@@ -8,9 +8,10 @@ own — the character instead adds focused instances, each of which becomes its
 own rankable row.
 
 To save vertical space the skills are laid out across two side-by-side tables:
-the left flow fills the first table and the right flow fills the second. The two
-tables scroll together — their vertical scroll bars are kept in sync so a wheel
-or drag over either half moves both. The split is dynamic: skills are grouped
+the left flow fills the first table and the right flow fills the second. Neither
+table scrolls — each is sized to show all of its rows and grows as focuses are
+added, so the whole section scrolls with the page. The split is dynamic: skills
+are grouped
 into blocks (a plain skill is one block; a focused skill and its focus rows form
 a single block), and the blocks are divided between the two tables so their
 heights are as even as possible without ever splitting a focused group.
@@ -71,7 +72,10 @@ class SkillsSection(QGroupBox):
         layout.addLayout(tables)
 
         guard_wheel(self.table_left, self.table_right)
-        self._sync_scrollbars(self.table_left, self.table_right)
+        # The tables fit their content and never scroll, so keep them out of the
+        # focus chain; the wheel then always falls through to the page scroll.
+        for table in (self.table_left, self.table_right):
+            table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._rebuild()
 
     @staticmethod
@@ -79,6 +83,9 @@ class SkillsSection(QGroupBox):
         table = QTableWidget(0, len(HEADERS))
         table.setHorizontalHeaderLabels(HEADERS)
         table.verticalHeader().setVisible(False)
+        # The table never scrolls itself; it is resized to fit all its rows.
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         header = table.horizontalHeader()
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         for col in (COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
@@ -86,18 +93,14 @@ class SkillsSection(QGroupBox):
         return table
 
     @staticmethod
-    def _sync_scrollbars(left: QTableWidget, right: QTableWidget) -> None:
-        """Keep the two tables' vertical positions locked together.
+    def _fit_table_height(table: QTableWidget) -> None:
+        """Fix the table's height to exactly show every row, so it never scrolls
+        internally and grows as focuses are added."""
 
-        Only the right table shows a scroll bar; the left one is driven purely by
-        the value link, so the pair reads as a single scrollable region.
-        """
-
-        left.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_bar = left.verticalScrollBar()
-        right_bar = right.verticalScrollBar()
-        left_bar.valueChanged.connect(right_bar.setValue)
-        right_bar.valueChanged.connect(left_bar.setValue)
+        height = table.horizontalHeader().height() + 2 * table.frameWidth()
+        for row in range(table.rowCount()):
+            height += table.rowHeight(row)
+        table.setFixedHeight(height)
 
     # -- data-driven rebuild -------------------------------------------------
 
@@ -107,14 +110,15 @@ class SkillsSection(QGroupBox):
         left_specs = self._expand(left)
         right_specs = self._expand(right)
 
-        # Match row counts so the two tables share the same scroll range and
-        # their rows stay aligned when scrolled together.
+        # Match row counts so the two tables stay the same height and their rows
+        # line up side by side.
         row_count = max(len(left_specs), len(right_specs))
         for table, specs in ((self.table_left, left_specs), (self.table_right, right_specs)):
             table.setRowCount(0)
             table.clearSpans()
             table.setRowCount(row_count)
             self._render_side(table, specs)
+            self._fit_table_height(table)
 
         self._refresh_totals()
 

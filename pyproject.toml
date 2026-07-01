@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mm-companion"
+version = "0.1.0"
+description = "A dice roller and character creator for the Mutants & Masterminds TTRPG (3rd/4th edition)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Mrzillka", email = "mrzillka@gmail.com" },
+]
+keywords = ["ttrpg", "mutants-and-masterminds", "dice", "character-creator", "pyside6"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Games/Entertainment :: Role-Playing",
+]
+dependencies = [
+    "PySide6>=6.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "black>=24.0",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/Mrzillka/MM-Companion"
+Repository = "https://github.com/Mrzillka/MM-Companion"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mm_companion = ["data/**/*.json", "data/**/*.yaml", "data/**/*.yml"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra"

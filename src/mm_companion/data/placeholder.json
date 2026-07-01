@@ -270,7 +270,7 @@
     },
     {
       "name": "Close Combat",
-      "ability": "FGT",
+      "ability": "ATK",
       "focused": true
     },
     {
@@ -310,12 +310,12 @@
     },
     {
       "name": "Ranged Combat",
-      "ability": "DEX",
+      "ability": "ATK",
       "focused": true
     },
     {
       "name": "Sleight of Hand",
-      "ability": "DEX",
+      "ability": "AGL",
       "focused": false
     },
     {
@@ -335,7 +335,7 @@
     },
     {
       "name": "Vehicles",
-      "ability": "DEX",
+      "ability": "AGL",
       "focused": false
     }
   ],

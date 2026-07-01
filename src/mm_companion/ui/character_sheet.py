@@ -36,3 +36,9 @@ class CharacterSheet(QScrollArea):
 
         self.setWidget(content)
         self.setWidgetResizable(True)
+
+    def set_locked(self, locked: bool) -> None:
+        """Toggle read-only view mode across every section."""
+        self.base_info.set_locked(locked)
+        self.stats.set_locked(locked)
+        self.skills.set_locked(locked)

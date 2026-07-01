@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.data_loader import Characteristic, Field, GameData
 from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
 
 IMAGE_SIZE = 160
@@ -42,6 +43,7 @@ class BaseInfoSection(QGroupBox):
         self._condition_names: list[str] = [c.name for c in data.conditions]
         self._conditions: dict[str, QWidget] = {}
         self._image_path: str | None = None
+        self._locked = False
 
         layout = QHBoxLayout(self)
 
@@ -224,6 +226,18 @@ class BaseInfoSection(QGroupBox):
         self._conditions_flow.removeWidget(chip)
         chip.deleteLater()
 
+    def set_locked(self, locked: bool) -> None:
+        """Turn the editable fields into read-only labels (locked) or back, and
+        hide the image loader. Conditions stay editable in either mode — they
+        change constantly during play, unlike the rest of the build.
+        """
+        self._locked = locked
+        for edit in self._profile_fields.values():
+            set_widget_locked(edit, locked)
+        for widget in self._characteristics.values():
+            set_widget_locked(widget, locked)
+        self._load_button.setVisible(not locked)
+
     def _build_image_column(self) -> QVBoxLayout:
         column = QVBoxLayout()
 
@@ -233,9 +247,9 @@ class BaseInfoSection(QGroupBox):
         self._image_label.setFrameShape(QLabel.Shape.Box)
         column.addWidget(self._image_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        load_button = QPushButton("Load Image…")
-        load_button.clicked.connect(self._load_image)
-        column.addWidget(load_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._load_button = QPushButton("Load Image…")
+        self._load_button.clicked.connect(self._load_image)
+        column.addWidget(self._load_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         column.addStretch()
         return column

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.data_loader import GameData, Skill
+from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
 
 RANK_MIN, RANK_MAX = 0, 20
@@ -62,6 +63,10 @@ class SkillsSection(QGroupBox):
         # row, so the ability-rank and total cells can be recomputed when
         # abilities change.
         self._rows: list[tuple[str, str, QTableWidgetItem, QTableWidgetItem]] = []
+        # Rank/modifier spin boxes rebuilt on every layout pass, tracked so the
+        # lock state can be re-applied to them.
+        self._editable_spins: list[QSpinBox] = []
+        self._locked = False
 
         layout = QVBoxLayout(self)
         tables = QHBoxLayout()
@@ -106,6 +111,7 @@ class SkillsSection(QGroupBox):
 
     def _rebuild(self) -> None:
         self._rows.clear()
+        self._editable_spins.clear()
         left, right = self._split_blocks()
         left_specs = self._expand(left)
         right_specs = self._expand(right)
@@ -120,6 +126,7 @@ class SkillsSection(QGroupBox):
             self._render_side(table, specs)
             self._fit_table_height(table)
 
+        self._apply_lock()
         self._refresh_totals()
 
     def _split_blocks(self) -> tuple[list[Skill], list[Skill]]:
@@ -171,6 +178,11 @@ class SkillsSection(QGroupBox):
 
         table.setItem(row, COL_NAME, self._readonly_item(skill.name))
 
+        # In the locked (read-only) view there's nothing to add, so the header
+        # is just the skill name with no button.
+        if self._locked:
+            return
+
         # The button spans every column after the name so it reads as one wide
         # control rather than being crammed into a single narrow cell.
         add_button = QPushButton("Add focus…")
@@ -213,6 +225,7 @@ class SkillsSection(QGroupBox):
         table.setCellWidget(row, COL_MODS, mods_spin)
 
         guard_wheel(ranks_spin, mods_spin)
+        self._editable_spins.extend((ranks_spin, mods_spin))
 
         total_item = self._readonly_item("", center=True)
         table.setItem(row, COL_TOTAL, total_item)
@@ -234,6 +247,22 @@ class SkillsSection(QGroupBox):
         if ok and focus and focus not in self._focuses[skill.name]:
             self._focuses[skill.name].append(focus)
             self._rebuild()
+
+    def set_locked(self, locked: bool) -> None:
+        """Make the rank/modifier spin boxes read-only labels and drop the
+        'Add focus' buttons while locked.
+
+        Rebuilds the tables so the focus buttons are omitted entirely: they live
+        in table cells, where toggling visibility isn't reliable.
+        """
+        self._locked = locked
+        self._rebuild()
+
+    def _apply_lock(self) -> None:
+        """Apply the current lock state to the spin boxes built by the last
+        rebuild. (Focus buttons are omitted at build time when locked.)"""
+        for spin in self._editable_spins:
+            set_widget_locked(spin, self._locked)
 
     def _on_rank_changed(self, row_id: str, value: int) -> None:
         self._ranks[row_id] = value

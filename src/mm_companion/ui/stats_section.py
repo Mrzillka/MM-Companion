@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.data_loader import GameData
+from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
 
 ABILITY_MIN, ABILITY_MAX = -5, 30
@@ -128,13 +129,14 @@ class StatsSection(QGroupBox):
         self._advantage_rank.setRange(RANK_MIN, RANK_MAX)
         picker.addWidget(self._advantage_rank)
 
-        add_button = QPushButton("Add")
-        add_button.clicked.connect(self._add_advantage)
-        picker.addWidget(add_button)
+        self._advantage_add_button = QPushButton("Add")
+        self._advantage_add_button.clicked.connect(self._add_advantage)
+        picker.addWidget(self._advantage_add_button)
 
-        remove_button = QPushButton("Remove")
-        remove_button.clicked.connect(self._remove_advantage)
-        picker.addWidget(remove_button)
+        self._advantage_remove_button = QPushButton("Remove")
+        self._advantage_remove_button.clicked.connect(self._remove_advantage)
+        picker.addWidget(self._advantage_remove_button)
+        self._advantage_picker = picker
         outer.addLayout(picker)
 
         self._advantage_table = QTableWidget(0, 2)
@@ -177,6 +179,21 @@ class StatsSection(QGroupBox):
         rows = {index.row() for index in self._advantage_table.selectedIndexes()}
         for row in sorted(rows, reverse=True):
             self._advantage_table.removeRow(row)
+
+    def set_locked(self, locked: bool) -> None:
+        """Make the ability/resistance spin boxes read-only labels and hide the
+        advantage picker; the advantage table is already read-only."""
+        for spin in self._abilities.values():
+            set_widget_locked(spin, locked)
+        for spin in self._resistances.values():
+            set_widget_locked(spin, locked)
+        for widget in (
+            self._advantage_combo,
+            self._advantage_rank,
+            self._advantage_add_button,
+            self._advantage_remove_button,
+        ):
+            widget.setVisible(not locked)
 
     def ability_values(self) -> dict[str, int]:
         """Current value of every ability, keyed by ability key."""

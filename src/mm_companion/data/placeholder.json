@@ -1,151 +1,686 @@
 {
   "_comment": "Placeholder game data for MM-Companion (Mutants & Masterminds 3e, Open Game Content). Consumed by mm_companion.core.data_loader; the UI must read from here rather than hardcoding rules content.",
   "profile_fields": [
-    { "key": "character_name", "label": "Character Name", "primary": true },
-    { "key": "hero_name", "label": "Hero Name", "primary": true },
-    { "key": "player_name", "label": "Player Name", "primary": true },
-    { "key": "identity", "label": "Identity" },
-    { "key": "gender", "label": "Gender" },
-    { "key": "age", "label": "Age" },
-    { "key": "height", "label": "Height" },
-    { "key": "weight", "label": "Weight" },
-    { "key": "eyes", "label": "Eyes" },
-    { "key": "hair", "label": "Hair" },
-    { "key": "group", "label": "Group / Affiliation" },
-    { "key": "base", "label": "Base of Operations" }
+    {
+      "key": "character_name",
+      "label": "Character Name",
+      "primary": true
+    },
+    {
+      "key": "hero_name",
+      "label": "Hero Name",
+      "primary": true
+    },
+    {
+      "key": "player_name",
+      "label": "Player Name",
+      "primary": true
+    },
+    {
+      "key": "identity",
+      "label": "Identity"
+    },
+    {
+      "key": "gender",
+      "label": "Gender"
+    },
+    {
+      "key": "age",
+      "label": "Age"
+    },
+    {
+      "key": "height",
+      "label": "Height"
+    },
+    {
+      "key": "weight",
+      "label": "Weight"
+    },
+    {
+      "key": "eyes",
+      "label": "Eyes"
+    },
+    {
+      "key": "hair",
+      "label": "Hair"
+    },
+    {
+      "key": "group",
+      "label": "Group / Affiliation"
+    },
+    {
+      "key": "base",
+      "label": "Base of Operations"
+    }
   ],
   "characteristics": [
-    { "key": "power_level", "label": "Power Level", "kind": "number", "default": 10, "min": 0, "max": 30 },
-    { "key": "power_points", "label": "Power Points", "kind": "pool", "default": 150, "min": 0, "max": 9999 },
-    { "key": "size", "label": "Size",
-      "options": ["Fine", "Diminutive", "Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan", "Colossal", "Awesome"],
-      "default": "Medium"},
-    { "key": "speed", "label": "Speed" },
-    { "key": "initiative", "label": "Initiative" },
-    { "key": "hero_points", "label": "Hero Points", "kind": "number", "default": 1, "min": 0, "max": 99 }
+    {
+      "key": "power_level",
+      "label": "Power Level",
+      "kind": "number",
+      "default": 10,
+      "min": 0,
+      "max": 30
+    },
+    {
+      "key": "power_points",
+      "label": "Power Points",
+      "kind": "pool",
+      "default": 150,
+      "min": 0,
+      "max": 9999
+    },
+    {
+      "key": "size",
+      "label": "Size",
+      "options": [
+        "Fine",
+        "Diminutive",
+        "Tiny",
+        "Small",
+        "Medium",
+        "Large",
+        "Huge",
+        "Gargantuan",
+        "Colossal",
+        "Awesome"
+      ],
+      "default": "Medium"
+    },
+    {
+      "key": "speed",
+      "label": "Speed"
+    },
+    {
+      "key": "initiative",
+      "label": "Initiative"
+    },
+    {
+      "key": "hero_points",
+      "label": "Hero Points",
+      "kind": "number",
+      "default": 1,
+      "min": 0,
+      "max": 99
+    }
   ],
   "conditions": [
-    { "name": "Asleep" },
-    { "name": "Blind" },
-    { "name": "Bound" },
-    { "name": "Compelled" },
-    { "name": "Controlled" },
-    { "name": "Dazed" },
-    { "name": "Deaf" },
-    { "name": "Debilitated" },
-    { "name": "Defenseless" },
-    { "name": "Disabled" },
-    { "name": "Dying" },
-    { "name": "Entranced" },
-    { "name": "Exhausted" },
-    { "name": "Fatigued" },
-    { "name": "Hindered" },
-    { "name": "Immobile" },
-    { "name": "Impaired" },
-    { "name": "Incapacitated" },
-    { "name": "Paralyzed" },
-    { "name": "Prone" },
-    { "name": "Restrained" },
-    { "name": "Staggered" },
-    { "name": "Stunned" },
-    { "name": "Surprised" },
-    { "name": "Transformed" },
-    { "name": "Unaware" },
-    { "name": "Vulnerable" },
-    { "name": "Weakened" }
+    {
+      "name": "Asleep"
+    },
+    {
+      "name": "Blind"
+    },
+    {
+      "name": "Bound"
+    },
+    {
+      "name": "Compelled"
+    },
+    {
+      "name": "Controlled"
+    },
+    {
+      "name": "Dazed"
+    },
+    {
+      "name": "Deaf"
+    },
+    {
+      "name": "Debilitated"
+    },
+    {
+      "name": "Defenseless"
+    },
+    {
+      "name": "Disabled"
+    },
+    {
+      "name": "Dying"
+    },
+    {
+      "name": "Entranced"
+    },
+    {
+      "name": "Exhausted"
+    },
+    {
+      "name": "Fatigued"
+    },
+    {
+      "name": "Hindered"
+    },
+    {
+      "name": "Immobile"
+    },
+    {
+      "name": "Impaired"
+    },
+    {
+      "name": "Incapacitated"
+    },
+    {
+      "name": "Paralyzed"
+    },
+    {
+      "name": "Prone"
+    },
+    {
+      "name": "Restrained"
+    },
+    {
+      "name": "Staggered"
+    },
+    {
+      "name": "Stunned"
+    },
+    {
+      "name": "Surprised"
+    },
+    {
+      "name": "Transformed"
+    },
+    {
+      "name": "Unaware"
+    },
+    {
+      "name": "Vulnerable"
+    },
+    {
+      "name": "Weakened"
+    }
   ],
   "abilities": [
-    { "key": "STR", "name": "Strength" },
-    { "key": "STA", "name": "Stamina" },
-    { "key": "AGL", "name": "Agility" },
-    { "key": "DEX", "name": "Dexterity" },
-    { "key": "FGT", "name": "Fighting" },
-    { "key": "INT", "name": "Intellect" },
-    { "key": "AWE", "name": "Awareness" },
-    { "key": "PRE", "name": "Presence" }
+    {
+      "key": "STR",
+      "name": "Strength",
+      "abbr": "STR"
+    },
+    {
+      "key": "STA",
+      "name": "Stamina",
+      "abbr": "STA"
+    },
+    {
+      "key": "AGL",
+      "name": "Agility",
+      "abbr": "AGL"
+    },
+    {
+      "key": "INT",
+      "name": "Intellect",
+      "abbr": "INT"
+    },
+    {
+      "key": "AWE",
+      "name": "Awareness",
+      "abbr": "AWE"
+    },
+    {
+      "key": "PRE",
+      "name": "Presence",
+      "abbr": "PRE"
+    },
+    {
+      "key": "ATK",
+      "name": "Attack",
+      "abbr": "ATK",
+      "derived": true
+    }
   ],
   "resistances": [
-    { "key": "DODGE", "name": "Dodge", "ability": "AGL" },
-    { "key": "PARRY", "name": "Parry", "ability": "FGT" },
-    { "key": "FORTITUDE", "name": "Fortitude", "ability": "STA" },
-    { "key": "TOUGHNESS", "name": "Toughness", "ability": "STA" },
-    { "key": "WILL", "name": "Will", "ability": "AWE" }
+    {
+      "key": "DODGE",
+      "name": "Dodge",
+      "ability": "AGL"
+    },
+    {
+      "key": "FORTITUDE",
+      "name": "Fortitude",
+      "ability": "STA"
+    },
+    {
+      "key": "TOUGHNESS",
+      "name": "Toughness",
+      "ability": "STA"
+    },
+    {
+      "key": "WILL",
+      "name": "Will",
+      "ability": "AWE"
+    },
+    {
+      "key": "DEF",
+      "name": "Defence",
+      "ability": "",
+      "abbr": "DEF",
+      "derived": true
+    }
   ],
   "skills": [
-    { "name": "Acrobatics", "ability": "AGL", "focused": false },
-    { "name": "Athletics", "ability": "STR", "focused": false },
-    { "name": "Close Combat", "ability": "FGT", "focused": true },
-    { "name": "Deception", "ability": "PRE", "focused": false },
-    { "name": "Expertise", "ability": "INT", "focused": true },
-    { "name": "Insight", "ability": "AWE", "focused": false },
-    { "name": "Intimidation", "ability": "PRE", "focused": false },
-    { "name": "Investigation", "ability": "INT", "focused": false },
-    { "name": "Perception", "ability": "AWE", "focused": false },
-    { "name": "Persuasion", "ability": "PRE", "focused": false },
-    { "name": "Ranged Combat", "ability": "DEX", "focused": true },
-    { "name": "Sleight of Hand", "ability": "DEX", "focused": false },
-    { "name": "Stealth", "ability": "AGL", "focused": false },
-    { "name": "Technology", "ability": "INT", "focused": false },
-    { "name": "Treatment", "ability": "INT", "focused": false },
-    { "name": "Vehicles", "ability": "DEX", "focused": false }
+    {
+      "name": "Acrobatics",
+      "ability": "AGL",
+      "focused": false
+    },
+    {
+      "name": "Athletics",
+      "ability": "STR",
+      "focused": false
+    },
+    {
+      "name": "Close Combat",
+      "ability": "FGT",
+      "focused": true
+    },
+    {
+      "name": "Deception",
+      "ability": "PRE",
+      "focused": false
+    },
+    {
+      "name": "Expertise",
+      "ability": "INT",
+      "focused": true
+    },
+    {
+      "name": "Insight",
+      "ability": "AWE",
+      "focused": false
+    },
+    {
+      "name": "Intimidation",
+      "ability": "PRE",
+      "focused": false
+    },
+    {
+      "name": "Investigation",
+      "ability": "INT",
+      "focused": false
+    },
+    {
+      "name": "Perception",
+      "ability": "AWE",
+      "focused": false
+    },
+    {
+      "name": "Persuasion",
+      "ability": "PRE",
+      "focused": false
+    },
+    {
+      "name": "Ranged Combat",
+      "ability": "DEX",
+      "focused": true
+    },
+    {
+      "name": "Sleight of Hand",
+      "ability": "DEX",
+      "focused": false
+    },
+    {
+      "name": "Stealth",
+      "ability": "AGL",
+      "focused": false
+    },
+    {
+      "name": "Technology",
+      "ability": "INT",
+      "focused": false
+    },
+    {
+      "name": "Treatment",
+      "ability": "INT",
+      "focused": false
+    },
+    {
+      "name": "Vehicles",
+      "ability": "DEX",
+      "focused": false
+    }
   ],
   "advantages": [
-    { "name": "Accurate Attack", "type": "Combat", "ranked": false },
-    { "name": "All-out Attack", "type": "Combat", "ranked": false },
-    { "name": "Close Attack", "type": "Combat", "ranked": true },
-    { "name": "Defensive Attack", "type": "Combat", "ranked": false },
-    { "name": "Defensive Roll", "type": "Combat", "ranked": true },
-    { "name": "Fast Grab", "type": "Combat", "ranked": false },
-    { "name": "Grabbing Finesse", "type": "Combat", "ranked": false },
-    { "name": "Improved Aim", "type": "Combat", "ranked": false },
-    { "name": "Improved Critical", "type": "Combat", "ranked": true },
-    { "name": "Improved Defense", "type": "Combat", "ranked": false },
-    { "name": "Improved Disarm", "type": "Combat", "ranked": false },
-    { "name": "Improved Grab", "type": "Combat", "ranked": false },
-    { "name": "Improved Hold", "type": "Combat", "ranked": false },
-    { "name": "Improved Initiative", "type": "Combat", "ranked": true },
-    { "name": "Improved Smash", "type": "Combat", "ranked": false },
-    { "name": "Improved Trip", "type": "Combat", "ranked": false },
-    { "name": "Move-by Action", "type": "Combat", "ranked": false },
-    { "name": "Power Attack", "type": "Combat", "ranked": false },
-    { "name": "Precise Attack", "type": "Combat", "ranked": false },
-    { "name": "Prone Fighting", "type": "Combat", "ranked": false },
-    { "name": "Ranged Attack", "type": "Combat", "ranked": true },
-    { "name": "Redirect", "type": "Combat", "ranked": false },
-    { "name": "Takedown", "type": "Combat", "ranked": true },
-    { "name": "Uncanny Dodge", "type": "Combat", "ranked": false },
-    { "name": "Weapon Bind", "type": "Combat", "ranked": false },
-    { "name": "Beginner's Luck", "type": "Fortune", "ranked": false },
-    { "name": "Inspire", "type": "Fortune", "ranked": true },
-    { "name": "Leadership", "type": "Fortune", "ranked": false },
-    { "name": "Luck", "type": "Fortune", "ranked": true },
-    { "name": "Seize Initiative", "type": "Fortune", "ranked": false },
-    { "name": "Ultimate Effort", "type": "Fortune", "ranked": false },
-    { "name": "Benefit", "type": "General", "ranked": true },
-    { "name": "Diehard", "type": "General", "ranked": false },
-    { "name": "Equipment", "type": "General", "ranked": true },
-    { "name": "Extraordinary Effort", "type": "General", "ranked": false },
-    { "name": "Fearless", "type": "General", "ranked": false },
-    { "name": "Great Endurance", "type": "General", "ranked": false },
-    { "name": "Interpose", "type": "General", "ranked": false },
-    { "name": "Minion", "type": "General", "ranked": true },
-    { "name": "Set-up", "type": "General", "ranked": false },
-    { "name": "Sidekick", "type": "General", "ranked": true },
-    { "name": "Teamwork", "type": "General", "ranked": false },
-    { "name": "Tracking", "type": "General", "ranked": false },
-    { "name": "Trance", "type": "General", "ranked": false },
-    { "name": "Assessment", "type": "Skill", "ranked": false },
-    { "name": "Attractive", "type": "Skill", "ranked": true },
-    { "name": "Connected", "type": "Skill", "ranked": false },
-    { "name": "Contacts", "type": "Skill", "ranked": false },
-    { "name": "Eidetic Memory", "type": "Skill", "ranked": false },
-    { "name": "Improvised Tools", "type": "Skill", "ranked": false },
-    { "name": "Inventor", "type": "Skill", "ranked": false },
-    { "name": "Jack-of-all-trades", "type": "Skill", "ranked": false },
-    { "name": "Languages", "type": "Skill", "ranked": true },
-    { "name": "Ritualist", "type": "Skill", "ranked": false },
-    { "name": "Skill Mastery", "type": "Skill", "ranked": false },
-    { "name": "Speed of Thought", "type": "Skill", "ranked": false },
-    { "name": "Well-informed", "type": "Skill", "ranked": false }
+    {
+      "name": "Accurate Attack",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Accurate Attack. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "All-out Attack",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for All-out Attack. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Close Attack",
+      "type": "Combat",
+      "ranked": true,
+      "description": "Placeholder description for Close Attack. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Defensive Attack",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Defensive Attack. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Defensive Roll",
+      "type": "Combat",
+      "ranked": true,
+      "description": "Placeholder description for Defensive Roll. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Fast Grab",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Fast Grab. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Grabbing Finesse",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Grabbing Finesse. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Aim",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Improved Aim. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Critical",
+      "type": "Combat",
+      "ranked": true,
+      "description": "Placeholder description for Improved Critical. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Defense",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Improved Defense. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Disarm",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Improved Disarm. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Grab",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Improved Grab. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Hold",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Improved Hold. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Initiative",
+      "type": "Combat",
+      "ranked": true,
+      "description": "Placeholder description for Improved Initiative. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Smash",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Improved Smash. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improved Trip",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Improved Trip. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Move-by Action",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Move-by Action. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Power Attack",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Power Attack. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Precise Attack",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Precise Attack. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Prone Fighting",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Prone Fighting. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Ranged Attack",
+      "type": "Combat",
+      "ranked": true,
+      "description": "Placeholder description for Ranged Attack. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Redirect",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Redirect. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Takedown",
+      "type": "Combat",
+      "ranked": true,
+      "description": "Placeholder description for Takedown. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Uncanny Dodge",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Uncanny Dodge. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Weapon Bind",
+      "type": "Combat",
+      "ranked": false,
+      "description": "Placeholder description for Weapon Bind. A Combat advantage; full rules text to be added later."
+    },
+    {
+      "name": "Beginner's Luck",
+      "type": "Fortune",
+      "ranked": false,
+      "description": "Placeholder description for Beginner's Luck. A Fortune advantage; full rules text to be added later."
+    },
+    {
+      "name": "Inspire",
+      "type": "Fortune",
+      "ranked": true,
+      "description": "Placeholder description for Inspire. A Fortune advantage; full rules text to be added later."
+    },
+    {
+      "name": "Leadership",
+      "type": "Fortune",
+      "ranked": false,
+      "description": "Placeholder description for Leadership. A Fortune advantage; full rules text to be added later."
+    },
+    {
+      "name": "Luck",
+      "type": "Fortune",
+      "ranked": true,
+      "description": "Placeholder description for Luck. A Fortune advantage; full rules text to be added later."
+    },
+    {
+      "name": "Seize Initiative",
+      "type": "Fortune",
+      "ranked": false,
+      "description": "Placeholder description for Seize Initiative. A Fortune advantage; full rules text to be added later."
+    },
+    {
+      "name": "Ultimate Effort",
+      "type": "Fortune",
+      "ranked": false,
+      "description": "Placeholder description for Ultimate Effort. A Fortune advantage; full rules text to be added later."
+    },
+    {
+      "name": "Benefit",
+      "type": "General",
+      "ranked": true,
+      "description": "Placeholder description for Benefit. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Diehard",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Diehard. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Equipment",
+      "type": "General",
+      "ranked": true,
+      "description": "Placeholder description for Equipment. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Extraordinary Effort",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Extraordinary Effort. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Fearless",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Fearless. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Great Endurance",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Great Endurance. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Interpose",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Interpose. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Minion",
+      "type": "General",
+      "ranked": true,
+      "description": "Placeholder description for Minion. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Set-up",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Set-up. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Sidekick",
+      "type": "General",
+      "ranked": true,
+      "description": "Placeholder description for Sidekick. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Teamwork",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Teamwork. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Tracking",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Tracking. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Trance",
+      "type": "General",
+      "ranked": false,
+      "description": "Placeholder description for Trance. A General advantage; full rules text to be added later."
+    },
+    {
+      "name": "Assessment",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Assessment. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Attractive",
+      "type": "Skill",
+      "ranked": true,
+      "description": "Placeholder description for Attractive. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Connected",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Connected. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Contacts",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Contacts. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Eidetic Memory",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Eidetic Memory. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Improvised Tools",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Improvised Tools. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Inventor",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Inventor. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Jack-of-all-trades",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Jack-of-all-trades. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Languages",
+      "type": "Skill",
+      "ranked": true,
+      "description": "Placeholder description for Languages. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Ritualist",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Ritualist. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Skill Mastery",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Skill Mastery. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Speed of Thought",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Speed of Thought. A Skill advantage; full rules text to be added later."
+    },
+    {
+      "name": "Well-informed",
+      "type": "Skill",
+      "ranked": false,
+      "description": "Placeholder description for Well-informed. A Skill advantage; full rules text to be added later."
+    }
   ]
 }

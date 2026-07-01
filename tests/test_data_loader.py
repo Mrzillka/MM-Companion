@@ -20,6 +20,8 @@ def test_resistances_link_to_known_abilities() -> None:
     data = load_game_data()
     ability_keys = {a.key for a in data.abilities}
     for resistance in data.resistances:
+        if resistance.derived:  # combat stats (e.g. Defence) link to no ability
+            continue
         assert resistance.ability in ability_keys
 
 

@@ -57,19 +57,32 @@ class Characteristic:
 
 @dataclass(frozen=True)
 class Ability:
-    """A core ability, bought directly with power points."""
+    """A core ability, bought directly with power points.
+
+    ``abbr`` is the short display code (STR, STA, ...). ``derived`` marks combat
+    stats (e.g. Attack) the UI shows below a separator, apart from the core
+    abilities.
+    """
 
     key: str
     name: str
+    abbr: str = ""
+    derived: bool = False
 
 
 @dataclass(frozen=True)
 class Resistance:
-    """A defense/resistance, linked to the ability it derives from."""
+    """A defense/resistance, linked to the ability it derives from.
+
+    ``abbr`` is the short display code. ``derived`` marks combat stats (e.g.
+    Defence) the UI shows below a separator, apart from the core resistances.
+    """
 
     key: str
     name: str
-    ability: str
+    ability: str = ""
+    abbr: str = ""
+    derived: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,11 +98,16 @@ class Skill:
 
 @dataclass(frozen=True)
 class Advantage:
-    """An advantage. ``ranked`` advantages can be taken at more than one rank."""
+    """An advantage. ``ranked`` advantages can be taken at more than one rank.
+
+    ``description`` is optional summary text the UI shows beside the selected
+    advantage.
+    """
 
     name: str
     type: str
     ranked: bool
+    description: str = ""
 
 
 @dataclass(frozen=True)

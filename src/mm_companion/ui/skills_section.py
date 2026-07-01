@@ -1,9 +1,19 @@
 """Section 3: the skills table.
 
-Regular skills expose a ranks spin box; their total bonus is ranks plus the
-linked ability. Focused skills (Close Combat, Expertise, Ranged Combat) have no
-ranks of their own — the character instead adds focused instances, each of which
-becomes its own rankable row.
+Each skill row lays out its bonus as a sum of columns: the linked ability's
+short code and current rank, the skill's own ranks, and a free modifier. The
+total bonus is the sum of the ability rank, the skill ranks, and the modifier.
+Focused skills (Close Combat, Expertise, Ranged Combat) have no ranks of their
+own — the character instead adds focused instances, each of which becomes its
+own rankable row.
+
+To save vertical space the skills are laid out across two side-by-side tables:
+the left flow fills the first table and the right flow fills the second. The two
+tables scroll together — their vertical scroll bars are kept in sync so a wheel
+or drag over either half moves both. The split is dynamic: skills are grouped
+into blocks (a plain skill is one block; a focused skill and its focus rows form
+a single block), and the blocks are divided between the two tables so their
+heights are as even as possible without ever splitting a focused group.
 """
 
 from __future__ import annotations
@@ -11,6 +21,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QGroupBox,
+    QHBoxLayout,
     QHeaderView,
     QInputDialog,
     QPushButton,
@@ -24,7 +35,11 @@ from PySide6.QtWidgets import (
 from mm_companion.core.data_loader import GameData, Skill
 
 RANK_MIN, RANK_MAX = 0, 20
-COL_NAME, COL_RANKS, COL_TOTAL = 0, 1, 2
+MOD_MIN, MOD_MAX = -20, 20
+COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
+HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
+# Keep the numeric spin-box columns narrow so they don't hog horizontal space.
+SPIN_WIDTH = 56
 
 
 class SkillsSection(QGroupBox):
@@ -34,75 +49,173 @@ class SkillsSection(QGroupBox):
         super().__init__("Skills", parent)
 
         self._skills = data.skills
+        self._ability_abbrs: dict[str, str] = {a.key: a.abbr or a.key for a in data.abilities}
         self._ability_values: dict[str, int] = {a.key: 0 for a in data.abilities}
-        # Ranks bought per row, keyed by a stable row id.
+        # Ranks and modifiers bought per row, keyed by a stable row id.
         self._ranks: dict[str, int] = {}
+        self._mods: dict[str, int] = {}
         # Added focuses per focused skill name, e.g. {"Close Combat": ["Swords"]}.
         self._focuses: dict[str, list[str]] = {s.name: [] for s in data.skills if s.focused}
-        # (ability_key, row_id, total_item) for every rankable row, so totals can
-        # be recomputed when abilities change.
-        self._rows: list[tuple[str, str, QTableWidgetItem]] = []
+        # (ability_key, row_id, ability_rank_item, total_item) for every rankable
+        # row, so the ability-rank and total cells can be recomputed when
+        # abilities change.
+        self._rows: list[tuple[str, str, QTableWidgetItem, QTableWidgetItem]] = []
 
         layout = QVBoxLayout(self)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Skill", "Ranks", "Total Bonus"])
-        self.table.verticalHeader().setVisible(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(COL_RANKS, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(COL_TOTAL, QHeaderView.ResizeMode.ResizeToContents)
-        layout.addWidget(self.table)
+        tables = QHBoxLayout()
+        self.table_left = self._make_table()
+        self.table_right = self._make_table()
+        tables.addWidget(self.table_left)
+        tables.addWidget(self.table_right)
+        layout.addLayout(tables)
 
+        self._sync_scrollbars(self.table_left, self.table_right)
         self._rebuild()
+
+    @staticmethod
+    def _make_table() -> QTableWidget:
+        table = QTableWidget(0, len(HEADERS))
+        table.setHorizontalHeaderLabels(HEADERS)
+        table.verticalHeader().setVisible(False)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
+        for col in (COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        return table
+
+    @staticmethod
+    def _sync_scrollbars(left: QTableWidget, right: QTableWidget) -> None:
+        """Keep the two tables' vertical positions locked together.
+
+        Only the right table shows a scroll bar; the left one is driven purely by
+        the value link, so the pair reads as a single scrollable region.
+        """
+
+        left.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_bar = left.verticalScrollBar()
+        right_bar = right.verticalScrollBar()
+        left_bar.valueChanged.connect(right_bar.setValue)
+        right_bar.valueChanged.connect(left_bar.setValue)
 
     # -- data-driven rebuild -------------------------------------------------
 
     def _rebuild(self) -> None:
-        self.table.setRowCount(0)
         self._rows.clear()
-        for skill in self._skills:
-            if skill.focused:
-                self._add_focused_group(skill)
-            else:
-                self._add_skill_row(skill, skill.name, skill.name)
+        left, right = self._split_blocks()
+        left_specs = self._expand(left)
+        right_specs = self._expand(right)
+
+        # Match row counts so the two tables share the same scroll range and
+        # their rows stay aligned when scrolled together.
+        row_count = max(len(left_specs), len(right_specs))
+        for table, specs in ((self.table_left, left_specs), (self.table_right, right_specs)):
+            table.setRowCount(0)
+            table.clearSpans()
+            table.setRowCount(row_count)
+            self._render_side(table, specs)
+
         self._refresh_totals()
 
-    def _add_focused_group(self, skill: Skill) -> None:
-        """Header row with an 'Add focus' button, followed by any focus rows."""
+    def _split_blocks(self) -> tuple[list[Skill], list[Skill]]:
+        """Divide the skills into two ordered groups of near-equal height.
 
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        self.table.setItem(row, COL_NAME, self._readonly_item(skill.name))
+        Each skill is a block whose height is one row, plus one row per focus for
+        focused skills; blocks are never split across the two groups.
+        """
 
+        sizes = [1 + len(self._focuses[s.name]) if s.focused else 1 for s in self._skills]
+        total = sum(sizes)
+
+        best_split, best_diff = 0, None
+        for split in range(len(self._skills) + 1):
+            left = sum(sizes[:split])
+            diff = abs(left - (total - left))
+            if best_diff is None or diff < best_diff:
+                best_split, best_diff = split, diff
+
+        return self._skills[:best_split], self._skills[best_split:]
+
+    def _expand(self, skills: list[Skill]) -> list[tuple]:
+        """Flatten skills into per-row specs: a focused skill yields a header row
+        followed by one row per focus; a plain skill yields a single row."""
+
+        specs: list[tuple] = []
+        for skill in skills:
+            if skill.focused:
+                specs.append(("header", skill))
+                for focus in self._focuses[skill.name]:
+                    display = f"{skill.name}: {focus}"
+                    row_id = f"{skill.name}::{focus}"
+                    specs.append(("focus", skill, display, row_id))
+            else:
+                specs.append(("skill", skill, skill.name, skill.name))
+        return specs
+
+    def _render_side(self, table: QTableWidget, specs: list[tuple]) -> None:
+        for row, spec in enumerate(specs):
+            if spec[0] == "header":
+                self._render_group_header(table, row, spec[1])
+            else:
+                _, skill, display, row_id = spec
+                indent = spec[0] == "focus"
+                self._render_skill_row(table, row, skill, display, row_id, indent=indent)
+
+    def _render_group_header(self, table: QTableWidget, row: int, skill: Skill) -> None:
+        """Header cell block with an 'Add focus' button for a focused skill."""
+
+        table.setItem(row, COL_NAME, self._readonly_item(skill.name))
+
+        # The button spans every column after the name so it reads as one wide
+        # control rather than being crammed into a single narrow cell.
         add_button = QPushButton("Add focus…")
         add_button.clicked.connect(lambda _=False, s=skill: self._add_focus(s))
-        self.table.setCellWidget(row, COL_RANKS, add_button)
-        self.table.setItem(row, COL_TOTAL, self._readonly_item(""))
+        table.setSpan(row, COL_ABILITY, 1, len(HEADERS) - COL_ABILITY)
+        table.setCellWidget(row, COL_ABILITY, add_button)
 
-        for focus in self._focuses[skill.name]:
-            display = f"{skill.name}: {focus}"
-            row_id = f"{skill.name}::{focus}"
-            self._add_skill_row(skill, display, row_id, indent=True)
+    def _render_skill_row(
+        self,
+        table: QTableWidget,
+        row: int,
+        skill: Skill,
+        display: str,
+        row_id: str,
+        indent: bool = False,
+    ) -> None:
+        name = ("    " if indent else "") + display
+        table.setItem(row, COL_NAME, self._readonly_item(name))
 
-    def _add_skill_row(self, skill: Skill, display: str, row_id: str, indent: bool = False) -> None:
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        self.table.setItem(row, COL_NAME, self._readonly_item(("    " if indent else "") + display))
+        abbr = self._ability_abbrs.get(skill.ability, skill.ability)
+        table.setItem(row, COL_ABILITY, self._readonly_item(abbr, center=True))
 
-        spin = QSpinBox()
-        spin.setRange(RANK_MIN, RANK_MAX)
-        spin.setValue(self._ranks.get(row_id, 0))
-        spin.valueChanged.connect(lambda value, rid=row_id: self._on_rank_changed(rid, value))
-        self.table.setCellWidget(row, COL_RANKS, spin)
+        ability_rank_item = self._readonly_item("", center=True)
+        table.setItem(row, COL_ABILITY_RANK, ability_rank_item)
 
-        total_item = self._readonly_item("")
-        self.table.setItem(row, COL_TOTAL, total_item)
-        self._rows.append((skill.ability, row_id, total_item))
+        ranks_spin = QSpinBox()
+        ranks_spin.setRange(RANK_MIN, RANK_MAX)
+        ranks_spin.setButtonSymbols(QSpinBox.NoButtons)
+        ranks_spin.setValue(self._ranks.get(row_id, 0))
+        ranks_spin.setMaximumWidth(SPIN_WIDTH)
+        ranks_spin.valueChanged.connect(lambda value, rid=row_id: self._on_rank_changed(rid, value))
+        table.setCellWidget(row, COL_RANKS, ranks_spin)
+
+        mods_spin = QSpinBox()
+        mods_spin.setRange(MOD_MIN, MOD_MAX)
+        mods_spin.setButtonSymbols(QSpinBox.NoButtons)
+        mods_spin.setValue(self._mods.get(row_id, 0))
+        mods_spin.setMaximumWidth(SPIN_WIDTH)
+        mods_spin.valueChanged.connect(lambda value, rid=row_id: self._on_mod_changed(rid, value))
+        table.setCellWidget(row, COL_MODS, mods_spin)
+
+        total_item = self._readonly_item("", center=True)
+        table.setItem(row, COL_TOTAL, total_item)
+        self._rows.append((skill.ability, row_id, ability_rank_item, total_item))
 
     @staticmethod
-    def _readonly_item(text: str) -> QTableWidgetItem:
+    def _readonly_item(text: str, center: bool = False) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        if center:
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         return item
 
     # -- interaction ---------------------------------------------------------
@@ -116,6 +229,10 @@ class SkillsSection(QGroupBox):
 
     def _on_rank_changed(self, row_id: str, value: int) -> None:
         self._ranks[row_id] = value
+        self._refresh_totals()
+
+    def _on_mod_changed(self, row_id: str, value: int) -> None:
+        self._mods[row_id] = value
         self._refresh_totals()
 
     # -- totals --------------------------------------------------------------
@@ -133,6 +250,8 @@ class SkillsSection(QGroupBox):
         self._refresh_totals()
 
     def _refresh_totals(self) -> None:
-        for ability_key, row_id, total_item in self._rows:
-            total = self._ranks.get(row_id, 0) + self._ability_values.get(ability_key, 0)
+        for ability_key, row_id, ability_rank_item, total_item in self._rows:
+            ability = self._ability_values.get(ability_key, 0)
+            total = ability + self._ranks.get(row_id, 0) + self._mods.get(row_id, 0)
+            ability_rank_item.setText(str(ability))
             total_item.setText(str(total))

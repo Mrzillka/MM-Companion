@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.data_loader import Characteristic, Field, GameData
 from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.wheel_guard import guard_wheel
 
 IMAGE_SIZE = 160
 CONDITIONS_ROW_HEIGHT = 44
@@ -65,6 +66,7 @@ class BaseInfoSection(QGroupBox):
             combo.addItems(c.options)
             if isinstance(c.default, str) and c.default in c.options:
                 combo.setCurrentText(c.default)
+            guard_wheel(combo)
             self._characteristics[c.key] = combo
             return combo
 
@@ -102,6 +104,7 @@ class BaseInfoSection(QGroupBox):
         spin.setRange(c.minimum, c.maximum)
         if isinstance(c.default, int):
             spin.setValue(c.default)
+        guard_wheel(spin)
         return spin
 
     def set_pool_current(self, key: str, value: object) -> None:

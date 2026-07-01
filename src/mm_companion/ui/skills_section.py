@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.data_loader import GameData, Skill
+from mm_companion.ui.wheel_guard import guard_wheel
 
 RANK_MIN, RANK_MAX = 0, 20
 MOD_MIN, MOD_MAX = -20, 20
@@ -69,6 +70,7 @@ class SkillsSection(QGroupBox):
         tables.addWidget(self.table_right)
         layout.addLayout(tables)
 
+        guard_wheel(self.table_left, self.table_right)
         self._sync_scrollbars(self.table_left, self.table_right)
         self._rebuild()
 
@@ -205,6 +207,8 @@ class SkillsSection(QGroupBox):
         mods_spin.setMaximumWidth(SPIN_WIDTH)
         mods_spin.valueChanged.connect(lambda value, rid=row_id: self._on_mod_changed(rid, value))
         table.setCellWidget(row, COL_MODS, mods_spin)
+
+        guard_wheel(ranks_spin, mods_spin)
 
         total_item = self._readonly_item("", center=True)
         table.setItem(row, COL_TOTAL, total_item)

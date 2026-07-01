@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.data_loader import GameData
+from mm_companion.ui.wheel_guard import guard_wheel
 
 ABILITY_MIN, ABILITY_MAX = -5, 30
 RESISTANCE_MIN, RESISTANCE_MAX = -5, 30
@@ -56,6 +57,7 @@ class StatsSection(QGroupBox):
         spin.setRange(minimum, maximum)
         spin.setButtonSymbols(QSpinBox.NoButtons)
         spin.setMaximumWidth(80)
+        guard_wheel(spin)
         return spin
 
     @staticmethod
@@ -148,6 +150,7 @@ class StatsSection(QGroupBox):
 
         self._advantage_combo.currentIndexChanged.connect(self._sync_rank_enabled)
         self._sync_rank_enabled()
+        guard_wheel(self._advantage_combo, self._advantage_rank, self._advantage_table)
         return box
 
     def _sync_rank_enabled(self) -> None:

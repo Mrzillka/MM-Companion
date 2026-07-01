@@ -19,23 +19,40 @@ DATA_FILE = "placeholder.json"
 
 @dataclass(frozen=True)
 class Field:
-    """A free-text descriptive field (character/hero/player name, hair, ...)."""
+    """A free-text descriptive field (character/hero/player name, hair, ...).
+
+    ``primary`` fields are the few identifying ones the UI always shows (name,
+    hero name, player); the rest are secondary details the UI may keep in a
+    collapsible group.
+    """
 
     key: str
     label: str
+    primary: bool = False
 
 
 @dataclass(frozen=True)
 class Characteristic:
     """A trait that is not bought with power points (size, speed, ...).
 
-    ``options`` is non-empty for enumerated characteristics (e.g. Size), which
-    the UI renders as a combo box; otherwise the UI uses a free-text field.
+    ``kind`` selects how the UI renders the value:
+
+    - ``"text"`` — free-text field (the default).
+    - ``"choice"`` — one of ``options``, rendered as a combo box.
+    - ``"number"`` — an integer spin box bounded by ``minimum``/``maximum``.
+    - ``"pool"`` — a calculated *current* value shown beside an editable
+      *total* spin box (e.g. power points current / total).
+
+    ``default`` seeds the initial value (an option string, or a number).
     """
 
     key: str
     label: str
+    kind: str = "text"
     options: list[str] = field(default_factory=list)
+    default: str | int | None = None
+    minimum: int = 0
+    maximum: int = 999
 
 
 @dataclass(frozen=True)
@@ -76,6 +93,17 @@ class Advantage:
 
 
 @dataclass(frozen=True)
+class Condition:
+    """A status condition that can affect a character (dazed, stunned, ...).
+
+    ``description`` is optional summary text the UI may show as a tooltip.
+    """
+
+    name: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
 class GameData:
     """The full parsed contents of the game-data file."""
 
@@ -85,6 +113,22 @@ class GameData:
     resistances: list[Resistance]
     skills: list[Skill]
     advantages: list[Advantage]
+    conditions: list[Condition]
+
+
+def _parse_characteristic(c: dict) -> Characteristic:
+    options = list(c.get("options", []))
+    # Infer a widget kind when not stated: enumerated -> choice, else text.
+    kind = c.get("kind") or ("choice" if options else "text")
+    return Characteristic(
+        key=c["key"],
+        label=c["label"],
+        kind=kind,
+        options=options,
+        default=c.get("default"),
+        minimum=int(c.get("min", 0)),
+        maximum=int(c.get("max", 999)),
+    )
 
 
 def _read_raw() -> dict:
@@ -99,12 +143,10 @@ def load_game_data() -> GameData:
     raw = _read_raw()
     return GameData(
         profile_fields=[Field(**f) for f in raw["profile_fields"]],
-        characteristics=[
-            Characteristic(key=c["key"], label=c["label"], options=list(c.get("options", [])))
-            for c in raw["characteristics"]
-        ],
+        characteristics=[_parse_characteristic(c) for c in raw["characteristics"]],
         abilities=[Ability(**a) for a in raw["abilities"]],
         resistances=[Resistance(**r) for r in raw["resistances"]],
         skills=[Skill(**s) for s in raw["skills"]],
         advantages=[Advantage(**a) for a in raw["advantages"]],
+        conditions=[Condition(**c) for c in raw.get("conditions", [])],
     )

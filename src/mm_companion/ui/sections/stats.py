@@ -6,7 +6,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -23,9 +22,11 @@ from PySide6.QtWidgets import (
 from mm_companion.core.data_loader import GameData
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import hline_separator, make_spin_box
 
-ABILITY_MIN, ABILITY_MAX = -5, 30
-RESISTANCE_MIN, RESISTANCE_MAX = -5, 30
+STAT_MIN, STAT_MAX = -5, 30
+STAT_SPIN_WIDTH = 80
+
 RANK_MIN, RANK_MAX = 1, 20
 
 
@@ -46,27 +47,11 @@ class StatsSection(QGroupBox):
         self._resistances: dict[str, QSpinBox] = {}
 
         layout = QHBoxLayout(self)
-        layout.addWidget(self._build_abilities(data))
-        layout.addWidget(self._build_resistances(data))
+        layout.addWidget(
+            self._build_stat_group("Abilities", data.abilities, self._abilities, emit_change=True)
+        )
+        layout.addWidget(self._build_stat_group("Resistances", data.resistances, self._resistances))
         layout.addWidget(self._build_advantages(data), stretch=1)
-
-    @staticmethod
-    def _make_stat_spin(minimum: int, maximum: int) -> QSpinBox:
-        """A spin box sized for at most two digits plus a sign."""
-
-        spin = QSpinBox()
-        spin.setRange(minimum, maximum)
-        spin.setButtonSymbols(QSpinBox.NoButtons)
-        spin.setMaximumWidth(80)
-        guard_wheel(spin)
-        return spin
-
-    @staticmethod
-    def _make_separator() -> QFrame:
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        return line
 
     def _add_stat_row(
         self, grid: QGridLayout, row: int, name: str, abbr: str, spin: QSpinBox
@@ -79,38 +64,37 @@ class StatsSection(QGroupBox):
         grid.addWidget(code, row, 1)
         grid.addWidget(spin, row, 2)
 
-    def _build_abilities(self, data: GameData) -> QGroupBox:
-        box = QGroupBox("Abilities")
-        grid = QGridLayout(box)
-        row = 0
-        separated = False
-        for ability in data.abilities:
-            if ability.derived and not separated:
-                grid.addWidget(self._make_separator(), row, 0, 1, 3)
-                row += 1
-                separated = True
-            spin = self._make_stat_spin(ABILITY_MIN, ABILITY_MAX)
-            spin.valueChanged.connect(
-                lambda value, key=ability.key: self.abilityChanged.emit(key, value)
-            )
-            self._abilities[ability.key] = spin
-            self._add_stat_row(grid, row, ability.name, ability.abbr, spin)
-            row += 1
-        return box
+    def _build_stat_group(
+        self,
+        title: str,
+        entries: list,
+        store: dict[str, QSpinBox],
+        *,
+        emit_change: bool = False,
+    ) -> QGroupBox:
+        """Build a titled grid of stat spin boxes (abilities or resistances).
 
-    def _build_resistances(self, data: GameData) -> QGroupBox:
-        box = QGroupBox("Resistances")
+        A separator is inserted before the first derived entry. When
+        *emit_change* is set, each spin box's changes are re-emitted via
+        :attr:`abilityChanged` so dependent sections can recompute.
+        """
+
+        box = QGroupBox(title)
         grid = QGridLayout(box)
         row = 0
         separated = False
-        for resistance in data.resistances:
-            if resistance.derived and not separated:
-                grid.addWidget(self._make_separator(), row, 0, 1, 3)
+        for entry in entries:
+            if entry.derived and not separated:
+                grid.addWidget(hline_separator(), row, 0, 1, 3)
                 row += 1
                 separated = True
-            spin = self._make_stat_spin(RESISTANCE_MIN, RESISTANCE_MAX)
-            self._resistances[resistance.key] = spin
-            self._add_stat_row(grid, row, resistance.name, resistance.abbr, spin)
+            spin = make_spin_box(STAT_MIN, STAT_MAX, buttons=False, max_width=STAT_SPIN_WIDTH)
+            if emit_change:
+                spin.valueChanged.connect(
+                    lambda value, key=entry.key: self.abilityChanged.emit(key, value)
+                )
+            store[entry.key] = spin
+            self._add_stat_row(grid, row, entry.name, entry.abbr, spin)
             row += 1
         return box
 
@@ -125,8 +109,7 @@ class StatsSection(QGroupBox):
             self._advantage_combo.addItem(label, advantage)
         picker.addWidget(self._advantage_combo, stretch=1)
 
-        self._advantage_rank = QSpinBox()
-        self._advantage_rank.setRange(RANK_MIN, RANK_MAX)
+        self._advantage_rank = make_spin_box(RANK_MIN, RANK_MAX, guarded=False)
         picker.addWidget(self._advantage_rank)
 
         self._advantage_add_button = QPushButton("Add")

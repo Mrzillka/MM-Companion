@@ -25,6 +25,7 @@ from mm_companion.core.data_loader import Characteristic, Field, GameData
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import make_spin_box
 
 IMAGE_SIZE = 160
 CONDITIONS_ROW_HEIGHT = 44
@@ -102,12 +103,8 @@ class BaseInfoSection(QGroupBox):
 
     @staticmethod
     def _make_spin_box(c: Characteristic) -> QSpinBox:
-        spin = QSpinBox()
-        spin.setRange(c.minimum, c.maximum)
-        if isinstance(c.default, int):
-            spin.setValue(c.default)
-        guard_wheel(spin)
-        return spin
+        value = c.default if isinstance(c.default, int) else None
+        return make_spin_box(c.minimum, c.maximum, value=value)
 
     def set_pool_current(self, key: str, value: object) -> None:
         """Update a pool characteristic's calculated *current* value.

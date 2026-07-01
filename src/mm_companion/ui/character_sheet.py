@@ -5,10 +5,12 @@ from __future__ import annotations
 from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
 from mm_companion.core.data_loader import GameData, load_game_data
-from mm_companion.ui.base_info_section import BaseInfoSection
-from mm_companion.ui.powers_section import PowersSection
-from mm_companion.ui.skills_section import SkillsSection
-from mm_companion.ui.stats_section import StatsSection
+from mm_companion.ui.sections import (
+    BaseInfoSection,
+    PowersSection,
+    SkillsSection,
+    StatsSection,
+)
 
 
 class CharacterSheet(QScrollArea):

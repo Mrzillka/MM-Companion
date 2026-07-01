@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core.data_loader import GameData, Skill
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import make_spin_box, readonly_item
 
 RANK_MIN, RANK_MAX = 0, 20
 MOD_MIN, MOD_MAX = -20, 20
@@ -176,7 +177,7 @@ class SkillsSection(QGroupBox):
     def _render_group_header(self, table: QTableWidget, row: int, skill: Skill) -> None:
         """Header cell block with an 'Add focus' button for a focused skill."""
 
-        table.setItem(row, COL_NAME, self._readonly_item(skill.name))
+        table.setItem(row, COL_NAME, readonly_item(skill.name))
 
         # In the locked (read-only) view there's nothing to add, so the header
         # is just the skill name with no button.
@@ -200,44 +201,35 @@ class SkillsSection(QGroupBox):
         indent: bool = False,
     ) -> None:
         name = ("    " if indent else "") + display
-        table.setItem(row, COL_NAME, self._readonly_item(name))
+        table.setItem(row, COL_NAME, readonly_item(name))
 
         abbr = self._ability_abbrs.get(skill.ability, skill.ability)
-        table.setItem(row, COL_ABILITY, self._readonly_item(abbr, center=True))
+        table.setItem(row, COL_ABILITY, readonly_item(abbr, center=True))
 
-        ability_rank_item = self._readonly_item("", center=True)
+        ability_rank_item = readonly_item("", center=True)
         table.setItem(row, COL_ABILITY_RANK, ability_rank_item)
 
-        ranks_spin = QSpinBox()
-        ranks_spin.setRange(RANK_MIN, RANK_MAX)
-        ranks_spin.setButtonSymbols(QSpinBox.NoButtons)
-        ranks_spin.setValue(self._ranks.get(row_id, 0))
-        ranks_spin.setMaximumWidth(SPIN_WIDTH)
+        ranks_spin = make_spin_box(
+            RANK_MIN,
+            RANK_MAX,
+            value=self._ranks.get(row_id, 0),
+            buttons=False,
+            max_width=SPIN_WIDTH,
+        )
         ranks_spin.valueChanged.connect(lambda value, rid=row_id: self._on_rank_changed(rid, value))
         table.setCellWidget(row, COL_RANKS, ranks_spin)
 
-        mods_spin = QSpinBox()
-        mods_spin.setRange(MOD_MIN, MOD_MAX)
-        mods_spin.setButtonSymbols(QSpinBox.NoButtons)
-        mods_spin.setValue(self._mods.get(row_id, 0))
-        mods_spin.setMaximumWidth(SPIN_WIDTH)
+        mods_spin = make_spin_box(
+            MOD_MIN, MOD_MAX, value=self._mods.get(row_id, 0), buttons=False, max_width=SPIN_WIDTH
+        )
         mods_spin.valueChanged.connect(lambda value, rid=row_id: self._on_mod_changed(rid, value))
         table.setCellWidget(row, COL_MODS, mods_spin)
 
-        guard_wheel(ranks_spin, mods_spin)
         self._editable_spins.extend((ranks_spin, mods_spin))
 
-        total_item = self._readonly_item("", center=True)
+        total_item = readonly_item("", center=True)
         table.setItem(row, COL_TOTAL, total_item)
         self._rows.append((skill.ability, row_id, ability_rank_item, total_item))
-
-    @staticmethod
-    def _readonly_item(text: str, center: bool = False) -> QTableWidgetItem:
-        item = QTableWidgetItem(text)
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        if center:
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        return item
 
     # -- interaction ---------------------------------------------------------
 

@@ -37,6 +37,9 @@ dev = [
     "ruff>=0.5",
 ]
 
+[project.scripts]
+mm-companion = "mm_companion.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/Mrzillka/MM-Companion"
 Repository = "https://github.com/Mrzillka/MM-Companion"

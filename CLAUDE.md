@@ -79,8 +79,11 @@ clean (see Licensing below).
   for saved characters, empty until save/load exists (so the library shows a
   "No characters yet" state). "Create New Character" opens a `MainWindow`
   (`locked=False`, editable) as its own window, kept referenced in
-  `_child_windows`; Exit closes the launcher. "Open Existing" and "Open GM Mode"
-  are still placeholders.
+  `_child_windows`, and **hides the launcher** behind it. `MainWindow` emits a
+  `closed` signal (from `closeEvent`), and its File→Exit action just closes the
+  window; `StartWindow._on_sheet_closed` drops the sheet and re-shows the
+  launcher. The launcher's own Exit closes the app. "Open Existing" and "Open GM
+  Mode" are still placeholders.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
   `PowersSection`. The data-driven sections take the `GameData` and build

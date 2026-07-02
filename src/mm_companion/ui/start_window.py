@@ -130,10 +130,20 @@ class StartWindow(QMainWindow):
         self._library.setWidget(self._cards_container)
 
     def _create_new_character(self) -> None:
-        """Open a fresh, editable character sheet in its own window."""
+        """Open a fresh, editable character sheet, hiding the launcher behind it."""
         window = MainWindow(locked=False)
+        window.closed.connect(lambda w=window: self._on_sheet_closed(w))
         self._child_windows.append(window)
+        self.hide()
         window.show()
+
+    def _on_sheet_closed(self, window: MainWindow) -> None:
+        """Drop a closed sheet and bring the launcher back to the front."""
+        if window in self._child_windows:
+            self._child_windows.remove(window)
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _not_implemented(self) -> None:
         """Placeholder for the not-yet-wired buttons (open existing / GM mode)."""

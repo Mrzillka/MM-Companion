@@ -41,6 +41,21 @@ def test_create_new_character_opens_an_unlocked_sheet(qapp: QApplication) -> Non
     assert sheet_window._lock_action.isChecked() is False
 
 
+def test_launcher_hides_while_the_sheet_is_open_and_returns_on_close(
+    qapp: QApplication,
+) -> None:
+    window = StartWindow()
+    window.show()
+    assert not window.isHidden()
+
+    window._create_new_character()
+    assert window.isHidden()  # hidden behind the sheet
+
+    window._child_windows[0].close()
+    assert not window.isHidden()  # the launcher is back
+    assert window._child_windows == []
+
+
 def test_character_card_renders_name_and_power_level(qapp: QApplication) -> None:
     card = CharacterCard(CharacterSummary(name="Ronin", power_level=8))
     texts = {label.text() for label in card.findChildren(QLabel)}

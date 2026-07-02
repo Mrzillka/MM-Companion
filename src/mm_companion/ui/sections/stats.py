@@ -1,6 +1,14 @@
-"""Section 2: abilities, resistances, and advantages."""
+"""Section 2: abilities, resistances, and advantages.
+
+Reads and writes the shared :class:`~mm_companion.core.character.Character`:
+ability/resistance ranks and the chosen advantages all live on the model, so the
+spin boxes and the advantage table are views over it rather than the source of
+truth.
+"""
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -19,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -31,26 +40,44 @@ RANK_MIN, RANK_MAX = 1, 20
 
 
 class StatsSection(QGroupBox):
-    """Simple spin boxes for abilities and resistances, plus a combo-box driven
-    picker for advantages.
+    """Spin boxes for abilities and resistances, plus a combo-box driven picker
+    for advantages, all backed by the shared :class:`Character`.
 
     Emits :attr:`abilityChanged` (key, value) whenever an ability spin box
-    changes, so dependent sections (e.g. Skills) can recompute their totals.
+    changes, so dependent sections (e.g. Skills) can recompute. Emits the generic
+    :attr:`changed` whenever anything that affects the point build changes, so the
+    sheet can recompute spent power points.
     """
 
     abilityChanged = Signal(str, int)
+    changed = Signal()
 
-    def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
+    def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__("Base Character Stats", parent)
 
+        self._character = character
         self._abilities: dict[str, QSpinBox] = {}
         self._resistances: dict[str, QSpinBox] = {}
 
         layout = QHBoxLayout(self)
         layout.addWidget(
-            self._build_stat_group("Abilities", data.abilities, self._abilities, emit_change=True)
+            self._build_stat_group(
+                "Abilities",
+                data.abilities,
+                self._abilities,
+                character.abilities,
+                self._on_ability_changed,
+            )
         )
-        layout.addWidget(self._build_stat_group("Resistances", data.resistances, self._resistances))
+        layout.addWidget(
+            self._build_stat_group(
+                "Resistances",
+                data.resistances,
+                self._resistances,
+                character.resistances,
+                self._on_resistance_changed,
+            )
+        )
         layout.addWidget(self._build_advantages(data), stretch=1)
 
     def _add_stat_row(
@@ -69,14 +96,14 @@ class StatsSection(QGroupBox):
         title: str,
         entries: list,
         store: dict[str, QSpinBox],
-        *,
-        emit_change: bool = False,
+        values: dict[str, int],
+        on_change: Callable[[str, int], None],
     ) -> QGroupBox:
         """Build a titled grid of stat spin boxes (abilities or resistances).
 
-        A separator is inserted before the first derived entry. When
-        *emit_change* is set, each spin box's changes are re-emitted via
-        :attr:`abilityChanged` so dependent sections can recompute.
+        Spin boxes are seeded from *values* (the model dict) and write back
+        through *on_change*. A separator is inserted before the first derived
+        entry.
         """
 
         box = QGroupBox(title)
@@ -88,15 +115,27 @@ class StatsSection(QGroupBox):
                 grid.addWidget(hline_separator(), row, 0, 1, 3)
                 row += 1
                 separated = True
-            spin = make_spin_box(STAT_MIN, STAT_MAX, buttons=False, max_width=STAT_SPIN_WIDTH)
-            if emit_change:
-                spin.valueChanged.connect(
-                    lambda value, key=entry.key: self.abilityChanged.emit(key, value)
-                )
+            spin = make_spin_box(
+                STAT_MIN,
+                STAT_MAX,
+                value=values.get(entry.key, 0),
+                buttons=False,
+                max_width=STAT_SPIN_WIDTH,
+            )
+            spin.valueChanged.connect(lambda value, key=entry.key: on_change(key, value))
             store[entry.key] = spin
             self._add_stat_row(grid, row, entry.name, entry.abbr, spin)
             row += 1
         return box
+
+    def _on_ability_changed(self, key: str, value: int) -> None:
+        self._character.abilities[key] = value
+        self.abilityChanged.emit(key, value)
+        self.changed.emit()
+
+    def _on_resistance_changed(self, key: str, value: int) -> None:
+        self._character.resistances[key] = value
+        self.changed.emit()
 
     def _build_advantages(self, data: GameData) -> QGroupBox:
         box = QGroupBox("Advantages")
@@ -148,20 +187,26 @@ class StatsSection(QGroupBox):
         advantage = self._advantage_combo.currentData()
         if advantage is None:
             return
-        text = advantage.name
-        if advantage.ranked:
-            text = f"{advantage.name} {self._advantage_rank.value()}"
+        rank = self._advantage_rank.value() if advantage.ranked else 1
+        # The table rows stay 1:1 (and in order) with the model's advantage list.
+        self._character.advantages.append(AdvantageSelection(advantage.name, rank))
 
+        text = f"{advantage.name} {rank}" if advantage.ranked else advantage.name
         row = self._advantage_table.rowCount()
         self._advantage_table.insertRow(row)
         self._advantage_table.setItem(row, 0, QTableWidgetItem(text))
         self._advantage_table.setItem(row, 1, QTableWidgetItem(advantage.description))
         self._advantage_table.resizeRowToContents(row)
+        self.changed.emit()
 
     def _remove_advantage(self) -> None:
         rows = {index.row() for index in self._advantage_table.selectedIndexes()}
         for row in sorted(rows, reverse=True):
             self._advantage_table.removeRow(row)
+            if 0 <= row < len(self._character.advantages):
+                del self._character.advantages[row]
+        if rows:
+            self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:
         """Make the ability/resistance spin boxes read-only labels and hide the

@@ -9,12 +9,12 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from mm_companion.ui.main_window import MainWindow
+from mm_companion.ui.start_window import StartWindow
 
 
 def main() -> int:
     app = QApplication(sys.argv)
-    window = MainWindow()
+    window = StartWindow()
     window.show()
     return app.exec()
 

@@ -65,6 +65,13 @@ clean (see Licensing below).
   `advantages.json`, and `conditions.json`; point costs and PL caps from
   `costs.json`. (`effects.json`/`modifiers.json` exist for powers but aren't
   loaded yet.)
+- The app launches into `StartWindow` (`ui/start_window.py`), a standalone
+  launcher: four action buttons (Create New Character, Open Existing, Open GM
+  Mode, Exit) beside a scrollable library of `CharacterCard`s (image, name, PL).
+  The cards come from `core.library.list_saved_characters()` — the single seam
+  for saved characters, empty until save/load exists (so the library shows a
+  "No characters yet" state). Only Exit is wired; the other buttons are
+  placeholders to be pointed at `MainWindow` later.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
   `PowersSection`. The data-driven sections take the `GameData` and build

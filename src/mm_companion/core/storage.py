@@ -25,6 +25,7 @@ HOME_ENV_VAR = "MM_COMPANION_HOME"
 SETTINGS_FILENAME = "settings.json"
 CHARACTERS_DIRNAME = "characters"
 GM_CHARACTERS_DIRNAME = "gm_characters"
+IMAGES_DIRNAME = "images"
 
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
@@ -50,6 +51,10 @@ class Workspace:
     @property
     def gm_characters_dir(self) -> Path:
         return self.root / GM_CHARACTERS_DIRNAME
+
+    @property
+    def images_dir(self) -> Path:
+        return self.root / IMAGES_DIRNAME
 
 
 def _platform_data_root() -> Path:
@@ -83,6 +88,7 @@ def ensure_workspace() -> Workspace:
     workspace = get_workspace()
     workspace.characters_dir.mkdir(parents=True, exist_ok=True)
     workspace.gm_characters_dir.mkdir(parents=True, exist_ok=True)
+    workspace.images_dir.mkdir(parents=True, exist_ok=True)
     if not workspace.settings_file.exists():
         workspace.settings_file.write_text(
             json.dumps(DEFAULT_SETTINGS, indent=2) + "\n", encoding="utf-8"

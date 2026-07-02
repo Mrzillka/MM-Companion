@@ -28,6 +28,7 @@ def test_ensure_workspace_creates_the_layout(_home: Path) -> None:
     assert ws.root == _home
     assert ws.characters_dir.is_dir()
     assert ws.gm_characters_dir.is_dir()
+    assert ws.images_dir.is_dir()
     assert json.loads(ws.settings_file.read_text(encoding="utf-8")) == DEFAULT_SETTINGS
 
 

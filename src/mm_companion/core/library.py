@@ -1,32 +1,185 @@
-"""The character library: the seam the start window reads saved characters from.
+"""The character library: saving, loading, and listing characters on disk.
 
-Pure data and no PySide6 (respects ``ui -> core -> data``). Save/load does not
-exist yet, so :func:`list_saved_characters` returns an empty list; once
-characters are persisted this becomes the single place the UI depends on.
+Pure data and no PySide6 (respects ``ui -> core -> data``). Characters are
+persisted as one JSON file per character — the output of
+:meth:`~mm_companion.core.character.Character.to_dict` — in the workspace
+``characters/`` directory (see :mod:`.storage`). :func:`list_saved_characters`
+is the single seam the start window reads from, so wiring or relocating storage
+stays a local change here.
 """
 
 from __future__ import annotations
 
+import json
+import re
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
+
+from mm_companion.core import storage
+from mm_companion.core.character import Character
+
+CHARACTER_SUFFIX = ".json"
+
+# Profile keys tried, in order, when deriving a character's display name.
+_NAME_FIELDS = ("hero_name", "character_name")
+UNNAMED = "Unnamed Character"
 
 
 @dataclass(frozen=True)
 class CharacterSummary:
-    """The minimum a start-window card needs: an image, a name, a power level."""
+    """The minimum a start-window card needs, plus the file it loads from."""
 
     name: str
     power_level: int
     image_path: str | None = None
+    path: Path | None = None
 
 
-def list_saved_characters() -> list[CharacterSummary]:
-    """Return summaries of every saved character, most useful for the launcher.
+def display_name(character: Character) -> str:
+    """The best human name for a character: hero name, then character name."""
+    for key in _NAME_FIELDS:
+        value = str(character.profile.get(key, "")).strip()
+        if value:
+            return value
+    return UNNAMED
 
-    Returns an empty list for now: there is no persistence yet. When save/load
-    lands this will scan a user data directory of serialized
-    :meth:`~mm_companion.core.character.Character.to_dict` JSON and build one
-    :class:`CharacterSummary` per file. Keeping the UI behind this one function
-    means wiring real storage later is a local change.
+
+def _slugify(name: str) -> str:
+    """A filesystem-safe stem derived from a name (``"Iron Man" -> "iron-man"``)."""
+    slug = re.sub(r"[^\w-]+", "-", name.strip().lower()).strip("-")
+    return slug or "character"
+
+
+def suggested_filename(character: Character) -> str:
+    """A default filename for *character*, e.g. ``"iron-man.json"``."""
+    return f"{_slugify(display_name(character))}{CHARACTER_SUFFIX}"
+
+
+def _characters_dir() -> Path:
+    """The workspace directory holding player characters."""
+    return storage.get_workspace().characters_dir
+
+
+def _unique_path(directory: Path, filename: str) -> Path:
+    """A path under *directory* for *filename* that does not collide with a file.
+
+    ``"iron-man.json"`` becomes ``"iron-man-2.json"`` when taken, and so on.
     """
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    candidate = directory / filename
+    counter = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}-{counter}{suffix}"
+        counter += 1
+    return candidate
 
-    return []
+
+def resolve_image_path(image_path: str | None) -> str | None:
+    """Turn a stored image reference into an absolute path for display.
+
+    Saved characters store their image as a bare filename inside the workspace
+    ``images/`` dir (see :func:`_store_image`); an unsaved character may still
+    hold the absolute path of a just-loaded external file. Absolute references
+    are returned unchanged; bare filenames are resolved against ``images/``.
+    """
+    if not image_path:
+        return None
+    path = Path(image_path)
+    if path.is_absolute():
+        return str(path)
+    return str(storage.get_workspace().images_dir / path)
+
+
+def _store_image(image_path: str | None) -> str | None:
+    """Copy an external image into the workspace and return its bare filename.
+
+    Keeps a saved character self-contained: the picture survives the original
+    file being moved or deleted. References that are already workspace-relative
+    (or already inside ``images/``) are left as-is, and a missing source file is
+    returned unchanged rather than raising.
+    """
+    if not image_path:
+        return image_path
+    source = Path(image_path)
+    if not source.is_absolute():
+        return image_path  # already a workspace-relative filename
+    images_dir = storage.get_workspace().images_dir
+    if source.parent == images_dir:
+        return source.name  # already stored in the workspace
+    if not source.is_file():
+        return image_path  # source is gone; keep the reference we were given
+    images_dir.mkdir(parents=True, exist_ok=True)
+    target = _unique_path(images_dir, source.name)
+    shutil.copy2(source, target)
+    return target.name
+
+
+def save_character(
+    character: Character,
+    *,
+    path: Path | None = None,
+    directory: Path | None = None,
+) -> Path:
+    """Write *character* to disk as JSON and return the file it was written to.
+
+    With an explicit *path* the file is overwritten in place (a plain "Save").
+    Otherwise a new, non-colliding filename is derived from the character's name
+    inside *directory* (defaulting to the workspace ``characters/`` dir) — a
+    first save or "Save As".
+    """
+    if path is not None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        directory = Path(directory) if directory is not None else _characters_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        path = _unique_path(directory, suggested_filename(character))
+
+    # Copy any external image into the workspace so the character is
+    # self-contained; the model then references the stored copy.
+    character.image_path = _store_image(character.image_path)
+
+    path.write_text(json.dumps(character.to_dict(), indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def load_character(path: Path) -> Character:
+    """Rebuild a :class:`Character` from a saved JSON file."""
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    return Character.from_dict(raw)
+
+
+def delete_character(path: Path) -> None:
+    """Remove a saved character file; a missing file is not an error."""
+    Path(path).unlink(missing_ok=True)
+
+
+def list_saved_characters(directory: Path | None = None) -> list[CharacterSummary]:
+    """Return a summary of every saved character, for the launcher's library.
+
+    Scans *directory* (defaulting to the workspace ``characters/`` dir) for
+    ``*.json`` files, tolerating any that fail to parse, and returns one
+    :class:`CharacterSummary` per readable file, sorted by name.
+    """
+    directory = Path(directory) if directory is not None else _characters_dir()
+    if not directory.is_dir():
+        return []
+
+    summaries: list[CharacterSummary] = []
+    for file in sorted(directory.glob(f"*{CHARACTER_SUFFIX}")):
+        try:
+            raw = json.loads(file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        character = Character.from_dict(raw)
+        summaries.append(
+            CharacterSummary(
+                name=display_name(character),
+                power_level=character.power_level,
+                image_path=character.image_path,
+                path=file,
+            )
+        )
+    summaries.sort(key=lambda s: s.name.lower())
+    return summaries

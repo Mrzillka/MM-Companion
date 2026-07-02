@@ -8,9 +8,9 @@ MM-Companion is a desktop dice roller and character creator for the *Mutants &
 Masterminds* TTRPG (3rd/4th edition), built with Python + PySide6 (Qt). It is in
 early development: it has a character-sheet UI, a data loader, and a headless
 `core` rules layer — d20 resolution, a mutable character model, character math,
-point-cost accounting, and Power Level validation. There is no save/load yet
-(the `Character` model is serializable but not wired to the menu), and powers
-are not yet modelled.
+point-cost accounting, and Power Level validation. Characters save to and load
+from the per-user workspace as JSON (via `core.library`), wired into the File
+menu and the launcher; powers are not yet modelled.
 
 ## Commands
 
@@ -76,14 +76,40 @@ clean (see Licensing below).
   launcher: four action buttons (Create New Character, Open Existing, Open GM
   Mode, Exit) beside a scrollable library of `CharacterCard`s (image, name, PL).
   The cards come from `core.library.list_saved_characters()` — the single seam
-  for saved characters, empty until save/load exists (so the library shows a
-  "No characters yet" state). "Create New Character" opens a `MainWindow`
-  (`locked=False`, editable) as its own window, kept referenced in
-  `_child_windows`, and **hides the launcher** behind it. `MainWindow` emits a
-  `closed` signal (from `closeEvent`), and its File→Exit action just closes the
-  window; `StartWindow._on_sheet_closed` drops the sheet and re-shows the
-  launcher. The launcher's own Exit closes the app. "Open Existing" and "Open GM
-  Mode" are still placeholders.
+  for saved characters; it scans the workspace `characters/` dir, so the library
+  shows a "No characters yet" state only when nothing is saved. "Create New
+  Character" opens a `MainWindow` (`locked=False`, editable) as its own window,
+  kept referenced in `_child_windows`, and **hides the launcher** behind it.
+  Clicking a `CharacterCard` or "Open Existing" (a file picker) loads a saved
+  character into a `locked=True` read-only sheet the same way. `MainWindow` emits
+  a `closed` signal (from `closeEvent`) and a `saved` signal (after a write);
+  `StartWindow` refreshes the library on both and re-shows the launcher on close.
+  Right-clicking a card offers to delete it (confirmed, then the file is removed
+  via `core.library.delete_character` and the library refreshes). The launcher's
+  own Exit closes the app. "Open GM Mode" is still a placeholder.
+- Persistence lives in `core.library` (pure Python, no Qt): `save_character`
+  writes a `Character.to_dict()` as JSON into the workspace `characters/` dir —
+  overwriting an explicit `path` for a plain "Save", or deriving a non-colliding
+  filename from the character's name for a first save / "Save As". `load_character`,
+  `delete_character`, and `display_name` (hero name → character name → "Unnamed
+  Character") round it out. `MainWindow` tracks the current file and wires File →
+  Open / Save / Save As through these. The **sections seed from the loaded
+  model**, so opening a character repopulates characteristics, conditions, the
+  image, and the advantage table (abilities/resistances/skills/profile already
+  seeded).
+- Character images are made self-contained: on save, `save_character` copies any
+  external image into the workspace `images/` dir and rewrites `Character.image_path`
+  to a bare filename; `core.library.resolve_image_path` turns that back into an
+  absolute path for display (absolute paths — a just-loaded, unsaved image — pass
+  through unchanged). So a saved character keeps its picture even if the original
+  file moves or is deleted.
+- Unsaved-change tracking: `CharacterSheet` emits `edited` on any user edit
+  (`BaseInfoSection.edited` covers name/conditions/image, which don't affect the
+  point build; stats/skills reuse their `changed` signal). `MainWindow` flags the
+  title with `*` while dirty, clears it on save, and prompts Save/Discard/Cancel
+  from `closeEvent` — a cancelled Save (or Save As dialog) leaves the window open.
+  Seeding a loaded character does **not** mark it dirty (a `_loading` guard in
+  `BaseInfoSection`, plus the fact that section signals connect after construction).
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
   `PowersSection`. The data-driven sections take the `GameData` and build

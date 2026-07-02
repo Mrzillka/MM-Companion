@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Characteristic, Field, GameData
+from mm_companion.core.library import resolve_image_path
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -42,16 +43,23 @@ class BaseInfoSection(QGroupBox):
     """
 
     changed = Signal()
+    edited = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__("Base Information", parent)
 
+        # While seeding from a (possibly loaded) character, edits are programmatic,
+        # not the user's, so they must not mark the sheet dirty.
+        self._loading = True
         self._character = character
         self._profile_fields: dict[str, QLineEdit] = {}
         self._characteristics: dict[str, QWidget] = {}
         self._pool_current: dict[str, QLabel] = {}
         self._condition_names: list[str] = [c.name for c in data.conditions]
         self._condition_ids: dict[str, str] = {c.name: (c.id or c.name) for c in data.conditions}
+        self._condition_names_by_id: dict[str, str] = {
+            (c.id or c.name): c.name for c in data.conditions
+        }
         self._conditions: dict[str, QWidget] = {}
         self._image_path: str | None = None
         self._locked = False
@@ -72,16 +80,44 @@ class BaseInfoSection(QGroupBox):
         # Right: character image with a load button.
         layout.addLayout(self._build_image_column(), stretch=1)
 
+        # Reflect any state a loaded character already carries.
+        self._seed_from_model()
+        self._loading = False
+
+    def _seed_from_model(self) -> None:
+        """Render conditions and the image from a (possibly loaded) character.
+
+        Profile fields and characteristics seed themselves as they are built;
+        conditions and the image are populated here since they have no fixed set
+        of widgets to seed. Runs while ``_loading`` is set, so it does not mark
+        the sheet dirty.
+        """
+        for condition_id in sorted(self._character.conditions):
+            name = self._condition_names_by_id.get(condition_id)
+            if name is not None:
+                self._add_condition(name)
+        if self._character.image_path:
+            self._show_image(resolve_image_path(self._character.image_path))
+
+    def _emit_edited(self) -> None:
+        """Signal a user edit, unless we're still seeding from the model."""
+        if not self._loading:
+            self.edited.emit()
+
     def _build_characteristic(self, c: Characteristic) -> QWidget:
         """Build the editor for one characteristic, keyed by its ``kind``.
 
-        Each editor writes its value back to the shared character model.
+        Each editor is seeded from the shared character model (falling back to
+        the content default) and writes its value back to it, so a loaded
+        character shows its saved characteristics.
         """
+        seed = self._seed_value(c)
+
         if c.kind == "choice":
             combo = QComboBox()
             combo.addItems(c.options)
-            if isinstance(c.default, str) and c.default in c.options:
-                combo.setCurrentText(c.default)
+            if isinstance(seed, str) and seed in c.options:
+                combo.setCurrentText(seed)
             combo.currentTextChanged.connect(
                 lambda text, key=c.key: self._on_characteristic_changed(key, text)
             )
@@ -90,7 +126,7 @@ class BaseInfoSection(QGroupBox):
             return combo
 
         if c.kind == "number":
-            spin = self._make_spin_box(c)
+            spin = self._make_spin_box(c, seed)
             spin.valueChanged.connect(
                 lambda value, key=c.key: self._on_characteristic_changed(key, value)
             )
@@ -104,7 +140,7 @@ class BaseInfoSection(QGroupBox):
             row.setContentsMargins(0, 0, 0, 0)
             current = QLabel("—")
             current.setToolTip("Spent — calculated from the build")
-            total = self._make_spin_box(c)
+            total = self._make_spin_box(c, seed)
             total.setToolTip("Total available")
             total.valueChanged.connect(
                 lambda value, key=c.key: self._on_characteristic_changed(key, value)
@@ -118,11 +154,17 @@ class BaseInfoSection(QGroupBox):
             return container
 
         edit = QLineEdit()
-        if c.default is not None:
-            edit.setText(str(c.default))
+        if seed is not None:
+            edit.setText(str(seed))
         edit.textChanged.connect(lambda text, key=c.key: self._on_characteristic_changed(key, text))
         self._characteristics[c.key] = edit
         return edit
+
+    def _seed_value(self, c: Characteristic) -> object:
+        """The value to seed a characteristic editor from: the model's stored
+        value if present, otherwise the content default."""
+        value = self._character.characteristics.get(c.key)
+        return value if value is not None else c.default
 
     def _on_characteristic_changed(self, key: str, value: object) -> None:
         """Write a characteristic edit back to the model.
@@ -137,10 +179,11 @@ class BaseInfoSection(QGroupBox):
         elif key == "power_points" and isinstance(value, int):
             self._character.power_points_total = value
             self.changed.emit()
+        self._emit_edited()
 
     @staticmethod
-    def _make_spin_box(c: Characteristic) -> QSpinBox:
-        value = c.default if isinstance(c.default, int) else None
+    def _make_spin_box(c: Characteristic, seed: object) -> QSpinBox:
+        value = seed if isinstance(seed, int) else None
         return make_spin_box(c.minimum, c.maximum, value=value)
 
     def set_pool_current(self, key: str, value: object) -> None:
@@ -156,11 +199,13 @@ class BaseInfoSection(QGroupBox):
     def _add_profile_field(self, form: QFormLayout, field: Field) -> None:
         edit = QLineEdit()
         edit.setText(self._character.profile.get(field.key, ""))
-        edit.textChanged.connect(
-            lambda text, key=field.key: self._character.profile.__setitem__(key, text)
-        )
+        edit.textChanged.connect(lambda text, key=field.key: self._on_profile_changed(key, text))
         self._profile_fields[field.key] = edit
         form.addRow(f"{field.label}:", edit)
+
+    def _on_profile_changed(self, key: str, text: str) -> None:
+        self._character.profile[key] = text
+        self._emit_edited()
 
     def _build_profile_column(self, data: GameData) -> QVBoxLayout:
         column = QVBoxLayout()
@@ -257,6 +302,7 @@ class BaseInfoSection(QGroupBox):
         self._conditions[name] = chip
         self._conditions_flow.addWidget(chip)
         self._character.conditions.add(self._condition_ids.get(name, name))
+        self._emit_edited()
 
     def _remove_condition(self, name: str) -> None:
         chip = self._conditions.pop(name, None)
@@ -265,6 +311,7 @@ class BaseInfoSection(QGroupBox):
         self._conditions_flow.removeWidget(chip)
         chip.deleteLater()
         self._character.conditions.discard(self._condition_ids.get(name, name))
+        self._emit_edited()
 
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back, and
@@ -301,15 +348,24 @@ class BaseInfoSection(QGroupBox):
             "",
             "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp)",
         )
-        if not path:
-            return
+        if path:
+            self._set_image(path)
 
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            self._image_label.setText("Invalid image")
+    def _set_image(self, path: str) -> None:
+        """Record a newly chosen image on the model and display it (a user edit)."""
+        if not self._show_image(path):
             return
-
         self._image_path = path
+        self._character.image_path = path
+        self._emit_edited()
+
+    def _show_image(self, path: str | None) -> bool:
+        """Render *path* in the image label; return whether it was a valid image."""
+        pixmap = QPixmap(path) if path else QPixmap()
+        if pixmap.isNull():
+            self._image_label.setText("Invalid image" if path else "No image")
+            return False
+
         self._image_label.setPixmap(
             pixmap.scaled(
                 IMAGE_SIZE,
@@ -318,3 +374,4 @@ class BaseInfoSection(QGroupBox):
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
+        return True

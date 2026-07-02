@@ -52,6 +52,9 @@ class BaseInfoSection(QGroupBox):
         self._pool_current: dict[str, QLabel] = {}
         self._condition_names: list[str] = [c.name for c in data.conditions]
         self._condition_ids: dict[str, str] = {c.name: (c.id or c.name) for c in data.conditions}
+        self._condition_names_by_id: dict[str, str] = {
+            (c.id or c.name): c.name for c in data.conditions
+        }
         self._conditions: dict[str, QWidget] = {}
         self._image_path: str | None = None
         self._locked = False
@@ -72,16 +75,37 @@ class BaseInfoSection(QGroupBox):
         # Right: character image with a load button.
         layout.addLayout(self._build_image_column(), stretch=1)
 
+        # Reflect any state a loaded character already carries.
+        self._seed_from_model()
+
+    def _seed_from_model(self) -> None:
+        """Render conditions and the image from a (possibly loaded) character.
+
+        Profile fields and characteristics seed themselves as they are built;
+        conditions and the image are populated here since they have no fixed set
+        of widgets to seed.
+        """
+        for condition_id in sorted(self._character.conditions):
+            name = self._condition_names_by_id.get(condition_id)
+            if name is not None:
+                self._add_condition(name)
+        if self._character.image_path:
+            self._set_image(self._character.image_path)
+
     def _build_characteristic(self, c: Characteristic) -> QWidget:
         """Build the editor for one characteristic, keyed by its ``kind``.
 
-        Each editor writes its value back to the shared character model.
+        Each editor is seeded from the shared character model (falling back to
+        the content default) and writes its value back to it, so a loaded
+        character shows its saved characteristics.
         """
+        seed = self._seed_value(c)
+
         if c.kind == "choice":
             combo = QComboBox()
             combo.addItems(c.options)
-            if isinstance(c.default, str) and c.default in c.options:
-                combo.setCurrentText(c.default)
+            if isinstance(seed, str) and seed in c.options:
+                combo.setCurrentText(seed)
             combo.currentTextChanged.connect(
                 lambda text, key=c.key: self._on_characteristic_changed(key, text)
             )
@@ -90,7 +114,7 @@ class BaseInfoSection(QGroupBox):
             return combo
 
         if c.kind == "number":
-            spin = self._make_spin_box(c)
+            spin = self._make_spin_box(c, seed)
             spin.valueChanged.connect(
                 lambda value, key=c.key: self._on_characteristic_changed(key, value)
             )
@@ -104,7 +128,7 @@ class BaseInfoSection(QGroupBox):
             row.setContentsMargins(0, 0, 0, 0)
             current = QLabel("—")
             current.setToolTip("Spent — calculated from the build")
-            total = self._make_spin_box(c)
+            total = self._make_spin_box(c, seed)
             total.setToolTip("Total available")
             total.valueChanged.connect(
                 lambda value, key=c.key: self._on_characteristic_changed(key, value)
@@ -118,11 +142,17 @@ class BaseInfoSection(QGroupBox):
             return container
 
         edit = QLineEdit()
-        if c.default is not None:
-            edit.setText(str(c.default))
+        if seed is not None:
+            edit.setText(str(seed))
         edit.textChanged.connect(lambda text, key=c.key: self._on_characteristic_changed(key, text))
         self._characteristics[c.key] = edit
         return edit
+
+    def _seed_value(self, c: Characteristic) -> object:
+        """The value to seed a characteristic editor from: the model's stored
+        value if present, otherwise the content default."""
+        value = self._character.characteristics.get(c.key)
+        return value if value is not None else c.default
 
     def _on_characteristic_changed(self, key: str, value: object) -> None:
         """Write a characteristic edit back to the model.
@@ -139,8 +169,8 @@ class BaseInfoSection(QGroupBox):
             self.changed.emit()
 
     @staticmethod
-    def _make_spin_box(c: Characteristic) -> QSpinBox:
-        value = c.default if isinstance(c.default, int) else None
+    def _make_spin_box(c: Characteristic, seed: object) -> QSpinBox:
+        value = seed if isinstance(seed, int) else None
         return make_spin_box(c.minimum, c.maximum, value=value)
 
     def set_pool_current(self, key: str, value: object) -> None:
@@ -301,15 +331,18 @@ class BaseInfoSection(QGroupBox):
             "",
             "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp)",
         )
-        if not path:
-            return
+        if path:
+            self._set_image(path)
 
+    def _set_image(self, path: str) -> None:
+        """Show *path* in the image label and record it on the model."""
         pixmap = QPixmap(path)
         if pixmap.isNull():
             self._image_label.setText("Invalid image")
             return
 
         self._image_path = path
+        self._character.image_path = path
         self._image_label.setPixmap(
             pixmap.scaled(
                 IMAGE_SIZE,

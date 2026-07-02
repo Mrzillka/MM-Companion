@@ -38,6 +38,7 @@ class Character:
 
     power_level: int = 10
     power_points_total: int = 150
+    image_path: str | None = None
     profile: dict[str, str] = field(default_factory=dict)
     characteristics: dict[str, str | int] = field(default_factory=dict)
     abilities: dict[str, int] = field(default_factory=dict)
@@ -78,6 +79,7 @@ class Character:
         return {
             "power_level": self.power_level,
             "power_points_total": self.power_points_total,
+            "image_path": self.image_path,
             "profile": dict(self.profile),
             "characteristics": dict(self.characteristics),
             "abilities": dict(self.abilities),
@@ -96,6 +98,7 @@ class Character:
         return cls(
             power_level=int(raw.get("power_level", 10)),
             power_points_total=int(raw.get("power_points_total", 150)),
+            image_path=raw.get("image_path"),
             profile=dict(raw.get("profile", {})),
             characteristics=dict(raw.get("characteristics", {})),
             abilities=dict(raw.get("abilities", {})),

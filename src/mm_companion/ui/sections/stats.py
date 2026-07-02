@@ -58,6 +58,7 @@ class StatsSection(QGroupBox):
         self._character = character
         self._abilities: dict[str, QSpinBox] = {}
         self._resistances: dict[str, QSpinBox] = {}
+        self._advantages_by_name = {a.name: a for a in data.advantages}
 
         layout = QHBoxLayout(self)
         layout.addWidget(
@@ -175,7 +176,23 @@ class StatsSection(QGroupBox):
         self._advantage_combo.currentIndexChanged.connect(self._sync_rank_enabled)
         self._sync_rank_enabled()
         guard_wheel(self._advantage_combo, self._advantage_rank, self._advantage_table)
+
+        # Render any advantages a loaded character already carries.
+        for selection in self._character.advantages:
+            advantage = self._advantages_by_name.get(selection.name)
+            description = advantage.description if advantage else ""
+            ranked = bool(advantage and advantage.ranked)
+            self._append_advantage_row(selection.name, selection.rank, description, ranked)
         return box
+
+    def _append_advantage_row(self, name: str, rank: int, description: str, ranked: bool) -> None:
+        """Add one row to the advantage table (kept 1:1 with the model list)."""
+        text = f"{name} {rank}" if ranked else name
+        row = self._advantage_table.rowCount()
+        self._advantage_table.insertRow(row)
+        self._advantage_table.setItem(row, 0, QTableWidgetItem(text))
+        self._advantage_table.setItem(row, 1, QTableWidgetItem(description))
+        self._advantage_table.resizeRowToContents(row)
 
     def _sync_rank_enabled(self) -> None:
         advantage = self._advantage_combo.currentData()
@@ -190,13 +207,7 @@ class StatsSection(QGroupBox):
         rank = self._advantage_rank.value() if advantage.ranked else 1
         # The table rows stay 1:1 (and in order) with the model's advantage list.
         self._character.advantages.append(AdvantageSelection(advantage.name, rank))
-
-        text = f"{advantage.name} {rank}" if advantage.ranked else advantage.name
-        row = self._advantage_table.rowCount()
-        self._advantage_table.insertRow(row)
-        self._advantage_table.setItem(row, 0, QTableWidgetItem(text))
-        self._advantage_table.setItem(row, 1, QTableWidgetItem(advantage.description))
-        self._advantage_table.resizeRowToContents(row)
+        self._append_advantage_row(advantage.name, rank, advantage.description, advantage.ranked)
         self.changed.emit()
 
     def _remove_advantage(self) -> None:

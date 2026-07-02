@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
@@ -20,8 +21,11 @@ class CharacterSheet(QScrollArea):
 
     Owns the shared :class:`Character` model that the sections read and write, and
     recomputes derived values (spent power points) whenever a section reports a
-    build change.
+    build change. Emits :attr:`edited` on any user edit, so a host window can
+    track unsaved changes.
     """
+
+    edited = Signal()
 
     def __init__(
         self,
@@ -53,6 +57,14 @@ class CharacterSheet(QScrollArea):
         for section in (self.base_info, self.stats, self.skills):
             section.changed.connect(self._recompute_derived)
         self._recompute_derived()
+
+        # Surface any user edit for unsaved-change tracking. The stats/skills
+        # `changed` signal already fires on every edit they make; base_info has
+        # edits (name, conditions, image) that don't affect the point build, so
+        # it carries a dedicated `edited` signal.
+        self.base_info.edited.connect(self.edited)
+        self.stats.changed.connect(self.edited)
+        self.skills.changed.connect(self.edited)
 
         self.setWidget(content)
         self.setWidgetResizable(True)

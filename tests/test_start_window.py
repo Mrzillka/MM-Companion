@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
 
-from mm_companion.core import storage
+from mm_companion.core import library, storage
+from mm_companion.core.character import Character
+from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.library import CharacterSummary, list_saved_characters
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.start_window import CharacterCard, StartWindow
@@ -71,3 +73,48 @@ def test_character_card_renders_name_and_power_level(qapp: QApplication) -> None
     texts = {label.text() for label in card.findChildren(QLabel)}
     assert "Ronin" in texts
     assert "PL 8" in texts
+
+
+def _save_one(name: str) -> None:
+    char = Character.new_default(load_game_data())
+    char.profile["hero_name"] = name
+    library.save_character(char)
+
+
+def test_saved_characters_appear_as_cards(qapp: QApplication) -> None:
+    _save_one("Ronin")
+    window = StartWindow()
+
+    cards = [window._cards_flow.itemAt(i).widget() for i in range(window._cards_flow.count())]
+    assert [c._summary.name for c in cards] == ["Ronin"]
+
+
+def test_deleting_a_card_removes_the_file_and_refreshes(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_one("Doomed")
+    window = StartWindow()
+    card = window._cards_flow.itemAt(0).widget()
+    path = card._summary.path
+    assert path is not None and path.is_file()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    card.deleteRequested.emit(card._summary)
+
+    assert not path.exists()
+    assert window._cards_flow.count() == 0
+    assert window._library.widget() is window._empty_label
+
+
+def test_declining_the_delete_prompt_keeps_the_file(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_one("Survivor")
+    window = StartWindow()
+    card = window._cards_flow.itemAt(0).widget()
+    path = card._summary.path
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+    card.deleteRequested.emit(card._summary)
+
+    assert path is not None and path.is_file()

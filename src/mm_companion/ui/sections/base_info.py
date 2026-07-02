@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Characteristic, Field, GameData
+from mm_companion.core.library import resolve_image_path
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -42,10 +43,14 @@ class BaseInfoSection(QGroupBox):
     """
 
     changed = Signal()
+    edited = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__("Base Information", parent)
 
+        # While seeding from a (possibly loaded) character, edits are programmatic,
+        # not the user's, so they must not mark the sheet dirty.
+        self._loading = True
         self._character = character
         self._profile_fields: dict[str, QLineEdit] = {}
         self._characteristics: dict[str, QWidget] = {}
@@ -77,20 +82,27 @@ class BaseInfoSection(QGroupBox):
 
         # Reflect any state a loaded character already carries.
         self._seed_from_model()
+        self._loading = False
 
     def _seed_from_model(self) -> None:
         """Render conditions and the image from a (possibly loaded) character.
 
         Profile fields and characteristics seed themselves as they are built;
         conditions and the image are populated here since they have no fixed set
-        of widgets to seed.
+        of widgets to seed. Runs while ``_loading`` is set, so it does not mark
+        the sheet dirty.
         """
         for condition_id in sorted(self._character.conditions):
             name = self._condition_names_by_id.get(condition_id)
             if name is not None:
                 self._add_condition(name)
         if self._character.image_path:
-            self._set_image(self._character.image_path)
+            self._show_image(resolve_image_path(self._character.image_path))
+
+    def _emit_edited(self) -> None:
+        """Signal a user edit, unless we're still seeding from the model."""
+        if not self._loading:
+            self.edited.emit()
 
     def _build_characteristic(self, c: Characteristic) -> QWidget:
         """Build the editor for one characteristic, keyed by its ``kind``.
@@ -167,6 +179,7 @@ class BaseInfoSection(QGroupBox):
         elif key == "power_points" and isinstance(value, int):
             self._character.power_points_total = value
             self.changed.emit()
+        self._emit_edited()
 
     @staticmethod
     def _make_spin_box(c: Characteristic, seed: object) -> QSpinBox:
@@ -186,11 +199,13 @@ class BaseInfoSection(QGroupBox):
     def _add_profile_field(self, form: QFormLayout, field: Field) -> None:
         edit = QLineEdit()
         edit.setText(self._character.profile.get(field.key, ""))
-        edit.textChanged.connect(
-            lambda text, key=field.key: self._character.profile.__setitem__(key, text)
-        )
+        edit.textChanged.connect(lambda text, key=field.key: self._on_profile_changed(key, text))
         self._profile_fields[field.key] = edit
         form.addRow(f"{field.label}:", edit)
+
+    def _on_profile_changed(self, key: str, text: str) -> None:
+        self._character.profile[key] = text
+        self._emit_edited()
 
     def _build_profile_column(self, data: GameData) -> QVBoxLayout:
         column = QVBoxLayout()
@@ -287,6 +302,7 @@ class BaseInfoSection(QGroupBox):
         self._conditions[name] = chip
         self._conditions_flow.addWidget(chip)
         self._character.conditions.add(self._condition_ids.get(name, name))
+        self._emit_edited()
 
     def _remove_condition(self, name: str) -> None:
         chip = self._conditions.pop(name, None)
@@ -295,6 +311,7 @@ class BaseInfoSection(QGroupBox):
         self._conditions_flow.removeWidget(chip)
         chip.deleteLater()
         self._character.conditions.discard(self._condition_ids.get(name, name))
+        self._emit_edited()
 
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back, and
@@ -335,14 +352,20 @@ class BaseInfoSection(QGroupBox):
             self._set_image(path)
 
     def _set_image(self, path: str) -> None:
-        """Show *path* in the image label and record it on the model."""
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            self._image_label.setText("Invalid image")
+        """Record a newly chosen image on the model and display it (a user edit)."""
+        if not self._show_image(path):
             return
-
         self._image_path = path
         self._character.image_path = path
+        self._emit_edited()
+
+    def _show_image(self, path: str | None) -> bool:
+        """Render *path* in the image label; return whether it was a valid image."""
+        pixmap = QPixmap(path) if path else QPixmap()
+        if pixmap.isNull():
+            self._image_label.setText("Invalid image" if path else "No image")
+            return False
+
         self._image_label.setPixmap(
             pixmap.scaled(
                 IMAGE_SIZE,
@@ -351,3 +374,4 @@ class BaseInfoSection(QGroupBox):
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
+        return True

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,14 +61,58 @@ def _characters_dir() -> Path:
     return storage.get_workspace().characters_dir
 
 
-def _unique_path(directory: Path, slug: str) -> Path:
-    """A path under *directory* for *slug* that does not collide with a file."""
-    candidate = directory / f"{slug}{CHARACTER_SUFFIX}"
+def _unique_path(directory: Path, filename: str) -> Path:
+    """A path under *directory* for *filename* that does not collide with a file.
+
+    ``"iron-man.json"`` becomes ``"iron-man-2.json"`` when taken, and so on.
+    """
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    candidate = directory / filename
     counter = 2
     while candidate.exists():
-        candidate = directory / f"{slug}-{counter}{CHARACTER_SUFFIX}"
+        candidate = directory / f"{stem}-{counter}{suffix}"
         counter += 1
     return candidate
+
+
+def resolve_image_path(image_path: str | None) -> str | None:
+    """Turn a stored image reference into an absolute path for display.
+
+    Saved characters store their image as a bare filename inside the workspace
+    ``images/`` dir (see :func:`_store_image`); an unsaved character may still
+    hold the absolute path of a just-loaded external file. Absolute references
+    are returned unchanged; bare filenames are resolved against ``images/``.
+    """
+    if not image_path:
+        return None
+    path = Path(image_path)
+    if path.is_absolute():
+        return str(path)
+    return str(storage.get_workspace().images_dir / path)
+
+
+def _store_image(image_path: str | None) -> str | None:
+    """Copy an external image into the workspace and return its bare filename.
+
+    Keeps a saved character self-contained: the picture survives the original
+    file being moved or deleted. References that are already workspace-relative
+    (or already inside ``images/``) are left as-is, and a missing source file is
+    returned unchanged rather than raising.
+    """
+    if not image_path:
+        return image_path
+    source = Path(image_path)
+    if not source.is_absolute():
+        return image_path  # already a workspace-relative filename
+    images_dir = storage.get_workspace().images_dir
+    if source.parent == images_dir:
+        return source.name  # already stored in the workspace
+    if not source.is_file():
+        return image_path  # source is gone; keep the reference we were given
+    images_dir.mkdir(parents=True, exist_ok=True)
+    target = _unique_path(images_dir, source.name)
+    shutil.copy2(source, target)
+    return target.name
 
 
 def save_character(
@@ -89,7 +134,11 @@ def save_character(
     else:
         directory = Path(directory) if directory is not None else _characters_dir()
         directory.mkdir(parents=True, exist_ok=True)
-        path = _unique_path(directory, _slugify(display_name(character)))
+        path = _unique_path(directory, suggested_filename(character))
+
+    # Copy any external image into the workspace so the character is
+    # self-contained; the model then references the stored copy.
+    character.image_path = _store_image(character.image_path)
 
     path.write_text(json.dumps(character.to_dict(), indent=2) + "\n", encoding="utf-8")
     return path

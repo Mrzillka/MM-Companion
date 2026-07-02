@@ -95,6 +95,61 @@ def test_display_name_falls_back_to_a_placeholder() -> None:
     assert library.display_name(Character()) == library.UNNAMED
 
 
+def test_save_copies_an_external_image_into_the_workspace(_home: Path, tmp_path: Path) -> None:
+    external = tmp_path / "portrait.png"
+    external.write_bytes(b"fake-png-bytes")
+    char = _sample_character()
+    char.image_path = str(external)
+
+    library.save_character(char)
+
+    stored = storage.get_workspace().images_dir / "portrait.png"
+    assert stored.is_file()
+    assert stored.read_bytes() == b"fake-png-bytes"
+    # The model now references the workspace copy by bare filename.
+    assert char.image_path == "portrait.png"
+    assert library.resolve_image_path(char.image_path) == str(stored)
+
+
+def test_save_does_not_recopy_an_already_stored_image(_home: Path, tmp_path: Path) -> None:
+    external = tmp_path / "portrait.png"
+    external.write_bytes(b"fake-png-bytes")
+    char = _sample_character()
+    char.image_path = str(external)
+
+    path = library.save_character(char)  # first save copies + rewrites to filename
+    library.save_character(char, path=path)  # second save must not duplicate
+
+    images = list(storage.get_workspace().images_dir.glob("*.png"))
+    assert [p.name for p in images] == ["portrait.png"]
+
+
+def test_save_avoids_clobbering_a_different_image_of_the_same_name(
+    _home: Path, tmp_path: Path
+) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "portrait.png").write_bytes(b"one")
+    (tmp_path / "b" / "portrait.png").write_bytes(b"two")
+
+    first = _sample_character()
+    first.image_path = str(tmp_path / "a" / "portrait.png")
+    library.save_character(first)
+
+    second = _sample_character()
+    second.image_path = str(tmp_path / "b" / "portrait.png")
+    library.save_character(second)
+
+    assert first.image_path == "portrait.png"
+    assert second.image_path == "portrait-2.png"
+
+
+def test_resolve_image_path_handles_none_and_absolutes(_home: Path, tmp_path: Path) -> None:
+    assert library.resolve_image_path(None) is None
+    absolute = str(tmp_path / "somewhere.png")
+    assert library.resolve_image_path(absolute) == absolute
+
+
 def test_delete_character_removes_the_file(_home: Path) -> None:
     path = library.save_character(_sample_character())
     library.delete_character(path)

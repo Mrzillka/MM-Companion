@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -36,9 +38,13 @@ CHARACTER_FILTER = "Character files (*.json)"
 
 
 class CharacterCard(QFrame):
-    """A single saved character rendered as a clickable card: image, name, PL."""
+    """A single saved character rendered as a clickable card: image, name, PL.
+
+    Left-click opens the character; right-click offers to delete it.
+    """
 
     clicked = Signal(object)
+    deleteRequested = Signal(object)
 
     def __init__(self, summary: CharacterSummary, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -52,7 +58,8 @@ class CharacterCard(QFrame):
         image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image.setFixedSize(CARD_IMAGE_SIZE, CARD_IMAGE_SIZE)
         image.setFrameShape(QLabel.Shape.Box)
-        pixmap = QPixmap(summary.image_path) if summary.image_path else QPixmap()
+        resolved = library.resolve_image_path(summary.image_path)
+        pixmap = QPixmap(resolved) if resolved else QPixmap()
         if pixmap.isNull():
             image.setText("No image")
         else:
@@ -78,6 +85,14 @@ class CharacterCard(QFrame):
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
             self.clicked.emit(self._summary)
         super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        menu = QMenu(self)
+        menu.addAction(
+            f"Delete {self._summary.name}",
+            lambda: self.deleteRequested.emit(self._summary),
+        )
+        menu.exec(event.globalPos())
 
 
 class StartWindow(QMainWindow):
@@ -153,6 +168,7 @@ class StartWindow(QMainWindow):
         for summary in summaries:
             card = CharacterCard(summary)
             card.clicked.connect(self._open_summary)
+            card.deleteRequested.connect(self._delete_summary)
             self._cards_flow.addWidget(card)
         self._library.setWidget(self._cards_container)
 
@@ -173,6 +189,21 @@ class StartWindow(QMainWindow):
         """Open the character a clicked card refers to."""
         if summary.path is not None:
             self._open_character(Path(summary.path))
+
+    def _delete_summary(self, summary: CharacterSummary) -> None:
+        """Confirm and delete the character a card refers to, then refresh."""
+        if summary.path is None:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Delete character",
+            f"Delete “{summary.name}”? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            library.delete_character(Path(summary.path))
+            self._populate_cards()
 
     def _open_character(self, path: Path) -> None:
         """Load a character from *path* into a read-only sheet."""

@@ -84,7 +84,9 @@ clean (see Licensing below).
   character into a `locked=True` read-only sheet the same way. `MainWindow` emits
   a `closed` signal (from `closeEvent`) and a `saved` signal (after a write);
   `StartWindow` refreshes the library on both and re-shows the launcher on close.
-  The launcher's own Exit closes the app. "Open GM Mode" is still a placeholder.
+  Right-clicking a card offers to delete it (confirmed, then the file is removed
+  via `core.library.delete_character` and the library refreshes). The launcher's
+  own Exit closes the app. "Open GM Mode" is still a placeholder.
 - Persistence lives in `core.library` (pure Python, no Qt): `save_character`
   writes a `Character.to_dict()` as JSON into the workspace `characters/` dir —
   overwriting an explicit `path` for a plain "Save", or deriving a non-colliding
@@ -95,6 +97,19 @@ clean (see Licensing below).
   model**, so opening a character repopulates characteristics, conditions, the
   image, and the advantage table (abilities/resistances/skills/profile already
   seeded).
+- Character images are made self-contained: on save, `save_character` copies any
+  external image into the workspace `images/` dir and rewrites `Character.image_path`
+  to a bare filename; `core.library.resolve_image_path` turns that back into an
+  absolute path for display (absolute paths — a just-loaded, unsaved image — pass
+  through unchanged). So a saved character keeps its picture even if the original
+  file moves or is deleted.
+- Unsaved-change tracking: `CharacterSheet` emits `edited` on any user edit
+  (`BaseInfoSection.edited` covers name/conditions/image, which don't affect the
+  point build; stats/skills reuse their `changed` signal). `MainWindow` flags the
+  title with `*` while dirty, clears it on save, and prompts Save/Discard/Cancel
+  from `closeEvent` — a cancelled Save (or Save As dialog) leaves the window open.
+  Seeding a loaded character does **not** mark it dirty (a `_loading` guard in
+  `BaseInfoSection`, plus the fact that section signals connect after construction).
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
   `PowersSection`. The data-driven sections take the `GameData` and build

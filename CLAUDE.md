@@ -58,13 +58,41 @@ clean (see Licensing below).
   installed as a package.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
-  `PowersSection`. Each section takes the `GameData` and builds widgets by
-  iterating over the data lists — no hardcoded ability/skill names.
+  `PowersSection`. The data-driven sections take the `GameData` and build
+  widgets by iterating over the data lists — no hardcoded ability/skill names.
+  (`PowersSection` takes no data yet — it is still a placeholder.)
 - Cross-section reactivity uses Qt signals. `StatsSection` emits
   `abilityChanged(key, value)`; `CharacterSheet` wires it to
   `SkillsSection.set_ability_value` so skill totals stay in sync with ability
   spin boxes. Follow this signal-based pattern for section-to-section updates
   rather than sections reaching into each other.
+
+## Shared UI utilities and view modes (matters when adding widgets)
+
+The `ui/` package has a small support layer that section code is expected to go
+through rather than reinvent. When building new sheet widgets, use it:
+
+- `ui/widgets.py` — shared factories (`make_spin_box`, `readonly_item`,
+  `hline_separator`) that keep construction consistent and wheel-guarded. Build
+  spin boxes and read-only table cells through these, not by hand.
+- `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
+  boxes, and inner tables from hijacking the page scroll: a guarded widget only
+  reacts to the wheel once it has keyboard focus, otherwise the wheel is
+  redirected to the enclosing page. `make_spin_box` guards by default.
+- `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
+  **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
+  out); a locked field keeps showing its value but sheds its input chrome
+  (frame, spin buttons, dropdown arrow) so it reads like a label. Combo boxes
+  have no native read-only mode, so it installs an event-filter interaction
+  blocker.
+- `ui/flow_layout.py` — a reflowing layout for wrapping widget rows.
+
+The Lock pattern is threaded top-down: `MainWindow` owns the checkable Lock menu
+action, `CharacterSheet.set_locked(bool)` fans out to each section's
+`set_locked`, and sections call `set_widget_locked` on their editable widgets.
+The sheet **starts locked** (a read-only viewer, not an editor). Any new section
+with editable widgets should expose `set_locked` and be wired into
+`CharacterSheet.set_locked`.
 
 ## Licensing boundary (matters when adding game data)
 

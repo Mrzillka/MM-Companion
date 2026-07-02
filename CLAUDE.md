@@ -65,6 +65,25 @@ clean (see Licensing below).
   `advantages.json`, and `conditions.json`; point costs and PL caps from
   `costs.json`. (`effects.json`/`modifiers.json` exist for powers but aren't
   loaded yet.)
+- On launch, `__main__.main()` shows a splash and calls
+  `core.storage.ensure_workspace()` to create the per-user workspace on first
+  run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
+  Application Support elsewhere; override with `MM_COMPANION_HOME`) holding
+  `settings.json`, a `characters/` dir, and a `gm_characters/` dir. It is
+  idempotent and never clobbers edited settings. `core.storage` is pure Python
+  (no Qt) and computes paths itself so it works headless in CI.
+- The app launches into `StartWindow` (`ui/start_window.py`), a standalone
+  launcher: four action buttons (Create New Character, Open Existing, Open GM
+  Mode, Exit) beside a scrollable library of `CharacterCard`s (image, name, PL).
+  The cards come from `core.library.list_saved_characters()` — the single seam
+  for saved characters, empty until save/load exists (so the library shows a
+  "No characters yet" state). "Create New Character" opens a `MainWindow`
+  (`locked=False`, editable) as its own window, kept referenced in
+  `_child_windows`, and **hides the launcher** behind it. `MainWindow` emits a
+  `closed` signal (from `closeEvent`), and its File→Exit action just closes the
+  window; `StartWindow._on_sheet_closed` drops the sheet and re-shows the
+  launcher. The launcher's own Exit closes the app. "Open Existing" and "Open GM
+  Mode" are still placeholders.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
   `PowersSection`. The data-driven sections take the `GameData` and build

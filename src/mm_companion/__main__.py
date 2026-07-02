@@ -7,15 +7,41 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtWidgets import QApplication, QSplashScreen
 
-from mm_companion.ui.main_window import MainWindow
+from mm_companion.core.storage import ensure_workspace
+from mm_companion.ui.start_window import StartWindow
+
+
+def _make_splash() -> QSplashScreen:
+    """A minimal loading screen shown while the workspace is prepared."""
+    pixmap = QPixmap(420, 220)
+    pixmap.fill(QColor("#2b2b3a"))
+    splash = QSplashScreen(pixmap)
+    splash.showMessage(
+        "MM-Companion\nPreparing workspace…",
+        Qt.AlignmentFlag.AlignCenter,
+        QColor("white"),
+    )
+    return splash
 
 
 def main() -> int:
     app = QApplication(sys.argv)
-    window = MainWindow()
+
+    # Hide first-run setup (creating the APPDATA workspace, default settings,
+    # character directories) behind a loading screen.
+    splash = _make_splash()
+    splash.show()
+    app.processEvents()
+
+    ensure_workspace()
+
+    window = StartWindow()
     window.show()
+    splash.finish(window)
     return app.exec()
 
 

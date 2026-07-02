@@ -28,7 +28,13 @@
       "trainedOnly": false,
       "action": "simple_or_free",
       "focused": false,
-      "specializations": ["Balancing", "Contorting", "Maneuvering", "Standing", "Tumbling"],
+      "specializations": [
+        "Balancing",
+        "Contorting",
+        "Maneuvering",
+        "Standing",
+        "Tumbling"
+      ],
       "description": "Flips, rolls, and fancy footwork — keeping your balance and grace in situations where an ordinary person would stumble."
     },
     {
@@ -38,7 +44,12 @@
       "trainedOnly": false,
       "action": "simple",
       "focused": false,
-      "specializations": ["Climbing", "Jumping", "Running", "Swimming"],
+      "specializations": [
+        "Climbing",
+        "Jumping",
+        "Running",
+        "Swimming"
+      ],
       "description": "Raw physical exertion: scaling a wall, clearing a gap, outrunning trouble, or powering through open water."
     },
     {
@@ -48,7 +59,15 @@
       "trainedOnly": false,
       "action": "standard",
       "focused": true,
-      "focuses": ["Array", "Blades", "Bludgeons", "Disarming", "Grabbing", "Tripping", "Unarmed"],
+      "focuses": [
+        "Array",
+        "Blades",
+        "Bludgeons",
+        "Disarming",
+        "Grabbing",
+        "Tripping",
+        "Unarmed"
+      ],
       "description": "Precision in melee range with a specific fighting style or weapon type — every focus you pick is trained and ranked on its own."
     },
     {
@@ -58,7 +77,13 @@
       "trainedOnly": false,
       "action": "standard",
       "focused": false,
-      "specializations": ["Bluffing", "Disguise", "Distracting", "Innuendo", "Tricking"],
+      "specializations": [
+        "Bluffing",
+        "Disguise",
+        "Distracting",
+        "Innuendo",
+        "Tricking"
+      ],
       "description": "Selling a lie, a distraction, or a hidden agenda convincingly enough that people believe it."
     },
     {
@@ -68,7 +93,9 @@
       "trainedOnly": false,
       "action": "extended",
       "focused": false,
-      "specializations": ["By disguise type"],
+      "specializations": [
+        "By disguise type"
+      ],
       "description": "Building a convincing false identity out of makeup, costuming, and careful attention to detail."
     },
     {
@@ -78,7 +105,9 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": true,
-      "focuses": ["Chosen freely per field of study, e.g. Science, Law, History, Streetwise"],
+      "focuses": [
+        "Chosen freely per field of study, e.g. Science, Law, History, Streetwise"
+      ],
       "description": "Deep, formal knowledge in a specific academic, professional, or scholarly field — each field you study is its own focus."
     },
     {
@@ -98,7 +127,10 @@
       "trainedOnly": false,
       "action": "standard",
       "focused": false,
-      "specializations": ["Coercing", "Demoralizing"],
+      "specializations": [
+        "Coercing",
+        "Demoralizing"
+      ],
       "description": "Making someone back down, comply, or lose their nerve through threats, presence, or sheer menace."
     },
     {
@@ -108,7 +140,13 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": false,
-      "specializations": ["Analyzing Evidence", "Gathering Evidence", "Gathering Information", "Searching", "Surveillance"],
+      "specializations": [
+        "Analyzing Evidence",
+        "Gathering Evidence",
+        "Gathering Information",
+        "Searching",
+        "Surveillance"
+      ],
       "description": "Methodically working a case: searching a scene, chasing down leads, and drawing conclusions from the evidence."
     },
     {
@@ -118,7 +156,9 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": true,
-      "focuses": ["Chosen freely per language beyond the character's native tongue"],
+      "focuses": [
+        "Chosen freely per language beyond the character's native tongue"
+      ],
       "description": "Fluent, literate command of a language other than your own — every additional language is its own focus."
     },
     {
@@ -128,7 +168,13 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": false,
-      "specializations": ["Constructing", "Disabling", "Lore", "Repairing", "Technique"],
+      "specializations": [
+        "Constructing",
+        "Disabling",
+        "Lore",
+        "Repairing",
+        "Technique"
+      ],
       "description": "Formal training in the practical craft of magic — casting, maintaining, and understanding arcane workings."
     },
     {
@@ -138,7 +184,9 @@
       "trainedOnly": false,
       "action": "free",
       "focused": false,
-      "specializations": ["By specific sense, e.g. sight, hearing, smell"],
+      "specializations": [
+        "By specific sense, e.g. sight, hearing, smell"
+      ],
       "description": "Staying alert to your surroundings — catching a sound, a shape in the shadows, or a detail everyone else missed."
     },
     {
@@ -148,7 +196,18 @@
       "trainedOnly": true,
       "action": "standard",
       "focused": true,
-      "focuses": ["Acting", "Comedy", "Dance", "Keyboards", "Oratory", "Percussion Instruments", "Poetry", "Singing", "Stringed Instruments", "Wind Instruments"],
+      "focuses": [
+        "Acting",
+        "Comedy",
+        "Dance",
+        "Keyboards",
+        "Oratory",
+        "Percussion Instruments",
+        "Poetry",
+        "Singing",
+        "Stringed Instruments",
+        "Wind Instruments"
+      ],
       "description": "Commanding an audience through a specific performing art — each discipline you train in is its own focus."
     },
     {
@@ -168,7 +227,11 @@
       "trainedOnly": false,
       "action": "standard",
       "focused": true,
-      "focuses": ["Array", "Guns", "Throwing"],
+      "focuses": [
+        "Array",
+        "Guns",
+        "Throwing"
+      ],
       "description": "Accuracy with a specific ranged weapon or attack type at a distance — every focus you pick is trained and ranked on its own."
     },
     {
@@ -178,7 +241,13 @@
       "trainedOnly": true,
       "action": "standard",
       "focused": false,
-      "specializations": ["Concealing", "Escaping", "Legerdemain", "Planting", "Stealing"],
+      "specializations": [
+        "Concealing",
+        "Escaping",
+        "Legerdemain",
+        "Planting",
+        "Stealing"
+      ],
       "description": "Quick, discreet handwork — palming an object, lifting a wallet, or planting something without being noticed."
     },
     {
@@ -188,7 +257,12 @@
       "trainedOnly": false,
       "action": "simple",
       "focused": false,
-      "specializations": ["Hiding", "Sneaking", "Tailing", "By specific environment or terrain"],
+      "specializations": [
+        "Hiding",
+        "Sneaking",
+        "Tailing",
+        "By specific environment or terrain"
+      ],
       "description": "Staying unseen and unheard — sneaking past guards, hiding in plain sight, or trailing someone unnoticed."
     },
     {
@@ -198,7 +272,13 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": false,
-      "specializations": ["Avoid Hazards", "Construction", "Foraging", "Navigation", "By specific environment or terrain"],
+      "specializations": [
+        "Avoid Hazards",
+        "Construction",
+        "Foraging",
+        "Navigation",
+        "By specific environment or terrain"
+      ],
       "description": "Getting by in the wild — finding food, shelter, and a safe path through hostile terrain."
     },
     {
@@ -208,7 +288,16 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": false,
-      "specializations": ["Computers", "Constructing", "Disabling", "Electronics", "Operating", "Mechanics", "Repairing", "Security"],
+      "specializations": [
+        "Computers",
+        "Constructing",
+        "Disabling",
+        "Electronics",
+        "Operating",
+        "Mechanics",
+        "Repairing",
+        "Security"
+      ],
       "description": "Working with machines and devices — building, fixing, hacking, or bypassing technology."
     },
     {
@@ -218,7 +307,13 @@
       "trainedOnly": true,
       "action": "standard",
       "focused": false,
-      "specializations": ["Diagnosis", "Disease and Toxins", "Provide Care", "Revive", "Stabilize"],
+      "specializations": [
+        "Diagnosis",
+        "Disease and Toxins",
+        "Provide Care",
+        "Revive",
+        "Stabilize"
+      ],
       "description": "Medical know-how — diagnosing injuries, providing first aid, and stabilizing someone in danger."
     },
     {
@@ -228,7 +323,11 @@
       "trainedOnly": true,
       "action": "standard",
       "focused": false,
-      "specializations": ["Driving", "Sailing", "Piloting"],
+      "specializations": [
+        "Driving",
+        "Sailing",
+        "Piloting"
+      ],
       "description": "Confident, skillful handling of a vehicle, especially when conditions get difficult."
     }
   ]

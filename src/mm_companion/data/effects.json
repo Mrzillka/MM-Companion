@@ -29,47 +29,719 @@
     }
   },
   "effects": [
-    { "id": "affliction", "name": "Affliction", "effectType": "Attack", "action": "Standard", "range": "Close", "duration": "Instant", "check": "Attack vs. Defense", "resistance": "Chosen resistance vs. Effect DC", "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Inflicts an escalating condition on a target instead of damage." },
-    { "id": "burrowing", "name": "Burrowing", "effectType": "Movement", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "movement" }, "description": "Grants the ability to tunnel through earth or similar material." },
-    { "id": "communication", "name": "Communication", "effectType": "Sensory", "action": "Free", "range": "Rank", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Lets you send and receive messages over distance through a chosen medium." },
-    { "id": "comprehend", "name": "Comprehend", "effectType": "Sensory", "action": "Free", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_permanent", "affects": "special" }, "description": "Lets you understand or be understood by languages, animals, or alien minds." },
-    { "id": "concealment", "name": "Concealment", "effectType": "Sensory", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Hides you from a chosen sense type, from a shadow-blend to full invisibility." },
-    { "id": "create", "name": "Create", "effectType": "Control", "action": "Standard", "range": "Ranged", "duration": "Sustained", "check": "Attack vs. Defense", "resistance": "Dodge vs. Effect", "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Conjures solid objects or terrain out of nothing." },
-    { "id": "damage", "name": "Damage", "effectType": "Attack", "action": "Standard", "range": "Close", "duration": "Instant", "check": "Attack vs. Defense", "resistance": "Toughness vs. Effect", "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "A direct harmful attack — the basis for most offensive powers." },
-    { "id": "deflect", "name": "Deflect", "effectType": "Defense", "action": "Standard", "range": "Personal", "duration": "Instant", "check": "Deflect vs. Attack", "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Bats away or redirects an incoming ranged attack." },
-    { "id": "elongation", "name": "Elongation", "effectType": "Alteration", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Stretches your limbs or body to extend your reach." },
-    { "id": "enhanced_movement", "name": "Enhanced Movement", "effectType": "Movement", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": true, "statIntegration": { "pattern": "passive_toggle", "affects": "movement" }, "description": "Grants specialized movement abilities like wall-crawling or safe falling." },
-    { "id": "enhanced_senses", "name": "Enhanced Senses", "effectType": "Sensory", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": true, "statIntegration": { "pattern": "passive_permanent", "affects": "senses" }, "description": "Improves existing senses or grants entirely new ones." },
-    { "id": "enhanced_trait", "name": "Enhanced Trait", "effectType": "General", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "Same as buying the target trait directly", "configurableTarget": true, "statIntegration": { "pattern": "passive_permanent", "affects": "ability|skill|defense|resistance" }, "description": "A bonus to a chosen ability, skill, defense, or resistance, held as a power rather than a bought-in trait." },
-    { "id": "environment", "name": "Environment", "effectType": "Control", "action": "Free", "range": "Rank", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 or more per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Alters conditions in an area — temperature, light, footing, and similar hazards." },
-    { "id": "extra_limbs", "name": "Extra Limbs", "effectType": "Alteration", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_permanent", "affects": "special" }, "description": "Grants additional functional limbs for extra actions or grips." },
-    { "id": "feature", "name": "Feature", "effectType": "General", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_permanent", "affects": "special" }, "description": "A minor, custom-defined convenience or utility not covered by another effect." },
-    { "id": "flight", "name": "Flight", "effectType": "Movement", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "movement" }, "description": "Grants the ability to fly at a speed set by rank." },
-    { "id": "fortune_control", "name": "Fortune Control", "effectType": "Control", "action": "None", "range": "Perception", "duration": "Instant", "check": null, "resistance": null, "baseCost": "3 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Bends luck and probability in or against someone's favor." },
-    { "id": "growth", "name": "Growth", "effectType": "Alteration", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Increases your size, with knock-on changes to Strength, Toughness, and more." },
-    { "id": "healing", "name": "Healing", "effectType": "General", "action": "Standard", "range": "Close", "duration": "Instant", "check": "Effect vs. DC 10", "resistance": null, "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Removes damage conditions from a target on touch." },
-    { "id": "illusion", "name": "Illusion", "effectType": "Sensory", "action": "Standard", "range": "Ranged", "duration": "Concentration", "check": null, "resistance": "Perception vs. Effect", "baseCost": "1+ per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Creates false sensory impressions that fool one or more senses." },
-    { "id": "immunity", "name": "Immunity", "effectType": "Defense", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": true, "statIntegration": { "pattern": "passive_permanent", "affects": "resistance" }, "description": "Removes the need to resist a specific effect or descriptor entirely." },
-    { "id": "insubstantial", "name": "Insubstantial", "effectType": "Alteration", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "10 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Turns your body into a less solid, harder-to-affect state, up to fully incorporeal." },
-    { "id": "leaping", "name": "Leaping", "effectType": "Movement", "action": "Free", "range": "Personal", "duration": "Instant", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_permanent", "affects": "movement" }, "description": "Extends how far and high you can jump." },
-    { "id": "lifting", "name": "Lifting", "effectType": "General", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "ability" }, "description": "Boosts Strength specifically for lifting and carrying heavy loads." },
-    { "id": "mind_reading", "name": "Mind Reading", "effectType": "Sensory", "action": "Standard", "range": "Perception", "duration": "Sustained", "check": "Effect vs. Will", "resistance": "Will vs. Effect", "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Reads or influences a target's surface thoughts and memories." },
-    { "id": "morph", "name": "Morph", "effectType": "Alteration", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "5 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Changes your appearance to resemble other people or forms." },
-    { "id": "move_object", "name": "Move Object", "effectType": "Control", "action": "Standard", "range": "Ranged", "duration": "Sustained", "check": "Attack vs. Defense", "resistance": "Strength vs. Effect", "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Telekinetically lifts and moves objects or people at a distance." },
-    { "id": "nullify", "name": "Nullify", "effectType": "Control", "action": "Standard", "range": "Ranged", "duration": "Instant", "check": "Attack vs. Defense", "resistance": "Effect vs. Will or rank", "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Suppresses or shuts down another power or effect." },
-    { "id": "obscure", "name": "Obscure", "effectType": "Sensory", "action": "Standard", "range": "Ranged", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1+ per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Blankets an area in fog, darkness, or static that blocks a chosen sense." },
-    { "id": "postcognition", "name": "Postcognition", "effectType": "Sensory", "action": "Standard", "range": "Personal", "duration": "Concentration", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Perceives events from the past at your current location." },
-    { "id": "precognition", "name": "Precognition", "effectType": "Sensory", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_permanent", "affects": "special" }, "description": "Grants glimpses or warnings of events yet to happen." },
-    { "id": "protection", "name": "Protection", "effectType": "Defense", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_permanent", "affects": "defense" }, "description": "A standing bonus to Toughness from tough skin, natural armor, or similar." },
-    { "id": "quickness", "name": "Quickness", "effectType": "General", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Lets you perform non-combat tasks in a fraction of the normal time." },
-    { "id": "regeneration", "name": "Regeneration", "effectType": "Defense", "action": "None", "range": "Personal", "duration": "Permanent", "check": null, "resistance": null, "baseCost": "3 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_permanent", "affects": "recovery" }, "description": "Speeds up how quickly you recover from injury." },
-    { "id": "remote_sensing", "name": "Remote Sensing", "effectType": "Sensory", "action": "Free", "range": "Rank", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "5 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "senses" }, "description": "Projects your senses to a remote location instead of your body." },
-    { "id": "shrinking", "name": "Shrinking", "effectType": "Alteration", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "special" }, "description": "Decreases your size, with knock-on changes to Stealth, Defense, and more." },
-    { "id": "speed", "name": "Speed", "effectType": "Movement", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "movement" }, "description": "Increases your ground movement speed." },
-    { "id": "summon", "name": "Summon", "effectType": "Control", "action": "Standard", "range": "Close", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Calls forth an ally or creature to fight and act on your behalf." },
-    { "id": "swimming", "name": "Swimming", "effectType": "Movement", "action": "Free", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "1 per rank", "configurableTarget": false, "statIntegration": { "pattern": "passive_toggle", "affects": "movement" }, "description": "Increases your swimming speed." },
-    { "id": "teleport", "name": "Teleport", "effectType": "Movement", "action": "Simple", "range": "Rank", "duration": "Instant", "check": null, "resistance": null, "baseCost": "2 per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "movement" }, "description": "Instantly relocates you (and possibly others) across distance." },
-    { "id": "transmute", "name": "Transmute", "effectType": "Control", "action": "Standard", "range": "Close", "duration": "Sustained", "check": "Attack vs. Defense", "resistance": null, "baseCost": "2+ per rank", "configurableTarget": false, "statIntegration": { "pattern": "instant_action", "affects": "none" }, "description": "Changes the material or substance of an object you touch." },
-    { "id": "variable", "name": "Variable", "effectType": "General", "action": "Standard", "range": "Personal", "duration": "Sustained", "check": null, "resistance": null, "baseCost": "7 per rank", "configurableTarget": false, "statIntegration": { "pattern": "resource_pool", "affects": "none" }, "description": "A flexible pool of points you can reconfigure into different effects on the fly." }
+    {
+      "id": "affliction",
+      "name": "Affliction",
+      "effectType": "Attack",
+      "action": "Standard",
+      "range": "Close",
+      "duration": "Instant",
+      "check": "Attack vs. Defense",
+      "resistance": "Chosen resistance vs. Effect DC",
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Inflicts an escalating condition on a target instead of damage."
+    },
+    {
+      "id": "burrowing",
+      "name": "Burrowing",
+      "effectType": "Movement",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "movement"
+      },
+      "description": "Grants the ability to tunnel through earth or similar material."
+    },
+    {
+      "id": "communication",
+      "name": "Communication",
+      "effectType": "Sensory",
+      "action": "Free",
+      "range": "Rank",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Lets you send and receive messages over distance through a chosen medium."
+    },
+    {
+      "id": "comprehend",
+      "name": "Comprehend",
+      "effectType": "Sensory",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "special"
+      },
+      "description": "Lets you understand or be understood by languages, animals, or alien minds."
+    },
+    {
+      "id": "concealment",
+      "name": "Concealment",
+      "effectType": "Sensory",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Hides you from a chosen sense type, from a shadow-blend to full invisibility."
+    },
+    {
+      "id": "create",
+      "name": "Create",
+      "effectType": "Control",
+      "action": "Standard",
+      "range": "Ranged",
+      "duration": "Sustained",
+      "check": "Attack vs. Defense",
+      "resistance": "Dodge vs. Effect",
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Conjures solid objects or terrain out of nothing."
+    },
+    {
+      "id": "damage",
+      "name": "Damage",
+      "effectType": "Attack",
+      "action": "Standard",
+      "range": "Close",
+      "duration": "Instant",
+      "check": "Attack vs. Defense",
+      "resistance": "Toughness vs. Effect",
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "A direct harmful attack — the basis for most offensive powers."
+    },
+    {
+      "id": "deflect",
+      "name": "Deflect",
+      "effectType": "Defense",
+      "action": "Standard",
+      "range": "Personal",
+      "duration": "Instant",
+      "check": "Deflect vs. Attack",
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Bats away or redirects an incoming ranged attack."
+    },
+    {
+      "id": "elongation",
+      "name": "Elongation",
+      "effectType": "Alteration",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Stretches your limbs or body to extend your reach."
+    },
+    {
+      "id": "enhanced_movement",
+      "name": "Enhanced Movement",
+      "effectType": "Movement",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": true,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "movement"
+      },
+      "description": "Grants specialized movement abilities like wall-crawling or safe falling."
+    },
+    {
+      "id": "enhanced_senses",
+      "name": "Enhanced Senses",
+      "effectType": "Sensory",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": true,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "senses"
+      },
+      "description": "Improves existing senses or grants entirely new ones."
+    },
+    {
+      "id": "enhanced_trait",
+      "name": "Enhanced Trait",
+      "effectType": "General",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "Same as buying the target trait directly",
+      "configurableTarget": true,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "ability|skill|defense|resistance"
+      },
+      "description": "A bonus to a chosen ability, skill, defense, or resistance, held as a power rather than a bought-in trait."
+    },
+    {
+      "id": "environment",
+      "name": "Environment",
+      "effectType": "Control",
+      "action": "Free",
+      "range": "Rank",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 or more per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Alters conditions in an area — temperature, light, footing, and similar hazards."
+    },
+    {
+      "id": "extra_limbs",
+      "name": "Extra Limbs",
+      "effectType": "Alteration",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "special"
+      },
+      "description": "Grants additional functional limbs for extra actions or grips."
+    },
+    {
+      "id": "feature",
+      "name": "Feature",
+      "effectType": "General",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "special"
+      },
+      "description": "A minor, custom-defined convenience or utility not covered by another effect."
+    },
+    {
+      "id": "flight",
+      "name": "Flight",
+      "effectType": "Movement",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "movement"
+      },
+      "description": "Grants the ability to fly at a speed set by rank."
+    },
+    {
+      "id": "fortune_control",
+      "name": "Fortune Control",
+      "effectType": "Control",
+      "action": "None",
+      "range": "Perception",
+      "duration": "Instant",
+      "check": null,
+      "resistance": null,
+      "baseCost": "3 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Bends luck and probability in or against someone's favor."
+    },
+    {
+      "id": "growth",
+      "name": "Growth",
+      "effectType": "Alteration",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Increases your size, with knock-on changes to Strength, Toughness, and more."
+    },
+    {
+      "id": "healing",
+      "name": "Healing",
+      "effectType": "General",
+      "action": "Standard",
+      "range": "Close",
+      "duration": "Instant",
+      "check": "Effect vs. DC 10",
+      "resistance": null,
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Removes damage conditions from a target on touch."
+    },
+    {
+      "id": "illusion",
+      "name": "Illusion",
+      "effectType": "Sensory",
+      "action": "Standard",
+      "range": "Ranged",
+      "duration": "Concentration",
+      "check": null,
+      "resistance": "Perception vs. Effect",
+      "baseCost": "1+ per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Creates false sensory impressions that fool one or more senses."
+    },
+    {
+      "id": "immunity",
+      "name": "Immunity",
+      "effectType": "Defense",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": true,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "resistance"
+      },
+      "description": "Removes the need to resist a specific effect or descriptor entirely."
+    },
+    {
+      "id": "insubstantial",
+      "name": "Insubstantial",
+      "effectType": "Alteration",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "10 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Turns your body into a less solid, harder-to-affect state, up to fully incorporeal."
+    },
+    {
+      "id": "leaping",
+      "name": "Leaping",
+      "effectType": "Movement",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Instant",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "movement"
+      },
+      "description": "Extends how far and high you can jump."
+    },
+    {
+      "id": "lifting",
+      "name": "Lifting",
+      "effectType": "General",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "ability"
+      },
+      "description": "Boosts Strength specifically for lifting and carrying heavy loads."
+    },
+    {
+      "id": "mind_reading",
+      "name": "Mind Reading",
+      "effectType": "Sensory",
+      "action": "Standard",
+      "range": "Perception",
+      "duration": "Sustained",
+      "check": "Effect vs. Will",
+      "resistance": "Will vs. Effect",
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Reads or influences a target's surface thoughts and memories."
+    },
+    {
+      "id": "morph",
+      "name": "Morph",
+      "effectType": "Alteration",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "5 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Changes your appearance to resemble other people or forms."
+    },
+    {
+      "id": "move_object",
+      "name": "Move Object",
+      "effectType": "Control",
+      "action": "Standard",
+      "range": "Ranged",
+      "duration": "Sustained",
+      "check": "Attack vs. Defense",
+      "resistance": "Strength vs. Effect",
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Telekinetically lifts and moves objects or people at a distance."
+    },
+    {
+      "id": "nullify",
+      "name": "Nullify",
+      "effectType": "Control",
+      "action": "Standard",
+      "range": "Ranged",
+      "duration": "Instant",
+      "check": "Attack vs. Defense",
+      "resistance": "Effect vs. Will or rank",
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Suppresses or shuts down another power or effect."
+    },
+    {
+      "id": "obscure",
+      "name": "Obscure",
+      "effectType": "Sensory",
+      "action": "Standard",
+      "range": "Ranged",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1+ per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Blankets an area in fog, darkness, or static that blocks a chosen sense."
+    },
+    {
+      "id": "postcognition",
+      "name": "Postcognition",
+      "effectType": "Sensory",
+      "action": "Standard",
+      "range": "Personal",
+      "duration": "Concentration",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Perceives events from the past at your current location."
+    },
+    {
+      "id": "precognition",
+      "name": "Precognition",
+      "effectType": "Sensory",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "special"
+      },
+      "description": "Grants glimpses or warnings of events yet to happen."
+    },
+    {
+      "id": "protection",
+      "name": "Protection",
+      "effectType": "Defense",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "defense"
+      },
+      "description": "A standing bonus to Toughness from tough skin, natural armor, or similar."
+    },
+    {
+      "id": "quickness",
+      "name": "Quickness",
+      "effectType": "General",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Lets you perform non-combat tasks in a fraction of the normal time."
+    },
+    {
+      "id": "regeneration",
+      "name": "Regeneration",
+      "effectType": "Defense",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "check": null,
+      "resistance": null,
+      "baseCost": "3 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "recovery"
+      },
+      "description": "Speeds up how quickly you recover from injury."
+    },
+    {
+      "id": "remote_sensing",
+      "name": "Remote Sensing",
+      "effectType": "Sensory",
+      "action": "Free",
+      "range": "Rank",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "5 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "senses"
+      },
+      "description": "Projects your senses to a remote location instead of your body."
+    },
+    {
+      "id": "shrinking",
+      "name": "Shrinking",
+      "effectType": "Alteration",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "special"
+      },
+      "description": "Decreases your size, with knock-on changes to Stealth, Defense, and more."
+    },
+    {
+      "id": "speed",
+      "name": "Speed",
+      "effectType": "Movement",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "movement"
+      },
+      "description": "Increases your ground movement speed."
+    },
+    {
+      "id": "summon",
+      "name": "Summon",
+      "effectType": "Control",
+      "action": "Standard",
+      "range": "Close",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Calls forth an ally or creature to fight and act on your behalf."
+    },
+    {
+      "id": "swimming",
+      "name": "Swimming",
+      "effectType": "Movement",
+      "action": "Free",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "1 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "passive_toggle",
+        "affects": "movement"
+      },
+      "description": "Increases your swimming speed."
+    },
+    {
+      "id": "teleport",
+      "name": "Teleport",
+      "effectType": "Movement",
+      "action": "Simple",
+      "range": "Rank",
+      "duration": "Instant",
+      "check": null,
+      "resistance": null,
+      "baseCost": "2 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "movement"
+      },
+      "description": "Instantly relocates you (and possibly others) across distance."
+    },
+    {
+      "id": "transmute",
+      "name": "Transmute",
+      "effectType": "Control",
+      "action": "Standard",
+      "range": "Close",
+      "duration": "Sustained",
+      "check": "Attack vs. Defense",
+      "resistance": null,
+      "baseCost": "2+ per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "instant_action",
+        "affects": "none"
+      },
+      "description": "Changes the material or substance of an object you touch."
+    },
+    {
+      "id": "variable",
+      "name": "Variable",
+      "effectType": "General",
+      "action": "Standard",
+      "range": "Personal",
+      "duration": "Sustained",
+      "check": null,
+      "resistance": null,
+      "baseCost": "7 per rank",
+      "configurableTarget": false,
+      "statIntegration": {
+        "pattern": "resource_pool",
+        "affects": "none"
+      },
+      "description": "A flexible pool of points you can reconfigure into different effects on the fly."
+    }
   ]
 }

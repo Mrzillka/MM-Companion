@@ -11,10 +11,22 @@
   "power_level": {
     "pp_per_level": 15,
     "caps": {
-      "skill_modifier": { "mult": 1, "add": 10 },
-      "attack_effect": { "mult": 2, "add": 0 },
-      "defense_toughness": { "mult": 2, "add": 0 },
-      "fortitude_will": { "mult": 2, "add": 0 }
+      "skill_modifier": {
+        "mult": 1,
+        "add": 10
+      },
+      "attack_effect": {
+        "mult": 2,
+        "add": 0
+      },
+      "defense_toughness": {
+        "mult": 2,
+        "add": 0
+      },
+      "fortitude_will": {
+        "mult": 2,
+        "add": 0
+      }
     }
   }
 }

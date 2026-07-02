@@ -8,46 +8,419 @@
     },
     "supersedesNote": "If a character already has a condition and gains one that supersedes it, the new (more severe) condition replaces it rather than stacking.",
     "includesNote": "Some conditions are shorthand bundles of several simpler conditions at once, listed in 'includes'.",
-    "damageLadder": ["hit", "dazed", "stunned", "staggered", "incapacitated", "dying", "dead"]
+    "damageLadder": [
+      "hit",
+      "dazed",
+      "stunned",
+      "staggered",
+      "incapacitated",
+      "dying",
+      "dead"
+    ]
   },
   "conditions": [
-    { "id": "asleep", "name": "Asleep", "category": "condition", "includes": ["defenseless", "stunned", "unaware"], "supersedes": [], "effect": "Unconscious. Wakes on a strong Perception check, sudden movement, or a noticeable effect.", "recovery": "Automatic on waking." },
-    { "id": "blind", "name": "Blind", "category": "condition", "includes": ["hindered"], "supersedes": [], "effect": "Can't see; also counts as Sight Unaware and Vulnerable, plus impaired for sight-dependent tasks.", "recovery": "Depends on the cause; permanent if it's a fixed trait." },
-    { "id": "bound", "name": "Bound", "category": "condition", "includes": ["defenseless", "immobile", "impaired"], "supersedes": [], "effect": "Physically tied up or restrained solidly enough to stop movement and struggling.", "recovery": "Escape action or outside help." },
-    { "id": "broken", "name": "Broken", "category": "object_damage_condition", "includes": [], "supersedes": [], "effect": "An object no longer functions.", "recovery": "Repair." },
-    { "id": "compelled", "name": "Compelled", "category": "condition", "includes": [], "supersedes": [], "effect": "Forced to take a single standard action per turn chosen by whoever compelled you.", "recovery": "Depends on the cause; Controlled supersedes this." },
-    { "id": "confused", "name": "Confused", "category": "condition", "includes": [], "supersedes": [], "effect": "Acts unpredictably each turn — may attack the source of confusion, act normally, do nothing, flee in fear, or lash out randomly.", "recovery": "Depends on the cause." },
-    { "id": "controlled", "name": "Controlled", "category": "condition", "includes": [], "supersedes": ["compelled"], "effect": "Another character dictates your actions each turn, though you keep your normal capabilities.", "recovery": "Depends on the cause." },
-    { "id": "dazed", "name": "Dazed", "category": "damage_condition", "includes": [], "supersedes": [], "effect": "Limited to free actions plus one standard action per round; can't take reactions.", "recovery": "DC 10 Fortitude check at the end of the next turn (damage-caused); other causes may need a different check." },
-    { "id": "dead", "name": "Dead", "category": "damage_condition", "includes": ["defenseless", "stunned", "unaware"], "supersedes": [], "effect": "Life has ended; no further recovery checks apply.", "recovery": "None under normal rules." },
-    { "id": "deaf", "name": "Deaf", "category": "condition", "includes": [], "supersedes": [], "effect": "Can't hear; counts as Hearing Unaware and is easier to catch off guard by sound.", "recovery": "Depends on the cause." },
-    { "id": "debilitated", "name": "Debilitated", "category": "condition", "includes": [], "supersedes": [], "effect": "Has effectively lost the use of a specific trait.", "recovery": "Depends on the cause." },
-    { "id": "defenseless", "name": "Defenseless", "category": "condition", "includes": [], "supersedes": ["vulnerable"], "effect": "Defense treated as 0; automatically fails Dodge resistance checks and can be hit with a routine attack.", "recovery": "Depends on the cause." },
-    { "id": "delusion", "name": "Delusion", "category": "condition", "includes": ["unaware"], "supersedes": ["phantasm", "figment"], "effect": "Highest degree of Hallucinating — the subject's whole perceived reality can be fabricated.", "recovery": "Depends on the cause." },
-    { "id": "destroyed", "name": "Destroyed", "category": "object_damage_condition", "includes": [], "supersedes": ["broken"], "effect": "An object is completely wrecked, in pieces or fragments.", "recovery": "None; the object is gone." },
-    { "id": "disabled", "name": "Disabled", "category": "condition", "includes": [], "supersedes": ["impaired"], "effect": "-5 penalty on all checks, or on a specific named category of checks.", "recovery": "Depends on the cause." },
-    { "id": "dying", "name": "Dying", "category": "damage_condition", "includes": ["incapacitated"], "supersedes": [], "effect": "Incapacitated and at serious risk of death; makes a stabilization check each turn.", "recovery": "Stamina check to stabilize (self) or a Treatment check from another character. See mm-actions-adventure.md §3." },
-    { "id": "exhausted", "name": "Exhausted", "category": "condition", "includes": ["disabled", "hindered"], "supersedes": ["fatigued"], "effect": "Worn out from overexertion — reduced effectiveness and half speed.", "recovery": "About 4 hours of rest, dropping back to Fatigued." },
-    { "id": "fatigued", "name": "Fatigued", "category": "condition", "includes": ["impaired", "hindered"], "supersedes": [], "effect": "Tired from exertion — minor penalties and reduced speed.", "recovery": "About 1 hour of rest." },
-    { "id": "figment", "name": "Figment", "category": "condition", "includes": [], "supersedes": [], "effect": "Mildest degree of Hallucinating — small, believable changes to perception.", "recovery": "Depends on the cause." },
-    { "id": "frightened", "name": "Frightened", "category": "condition", "includes": [], "supersedes": [], "effect": "-5 penalty on checks related to the source of fear, and can't willingly approach it.", "recovery": "Depends on the cause." },
-    { "id": "hallucinating", "name": "Hallucinating", "category": "condition", "includes": [], "supersedes": [], "effect": "Perceiving things that aren't real; severity ranges from Figment to Phantasm to Delusion.", "recovery": "Depends on the cause." },
-    { "id": "hindered", "name": "Hindered", "category": "condition", "includes": [], "supersedes": [], "effect": "Movement speed halved.", "recovery": "Depends on the cause." },
-    { "id": "hit", "name": "Hit", "category": "damage_condition", "includes": [], "supersedes": [], "effect": "Minor damage taken; stacking -1 penalty on further Damage resistance checks per Hit.", "recovery": "DC 10 Stamina check once per minute removes one Hit." },
-    { "id": "immobile", "name": "Immobile", "category": "condition", "includes": [], "supersedes": ["hindered"], "effect": "Can't move from your current spot, though you can still act.", "recovery": "Depends on the cause." },
-    { "id": "impaired", "name": "Impaired", "category": "condition", "includes": [], "supersedes": [], "effect": "-2 penalty on checks, either all of them or a named category.", "recovery": "Depends on the cause." },
-    { "id": "incapacitated", "name": "Incapacitated", "category": "damage_condition", "includes": ["defenseless", "stunned", "unaware"], "supersedes": ["staggered"], "effect": "Down and out of the fight, usually knocked prone as well.", "recovery": "DC 10 Stamina check once per minute." },
-    { "id": "paralyzed", "name": "Paralyzed", "category": "condition", "includes": ["defenseless", "immobile"], "supersedes": [], "effect": "Frozen and unable to act physically, though still mentally aware and able to take purely mental actions.", "recovery": "Depends on the cause." },
-    { "id": "phantasm", "name": "Phantasm", "category": "condition", "includes": [], "supersedes": ["figment"], "effect": "Middle degree of Hallucinating — larger, more complex false perceptions.", "recovery": "Depends on the cause." },
-    { "id": "prone", "name": "Prone", "category": "condition", "includes": [], "supersedes": [], "effect": "Lying down — penalty on close attacks made, bonus for close attacks against you, penalty for ranged attacks against you, and reduced ground speed.", "recovery": "Stand action." },
-    { "id": "restrained", "name": "Restrained", "category": "condition", "includes": ["hindered", "vulnerable"], "supersedes": [], "effect": "Held or bound; becomes Immobile instead of Hindered if anchored to something fixed.", "recovery": "Escape action or outside help." },
-    { "id": "staggered", "name": "Staggered", "category": "damage_condition", "includes": ["dazed", "hindered"], "supersedes": [], "effect": "Badly hurt — limited actions and reduced speed.", "recovery": "DC 10 Stamina check once per minute (if no worse condition is also present)." },
-    { "id": "stunned", "name": "Stunned", "category": "damage_condition", "includes": [], "supersedes": ["dazed"], "effect": "Can't take any action at all, including free actions and reactions; Dodge rank halved.", "recovery": "DC 10 Fortitude check at the end of the next turn (damage-caused); other causes may need a different check." },
-    { "id": "surprised", "name": "Surprised", "category": "condition", "includes": ["stunned", "vulnerable"], "supersedes": [], "effect": "Caught completely off guard; normally lasts just one round.", "recovery": "Automatic after the round it's applied." },
-    { "id": "susceptible", "name": "Susceptible", "category": "condition", "includes": [], "supersedes": [], "effect": "Penalty on resistance checks against a specific effect or descriptor, equal to half that effect's rank.", "recovery": "Depends on the cause; often a fixed trait." },
-    { "id": "transformed", "name": "Transformed", "category": "condition", "includes": [], "supersedes": [], "effect": "Some or all of the character's traits are altered, sometimes drastically.", "recovery": "Depends on the cause." },
-    { "id": "unaware", "name": "Unaware", "category": "condition", "includes": [], "supersedes": [], "effect": "Oblivious to your surroundings, or to a specific sense if named (e.g. Sight Unaware); fails related Perception checks automatically.", "recovery": "Depends on the cause." },
-    { "id": "vulnerable", "name": "Vulnerable", "category": "condition", "includes": [], "supersedes": [], "effect": "Defense and Dodge ranks are halved (round down).", "recovery": "Depends on the cause." },
-    { "id": "weakness", "name": "Weakness", "category": "condition", "includes": [], "supersedes": [], "effect": "Penalty on resistance checks against a specific effect, and the best possible outcome is capped at one degree of failure.", "recovery": "Usually a fixed trait; not something that clears in play." }
+    {
+      "id": "asleep",
+      "name": "Asleep",
+      "category": "condition",
+      "includes": [
+        "defenseless",
+        "stunned",
+        "unaware"
+      ],
+      "supersedes": [],
+      "effect": "Unconscious. Wakes on a strong Perception check, sudden movement, or a noticeable effect.",
+      "recovery": "Automatic on waking."
+    },
+    {
+      "id": "blind",
+      "name": "Blind",
+      "category": "condition",
+      "includes": [
+        "hindered"
+      ],
+      "supersedes": [],
+      "effect": "Can't see; also counts as Sight Unaware and Vulnerable, plus impaired for sight-dependent tasks.",
+      "recovery": "Depends on the cause; permanent if it's a fixed trait."
+    },
+    {
+      "id": "bound",
+      "name": "Bound",
+      "category": "condition",
+      "includes": [
+        "defenseless",
+        "immobile",
+        "impaired"
+      ],
+      "supersedes": [],
+      "effect": "Physically tied up or restrained solidly enough to stop movement and struggling.",
+      "recovery": "Escape action or outside help."
+    },
+    {
+      "id": "broken",
+      "name": "Broken",
+      "category": "object_damage_condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "An object no longer functions.",
+      "recovery": "Repair."
+    },
+    {
+      "id": "compelled",
+      "name": "Compelled",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Forced to take a single standard action per turn chosen by whoever compelled you.",
+      "recovery": "Depends on the cause; Controlled supersedes this."
+    },
+    {
+      "id": "confused",
+      "name": "Confused",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Acts unpredictably each turn — may attack the source of confusion, act normally, do nothing, flee in fear, or lash out randomly.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "controlled",
+      "name": "Controlled",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [
+        "compelled"
+      ],
+      "effect": "Another character dictates your actions each turn, though you keep your normal capabilities.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "dazed",
+      "name": "Dazed",
+      "category": "damage_condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Limited to free actions plus one standard action per round; can't take reactions.",
+      "recovery": "DC 10 Fortitude check at the end of the next turn (damage-caused); other causes may need a different check."
+    },
+    {
+      "id": "dead",
+      "name": "Dead",
+      "category": "damage_condition",
+      "includes": [
+        "defenseless",
+        "stunned",
+        "unaware"
+      ],
+      "supersedes": [],
+      "effect": "Life has ended; no further recovery checks apply.",
+      "recovery": "None under normal rules."
+    },
+    {
+      "id": "deaf",
+      "name": "Deaf",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Can't hear; counts as Hearing Unaware and is easier to catch off guard by sound.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "debilitated",
+      "name": "Debilitated",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Has effectively lost the use of a specific trait.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "defenseless",
+      "name": "Defenseless",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [
+        "vulnerable"
+      ],
+      "effect": "Defense treated as 0; automatically fails Dodge resistance checks and can be hit with a routine attack.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "delusion",
+      "name": "Delusion",
+      "category": "condition",
+      "includes": [
+        "unaware"
+      ],
+      "supersedes": [
+        "phantasm",
+        "figment"
+      ],
+      "effect": "Highest degree of Hallucinating — the subject's whole perceived reality can be fabricated.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "destroyed",
+      "name": "Destroyed",
+      "category": "object_damage_condition",
+      "includes": [],
+      "supersedes": [
+        "broken"
+      ],
+      "effect": "An object is completely wrecked, in pieces or fragments.",
+      "recovery": "None; the object is gone."
+    },
+    {
+      "id": "disabled",
+      "name": "Disabled",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [
+        "impaired"
+      ],
+      "effect": "-5 penalty on all checks, or on a specific named category of checks.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "dying",
+      "name": "Dying",
+      "category": "damage_condition",
+      "includes": [
+        "incapacitated"
+      ],
+      "supersedes": [],
+      "effect": "Incapacitated and at serious risk of death; makes a stabilization check each turn.",
+      "recovery": "Stamina check to stabilize (self) or a Treatment check from another character. See mm-actions-adventure.md §3."
+    },
+    {
+      "id": "exhausted",
+      "name": "Exhausted",
+      "category": "condition",
+      "includes": [
+        "disabled",
+        "hindered"
+      ],
+      "supersedes": [
+        "fatigued"
+      ],
+      "effect": "Worn out from overexertion — reduced effectiveness and half speed.",
+      "recovery": "About 4 hours of rest, dropping back to Fatigued."
+    },
+    {
+      "id": "fatigued",
+      "name": "Fatigued",
+      "category": "condition",
+      "includes": [
+        "impaired",
+        "hindered"
+      ],
+      "supersedes": [],
+      "effect": "Tired from exertion — minor penalties and reduced speed.",
+      "recovery": "About 1 hour of rest."
+    },
+    {
+      "id": "figment",
+      "name": "Figment",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Mildest degree of Hallucinating — small, believable changes to perception.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "frightened",
+      "name": "Frightened",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "-5 penalty on checks related to the source of fear, and can't willingly approach it.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "hallucinating",
+      "name": "Hallucinating",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Perceiving things that aren't real; severity ranges from Figment to Phantasm to Delusion.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "hindered",
+      "name": "Hindered",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Movement speed halved.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "hit",
+      "name": "Hit",
+      "category": "damage_condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Minor damage taken; stacking -1 penalty on further Damage resistance checks per Hit.",
+      "recovery": "DC 10 Stamina check once per minute removes one Hit."
+    },
+    {
+      "id": "immobile",
+      "name": "Immobile",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [
+        "hindered"
+      ],
+      "effect": "Can't move from your current spot, though you can still act.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "impaired",
+      "name": "Impaired",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "-2 penalty on checks, either all of them or a named category.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "incapacitated",
+      "name": "Incapacitated",
+      "category": "damage_condition",
+      "includes": [
+        "defenseless",
+        "stunned",
+        "unaware"
+      ],
+      "supersedes": [
+        "staggered"
+      ],
+      "effect": "Down and out of the fight, usually knocked prone as well.",
+      "recovery": "DC 10 Stamina check once per minute."
+    },
+    {
+      "id": "paralyzed",
+      "name": "Paralyzed",
+      "category": "condition",
+      "includes": [
+        "defenseless",
+        "immobile"
+      ],
+      "supersedes": [],
+      "effect": "Frozen and unable to act physically, though still mentally aware and able to take purely mental actions.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "phantasm",
+      "name": "Phantasm",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [
+        "figment"
+      ],
+      "effect": "Middle degree of Hallucinating — larger, more complex false perceptions.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "prone",
+      "name": "Prone",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Lying down — penalty on close attacks made, bonus for close attacks against you, penalty for ranged attacks against you, and reduced ground speed.",
+      "recovery": "Stand action."
+    },
+    {
+      "id": "restrained",
+      "name": "Restrained",
+      "category": "condition",
+      "includes": [
+        "hindered",
+        "vulnerable"
+      ],
+      "supersedes": [],
+      "effect": "Held or bound; becomes Immobile instead of Hindered if anchored to something fixed.",
+      "recovery": "Escape action or outside help."
+    },
+    {
+      "id": "staggered",
+      "name": "Staggered",
+      "category": "damage_condition",
+      "includes": [
+        "dazed",
+        "hindered"
+      ],
+      "supersedes": [],
+      "effect": "Badly hurt — limited actions and reduced speed.",
+      "recovery": "DC 10 Stamina check once per minute (if no worse condition is also present)."
+    },
+    {
+      "id": "stunned",
+      "name": "Stunned",
+      "category": "damage_condition",
+      "includes": [],
+      "supersedes": [
+        "dazed"
+      ],
+      "effect": "Can't take any action at all, including free actions and reactions; Dodge rank halved.",
+      "recovery": "DC 10 Fortitude check at the end of the next turn (damage-caused); other causes may need a different check."
+    },
+    {
+      "id": "surprised",
+      "name": "Surprised",
+      "category": "condition",
+      "includes": [
+        "stunned",
+        "vulnerable"
+      ],
+      "supersedes": [],
+      "effect": "Caught completely off guard; normally lasts just one round.",
+      "recovery": "Automatic after the round it's applied."
+    },
+    {
+      "id": "susceptible",
+      "name": "Susceptible",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Penalty on resistance checks against a specific effect or descriptor, equal to half that effect's rank.",
+      "recovery": "Depends on the cause; often a fixed trait."
+    },
+    {
+      "id": "transformed",
+      "name": "Transformed",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Some or all of the character's traits are altered, sometimes drastically.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "unaware",
+      "name": "Unaware",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Oblivious to your surroundings, or to a specific sense if named (e.g. Sight Unaware); fails related Perception checks automatically.",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "vulnerable",
+      "name": "Vulnerable",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Defense and Dodge ranks are halved (round down).",
+      "recovery": "Depends on the cause."
+    },
+    {
+      "id": "weakness",
+      "name": "Weakness",
+      "category": "condition",
+      "includes": [],
+      "supersedes": [],
+      "effect": "Penalty on resistance checks against a specific effect, and the best possible outcome is capped at one degree of failure.",
+      "recovery": "Usually a fixed trait; not something that clears in play."
+    }
   ]
 }

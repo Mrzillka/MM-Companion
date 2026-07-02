@@ -6,8 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MM-Companion is a desktop dice roller and character creator for the *Mutants &
 Masterminds* TTRPG (3rd/4th edition), built with Python + PySide6 (Qt). It is in
-early development: currently only a base character-sheet UI and a data loader
-exist; there is no rules engine, dice roller, or save/load yet.
+early development: it has a character-sheet UI, a data loader, and a headless
+`core` rules layer — d20 resolution, a mutable character model, character math,
+point-cost accounting, and Power Level validation. There is no save/load yet
+(the `Character` model is serializable but not wired to the menu), and powers
+are not yet modelled.
 
 ## Commands
 
@@ -34,8 +37,10 @@ Python 3.10–3.13. GUI tests need a display server; CI provides one via
 The single most important convention. The package is layered and the
 dependency direction is strictly **`ui` → `core` → `data`**:
 
-- `src/mm_companion/core/` — rules engine. Pure Python (dice, character math,
-  cost calc, validation). **No PySide6 imports.** Must not import `ui`.
+- `src/mm_companion/core/` — rules engine. Pure Python, **no PySide6 imports**,
+  must not import `ui`: `data_loader.py` (game content), `dice.py` (d20
+  resolution / degrees of success), `character.py` (the mutable `Character`
+  state model), `rules.py` (derived math, point costs, PL validation).
 - `src/mm_companion/data/` — game *content* as JSON/YAML data files, no code.
 - `src/mm_companion/ui/` — PySide6 interface. Depends on `core`; never
   implements game rules itself.
@@ -51,21 +56,35 @@ clean (see Licensing below).
 
 - `core/data_loader.py` is the *only* entry point for game content. It parses
   the bundled JSON into frozen dataclasses (`Field`, `Characteristic`,
-  `Ability`, `Resistance`, `Skill`, `Advantage`) aggregated in a `GameData`
-  record. `load_game_data()` is `lru_cache`d — one parse per process.
-- Data is loaded via `importlib.resources` from the `mm_companion` package
-  (`data/placeholder.json` today), not by filesystem path, so it works when
-  installed as a package.
+  `Ability`, `Resistance`, `Skill`, `Advantage`, `Condition`, and a `Costs`
+  record of point costs / PL caps) aggregated in a `GameData` record.
+  `load_game_data()` is `lru_cache`d — one parse per process.
+- Content is aggregated from several files, loaded via `importlib.resources`
+  (not filesystem paths) so it works when installed as a package: core traits
+  from `placeholder.json`; the rich 4e catalogs from `skills.json`,
+  `advantages.json`, and `conditions.json`; point costs and PL caps from
+  `costs.json`. (`effects.json`/`modifiers.json` exist for powers but aren't
+  loaded yet.)
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
   `PowersSection`. The data-driven sections take the `GameData` and build
   widgets by iterating over the data lists — no hardcoded ability/skill names.
   (`PowersSection` takes no data yet — it is still a placeholder.)
-- Cross-section reactivity uses Qt signals. `StatsSection` emits
-  `abilityChanged(key, value)`; `CharacterSheet` wires it to
-  `SkillsSection.set_ability_value` so skill totals stay in sync with ability
-  spin boxes. Follow this signal-based pattern for section-to-section updates
-  rather than sections reaching into each other.
+- `CharacterSheet` owns the mutable per-character state as a single
+  `core.character.Character` and passes it to each data-driven section. The
+  sections are **views over that model**: widgets seed from it and write back to
+  it (abilities/resistances, skill ranks/mods/focuses, advantages, conditions)
+  rather than holding character state themselves. Derived values are computed in
+  `core.rules`, never in the widgets — e.g. skill totals come from
+  `rules.skill_total`, not an inline formula.
+- Cross-section reactivity uses Qt signals over that shared model. Ability spin
+  boxes emit `StatsSection.abilityChanged(key, value)` →
+  `SkillsSection.set_ability_value`, which refreshes skill totals from the
+  model. Each section also emits a generic `changed` signal; `CharacterSheet`
+  connects them to recompute build-wide derived values (currently
+  `rules.power_points_spent`, pushed into the power-points pool label via
+  `BaseInfoSection.set_pool_current`). Follow this pattern — write to the model
+  and emit a signal — rather than sections reaching into each other.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

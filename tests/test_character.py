@@ -1,0 +1,100 @@
+"""Tests for the character model and the derived-math / validation rules."""
+
+from __future__ import annotations
+
+from mm_companion.core.character import AdvantageSelection, Character
+from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.rules import (
+    defense_class,
+    power_level_violations,
+    power_points_remaining,
+    power_points_spent,
+    resistance_total,
+    skill_total,
+)
+
+
+def test_new_default_seeds_from_game_data() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert char.power_level == 10
+    assert char.power_points_total == 150
+    # Every ability/resistance key is present and starts at 0.
+    assert set(char.abilities) == {a.key for a in data.abilities}
+    assert set(char.resistances) == {r.key for r in data.resistances}
+    assert all(v == 0 for v in char.abilities.values())
+
+
+def test_to_dict_from_dict_round_trip() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STR"] = 4
+    char.skill_ranks["Stealth"] = 6
+    char.focuses["Close Combat"] = ["Swords"]
+    char.advantages.append(AdvantageSelection("Close Attack", 2))
+    char.conditions.add("dazed")
+
+    restored = Character.from_dict(char.to_dict())
+    assert restored == char
+
+
+def test_power_points_spent_matches_hand_computed_build() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STR"] = 3  # 3 * 2 = 6
+    char.abilities["ATK"] = 2  # derived combat: 2 * 2 = 4
+    char.resistances["TOUGHNESS"] = 4  # 4 * 1 = 4
+    char.resistances["DEF"] = 2  # derived combat: 2 * 2 = 4
+    char.skill_ranks["Stealth"] = 4  # ceil(4 / 2) = 2
+    char.skill_ranks["Close Combat: Swords"] = 8  # focused: ceil(8 / 4) = 2
+    char.advantages.append(AdvantageSelection("Close Attack", 3))  # 3 * 1 = 3
+
+    assert power_points_spent(char, data) == 25
+    assert power_points_remaining(char, data) == 150 - 25
+
+
+def test_skill_total_is_ability_plus_ranks_plus_mods() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 4
+    char.skill_mods["Stealth"] = 1
+    assert skill_total(char, data, "Stealth") == 7  # AGL 2 + 4 ranks + 1 mod
+
+
+def test_focused_skill_row_resolves_parent_ability() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 3
+    char.skill_ranks["Close Combat: Swords"] = 5
+    # Close Combat is an ATK skill; the "<Skill>: <focus>" row inherits that.
+    assert skill_total(char, data, "Close Combat: Swords") == 8
+
+
+def test_resistance_and_defense_derivation() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STA"] = 3
+    char.resistances["TOUGHNESS"] = 4  # Toughness links to Stamina
+    assert resistance_total(char, data, "TOUGHNESS") == 7
+
+    char.resistances["DEF"] = 5  # Defence is derived (no linked ability)
+    assert resistance_total(char, data, "DEF") == 5
+    assert defense_class(char, data) == 15
+
+
+def test_power_level_violation_is_reported() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # PL 10 -> skill-mod cap 20
+    char.abilities["AGL"] = 15
+    char.skill_ranks["Stealth"] = 10  # total 25 > 20
+    violations = power_level_violations(char, data)
+    assert any("Stealth" in v for v in violations)
+
+
+def test_clean_build_has_no_violations() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 4  # total 6, well under cap
+    assert power_level_violations(char, data) == []

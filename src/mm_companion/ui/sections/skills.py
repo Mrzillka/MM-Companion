@@ -19,7 +19,7 @@ heights are as even as possible without ever splitting a focused group.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -33,7 +33,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
+from mm_companion.core.rules import skill_total
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item
@@ -47,19 +49,31 @@ SPIN_WIDTH = 56
 
 
 class SkillsSection(QGroupBox):
-    """A table of skills whose total bonuses track the current ability values."""
+    """A table of skills whose total bonuses track the shared character model.
 
-    def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
+    Ranks, modifiers, and focuses are read from and written to the
+    :class:`Character`; totals are computed by :func:`skill_total` rather than in
+    the view. Emits :attr:`changed` when the build changes so the sheet can
+    recompute spent power points.
+    """
+
+    changed = Signal()
+
+    def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__("Skills", parent)
 
+        self._data = data
+        self._character = character
         self._skills = data.skills
         self._ability_abbrs: dict[str, str] = {a.key: a.abbr or a.key for a in data.abilities}
-        self._ability_values: dict[str, int] = {a.key: 0 for a in data.abilities}
-        # Ranks and modifiers bought per row, keyed by a stable row id.
-        self._ranks: dict[str, int] = {}
-        self._mods: dict[str, int] = {}
-        # Added focuses per focused skill name, e.g. {"Close Combat": ["Swords"]}.
-        self._focuses: dict[str, list[str]] = {s.name: [] for s in data.skills if s.focused}
+        # Ranks, modifiers, and focuses all live on the model; ensure every
+        # focused skill has a (possibly empty) focus list to render from.
+        self._ranks = character.skill_ranks
+        self._mods = character.skill_mods
+        self._focuses = character.focuses
+        for skill in data.skills:
+            if skill.focused:
+                self._focuses.setdefault(skill.name, [])
         # (ability_key, row_id, ability_rank_item, total_item) for every rankable
         # row, so the ability-rank and total cells can be recomputed when
         # abilities change.
@@ -239,6 +253,7 @@ class SkillsSection(QGroupBox):
         if ok and focus and focus not in self._focuses[skill.name]:
             self._focuses[skill.name].append(focus)
             self._rebuild()
+            self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:
         """Make the rank/modifier spin boxes read-only labels and drop the
@@ -259,28 +274,28 @@ class SkillsSection(QGroupBox):
     def _on_rank_changed(self, row_id: str, value: int) -> None:
         self._ranks[row_id] = value
         self._refresh_totals()
+        self.changed.emit()
 
     def _on_mod_changed(self, row_id: str, value: int) -> None:
         self._mods[row_id] = value
         self._refresh_totals()
+        self.changed.emit()
 
     # -- totals --------------------------------------------------------------
 
     def set_ability_value(self, key: str, value: int) -> None:
-        """Update a single ability and refresh dependent skill totals."""
+        """Refresh skill totals after an ability changed on the shared model."""
 
-        self._ability_values[key] = value
         self._refresh_totals()
 
     def set_ability_values(self, values: dict[str, int]) -> None:
-        """Replace all ability values (used for the initial sync)."""
+        """Refresh skill totals (kept for the sheet's initial sync call)."""
 
-        self._ability_values.update(values)
         self._refresh_totals()
 
     def _refresh_totals(self) -> None:
         for ability_key, row_id, ability_rank_item, total_item in self._rows:
-            ability = self._ability_values.get(ability_key, 0)
-            total = ability + self._ranks.get(row_id, 0) + self._mods.get(row_id, 0)
+            ability = self._character.abilities.get(ability_key, 0)
+            total = skill_total(self._character, self._data, row_id)
             ability_rank_item.setText(str(ability))
             total_item.setText(str(total))

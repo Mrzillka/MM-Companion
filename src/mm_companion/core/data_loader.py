@@ -1,9 +1,16 @@
 """Load MM-Companion game data from the bundled data files.
 
 This module is the single entry point the UI uses to obtain rules *content*
-(abilities, resistances, skills, advantages, ...). Nothing here implements game
-rules; it only parses the JSON in :mod:`mm_companion.data` into typed records so
-the UI never hardcodes that content.
+(abilities, resistances, skills, advantages, conditions, point costs, ...).
+Nothing here implements game rules; it only parses the JSON in
+:mod:`mm_companion.data` into typed records so the UI never hardcodes that
+content.
+
+Content is aggregated from several files: the core traits (profile fields,
+characteristics, abilities, resistances) still live in ``placeholder.json``,
+while the richer 4e catalogs come from their own files (``skills.json``,
+``advantages.json``, ``conditions.json``) and the point-cost constants from
+``costs.json``.
 """
 
 from __future__ import annotations
@@ -14,7 +21,7 @@ from functools import lru_cache
 from importlib import resources
 
 DATA_PACKAGE = "mm_companion"
-DATA_FILE = "placeholder.json"
+PLACEHOLDER_FILE = "placeholder.json"
 
 
 @dataclass(frozen=True)
@@ -87,43 +94,114 @@ class Resistance:
 
 @dataclass(frozen=True)
 class Skill:
-    """A skill and the ability it adds to. ``focused`` skills have no ranks of
-    their own; the character instead buys focused instances (e.g. Close Combat:
-    Swords)."""
+    """A skill and the ability it adds to.
+
+    ``focused`` skills have no ranks of their own; the character instead buys
+    focused instances (e.g. Close Combat: Swords), one rank pool per focus.
+    ``focuses`` lists the suggested focuses for a focused skill;
+    ``specializations`` lists illustrative common uses of a non-focused skill.
+    ``trained_only`` marks skills that can't be used untrained.
+    """
 
     name: str
     ability: str
     focused: bool
+    id: str = ""
+    trained_only: bool = False
+    action: str = ""
+    specializations: tuple[str, ...] = ()
+    focuses: tuple[str, ...] = ()
+    description: str = ""
 
 
 @dataclass(frozen=True)
 class Advantage:
     """An advantage. ``ranked`` advantages can be taken at more than one rank.
 
-    ``description`` is optional summary text the UI shows beside the selected
-    advantage.
+    ``types`` is one or more category tags (Combat, Skill, Fortune, ...);
+    ``max_rank`` is a hard cap when the rules specify one (``None`` otherwise);
+    ``focused`` advantages apply to one chosen focus and are bought again per
+    focus. ``description`` is short summary text the UI shows.
     """
 
     name: str
-    type: str
     ranked: bool
     description: str = ""
+    id: str = ""
+    types: tuple[str, ...] = ()
+    max_rank: int | None = None
+    focused: bool = False
+
+    @property
+    def type(self) -> str:
+        """The primary category tag (kept for widgets that group by a single type)."""
+
+        return self.types[0] if self.types else ""
 
 
 @dataclass(frozen=True)
 class Condition:
     """A status condition that can affect a character (dazed, stunned, ...).
 
-    ``description`` is optional summary text the UI may show as a tooltip.
+    ``category`` distinguishes general conditions from the damage/object-damage
+    ladders. ``includes`` lists ids of sub-conditions this one bundles in, and
+    ``supersedes`` lists ids a more severe condition replaces — together these
+    form the condition graph the combat state machine walks. ``effect`` and
+    ``recovery`` are short summary text the UI may show.
     """
 
     name: str
     description: str = ""
+    id: str = ""
+    category: str = ""
+    includes: tuple[str, ...] = ()
+    supersedes: tuple[str, ...] = ()
+    effect: str = ""
+    recovery: str = ""
+
+
+@dataclass(frozen=True)
+class TraitCosts:
+    """Power-point cost constants for the point-bought traits (``mm-core-mechanics.md`` §6)."""
+
+    ability_per_rank: int
+    combat_per_rank: int
+    resistance_per_rank: int
+    advantage_per_rank: int
+    skill_ranks_per_pp: int
+    skill_focus_ranks_per_pp: int
+
+
+@dataclass(frozen=True)
+class PowerLevelCap:
+    """A Power Level cap expressed as ``power_level * mult + add`` (``mm-core-mechanics.md`` §7)."""
+
+    mult: int
+    add: int
+
+    def limit(self, power_level: int) -> int:
+        return power_level * self.mult + self.add
+
+
+@dataclass(frozen=True)
+class PowerLevelRules:
+    """Power-Level-derived budget and caps."""
+
+    pp_per_level: int
+    caps: dict[str, PowerLevelCap]
+
+
+@dataclass(frozen=True)
+class Costs:
+    """The parsed contents of ``costs.json``."""
+
+    traits: TraitCosts
+    power_level: PowerLevelRules
 
 
 @dataclass(frozen=True)
 class GameData:
-    """The full parsed contents of the game-data file."""
+    """The full parsed game-data content, aggregated across the data files."""
 
     profile_fields: list[Field]
     characteristics: list[Characteristic]
@@ -132,6 +210,7 @@ class GameData:
     skills: list[Skill]
     advantages: list[Advantage]
     conditions: list[Condition]
+    costs: Costs
 
 
 def _parse_characteristic(c: dict) -> Characteristic:
@@ -149,8 +228,62 @@ def _parse_characteristic(c: dict) -> Characteristic:
     )
 
 
-def _read_raw() -> dict:
-    source = resources.files(DATA_PACKAGE).joinpath("data", DATA_FILE)
+def _parse_skill(s: dict) -> Skill:
+    return Skill(
+        name=s["name"],
+        ability=s["ability"],
+        focused=bool(s["focused"]),
+        id=s.get("id", ""),
+        trained_only=bool(s.get("trainedOnly", False)),
+        action=s.get("action", ""),
+        specializations=tuple(s.get("specializations", ())),
+        focuses=tuple(s.get("focuses", ())),
+        description=s.get("description", ""),
+    )
+
+
+def _parse_advantage(a: dict) -> Advantage:
+    # Accept the rich ``types`` list, falling back to a legacy singular ``type``.
+    types = tuple(a["types"]) if "types" in a else tuple(t for t in (a.get("type"),) if t)
+    return Advantage(
+        name=a["name"],
+        ranked=bool(a["ranked"]),
+        description=a.get("description", ""),
+        id=a.get("id", ""),
+        types=types,
+        max_rank=a.get("maxRank"),
+        focused=bool(a.get("focused", False)),
+    )
+
+
+def _parse_condition(c: dict) -> Condition:
+    return Condition(
+        name=c["name"],
+        description=c.get("description", ""),
+        id=c.get("id", ""),
+        category=c.get("category", ""),
+        includes=tuple(c.get("includes", ())),
+        supersedes=tuple(c.get("supersedes", ())),
+        effect=c.get("effect", ""),
+        recovery=c.get("recovery", ""),
+    )
+
+
+def _parse_costs(raw: dict) -> Costs:
+    traits = TraitCosts(**{k: int(v) for k, v in raw["trait_costs"].items()})
+    pl = raw["power_level"]
+    caps = {
+        name: PowerLevelCap(mult=int(cap["mult"]), add=int(cap["add"]))
+        for name, cap in pl["caps"].items()
+    }
+    return Costs(
+        traits=traits,
+        power_level=PowerLevelRules(pp_per_level=int(pl["pp_per_level"]), caps=caps),
+    )
+
+
+def _read_json(filename: str) -> dict:
+    source = resources.files(DATA_PACKAGE).joinpath("data", filename)
     return json.loads(source.read_text(encoding="utf-8"))
 
 
@@ -158,13 +291,19 @@ def _read_raw() -> dict:
 def load_game_data() -> GameData:
     """Parse and return the bundled game data (cached after first call)."""
 
-    raw = _read_raw()
+    base = _read_json(PLACEHOLDER_FILE)
+    skills_raw = _read_json("skills.json")
+    advantages_raw = _read_json("advantages.json")
+    conditions_raw = _read_json("conditions.json")
+    costs_raw = _read_json("costs.json")
+
     return GameData(
-        profile_fields=[Field(**f) for f in raw["profile_fields"]],
-        characteristics=[_parse_characteristic(c) for c in raw["characteristics"]],
-        abilities=[Ability(**a) for a in raw["abilities"]],
-        resistances=[Resistance(**r) for r in raw["resistances"]],
-        skills=[Skill(**s) for s in raw["skills"]],
-        advantages=[Advantage(**a) for a in raw["advantages"]],
-        conditions=[Condition(**c) for c in raw.get("conditions", [])],
+        profile_fields=[Field(**f) for f in base["profile_fields"]],
+        characteristics=[_parse_characteristic(c) for c in base["characteristics"]],
+        abilities=[Ability(**a) for a in base["abilities"]],
+        resistances=[Resistance(**r) for r in base["resistances"]],
+        skills=[_parse_skill(s) for s in skills_raw["skills"]],
+        advantages=[_parse_advantage(a) for a in advantages_raw["advantages"]],
+        conditions=[_parse_condition(c) for c in conditions_raw["conditions"]],
+        costs=_parse_costs(costs_raw),
     )

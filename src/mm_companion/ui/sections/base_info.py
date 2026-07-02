@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Characteristic, Field, GameData
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.lock import set_widget_locked
@@ -33,15 +34,24 @@ CONDITIONS_ROW_HEIGHT = 44
 
 class BaseInfoSection(QGroupBox):
     """Descriptive fields, characteristics that can't be bought with power
-    points (size, speed, ...), and a user-loadable character image."""
+    points (size, speed, ...), and a user-loadable character image.
 
-    def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
+    Field, characteristic, and condition edits are written to the shared
+    :class:`Character`. Emits :attr:`changed` when an edit affects the point
+    build (power level / power points) so the sheet can recompute.
+    """
+
+    changed = Signal()
+
+    def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__("Base Information", parent)
 
+        self._character = character
         self._profile_fields: dict[str, QLineEdit] = {}
         self._characteristics: dict[str, QWidget] = {}
         self._pool_current: dict[str, QLabel] = {}
         self._condition_names: list[str] = [c.name for c in data.conditions]
+        self._condition_ids: dict[str, str] = {c.name: (c.id or c.name) for c in data.conditions}
         self._conditions: dict[str, QWidget] = {}
         self._image_path: str | None = None
         self._locked = False
@@ -63,23 +73,32 @@ class BaseInfoSection(QGroupBox):
         layout.addLayout(self._build_image_column(), stretch=1)
 
     def _build_characteristic(self, c: Characteristic) -> QWidget:
-        """Build the editor for one characteristic, keyed by its ``kind``."""
+        """Build the editor for one characteristic, keyed by its ``kind``.
+
+        Each editor writes its value back to the shared character model.
+        """
         if c.kind == "choice":
             combo = QComboBox()
             combo.addItems(c.options)
             if isinstance(c.default, str) and c.default in c.options:
                 combo.setCurrentText(c.default)
+            combo.currentTextChanged.connect(
+                lambda text, key=c.key: self._on_characteristic_changed(key, text)
+            )
             guard_wheel(combo)
             self._characteristics[c.key] = combo
             return combo
 
         if c.kind == "number":
             spin = self._make_spin_box(c)
+            spin.valueChanged.connect(
+                lambda value, key=c.key: self._on_characteristic_changed(key, value)
+            )
             self._characteristics[c.key] = spin
             return spin
 
         if c.kind == "pool":
-            # Current (calculated later) shown beside an editable total.
+            # Current (spent, calculated) shown beside an editable total.
             container = QWidget()
             row = QHBoxLayout(container)
             row.setContentsMargins(0, 0, 0, 0)
@@ -87,6 +106,9 @@ class BaseInfoSection(QGroupBox):
             current.setToolTip("Spent — calculated from the build")
             total = self._make_spin_box(c)
             total.setToolTip("Total available")
+            total.valueChanged.connect(
+                lambda value, key=c.key: self._on_characteristic_changed(key, value)
+            )
             row.addWidget(current)
             row.addWidget(QLabel("/"))
             row.addWidget(total)
@@ -98,8 +120,23 @@ class BaseInfoSection(QGroupBox):
         edit = QLineEdit()
         if c.default is not None:
             edit.setText(str(c.default))
+        edit.textChanged.connect(lambda text, key=c.key: self._on_characteristic_changed(key, text))
         self._characteristics[c.key] = edit
         return edit
+
+    def _on_characteristic_changed(self, key: str, value: object) -> None:
+        """Write a characteristic edit back to the model.
+
+        ``power_level`` and the ``power_points`` pool total also update their
+        dedicated model fields and signal a build change so spent points refresh.
+        """
+        self._character.characteristics[key] = value
+        if key == "power_level" and isinstance(value, int):
+            self._character.power_level = value
+            self.changed.emit()
+        elif key == "power_points" and isinstance(value, int):
+            self._character.power_points_total = value
+            self.changed.emit()
 
     @staticmethod
     def _make_spin_box(c: Characteristic) -> QSpinBox:
@@ -118,6 +155,10 @@ class BaseInfoSection(QGroupBox):
 
     def _add_profile_field(self, form: QFormLayout, field: Field) -> None:
         edit = QLineEdit()
+        edit.setText(self._character.profile.get(field.key, ""))
+        edit.textChanged.connect(
+            lambda text, key=field.key: self._character.profile.__setitem__(key, text)
+        )
         self._profile_fields[field.key] = edit
         form.addRow(f"{field.label}:", edit)
 
@@ -215,6 +256,7 @@ class BaseInfoSection(QGroupBox):
 
         self._conditions[name] = chip
         self._conditions_flow.addWidget(chip)
+        self._character.conditions.add(self._condition_ids.get(name, name))
 
     def _remove_condition(self, name: str) -> None:
         chip = self._conditions.pop(name, None)
@@ -222,6 +264,7 @@ class BaseInfoSection(QGroupBox):
             return
         self._conditions_flow.removeWidget(chip)
         chip.deleteLater()
+        self._character.conditions.discard(self._condition_ids.get(name, name))
 
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back, and

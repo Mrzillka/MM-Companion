@@ -65,6 +65,13 @@ clean (see Licensing below).
   `advantages.json`, and `conditions.json`; point costs and PL caps from
   `costs.json`. (`effects.json`/`modifiers.json` exist for powers but aren't
   loaded yet.)
+- On launch, `__main__.main()` shows a splash and calls
+  `core.storage.ensure_workspace()` to create the per-user workspace on first
+  run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
+  Application Support elsewhere; override with `MM_COMPANION_HOME`) holding
+  `settings.json`, a `characters/` dir, and a `gm_characters/` dir. It is
+  idempotent and never clobbers edited settings. `core.storage` is pure Python
+  (no Qt) and computes paths itself so it works headless in CI.
 - The app launches into `StartWindow` (`ui/start_window.py`), a standalone
   launcher: four action buttons (Create New Character, Open Existing, Open GM
   Mode, Exit) beside a scrollable library of `CharacterCard`s (image, name, PL).

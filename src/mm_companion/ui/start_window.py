@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.library import CharacterSummary, list_saved_characters
 from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.main_window import MainWindow
 
 CARD_IMAGE_SIZE = 120
 
@@ -71,6 +72,9 @@ class StartWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("MM-Companion")
         self.resize(720, 480)
+        # Sheet windows opened from here are kept referenced so they aren't
+        # garbage-collected (and thus closed) the moment the handler returns.
+        self._child_windows: list[MainWindow] = []
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -84,7 +88,11 @@ class StartWindow(QMainWindow):
         """The left column of action buttons; only Exit is wired for now."""
         column = QVBoxLayout()
 
-        for label in ("Create New Character", "Open Existing", "Open GM Mode"):
+        create_button = QPushButton("Create New Character")
+        create_button.clicked.connect(self._create_new_character)
+        column.addWidget(create_button)
+
+        for label in ("Open Existing", "Open GM Mode"):
             button = QPushButton(label)
             button.clicked.connect(self._not_implemented)
             column.addWidget(button)
@@ -121,5 +129,11 @@ class StartWindow(QMainWindow):
             self._cards_flow.addWidget(CharacterCard(summary))
         self._library.setWidget(self._cards_container)
 
+    def _create_new_character(self) -> None:
+        """Open a fresh, editable character sheet in its own window."""
+        window = MainWindow(locked=False)
+        self._child_windows.append(window)
+        window.show()
+
     def _not_implemented(self) -> None:
-        """Placeholder for the not-yet-wired buttons (create/open/GM mode)."""
+        """Placeholder for the not-yet-wired buttons (open existing / GM mode)."""

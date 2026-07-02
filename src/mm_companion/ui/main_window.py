@@ -10,18 +10,19 @@ from mm_companion.ui.character_sheet import CharacterSheet
 class MainWindow(QMainWindow):
     """Main window; currently shows a single character sheet."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, locked: bool = True) -> None:
         super().__init__(parent)
         self.setWindowTitle("MM-Companion — Character Sheet")
         self.resize(900, 800)
         self._sheet = CharacterSheet()
-        self._build_menu_bar()
+        self._build_menu_bar(locked)
         self.setCentralWidget(self._sheet)
 
-        # The sheet starts locked: a read-only view rather than an editor.
-        self._sheet.set_locked(True)
+        # New characters open unlocked for editing; otherwise the sheet is a
+        # read-only view.
+        self._sheet.set_locked(locked)
 
-    def _build_menu_bar(self) -> None:
+    def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar. Everything but Lock is a disabled placeholder."""
         menu_bar = self.menuBar()
 
@@ -33,7 +34,7 @@ class MainWindow(QMainWindow):
 
         self._lock_action = settings_menu.addAction("Lock")
         self._lock_action.setCheckable(True)
-        self._lock_action.setChecked(True)
+        self._lock_action.setChecked(locked)
         self._lock_action.toggled.connect(self._sheet.set_locked)
 
     @staticmethod

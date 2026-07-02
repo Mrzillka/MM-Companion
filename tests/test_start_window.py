@@ -6,6 +6,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from mm_companion.core.library import CharacterSummary, list_saved_characters
+from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.start_window import CharacterCard, StartWindow
 
 
@@ -28,6 +29,16 @@ def test_empty_store_shows_the_empty_state(qapp: QApplication) -> None:
     window = StartWindow()
     assert window._library.widget() is window._empty_label
     assert window._cards_flow.count() == 0
+
+
+def test_create_new_character_opens_an_unlocked_sheet(qapp: QApplication) -> None:
+    window = StartWindow()
+    window._create_new_character()
+
+    assert len(window._child_windows) == 1
+    sheet_window = window._child_windows[0]
+    assert isinstance(sheet_window, MainWindow)
+    assert sheet_window._lock_action.isChecked() is False
 
 
 def test_character_card_renders_name_and_power_level(qapp: QApplication) -> None:

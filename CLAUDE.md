@@ -77,8 +77,10 @@ clean (see Licensing below).
   Mode, Exit) beside a scrollable library of `CharacterCard`s (image, name, PL).
   The cards come from `core.library.list_saved_characters()` — the single seam
   for saved characters, empty until save/load exists (so the library shows a
-  "No characters yet" state). Only Exit is wired; the other buttons are
-  placeholders to be pointed at `MainWindow` later.
+  "No characters yet" state). "Create New Character" opens a `MainWindow`
+  (`locked=False`, editable) as its own window, kept referenced in
+  `_child_windows`; Exit closes the launcher. "Open Existing" and "Open GM Mode"
+  are still placeholders.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
   stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
   `PowersSection`. The data-driven sections take the `GameData` and build

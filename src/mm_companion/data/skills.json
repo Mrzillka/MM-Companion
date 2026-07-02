@@ -1,0 +1,235 @@
+{
+  "_meta": {
+    "description": "Skill list and mechanics metadata for Mutants & Masterminds 4e character creation. All 'description' fields are original text written for this project (tooltip copy), not taken from the rulebook. Mechanical fields (ability, trainedOnly, action, focused, specializations) reflect game rules/facts, not copyrighted prose.",
+    "abilityKey": {
+      "STR": "Strength",
+      "STA": "Stamina",
+      "AGL": "Agility",
+      "INT": "Intellect",
+      "AWE": "Awareness",
+      "PRE": "Presence",
+      "ATK": "Attack (combat ability, not a core ability)"
+    },
+    "actionKey": {
+      "free": "Free action",
+      "simple": "Simple action",
+      "simple_or_free": "Simple or free action depending on use",
+      "standard": "Standard action",
+      "extended": "Takes longer than a standard action; typically resolved outside of round-by-round action time"
+    },
+    "costRule": "Normal skill ranks cost 1 Power Point per 2 ranks. Skills bought as a narrow focus (see 'focused': true) instead cost 1 Power Point per 4 ranks in that focus, but each focus is tracked as its own independent rank pool.",
+    "focusedNote": "When 'focused' is true, a character must pick one or more specific focuses (e.g. a language, a field of expertise, a weapon type) and buy ranks separately per focus, effectively treating each focus as its own skill. When 'focused' is false, any 'specializations' listed are just common illustrative uses of the single skill, not separate rank pools."
+  },
+  "skills": [
+    {
+      "id": "acrobatics",
+      "name": "Acrobatics",
+      "ability": "AGL",
+      "trainedOnly": false,
+      "action": "simple_or_free",
+      "focused": false,
+      "specializations": ["Balancing", "Contorting", "Maneuvering", "Standing", "Tumbling"],
+      "description": "Flips, rolls, and fancy footwork — keeping your balance and grace in situations where an ordinary person would stumble."
+    },
+    {
+      "id": "athletics",
+      "name": "Athletics",
+      "ability": "STR",
+      "trainedOnly": false,
+      "action": "simple",
+      "focused": false,
+      "specializations": ["Climbing", "Jumping", "Running", "Swimming"],
+      "description": "Raw physical exertion: scaling a wall, clearing a gap, outrunning trouble, or powering through open water."
+    },
+    {
+      "id": "close_combat",
+      "name": "Close Combat",
+      "ability": "ATK",
+      "trainedOnly": false,
+      "action": "standard",
+      "focused": true,
+      "focuses": ["Array", "Blades", "Bludgeons", "Disarming", "Grabbing", "Tripping", "Unarmed"],
+      "description": "Precision in melee range with a specific fighting style or weapon type — every focus you pick is trained and ranked on its own."
+    },
+    {
+      "id": "deception",
+      "name": "Deception",
+      "ability": "PRE",
+      "trainedOnly": false,
+      "action": "standard",
+      "focused": false,
+      "specializations": ["Bluffing", "Disguise", "Distracting", "Innuendo", "Tricking"],
+      "description": "Selling a lie, a distraction, or a hidden agenda convincingly enough that people believe it."
+    },
+    {
+      "id": "disguise",
+      "name": "Disguise",
+      "ability": "AWE",
+      "trainedOnly": false,
+      "action": "extended",
+      "focused": false,
+      "specializations": ["By disguise type"],
+      "description": "Building a convincing false identity out of makeup, costuming, and careful attention to detail."
+    },
+    {
+      "id": "expertise",
+      "name": "Expertise",
+      "ability": "INT",
+      "trainedOnly": true,
+      "action": "extended",
+      "focused": true,
+      "focuses": ["Chosen freely per field of study, e.g. Science, Law, History, Streetwise"],
+      "description": "Deep, formal knowledge in a specific academic, professional, or scholarly field — each field you study is its own focus."
+    },
+    {
+      "id": "insight",
+      "name": "Insight",
+      "ability": "AWE",
+      "trainedOnly": false,
+      "action": "free",
+      "focused": false,
+      "specializations": [],
+      "description": "Reading a person's true intentions, sincerity, or emotional state beneath what they're actually saying."
+    },
+    {
+      "id": "intimidation",
+      "name": "Intimidation",
+      "ability": "PRE",
+      "trainedOnly": false,
+      "action": "standard",
+      "focused": false,
+      "specializations": ["Coercing", "Demoralizing"],
+      "description": "Making someone back down, comply, or lose their nerve through threats, presence, or sheer menace."
+    },
+    {
+      "id": "investigation",
+      "name": "Investigation",
+      "ability": "INT",
+      "trainedOnly": true,
+      "action": "extended",
+      "focused": false,
+      "specializations": ["Analyzing Evidence", "Gathering Evidence", "Gathering Information", "Searching", "Surveillance"],
+      "description": "Methodically working a case: searching a scene, chasing down leads, and drawing conclusions from the evidence."
+    },
+    {
+      "id": "languages",
+      "name": "Languages",
+      "ability": "INT",
+      "trainedOnly": true,
+      "action": "extended",
+      "focused": true,
+      "focuses": ["Chosen freely per language beyond the character's native tongue"],
+      "description": "Fluent, literate command of a language other than your own — every additional language is its own focus."
+    },
+    {
+      "id": "magic",
+      "name": "Magic",
+      "ability": "INT",
+      "trainedOnly": true,
+      "action": "extended",
+      "focused": false,
+      "specializations": ["Constructing", "Disabling", "Lore", "Repairing", "Technique"],
+      "description": "Formal training in the practical craft of magic — casting, maintaining, and understanding arcane workings."
+    },
+    {
+      "id": "perception",
+      "name": "Perception",
+      "ability": "AWE",
+      "trainedOnly": false,
+      "action": "free",
+      "focused": false,
+      "specializations": ["By specific sense, e.g. sight, hearing, smell"],
+      "description": "Staying alert to your surroundings — catching a sound, a shape in the shadows, or a detail everyone else missed."
+    },
+    {
+      "id": "performance",
+      "name": "Performance",
+      "ability": "PRE",
+      "trainedOnly": true,
+      "action": "standard",
+      "focused": true,
+      "focuses": ["Acting", "Comedy", "Dance", "Keyboards", "Oratory", "Percussion Instruments", "Poetry", "Singing", "Stringed Instruments", "Wind Instruments"],
+      "description": "Commanding an audience through a specific performing art — each discipline you train in is its own focus."
+    },
+    {
+      "id": "persuasion",
+      "name": "Persuasion",
+      "ability": "PRE",
+      "trainedOnly": false,
+      "action": "extended",
+      "focused": false,
+      "specializations": [],
+      "description": "Winning people over honestly — through argument, charisma, or an appeal to their better nature."
+    },
+    {
+      "id": "ranged_combat",
+      "name": "Ranged Combat",
+      "ability": "ATK",
+      "trainedOnly": false,
+      "action": "standard",
+      "focused": true,
+      "focuses": ["Array", "Guns", "Throwing"],
+      "description": "Accuracy with a specific ranged weapon or attack type at a distance — every focus you pick is trained and ranked on its own."
+    },
+    {
+      "id": "sleight_of_hand",
+      "name": "Sleight of Hand",
+      "ability": "AGL",
+      "trainedOnly": true,
+      "action": "standard",
+      "focused": false,
+      "specializations": ["Concealing", "Escaping", "Legerdemain", "Planting", "Stealing"],
+      "description": "Quick, discreet handwork — palming an object, lifting a wallet, or planting something without being noticed."
+    },
+    {
+      "id": "stealth",
+      "name": "Stealth",
+      "ability": "AGL",
+      "trainedOnly": false,
+      "action": "simple",
+      "focused": false,
+      "specializations": ["Hiding", "Sneaking", "Tailing", "By specific environment or terrain"],
+      "description": "Staying unseen and unheard — sneaking past guards, hiding in plain sight, or trailing someone unnoticed."
+    },
+    {
+      "id": "survival",
+      "name": "Survival",
+      "ability": "AWE",
+      "trainedOnly": true,
+      "action": "extended",
+      "focused": false,
+      "specializations": ["Avoid Hazards", "Construction", "Foraging", "Navigation", "By specific environment or terrain"],
+      "description": "Getting by in the wild — finding food, shelter, and a safe path through hostile terrain."
+    },
+    {
+      "id": "technology",
+      "name": "Technology",
+      "ability": "INT",
+      "trainedOnly": true,
+      "action": "extended",
+      "focused": false,
+      "specializations": ["Computers", "Constructing", "Disabling", "Electronics", "Operating", "Mechanics", "Repairing", "Security"],
+      "description": "Working with machines and devices — building, fixing, hacking, or bypassing technology."
+    },
+    {
+      "id": "treatment",
+      "name": "Treatment",
+      "ability": "INT",
+      "trainedOnly": true,
+      "action": "standard",
+      "focused": false,
+      "specializations": ["Diagnosis", "Disease and Toxins", "Provide Care", "Revive", "Stabilize"],
+      "description": "Medical know-how — diagnosing injuries, providing first aid, and stabilizing someone in danger."
+    },
+    {
+      "id": "vehicles",
+      "name": "Vehicles",
+      "ability": "AGL",
+      "trainedOnly": true,
+      "action": "standard",
+      "focused": false,
+      "specializations": ["Driving", "Sailing", "Piloting"],
+      "description": "Confident, skillful handling of a vehicle, especially when conditions get difficult."
+    }
+  ]
+}

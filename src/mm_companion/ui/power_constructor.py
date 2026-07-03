@@ -61,7 +61,9 @@ class BrickWidget(QFrame):
     what kind of brick it is and which record it refers to.
     """
 
-    def __init__(self, title: str, subtitle: str, mime: str, payload: str) -> None:
+    def __init__(
+        self, title: str, subtitle: str, mime: str, payload: str, *, flat: bool = False
+    ) -> None:
         super().__init__()
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -72,9 +74,22 @@ class BrickWidget(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(1)
+
+        header = QHBoxLayout()
+        header.setSpacing(4)
         name = QLabel(title)
         name.setStyleSheet("font-weight: bold;")
-        layout.addWidget(name)
+        header.addWidget(name)
+        header.addStretch()
+        if flat:
+            # A flat modifier costs a one-time add/subtract rather than per rank.
+            badge = QLabel("flat")
+            badge.setStyleSheet(
+                "background: #555; color: white; border-radius: 4px; padding: 0 4px;"
+            )
+            header.addWidget(badge)
+        layout.addLayout(header)
+
         if subtitle:
             cost = QLabel(subtitle)
             cost.setEnabled(False)
@@ -328,12 +343,12 @@ class PowerConstructorWindow(QMainWindow):
             for e in sorted(self._data.effects, key=lambda e: e.name)
         ]
         extras = [
-            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id)
+            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
             if m.category == "extra"
         ]
         flaws = [
-            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id)
+            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
             if m.category == "flaw"
         ]

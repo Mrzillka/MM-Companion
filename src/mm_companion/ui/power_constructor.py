@@ -137,7 +137,7 @@ class ModifierChip(QFrame):
         layout.setSpacing(4)
         layout.addWidget(QLabel(modifier.name))
         if modifier.ranked:
-            rank = make_spin_box(1, 30, value=selection.rank, max_width=48)
+            rank = make_spin_box(1, 30, value=selection.rank, buttons=False, max_width=44)
             rank.setPrefix("×")
             rank.valueChanged.connect(self._on_rank_changed)
             layout.addWidget(rank)
@@ -181,7 +181,7 @@ class EffectCard(QFrame):
         header.addWidget(name)
         header.addStretch()
         header.addWidget(QLabel("Rank"))
-        self._rank = make_spin_box(1, 30, value=instance.rank, max_width=60)
+        self._rank = make_spin_box(1, 30, value=instance.rank, buttons=False, max_width=44)
         self._rank.valueChanged.connect(self._on_rank_changed)
         header.addWidget(self._rank)
         remove = QPushButton("✕")

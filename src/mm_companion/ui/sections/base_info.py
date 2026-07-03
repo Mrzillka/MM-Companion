@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Characteristic, Field, GameData
 from mm_companion.core.library import resolve_image_path
+from mm_companion.core.rules import power_level_for_points, reconcile_points_to_level
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -51,6 +52,7 @@ class BaseInfoSection(QGroupBox):
         # While seeding from a (possibly loaded) character, edits are programmatic,
         # not the user's, so they must not mark the sheet dirty.
         self._loading = True
+        self._data = data
         self._character = character
         self._profile_fields: dict[str, QLineEdit] = {}
         self._characteristics: dict[str, QWidget] = {}
@@ -171,15 +173,54 @@ class BaseInfoSection(QGroupBox):
 
         ``power_level`` and the ``power_points`` pool total also update their
         dedicated model fields and signal a build change so spent points refresh.
+        The two are linked: Power Level sets the minimum budget, and raising the
+        budget past a level's border raises Power Level (see :meth:`_link_pl_pp`).
         """
         self._character.characteristics[key] = value
         if key == "power_level" and isinstance(value, int):
             self._character.power_level = value
+            self._link_pl_pp(edited="power_level")
             self.changed.emit()
         elif key == "power_points" and isinstance(value, int):
             self._character.power_points_total = value
+            self._link_pl_pp(edited="power_points")
             self.changed.emit()
         self._emit_edited()
+
+    def _link_pl_pp(self, *, edited: str) -> None:
+        """Reconcile Power Level and the power-point budget after one of them changed.
+
+        Editing Power Level snaps the budget to that level's band (its minimum, unless
+        the budget already sits within the band); editing the budget re-derives Power
+        Level from it. Only the *other* field is updated, and silently, so the two
+        never fight in a signal loop.
+        """
+        if edited == "power_level":
+            new_pp = reconcile_points_to_level(
+                self._character.power_level, self._character.power_points_total, self._data
+            )
+            if new_pp != self._character.power_points_total:
+                self._character.power_points_total = self._set_spin_silently("power_points", new_pp)
+        else:
+            new_pl = power_level_for_points(self._character.power_points_total, self._data)
+            if new_pl != self._character.power_level:
+                self._character.power_level = self._set_spin_silently("power_level", new_pl)
+
+    def _set_spin_silently(self, key: str, value: int) -> int:
+        """Set a characteristic spin box without re-triggering its change handler.
+
+        Returns the value the widget actually holds (spin-box range may clamp it) and
+        keeps the model's ``characteristics`` dict in step. A no-op if the widget is
+        missing or not a spin box.
+        """
+        widget = self._characteristics.get(key)
+        if not isinstance(widget, QSpinBox):
+            return value
+        with QSignalBlocker(widget):
+            widget.setValue(value)
+            actual = widget.value()
+        self._character.characteristics[key] = actual
+        return actual
 
     @staticmethod
     def _make_spin_box(c: Characteristic, seed: object) -> QSpinBox:

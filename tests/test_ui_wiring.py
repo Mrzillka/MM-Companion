@@ -47,6 +47,40 @@ def test_spent_power_points_reflected_in_pool_label(qapp: QApplication) -> None:
     assert sheet.base_info._pool_current["power_points"].text() == "8"
 
 
+def test_raising_power_level_raises_the_budget_to_its_minimum(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)  # PL 10, 150 PP
+    per_level = data.costs.power_level.pp_per_level
+
+    sheet.base_info._characteristics["power_level"].setValue(12)
+
+    assert sheet.character.power_level == 12
+    assert sheet.character.power_points_total == 12 * per_level
+    assert sheet.base_info._characteristics["power_points"].value() == 12 * per_level
+
+
+def test_raising_the_budget_past_a_border_raises_power_level(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)  # PL 10, 150 PP
+    per_level = data.costs.power_level.pp_per_level
+
+    sheet.base_info._characteristics["power_points"].setValue(11 * per_level)
+
+    assert sheet.character.power_level == 11
+    assert sheet.base_info._characteristics["power_level"].value() == 11
+
+
+def test_budget_within_a_band_leaves_power_level_alone(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)  # PL 10, 150 PP
+    per_level = data.costs.power_level.pp_per_level
+
+    sheet.base_info._characteristics["power_points"].setValue(10 * per_level + 5)
+
+    assert sheet.character.power_level == 10
+    assert sheet.character.power_points_total == 10 * per_level + 5
+
+
 def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
     data = load_game_data()
     char = Character.new_default(data)

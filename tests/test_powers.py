@@ -560,38 +560,65 @@ def test_linked_game_terms_prefix_a_header() -> None:
     assert power_game_terms(power, data).startswith("Linked (all effects activate together):")
 
 
+def _pl_char(data, *, atk: int = 0, strength: int = 0, power_level: int = 10) -> Character:
+    char = Character.new_default(data)
+    char.power_level = power_level
+    char.abilities["ATK"] = atk
+    char.abilities["STR"] = strength
+    return char
+
+
 def test_pl_violations_flag_an_attack_effect_over_the_cap() -> None:
     data = load_game_data()
-    # PL 10 → attack + effect-rank cap of 20. A rank-20 Damage is exactly at the cap.
+    char = _pl_char(data)  # PL 10, no attack bonus → cap of 20 on attack + rank
     at_cap = Power(effects=[PowerEffectInstance("damage", rank=20)])
-    assert power_pl_violations(at_cap, 10, data) == []
+    assert power_pl_violations(at_cap, char, data) == []
 
     over = Power(effects=[PowerEffectInstance("damage", rank=21)])
-    violations = power_pl_violations(over, 10, data)
+    violations = power_pl_violations(over, char, data)
     assert len(violations) == 1
-    assert "Damage rank 21" in violations[0]
+    assert "rank 21" in violations[0]
     assert "20" in violations[0]  # names the PL 10 cap
+
+
+def test_pl_violations_add_the_characters_attack_bonus() -> None:
+    data = load_game_data()
+    # A rank-16 Damage is fine on its own, but the character's Attack 5 pushes
+    # attack + rank to 21, over the PL 10 cap of 20.
+    power = Power(effects=[PowerEffectInstance("damage", rank=16)])
+    assert power_pl_violations(power, _pl_char(data, atk=4), data) == []  # 4 + 16 = 20
+    assert power_pl_violations(power, _pl_char(data, atk=5), data)  # 5 + 16 = 21
+
+
+def test_pl_violations_fold_strength_into_a_strength_based_damage() -> None:
+    data = load_game_data()
+    # Strength-Based Damage rank 10 + Strength 8 resolves at rank 18; with no attack
+    # bonus that's 18 ≤ 20 (fine), but Strength 11 makes it 21 (over).
+    effect = PowerEffectInstance("damage", rank=10, extras=[ModifierSelection("strength_based")])
+    assert power_pl_violations(Power(effects=[effect]), _pl_char(data, strength=8), data) == []
+    over = power_pl_violations(Power(effects=[effect]), _pl_char(data, strength=11), data)
+    assert over and "rank 21" in over[0]
 
 
 def test_pl_violations_ignore_non_attack_effects() -> None:
     data = load_game_data()
     # Flight imposes no resistance check, so the attack cap doesn't apply at any rank.
     power = Power(effects=[PowerEffectInstance("flight", rank=30)])
-    assert power_pl_violations(power, 10, data) == []
+    assert power_pl_violations(power, _pl_char(data), data) == []
 
 
 def test_pl_violations_count_the_powers_own_accurate_bonus() -> None:
     data = load_game_data()
     # Rank 20 is at the cap, but Accurate adds +2 to the attack, pushing it over.
     effect = PowerEffectInstance("damage", rank=20, extras=[ModifierSelection("accurate")])
-    assert power_pl_violations(Power(effects=[effect]), 10, data)
+    assert power_pl_violations(Power(effects=[effect]), _pl_char(data), data)
 
 
 def test_pl_violations_respect_inaccurate_trade_off() -> None:
     data = load_game_data()
     # Inaccurate lowers the attack, so a rank-21 Damage trades back under the cap.
     effect = PowerEffectInstance("damage", rank=21, flaws=[ModifierSelection("inaccurate")])
-    assert power_pl_violations(Power(effects=[effect]), 10, data) == []
+    assert power_pl_violations(Power(effects=[effect]), _pl_char(data), data) == []
 
 
 # -- trait boosts from powers (Enhanced Trait, Protection) --------------------

@@ -88,7 +88,7 @@
     },
     "damage": {
       "extras": [
-        { "id": "strength_based", "name": "Strength-Based", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "description": "Adds your Strength rank to this Damage effect's rank, like a melee weapon or claws." }
+        { "id": "strength_based", "name": "Strength-Based", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "addsAbility": "STR", "description": "Adds your Strength rank to this Damage effect's rank, like a melee weapon or claws." }
       ]
     },
     "deflect": {

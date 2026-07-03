@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
+from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Modifier, load_game_data
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
@@ -73,6 +74,7 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
     effect_cost_formula,
+    effect_effective_rank,
     effect_stat_rows,
     effect_total_cost,
     power_pl_violations,
@@ -784,7 +786,7 @@ class PowerTermsView(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(6)
 
-    def set_power(self, power: Power, game_data: GameData) -> None:
+    def set_power(self, power: Power, game_data: GameData, char: Character | None = None) -> None:
         self._clear()
         if not power.effects:
             placeholder = QLabel("Game-term summary appears here as you add effects.")
@@ -799,13 +801,21 @@ class PowerTermsView(QWidget):
             label.setStyleSheet("font-weight: bold;")
             self._layout.addWidget(label)
         for index, effect in enumerate(power.effects):
-            self._add_effect_block(effect, index, power, game_data)
+            self._add_effect_block(effect, index, power, game_data, char)
 
     def _add_effect_block(
-        self, effect: PowerEffectInstance, index: int, power: Power, game_data: GameData
+        self,
+        effect: PowerEffectInstance,
+        index: int,
+        power: Power,
+        game_data: GameData,
+        char: Character | None = None,
     ) -> None:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-        title = f"{base.name if base else effect.effect_id} {effect.rank}"
+        # The title carries the effective rank so a Strength-Based Damage reads at its
+        # boosted rank (e.g. "Damage 13"), matching the DC below.
+        rank = effect_effective_rank(effect, game_data, char)
+        title = f"{base.name if base else effect.effect_id} {rank}"
 
         header = QHBoxLayout()
         header.setSpacing(6)
@@ -820,7 +830,7 @@ class PowerTermsView(QWidget):
         header.addStretch()
         self._layout.addLayout(header)
 
-        rows = effect_stat_rows(effect, game_data)
+        rows = effect_stat_rows(effect, game_data, char)
         self.effect_rows.append(rows)
         pairs = self._PAIRS_PER_ROW
         grid = QGridLayout()
@@ -891,13 +901,14 @@ class PowerConstructorWindow(QMainWindow):
         data: GameData | None = None,
         parent: QWidget | None = None,
         *,
-        power_level: int | None = None,
+        character: Character | None = None,
     ) -> None:
         super().__init__(parent)
         self._data = data or load_game_data()
-        # The character's PL, used to flag cap breaches; None disables the check
-        # (a constructor opened without a character context).
-        self._power_level = power_level
+        # The wielding character, used to resolve stats that feed a power (Strength
+        # for Strength-Based Damage, Attack for the PL cap) and to flag cap breaches.
+        # None disables the check (a constructor opened without a character context).
+        self._character = character
         self.power = Power()
         self.setWindowTitle("Power Constructor")
         self.resize(900, 600)
@@ -1055,13 +1066,13 @@ class PowerConstructorWindow(QMainWindow):
         self._cost.setText(f"Total cost: {power_total_cost(self.power, self._data)} PP")
 
     def _refresh_game_terms(self) -> None:
-        self._terms.set_power(self.power, self._data)
+        self._terms.set_power(self.power, self._data, self._character)
 
     def _pl_violations(self) -> list[str]:
-        """Power Level cap breaches for the current power (empty without a PL context)."""
-        if self._power_level is None:
+        """Power Level cap breaches for the current power (empty without a character)."""
+        if self._character is None:
             return []
-        return power_pl_violations(self.power, self._power_level, self._data)
+        return power_pl_violations(self.power, self._character, self._data)
 
     def _refresh_pl_warning(self) -> None:
         """Show or hide the live PL warning from the current violations."""

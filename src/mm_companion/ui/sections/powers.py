@@ -72,7 +72,7 @@ class PowersSection(QGroupBox):
 
     # -- constructor lifecycle --------------------------------------------
     def _open_constructor(self) -> None:
-        window = PowerConstructorWindow(self._data, power_level=self._character.power_level)
+        window = PowerConstructorWindow(self._data, character=self._character)
         window.powerSaved.connect(self._on_power_saved)
         window.closed.connect(lambda w=window: self._on_window_closed(w))
         self._windows.append(window)
@@ -111,7 +111,7 @@ class PowersSection(QGroupBox):
 
         # A power that breaks a PL cap carries a warning marker naming the breach;
         # enforcement is a warning for now (see storage.pl_enforcement).
-        violations = power_pl_violations(power, self._character.power_level, self._data)
+        violations = power_pl_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet("color: #d1a01e; font-weight: bold;")

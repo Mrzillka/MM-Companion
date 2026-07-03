@@ -280,6 +280,12 @@ class Modifier:
     Dodge-for-half); and ``step_field``/``step_by`` shift a field one or more steps
     along its :attr:`GameData.game_term_ladders` ordering (Increased Duration steps
     ``duration`` up, Increased Action steps ``action`` to a slower one).
+
+    ``adds_ability`` names a character ability whose rank is added to the effect's
+    *effective* rank — Strength-Based Damage (``"STR"``) folds the wielder's Strength
+    into the Damage rank for its resistance DC and Power Level cap. It is the one
+    modifier field that reaches back into character stats, so cost/PL math must be
+    given the character to resolve it.
     """
 
     id: str
@@ -296,6 +302,7 @@ class Modifier:
     check_note: str = ""
     step_field: str = ""
     step_by: int = 0
+    adds_ability: str = ""
 
 
 @dataclass(frozen=True)
@@ -518,6 +525,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         check_note=m.get("checkNote", ""),
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
+        adds_ability=m.get("addsAbility", ""),
         description=m.get("description", ""),
     )
 

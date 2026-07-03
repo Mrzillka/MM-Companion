@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtWidgets import QApplication, QLabel
 
+from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
@@ -17,6 +18,12 @@ from mm_companion.ui.power_constructor import PowerConstructorWindow
 @pytest.fixture(scope="module")
 def qapp() -> QApplication:
     return QApplication.instance() or QApplication([])
+
+
+def _pl10_character() -> Character:
+    """A blank PL 10 character (no attack bonus) — the context the constructor needs
+    to check Power Level caps."""
+    return Character.new_default(load_game_data())
 
 
 def test_dropping_an_effect_adds_a_card_and_costs(qapp: QApplication) -> None:
@@ -414,19 +421,19 @@ def test_loaded_powers_repopulate_the_section(qapp: QApplication) -> None:
 
 
 def test_pl_warning_appears_only_when_a_power_breaks_a_cap(qapp: QApplication) -> None:
-    window = PowerConstructorWindow(load_game_data(), power_level=10)
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
     card = window.canvas.add_effect("damage")
 
-    card._rank.setValue(20)  # exactly at the PL 10 cap of 20
+    card._rank.setValue(20)  # exactly at the PL 10 cap of 20 (no attack bonus)
     assert not window._warning.isVisibleTo(window)
 
     card._rank.setValue(25)  # over the cap
     assert window._warning.isVisibleTo(window)
-    assert "Damage rank 25" in window._warning.toolTip()
+    assert "rank 25" in window._warning.toolTip()
 
 
-def test_pl_check_is_skipped_without_a_power_level(qapp: QApplication) -> None:
-    window = PowerConstructorWindow(load_game_data())  # no PL context
+def test_pl_check_is_skipped_without_a_character(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())  # no character context
     card = window.canvas.add_effect("damage")
     card._rank.setValue(30)
     assert not window._warning.isVisibleTo(window)
@@ -436,7 +443,7 @@ def test_warn_enforcement_saves_an_over_cap_power(qapp: QApplication, monkeypatc
     from mm_companion.core import storage
 
     monkeypatch.setattr(storage, "pl_enforcement", lambda: storage.PL_ENFORCE_WARN)
-    window = PowerConstructorWindow(load_game_data(), power_level=10)
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
     window.canvas.add_effect("damage")._rank.setValue(25)
 
     saved: list = []
@@ -452,7 +459,7 @@ def test_block_enforcement_refuses_an_over_cap_power(qapp: QApplication, monkeyp
 
     monkeypatch.setattr(storage, "pl_enforcement", lambda: storage.PL_ENFORCE_BLOCK)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
-    window = PowerConstructorWindow(load_game_data(), power_level=10)
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
     window.canvas.add_effect("damage")._rank.setValue(25)
 
     saved: list = []
@@ -462,7 +469,6 @@ def test_block_enforcement_refuses_an_over_cap_power(qapp: QApplication, monkeyp
 
 
 def test_section_row_marks_a_power_that_breaks_the_cap(qapp: QApplication) -> None:
-    from mm_companion.core.character import Character
     from mm_companion.core.powers import Power, PowerEffectInstance
 
     data = load_game_data()
@@ -474,7 +480,39 @@ def test_section_row_marks_a_power_that_breaks_the_cap(qapp: QApplication) -> No
     sheet = CharacterSheet(data, character)
     warnings = [lbl for lbl in sheet.powers._list_host.findChildren(QLabel) if lbl.text() == "⚠"]
     assert warnings  # the over-cap power carries a warning marker
-    assert "Damage rank 30" in warnings[0].toolTip()
+    assert "rank 30" in warnings[0].toolTip()
+
+
+def test_strength_based_damage_uses_strength_in_the_pl_check(qapp: QApplication) -> None:
+    from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.abilities["STR"] = 12  # a strong bruiser
+
+    # A modest rank-10 Strength-Based Damage resolves at rank 22 with STR 12 — over
+    # the PL 10 cap of 20 once Strength is folded in.
+    effect = PowerEffectInstance("damage", rank=10, extras=[ModifierSelection("strength_based")])
+    character.powers.append(Power(name="Haymaker", effects=[effect]))
+
+    sheet = CharacterSheet(data, character)
+    warnings = [lbl for lbl in sheet.powers._list_host.findChildren(QLabel) if lbl.text() == "⚠"]
+    assert warnings  # Strength pushed the effective rank over the cap
+    assert "rank 22" in warnings[0].toolTip()
+
+
+def test_constructor_shows_strength_folded_into_the_damage_dc(qapp: QApplication) -> None:
+    character = Character.new_default(load_game_data())
+    character.abilities["STR"] = 5
+    window = PowerConstructorWindow(load_game_data(), character=character)
+
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    card.attach_modifier("strength_based")
+
+    # Toughness DC = 15 + effective rank (8 + 5) = 28, not the bought-rank 23.
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["resistance"].value == "Toughness vs. 28"
 
 
 # -- Enhanced Trait target picker & trait-boost display -----------------------

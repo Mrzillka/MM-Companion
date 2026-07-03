@@ -326,6 +326,42 @@ def effect_total_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
     return ranked + flat
 
 
+def effect_rank_trait_bonus(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> int:
+    """Ranks a modifier folds in from a character ability (Strength-Based → Strength).
+
+    Sums the *effective* value of each ability an attached modifier's
+    :attr:`~mm_companion.core.data_loader.Modifier.adds_ability` names — so a
+    Strength-Based Damage picks up the wielder's Strength (Enhanced Trait boosts to
+    that ability included). Zero without a character or when no such modifier is
+    attached. The bought point cost is unaffected — the folded-in rank is free.
+    """
+
+    if char is None:
+        return 0
+    catalog = game_data.modifier_catalog()
+    bonus = 0
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier and modifier.adds_ability:
+            bonus += effective_ability(char, game_data, modifier.adds_ability)
+    return bonus
+
+
+def effect_effective_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
+    """The effect's rank as it resolves in play: bought rank plus any ability a
+    modifier folds in (:func:`effect_rank_trait_bonus`).
+
+    This is the rank that sets the resistance DC and counts against the Power Level
+    attack/effect cap — not the point-cost rank, which stays the bought value.
+    """
+
+    return effect.rank + effect_rank_trait_bonus(effect, game_data, char)
+
+
 def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -> list[int]:
     """Signed ``cost_value`` of each modifier in one bucket, for formula display.
 
@@ -429,38 +465,51 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
-def power_pl_violations(power: Power, power_level: int, game_data: GameData) -> list[str]:
-    """Power Level cap breaches within a single power (empty list = within caps).
+def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
+    """Power Level cap breaches within a single power, for its wielding character.
 
-    Applies the attack + effect-rank cap (``max_attack + effect_rank <= power_level
-    * 2``, ``mm-core-mechanics.md`` §7) to each effect that resolves against a
-    resistance — the offensive effects, marked by a
-    :attr:`~mm_companion.core.data_loader.Effect.resistance_dc_base`. The only attack
-    bonus known at the power level is the effect's own Accurate/Inaccurate
-    adjustment (the character's base attack is out of scope here), so this flags an
-    effect whose rank alone — plus that adjustment — already breaks the cap; it does
-    not yet fold in the character's combat bonus. Returns one message per offending
-    effect. The cap is read from ``game_data`` (``attack_effect``), never hardcoded.
+    Checks each offensive effect (one with a
+    :attr:`~mm_companion.core.data_loader.Effect.resistance_dc_base`) against the
+    Power Level caps in ``mm-core-mechanics.md`` §7, reading the character so the
+    real inputs apply:
+
+    - An effect that makes an **attack roll** obeys ``max_attack + effect_rank <=
+      power_level * 2``. The attack bonus is the character's *effective* Attack
+      ability plus the power's own Accurate/Inaccurate; the effect rank is the
+      *effective* rank (:func:`effect_effective_rank`), so a Strength-Based Damage
+      folds in the wielder's Strength.
+    - A resisted effect with **no attack roll** (auto-hit — Perception range, or a
+      Perception-Range modifier) instead obeys ``effect_rank <= power_level``.
+
+    Returns one message per offending effect. Both caps derive from Power Level (the
+    ``attack_effect`` cap for the ×2 ceiling), never hardcoded.
     """
 
     cap = game_data.costs.power_level.caps.get("attack_effect")
     if cap is None:
         return []
+    power_level = char.power_level
     limit = cap.limit(power_level)
+    attack_ability = effective_ability(char, game_data, "ATK")
 
     violations: list[str] = []
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None or base.resistance_dc_base is None:
-            continue  # not an attack/resisted effect — this cap doesn't apply
+            continue  # not an attack/resisted effect — these caps don't apply
         impact = _effective_stats(effect, game_data)[3]
-        # A perception-range attack drops its roll, so no Accurate bonus rides along.
-        attack_bonus = 0 if impact.drops_check else impact.check_bonus
-        load = effect.rank + attack_bonus
-        if load > limit:
+        rank = effect_effective_rank(effect, game_data, char)
+        makes_attack = "Attack" in (base.check or "") and not impact.drops_check
+        if makes_attack:
+            attack = attack_ability + impact.check_bonus
+            if attack + rank > limit:
+                violations.append(
+                    f"{base.name}: attack +{attack} plus rank {rank} = {attack + rank} "
+                    f"exceeds the PL {power_level} cap of {limit}."
+                )
+        elif rank > power_level:  # auto-hit effect: rank alone is capped at PL
             violations.append(
-                f"{base.name} rank {effect.rank} exceeds the PL {power_level} "
-                f"attack/effect cap of {limit}."
+                f"{base.name} rank {rank} exceeds the PL {power_level} rank cap of {power_level}."
             )
     return violations
 
@@ -694,7 +743,9 @@ def _measure_value(measure, rank: int, game_data: GameData) -> str:
     return f"{label}/round" if measure.per_round else label
 
 
-def effect_stat_rows(effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
+def effect_stat_rows(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> list[EffectStat]:
     """The effect's non-empty game-term fields as tintable table rows.
 
     Each :class:`EffectStat` carries its base and current value plus a ``change``
@@ -709,6 +760,9 @@ def effect_stat_rows(effect: PowerEffectInstance, game_data: GameData) -> list[E
     qualities that don't override a stat (e.g. Affliction's condition degrees) are
     appended as untinted rows so the table stays a complete summary. Empty for an
     unknown effect id.
+
+    When ``char`` is given, the resistance save DC uses the *effective* effect rank,
+    so a Strength-Based Damage shows the wielder's Strength folded into its DC.
     """
 
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -723,12 +777,14 @@ def effect_stat_rows(effect: PowerEffectInstance, game_data: GameData) -> list[E
             scope["range"] = game_data.measurements.label("distance", effect.rank) or "Rank"
 
     # Resolve the check/resistance phrases to concrete numbers (attack bonus = rank,
-    # save DC = base + rank). The save DC uses the plain rank in both scopes, but the
-    # current attack roll carries any Accurate/Inaccurate bonus so it can be tinted.
+    # save DC = base + effective rank — the effective rank folds in a Strength-Based
+    # bonus). The current attack roll carries any Accurate/Inaccurate bonus so it can
+    # be tinted.
+    effective_rank = effect_effective_rank(effect, game_data, char)
     dc = (
         None
         if base_effect.resistance_dc_base is None
-        else base_effect.resistance_dc_base + effect.rank
+        else base_effect.resistance_dc_base + effective_rank
     )
     base["check"] = _numeric_roll(base["check"], effect.rank, dc, resistance=False)
     base["resistance"] = _numeric_roll(base["resistance"], effect.rank, dc, resistance=True)

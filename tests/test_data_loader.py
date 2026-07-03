@@ -95,5 +95,29 @@ def test_modifiers_are_categorised_with_numeric_cost() -> None:
     assert categories == {"extra", "flaw"}
 
 
+def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
+    data = load_game_data()
+    assert len(data.effect_modifiers) == 33  # effects with their own extras/flaws
+    total = sum(len(mods) for mods in data.effect_modifiers.values())
+    assert total == 194
+    for mods in data.effect_modifiers.values():
+        for modifier in mods:
+            # Category is injected from the extras/flaws array, not stored per entry.
+            assert modifier.category in {"extra", "flaw"}
+            assert modifier.cost_value >= 0
+
+    damage_specific = {m.id: m for m in data.effect_modifiers["damage"]}
+    assert damage_specific["strength_based"].category == "extra"
+    assert damage_specific["strength_based"].cost_value == 0  # "+0 points per rank"
+
+
+def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
+    data = load_game_data()
+    catalog = data.modifier_catalog()
+    assert len(catalog) == 62 + 194  # ids are globally unique, so no collisions
+    assert catalog["ranged"].category == "extra"  # general pool
+    assert catalog["strength_based"].category == "extra"  # effect-specific pool
+
+
 def test_load_game_data_is_cached() -> None:
     assert load_game_data() is load_game_data()

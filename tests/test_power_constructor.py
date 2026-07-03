@@ -178,6 +178,40 @@ def test_effect_without_config_has_no_combos(qapp: QApplication) -> None:
     assert card.findChildren(QComboBox) == []
 
 
+def test_effect_specific_menu_lists_only_this_effects_modifiers(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+
+    # The button is shown because Damage has effect-specific modifiers.
+    assert card._specific_button.isVisibleTo(card)
+    card._populate_specific_menu()
+    labels = {a.text() for a in card._specific_menu.actions() if not a.isSeparator()}
+    assert "Strength-Based" in labels  # Damage-specific extra
+    assert "Rocket" not in labels  # a Flight-specific flaw, not offered here
+
+
+def test_effect_without_specific_modifiers_hides_the_menu_button(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    # Move Object relies solely on the general pool (no effect_modifiers entry).
+    card = window.canvas.add_effect("move_object")
+    assert not card._specific_button.isVisibleTo(card)
+
+
+def test_menu_attaches_an_effect_specific_modifier_and_disables_it(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("flight")
+    card._rank.setValue(6)
+
+    card.attach_modifier("rocket")  # a Flight-specific flaw (-1/rank)
+    assert window.power.effects[0].flaws[0].modifier_id == "rocket"
+    assert window._cost.text() == "Total cost: 6 PP"  # 6 * (2 - 1)
+
+    # Reopening the menu greys out the already-attached modifier.
+    card._populate_specific_menu()
+    rocket = next(a for a in card._specific_menu.actions() if a.text() == "Rocket")
+    assert not rocket.isEnabled()
+
+
 def test_name_and_description_write_to_model(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     window._name.setText("Fire Blast")

@@ -74,6 +74,39 @@ def test_unknown_effect_costs_nothing() -> None:
     assert effect_total_cost(PowerEffectInstance("nonesuch", rank=5), data) == 0
 
 
+def test_effect_specific_modifier_counts_toward_cost() -> None:
+    data = load_game_data()
+    # Damage 8 + the Damage-specific Strength-Based extra (+0) + general Ranged (+1).
+    effect = PowerEffectInstance(
+        "damage",
+        rank=8,
+        extras=[ModifierSelection("strength_based"), ModifierSelection("ranged")],
+    )
+    assert effect_cost_formula(effect, data) == "8 × (1 + 0 + 1)"
+    assert effect_total_cost(effect, data) == 16
+
+
+def test_effect_specific_ranked_flat_modifier_scales_with_its_own_rank() -> None:
+    data = load_game_data()
+    # Teleport 10 (2/rank) + the Teleport-specific Increased Mass (flat per rank) at rank 3.
+    effect = PowerEffectInstance(
+        "teleport", rank=10, extras=[ModifierSelection("increased_mass_teleport", rank=3)]
+    )
+    assert effect_total_cost(effect, data) == 23  # 2*10 + 1*3
+
+
+def test_effect_specific_flaw_and_extra_combine() -> None:
+    data = load_game_data()
+    # Flight 6 (2/rank) + Safe Landing (+1 flat) - Rocket (-1/rank) => 6*(2-1) + 1 = 7.
+    effect = PowerEffectInstance(
+        "flight",
+        rank=6,
+        extras=[ModifierSelection("safe_landing")],
+        flaws=[ModifierSelection("rocket")],
+    )
+    assert effect_total_cost(effect, data) == 7
+
+
 def test_formula_shows_bare_base_when_no_modifiers() -> None:
     data = load_game_data()
     effect = PowerEffectInstance("damage", rank=8)

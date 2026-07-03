@@ -297,7 +297,14 @@ class Costs:
 
 @dataclass(frozen=True)
 class GameData:
-    """The full parsed game-data content, aggregated across the data files."""
+    """The full parsed game-data content, aggregated across the data files.
+
+    ``modifiers`` is the general-purpose extra/flaw pool that applies broadly;
+    ``effect_modifiers`` maps an effect id to the extras/flaws specific to that one
+    effect (from ``effect_modifiers.json``). A power builder offers both pools for a
+    given effect; :meth:`modifier_catalog` merges them into a single id lookup for
+    cost math and the game-terms summary.
+    """
 
     profile_fields: list[Field]
     characteristics: list[Characteristic]
@@ -308,7 +315,21 @@ class GameData:
     conditions: list[Condition]
     effects: list[Effect]
     modifiers: list[Modifier]
+    effect_modifiers: dict[str, list[Modifier]]
     costs: Costs
+
+    def modifier_catalog(self) -> dict[str, Modifier]:
+        """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
+
+        Effect-specific ids are globally unique and never collide with the general
+        pool, so a flat merge is unambiguous.
+        """
+
+        catalog: dict[str, Modifier] = {m.id: m for m in self.modifiers}
+        for mods in self.effect_modifiers.values():
+            for modifier in mods:
+                catalog.setdefault(modifier.id, modifier)
+        return catalog
 
 
 def _parse_characteristic(c: dict) -> Characteristic:
@@ -402,11 +423,13 @@ def _parse_effect(e: dict) -> Effect:
     )
 
 
-def _parse_modifier(m: dict) -> Modifier:
+def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
+    # Effect-specific modifiers carry no ``category`` of their own — it comes from
+    # whether they sit in an ``extras`` or ``flaws`` array (passed in as ``category``).
     return Modifier(
         id=m["id"],
         name=m["name"],
-        category=m["category"],
+        category=category or m["category"],
         cost_formula=m.get("costFormula", ""),
         cost_value=int(m.get("costValue", 0)),
         flat=bool(m.get("flat", False)),
@@ -414,6 +437,21 @@ def _parse_modifier(m: dict) -> Modifier:
         overrides=dict(m.get("overrides", {})),
         description=m.get("description", ""),
     )
+
+
+def _parse_effect_modifiers(raw: dict) -> dict[str, list[Modifier]]:
+    """Parse ``effect_modifiers.json`` into ``effect id -> [Modifier, ...]``.
+
+    Each effect's ``extras`` and ``flaws`` arrays are flattened into one list, with
+    the category tagged onto each modifier from the array it came from.
+    """
+
+    result: dict[str, list[Modifier]] = {}
+    for effect_id, groups in raw.get("effectModifiers", {}).items():
+        mods = [_parse_modifier(m, "extra") for m in groups.get("extras", [])]
+        mods += [_parse_modifier(m, "flaw") for m in groups.get("flaws", [])]
+        result[effect_id] = mods
+    return result
 
 
 def _parse_costs(raw: dict) -> Costs:
@@ -444,6 +482,7 @@ def load_game_data() -> GameData:
     conditions_raw = _read_json("conditions.json")
     effects_raw = _read_json("effects.json")
     modifiers_raw = _read_json("modifiers.json")
+    effect_modifiers_raw = _read_json("effect_modifiers.json")
     costs_raw = _read_json("costs.json")
 
     return GameData(
@@ -456,5 +495,6 @@ def load_game_data() -> GameData:
         conditions=[_parse_condition(c) for c in conditions_raw["conditions"]],
         effects=[_parse_effect(e) for e in effects_raw["effects"]],
         modifiers=[_parse_modifier(m) for m in modifiers_raw["modifiers"]],
+        effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
         costs=_parse_costs(costs_raw),
     )

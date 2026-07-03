@@ -32,10 +32,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSplitter,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -197,9 +199,10 @@ class ModifierGroup(QWidget):
 class EffectCard(QFrame):
     """One effect within the power: rank, attached modifier chips, and its cost.
 
-    Accepts **modifier** drops (extras/flaws attach here). Writes rank/modifier
-    changes straight to the shared :class:`PowerEffectInstance` and emits
-    :attr:`changed` so the window can recompute the total.
+    Accepts **modifier** drops (extras/flaws from the general palette attach here),
+    and offers this effect's own effect-specific extras/flaws through a menu button.
+    Writes rank/modifier changes straight to the shared :class:`PowerEffectInstance`
+    and emits :attr:`changed` so the window can recompute the total.
     """
 
     changed = Signal()
@@ -248,6 +251,19 @@ class EffectCard(QFrame):
         self._hint = QLabel("Drag extras or flaws here")
         self._hint.setEnabled(False)
         layout.addWidget(self._hint)
+
+        # Effect-specific extras/flaws (from effect_modifiers.json) can't be dragged
+        # from the general palette — this effect offers its own through a menu button.
+        self._specific_button = QToolButton()
+        self._specific_button.setText("＋ Effect-specific extra / flaw")
+        self._specific_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._specific_menu = QMenu(self._specific_button)
+        self._specific_menu.setToolTipsVisible(True)
+        self._specific_menu.aboutToShow.connect(self._populate_specific_menu)
+        self._specific_button.setMenu(self._specific_menu)
+        if not self._data.effect_modifiers.get(instance.effect_id):
+            self._specific_button.hide()  # this effect has no specific modifiers
+        layout.addWidget(self._specific_button)
 
         self._cost = QLabel()
         self._cost.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -349,12 +365,41 @@ class EffectCard(QFrame):
             self.instance.config.pop(key, None)
         self.changed.emit()
 
+    # -- effect-specific modifier menu ------------------------------------
+    def _populate_specific_menu(self) -> None:
+        """(Re)build the menu from this effect's specific pool, disabling attached ones.
+
+        Rebuilt on each open so an already-attached modifier shows as greyed-out.
+        """
+        self._specific_menu.clear()
+        mods = self._data.effect_modifiers.get(self.instance.effect_id, [])
+        attached = {sel.modifier_id for sel in (*self.instance.extras, *self.instance.flaws)}
+        for category, title in (("extra", "Extras"), ("flaw", "Flaws")):
+            group = [m for m in mods if m.category == category]
+            if not group:
+                continue
+            self._specific_menu.addSection(title)
+            for modifier in group:
+                action = self._specific_menu.addAction(modifier.name)
+                action.setToolTip(modifier.description)
+                if modifier.id in attached:
+                    action.setEnabled(False)  # already on this effect
+                else:
+                    action.triggered.connect(
+                        lambda _checked=False, mid=modifier.id: self.attach_modifier(mid)
+                    )
+
     # -- data lookups -----------------------------------------------------
     def _effect(self):
         return next((e for e in self._data.effects if e.id == self.instance.effect_id), None)
 
     def _modifier(self, modifier_id: str) -> Modifier | None:
-        return next((m for m in self._data.modifiers if m.id == modifier_id), None)
+        """Resolve a modifier id against the general pool, then this effect's own pool."""
+        general = next((m for m in self._data.modifiers if m.id == modifier_id), None)
+        if general is not None:
+            return general
+        specific = self._data.effect_modifiers.get(self.instance.effect_id, [])
+        return next((m for m in specific if m.id == modifier_id), None)
 
     # -- drops ------------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)

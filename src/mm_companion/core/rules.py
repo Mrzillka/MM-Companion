@@ -130,7 +130,7 @@ def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: b
     :func:`_modifier_magnitude`).
     """
 
-    catalog: dict[str, Modifier] = {m.id: m for m in game_data.modifiers}
+    catalog = game_data.modifier_catalog()
     total = 0
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
@@ -189,7 +189,7 @@ def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -
     breakdown can list them individually rather than as a single sum.
     """
 
-    catalog: dict[str, Modifier] = {m.id: m for m in game_data.modifiers}
+    catalog = game_data.modifier_catalog()
     terms: list[int] = []
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
@@ -271,7 +271,7 @@ def effective_effect_stats(effect: PowerEffectInstance, game_data: GameData) -> 
         "check": base.check or "",
         "resistance": base.resistance or "",
     }
-    catalog: dict[str, Modifier] = {m.id: m for m in game_data.modifiers}
+    catalog = game_data.modifier_catalog()
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier is None:

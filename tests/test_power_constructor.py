@@ -261,6 +261,81 @@ def test_name_and_description_write_to_model(qapp: QApplication) -> None:
     assert window.power.description == "whoosh"
 
 
+def test_mode_bar_appears_only_with_two_or_more_effects(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    bar = window.canvas._mode_bar
+
+    card = window.canvas.add_effect("damage")
+    assert not bar.isVisibleTo(window.canvas)  # single effect: no switch
+
+    window.canvas.add_effect("affliction")
+    assert bar.isVisibleTo(window.canvas)  # a second effect reveals it
+
+    window.canvas._remove_card(card)  # back to one effect
+    assert not bar.isVisibleTo(window.canvas)
+
+
+def test_switching_to_array_recomputes_cost_and_badges_cards(qapp: QApplication) -> None:
+    from mm_companion.core.powers import STRUCTURE_ARRAY
+
+    window = PowerConstructorWindow(load_game_data())
+    base = window.canvas.add_effect("damage")
+    base._rank.setValue(8)  # 8 PP, the costliest → base
+    alt = window.canvas.add_effect("affliction")
+    alt._rank.setValue(2)  # 2 PP alternate
+
+    # Independent by default: costs sum.
+    assert window._cost.text() == "Total cost: 10 PP"
+
+    window.canvas._mode_bar.changed.emit(STRUCTURE_ARRAY)
+    assert window.power.structure == STRUCTURE_ARRAY
+    assert window._cost.text() == "Total cost: 9 PP"  # 8 base + 1 flat alternate
+    assert base._role_badge.text() == "Base"
+    assert alt._role_badge.text().startswith("Alternate")
+
+
+def test_array_base_badge_follows_the_costliest_effect(qapp: QApplication) -> None:
+    from mm_companion.core.powers import STRUCTURE_ARRAY
+
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    first._rank.setValue(3)
+    second = window.canvas.add_effect("damage")
+    second._rank.setValue(8)
+    window.canvas._mode_bar.changed.emit(STRUCTURE_ARRAY)
+
+    assert second._role_badge.text() == "Base"  # the rank-8 effect is the base
+    first._rank.setValue(10)  # now the first effect is costliest
+    assert first._role_badge.text() == "Base"
+    assert second._role_badge.text().startswith("Alternate")
+
+
+def test_dropping_below_two_effects_resets_structure_to_independent(qapp: QApplication) -> None:
+    from mm_companion.core.powers import STRUCTURE_ARRAY, STRUCTURE_INDEPENDENT
+
+    window = PowerConstructorWindow(load_game_data())
+    keep = window.canvas.add_effect("damage")
+    drop = window.canvas.add_effect("affliction")
+    window.canvas._mode_bar.changed.emit(STRUCTURE_ARRAY)
+    assert window.power.structure == STRUCTURE_ARRAY
+
+    window.canvas._remove_card(drop)
+    assert window.power.structure == STRUCTURE_INDEPENDENT  # lone effect can't be an array
+    assert keep._role_badge.text() == ""  # badge cleared
+
+
+def test_linked_badges_every_card(qapp: QApplication) -> None:
+    from mm_companion.core.powers import STRUCTURE_LINKED
+
+    window = PowerConstructorWindow(load_game_data())
+    a = window.canvas.add_effect("damage")
+    b = window.canvas.add_effect("affliction")
+    window.canvas._mode_bar.changed.emit(STRUCTURE_LINKED)
+
+    assert a._role_badge.text() == "Linked"
+    assert b._role_badge.text() == "Linked"
+
+
 def test_powers_section_launches_and_locks(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     button = sheet.powers._add_button

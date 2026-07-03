@@ -15,7 +15,13 @@ import math
 
 from .character import Character
 from .data_loader import GameData, Modifier, Resistance, Skill
-from .powers import Power, PowerEffectInstance
+from .powers import (
+    ALTERNATE_EFFECT_MODIFIER,
+    STRUCTURE_ARRAY,
+    STRUCTURE_LINKED,
+    Power,
+    PowerEffectInstance,
+)
 
 
 def _skill_for_row(game_data: GameData, row_id: str) -> Skill | None:
@@ -244,9 +250,44 @@ def _join_terms(terms: list[int]) -> str:
     return " ".join(parts)
 
 
-def power_total_cost(power: Power, game_data: GameData) -> int:
-    """Total power-point cost of a power: the sum of its effects' costs."""
+def array_alternate_cost(game_data: GameData) -> int:
+    """The flat point cost of one array alternate, read from the ``Alternate Effect`` extra.
 
+    Kept data-driven: the number lives on the ``alternate_effect`` modifier in
+    ``modifiers.json`` (``costValue``), not hardcoded here. Falls back to 1 if the
+    record is missing.
+    """
+
+    modifier = game_data.modifier_catalog().get(ALTERNATE_EFFECT_MODIFIER)
+    return modifier.cost_value if modifier else 1
+
+
+def array_base_index(power: Power, game_data: GameData) -> int:
+    """Index of an array's *base* effect — the costliest one (ties break to the first).
+
+    The base is paid for in full; every other effect is a flat-cost alternate.
+    Returns ``-1`` for a power with no effects. Only meaningful for an array, but
+    computed purely from the effects so callers can badge cards uniformly.
+    """
+
+    if not power.effects:
+        return -1
+    full = [effect_total_cost(e, game_data) for e in power.effects]
+    return full.index(max(full))
+
+
+def power_total_cost(power: Power, game_data: GameData) -> int:
+    """Total power-point cost of a power (``mm-powers-architecture.md`` §4).
+
+    ``independent`` and ``linked`` powers cost the sum of their effects (linking
+    is a +0 bundle). An ``array`` instead pays the costliest effect in full and a
+    flat :func:`array_alternate_cost` for each remaining effect, since only one is
+    active at a time.
+    """
+
+    if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
+        full = [effect_total_cost(e, game_data) for e in power.effects]
+        return max(full) + (len(full) - 1) * array_alternate_cost(game_data)
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
@@ -339,9 +380,26 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
 
 
 def power_game_terms(power: Power, game_data: GameData) -> str:
-    """The power's game-term summary: one :func:`effect_game_terms` line per effect."""
+    """The power's game-term summary: one :func:`effect_game_terms` line per effect.
 
-    return "\n".join(effect_game_terms(e, game_data) for e in power.effects)
+    A ``linked`` or ``array`` power (with two or more effects) prefixes a header and
+    tags each line with its role — the array marks its base and notes the flat cost
+    of each alternate — so the composite structure reads at a glance.
+    """
+
+    lines = [effect_game_terms(e, game_data) for e in power.effects]
+    if len(power.effects) > 1 and power.structure == STRUCTURE_LINKED:
+        body = "\n".join(f"• {line}" for line in lines)
+        return "Linked (all effects activate together):\n" + body
+    if len(power.effects) > 1 and power.structure == STRUCTURE_ARRAY:
+        base = array_base_index(power, game_data)
+        alt = array_alternate_cost(game_data)
+        tagged = [
+            f"• {line}" + (" [base]" if i == base else f" (Alternate Effect, {alt} pt)")
+            for i, line in enumerate(lines)
+        ]
+        return "Array (one effect active at a time):\n" + "\n".join(tagged)
+    return "\n".join(lines)
 
 
 def power_level_violations(char: Character, game_data: GameData) -> list[str]:

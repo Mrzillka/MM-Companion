@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+from mm_companion.core.powers import (
+    STRUCTURE_ARRAY,
+    STRUCTURE_INDEPENDENT,
+    STRUCTURE_LINKED,
+    ModifierSelection,
+    Power,
+    PowerEffectInstance,
+)
 from mm_companion.core.rules import (
+    array_alternate_cost,
+    array_base_index,
     effect_cost_formula,
     effect_game_terms,
     effect_total_cost,
@@ -222,6 +231,7 @@ def test_power_round_trips_through_dict() -> None:
         name="Fire Blast",
         description="whoosh",
         descriptors=["fire"],
+        structure=STRUCTURE_ARRAY,
         effects=[
             PowerEffectInstance(
                 "damage",
@@ -236,3 +246,80 @@ def test_power_round_trips_through_dict() -> None:
     restored = Power.from_dict(power.to_dict())
     assert restored.to_dict() == power.to_dict()
     assert restored.effects[0].extras[0].modifier_id == "ranged"
+    assert restored.structure == STRUCTURE_ARRAY
+
+
+def test_structure_defaults_to_independent_and_rejects_junk() -> None:
+    assert Power().structure == STRUCTURE_INDEPENDENT
+    # A malformed persisted value falls back rather than corrupting cost math.
+    assert Power.from_dict({"structure": "nonsense"}).structure == STRUCTURE_INDEPENDENT
+
+
+def test_linked_power_costs_the_sum_like_independent() -> None:
+    data = load_game_data()
+    effects = [
+        PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),  # 16
+        PowerEffectInstance("affliction", rank=4),  # 4
+    ]
+    independent = Power(effects=list(effects), structure=STRUCTURE_INDEPENDENT)
+    linked = Power(effects=list(effects), structure=STRUCTURE_LINKED)
+    assert power_total_cost(independent, data) == 20
+    assert power_total_cost(linked, data) == 20  # linking is a +0 bundle
+
+
+def test_array_pays_base_in_full_plus_a_flat_point_per_alternate() -> None:
+    data = load_game_data()
+    # Damage 8 + Ranged = 16 (the costliest → base); two cheaper alternates at 1 pt each.
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),  # 16
+            PowerEffectInstance("affliction", rank=4),  # 4, alternate
+            PowerEffectInstance("move_object", rank=8),  # alternate
+        ],
+    )
+    flat = array_alternate_cost(data)
+    assert power_total_cost(power, data) == 16 + 2 * flat
+
+
+def test_array_base_is_the_costliest_effect_regardless_of_order() -> None:
+    data = load_game_data()
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("affliction", rank=4),  # cheaper, dropped first
+            PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),  # 16
+        ],
+    )
+    assert array_base_index(power, data) == 1  # the Damage effect, not the first one
+
+
+def test_array_with_a_single_effect_is_just_that_effects_cost() -> None:
+    data = load_game_data()
+    # The structure only bites at two-plus effects; a lone effect pays its own way.
+    power = Power(structure=STRUCTURE_ARRAY, effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_total_cost(power, data) == 8
+
+
+def test_array_game_terms_mark_the_base_and_alternates() -> None:
+    data = load_game_data()
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),
+            PowerEffectInstance("affliction", rank=4),
+        ],
+    )
+    summary = power_game_terms(power, data)
+    assert summary.startswith("Array (one effect active at a time):")
+    assert "[base]" in summary
+    assert "Alternate Effect" in summary
+
+
+def test_linked_game_terms_prefix_a_header() -> None:
+    data = load_game_data()
+    power = Power(
+        structure=STRUCTURE_LINKED,
+        effects=[PowerEffectInstance("damage", rank=8), PowerEffectInstance("affliction", rank=4)],
+    )
+    assert power_game_terms(power, data).startswith("Linked (all effects activate together):")

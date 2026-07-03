@@ -9,13 +9,31 @@ This is plain data — point costs are derived in :mod:`.rules`, and nothing her
 imports PySide6. The model is JSON-serializable (:meth:`Power.to_dict` /
 :meth:`Power.from_dict`) so it can be persisted onto a character later.
 
-Arrays (alternate effects) and linked effects are intentionally not modelled
-yet; this is the single-power builder foundation.
+A multi-effect power has a :data:`Power.structure` describing how its effects
+relate (see ``mm-powers-architecture.md`` §4): ``independent`` effects are just
+grouped, ``linked`` ones always fire together, and an ``array`` shares one point
+pool where only one effect is active at a time. The structure — not per-effect
+modifier chips — is the source of truth; :mod:`.rules` reads it to compute the
+composite cost and game-term summary.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+# How the effects of a multi-effect power relate to one another (§4).
+STRUCTURE_INDEPENDENT = "independent"
+STRUCTURE_LINKED = "linked"
+STRUCTURE_ARRAY = "array"
+STRUCTURES = (STRUCTURE_INDEPENDENT, STRUCTURE_LINKED, STRUCTURE_ARRAY)
+
+# The general-pool modifier ids the composite structures correspond to. The
+# constructor applies their cost/semantics automatically from ``structure`` (a
+# base power plus flat-cost alternates for an array; a +0 bundle for linked), so
+# they are *not* stored as per-effect selections — these ids let cost math and
+# the game-terms summary look the records up when they need the flat point value.
+ALTERNATE_EFFECT_MODIFIER = "alternate_effect"
+LINKED_MODIFIER = "linked"
 
 
 @dataclass
@@ -78,12 +96,19 @@ class PowerEffectInstance:
 
 @dataclass
 class Power:
-    """A player-assembled power: a titled, described bundle of effects."""
+    """A player-assembled power: a titled, described bundle of effects.
+
+    ``structure`` (one of :data:`STRUCTURES`) governs how the effects combine and
+    is only meaningful with two or more of them: ``independent`` (the default) and
+    ``linked`` both sum their effects' costs, while ``array`` pays only for the
+    costliest effect plus a flat point per alternate.
+    """
 
     name: str = ""
     description: str = ""
     descriptors: list[str] = field(default_factory=list)
     effects: list[PowerEffectInstance] = field(default_factory=list)
+    structure: str = STRUCTURE_INDEPENDENT
 
     def to_dict(self) -> dict:
         return {
@@ -91,13 +116,16 @@ class Power:
             "description": self.description,
             "descriptors": list(self.descriptors),
             "effects": [e.to_dict() for e in self.effects],
+            "structure": self.structure,
         }
 
     @classmethod
     def from_dict(cls, raw: dict) -> Power:
+        structure = raw.get("structure", STRUCTURE_INDEPENDENT)
         return cls(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
             descriptors=list(raw.get("descriptors", [])),
             effects=[PowerEffectInstance.from_dict(e) for e in raw.get("effects", [])],
+            structure=structure if structure in STRUCTURES else STRUCTURE_INDEPENDENT,
         )

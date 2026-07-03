@@ -12,10 +12,15 @@ Interaction (all drag-and-drop):
   (one :class:`~mm_companion.core.powers.PowerEffectInstance`).
 - Drag an **Extra** or **Flaw** brick onto a specific card → it attaches there as a
   chip (a modifier modifies one effect, per the M&M model).
+- Once a second effect is on the canvas a :class:`PowerModeBar` appears, switching
+  the power between **Independent**, **Linked**, and **Array** structures (§4). The
+  structure lives on the :class:`~mm_companion.core.powers.Power`; the cards badge
+  their role and the total recomputes from it (an array pays its base in full plus
+  a flat point per alternate) — the modifier chips aren't touched.
 
 The window owns a single :class:`~mm_companion.core.powers.Power` and mutates it;
 costs always come from :mod:`mm_companion.core.rules`, never computed inline.
-Arrays, linking, and writing the finished power back onto a character are deferred.
+Writing the finished power back onto a character is deferred.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -43,8 +49,17 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.data_loader import GameData, Modifier, load_game_data
-from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+from mm_companion.core.powers import (
+    STRUCTURE_ARRAY,
+    STRUCTURE_INDEPENDENT,
+    STRUCTURE_LINKED,
+    ModifierSelection,
+    Power,
+    PowerEffectInstance,
+)
 from mm_companion.core.rules import (
+    array_alternate_cost,
+    array_base_index,
     effect_cost_formula,
     effect_total_cost,
     power_game_terms,
@@ -227,6 +242,11 @@ class EffectCard(QFrame):
         name = QLabel(effect.name if effect else instance.effect_id)
         name.setStyleSheet("font-weight: bold;")
         header.addWidget(name)
+        # A structure badge (Base / Alternate / Linked) the canvas drives; hidden
+        # while the power is a single or independent-multi effect.
+        self._role_badge = QLabel()
+        self._role_badge.setVisible(False)
+        header.addWidget(self._role_badge)
         header.addStretch()
         header.addWidget(QLabel("Rank"))
         self._rank = make_spin_box(1, 30, value=instance.rank, buttons=False, max_width=44)
@@ -464,12 +484,97 @@ class EffectCard(QFrame):
         total = effect_total_cost(self.instance, self._data)
         self._cost.setText(f"{formula} = {total} PP" if formula else f"{total} PP")
 
+    # -- structure role (driven by the canvas) ----------------------------
+    def set_role(self, role: str, note: str = "") -> None:
+        """Show this card's part in a composite power, or clear the badge.
+
+        ``role`` is ``"base"``/``"alternate"`` (array), ``"linked"``, or ``""`` for
+        an independent/single effect. ``note`` appends a detail (an alternate's flat
+        cost) so the badge shows the number without this widget hardcoding it.
+        """
+
+        palette = {
+            "base": ("Base", "#3a5f8a"),
+            "alternate": ("Alternate", "#7a5c1e"),
+            "linked": ("Linked", "#3a6f4a"),
+        }
+        if role not in palette:
+            self._role_badge.clear()
+            self._role_badge.setVisible(False)
+            return
+        text, color = palette[role]
+        if note:
+            text = f"{text} · {note}"
+        self._role_badge.setText(text)
+        self._role_badge.setStyleSheet(
+            f"background: {color}; color: white; border-radius: 6px; padding: 0 6px;"
+        )
+        self._role_badge.setVisible(True)
+
+
+class PowerModeBar(QWidget):
+    """A three-way switch for how a multi-effect power's effects combine.
+
+    Shown by the canvas only once a power holds two or more effects. Emits
+    :attr:`changed` with the chosen structure id (``independent`` / ``linked`` /
+    ``array``); the canvas writes it to the :class:`Power` and recomputes.
+    """
+
+    changed = Signal(str)
+
+    _MODES = (
+        (STRUCTURE_INDEPENDENT, "Independent", "Effects act on their own; their costs add up."),
+        (STRUCTURE_LINKED, "Linked", "Effects always activate together as one; costs add up."),
+        (
+            STRUCTURE_ARRAY,
+            "Array",
+            "One effect active at a time; the costliest is paid in full and each other "
+            "is a flat-cost alternate.",
+        ),
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(QLabel("Multiple effects:"))
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._buttons: dict[str, QPushButton] = {}
+        for structure, label, tip in self._MODES:
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._group.addButton(button)
+            self._buttons[structure] = button
+            layout.addWidget(button)
+        layout.addStretch()
+        self._buttons[STRUCTURE_INDEPENDENT].setChecked(True)
+        self._group.buttonClicked.connect(self._on_clicked)
+
+    def _on_clicked(self, button: QPushButton) -> None:
+        for structure, candidate in self._buttons.items():
+            if candidate is button:
+                self.changed.emit(structure)
+                return
+
+    def set_structure(self, structure: str) -> None:
+        """Reflect ``structure`` in the buttons without re-emitting :attr:`changed`."""
+        button = self._buttons.get(structure)
+        if button is not None:
+            button.setChecked(True)
+
 
 class PowerCanvas(QFrame):
-    """The drop area that holds the power's effect cards.
+    """The drop area that holds the power's effect cards and the structure switch.
 
     Accepts **effect** drops (each makes a new card). Owns no state itself beyond
-    the shared :class:`Power`; emits :attr:`changed` on every add/remove/edit.
+    the shared :class:`Power`; emits :attr:`changed` on every add/remove/edit. Once
+    a second card lands it reveals the :class:`PowerModeBar`, writes the chosen
+    structure to the power, and keeps every card's role badge in step (the array
+    base tracks the costliest effect as ranks change).
     """
 
     changed = Signal()
@@ -483,6 +588,12 @@ class PowerCanvas(QFrame):
         self.setAcceptDrops(True)
 
         self._layout = QVBoxLayout(self)
+        # The structure switch sits above the cards; it reveals itself only once a
+        # second effect makes the choice meaningful (§4).
+        self._mode_bar = PowerModeBar()
+        self._mode_bar.setVisible(False)
+        self._mode_bar.changed.connect(self._on_structure_changed)
+        self._layout.addWidget(self._mode_bar)
         self._hint = QLabel("Drag an effect here to start building your power")
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setEnabled(False)
@@ -505,11 +616,12 @@ class PowerCanvas(QFrame):
         instance = PowerEffectInstance(effect_id=effect_id)
         self._power.effects.append(instance)
         card = EffectCard(instance, self._data)
-        card.changed.connect(self.changed)
+        card.changed.connect(self._on_card_changed)
         card.removeRequested.connect(self._remove_card)
         self._cards.append(card)
         self._layout.insertWidget(self._layout.count() - 1, card)  # before the stretch
         self._hint.setVisible(False)
+        self._sync_structure_ui()
         self.changed.emit()
         return card
 
@@ -520,7 +632,47 @@ class PowerCanvas(QFrame):
         card.setParent(None)
         card.deleteLater()
         self._hint.setVisible(not self._cards)
+        self._sync_structure_ui()
         self.changed.emit()
+
+    def _on_card_changed(self) -> None:
+        # A rank/modifier edit can change which effect is the array base, so refresh
+        # the badges before forwarding the change on for a cost/summary recompute.
+        self._refresh_roles()
+        self.changed.emit()
+
+    def _on_structure_changed(self, structure: str) -> None:
+        self._power.structure = structure
+        self._refresh_roles()
+        self.changed.emit()
+
+    def _sync_structure_ui(self) -> None:
+        """Reveal the switch for a multi-effect power (collapsing back to Independent
+        when a removal leaves fewer than two), then refresh the card badges."""
+        multi = len(self._cards) >= 2
+        self._mode_bar.setVisible(multi)
+        if not multi and self._power.structure != STRUCTURE_INDEPENDENT:
+            self._power.structure = STRUCTURE_INDEPENDENT
+            self._mode_bar.set_structure(STRUCTURE_INDEPENDENT)
+        self._refresh_roles()
+
+    def _refresh_roles(self) -> None:
+        """Badge each card with its part in the current structure (§4)."""
+        multi = len(self._cards) >= 2
+        if multi and self._power.structure == STRUCTURE_ARRAY:
+            base = array_base_index(self._power, self._data)
+            note = f"{array_alternate_cost(self._data)} PP"
+            for index, card in enumerate(self._cards):
+                if index == base:
+                    card.set_role("base")
+                else:
+                    card.set_role("alternate", note)
+        elif multi and self._power.structure == STRUCTURE_LINKED:
+            for card in self._cards:
+                card.set_role("linked")
+        else:
+            for card in self._cards:
+                card.set_role("")
 
     @property
     def cards(self) -> list[EffectCard]:

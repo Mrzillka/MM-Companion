@@ -6,6 +6,7 @@
       "flaw": "Decreases an effect's cost and adds a restriction"
     },
     "flatNote": "flat: true means the cost is a one-time addition/reduction to the effect's total, not multiplied by rank. flat: false means the cost applies per rank of the effect.",
+    "rankedNote": "ranked: true means the modifier is bought in its own ranks (chosen independently of the effect's rank), so its total contribution is costValue x its rank. These are the flat modifiers whose costFormula reads 'per rank'. Absent/false means it is applied once (rank 1).",
     "costValueNote": "costValue is the canonical numeric cost magnitude used for automatic point-cost calculation; its sign is implied by category (extra adds, flaw subtracts) and flat decides whether it applies once or per rank. The costFormula string carries the full nuance (ranges, tiers) for cases costValue simplifies."
   },
   "modifiers": [
@@ -16,6 +17,7 @@
       "costFormula": "+1 point per rank",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Bonus to attack checks made with this effect."
     },
     {
@@ -88,6 +90,7 @@
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Increases how far a ranged effect can reach."
     },
     {
@@ -97,6 +100,7 @@
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Bolts a minor extra capability onto another effect."
     },
     {
@@ -115,6 +119,7 @@
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Gives a ranged attack a second chance to hit if it misses."
     },
     {
@@ -151,6 +156,7 @@
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Increases how much mass a carrying/moving effect can handle."
     },
     {
@@ -241,6 +247,7 @@
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Extends a close-range effect's reach by a space per rank."
     },
     {
@@ -268,6 +275,7 @@
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Lets a ranged effect bounce off surfaces to reach around cover."
     },
     {
@@ -295,6 +303,7 @@
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Divides the effect's rank between two or more targets at once."
     },
     {
@@ -331,6 +340,7 @@
       "costFormula": "1 point flat per rank",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Lets you pre-set the effect to activate automatically on a chosen event."
     },
     {
@@ -340,6 +350,7 @@
       "costFormula": "1 point flat per rank",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Lets you change the effect's descriptor (fire, cold, sonic, etc.) on the fly."
     },
     {
@@ -358,6 +369,7 @@
       "costFormula": "-1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Using the effect requires an extra check that can simply fail."
     },
     {
@@ -385,6 +397,7 @@
       "costFormula": "-1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Shortens a ranged effect's short/medium/long distances."
     },
     {
@@ -430,6 +443,7 @@
       "costFormula": "-1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "Penalty on attack checks made with this effect."
     },
     {
@@ -484,6 +498,7 @@
       "costFormula": "-1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "description": "A minor, mostly cosmetic nuisance attached to the effect."
     },
     {

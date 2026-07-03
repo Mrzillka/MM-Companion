@@ -47,6 +47,21 @@ def test_single_per_rank_flaw_halves_the_cost() -> None:
     assert effect_total_cost(effect, data) == 4
 
 
+def test_ranked_flat_extra_multiplies_by_its_own_rank() -> None:
+    data = load_game_data()
+    # Damage 5 + Accurate (ranked flat, +1) bought at rank 3 => 1*5 + 1*3 = 8.
+    effect = PowerEffectInstance("damage", rank=5, extras=[ModifierSelection("accurate", rank=3)])
+    assert effect_total_cost(effect, data) == 8
+    assert effect_cost_formula(effect, data) == "5 × 1 + 3"
+
+
+def test_unranked_modifier_ignores_its_rank() -> None:
+    data = load_game_data()
+    # Ranged is per-rank (not ranked); a stray rank on the selection is ignored.
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged", rank=5)])
+    assert effect_total_cost(effect, data) == 16  # (1 + 1) * 8, not affected by rank=5
+
+
 def test_unknown_effect_costs_nothing() -> None:
     data = load_game_data()
     assert effect_total_cost(PowerEffectInstance("nonesuch", rank=5), data) == 0

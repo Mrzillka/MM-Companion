@@ -196,7 +196,9 @@ class Modifier:
     cost/adds a restriction). ``cost_formula`` is the prose; ``cost_value`` is the
     canonical numeric magnitude (always non-negative — the sign comes from
     ``category``). ``flat`` is ``True`` when the cost is a one-time add/subtract to
-    the effect total rather than per rank.
+    the effect total rather than per rank. ``ranked`` is ``True`` when the modifier
+    itself is bought in ranks (chosen independently of the effect's rank), so its
+    contribution is ``cost_value × rank`` — e.g. Accurate, Extended Range.
     """
 
     id: str
@@ -205,6 +207,7 @@ class Modifier:
     cost_formula: str = ""
     cost_value: int = 0
     flat: bool = False
+    ranked: bool = False
     description: str = ""
 
 
@@ -347,6 +350,7 @@ def _parse_modifier(m: dict) -> Modifier:
         cost_formula=m.get("costFormula", ""),
         cost_value=int(m.get("costValue", 0)),
         flat=bool(m.get("flat", False)),
+        ranked=bool(m.get("ranked", False)),
         description=m.get("description", ""),
     )
 

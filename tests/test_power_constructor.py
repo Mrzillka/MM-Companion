@@ -41,6 +41,33 @@ def test_attaching_a_modifier_updates_model_and_cost(qapp: QApplication) -> None
     assert window._cost.text() == "Total cost: 16 PP"
 
 
+def test_ranked_modifier_chip_has_a_rank_spin_box_that_drives_cost(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(5)
+    card.attach_modifier("accurate")  # ranked flat extra
+
+    chip = card._chips[0]
+    spin = chip.findChild(QSpinBox)
+    assert spin is not None  # ranked modifiers expose a rank spin box
+    spin.setValue(3)
+
+    assert window.power.effects[0].extras[0].rank == 3
+    assert window._cost.text() == "Total cost: 8 PP"  # 1*5 + 1*3
+
+
+def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")  # per-rank, not ranked
+
+    assert card._chips[0].findChild(QSpinBox) is None
+
+
 def test_removing_an_effect_clears_it(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")

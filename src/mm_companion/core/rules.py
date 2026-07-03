@@ -115,11 +115,19 @@ def power_points_remaining(char: Character, game_data: GameData) -> int:
     return char.power_points_total - power_points_spent(char, game_data)
 
 
+def _modifier_magnitude(modifier: Modifier, selection) -> int:
+    """One modifier's cost magnitude: ``cost_value``, times its rank when ``ranked``."""
+
+    return modifier.cost_value * (selection.rank if modifier.ranked else 1)
+
+
 def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: bool) -> int:
     """Sum the ``cost_value`` of the given modifier selections in one bucket.
 
     ``sign`` is ``+1`` for extras and ``-1`` for flaws; ``flat`` selects either the
-    per-rank bucket (``flat=False``) or the one-time bucket (``flat=True``).
+    per-rank bucket (``flat=False``) or the one-time bucket (``flat=True``). A
+    ``ranked`` modifier contributes ``cost_value × its rank`` (see
+    :func:`_modifier_magnitude`).
     """
 
     catalog: dict[str, Modifier] = {m.id: m for m in game_data.modifiers}
@@ -128,7 +136,7 @@ def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: b
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or modifier.flat != flat:
             continue
-        total += sign * modifier.cost_value
+        total += sign * _modifier_magnitude(modifier, selection)
     return total
 
 
@@ -187,7 +195,7 @@ def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or modifier.flat != flat:
             continue
-        terms.append(sign * modifier.cost_value)
+        terms.append(sign * _modifier_magnitude(modifier, selection))
     return terms
 
 

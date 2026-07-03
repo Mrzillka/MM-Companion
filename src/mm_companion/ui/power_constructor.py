@@ -115,9 +115,15 @@ class BrickWidget(QFrame):
 
 
 class ModifierChip(QFrame):
-    """An attached extra/flaw shown on an effect card, with a remove button."""
+    """An attached extra/flaw shown on an effect card, with a remove button.
+
+    A ``ranked`` modifier (bought in its own ranks, e.g. Accurate) also carries a
+    rank spin box; changing it writes back to the :class:`ModifierSelection` and
+    emits :attr:`changed` so the card can recompute its cost.
+    """
 
     removeRequested = Signal(object)
+    changed = Signal()
 
     def __init__(self, modifier: Modifier, selection: ModifierSelection) -> None:
         super().__init__()
@@ -130,12 +136,21 @@ class ModifierChip(QFrame):
         layout.setContentsMargins(6, 2, 3, 2)
         layout.setSpacing(4)
         layout.addWidget(QLabel(modifier.name))
+        if modifier.ranked:
+            rank = make_spin_box(1, 30, value=selection.rank, max_width=48)
+            rank.setPrefix("×")
+            rank.valueChanged.connect(self._on_rank_changed)
+            layout.addWidget(rank)
         remove = QPushButton("✕")
         remove.setFlat(True)
         remove.setFixedWidth(18)
         remove.setCursor(Qt.CursorShape.PointingHandCursor)
         remove.clicked.connect(lambda: self.removeRequested.emit(self))
         layout.addWidget(remove)
+
+    def _on_rank_changed(self, value: int) -> None:
+        self.selection.rank = value
+        self.changed.emit()
 
 
 class EffectCard(QFrame):
@@ -220,6 +235,7 @@ class EffectCard(QFrame):
 
         chip = ModifierChip(modifier, selection)
         chip.removeRequested.connect(self._remove_chip)
+        chip.changed.connect(self._on_chip_changed)
         self._chips.append(chip)
         self._chip_layout.addWidget(chip)
         self._hint.setVisible(False)
@@ -239,6 +255,10 @@ class EffectCard(QFrame):
 
     def _on_rank_changed(self, value: int) -> None:
         self.instance.rank = value
+        self._refresh_cost()
+        self.changed.emit()
+
+    def _on_chip_changed(self) -> None:
         self._refresh_cost()
         self.changed.emit()
 

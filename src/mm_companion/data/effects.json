@@ -665,7 +665,8 @@
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_permanent",
-        "affects": "defense"
+        "affects": "defense",
+        "target": "TOUGHNESS"
       },
       "description": "A standing bonus to Toughness from tough skin, natural armor, or similar."
     },

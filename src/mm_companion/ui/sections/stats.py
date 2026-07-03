@@ -4,6 +4,12 @@ Reads and writes the shared :class:`~mm_companion.core.character.Character`:
 ability/resistance ranks and the chosen advantages all live on the model, so the
 spin boxes and the advantage table are views over it rather than the source of
 truth.
+
+A trait a power raises (Enhanced Trait, Protection) shows its enhanced total in
+green beside the base spin box — ``→ 5`` — without replacing the bought value; the
+boost itself is computed in :func:`~mm_companion.core.rules.power_trait_bonuses`.
+:meth:`StatsSection.refresh_enhancements` recomputes these labels, and the sheet
+calls it whenever a power changes.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import GameData
+from mm_companion.core.rules import power_trait_bonuses
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, make_spin_box
@@ -37,6 +44,9 @@ STAT_MIN, STAT_MAX = -5, 30
 STAT_SPIN_WIDTH = 80
 
 RANK_MIN, RANK_MAX = 1, 20
+
+# The green a power-boosted trait's "→ total" reads in, matching the summary tints.
+ENHANCED_TINT = "#2e9e4f"
 
 
 class StatsSection(QGroupBox):
@@ -55,9 +65,13 @@ class StatsSection(QGroupBox):
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__("Base Character Stats", parent)
 
+        self._data = data
         self._character = character
         self._abilities: dict[str, QSpinBox] = {}
         self._resistances: dict[str, QSpinBox] = {}
+        # The "→ total" labels that show a power-boosted trait's enhanced value.
+        self._ability_enh: dict[str, QLabel] = {}
+        self._resistance_enh: dict[str, QLabel] = {}
         self._advantages_by_name = {a.name: a for a in data.advantages}
 
         layout = QHBoxLayout(self)
@@ -66,6 +80,7 @@ class StatsSection(QGroupBox):
                 "Abilities",
                 data.abilities,
                 self._abilities,
+                self._ability_enh,
                 character.abilities,
                 self._on_ability_changed,
             )
@@ -75,36 +90,43 @@ class StatsSection(QGroupBox):
                 "Resistances",
                 data.resistances,
                 self._resistances,
+                self._resistance_enh,
                 character.resistances,
                 self._on_resistance_changed,
             )
         )
         layout.addWidget(self._build_advantages(data), stretch=1)
+        # Seed the enhancement labels from any powers a loaded character carries.
+        self.refresh_enhancements()
 
     def _add_stat_row(
-        self, grid: QGridLayout, row: int, name: str, abbr: str, spin: QSpinBox
+        self, grid: QGridLayout, row: int, name: str, abbr: str, spin: QSpinBox, enh: QLabel
     ) -> None:
-        """Lay out one stat as three aligned columns: name, short code, spin box."""
+        """Lay out one stat as four aligned columns: name, short code, spin box,
+        and the (usually hidden) power-enhanced total."""
 
         grid.addWidget(QLabel(f"{name}:"), row, 0)
         code = QLabel(abbr)
         code.setAlignment(Qt.AlignmentFlag.AlignCenter)
         grid.addWidget(code, row, 1)
         grid.addWidget(spin, row, 2)
+        grid.addWidget(enh, row, 3)
 
     def _build_stat_group(
         self,
         title: str,
         entries: list,
         store: dict[str, QSpinBox],
+        enh_store: dict[str, QLabel],
         values: dict[str, int],
         on_change: Callable[[str, int], None],
     ) -> QGroupBox:
         """Build a titled grid of stat spin boxes (abilities or resistances).
 
         Spin boxes are seeded from *values* (the model dict) and write back
-        through *on_change*. A separator is inserted before the first derived
-        entry.
+        through *on_change*. Each row also gets a green "→ total" label that stays
+        hidden until a power enhances that trait. A separator is inserted before
+        the first derived entry.
         """
 
         box = QGroupBox(title)
@@ -113,7 +135,7 @@ class StatsSection(QGroupBox):
         separated = False
         for entry in entries:
             if entry.derived and not separated:
-                grid.addWidget(hline_separator(), row, 0, 1, 3)
+                grid.addWidget(hline_separator(), row, 0, 1, 4)
                 row += 1
                 separated = True
             spin = make_spin_box(
@@ -125,18 +147,49 @@ class StatsSection(QGroupBox):
             )
             spin.valueChanged.connect(lambda value, key=entry.key: on_change(key, value))
             store[entry.key] = spin
-            self._add_stat_row(grid, row, entry.name, entry.abbr, spin)
+            enh = QLabel()
+            enh.setStyleSheet(f"color: {ENHANCED_TINT}; font-weight: bold;")
+            enh.setVisible(False)
+            enh_store[entry.key] = enh
+            self._add_stat_row(grid, row, entry.name, entry.abbr, spin, enh)
             row += 1
         return box
 
     def _on_ability_changed(self, key: str, value: int) -> None:
         self._character.abilities[key] = value
         self.abilityChanged.emit(key, value)
+        self.refresh_enhancements()  # the base moved, so the "→ total" does too
         self.changed.emit()
 
     def _on_resistance_changed(self, key: str, value: int) -> None:
         self._character.resistances[key] = value
+        self.refresh_enhancements()
         self.changed.emit()
+
+    def refresh_enhancements(self) -> None:
+        """Recompute each trait's power-enhanced total and show it beside the base.
+
+        A trait with no power bonus keeps its label hidden, so the column only
+        appears for traits an Enhanced-Trait/Protection power actually raises.
+        """
+
+        bonuses = power_trait_bonuses(self._character, self._data)
+        self._apply_enhancements(self._abilities, self._ability_enh, bonuses["ability"])
+        self._apply_enhancements(self._resistances, self._resistance_enh, bonuses["resistance"])
+
+    @staticmethod
+    def _apply_enhancements(spins: dict, labels: dict, bonuses: dict) -> None:
+        for key, label in labels.items():
+            bonus = bonuses.get(key)
+            if bonus:
+                total = spins[key].value() + bonus.amount
+                label.setText(f"→ {total}")
+                label.setToolTip(f"+{bonus.amount} from {', '.join(bonus.sources)}")
+                label.setVisible(True)
+            else:
+                label.clear()
+                label.setToolTip("")
+                label.setVisible(False)
 
     def _build_advantages(self, data: GameData) -> QGroupBox:
         box = QGroupBox("Advantages")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
@@ -18,10 +19,14 @@ from mm_companion.core.rules import (
     effect_game_terms,
     effect_stat_rows,
     effect_total_cost,
+    effective_ability,
     effective_effect_stats,
     power_game_terms,
     power_pl_violations,
     power_total_cost,
+    power_trait_bonuses,
+    resistance_total,
+    skill_total,
 )
 
 
@@ -587,3 +592,94 @@ def test_pl_violations_respect_inaccurate_trade_off() -> None:
     # Inaccurate lowers the attack, so a rank-21 Damage trades back under the cap.
     effect = PowerEffectInstance("damage", rank=21, flaws=[ModifierSelection("inaccurate")])
     assert power_pl_violations(Power(effects=[effect]), 10, data) == []
+
+
+# -- trait boosts from powers (Enhanced Trait, Protection) --------------------
+
+
+def _char_with(power: Power) -> Character:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.powers.append(power)
+    return char
+
+
+def test_enhanced_trait_boosts_a_chosen_ability() -> None:
+    data = load_game_data()
+    char = _char_with(
+        Power(
+            name="Mighty",
+            effects=[PowerEffectInstance("enhanced_trait", rank=3, config={"target": "STR"})],
+        )
+    )
+    char.abilities["STR"] = 2
+
+    bonus = power_trait_bonuses(char, data)["ability"]["STR"]
+    assert bonus.amount == 3
+    assert bonus.sources == ("Mighty",)
+    assert effective_ability(char, data, "STR") == 5  # 2 bought + 3 boost
+
+
+def test_protection_boosts_toughness_via_its_fixed_target() -> None:
+    data = load_game_data()
+    char = _char_with(Power(name="Armor", effects=[PowerEffectInstance("protection", rank=5)]))
+    # Protection carries no config target — it's baked into the effect's stat_target.
+    assert resistance_total(char, data, "TOUGHNESS") == 5
+
+
+def test_enhanced_ability_propagates_into_linked_skill_total() -> None:
+    data = load_game_data()
+    char = _char_with(
+        Power(effects=[PowerEffectInstance("enhanced_trait", rank=4, config={"target": "STR"})])
+    )
+    char.skill_ranks["Athletics"] = 1  # Athletics is Strength-linked
+    assert skill_total(char, data, "Athletics") == 5  # effective STR 4 + 1 rank
+
+
+def test_enhanced_trait_can_boost_a_skill_directly() -> None:
+    data = load_game_data()
+    char = _char_with(
+        Power(
+            effects=[PowerEffectInstance("enhanced_trait", rank=6, config={"target": "Acrobatics"})]
+        )
+    )
+    # No ranks bought, no linked-ability value: the whole total is the power boost.
+    assert skill_total(char, data, "Acrobatics") == 6
+
+
+def test_trait_boosts_from_several_powers_stack() -> None:
+    data = load_game_data()
+    char = _char_with(
+        Power(
+            name="A",
+            effects=[PowerEffectInstance("enhanced_trait", rank=2, config={"target": "STR"})],
+        )
+    )
+    char.powers.append(
+        Power(
+            name="B",
+            effects=[PowerEffectInstance("enhanced_trait", rank=3, config={"target": "STR"})],
+        )
+    )
+    bonus = power_trait_bonuses(char, data)["ability"]["STR"]
+    assert bonus.amount == 5
+    assert bonus.sources == ("A", "B")
+
+
+def test_enhanced_trait_without_a_chosen_target_is_ignored() -> None:
+    data = load_game_data()
+    char = _char_with(Power(effects=[PowerEffectInstance("enhanced_trait", rank=4)]))  # no config
+    assert power_trait_bonuses(char, data) == {"ability": {}, "resistance": {}, "skill": {}}
+
+
+def test_trait_boost_does_not_change_point_cost() -> None:
+    from mm_companion.core.rules import power_points_spent
+
+    data = load_game_data()
+    char = _char_with(
+        Power(effects=[PowerEffectInstance("enhanced_trait", rank=3, config={"target": "STR"})])
+    )
+    char.abilities["STR"] = 2
+    # STR costs for the 2 *bought* ranks (4 PP), not the boosted 5; the boost is
+    # paid by the power's own cost (enhanced_trait 2/rank × 3 = 6).
+    assert power_points_spent(char, data) == 2 * 2 + 6

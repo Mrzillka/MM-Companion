@@ -47,26 +47,149 @@ def _resistance(game_data: GameData, key: str) -> Resistance | None:
     return None
 
 
+# The trait categories an effect's ``stat_affects`` can name that map to a numeric
+# trait bonus on the sheet (``defense`` resistances live in the resistances list).
+TRAIT_CATEGORIES = frozenset({"ability", "resistance", "defense", "skill"})
+
+
+@dataclass(frozen=True)
+class TraitBonus:
+    """A standing bonus a character's powers add to one trait.
+
+    ``amount`` is the summed bonus; ``sources`` names each contributing power (its
+    name, or the effect's name when the power is unnamed) so the UI can explain the
+    boost on a tooltip.
+    """
+
+    amount: int
+    sources: tuple[str, ...]
+
+
+def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
+    """The trait key one effect boosts, or ``""`` when it isn't a trait booster.
+
+    The target is the player's choice (``config['target']``) for a configurable
+    effect or the effect's baked-in ``stat_target`` otherwise, and only when the
+    effect's ``stat_affects`` names a numeric trait category.
+    """
+
+    affects = set(base.stat_affects.split("|")) if base.stat_affects else set()
+    if not (affects & TRAIT_CATEGORIES):
+        return ""
+    target = effect.config.get("target", "") if base.configurable_target else base.stat_target
+    return target or ""
+
+
+def _trait_category(game_data: GameData, target: str) -> str:
+    """Which trait list ``target`` belongs to — ``ability``/``resistance``/``skill``, or ``""``."""
+    if any(a.key == target for a in game_data.abilities):
+        return "ability"
+    if any(r.key == target for r in game_data.resistances):
+        return "resistance"
+    if any(s.name == target for s in game_data.skills):
+        return "skill"
+    return ""
+
+
+def _trait_name(game_data: GameData, target: str) -> str:
+    """The display name for a trait key (its ``name``; skills are named by key)."""
+    for a in game_data.abilities:
+        if a.key == target:
+            return a.name
+    for r in game_data.resistances:
+        if r.key == target:
+            return r.name
+    return target  # skills (and anything else) display by their key/name
+
+
+def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:
+    """Trait bonuses every saved power grants, grouped ``category -> {key: TraitBonus}``.
+
+    A power enhances a trait when one of its effects is a trait booster — an
+    Enhanced-Trait-style effect (``configurable_target``, the target read from the
+    instance ``config['target']``) or a fixed-target one like Protection (the target
+    baked into the effect's ``stat_target``) — and its ``stat_affects`` names a trait
+    category. The bonus is the effect's rank, added to the resolved target; the
+    category is inferred from which trait list the target key belongs to (abilities,
+    resistances, or skills). Effects that boost non-numeric traits (senses, movement)
+    or carry no resolvable target are skipped. Multiple powers stack on one trait.
+    """
+
+    result: dict[str, dict[str, TraitBonus]] = {"ability": {}, "resistance": {}, "skill": {}}
+
+    for power in char.powers:
+        for effect in power.effects:
+            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+            if base is None:
+                continue
+            target = _resolved_trait_target(effect, base)
+            if not target:
+                continue  # not a booster, or no trait chosen / no fixed target
+            category = _trait_category(game_data, target)
+            if not category:
+                continue  # target isn't a trait we track
+            source = power.name or base.name
+            bucket = result[category]
+            prior = bucket.get(target)
+            if prior is None:
+                bucket[target] = TraitBonus(effect.rank, (source,))
+            else:
+                bucket[target] = TraitBonus(prior.amount + effect.rank, prior.sources + (source,))
+    return result
+
+
+def _trait_bonus(
+    char: Character, game_data: GameData, category: str, key: str
+) -> TraitBonus | None:
+    """The :class:`TraitBonus` powers add to one trait, or ``None`` when there is none."""
+    return power_trait_bonuses(char, game_data)[category].get(key)
+
+
+def effective_ability(char: Character, game_data: GameData, key: str) -> int:
+    """An ability's value for all derived math: its bought rank plus any power bonus.
+
+    This is the value skills, resistances, initiative, and the like read, so an
+    Enhanced-Trait boost to an ability flows through the whole sheet. The point cost
+    (:func:`power_points_spent`) still counts only the *bought* rank — the boost is
+    paid for by the power itself.
+    """
+
+    bonus = _trait_bonus(char, game_data, "ability", key)
+    return char.abilities.get(key, 0) + (bonus.amount if bonus else 0)
+
+
 def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
-    """``ability value + skill ranks + situational modifier`` for one skill row."""
+    """``ability value + skill ranks + situational modifier`` for one skill row.
+
+    The ability value is the *effective* one (:func:`effective_ability`), and a skill
+    a power enhances also adds that power bonus, so an Enhanced-Trait boost to either
+    the linked ability or the skill itself shows up in the total.
+    """
 
     skill = _skill_for_row(game_data, row_id)
     ability_key = skill.ability if skill else ""
-    ability_value = char.abilities.get(ability_key, 0)
-    return ability_value + char.skill_ranks.get(row_id, 0) + char.skill_mods.get(row_id, 0)
+    ability_value = effective_ability(char, game_data, ability_key)
+    total = ability_value + char.skill_ranks.get(row_id, 0) + char.skill_mods.get(row_id, 0)
+    if skill:
+        bonus = _trait_bonus(char, game_data, "skill", skill.name)
+        if bonus:
+            total += bonus.amount
+    return total
 
 
 def resistance_total(char: Character, game_data: GameData, key: str) -> int:
-    """A resistance's total: its linked ability value plus the ranks bought in it.
+    """A resistance's total: its linked (effective) ability plus bought and power ranks.
 
-    Derived resistances with no linked ability (e.g. Defence) are just their
-    bought ranks.
+    Derived resistances with no linked ability (e.g. Defence) are just their bought
+    plus power ranks. A power that enhances the linked ability (or the resistance
+    itself, e.g. Protection → Toughness) raises the total.
     """
 
     res = _resistance(game_data, key)
     bought = char.resistances.get(key, 0)
-    ability_value = char.abilities.get(res.ability, 0) if res and res.ability else 0
-    return ability_value + bought
+    ability_value = effective_ability(char, game_data, res.ability) if res and res.ability else 0
+    bonus = _trait_bonus(char, game_data, "resistance", key)
+    return ability_value + bought + (bonus.amount if bonus else 0)
 
 
 def defense_class(char: Character, game_data: GameData, key: str = "DEF") -> int:
@@ -75,10 +198,19 @@ def defense_class(char: Character, game_data: GameData, key: str = "DEF") -> int
     return 10 + resistance_total(char, game_data, key)
 
 
-def initiative(char: Character, bonus: int = 0) -> int:
-    """Initiative modifier: Agility rank plus any misc bonus (``mm-core-mechanics.md`` §8)."""
+def initiative(char: Character, bonus: int = 0, game_data: GameData | None = None) -> int:
+    """Initiative modifier: Agility rank plus any misc bonus (``mm-core-mechanics.md`` §8).
 
-    return char.abilities.get("AGL", 0) + bonus
+    Uses the *effective* Agility (bought plus any Enhanced-Trait boost) when
+    ``game_data`` is supplied; without it, the bare bought rank.
+    """
+
+    agility = (
+        effective_ability(char, game_data, "AGL")
+        if game_data is not None
+        else char.abilities.get("AGL", 0)
+    )
+    return agility + bonus
 
 
 def power_points_spent(char: Character, game_data: GameData) -> int:
@@ -633,6 +765,12 @@ def effect_stat_rows(effect: PowerEffectInstance, game_data: GameData) -> list[E
         value = effect.config.get(field.key)
         if value:
             rows.append(EffectStat(field.key, field.label, "", _config_display(field, value), ""))
+    # A trait booster (Enhanced Trait, Protection) shows which trait it raises and by
+    # how much — green, since it's an improvement — so the summary isn't blank.
+    target = _resolved_trait_target(effect, base_effect)
+    if target and _trait_category(game_data, target):
+        raised = f"{_trait_name(game_data, target)} +{effect.rank}"
+        rows.append(EffectStat("enhances", "Enhances", "", raised, "better"))
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
     return rows

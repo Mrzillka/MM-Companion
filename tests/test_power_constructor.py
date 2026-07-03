@@ -475,3 +475,80 @@ def test_section_row_marks_a_power_that_breaks_the_cap(qapp: QApplication) -> No
     warnings = [lbl for lbl in sheet.powers._list_host.findChildren(QLabel) if lbl.text() == "⚠"]
     assert warnings  # the over-cap power carries a warning marker
     assert "Damage rank 30" in warnings[0].toolTip()
+
+
+# -- Enhanced Trait target picker & trait-boost display -----------------------
+
+
+def _target_combo(card):
+    """The Enhanced-Trait target combo on an effect card, or None."""
+    from PySide6.QtWidgets import QComboBox
+
+    return next((c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0), None)
+
+
+def test_configurable_effect_offers_a_trait_target_picker(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    combo = _target_combo(card)
+    assert combo is not None  # abilities, resistances, skills all offered
+    assert combo.findData("TOUGHNESS") >= 0
+    assert combo.findData("Acrobatics") >= 0
+
+
+def test_fixed_and_plain_effects_have_no_target_picker(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    # Protection's target is fixed (Toughness), Damage isn't a booster at all.
+    assert _target_combo(window.canvas.add_effect("protection")) is None
+    assert _target_combo(window.canvas.add_effect("damage")) is None
+
+
+def test_picking_a_target_writes_it_to_the_effect_config(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    combo = _target_combo(card)
+    combo.setCurrentIndex(combo.findData("AWE"))
+    assert card.instance.config["target"] == "AWE"
+
+
+def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    sheet.stats._abilities["STR"].setValue(2)
+
+    sheet.powers._open_constructor()
+    window = sheet.powers._windows[0]
+    window._name.setText("Mighty")
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(3)
+    combo = _target_combo(card)
+    combo.setCurrentIndex(combo.findData("STR"))
+    window._save_power()
+
+    enh = sheet.stats._ability_enh["STR"]
+    assert enh.isVisibleTo(sheet.stats)
+    assert enh.text() == "→ 5"  # 2 bought + 3 boost
+    assert "Mighty" in enh.toolTip()
+
+    # A Strength-linked skill total reflects the boosted ability.
+    sheet.character.skill_ranks["Athletics"] = 1
+    sheet.skills.refresh_totals()
+    athletics = next(r for r in sheet.skills._rows if r[1] == "Athletics")
+    assert athletics[3].text() == "6"  # effective STR 5 + 1 rank
+
+
+def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) -> None:
+    from mm_companion.core.character import Character
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(
+        Power(name="Armor", effects=[PowerEffectInstance("protection", rank=5)])
+    )
+    sheet = CharacterSheet(data, character)
+
+    tough = sheet.stats._resistance_enh["TOUGHNESS"]
+    assert tough.isVisibleTo(sheet.stats)  # Protection boost shown on load
+
+    sheet.powers._remove_power(character.powers[0])
+    assert not tough.isVisibleTo(sheet.stats)  # boost cleared when the power goes

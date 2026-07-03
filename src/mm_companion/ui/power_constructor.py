@@ -69,6 +69,7 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
 )
 from mm_companion.core.rules import (
+    TRAIT_CATEGORIES,
     array_alternate_cost,
     array_base_index,
     effect_cost_formula,
@@ -271,6 +272,13 @@ class EffectCard(QFrame):
         header.addWidget(remove)
         layout.addLayout(header)
 
+        # A configurable trait booster (Enhanced Trait) picks which trait it raises;
+        # a fixed one (Protection) has no picker. Shown just under the header so the
+        # target reads before the qualities below.
+        target_picker = self._build_target_picker(effect)
+        if target_picker is not None:
+            layout.addWidget(target_picker)
+
         # The config form is rebuilt on demand: attaching Extra Condition upgrades
         # Affliction's degree pickers from single-select to multiselect.
         self._config_host = QWidget()
@@ -400,6 +408,59 @@ class EffectCard(QFrame):
         else:  # "", empty list, or None all clear the choice
             self.instance.config.pop(key, None)
         self.changed.emit()
+
+    # -- enhanced-trait target picker -------------------------------------
+    def _build_target_picker(self, effect) -> QWidget | None:
+        """A combo choosing which trait a configurable booster (Enhanced Trait) raises.
+
+        Returns ``None`` unless the effect is ``configurable_target`` and its
+        ``stat_affects`` names a numeric trait category (so senses/movement pickers
+        don't appear). The options — abilities, resistances, and skills — are read
+        from the game data, not hardcoded; the chosen key is stored in
+        ``instance.config['target']``.
+        """
+
+        if effect is None or not effect.configurable_target:
+            return None
+        affects = set(effect.stat_affects.split("|")) if effect.stat_affects else set()
+        if not (affects & TRAIT_CATEGORIES):
+            return None
+
+        host = QWidget()
+        form = QFormLayout(host)
+        form.setContentsMargins(0, 0, 0, 0)
+        combo = QComboBox()
+        combo.addItem("— choose a trait —", "")
+        combo.addItem("Abilities", None)  # a disabled section heading
+        for ability in self._data.abilities:
+            combo.addItem(f"  {ability.name}", ability.key)
+        combo.addItem("Resistances", None)
+        for res in self._data.resistances:
+            if not res.derived:  # skip the derived Defence aggregate
+                combo.addItem(f"  {res.name}", res.key)
+        combo.addItem("Skills", None)
+        for skill in self._data.skills:
+            combo.addItem(f"  {skill.name}", skill.name)
+        self._disable_section_headings(combo)
+
+        current = combo.findData(self.instance.config.get("target", ""))
+        combo.setCurrentIndex(current if current >= 0 else 0)
+        guard_wheel(combo)
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo: self._on_config_changed("target", c.currentData())
+        )
+        form.addRow("Enhances", combo)
+        return host
+
+    @staticmethod
+    def _disable_section_headings(combo: QComboBox) -> None:
+        """Grey out the section-heading rows (those carrying ``None`` data) so they
+        read as group labels rather than selectable traits."""
+        model = combo.model()
+        for index in range(combo.count()):
+            if combo.itemData(index) is None:
+                item = model.item(index)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
 
     # -- effect-specific modifier menu ------------------------------------
     def _populate_specific_menu(self) -> None:

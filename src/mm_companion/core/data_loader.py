@@ -218,8 +218,12 @@ class Effect:
     and flaws. ``base_cost`` is the human-readable prose (e.g. ``"1 per rank"``);
     ``base_cost_value`` is the canonical machine-readable points-per-rank used for
     automatic cost calculation. ``configurable_target`` marks Enhanced-Trait-style
-    effects that target a chosen trait. ``stat_pattern``/``stat_affects`` are the
-    flattened ``statIntegration`` object describing how the effect patches stats.
+    effects that target a chosen trait. ``stat_pattern``/``stat_affects``/``stat_target``
+    are the flattened ``statIntegration`` object describing how the effect patches
+    stats: ``stat_affects`` is the trait *category* it can boost
+    (``ability``/``resistance``/``defense``/``skill``/…), and ``stat_target`` is the
+    specific trait key for a fixed-target booster like Protection (``"TOUGHNESS"``),
+    left blank when the player chooses the target (``configurable_target``).
     ``config_fields`` are the effect's configurable qualities (Affliction's
     conditions, etc.), the player's choices for which live in the instance's config.
     ``measure`` is a rank-derived real-world quantity the effect exposes (a movement
@@ -246,6 +250,7 @@ class Effect:
     config_fields: tuple[EffectConfigField, ...] = ()
     measure: Measure | None = None
     resistance_dc_base: int | None = None
+    stat_target: str = ""
 
 
 @dataclass(frozen=True)
@@ -488,6 +493,7 @@ def _parse_effect(e: dict) -> Effect:
         configurable_target=bool(e.get("configurableTarget", False)),
         stat_pattern=integration.get("pattern", ""),
         stat_affects=integration.get("affects", ""),
+        stat_target=integration.get("target", ""),
         description=e.get("description", ""),
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
         measure=_parse_measure(e.get("measure")),

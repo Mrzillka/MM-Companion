@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
-from mm_companion.core.rules import skill_total
+from mm_companion.core.rules import effective_ability, skill_total
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item
@@ -293,9 +293,18 @@ class SkillsSection(QGroupBox):
 
         self._refresh_totals()
 
+    def refresh_totals(self) -> None:
+        """Recompute every skill total — the sheet calls this when powers change,
+        since an Enhanced-Trait boost to a linked ability or the skill itself moves
+        the total."""
+
+        self._refresh_totals()
+
     def _refresh_totals(self) -> None:
         for ability_key, row_id, ability_rank_item, total_item in self._rows:
-            ability = self._character.abilities.get(ability_key, 0)
+            # The ABL column shows the *effective* ability (with any power boost) so
+            # the row's columns still sum to the total.
+            ability = effective_ability(self._character, self._data, ability_key)
             total = skill_total(self._character, self._data, row_id)
             ability_rank_item.setText(str(ability))
             total_item.setText(str(total))

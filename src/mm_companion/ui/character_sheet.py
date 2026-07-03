@@ -58,6 +58,11 @@ class CharacterSheet(QScrollArea):
             section.changed.connect(self._recompute_derived)
         self._recompute_derived()
 
+        # A power change can add or drop a trait boost, so refresh the enhanced
+        # ability/resistance totals and the skill totals that read them.
+        self.powers.changed.connect(self.stats.refresh_enhancements)
+        self.powers.changed.connect(self.skills.refresh_totals)
+
         # Surface any user edit for unsaved-change tracking. The stats/skills
         # `changed` signal already fires on every edit they make; base_info has
         # edits (name, conditions, image) that don't affect the point build, so

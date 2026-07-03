@@ -515,6 +515,17 @@ def test_constructor_shows_strength_folded_into_the_damage_dc(qapp: QApplication
     assert rows["resistance"].value == "Toughness vs. 28"
 
 
+def test_constructor_summary_shows_the_characters_attack_bonus(qapp: QApplication) -> None:
+    character = Character.new_default(load_game_data())
+    character.abilities["ATK"] = 7
+    window = PowerConstructorWindow(load_game_data(), character=character)
+
+    window.canvas.add_effect("damage")._rank.setValue(9)
+    # The attack roll in the summary reads the character's Attack, not the rank.
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["check"].value == "7 vs. Defense"
+
+
 # -- Enhanced Trait target picker & trait-boost display -----------------------
 
 

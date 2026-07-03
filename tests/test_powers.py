@@ -266,6 +266,41 @@ def test_effect_stat_rows_use_a_ten_base_dc_for_non_damage() -> None:
     assert rows["resistance"].value == "Will vs. 15"  # 10 + rank
 
 
+def test_attack_roll_shows_the_characters_attack_when_given() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+
+    effect = PowerEffectInstance("damage", rank=8)
+    rows = {r.key: r for r in effect_stat_rows(effect, data, char)}
+    # The attack roll is the character's Attack, not the effect rank; the DC still
+    # tracks the rank.
+    assert rows["check"].value == "6 vs. Defense"
+    assert rows["resistance"].value == "Toughness vs. 23"
+
+
+def test_attack_roll_adds_accurate_over_the_characters_attack() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("accurate")])
+    check = next(r for r in effect_stat_rows(effect, data, char) if r.key == "check")
+    assert check.base == "6 vs. Defense"  # Attack alone
+    assert check.value == "8 vs. Defense"  # + Accurate 2
+    assert check.change == "better"
+
+
+def test_non_attack_roll_still_uses_the_effect_rank() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+
+    # Nullify resolves "Effect vs. Will" — its own rank, never the character's Attack.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("nullify", rank=7), data, char)}
+    assert rows["resistance"].value == "7 vs. Will or rank"
+
+
 def test_effect_stat_rows_opposed_effect_uses_rank_as_the_threshold() -> None:
     data = load_game_data()
     # Move Object is resisted by Strength against its effective Strength (its rank).

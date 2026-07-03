@@ -761,8 +761,11 @@ def effect_stat_rows(
     appended as untinted rows so the table stays a complete summary. Empty for an
     unknown effect id.
 
-    When ``char`` is given, the resistance save DC uses the *effective* effect rank,
-    so a Strength-Based Damage shows the wielder's Strength folded into its DC.
+    When ``char`` is given, the numbers reflect the wielder: an attack roll shows the
+    character's Attack (plus Accurate/Inaccurate) rather than the effect rank, and the
+    resistance save DC uses the effective effect rank (a Strength-Based Damage folds in
+    the wielder's Strength). Without a character both fall back to the effect rank, so a
+    context-free summary still reads.
     """
 
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -776,20 +779,31 @@ def effect_stat_rows(
         if scope.get("range") == "Rank":
             scope["range"] = game_data.measurements.label("distance", effect.rank) or "Rank"
 
-    # Resolve the check/resistance phrases to concrete numbers (attack bonus = rank,
-    # save DC = base + effective rank — the effective rank folds in a Strength-Based
-    # bonus). The current attack roll carries any Accurate/Inaccurate bonus so it can
-    # be tinted.
+    # Resolve the check/resistance phrases to concrete numbers: the save DC is
+    # ``base + effective rank`` (effective rank folds in a Strength-Based bonus), and
+    # the attack roll uses the character's Attack (see below).
     effective_rank = effect_effective_rank(effect, game_data, char)
     dc = (
         None
         if base_effect.resistance_dc_base is None
         else base_effect.resistance_dc_base + effective_rank
     )
-    base["check"] = _numeric_roll(base["check"], effect.rank, dc, resistance=False)
+    # The attacker's own d20 bonus in the check phrase. An "Attack vs. Defense" roll
+    # uses the character's Attack (plus this power's Accurate/Inaccurate); an "Effect
+    # vs. …" / "Deflect vs. …" phrase instead uses the effect's own rank. Without a
+    # character we fall back to the effect rank so a context-free summary still reads.
+    attack = effective_ability(char, game_data, "ATK") if char is not None else effect.rank
+
+    def _actor(phrase: str, *, with_mods: bool) -> int:
+        roll = attack if phrase.startswith("Attack") else effect.rank
+        return roll + (impact.check_bonus if with_mods else 0)
+
+    base["check"] = _numeric_roll(
+        base["check"], _actor(base["check"], with_mods=False), dc, resistance=False
+    )
     base["resistance"] = _numeric_roll(base["resistance"], effect.rank, dc, resistance=True)
     stats["check"] = _numeric_roll(
-        stats["check"], effect.rank + impact.check_bonus, dc, resistance=False
+        stats["check"], _actor(stats["check"], with_mods=True), dc, resistance=False
     )
     stats["resistance"] = _numeric_roll(stats["resistance"], effect.rank, dc, resistance=True)
 

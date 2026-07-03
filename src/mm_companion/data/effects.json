@@ -1,6 +1,7 @@
 {
   "_meta": {
-    "description": "Base power effects for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (effectType, action, range, duration, check, resistance, baseCost, statIntegration) reflect game rules/facts, not copyrighted prose. Companion to mm-powers-architecture.md (read first) and modifiers.json.",
+    "description": "Base power effects for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (effectType, action, range, duration, check, resistance, baseCost, statIntegration, config) reflect game rules/facts, not copyrighted prose. Companion to mm-powers-architecture.md (read first) and modifiers.json.",
+    "configNote": "config is the effect's list of configurable qualities (the per-effect choices mm-powers-architecture.md §9 defers). Each entry is { key, label, type ('select'|'multiselect'|'text'), overrides?, multiselectWith?, options? }. The player's choice is stored under 'key' in the power effect instance's config: a single value for select/text, a list of values for multiselect. 'overrides' names a base game-term field (e.g. 'resistance') the chosen value replaces in the generated summary; without it the choice is appended. 'multiselectWith' names an extra modifier whose presence upgrades a select field to multiselect (e.g. Affliction's degrees become multiselect only once the 'extra_condition' extra is attached). For select/multiselect fields, options are { value, label } pairs (condition options use the condition id as value).",
     "effectTypeKey": {
       "Attack": "Offensive; requires an attack check; always resistible",
       "Defense": "Personal protection; usually passive",
@@ -45,6 +46,60 @@
         "pattern": "instant_action",
         "affects": "none"
       },
+      "config": [
+        {
+          "key": "resistance",
+          "label": "Resisted by",
+          "type": "select",
+          "overrides": "resistance",
+          "options": [
+            { "value": "Fortitude", "label": "Fortitude" },
+            { "value": "Will", "label": "Will" }
+          ]
+        },
+        {
+          "key": "degree1",
+          "label": "1st degree",
+          "type": "select",
+          "multiselectWith": "extra_condition",
+          "options": [
+            { "value": "dazed", "label": "Dazed" },
+            { "value": "fatigued", "label": "Fatigued" },
+            { "value": "hindered", "label": "Hindered" },
+            { "value": "impaired", "label": "Impaired" },
+            { "value": "vulnerable", "label": "Vulnerable" }
+          ]
+        },
+        {
+          "key": "degree2",
+          "label": "2nd degree",
+          "type": "select",
+          "multiselectWith": "extra_condition",
+          "options": [
+            { "value": "compelled", "label": "Compelled" },
+            { "value": "defenseless", "label": "Defenseless" },
+            { "value": "disabled", "label": "Disabled" },
+            { "value": "exhausted", "label": "Exhausted" },
+            { "value": "immobile", "label": "Immobile" },
+            { "value": "prone", "label": "Prone" },
+            { "value": "stunned", "label": "Stunned" }
+          ]
+        },
+        {
+          "key": "degree3",
+          "label": "3rd degree",
+          "type": "select",
+          "multiselectWith": "extra_condition",
+          "options": [
+            { "value": "asleep", "label": "Asleep" },
+            { "value": "controlled", "label": "Controlled" },
+            { "value": "incapacitated", "label": "Incapacitated" },
+            { "value": "paralyzed", "label": "Paralyzed" },
+            { "value": "transformed", "label": "Transformed" },
+            { "value": "unaware", "label": "Unaware" }
+          ]
+        }
+      ],
       "description": "Inflicts an escalating condition on a target instead of damage."
     },
     {

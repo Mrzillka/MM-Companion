@@ -98,6 +98,86 @@ def test_removing_an_effect_clears_it(qapp: QApplication) -> None:
     assert window._cost.text() == "Total cost: 0 PP"
 
 
+def test_game_terms_row_is_read_only_and_tracks_the_build(qapp: QApplication) -> None:
+    from PySide6.QtCore import Qt
+
+    window = PowerConstructorWindow(load_game_data())
+    # Read-only: it is a label, not an input, and never editable by keyboard.
+    assert not (window._game_terms.textInteractionFlags() & Qt.TextInteractionFlag.TextEditable)
+
+    card = window.canvas.add_effect("affliction")
+    assert "Close range" in window._game_terms.text()
+
+    card.attach_modifier("ranged")  # overrides range to Ranged
+    assert "Ranged range" in window._game_terms.text()
+    assert "Close range" not in window._game_terms.text()
+
+
+def test_effect_config_combos_write_choices_to_the_model(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    combos = card.findChildren(QComboBox)
+    assert combos  # Affliction exposes configurable qualities as selects
+
+    resistance = next(c for c in combos if c.findData("Will") >= 0)
+    resistance.setCurrentIndex(resistance.findData("Will"))
+
+    assert window.power.effects[0].config["resistance"] == "Will"
+    assert "resisted by Will" in window._game_terms.text()
+
+
+def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox, QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+
+    # By default the degrees are single-select combos and there are no check boxes.
+    assert len(card.findChildren(QComboBox)) == 4  # resistance + 3 degrees
+    assert card.findChildren(QCheckBox) == []
+
+    card.attach_modifier("extra_condition")  # the Affliction-only gating extra
+    assert card.findChildren(QCheckBox)  # degrees are now multiselect
+    assert len(card.findChildren(QComboBox)) == 1  # only resistance stays a combo
+
+
+def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    card.attach_modifier("extra_condition")
+
+    boxes = {b.text(): b for b in card.findChildren(QCheckBox)}
+    boxes["Dazed"].setChecked(True)
+    boxes["Vulnerable"].setChecked(True)
+
+    assert window.power.effects[0].config["degree1"] == ["dazed", "vulnerable"]
+    assert "1st degree: Dazed + Vulnerable" in window._game_terms.text()
+
+
+def test_removing_extra_condition_collapses_the_degree_back_to_one(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    card.attach_modifier("extra_condition")
+    card.instance.config["degree1"] = ["dazed", "vulnerable"]
+
+    card._remove_chip(card._chips[0])  # drop Extra Condition
+    assert card.instance.config["degree1"] == "dazed"  # collapsed to a single value
+    assert "1st degree: Dazed" in window._game_terms.text()
+    assert "Vulnerable" not in window._game_terms.text()
+
+
+def test_effect_without_config_has_no_combos(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")  # Damage has no config fields
+    assert card.findChildren(QComboBox) == []
+
+
 def test_name_and_description_write_to_model(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     window._name.setText("Fire Blast")

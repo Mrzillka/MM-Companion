@@ -161,6 +161,41 @@ class Condition:
 
 
 @dataclass(frozen=True)
+class ConfigOption:
+    """One selectable value for an :class:`EffectConfigField`.
+
+    ``value`` is what gets stored in ``PowerEffectInstance.config``; ``label`` is
+    what the UI shows (e.g. value ``"dazed"`` shown as ``"Dazed"``).
+    """
+
+    value: str
+    label: str
+
+
+@dataclass(frozen=True)
+class EffectConfigField:
+    """One configurable *quality* of an effect (see ``mm-powers-architecture.md`` §9).
+
+    Effects like Affliction require player choices — which resistance it targets,
+    which condition each degree inflicts. Each field is stored under ``key`` in the
+    :class:`~mm_companion.core.powers.PowerEffectInstance` ``config`` dict. ``type``
+    is ``"select"`` (one of ``options``), ``"multiselect"`` (a list of them), or
+    ``"text"`` (free text). ``overrides``, if set, names a base game-term field (e.g.
+    ``"resistance"``) that the chosen value replaces in the generated summary;
+    otherwise the choice is appended to it. ``multiselect_with`` names an extra whose
+    presence upgrades a ``select`` field to ``multiselect`` — e.g. Affliction's
+    ``extra_condition`` lets each degree hold two same-degree conditions.
+    """
+
+    key: str
+    label: str
+    type: str = "select"
+    overrides: str | None = None
+    multiselect_with: str | None = None
+    options: tuple[ConfigOption, ...] = ()
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``mm-powers-architecture.md``).
 
@@ -170,6 +205,8 @@ class Effect:
     automatic cost calculation. ``configurable_target`` marks Enhanced-Trait-style
     effects that target a chosen trait. ``stat_pattern``/``stat_affects`` are the
     flattened ``statIntegration`` object describing how the effect patches stats.
+    ``config_fields`` are the effect's configurable qualities (Affliction's
+    conditions, etc.), the player's choices for which live in the instance's config.
     """
 
     id: str
@@ -186,6 +223,7 @@ class Effect:
     stat_pattern: str = ""
     stat_affects: str = ""
     description: str = ""
+    config_fields: tuple[EffectConfigField, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -199,6 +237,12 @@ class Modifier:
     the effect total rather than per rank. ``ranked`` is ``True`` when the modifier
     itself is bought in ranks (chosen independently of the effect's rank), so its
     contribution is ``cost_value × rank`` — e.g. Accurate, Extended Range.
+
+    ``overrides`` maps a base-effect game-term field (``range``, ``action``,
+    ``duration``, ``resistance``, ``check``, ``effect_type``) to the value this
+    modifier forces it to — e.g. Ranged sets ``range`` to ``"Ranged"``, replacing
+    a Close or Perception base. It drives the generated game-terms summary only,
+    not the point cost.
     """
 
     id: str
@@ -209,6 +253,7 @@ class Modifier:
     flat: bool = False
     ranked: bool = False
     description: str = ""
+    overrides: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -322,6 +367,20 @@ def _parse_condition(c: dict) -> Condition:
     )
 
 
+def _parse_config_field(c: dict) -> EffectConfigField:
+    return EffectConfigField(
+        key=c["key"],
+        label=c.get("label", c["key"]),
+        type=c.get("type", "select"),
+        overrides=c.get("overrides"),
+        multiselect_with=c.get("multiselectWith"),
+        options=tuple(
+            ConfigOption(value=o["value"], label=o.get("label", o["value"]))
+            for o in c.get("options", [])
+        ),
+    )
+
+
 def _parse_effect(e: dict) -> Effect:
     integration = e.get("statIntegration", {})
     return Effect(
@@ -339,6 +398,7 @@ def _parse_effect(e: dict) -> Effect:
         stat_pattern=integration.get("pattern", ""),
         stat_affects=integration.get("affects", ""),
         description=e.get("description", ""),
+        config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
     )
 
 
@@ -351,6 +411,7 @@ def _parse_modifier(m: dict) -> Modifier:
         cost_value=int(m.get("costValue", 0)),
         flat=bool(m.get("flat", False)),
         ranked=bool(m.get("ranked", False)),
+        overrides=dict(m.get("overrides", {})),
         description=m.get("description", ""),
     )
 

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
-from mm_companion.core.rules import effect_cost_formula, effect_total_cost, power_total_cost
+from mm_companion.core.rules import (
+    effect_cost_formula,
+    effect_game_terms,
+    effect_total_cost,
+    effective_effect_stats,
+    power_game_terms,
+    power_total_cost,
+)
 
 
 def test_base_effect_cost_is_per_rank() -> None:
@@ -101,6 +108,68 @@ def test_formula_annotates_sub_one_group_with_its_fraction() -> None:
 def test_formula_is_empty_for_unknown_effect() -> None:
     data = load_game_data()
     assert effect_cost_formula(PowerEffectInstance("nonesuch", rank=5), data) == ""
+
+
+def test_game_terms_render_base_effect_stats() -> None:
+    data = load_game_data()
+    # Affliction is a Close-range Attack; the summary reflects its base stats.
+    line = effect_game_terms(PowerEffectInstance("affliction", rank=4), data)
+    assert line.startswith("Affliction 4: ")
+    assert "Attack" in line and "Close range" in line and "Instant duration" in line
+
+
+def test_ranged_modifier_overrides_the_effect_range_in_game_terms() -> None:
+    data = load_game_data()
+    # Ranged forces range to Ranged, replacing Affliction's Close base.
+    effect = PowerEffectInstance("affliction", rank=4, extras=[ModifierSelection("ranged")])
+    assert "Ranged range" in effect_game_terms(effect, data)
+    assert "Close range" not in effect_game_terms(effect, data)
+
+
+def test_ranged_overrides_perception_range_too() -> None:
+    data = load_game_data()
+    # Mind Reading is Perception range; Ranged drops it to Ranged.
+    effect = PowerEffectInstance("mind_reading", rank=6, extras=[ModifierSelection("ranged")])
+    assert effective_effect_stats(effect, data)["range"] == "Ranged"
+
+
+def test_affliction_exposes_config_fields() -> None:
+    data = load_game_data()
+    affliction = next(e for e in data.effects if e.id == "affliction")
+    assert [f.key for f in affliction.config_fields] == [
+        "resistance",
+        "degree1",
+        "degree2",
+        "degree3",
+    ]
+
+
+def test_config_resistance_overrides_and_conditions_append_in_game_terms() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=4,
+        config={"resistance": "Will", "degree1": ["dazed"], "degree2": ["stunned"]},
+    )
+    line = effect_game_terms(effect, data)
+    assert "(resisted by Will)" in line  # config choice overrides the base resistance
+    assert "1st degree: Dazed" in line and "2nd degree: Stunned" in line  # appended
+    assert effective_effect_stats(effect, data)["resistance"] == "Will"
+
+
+def test_multiselect_degree_joins_same_degree_conditions() -> None:
+    data = load_game_data()
+    # A degree can hold two same-degree conditions instead of escalating.
+    effect = PowerEffectInstance("affliction", rank=4, config={"degree1": ["dazed", "vulnerable"]})
+    assert "1st degree: Dazed + Vulnerable" in effect_game_terms(effect, data)
+
+
+def test_power_game_terms_is_one_line_per_effect() -> None:
+    data = load_game_data()
+    power = Power(
+        effects=[PowerEffectInstance("damage", rank=8), PowerEffectInstance("affliction", rank=4)]
+    )
+    assert power_game_terms(power, data).count("\n") == 1  # two effects, one newline
 
 
 def test_power_total_sums_its_effects() -> None:

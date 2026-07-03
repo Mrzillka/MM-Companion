@@ -24,6 +24,9 @@ from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -39,8 +42,14 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.data_loader import GameData, Modifier, load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
-from mm_companion.core.rules import effect_cost_formula, effect_total_cost, power_total_cost
+from mm_companion.core.rules import (
+    effect_cost_formula,
+    effect_total_cost,
+    power_game_terms,
+    power_total_cost,
+)
 from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
 # Custom drag payload formats: the record id travels as the mime data.
@@ -223,6 +232,14 @@ class EffectCard(QFrame):
         header.addWidget(remove)
         layout.addLayout(header)
 
+        # The config form is rebuilt on demand: attaching Extra Condition upgrades
+        # Affliction's degree pickers from single-select to multiselect.
+        self._config_host = QWidget()
+        self._config_layout = QVBoxLayout(self._config_host)
+        self._config_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._config_host)
+        self._populate_config_form()
+
         self._extras_group = ModifierGroup("Extras")
         self._flaws_group = ModifierGroup("Flaws")
         layout.addWidget(self._extras_group)
@@ -237,6 +254,100 @@ class EffectCard(QFrame):
         layout.addWidget(self._cost)
 
         self._refresh_cost()
+
+    # -- effect-specific qualities (config) -------------------------------
+    def _has_extra(self, modifier_id: str) -> bool:
+        return any(sel.modifier_id == modifier_id for sel in self.instance.extras)
+
+    def _effective_type(self, field) -> str:
+        """A field's live input type — ``select`` is upgraded to ``multiselect`` only
+        while its ``multiselect_with`` extra is attached (e.g. Extra Condition)."""
+        if field.multiselect_with and self._has_extra(field.multiselect_with):
+            return "multiselect"
+        return field.type
+
+    def _populate_config_form(self) -> None:
+        """(Re)build the config form to match the effect's current modifiers.
+
+        Called on construction and whenever a modifier is attached/removed, so a
+        field can switch between single- and multi-select as its gate comes and goes.
+        """
+        while self._config_layout.count():  # clear any previous form
+            widget = self._config_layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+        effect = self._effect()
+        if effect is None or not effect.config_fields:
+            return
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        form.setContentsMargins(0, 0, 0, 0)
+        for field in effect.config_fields:
+            field_type = self._effective_type(field)
+            self._normalize_config(field.key, field_type)
+            form.addRow(field.label, self._config_widget(field, field_type))
+        self._config_layout.addWidget(form_host)
+
+    def _normalize_config(self, key: str, field_type: str) -> None:
+        """Keep the stored value shaped like the current input type: a list for
+        multiselect, a single value otherwise (collapsing a list to its first)."""
+        value = self.instance.config.get(key)
+        if value is None:
+            return
+        if field_type == "multiselect" and not isinstance(value, list):
+            self.instance.config[key] = [value]
+        elif field_type != "multiselect" and isinstance(value, list):
+            if value:
+                self.instance.config[key] = value[0]
+            else:
+                self.instance.config.pop(key, None)
+
+    def _config_widget(self, field, field_type: str) -> QWidget:
+        if field_type == "text":
+            edit = QLineEdit(self.instance.config.get(field.key, ""))
+            edit.textChanged.connect(lambda text, k=field.key: self._on_config_changed(k, text))
+            return edit
+        if field_type == "multiselect":
+            return self._multiselect_widget(field)
+        combo = QComboBox()
+        combo.addItem("—", "")  # the unset choice
+        for option in field.options:
+            combo.addItem(option.label, option.value)
+        index = combo.findData(self.instance.config.get(field.key, ""))
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        guard_wheel(combo)
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo, k=field.key: self._on_config_changed(k, c.currentData())
+        )
+        return combo
+
+    def _multiselect_widget(self, field) -> QWidget:
+        """A wrapping row of check boxes — multiple same-category choices at once."""
+        container = QWidget()
+        flow = FlowLayout(container)
+        chosen = self.instance.config.get(field.key, [])
+        pairs: list[tuple[QCheckBox, str]] = []
+        for option in field.options:
+            box = QCheckBox(option.label)
+            box.setChecked(option.value in chosen)
+            flow.addWidget(box)
+            pairs.append((box, option.value))
+        for box, _ in pairs:
+            box.toggled.connect(
+                lambda _c, k=field.key, ps=pairs: self._on_config_changed(
+                    k, [value for cb, value in ps if cb.isChecked()]
+                )
+            )
+        return container
+
+    def _on_config_changed(self, key: str, value) -> None:
+        if value:
+            self.instance.config[key] = value
+        else:  # "", empty list, or None all clear the choice
+            self.instance.config.pop(key, None)
+        self.changed.emit()
 
     # -- data lookups -----------------------------------------------------
     def _effect(self):
@@ -273,6 +384,7 @@ class EffectCard(QFrame):
         self._chips.append(chip)
         (self._flaws_group if is_flaw else self._extras_group).add_chip(chip)
         self._hint.setVisible(False)
+        self._populate_config_form()  # a gating extra may change a field's type
         self._refresh_cost()
         self.changed.emit()
 
@@ -285,6 +397,7 @@ class EffectCard(QFrame):
             self._flaws_group.remove_chip(chip)
         self._chips.remove(chip)
         self._hint.setVisible(not self._chips)
+        self._populate_config_form()  # removing a gating extra may downgrade a field
         self._refresh_cost()
         self.changed.emit()
 
@@ -387,6 +500,7 @@ class PowerConstructorWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         self._refresh_cost()
+        self._refresh_game_terms()
 
     # -- left: the palette of bricks --------------------------------------
     def _build_palette(self) -> QWidget:
@@ -441,12 +555,21 @@ class PowerConstructorWindow(QMainWindow):
         self._description.textChanged.connect(self._on_description_changed)
         layout.addWidget(self._description)
 
+        # A read-only, auto-generated game-terms summary sits under the free-text
+        # description — it is derived from the effects/modifiers, not editable.
+        self._game_terms = QLabel()
+        self._game_terms.setWordWrap(True)
+        self._game_terms.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._game_terms.setStyleSheet("color: gray; font-style: italic;")
+        layout.addWidget(self._game_terms)
+
         self._cost = QLabel()
         self._cost.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._cost)
 
         self.canvas = PowerCanvas(self.power, self._data)
         self.canvas.changed.connect(self._refresh_cost)
+        self.canvas.changed.connect(self._refresh_game_terms)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.canvas)
@@ -461,6 +584,10 @@ class PowerConstructorWindow(QMainWindow):
 
     def _refresh_cost(self) -> None:
         self._cost.setText(f"Total cost: {power_total_cost(self.power, self._data)} PP")
+
+    def _refresh_game_terms(self) -> None:
+        text = power_game_terms(self.power, self._data)
+        self._game_terms.setText(text or "Game-term summary appears here as you add effects.")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.closed.emit()

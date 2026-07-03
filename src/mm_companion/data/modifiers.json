@@ -7,6 +7,7 @@
     },
     "flatNote": "flat: true means the cost is a one-time addition/reduction to the effect's total, not multiplied by rank. flat: false means the cost applies per rank of the effect.",
     "rankedNote": "ranked: true means the modifier is bought in its own ranks (chosen independently of the effect's rank), so its total contribution is costValue x its rank. These are the flat modifiers whose costFormula reads 'per rank'. Absent/false means it is applied once (rank 1).",
+    "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary (not the point cost). Later modifiers win. Example: Ranged sets range to 'Ranged', replacing a Close or Perception base.",
     "costValueNote": "costValue is the canonical numeric cost magnitude used for automatic point-cost calculation; its sign is implied by category (extra adds, flaw subtracts) and flat decides whether it applies once or per rank. The costFormula string carries the full nuance (ranges, tiers) for cases costValue simplifies."
   },
   "modifiers": [
@@ -92,6 +93,15 @@
       "flat": true,
       "ranked": true,
       "description": "Increases how far a ranged effect can reach."
+    },
+    {
+      "id": "extra_condition",
+      "name": "Extra Condition",
+      "category": "extra",
+      "costFormula": "+1 point per rank",
+      "costValue": 1,
+      "flat": false,
+      "description": "Affliction only: also inflicts a second condition of the same degree at each degree of failure."
     },
     {
       "id": "feature_extra",
@@ -220,6 +230,7 @@
       "costFormula": "+1 or +2 points per rank",
       "costValue": 1,
       "flat": false,
+      "overrides": { "range": "Perception" },
       "description": "Lets the effect target anything you can accurately perceive, no attack roll needed."
     },
     {
@@ -238,6 +249,7 @@
       "costFormula": "+1 or -1 point per rank",
       "costValue": 1,
       "flat": false,
+      "overrides": { "range": "Ranged" },
       "description": "Turns a close-range effect into one usable at a distance."
     },
     {
@@ -322,6 +334,7 @@
       "costFormula": "+0 points per rank",
       "costValue": 0,
       "flat": false,
+      "overrides": { "duration": "Sustained" },
       "description": "Turns a Permanent effect into one that can be toggled on and off."
     },
     {
@@ -331,6 +344,7 @@
       "costFormula": "+0 points per rank",
       "costValue": 0,
       "flat": false,
+      "overrides": { "range": "Ranged" },
       "description": "Lets a close-range attack be hurled to hit at a distance."
     },
     {
@@ -379,6 +393,7 @@
       "costFormula": "-1 or -2 points per rank",
       "costValue": 1,
       "flat": false,
+      "overrides": { "range": "Close" },
       "description": "Drops a Ranged or Perception-range effect down to Close range."
     },
     {
@@ -388,6 +403,7 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "overrides": { "duration": "Concentration" },
       "description": "Drops a Sustained effect down to needing active Concentration to maintain."
     },
     {
@@ -489,6 +505,7 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "overrides": { "duration": "Permanent" },
       "description": "A Continuous effect becomes always-on and can never be switched off."
     },
     {

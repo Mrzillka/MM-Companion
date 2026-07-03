@@ -250,6 +250,100 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
+def effective_effect_stats(effect: PowerEffectInstance, game_data: GameData) -> dict[str, str]:
+    """The base effect's game-term stats with its modifiers' overrides applied.
+
+    Starts from the effect's own ``effect_type``/``range``/``action``/``duration``/
+    ``check``/``resistance`` and lets each attached modifier's
+    :attr:`~mm_companion.core.data_loader.Modifier.overrides` replace fields — e.g.
+    Ranged forces ``range`` to ``"Ranged"``. Modifiers apply extras-then-flaws, so a
+    later one wins. Returns ``{}`` for an unknown effect id.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return {}
+    stats = {
+        "effect_type": base.effect_type,
+        "range": base.range_,
+        "action": base.action,
+        "duration": base.duration,
+        "check": base.check or "",
+        "resistance": base.resistance or "",
+    }
+    catalog: dict[str, Modifier] = {m.id: m for m in game_data.modifiers}
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None:
+            continue
+        for key, value in modifier.overrides.items():
+            if key in stats:
+                stats[key] = value
+
+    # Config choices that name a stat replace it (e.g. Affliction's chosen resistance).
+    for field in base.config_fields:
+        if field.overrides and field.overrides in stats:
+            value = effect.config.get(field.key)
+            if value:
+                stats[field.overrides] = _config_display(field, value)
+    return stats
+
+
+def _config_display(field, value) -> str:
+    """Display text for a stored config ``value``: an option's label, or, for a
+    multiselect list, its labels joined with ``+`` (falls back to the raw value)."""
+
+    values = value if isinstance(value, list) else [value]
+    labels = (next((o.label for o in field.options if o.value == v), v) for v in values)
+    return " + ".join(labels)
+
+
+def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """One-line game-term summary of an effect, e.g.
+    ``Affliction 4: Attack, Ranged range, Standard action, Instant duration``.
+
+    Reads the effective stats (base plus modifier and config overrides) and renders
+    the non-empty ones; a resistance is appended in parentheses, then any remaining
+    configured qualities (Affliction's condition degrees, etc.). Returns ``""`` for
+    an unknown effect id.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return ""
+    stats = effective_effect_stats(effect, game_data)
+
+    segments = [stats["effect_type"]]
+    if stats["range"]:
+        segments.append(f"{stats['range']} range")
+    if stats["action"] and stats["action"] != "None":
+        segments.append(f"{stats['action']} action")
+    if stats["duration"]:
+        segments.append(f"{stats['duration']} duration")
+
+    line = f"{base.name} {effect.rank}: " + ", ".join(s for s in segments if s)
+    if stats["resistance"]:
+        line += f" (resisted by {stats['resistance']})"
+
+    # Configured qualities that don't override a stat are appended (e.g. conditions).
+    chosen = []
+    for field in base.config_fields:
+        if field.overrides:
+            continue
+        value = effect.config.get(field.key)
+        if value:
+            chosen.append(f"{field.label}: {_config_display(field, value)}")
+    if chosen:
+        line += "; " + ", ".join(chosen)
+    return line
+
+
+def power_game_terms(power: Power, game_data: GameData) -> str:
+    """The power's game-term summary: one :func:`effect_game_terms` line per effect."""
+
+    return "\n".join(effect_game_terms(e, game_data) for e in power.effects)
+
+
 def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     """Report Power Level cap breaches (``mm-core-mechanics.md`` §7); empty list = valid.
 

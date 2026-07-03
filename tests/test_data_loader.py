@@ -69,7 +69,7 @@ def test_costs_are_loaded() -> None:
 def test_effects_and_modifiers_are_loaded() -> None:
     data = load_game_data()
     assert len(data.effects) == 42
-    assert len(data.modifiers) == 61
+    assert len(data.modifiers) == 62
 
 
 def test_effect_carries_numeric_base_cost_and_integration() -> None:

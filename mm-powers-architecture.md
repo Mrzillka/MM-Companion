@@ -3,8 +3,12 @@
 > **Note on source & copyright:** Same basis as the other reference files — original,
 > paraphrased summary of the *functional* rules (cost formulas, categories, integration
 > behavior), not a reproduction of the rulebook's text. This file is the architecture guide;
-> `effects.json` holds the 41 base effects and `modifiers.json` holds the 37 extras + 24 flaws
-> that combine with them. Read `mm-core-mechanics.md` first for Power Points/Power Level.
+> `effects.json` holds the 42 base effects, `modifiers.json` holds the 37 general-purpose
+> extras + 24 flaws that apply broadly, and `effect_modifiers.json` holds ~194 extras/flaws
+> that are specific to one particular effect (e.g. Damage's Strength-Based, Flight's Rocket).
+> A power-builder UI should offer both pools together for whichever effect the player picked —
+> see `effect_modifiers.json`'s `usageNote` for details. Read `mm-core-mechanics.md` first for
+> Power Points/Power Level.
 
 ---
 

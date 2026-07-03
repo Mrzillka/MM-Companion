@@ -68,6 +68,27 @@ def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None
     assert card._chips[0].findChild(QSpinBox) is None
 
 
+def test_extras_and_flaws_groups_reveal_and_hide_with_their_chips(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+
+    # Both groups hidden until something is attached.
+    assert not card._extras_group.isVisibleTo(card)
+    assert not card._flaws_group.isVisibleTo(card)
+
+    card.attach_modifier("ranged")  # an extra
+    assert card._extras_group.isVisibleTo(card)
+    assert not card._flaws_group.isVisibleTo(card)
+
+    card.attach_modifier("limited")  # a flaw
+    assert card._flaws_group.isVisibleTo(card)
+
+    # Removing the only extra hides the Extras group again; Flaws stays.
+    card._remove_chip(card._chips[0])
+    assert not card._extras_group.isVisibleTo(card)
+    assert card._flaws_group.isVisibleTo(card)
+
+
 def test_removing_an_effect_clears_it(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")

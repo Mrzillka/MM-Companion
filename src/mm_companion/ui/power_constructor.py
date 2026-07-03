@@ -153,6 +153,38 @@ class ModifierChip(QFrame):
         self.changed.emit()
 
 
+class ModifierGroup(QWidget):
+    """A titled, vertically-stacked run of modifier chips, hidden while empty.
+
+    An :class:`EffectCard` keeps one of these for extras and one for flaws; each
+    reveals itself only once its first chip is added and hides again when its last
+    chip is removed.
+    """
+
+    def __init__(self, title: str) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        header = QLabel(title)
+        header.setStyleSheet("font-weight: bold;")
+        layout.addWidget(header)
+        chip_area = QWidget()
+        self._chip_layout = FlowLayout(chip_area)
+        layout.addWidget(chip_area)
+        self.setVisible(False)
+
+    def add_chip(self, chip: QWidget) -> None:
+        self._chip_layout.addWidget(chip)
+        self.setVisible(True)
+
+    def remove_chip(self, chip: QWidget) -> None:
+        self._chip_layout.removeWidget(chip)
+        chip.setParent(None)
+        chip.deleteLater()
+        self.setVisible(self._chip_layout.count() > 0)
+
+
 class EffectCard(QFrame):
     """One effect within the power: rank, attached modifier chips, and its cost.
 
@@ -191,9 +223,10 @@ class EffectCard(QFrame):
         header.addWidget(remove)
         layout.addLayout(header)
 
-        self._chip_area = QWidget()
-        self._chip_layout = FlowLayout(self._chip_area)
-        layout.addWidget(self._chip_area)
+        self._extras_group = ModifierGroup("Extras")
+        self._flaws_group = ModifierGroup("Flaws")
+        layout.addWidget(self._extras_group)
+        layout.addWidget(self._flaws_group)
 
         self._hint = QLabel("Drag extras or flaws here")
         self._hint.setEnabled(False)
@@ -230,25 +263,27 @@ class EffectCard(QFrame):
         if modifier is None:
             return
         selection = ModifierSelection(modifier_id=modifier_id)
-        bucket = self.instance.flaws if modifier.category == "flaw" else self.instance.extras
+        is_flaw = modifier.category == "flaw"
+        bucket = self.instance.flaws if is_flaw else self.instance.extras
         bucket.append(selection)
 
         chip = ModifierChip(modifier, selection)
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(self._on_chip_changed)
         self._chips.append(chip)
-        self._chip_layout.addWidget(chip)
+        (self._flaws_group if is_flaw else self._extras_group).add_chip(chip)
         self._hint.setVisible(False)
         self._refresh_cost()
         self.changed.emit()
 
     def _remove_chip(self, chip: ModifierChip) -> None:
-        for bucket in (self.instance.extras, self.instance.flaws):
-            if chip.selection in bucket:
-                bucket.remove(chip.selection)
+        if chip.selection in self.instance.extras:
+            self.instance.extras.remove(chip.selection)
+            self._extras_group.remove_chip(chip)
+        else:
+            self.instance.flaws.remove(chip.selection)
+            self._flaws_group.remove_chip(chip)
         self._chips.remove(chip)
-        chip.setParent(None)
-        chip.deleteLater()
         self._hint.setVisible(not self._chips)
         self._refresh_cost()
         self.changed.emit()

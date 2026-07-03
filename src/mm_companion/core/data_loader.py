@@ -196,6 +196,21 @@ class EffectConfigField:
 
 
 @dataclass(frozen=True)
+class Measure:
+    """A rank-derived real-world measurement an effect exposes (see ``measurements.json``).
+
+    ``column`` picks the measurements-table column (``"distance"``/``"mass"``/
+    ``"time"``/``"volume"``); ``label`` is the table row this measure is shown under
+    (e.g. ``"Speed"``); ``per_round`` marks a speed — a distance covered each round —
+    so the value reads e.g. ``"30 feet/round"`` rather than a bare distance.
+    """
+
+    column: str
+    label: str
+    per_round: bool = False
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``mm-powers-architecture.md``).
 
@@ -207,6 +222,11 @@ class Effect:
     flattened ``statIntegration`` object describing how the effect patches stats.
     ``config_fields`` are the effect's configurable qualities (Affliction's
     conditions, etc.), the player's choices for which live in the instance's config.
+    ``measure`` is a rank-derived real-world quantity the effect exposes (a movement
+    speed, a leap distance). ``resistance_dc_base`` is the fixed part of the save DC
+    an attack imposes — the resistance DC is ``resistance_dc_base + rank`` (10 for
+    most resistible effects, 15 for Damage, 0 for the opposed ones like Move Object)
+    — left ``None`` for effects that impose no save DC.
     """
 
     id: str
@@ -224,6 +244,8 @@ class Effect:
     stat_affects: str = ""
     description: str = ""
     config_fields: tuple[EffectConfigField, ...] = ()
+    measure: Measure | None = None
+    resistance_dc_base: int | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +265,16 @@ class Modifier:
     modifier forces it to — e.g. Ranged sets ``range`` to ``"Ranged"``, replacing
     a Close or Perception base. It drives the generated game-terms summary only,
     not the point cost.
+
+    The remaining fields describe a modifier's other game-term impacts (see
+    :func:`mm_companion.core.rules.effect_stat_rows`), again for the summary, not
+    the cost: ``check_bonus`` is a signed adjustment to the effect's attack-roll
+    number, per the modifier's rank (Accurate ``+2``, Inaccurate ``-2``);
+    ``drops_check`` removes the attack roll entirely (Perception Range);
+    ``check_note`` is a parenthetical appended to the check row (Area's
+    Dodge-for-half); and ``step_field``/``step_by`` shift a field one or more steps
+    along its :attr:`GameData.game_term_ladders` ordering (Increased Duration steps
+    ``duration`` up, Increased Action steps ``action`` to a slower one).
     """
 
     id: str
@@ -254,6 +286,11 @@ class Modifier:
     ranked: bool = False
     description: str = ""
     overrides: dict[str, str] = field(default_factory=dict)
+    check_bonus: int = 0
+    drops_check: bool = False
+    check_note: str = ""
+    step_field: str = ""
+    step_by: int = 0
 
 
 @dataclass(frozen=True)
@@ -296,6 +333,22 @@ class Costs:
 
 
 @dataclass(frozen=True)
+class Measurements:
+    """The rank → real-world measurement conversion tables (from ``measurements.json``).
+
+    Both the imperial and metric labels are parsed so a later settings toggle need
+    only pass a different ``system``; the UI shows imperial for now. ``label`` returns
+    the book's own display string for a rank/column (e.g. distance rank 3 →
+    ``"60 feet"``), or ``""`` when the rank is outside the tabulated −5…30 range.
+    """
+
+    by_rank: dict[int, dict[str, dict[str, str]]]  # rank -> system -> column -> label
+
+    def label(self, column: str, rank: int, system: str = "imperial") -> str:
+        return self.by_rank.get(rank, {}).get(system, {}).get(column, "")
+
+
+@dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
 
@@ -304,6 +357,11 @@ class GameData:
     effect (from ``effect_modifiers.json``). A power builder offers both pools for a
     given effect; :meth:`modifier_catalog` merges them into a single id lookup for
     cost math and the game-terms summary.
+
+    ``game_term_ladders`` maps a game-term field (``"duration"``, ``"action"``) to
+    its ordered values from least to most, so a stepping modifier (Increased
+    Duration, Increased Action) can move a value along it without hardcoding the
+    order in code.
     """
 
     profile_fields: list[Field]
@@ -317,6 +375,8 @@ class GameData:
     modifiers: list[Modifier]
     effect_modifiers: dict[str, list[Modifier]]
     costs: Costs
+    measurements: Measurements
+    game_term_ladders: dict[str, tuple[str, ...]]
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -402,6 +462,16 @@ def _parse_config_field(c: dict) -> EffectConfigField:
     )
 
 
+def _parse_measure(raw: dict | None) -> Measure | None:
+    if not raw:
+        return None
+    return Measure(
+        column=raw.get("column", "distance"),
+        label=raw["label"],
+        per_round=bool(raw.get("perRound", False)),
+    )
+
+
 def _parse_effect(e: dict) -> Effect:
     integration = e.get("statIntegration", {})
     return Effect(
@@ -420,6 +490,8 @@ def _parse_effect(e: dict) -> Effect:
         stat_affects=integration.get("affects", ""),
         description=e.get("description", ""),
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
+        measure=_parse_measure(e.get("measure")),
+        resistance_dc_base=e.get("resistanceDcBase"),
     )
 
 
@@ -435,8 +507,19 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         flat=bool(m.get("flat", False)),
         ranked=bool(m.get("ranked", False)),
         overrides=dict(m.get("overrides", {})),
+        check_bonus=int(m.get("checkBonus", 0)),
+        drops_check=bool(m.get("dropsCheck", False)),
+        check_note=m.get("checkNote", ""),
+        step_field=m.get("stepField", ""),
+        step_by=int(m.get("stepBy", 0)),
         description=m.get("description", ""),
     )
+
+
+def _parse_ladders(raw: dict) -> dict[str, tuple[str, ...]]:
+    """Read ``gameTermLadders`` (field -> ordered values) from ``modifiers.json``."""
+
+    return {field: tuple(values) for field, values in raw.get("gameTermLadders", {}).items()}
 
 
 def _parse_effect_modifiers(raw: dict) -> dict[str, list[Modifier]]:
@@ -452,6 +535,28 @@ def _parse_effect_modifiers(raw: dict) -> dict[str, list[Modifier]]:
         mods += [_parse_modifier(m, "flaw") for m in groups.get("flaws", [])]
         result[effect_id] = mods
     return result
+
+
+def _parse_measurements(raw: dict) -> Measurements:
+    """Flatten ``rankMeasures`` into ``rank -> system -> column -> label``.
+
+    Time is a single column shared by both systems, so it is copied into each.
+    """
+
+    by_rank: dict[int, dict[str, dict[str, str]]] = {}
+    for row in raw.get("rankMeasures", []):
+        rank = int(row["rank"])
+        time_label = row.get("time", {}).get("label", "")
+        systems: dict[str, dict[str, str]] = {}
+        for system in ("imperial", "metric"):
+            block = row.get(system, {})
+            labels = {
+                col: block.get(col, {}).get("label", "") for col in ("mass", "distance", "volume")
+            }
+            labels["time"] = time_label
+            systems[system] = labels
+        by_rank[rank] = systems
+    return Measurements(by_rank=by_rank)
 
 
 def _parse_costs(raw: dict) -> Costs:
@@ -484,6 +589,7 @@ def load_game_data() -> GameData:
     modifiers_raw = _read_json("modifiers.json")
     effect_modifiers_raw = _read_json("effect_modifiers.json")
     costs_raw = _read_json("costs.json")
+    measurements_raw = _read_json("measurements.json")
 
     return GameData(
         profile_fields=[Field(**f) for f in base["profile_fields"]],
@@ -497,4 +603,6 @@ def load_game_data() -> GameData:
         modifiers=[_parse_modifier(m) for m in modifiers_raw["modifiers"]],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
         costs=_parse_costs(costs_raw),
+        measurements=_parse_measurements(measurements_raw),
+        game_term_ladders=_parse_ladders(modifiers_raw),
     )

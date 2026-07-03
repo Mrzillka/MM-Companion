@@ -98,19 +98,25 @@ def test_removing_an_effect_clears_it(qapp: QApplication) -> None:
     assert window._cost.text() == "Total cost: 0 PP"
 
 
-def test_game_terms_row_is_read_only_and_tracks_the_build(qapp: QApplication) -> None:
-    from PySide6.QtCore import Qt
+def _stat(window: PowerConstructorWindow, effect_index: int, key: str):
+    """The rendered game-term row for one effect field (or ``None`` if absent)."""
+    rows = window._terms.effect_rows[effect_index]
+    return next((r for r in rows if r.key == key), None)
 
+
+def test_game_terms_table_tints_the_fields_a_modifier_changes(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
-    # Read-only: it is a label, not an input, and never editable by keyboard.
-    assert not (window._game_terms.textInteractionFlags() & Qt.TextInteractionFlag.TextEditable)
 
     card = window.canvas.add_effect("affliction")
-    assert "Close range" in window._game_terms.text()
+    range_row = _stat(window, 0, "range")
+    assert range_row.value == "Close"
+    assert range_row.change == ""  # untouched — no tint
 
-    card.attach_modifier("ranged")  # overrides range to Ranged
-    assert "Ranged range" in window._game_terms.text()
-    assert "Close range" not in window._game_terms.text()
+    card.attach_modifier("ranged")  # an extra: overrides range to Ranged
+    range_row = _stat(window, 0, "range")
+    assert range_row.value == "Ranged"
+    assert range_row.base == "Close"
+    assert range_row.change == "better"  # improved — tinted green
 
 
 def test_effect_config_combos_write_choices_to_the_model(qapp: QApplication) -> None:
@@ -125,7 +131,8 @@ def test_effect_config_combos_write_choices_to_the_model(qapp: QApplication) -> 
     resistance.setCurrentIndex(resistance.findData("Will"))
 
     assert window.power.effects[0].config["resistance"] == "Will"
-    assert "resisted by Will" in window._game_terms.text()
+    # The chosen resistance now carries the numeric save DC (10 + rank 1).
+    assert _stat(window, 0, "resistance").value == "Will vs. DC 11"
 
 
 def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> None:
@@ -155,7 +162,7 @@ def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -
     boxes["Vulnerable"].setChecked(True)
 
     assert window.power.effects[0].config["degree1"] == ["dazed", "vulnerable"]
-    assert "1st degree: Dazed + Vulnerable" in window._game_terms.text()
+    assert _stat(window, 0, "degree1").value == "Dazed + Vulnerable"
 
 
 def test_removing_extra_condition_collapses_the_degree_back_to_one(qapp: QApplication) -> None:
@@ -166,8 +173,7 @@ def test_removing_extra_condition_collapses_the_degree_back_to_one(qapp: QApplic
 
     card._remove_chip(card._chips[0])  # drop Extra Condition
     assert card.instance.config["degree1"] == "dazed"  # collapsed to a single value
-    assert "1st degree: Dazed" in window._game_terms.text()
-    assert "Vulnerable" not in window._game_terms.text()
+    assert _stat(window, 0, "degree1").value == "Dazed"  # no longer "Dazed + Vulnerable"
 
 
 def test_effect_without_config_has_no_combos(qapp: QApplication) -> None:

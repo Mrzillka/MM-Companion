@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTextEdit,
     QToolButton,
@@ -61,8 +63,8 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
     effect_cost_formula,
+    effect_stat_rows,
     effect_total_cost,
-    power_game_terms,
     power_total_cost,
 )
 from mm_companion.ui.flow_layout import FlowLayout
@@ -679,6 +681,134 @@ class PowerCanvas(QFrame):
         return list(self._cards)
 
 
+class PowerTermsView(QWidget):
+    """A read-only, tinted game-term breakdown of the power as a per-effect table.
+
+    Rebuilt from the :class:`Power` whenever it changes (:meth:`set_power`): a titled
+    block per effect listing its stats (Type, Range, …) as label/value rows. A stat
+    an extra improved is shown green and one a flaw limited red — with the base value
+    on the value's tooltip — reading the tint straight from
+    :func:`~mm_companion.core.rules.effect_stat_rows`. Composite powers get a
+    structure header and each effect its array/linked role note.
+
+    It sizes to its content (no inner scroll bar), so the whole summary is always
+    visible; the canvas below it takes the remaining space. The last-rendered rows
+    are kept in :attr:`effect_rows` (one list per effect) as the seam headless tests
+    read.
+    """
+
+    # Tints for a modified stat's value; readable on both light and dark themes.
+    _TINTS = {"better": "#2e9e4f", "worse": "#d15b5b"}
+    # How many label/value pairs sit side by side per grid row, so the short stats
+    # pack across the width instead of stacking into a tall, scrolling column.
+    _PAIRS_PER_ROW = 2
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.effect_rows: list[list] = []
+        # Hug the content vertically so the summary never grows a scroll bar of its
+        # own — the enclosing canvas absorbs the slack instead.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(6)
+
+    def set_power(self, power: Power, game_data: GameData) -> None:
+        self._clear()
+        if not power.effects:
+            placeholder = QLabel("Game-term summary appears here as you add effects.")
+            placeholder.setStyleSheet("color: gray; font-style: italic;")
+            placeholder.setWordWrap(True)
+            self._layout.addWidget(placeholder)
+            return
+
+        header = self._structure_header(power)
+        if header:
+            label = QLabel(header)
+            label.setStyleSheet("font-weight: bold;")
+            self._layout.addWidget(label)
+        for index, effect in enumerate(power.effects):
+            self._add_effect_block(effect, index, power, game_data)
+
+    def _add_effect_block(
+        self, effect: PowerEffectInstance, index: int, power: Power, game_data: GameData
+    ) -> None:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        title = f"{base.name if base else effect.effect_id} {effect.rank}"
+
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        name = QLabel(title)
+        name.setStyleSheet("font-weight: bold;")
+        header.addWidget(name)
+        note = self._role_note(power, index, game_data)
+        if note:
+            role = QLabel(note)
+            role.setStyleSheet("color: gray; font-style: italic;")
+            header.addWidget(role)
+        header.addStretch()
+        self._layout.addLayout(header)
+
+        rows = effect_stat_rows(effect, game_data)
+        self.effect_rows.append(rows)
+        pairs = self._PAIRS_PER_ROW
+        grid = QGridLayout()
+        grid.setContentsMargins(12, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(1)
+        for index, stat in enumerate(rows):
+            grid_row, pair = divmod(index, pairs)
+            col = pair * 2
+            label = QLabel(f"{stat.label}:")
+            label.setStyleSheet("color: gray;")
+            value = QLabel(stat.value)
+            value.setWordWrap(True)
+            tint = self._TINTS.get(stat.change)
+            if tint:
+                value.setStyleSheet(f"color: {tint}; font-weight: bold;")
+                value.setToolTip(f"Base: {stat.base}")
+            grid.addWidget(label, grid_row, col, Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(value, grid_row, col + 1, Qt.AlignmentFlag.AlignTop)
+        # Let the value columns share the slack evenly so the pairs spread across
+        # the width rather than bunching at the left.
+        for pair in range(pairs):
+            grid.setColumnStretch(pair * 2 + 1, 1)
+        self._layout.addLayout(grid)
+
+    @staticmethod
+    def _structure_header(power: Power) -> str:
+        if len(power.effects) < 2:
+            return ""
+        if power.structure == STRUCTURE_LINKED:
+            return "Linked (all effects activate together):"
+        if power.structure == STRUCTURE_ARRAY:
+            return "Array (one effect active at a time):"
+        return ""
+
+    @staticmethod
+    def _role_note(power: Power, index: int, game_data: GameData) -> str:
+        if len(power.effects) < 2 or power.structure != STRUCTURE_ARRAY:
+            return ""
+        if index == array_base_index(power, game_data):
+            return "base"
+        return f"Alternate Effect, {array_alternate_cost(game_data)} pt"
+
+    def _clear(self) -> None:
+        self.effect_rows = []
+        self._take_all(self._layout)
+
+    def _take_all(self, layout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+            elif item.layout() is not None:
+                self._take_all(item.layout())
+                item.layout().deleteLater()
+
+
 class PowerConstructorWindow(QMainWindow):
     """Standalone brick-builder window for assembling a single power."""
 
@@ -790,17 +920,17 @@ class PowerConstructorWindow(QMainWindow):
 
         self._description = QTextEdit()
         self._description.setPlaceholderText("Description / flavor text")
-        self._description.setMaximumHeight(80)
+        # A compact two-ish line box: the flavor text is short, so keep it from
+        # eating vertical room the game-term table and canvas need.
+        self._description.setFixedHeight(50)
         self._description.textChanged.connect(self._on_description_changed)
         layout.addWidget(self._description)
 
-        # A read-only, auto-generated game-terms summary sits under the free-text
-        # description — it is derived from the effects/modifiers, not editable.
-        self._game_terms = QLabel()
-        self._game_terms.setWordWrap(True)
-        self._game_terms.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._game_terms.setStyleSheet("color: gray; font-style: italic;")
-        layout.addWidget(self._game_terms)
+        # A read-only, auto-generated game-terms table sits under the free-text
+        # description — it is derived from the effects/modifiers, not editable, and
+        # tints each stat a modifier changed (green better, red worse).
+        self._terms = PowerTermsView()
+        layout.addWidget(self._terms)
 
         self._cost = QLabel()
         self._cost.setStyleSheet("font-weight: bold;")
@@ -825,8 +955,7 @@ class PowerConstructorWindow(QMainWindow):
         self._cost.setText(f"Total cost: {power_total_cost(self.power, self._data)} PP")
 
     def _refresh_game_terms(self) -> None:
-        text = power_game_terms(self.power, self._data)
-        self._game_terms.setText(text or "Game-term summary appears here as you add effects.")
+        self._terms.set_power(self.power, self._data)
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.closed.emit()

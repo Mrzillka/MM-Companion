@@ -12,6 +12,8 @@ trait lists, never hardcoded here.
 from __future__ import annotations
 
 import math
+import re
+from dataclasses import dataclass
 
 from .character import Character
 from .data_loader import GameData, Modifier, Resistance, Skill
@@ -291,6 +293,180 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
+# The base game-term fields, in display order, with their table labels.
+_STAT_FIELDS = (
+    ("effect_type", "Type"),
+    ("range", "Range"),
+    ("action", "Action"),
+    ("duration", "Duration"),
+    ("check", "Check"),
+    ("resistance", "Resistance"),
+)
+
+
+@dataclass(frozen=True)
+class EffectStat:
+    """One row of an effect's game-term table (see :func:`effect_stat_rows`).
+
+    ``base`` is the unmodified value and ``value`` the current one; ``change`` is
+    ``"better"`` when an extra improved the field (the UI tints it green),
+    ``"worse"`` when a flaw limited it (red), or ``""`` when it is unchanged or set
+    by a neutral player choice.
+    """
+
+    key: str
+    label: str
+    base: str
+    value: str
+    change: str = ""
+
+
+@dataclass(frozen=True)
+class EffectImpact:
+    """Modifier-derived game-term adjustments that aren't a plain field override.
+
+    Gathered alongside the stat dicts by :func:`_effective_stats`. ``check_bonus``
+    is the net signed number modifiers add to the effect's attack roll (Accurate
+    ``+2``/rank, Inaccurate ``-2``/rank); ``drops_check`` is set when a modifier
+    removes the attack roll entirely (Perception Range); ``check_notes`` are
+    parentheticals a modifier appends to the check row (Area's Dodge-for-half); and
+    ``notes`` names every attached modifier with no other visible game-term impact,
+    so the table can list them and nothing an effect carries goes unseen.
+    """
+
+    check_bonus: int = 0
+    drops_check: bool = False
+    check_notes: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
+def _step_along(ladder: tuple[str, ...], value: str, step: int) -> str:
+    """Move ``value`` ``step`` positions along ``ladder`` (clamped to its ends).
+
+    Returns ``value`` unchanged when it isn't on the ladder or ``step`` is zero, so
+    a stepping modifier on a value the ladder doesn't cover is simply a no-op.
+    """
+
+    if not ladder or not step or value not in ladder:
+        return value
+    index = ladder.index(value) + step
+    return ladder[max(0, min(len(ladder) - 1, index))]
+
+
+def _modifier_notes(
+    effect: PowerEffectInstance, catalog: dict, impactful: set[str]
+) -> tuple[str, ...]:
+    """Names of the effect's attached modifiers that produced no visible stat change.
+
+    Skips the ids in ``impactful`` (those already reflected in a stat cell) so the
+    Notes row lists only what would otherwise be invisible; a ranked modifier taken
+    above rank 1 carries its rank (e.g. ``"Penetrating 3"``).
+    """
+
+    notes: list[str] = []
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None or selection.modifier_id in impactful:
+            continue
+        label = modifier.name
+        if modifier.ranked and selection.rank > 1:
+            label = f"{modifier.name} {selection.rank}"
+        notes.append(label)
+    return tuple(notes)
+
+
+def _effective_stats(
+    effect: PowerEffectInstance, game_data: GameData
+) -> tuple[dict[str, str], dict[str, str], dict[str, str], EffectImpact]:
+    """``(base, effective, change, impact)`` for an effect's game-term fields.
+
+    ``base`` is the unmodified stat, ``effective`` has each modifier and config
+    override applied (extras-then-flaws, so a later one wins, then config choices),
+    and ``change`` records how the final value differs from the base: ``"better"``
+    (an extra changed it), ``"worse"`` (a flaw), or ``""`` (unchanged or a neutral
+    config choice). ``impact`` collects the modifier effects that aren't a field
+    replacement (attack-roll bonus, dropped/noted check, plus the Notes list). Empty
+    dicts and a blank :class:`EffectImpact` for an unknown effect id.
+    """
+
+    base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None:
+        return {}, {}, {}, EffectImpact()
+    base = {
+        "effect_type": base_effect.effect_type,
+        "range": base_effect.range_,
+        "action": base_effect.action,
+        "duration": base_effect.duration,
+        "check": base_effect.check or "",
+        "resistance": base_effect.resistance or "",
+    }
+    stats = dict(base)
+    change = dict.fromkeys(base, "")
+    ladders = game_data.game_term_ladders
+    catalog = game_data.modifier_catalog()
+
+    check_bonus = 0
+    drops_check = False
+    check_notes: list[str] = []
+    impactful: set[str] = set()  # ids reflected in a stat cell — kept out of Notes
+
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None:
+            continue
+        tint = "better" if modifier.category == "extra" else "worse"
+        touched = False
+        for key, value in modifier.overrides.items():
+            if key in stats:
+                stats[key] = value
+                change[key] = tint
+                touched = True
+        if modifier.step_field in stats:
+            stepped = _step_along(
+                ladders.get(modifier.step_field, ()), stats[modifier.step_field], modifier.step_by
+            )
+            if stepped != stats[modifier.step_field]:
+                stats[modifier.step_field] = stepped
+                change[modifier.step_field] = tint
+            touched = True
+        if modifier.check_bonus:
+            check_bonus += modifier.check_bonus * (
+                selection.rank if modifier.ranked else effect.rank
+            )
+            touched = True
+        if modifier.drops_check:
+            drops_check = True
+            touched = True
+        if modifier.check_note:
+            check_notes.append(modifier.check_note)
+            touched = True
+        if touched:
+            impactful.add(selection.modifier_id)
+
+    # Config choices that name a stat replace it (e.g. Affliction's chosen
+    # resistance). These are neutral player choices, not modifiers, so they carry
+    # no better/worse tint.
+    for field in base_effect.config_fields:
+        if field.overrides and field.overrides in stats:
+            value = effect.config.get(field.key)
+            if value:
+                stats[field.overrides] = _config_display(field, value)
+                change[field.overrides] = ""
+
+    # A modifier that lands the value back on its base isn't really a change.
+    for key in change:
+        if stats[key] == base[key]:
+            change[key] = ""
+
+    impact = EffectImpact(
+        check_bonus=check_bonus,
+        drops_check=drops_check,
+        check_notes=tuple(check_notes),
+        notes=_modifier_notes(effect, catalog, impactful),
+    )
+    return base, stats, change, impact
+
+
 def effective_effect_stats(effect: PowerEffectInstance, game_data: GameData) -> dict[str, str]:
     """The base effect's game-term stats with its modifiers' overrides applied.
 
@@ -301,33 +477,125 @@ def effective_effect_stats(effect: PowerEffectInstance, game_data: GameData) -> 
     later one wins. Returns ``{}`` for an unknown effect id.
     """
 
-    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-    if base is None:
-        return {}
-    stats = {
-        "effect_type": base.effect_type,
-        "range": base.range_,
-        "action": base.action,
-        "duration": base.duration,
-        "check": base.check or "",
-        "resistance": base.resistance or "",
-    }
-    catalog = game_data.modifier_catalog()
-    for selection in (*effect.extras, *effect.flaws):
-        modifier = catalog.get(selection.modifier_id)
-        if modifier is None:
-            continue
-        for key, value in modifier.overrides.items():
-            if key in stats:
-                stats[key] = value
+    return _effective_stats(effect, game_data)[1]
 
-    # Config choices that name a stat replace it (e.g. Affliction's chosen resistance).
-    for field in base.config_fields:
-        if field.overrides and field.overrides in stats:
-            value = effect.config.get(field.key)
-            if value:
-                stats[field.overrides] = _config_display(field, value)
-    return stats
+
+# The actor's own roll in a check/resistance phrase ("Attack vs. …", "Effect vs. …")
+# — the leading word before "vs." — is the effect's own d20 bonus, its rank.
+_ACTOR_ROLL = re.compile(r"^(?:Attack|Deflect|Effect) vs\.")
+
+
+def _numeric_roll(text: str, actor_bonus: int, dc: int | None, *, resistance: bool) -> str:
+    """Fill an effect's attack bonus / save DC into a check or resistance phrase.
+
+    The actor's own roll (the ``Attack``/``Deflect``/``Effect`` before ``vs.``)
+    becomes ``actor_bonus`` — the effect rank, plus any Accurate/Inaccurate
+    adjustment — so ``"Attack vs. Defense"`` reads ``"8 vs. Defense"``. A resisted
+    threshold (``"Effect"`` / ``"Effect DC"`` after ``vs.``) becomes the save
+    ``dc``, so ``"Toughness vs. Effect"`` reads ``"Toughness vs. 23"``. A bare
+    resistance name a config override left behind (e.g. Affliction's ``"Will"``)
+    gets the DC appended. ``dc`` is ``None`` for effects that impose no save DC (the
+    phrase's threshold is then left as prose).
+    """
+
+    if not text:
+        return text
+    if dc is not None:
+        text = text.replace("Effect DC", f"DC {dc}")
+        text = re.sub(r"vs\. Effect\b", f"vs. {dc}", text)
+    text = _ACTOR_ROLL.sub(f"{actor_bonus} vs.", text)
+    if resistance and dc is not None and " vs. " not in text:
+        text = f"{text} vs. DC {dc}"
+    return text
+
+
+def _measure_value(measure, rank: int, game_data: GameData) -> str:
+    """The imperial measurement label for a rank, with a ``/round`` suffix for a speed.
+
+    Metric is deferred to a settings toggle — this reads the ``imperial`` column for
+    now. Returns ``""`` when the rank is outside the tabulated range.
+    """
+
+    label = game_data.measurements.label(measure.column, rank)
+    if not label:
+        return ""
+    return f"{label}/round" if measure.per_round else label
+
+
+def effect_stat_rows(effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
+    """The effect's non-empty game-term fields as tintable table rows.
+
+    Each :class:`EffectStat` carries its base and current value plus a ``change``
+    tag, so the UI can render a small table and highlight the fields an extra
+    improved (green) or a flaw limited (red). Numeric measures derived from the rank
+    are filled in from ``measurements.json``: a ``"Rank"`` range becomes the actual
+    distance, and an effect with a ``measure`` (movement speeds, leap distance) gets
+    its own row. Modifier impacts beyond a field override are folded in too — an
+    Accurate/Inaccurate bonus shifts (and tints) the attack roll, Perception Range
+    drops the check row, Area annotates it — and every attached modifier with no
+    other visible impact is gathered into a trailing ``Notes`` row. The configured
+    qualities that don't override a stat (e.g. Affliction's condition degrees) are
+    appended as untinted rows so the table stays a complete summary. Empty for an
+    unknown effect id.
+    """
+
+    base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None:
+        return []
+    base, stats, change, impact = _effective_stats(effect, game_data)
+
+    # A "Rank" range means "a distance equal to the effect's rank" — show the number
+    # (in both base and current, so it isn't mistaken for a modifier change).
+    for scope in (base, stats):
+        if scope.get("range") == "Rank":
+            scope["range"] = game_data.measurements.label("distance", effect.rank) or "Rank"
+
+    # Resolve the check/resistance phrases to concrete numbers (attack bonus = rank,
+    # save DC = base + rank). The save DC uses the plain rank in both scopes, but the
+    # current attack roll carries any Accurate/Inaccurate bonus so it can be tinted.
+    dc = (
+        None
+        if base_effect.resistance_dc_base is None
+        else base_effect.resistance_dc_base + effect.rank
+    )
+    base["check"] = _numeric_roll(base["check"], effect.rank, dc, resistance=False)
+    base["resistance"] = _numeric_roll(base["resistance"], effect.rank, dc, resistance=True)
+    stats["check"] = _numeric_roll(
+        stats["check"], effect.rank + impact.check_bonus, dc, resistance=False
+    )
+    stats["resistance"] = _numeric_roll(stats["resistance"], effect.rank, dc, resistance=True)
+
+    # Accurate/Inaccurate move the attack number — tint the check by the net sign.
+    if stats["check"] and impact.check_bonus:
+        change["check"] = "better" if impact.check_bonus > 0 else "worse"
+    # Area-style notes ride along on the current check value only (not the base).
+    if stats["check"] and impact.check_notes:
+        stats["check"] = f"{stats['check']} ({'; '.join(impact.check_notes)})"
+
+    rows = []
+    for key, label in _STAT_FIELDS:
+        if key == "check" and impact.drops_check:  # e.g. Perception Range — no attack roll
+            continue
+        if stats[key]:
+            rows.append(EffectStat(key, label, base[key], stats[key], change[key]))
+    # An effect can impose a save DC without either a (shown) check or resistance
+    # phrase to carry it — surface it in its own row so the number is never lost.
+    check_shown = "" if impact.drops_check else stats["check"]
+    if dc is not None and not check_shown and not stats["resistance"]:
+        rows.append(EffectStat("effect_dc", "Effect DC", "", f"DC {dc}", ""))
+    if base_effect.measure:
+        value = _measure_value(base_effect.measure, effect.rank, game_data)
+        if value:
+            rows.append(EffectStat("measure", base_effect.measure.label, "", value, ""))
+    for field in base_effect.config_fields:
+        if field.overrides:
+            continue
+        value = effect.config.get(field.key)
+        if value:
+            rows.append(EffectStat(field.key, field.label, "", _config_display(field, value), ""))
+    if impact.notes:
+        rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
+    return rows
 
 
 def _config_display(field, value) -> str:

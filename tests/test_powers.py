@@ -16,6 +16,7 @@ from mm_companion.core.rules import (
     array_base_index,
     effect_cost_formula,
     effect_game_terms,
+    effect_stat_rows,
     effect_total_cost,
     effective_effect_stats,
     power_game_terms,
@@ -173,6 +174,234 @@ def test_ranged_overrides_perception_range_too() -> None:
     # Mind Reading is Perception range; Ranged drops it to Ranged.
     effect = PowerEffectInstance("mind_reading", rank=6, extras=[ModifierSelection("ranged")])
     assert effective_effect_stats(effect, data)["range"] == "Ranged"
+
+
+def test_effect_stat_rows_flag_no_change_on_a_bare_effect() -> None:
+    data = load_game_data()
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("affliction", rank=4), data)}
+    # Every base stat renders, and with no modifiers none is tinted.
+    assert rows["range"].value == "Close" and rows["range"].base == "Close"
+    assert all(r.change == "" for r in rows.values())
+
+
+def test_effect_stat_rows_tint_an_extra_better_and_a_flaw_worse() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=4,
+        extras=[ModifierSelection("sustained_extra")],  # duration Instant -> Sustained
+        flaws=[ModifierSelection("close_flaw")],  # range Close -> Close (no real change)
+    )
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["duration"].value == "Sustained"
+    assert rows["duration"].base == "Instant"
+    assert rows["duration"].change == "better"  # an extra improved it
+    # A modifier that lands back on the base value isn't reported as a change.
+    assert rows["range"].value == "Close" and rows["range"].change == ""
+
+
+def test_effect_stat_rows_tint_a_stat_a_flaw_limits_worse() -> None:
+    data = load_game_data()
+    # Concentration flaw drops Affliction's Instant duration to Concentration.
+    effect = PowerEffectInstance(
+        "affliction", rank=4, flaws=[ModifierSelection("concentration_flaw")]
+    )
+    duration = next(r for r in effect_stat_rows(effect, data) if r.key == "duration")
+    assert duration.value == "Concentration"
+    assert duration.change == "worse"  # a flaw limited it
+
+
+def test_effect_stat_rows_append_configured_conditions_untinted() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("affliction", rank=4, config={"degree1": ["dazed", "vulnerable"]})
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["degree1"].value == "Dazed + Vulnerable"
+    assert rows["degree1"].change == ""  # a player choice, not a modifier
+
+
+def test_effect_stat_rows_add_a_movement_speed_measure() -> None:
+    data = load_game_data()
+    # Speed rank 2 covers distance rank 2 (30 ft) per round.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("speed", rank=2), data)}
+    assert rows["measure"].label == "Speed"
+    assert rows["measure"].value == "30 feet/round"
+    # Rank drives it — bumping the rank moves the measure up the table.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("flight", rank=5), data)}
+    assert rows["measure"].value == "250 feet/round"
+
+
+def test_effect_stat_rows_measure_without_per_round_has_no_suffix() -> None:
+    data = load_game_data()
+    # Leaping is a one-off jump distance, not a per-round speed.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("leaping", rank=3), data)}
+    assert rows["measure"].label == "Leap"
+    assert rows["measure"].value == "60 feet"
+
+
+def test_effect_stat_rows_render_a_rank_range_as_a_distance() -> None:
+    data = load_game_data()
+    # Teleport's "Rank" range is a distance equal to its rank on the measures table.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("teleport", rank=5), data)}
+    assert rows["range"].value == "250 feet"
+    assert rows["range"].change == ""  # a rank readout, not a modifier change
+
+
+def test_effect_stat_rows_fill_in_the_attack_bonus_and_save_dc() -> None:
+    data = load_game_data()
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("damage", rank=8), data)}
+    # Attack bonus reads as the effect rank; Damage's Toughness DC is 15 + rank.
+    assert rows["check"].value == "8 vs. Defense"
+    assert rows["resistance"].value == "Toughness vs. 23"
+
+
+def test_effect_stat_rows_use_a_ten_base_dc_for_non_damage() -> None:
+    data = load_game_data()
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("mind_reading", rank=5), data)}
+    assert rows["resistance"].value == "Will vs. 15"  # 10 + rank
+
+
+def test_effect_stat_rows_opposed_effect_uses_rank_as_the_threshold() -> None:
+    data = load_game_data()
+    # Move Object is resisted by Strength against its effective Strength (its rank).
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("move_object", rank=6), data)}
+    assert rows["resistance"].value == "Strength vs. 6"  # base 0 + rank
+
+
+def test_effect_stat_rows_append_dc_to_a_config_chosen_resistance() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("affliction", rank=4, config={"resistance": "Will"})
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["resistance"].value == "Will vs. DC 14"  # chosen resistance keeps the DC
+
+
+def test_effect_stat_rows_leave_dc_less_effects_as_prose() -> None:
+    data = load_game_data()
+    # Nullify is opposed (no static DC); the actor roll still resolves to its rank.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("nullify", rank=7), data)}
+    assert rows["resistance"].value == "7 vs. Will or rank"
+
+
+def test_effect_stat_rows_accurate_raises_and_tints_the_attack_roll() -> None:
+    data = load_game_data()
+    # Accurate is +2 attack per its own rank; at rank 2 that is +4 over the base.
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("accurate", rank=2)])
+    check = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert check.base == "8 vs. Defense"
+    assert check.value == "12 vs. Defense"
+    assert check.change == "better"
+
+
+def test_effect_stat_rows_inaccurate_lowers_and_tints_the_attack_roll() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8, flaws=[ModifierSelection("inaccurate")])
+    check = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert check.value == "6 vs. Defense"  # 8 - 2
+    assert check.change == "worse"
+
+
+def test_effect_stat_rows_perception_range_drops_the_attack_roll() -> None:
+    data = load_game_data()
+    # Perception Range forces range to Perception and removes the attack roll.
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("perception_range")])
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert "check" not in rows  # no attack roll row at all
+    assert rows["range"].value == "Perception" and rows["range"].change == "better"
+    assert rows["resistance"].value == "Toughness vs. 23"  # target still resists
+
+
+def test_effect_stat_rows_area_keeps_the_attack_roll_with_a_note() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("area_effect")])
+    check = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert check.value == "8 vs. Defense (area; Dodge for half)"
+
+
+def test_effect_stat_rows_increased_duration_steps_up_the_ladder() -> None:
+    data = load_game_data()
+    # Damage is Instant; Increased Duration steps it one rung to Concentration.
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("increased_duration")])
+    duration = next(r for r in effect_stat_rows(effect, data) if r.key == "duration")
+    assert duration.base == "Instant"
+    assert duration.value == "Concentration"
+    assert duration.change == "better"
+
+
+def test_effect_stat_rows_increased_action_steps_to_a_slower_action() -> None:
+    data = load_game_data()
+    # Move Object is a Standard action; Increased Action pushes it a rung slower.
+    effect = PowerEffectInstance(
+        "move_object", rank=6, flaws=[ModifierSelection("increased_action")]
+    )
+    action = next(r for r in effect_stat_rows(effect, data) if r.key == "action")
+    assert action.base == "Standard"
+    assert action.value == "Full round"
+    assert action.change == "worse"
+
+
+def test_effect_stat_rows_gather_impactless_modifiers_into_a_notes_row() -> None:
+    data = load_game_data()
+    # Penetrating and Multiattack change combat resolution the table doesn't model,
+    # so they surface in the Notes row rather than silently vanishing.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=8,
+        extras=[ModifierSelection("penetrating"), ModifierSelection("multiattack")],
+    )
+    notes = next(r for r in effect_stat_rows(effect, data) if r.key == "notes")
+    assert notes.value == "Penetrating, Multiattack"
+
+
+def test_effect_stat_rows_impactful_modifiers_stay_out_of_the_notes_row() -> None:
+    data = load_game_data()
+    # Ranged shows in the Range cell, so it is not repeated in Notes; Penetrating is.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=8,
+        extras=[ModifierSelection("ranged"), ModifierSelection("penetrating")],
+    )
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["range"].value == "Ranged"
+    assert rows["notes"].value == "Penetrating"
+
+
+def test_effect_stat_rows_effect_specific_override_tints_like_a_general_one() -> None:
+    data = load_game_data()
+    # Deflect's own Aura extra makes it automatic — action Standard -> None, green.
+    effect = PowerEffectInstance("deflect", rank=4, extras=[ModifierSelection("aura_deflect")])
+    action = next(r for r in effect_stat_rows(effect, data) if r.key == "action")
+    assert action.base == "Standard"
+    assert action.value == "None"
+    assert action.change == "better"
+
+
+def test_effect_stat_rows_effect_specific_flaw_adds_an_attack_check() -> None:
+    data = load_game_data()
+    # Fortune Control is a no-attack Perception effect; its Attack Check flaw makes it
+    # a ranged attack — a check row appears and the range drops to Ranged, both red.
+    effect = PowerEffectInstance(
+        "fortune_control", rank=5, flaws=[ModifierSelection("attack_check_fortune")]
+    )
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["range"].value == "Ranged" and rows["range"].change == "worse"
+    assert rows["check"].value == "5 vs. Defense" and rows["check"].change == "worse"
+
+
+def test_effect_stat_rows_effect_specific_area_notes_the_check() -> None:
+    data = load_game_data()
+    # Nullify's own Area Effect keeps the attack roll and annotates it.
+    effect = PowerEffectInstance(
+        "nullify", rank=7, extras=[ModifierSelection("area_effect_nullify")]
+    )
+    check = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert check.value == "7 vs. Defense (area)"
+
+
+def test_effect_stat_rows_effect_specific_narrative_modifier_lands_in_notes() -> None:
+    data = load_game_data()
+    # Affliction's Cumulative extra has no game-term cell, so it surfaces in Notes.
+    effect = PowerEffectInstance("affliction", rank=4, extras=[ModifierSelection("cumulative")])
+    notes = next(r for r in effect_stat_rows(effect, data) if r.key == "notes")
+    assert notes.value == "Cumulative"
 
 
 def test_affliction_exposes_config_fields() -> None:

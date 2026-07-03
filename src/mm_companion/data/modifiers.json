@@ -8,7 +8,12 @@
     "flatNote": "flat: true means the cost is a one-time addition/reduction to the effect's total, not multiplied by rank. flat: false means the cost applies per rank of the effect.",
     "rankedNote": "ranked: true means the modifier is bought in its own ranks (chosen independently of the effect's rank), so its total contribution is costValue x its rank. These are the flat modifiers whose costFormula reads 'per rank'. Absent/false means it is applied once (rank 1).",
     "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary (not the point cost). Later modifiers win. Example: Ranged sets range to 'Ranged', replacing a Close or Perception base.",
-    "costValueNote": "costValue is the canonical numeric cost magnitude used for automatic point-cost calculation; its sign is implied by category (extra adds, flaw subtracts) and flat decides whether it applies once or per rank. The costFormula string carries the full nuance (ranges, tiers) for cases costValue simplifies."
+    "costValueNote": "costValue is the canonical numeric cost magnitude used for automatic point-cost calculation; its sign is implied by category (extra adds, flaw subtracts) and flat decides whether it applies once or per rank. The costFormula string carries the full nuance (ranges, tiers) for cases costValue simplifies.",
+    "impactNote": "Beyond 'overrides' (a literal field replacement), a modifier may declare other game-term impacts read by core.rules.effect_stat_rows for the summary (never the point cost): 'checkBonus' is a SIGNED adjustment to the effect's attack-roll number, multiplied by the modifier's rank (Accurate +2, Inaccurate -2); 'dropsCheck' removes the attack roll entirely (Perception Range); 'checkNote' is a parenthetical appended to the check row (Area keeps its attack roll but notes Dodge-for-half); 'stepField'+'stepBy' move a field that many steps along its gameTermLadders ordering (Increased Duration steps duration +1, Increased Action steps action +1 toward slower)."
+  },
+  "gameTermLadders": {
+    "duration": ["Instant", "Concentration", "Sustained", "Continuous", "Permanent"],
+    "action": ["None", "Reaction", "Free", "Simple", "Move", "Standard", "Full round"]
   },
   "modifiers": [
     {
@@ -19,7 +24,8 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
-      "description": "Bonus to attack checks made with this effect."
+      "checkBonus": 2,
+      "description": "Bonus to attack checks made with this effect (+2 per rank)."
     },
     {
       "id": "affects_objects",
@@ -55,6 +61,7 @@
       "costFormula": "+1 point per rank",
       "costValue": 1,
       "flat": false,
+      "checkNote": "area; Dodge for half",
       "description": "Expands the effect to hit an area instead of a single target."
     },
     {
@@ -157,6 +164,8 @@
       "costFormula": "+1 point per rank",
       "costValue": 1,
       "flat": false,
+      "stepField": "duration",
+      "stepBy": 1,
       "description": "Moves an effect's duration up a step (e.g. Instant to Concentration)."
     },
     {
@@ -231,6 +240,7 @@
       "costValue": 1,
       "flat": false,
       "overrides": { "range": "Perception" },
+      "dropsCheck": true,
       "description": "Lets the effect target anything you can accurately perceive, no attack roll needed."
     },
     {
@@ -460,7 +470,8 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
-      "description": "Penalty on attack checks made with this effect."
+      "checkBonus": -2,
+      "description": "Penalty on attack checks made with this effect (-2 per rank)."
     },
     {
       "id": "increased_action",
@@ -469,6 +480,8 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "stepField": "action",
+      "stepBy": 1,
       "description": "Using the effect requires a slower action type than normal."
     },
     {

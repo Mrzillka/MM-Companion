@@ -100,7 +100,8 @@
           ]
         }
       ],
-      "description": "Inflicts an escalating condition on a target instead of damage."
+      "description": "Inflicts an escalating condition on a target instead of damage.",
+      "resistanceDcBase": 10
     },
     {
       "id": "burrowing",
@@ -118,7 +119,8 @@
         "pattern": "passive_toggle",
         "affects": "movement"
       },
-      "description": "Grants the ability to tunnel through earth or similar material."
+      "description": "Grants the ability to tunnel through earth or similar material.",
+      "measure": { "column": "distance", "label": "Speed", "perRound": true }
     },
     {
       "id": "communication",
@@ -190,7 +192,8 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Conjures solid objects or terrain out of nothing."
+      "description": "Conjures solid objects or terrain out of nothing.",
+      "resistanceDcBase": 10
     },
     {
       "id": "damage",
@@ -208,7 +211,8 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "A direct harmful attack — the basis for most offensive powers."
+      "description": "A direct harmful attack — the basis for most offensive powers.",
+      "resistanceDcBase": 15
     },
     {
       "id": "deflect",
@@ -370,7 +374,8 @@
         "pattern": "passive_toggle",
         "affects": "movement"
       },
-      "description": "Grants the ability to fly at a speed set by rank."
+      "description": "Grants the ability to fly at a speed set by rank.",
+      "measure": { "column": "distance", "label": "Speed", "perRound": true }
     },
     {
       "id": "fortune_control",
@@ -442,7 +447,8 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Creates false sensory impressions that fool one or more senses."
+      "description": "Creates false sensory impressions that fool one or more senses.",
+      "resistanceDcBase": 10
     },
     {
       "id": "immunity",
@@ -496,7 +502,8 @@
         "pattern": "passive_permanent",
         "affects": "movement"
       },
-      "description": "Extends how far and high you can jump."
+      "description": "Extends how far and high you can jump.",
+      "measure": { "column": "distance", "label": "Leap", "perRound": false }
     },
     {
       "id": "lifting",
@@ -532,7 +539,8 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Reads or influences a target's surface thoughts and memories."
+      "description": "Reads or influences a target's surface thoughts and memories.",
+      "resistanceDcBase": 10
     },
     {
       "id": "morph",
@@ -568,7 +576,8 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Telekinetically lifts and moves objects or people at a distance."
+      "description": "Telekinetically lifts and moves objects or people at a distance.",
+      "resistanceDcBase": 0
     },
     {
       "id": "nullify",
@@ -748,7 +757,8 @@
         "pattern": "passive_toggle",
         "affects": "movement"
       },
-      "description": "Increases your ground movement speed."
+      "description": "Increases your ground movement speed.",
+      "measure": { "column": "distance", "label": "Speed", "perRound": true }
     },
     {
       "id": "summon",
@@ -784,7 +794,8 @@
         "pattern": "passive_toggle",
         "affects": "movement"
       },
-      "description": "Increases your swimming speed."
+      "description": "Increases your swimming speed.",
+      "measure": { "column": "distance", "label": "Speed", "perRound": true }
     },
     {
       "id": "teleport",

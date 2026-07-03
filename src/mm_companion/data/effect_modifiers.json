@@ -11,7 +11,8 @@
     "costValueNote": "costValue is the canonical numeric magnitude of the modifier (always non-negative; the sign comes from whether it is an extra or a flaw). For 'or'/'up to' formulas it is the lowest positive value; referential costs (e.g. Reduced Trait) are 0 and handled specially.",
     "rankedNote": "ranked: true means the modifier is bought in its own ranks, independent of the effect's rank, so its contribution is costValue x its rank. These are the flat modifiers whose costFormula reads 'flat per rank'.",
     "categoryNote": "category (extra/flaw) is not stored per entry; it is implied by whether the modifier sits in an 'extras' or 'flaws' array and is injected by the loader.",
-    "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance) to the value this modifier forces it to, for the generated game-terms summary only (not the point cost)."
+    "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary only (not the point cost).",
+    "impactNote": "Effect-specific modifiers support the same non-cost game-term impact fields as the general pool (see modifiers.json's impactNote): 'checkBonus' (signed attack-roll adjustment, x rank), 'dropsCheck' (removes the attack roll), 'checkNote' (parenthetical appended to the check row), and 'stepField'+'stepBy' (move a field along its gameTermLadders ordering, which live in modifiers.json). Any attached modifier with no such impact is listed by name in the effect's Notes row automatically, so narrative extras/flaws here need no extra fields."
   },
   "effectModifiers": {
     "affliction": {
@@ -92,7 +93,7 @@
     },
     "deflect": {
       "extras": [
-        { "id": "aura_deflect", "name": "Aura", "costFormula": "+3 points per rank", "costValue": 3, "flat": false, "description": "Blocks attacks against you automatically, with no action required." },
+        { "id": "aura_deflect", "name": "Aura", "costFormula": "+3 points per rank", "costValue": 3, "flat": false, "overrides": {"action": "None"}, "description": "Blocks attacks against you automatically, with no action required." },
         { "id": "free_action_deflect", "name": "Free Action", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "overrides": {"action": "Free"}, "description": "Lets you Deflect as a free action." },
         { "id": "ranged_deflect", "name": "Ranged", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Ranged"}, "description": "Lets you Deflect attacks aimed at allies within range." },
         { "id": "reaction_deflect", "name": "Reaction", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"action": "Reaction"}, "description": "Lets you Deflect using your reaction for the round." },
@@ -165,8 +166,8 @@
         { "id": "enhanced_advantages", "name": "Enhanced Advantages", "costFormula": "+1 point flat per advantage", "costValue": 1, "flat": true, "description": "Lets you acquire fortune/heroic advantages through this effect." }
       ],
       "flaws": [
-        { "id": "action_fortune_control", "name": "Action", "costFormula": "-1 or -2 points per rank", "costValue": 1, "flat": false, "description": "Requires a slower action to use, limiting when you can respond to others." },
-        { "id": "attack_check_fortune", "name": "Attack Check", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Requires a successful ranged attack check to affect a target." },
+        { "id": "action_fortune_control", "name": "Action", "costFormula": "-1 or -2 points per rank", "costValue": 1, "flat": false, "stepField": "action", "stepBy": 1, "description": "Requires a slower action to use, limiting when you can respond to others." },
+        { "id": "attack_check_fortune", "name": "Attack Check", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Ranged", "check": "Attack vs. Defense"}, "description": "Requires a successful ranged attack check to affect a target." },
         { "id": "resistible_fortune", "name": "Resistible", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Targets get a resistance check to avoid its effects." },
         { "id": "side_effect_fortune", "name": "Side Effect", "costFormula": "-1 or -2 points per rank", "costValue": 1, "flat": false, "description": "A failed use backfires as a complication, with no Hero Point awarded." }
       ]
@@ -276,7 +277,7 @@
       "extras": [
         { "id": "affects_insubstantial_nullify", "name": "Affects Insubstantial", "costFormula": "no extra cost (clarification only)", "costValue": 0, "flat": true, "description": "Confirms Nullify can affect insubstantial targets without a special modifier." },
         { "id": "alternate_resistance_nullify", "name": "Alternate Resistance", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"resistance": "Fortitude"}, "description": "Uses Fortitude instead of Will for the opposed check." },
-        { "id": "area_effect_nullify", "name": "Area Effect", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Counters every valid target within an area with a single check." },
+        { "id": "area_effect_nullify", "name": "Area Effect", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "checkNote": "area", "description": "Counters every valid target within an area with a single check." },
         { "id": "broad_nullify", "name": "Broad", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Counters a broad category of descriptor, like all magical effects." },
         { "id": "concentration_nullify", "name": "Concentration", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Concentration"}, "description": "Suppresses the countered effect for as long as you keep concentrating." },
         { "id": "continuous_nullify", "name": "Continuous", "costFormula": "+3 points per rank", "costValue": 3, "flat": false, "overrides": {"duration": "Continuous"}, "description": "Suppresses the countered effect indefinitely with no upkeep." },

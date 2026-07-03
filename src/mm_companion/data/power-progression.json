@@ -1,0 +1,283 @@
+{
+  "_meta": {
+    "description": "Character-build progression tables for Mutants & Masterminds 4e \u2014 Starting Power Points and Power Level caps by Power Level, plus the basic trait cost reference. These are game-functional numbers (budget/limit tables), not creative expression, reproduced in full. Companion to mm-core-mechanics.md sections 6-7, which describe the formulas these tables tabulate exactly.",
+    "extrapolation": "Beyond PL 20, each additional Power Level adds +15 Starting Power Points, +1 to max Skill Modifier, +2 to each of max Attack+Effect / max Defense-or-Dodge+Toughness / max Fortitude+Will, and the Heroic Advantage cap continues as floor(PL/2).",
+    "formulaKey": {
+      "maxSkillModifier": "The total modifier (ability + skill rank + advantage bonuses) for any single skill cannot exceed this.",
+      "maxAttackPlusEffectRank": "Attack bonus + the effect rank of that attack cannot exceed this.",
+      "maxDefenseOrDodgePlusToughness": "Defense (or Dodge) rank + Toughness rank cannot exceed this.",
+      "maxFortitudePlusWill": "Fortitude rank + Will rank cannot exceed this.",
+      "maxHeroicAdvantageRanks": "Total ranks spent on Heroic-type advantages cannot exceed this."
+    }
+  },
+  "startingPowerPoints": [
+    {
+      "powerLevel": 1,
+      "startingPowerPoints": 15
+    },
+    {
+      "powerLevel": 2,
+      "startingPowerPoints": 30
+    },
+    {
+      "powerLevel": 3,
+      "startingPowerPoints": 45
+    },
+    {
+      "powerLevel": 4,
+      "startingPowerPoints": 60
+    },
+    {
+      "powerLevel": 5,
+      "startingPowerPoints": 75
+    },
+    {
+      "powerLevel": 6,
+      "startingPowerPoints": 90
+    },
+    {
+      "powerLevel": 7,
+      "startingPowerPoints": 105
+    },
+    {
+      "powerLevel": 8,
+      "startingPowerPoints": 120
+    },
+    {
+      "powerLevel": 9,
+      "startingPowerPoints": 135
+    },
+    {
+      "powerLevel": 10,
+      "startingPowerPoints": 150
+    },
+    {
+      "powerLevel": 11,
+      "startingPowerPoints": 165
+    },
+    {
+      "powerLevel": 12,
+      "startingPowerPoints": 180
+    },
+    {
+      "powerLevel": 13,
+      "startingPowerPoints": 195
+    },
+    {
+      "powerLevel": 14,
+      "startingPowerPoints": 210
+    },
+    {
+      "powerLevel": 15,
+      "startingPowerPoints": 225
+    },
+    {
+      "powerLevel": 16,
+      "startingPowerPoints": 240
+    },
+    {
+      "powerLevel": 17,
+      "startingPowerPoints": 255
+    },
+    {
+      "powerLevel": 18,
+      "startingPowerPoints": 270
+    },
+    {
+      "powerLevel": 19,
+      "startingPowerPoints": 285
+    },
+    {
+      "powerLevel": 20,
+      "startingPowerPoints": 300
+    }
+  ],
+  "powerLevelLimits": [
+    {
+      "powerLevel": 1,
+      "maxSkillModifier": 11,
+      "maxAttackPlusEffectRank": 2,
+      "maxDefenseOrDodgePlusToughness": 2,
+      "maxFortitudePlusWill": 2,
+      "maxHeroicAdvantageRanks": 0
+    },
+    {
+      "powerLevel": 2,
+      "maxSkillModifier": 12,
+      "maxAttackPlusEffectRank": 4,
+      "maxDefenseOrDodgePlusToughness": 4,
+      "maxFortitudePlusWill": 4,
+      "maxHeroicAdvantageRanks": 1
+    },
+    {
+      "powerLevel": 3,
+      "maxSkillModifier": 13,
+      "maxAttackPlusEffectRank": 6,
+      "maxDefenseOrDodgePlusToughness": 6,
+      "maxFortitudePlusWill": 6,
+      "maxHeroicAdvantageRanks": 1
+    },
+    {
+      "powerLevel": 4,
+      "maxSkillModifier": 14,
+      "maxAttackPlusEffectRank": 8,
+      "maxDefenseOrDodgePlusToughness": 8,
+      "maxFortitudePlusWill": 8,
+      "maxHeroicAdvantageRanks": 2
+    },
+    {
+      "powerLevel": 5,
+      "maxSkillModifier": 15,
+      "maxAttackPlusEffectRank": 10,
+      "maxDefenseOrDodgePlusToughness": 10,
+      "maxFortitudePlusWill": 10,
+      "maxHeroicAdvantageRanks": 2
+    },
+    {
+      "powerLevel": 6,
+      "maxSkillModifier": 16,
+      "maxAttackPlusEffectRank": 12,
+      "maxDefenseOrDodgePlusToughness": 12,
+      "maxFortitudePlusWill": 12,
+      "maxHeroicAdvantageRanks": 3
+    },
+    {
+      "powerLevel": 7,
+      "maxSkillModifier": 17,
+      "maxAttackPlusEffectRank": 14,
+      "maxDefenseOrDodgePlusToughness": 14,
+      "maxFortitudePlusWill": 14,
+      "maxHeroicAdvantageRanks": 3
+    },
+    {
+      "powerLevel": 8,
+      "maxSkillModifier": 18,
+      "maxAttackPlusEffectRank": 16,
+      "maxDefenseOrDodgePlusToughness": 16,
+      "maxFortitudePlusWill": 16,
+      "maxHeroicAdvantageRanks": 4
+    },
+    {
+      "powerLevel": 9,
+      "maxSkillModifier": 19,
+      "maxAttackPlusEffectRank": 18,
+      "maxDefenseOrDodgePlusToughness": 18,
+      "maxFortitudePlusWill": 18,
+      "maxHeroicAdvantageRanks": 4
+    },
+    {
+      "powerLevel": 10,
+      "maxSkillModifier": 20,
+      "maxAttackPlusEffectRank": 20,
+      "maxDefenseOrDodgePlusToughness": 20,
+      "maxFortitudePlusWill": 20,
+      "maxHeroicAdvantageRanks": 5
+    },
+    {
+      "powerLevel": 11,
+      "maxSkillModifier": 21,
+      "maxAttackPlusEffectRank": 22,
+      "maxDefenseOrDodgePlusToughness": 22,
+      "maxFortitudePlusWill": 22,
+      "maxHeroicAdvantageRanks": 5
+    },
+    {
+      "powerLevel": 12,
+      "maxSkillModifier": 22,
+      "maxAttackPlusEffectRank": 24,
+      "maxDefenseOrDodgePlusToughness": 24,
+      "maxFortitudePlusWill": 24,
+      "maxHeroicAdvantageRanks": 6
+    },
+    {
+      "powerLevel": 13,
+      "maxSkillModifier": 23,
+      "maxAttackPlusEffectRank": 26,
+      "maxDefenseOrDodgePlusToughness": 26,
+      "maxFortitudePlusWill": 26,
+      "maxHeroicAdvantageRanks": 6
+    },
+    {
+      "powerLevel": 14,
+      "maxSkillModifier": 24,
+      "maxAttackPlusEffectRank": 28,
+      "maxDefenseOrDodgePlusToughness": 28,
+      "maxFortitudePlusWill": 28,
+      "maxHeroicAdvantageRanks": 7
+    },
+    {
+      "powerLevel": 15,
+      "maxSkillModifier": 25,
+      "maxAttackPlusEffectRank": 30,
+      "maxDefenseOrDodgePlusToughness": 30,
+      "maxFortitudePlusWill": 30,
+      "maxHeroicAdvantageRanks": 7
+    },
+    {
+      "powerLevel": 16,
+      "maxSkillModifier": 26,
+      "maxAttackPlusEffectRank": 32,
+      "maxDefenseOrDodgePlusToughness": 32,
+      "maxFortitudePlusWill": 32,
+      "maxHeroicAdvantageRanks": 8
+    },
+    {
+      "powerLevel": 17,
+      "maxSkillModifier": 27,
+      "maxAttackPlusEffectRank": 34,
+      "maxDefenseOrDodgePlusToughness": 34,
+      "maxFortitudePlusWill": 34,
+      "maxHeroicAdvantageRanks": 8
+    },
+    {
+      "powerLevel": 18,
+      "maxSkillModifier": 28,
+      "maxAttackPlusEffectRank": 36,
+      "maxDefenseOrDodgePlusToughness": 36,
+      "maxFortitudePlusWill": 36,
+      "maxHeroicAdvantageRanks": 9
+    },
+    {
+      "powerLevel": 19,
+      "maxSkillModifier": 29,
+      "maxAttackPlusEffectRank": 38,
+      "maxDefenseOrDodgePlusToughness": 38,
+      "maxFortitudePlusWill": 38,
+      "maxHeroicAdvantageRanks": 9
+    },
+    {
+      "powerLevel": 20,
+      "maxSkillModifier": 30,
+      "maxAttackPlusEffectRank": 40,
+      "maxDefenseOrDodgePlusToughness": 40,
+      "maxFortitudePlusWill": 40,
+      "maxHeroicAdvantageRanks": 10
+    }
+  ],
+  "basicTraitCosts": [
+    {
+      "trait": "Ability rank",
+      "costInPowerPoints": "2 per rank"
+    },
+    {
+      "trait": "Combat ability rank (Attack/Defense)",
+      "costInPowerPoints": "2 per rank"
+    },
+    {
+      "trait": "Resistance rank (above ability-derived base)",
+      "costInPowerPoints": "1 per rank"
+    },
+    {
+      "trait": "Skill rank",
+      "costInPowerPoints": "1 per 2 ranks (1 per 4 ranks if focused/specialized)"
+    },
+    {
+      "trait": "Advantage",
+      "costInPowerPoints": "1 per advantage or per rank in a rankable advantage"
+    },
+    {
+      "trait": "Power",
+      "costInPowerPoints": "(base effect cost + extras - flaws) x rank + flat modifiers"
+    }
+  ]
+}

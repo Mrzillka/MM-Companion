@@ -226,6 +226,22 @@ def test_palette_search_filters_bricks_instantly(qapp: QApplication) -> None:
     assert all(not b.isHidden() for b in bricks)
 
 
+def test_palette_search_matches_names_not_cost_text(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    search, bricks = window._search_tabs["effects"]
+
+    # A digit only occurs in the shared cost text ("1 per rank"), never in a name,
+    # so it must hide everything rather than matching every brick.
+    search.setText("1")
+    assert all(b.isHidden() for b in bricks)
+
+    # A single letter that does appear in names filters to just those.
+    search.setText("a")
+    shown = [b for b in bricks if not b.isHidden()]
+    assert shown
+    assert all("a" in b.search_key for b in shown)
+
+
 def test_palette_search_is_case_insensitive_and_per_tab(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     effects_search, effect_bricks = window._search_tabs["effects"]

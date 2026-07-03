@@ -81,8 +81,10 @@ class BrickWidget(QFrame):
         self._mime = mime
         self._payload = payload
         self._press_pos = None
-        # The visible text (name + cost) is what the palette search box matches on.
-        self.search_key = f"{title} {subtitle}".lower()
+        # The palette search box matches on the name only — the cost subtitle
+        # ("1 per rank", …) is the same across most bricks and would swamp
+        # single-letter queries with matches.
+        self.search_key = title.lower()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)

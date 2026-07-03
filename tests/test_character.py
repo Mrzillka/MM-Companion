@@ -7,9 +7,12 @@ from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
     defense_class,
+    min_power_points,
+    power_level_for_points,
     power_level_violations,
     power_points_remaining,
     power_points_spent,
+    reconcile_points_to_level,
     resistance_total,
     skill_total,
 )
@@ -67,6 +70,42 @@ def test_power_points_spent_matches_hand_computed_build() -> None:
 
     assert power_points_spent(char, data) == 25
     assert power_points_remaining(char, data) == 150 - 25
+
+
+def test_min_power_points_is_level_times_per_level_rate() -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    assert min_power_points(10, data) == 10 * per_level
+    assert min_power_points(0, data) == 0
+
+
+def test_power_level_for_points_floors_at_the_border() -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    assert power_level_for_points(10 * per_level, data) == 10  # exactly on the border
+    assert power_level_for_points(10 * per_level + 1, data) == 10  # within the band
+    assert power_level_for_points(11 * per_level, data) == 11  # next border → next level
+
+
+def test_reconcile_points_keeps_a_budget_inside_the_band() -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    # 160 sits inside PL 10's band (150–164), so it is left untouched.
+    assert reconcile_points_to_level(10, 10 * per_level + 10, data) == 10 * per_level + 10
+
+
+def test_reconcile_points_raises_a_budget_below_the_level_minimum() -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    # PL raised to 11 while the budget is still PL 10's minimum → snaps up to 165.
+    assert reconcile_points_to_level(11, 10 * per_level, data) == 11 * per_level
+
+
+def test_reconcile_points_lowers_a_budget_from_a_higher_band() -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    # PL lowered to 9 while the budget is in PL 11's band → snaps down to PL 9's min.
+    assert reconcile_points_to_level(9, 11 * per_level, data) == 9 * per_level
 
 
 def test_skill_total_is_ability_plus_ranks_plus_mods() -> None:

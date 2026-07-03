@@ -259,6 +259,45 @@ def power_points_remaining(char: Character, game_data: GameData) -> int:
     return char.power_points_total - power_points_spent(char, game_data)
 
 
+def min_power_points(power_level: int, game_data: GameData) -> int:
+    """The minimum power-point budget a Power Level requires: ``PL × pp_per_level``.
+
+    A character's Power Level sets the floor on their point budget — a PL 10 hero is
+    built on at least 150 points at 15 points per level (``mm-core-mechanics.md`` §6).
+    Data-driven: the per-level rate comes from ``costs.json``, never hardcoded here.
+    """
+
+    return power_level * game_data.costs.power_level.pp_per_level
+
+
+def power_level_for_points(power_points: int, game_data: GameData) -> int:
+    """The Power Level a point budget affords: ``floor(power_points / pp_per_level)``.
+
+    Every further ``pp_per_level`` points crosses into the next Power Level band, so a
+    budget raised past a level's border raises the Power Level to match. Guards a
+    non-positive ``pp_per_level`` by returning 0.
+    """
+
+    per_level = game_data.costs.power_level.pp_per_level
+    if per_level <= 0:
+        return 0
+    return power_points // per_level
+
+
+def reconcile_points_to_level(power_level: int, power_points: int, game_data: GameData) -> int:
+    """Point budget after a Power Level change: snap it to the level's band minimum.
+
+    Keeps the two linked so :func:`power_level_for_points` of the result equals
+    ``power_level``. A budget already inside the level's band is left untouched (so a
+    character can carry extra points within a level); one below the minimum, or up in
+    a higher band, snaps to :func:`min_power_points`.
+    """
+
+    if power_level_for_points(power_points, game_data) != power_level:
+        return min_power_points(power_level, game_data)
+    return power_points
+
+
 def _modifier_magnitude(modifier: Modifier, selection) -> int:
     """One modifier's cost magnitude: ``cost_value``, times its rank when ``ranked``."""
 

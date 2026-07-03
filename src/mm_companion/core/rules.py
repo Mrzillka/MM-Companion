@@ -132,28 +132,108 @@ def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: b
     return total
 
 
+def _per_rank_cost(effect: PowerEffectInstance, base_cost_value: int, game_data: GameData) -> int:
+    """Net per-rank cost of an effect: ``base + Σ per-rank extras − Σ per-rank flaws``."""
+
+    net = base_cost_value
+    net += _signed_modifier_cost(effect.extras, +1, game_data, flat=False)
+    net += _signed_modifier_cost(effect.flaws, -1, game_data, flat=False)
+    return net
+
+
+def _ranked_cost(net_per_rank: int, rank: int) -> int:
+    """Points for ``rank`` ranks at ``net_per_rank`` PP/rank.
+
+    Above 1 PP/rank it is simply ``net × rank``. When flaws push the per-rank cost
+    below 1, M&M switches to *1 point per N ranks* (``N = 2 − net``: net 0 → 1/2,
+    net −1 → 1/3, …), so the cost is ``ceil(rank / (2 − net))``.
+    """
+
+    if net_per_rank >= 1:
+        return net_per_rank * rank
+    return math.ceil(rank / (2 - net_per_rank))
+
+
 def effect_total_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
     """Power-point cost of one assembled effect (``mm-powers-architecture.md`` §2).
 
-    ``per_rank = base + Σ per-rank extras − Σ per-rank flaws`` (floored at 1 — flaws
-    can't push a per-rank cost below 1 PP), then
-    ``total = per_rank × rank + Σ flat extras − Σ flat flaws``. An unknown effect id
-    contributes nothing.
+    ``ranked = ceil`` of the per-rank cost times rank (see :func:`_ranked_cost` for
+    the sub-1 PP/rank fraction rule), then ``total = ranked + Σ flat extras − Σ flat
+    flaws``. An unknown effect id contributes nothing.
     """
 
     base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base is None:
         return 0
 
-    per_rank = base.base_cost_value
-    per_rank += _signed_modifier_cost(effect.extras, +1, game_data, flat=False)
-    per_rank += _signed_modifier_cost(effect.flaws, -1, game_data, flat=False)
-    per_rank = max(1, per_rank)
+    ranked = _ranked_cost(_per_rank_cost(effect, base.base_cost_value, game_data), effect.rank)
 
     flat = _signed_modifier_cost(effect.extras, +1, game_data, flat=True)
     flat += _signed_modifier_cost(effect.flaws, -1, game_data, flat=True)
 
-    return per_rank * effect.rank + flat
+    return ranked + flat
+
+
+def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -> list[int]:
+    """Signed ``cost_value`` of each modifier in one bucket, for formula display.
+
+    Same selection as :func:`_signed_modifier_cost` but keeps the terms apart so a
+    breakdown can list them individually rather than as a single sum.
+    """
+
+    catalog: dict[str, Modifier] = {m.id: m for m in game_data.modifiers}
+    terms: list[int] = []
+    for selection in mods:
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None or modifier.flat != flat:
+            continue
+        terms.append(sign * modifier.cost_value)
+    return terms
+
+
+def effect_cost_formula(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """Human-readable cost breakdown for one effect, e.g. ``3 × (2 + 1 − 1) + 1``.
+
+    Mirrors :func:`effect_total_cost`: the parenthesised group is the per-rank cost
+    (base plus per-rank extras minus per-rank flaws), multiplied by rank, then flat
+    extras/flaws added outside. The raw terms are always shown — when flaws push the
+    group below 1 PP/rank it is annotated with the resulting fraction (e.g.
+    ``4 × (1 − 1 − 1 = 1/3)``), since the total is then a ceil, not that arithmetic.
+    Returns ``""`` for an unknown effect.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return ""
+
+    per_rank_terms = [base.base_cost_value]
+    per_rank_terms += _modifier_terms(effect.extras, +1, game_data, flat=False)
+    per_rank_terms += _modifier_terms(effect.flaws, -1, game_data, flat=False)
+    net = sum(per_rank_terms)
+
+    per_rank_str = _join_terms(per_rank_terms)
+    if net < 1:  # sub-1 PP/rank: 1 point per (2 − net) ranks
+        per_rank_str = f"({per_rank_str} = 1/{2 - net})"
+    elif len(per_rank_terms) > 1:
+        per_rank_str = f"({per_rank_str})"
+
+    formula = f"{effect.rank} × {per_rank_str}"
+
+    flat_terms = _modifier_terms(effect.extras, +1, game_data, flat=True)
+    flat_terms += _modifier_terms(effect.flaws, -1, game_data, flat=True)
+    for term in flat_terms:
+        formula += f" {'−' if term < 0 else '+'} {abs(term)}"
+
+    return formula
+
+
+def _join_terms(terms: list[int]) -> str:
+    """Render signed integers as ``a + b − c`` (leading term keeps its own sign)."""
+
+    parts = [str(terms[0])]
+    for term in terms[1:]:
+        parts.append(f"{'−' if term < 0 else '+'} {abs(term)}")
+    return " ".join(parts)
 
 
 def power_total_cost(power: Power, game_data: GameData) -> int:

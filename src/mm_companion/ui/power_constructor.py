@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.data_loader import GameData, Modifier, load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
-from mm_companion.core.rules import effect_total_cost, power_total_cost
+from mm_companion.core.rules import effect_cost_formula, effect_total_cost, power_total_cost
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.widgets import make_spin_box
 
@@ -228,7 +228,9 @@ class EffectCard(QFrame):
         self.changed.emit()
 
     def _refresh_cost(self) -> None:
-        self._cost.setText(f"{effect_total_cost(self.instance, self._data)} PP")
+        formula = effect_cost_formula(self.instance, self._data)
+        total = effect_total_cost(self.instance, self._data)
+        self._cost.setText(f"{formula} = {total} PP" if formula else f"{total} PP")
 
 
 class PowerCanvas(QFrame):

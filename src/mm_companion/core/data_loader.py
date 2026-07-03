@@ -161,6 +161,54 @@ class Condition:
 
 
 @dataclass(frozen=True)
+class Effect:
+    """A base power effect from ``effects.json`` (see ``mm-powers-architecture.md``).
+
+    A power is assembled from one or more of these, each carrying its own extras
+    and flaws. ``base_cost`` is the human-readable prose (e.g. ``"1 per rank"``);
+    ``base_cost_value`` is the canonical machine-readable points-per-rank used for
+    automatic cost calculation. ``configurable_target`` marks Enhanced-Trait-style
+    effects that target a chosen trait. ``stat_pattern``/``stat_affects`` are the
+    flattened ``statIntegration`` object describing how the effect patches stats.
+    """
+
+    id: str
+    name: str
+    effect_type: str
+    action: str = ""
+    range_: str = ""
+    duration: str = ""
+    check: str | None = None
+    resistance: str | None = None
+    base_cost: str = ""
+    base_cost_value: int = 1
+    configurable_target: bool = False
+    stat_pattern: str = ""
+    stat_affects: str = ""
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class Modifier:
+    """An extra or flaw from ``modifiers.json`` (see ``mm-powers-architecture.md``).
+
+    ``category`` is ``"extra"`` (adds cost/benefit) or ``"flaw"`` (subtracts
+    cost/adds a restriction). ``cost_formula`` is the prose; ``cost_value`` is the
+    canonical numeric magnitude (always non-negative — the sign comes from
+    ``category``). ``flat`` is ``True`` when the cost is a one-time add/subtract to
+    the effect total rather than per rank.
+    """
+
+    id: str
+    name: str
+    category: str
+    cost_formula: str = ""
+    cost_value: int = 0
+    flat: bool = False
+    description: str = ""
+
+
+@dataclass(frozen=True)
 class TraitCosts:
     """Power-point cost constants for the point-bought traits (``mm-core-mechanics.md`` §6)."""
 
@@ -210,6 +258,8 @@ class GameData:
     skills: list[Skill]
     advantages: list[Advantage]
     conditions: list[Condition]
+    effects: list[Effect]
+    modifiers: list[Modifier]
     costs: Costs
 
 
@@ -269,6 +319,38 @@ def _parse_condition(c: dict) -> Condition:
     )
 
 
+def _parse_effect(e: dict) -> Effect:
+    integration = e.get("statIntegration", {})
+    return Effect(
+        id=e["id"],
+        name=e["name"],
+        effect_type=e["effectType"],
+        action=e.get("action", ""),
+        range_=e.get("range", ""),
+        duration=e.get("duration", ""),
+        check=e.get("check"),
+        resistance=e.get("resistance"),
+        base_cost=e.get("baseCost", ""),
+        base_cost_value=int(e.get("baseCostValue", 1)),
+        configurable_target=bool(e.get("configurableTarget", False)),
+        stat_pattern=integration.get("pattern", ""),
+        stat_affects=integration.get("affects", ""),
+        description=e.get("description", ""),
+    )
+
+
+def _parse_modifier(m: dict) -> Modifier:
+    return Modifier(
+        id=m["id"],
+        name=m["name"],
+        category=m["category"],
+        cost_formula=m.get("costFormula", ""),
+        cost_value=int(m.get("costValue", 0)),
+        flat=bool(m.get("flat", False)),
+        description=m.get("description", ""),
+    )
+
+
 def _parse_costs(raw: dict) -> Costs:
     traits = TraitCosts(**{k: int(v) for k, v in raw["trait_costs"].items()})
     pl = raw["power_level"]
@@ -295,6 +377,8 @@ def load_game_data() -> GameData:
     skills_raw = _read_json("skills.json")
     advantages_raw = _read_json("advantages.json")
     conditions_raw = _read_json("conditions.json")
+    effects_raw = _read_json("effects.json")
+    modifiers_raw = _read_json("modifiers.json")
     costs_raw = _read_json("costs.json")
 
     return GameData(
@@ -305,5 +389,7 @@ def load_game_data() -> GameData:
         skills=[_parse_skill(s) for s in skills_raw["skills"]],
         advantages=[_parse_advantage(a) for a in advantages_raw["advantages"]],
         conditions=[_parse_condition(c) for c in conditions_raw["conditions"]],
+        effects=[_parse_effect(e) for e in effects_raw["effects"]],
+        modifiers=[_parse_modifier(m) for m in modifiers_raw["modifiers"]],
         costs=_parse_costs(costs_raw),
     )

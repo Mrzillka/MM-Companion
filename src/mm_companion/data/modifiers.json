@@ -5,7 +5,8 @@
       "extra": "Increases an effect's cost and adds a benefit",
       "flaw": "Decreases an effect's cost and adds a restriction"
     },
-    "flatNote": "flat: true means the cost is a one-time addition/reduction to the effect's total, not multiplied by rank. flat: false means the cost applies per rank of the effect."
+    "flatNote": "flat: true means the cost is a one-time addition/reduction to the effect's total, not multiplied by rank. flat: false means the cost applies per rank of the effect.",
+    "costValueNote": "costValue is the canonical numeric cost magnitude used for automatic point-cost calculation; its sign is implied by category (extra adds, flaw subtracts) and flat decides whether it applies once or per rank. The costFormula string carries the full nuance (ranges, tiers) for cases costValue simplifies."
   },
   "modifiers": [
     {
@@ -13,6 +14,7 @@
       "name": "Accurate",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": true,
       "description": "Bonus to attack checks made with this effect."
     },
@@ -21,6 +23,7 @@
       "name": "Affects Objects",
       "category": "extra",
       "costFormula": "+0 or +1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Lets a personal effect also work on objects."
     },
@@ -29,6 +32,7 @@
       "name": "Affects Others",
       "category": "extra",
       "costFormula": "+1 or +0 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Lets a personal effect be granted to other people."
     },
@@ -37,6 +41,7 @@
       "name": "Alternate Effect",
       "category": "extra",
       "costFormula": "1 or 2 points flat (per alternate)",
+      "costValue": 1,
       "flat": true,
       "description": "Adds another interchangeable configuration to a power array."
     },
@@ -45,6 +50,7 @@
       "name": "Area Effect",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Expands the effect to hit an area instead of a single target."
     },
@@ -53,6 +59,7 @@
       "name": "Aura",
       "category": "extra",
       "costFormula": "+3 points per rank",
+      "costValue": 3,
       "flat": false,
       "description": "Turns a close-range effect into a field surrounding your body."
     },
@@ -61,6 +68,7 @@
       "name": "Contagious",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Spreads the effect to anyone who touches an affected target."
     },
@@ -69,6 +77,7 @@
       "name": "Dimensional",
       "category": "extra",
       "costFormula": "1-3 points flat",
+      "costValue": 1,
       "flat": true,
       "description": "Lets the effect reach into other dimensions."
     },
@@ -77,6 +86,7 @@
       "name": "Extended Range",
       "category": "extra",
       "costFormula": "1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Increases how far a ranged effect can reach."
     },
@@ -85,6 +95,7 @@
       "name": "Feature (as extra)",
       "category": "extra",
       "costFormula": "1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Bolts a minor extra capability onto another effect."
     },
@@ -93,6 +104,7 @@
       "name": "Hardened",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Improves Toughness resistance checks and reduces damage conditions on a strong result."
     },
@@ -101,6 +113,7 @@
       "name": "Homing",
       "category": "extra",
       "costFormula": "1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Gives a ranged attack a second chance to hit if it misses."
     },
@@ -109,6 +122,7 @@
       "name": "Impenetrable",
       "category": "extra",
       "costFormula": "+3 points per rank",
+      "costValue": 3,
       "flat": false,
       "description": "Like Impervious, but also blocks Penetrating effects."
     },
@@ -117,6 +131,7 @@
       "name": "Impervious",
       "category": "extra",
       "costFormula": "+2 points per rank",
+      "costValue": 2,
       "flat": false,
       "description": "Grants outright immunity to lower-rank effects and avoids damage conditions on a strong resistance check."
     },
@@ -125,6 +140,7 @@
       "name": "Increased Duration",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Moves an effect's duration up a step (e.g. Instant to Concentration)."
     },
@@ -133,6 +149,7 @@
       "name": "Increased Mass",
       "category": "extra",
       "costFormula": "1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Increases how much mass a carrying/moving effect can handle."
     },
@@ -141,6 +158,7 @@
       "name": "Incurable",
       "category": "extra",
       "costFormula": "1 point flat",
+      "costValue": 1,
       "flat": true,
       "description": "Damage from this effect resists being healed by outside means."
     },
@@ -149,6 +167,7 @@
       "name": "Indirect",
       "category": "extra",
       "costFormula": "1-4 points flat",
+      "costValue": 1,
       "flat": true,
       "description": "Lets a ranged effect originate from somewhere other than you."
     },
@@ -157,6 +176,7 @@
       "name": "Insidious",
       "category": "extra",
       "costFormula": "1 point flat",
+      "costValue": 1,
       "flat": true,
       "description": "Makes the effect's results hard to notice, even if the effect itself is visible."
     },
@@ -165,6 +185,7 @@
       "name": "Linked",
       "category": "extra",
       "costFormula": "+0 points",
+      "costValue": 0,
       "flat": true,
       "description": "Bundles two or more effects to always activate together as one."
     },
@@ -173,6 +194,7 @@
       "name": "Multiattack",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Lets an attack effect hit multiple targets, or one target multiple times, in one action."
     },
@@ -181,6 +203,7 @@
       "name": "Penetrating",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Partially overcomes Resistance and Impervious on the target."
     },
@@ -189,6 +212,7 @@
       "name": "Perception Range",
       "category": "extra",
       "costFormula": "+1 or +2 points per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Lets the effect target anything you can accurately perceive, no attack roll needed."
     },
@@ -197,6 +221,7 @@
       "name": "Precise",
       "category": "extra",
       "costFormula": "1 point flat",
+      "costValue": 1,
       "flat": true,
       "description": "Allows fine, delicate control when using the effect for detail work."
     },
@@ -205,6 +230,7 @@
       "name": "Ranged",
       "category": "extra",
       "costFormula": "+1 or -1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Turns a close-range effect into one usable at a distance."
     },
@@ -213,6 +239,7 @@
       "name": "Reach",
       "category": "extra",
       "costFormula": "1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Extends a close-range effect's reach by a space per rank."
     },
@@ -221,6 +248,7 @@
       "name": "Reaction",
       "category": "extra",
       "costFormula": "+1 point flat",
+      "costValue": 1,
       "flat": true,
       "description": "Lets the effect be triggered with your reaction under a chosen circumstance."
     },
@@ -229,6 +257,7 @@
       "name": "Reversible",
       "category": "extra",
       "costFormula": "1 or 2 points flat",
+      "costValue": 1,
       "flat": true,
       "description": "Lets you remove the effect's conditions at will as a free action."
     },
@@ -237,6 +266,7 @@
       "name": "Ricochet",
       "category": "extra",
       "costFormula": "1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Lets a ranged effect bounce off surfaces to reach around cover."
     },
@@ -245,6 +275,7 @@
       "name": "Secondary Effect",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Hits the target again automatically on the following round."
     },
@@ -253,6 +284,7 @@
       "name": "Selective",
       "category": "extra",
       "costFormula": "+1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Lets you choose exactly who is and isn't affected."
     },
@@ -261,6 +293,7 @@
       "name": "Split",
       "category": "extra",
       "costFormula": "1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Divides the effect's rank between two or more targets at once."
     },
@@ -269,6 +302,7 @@
       "name": "Subtle",
       "category": "extra",
       "costFormula": "1-2 points flat",
+      "costValue": 1,
       "flat": true,
       "description": "Makes the effect itself hard or impossible to notice being used."
     },
@@ -277,6 +311,7 @@
       "name": "Sustained (as extra)",
       "category": "extra",
       "costFormula": "+0 points per rank",
+      "costValue": 0,
       "flat": false,
       "description": "Turns a Permanent effect into one that can be toggled on and off."
     },
@@ -285,6 +320,7 @@
       "name": "Thrown",
       "category": "extra",
       "costFormula": "+0 points per rank",
+      "costValue": 0,
       "flat": false,
       "description": "Lets a close-range attack be hurled to hit at a distance."
     },
@@ -293,6 +329,7 @@
       "name": "Triggered",
       "category": "extra",
       "costFormula": "1 point flat per rank",
+      "costValue": 1,
       "flat": true,
       "description": "Lets you pre-set the effect to activate automatically on a chosen event."
     },
@@ -301,6 +338,7 @@
       "name": "Variable Descriptor",
       "category": "extra",
       "costFormula": "1 point flat per rank",
+      "costValue": 1,
       "flat": true,
       "description": "Lets you change the effect's descriptor (fire, cold, sonic, etc.) on the fly."
     },
@@ -309,6 +347,7 @@
       "name": "Activation",
       "category": "flaw",
       "costFormula": "-1 or -2 points flat",
+      "costValue": 1,
       "flat": true,
       "description": "The whole power needs an extra action to switch on before any of its effects can be used."
     },
@@ -317,6 +356,7 @@
       "name": "Check Required",
       "category": "flaw",
       "costFormula": "-1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Using the effect requires an extra check that can simply fail."
     },
@@ -325,6 +365,7 @@
       "name": "Close (reduced range)",
       "category": "flaw",
       "costFormula": "-1 or -2 points per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Drops a Ranged or Perception-range effect down to Close range."
     },
@@ -333,6 +374,7 @@
       "name": "Concentration (reduced duration)",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Drops a Sustained effect down to needing active Concentration to maintain."
     },
@@ -341,6 +383,7 @@
       "name": "Diminished Range",
       "category": "flaw",
       "costFormula": "-1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Shortens a ranged effect's short/medium/long distances."
     },
@@ -349,6 +392,7 @@
       "name": "Distracting",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Using the effect leaves you Vulnerable until your next turn."
     },
@@ -357,6 +401,7 @@
       "name": "Fades",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "The effect loses potency with each use until it needs to recharge."
     },
@@ -365,6 +410,7 @@
       "name": "Feedback",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Damaging the effect's manifestation hurts you too."
     },
@@ -373,6 +419,7 @@
       "name": "Grab-Based",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "You must successfully grab the target before the effect can work."
     },
@@ -381,6 +428,7 @@
       "name": "Inaccurate",
       "category": "flaw",
       "costFormula": "-1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "Penalty on attack checks made with this effect."
     },
@@ -389,6 +437,7 @@
       "name": "Increased Action",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Using the effect requires a slower action type than normal."
     },
@@ -397,6 +446,7 @@
       "name": "Independent",
       "category": "flaw",
       "costFormula": "-0 points per rank",
+      "costValue": 0,
       "flat": false,
       "description": "No upkeep needed, but the effect weakens by a rank every round until it fades."
     },
@@ -405,6 +455,7 @@
       "name": "Limited",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Only works in specific circumstances or on specific targets."
     },
@@ -413,6 +464,7 @@
       "name": "Noticeable",
       "category": "flaw",
       "costFormula": "-1 point flat",
+      "costValue": 1,
       "flat": true,
       "description": "A standing effect has some obvious, unavoidable tell."
     },
@@ -421,6 +473,7 @@
       "name": "Permanent (locked on)",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "A Continuous effect becomes always-on and can never be switched off."
     },
@@ -429,6 +482,7 @@
       "name": "Quirk",
       "category": "flaw",
       "costFormula": "-1 point per rank flat",
+      "costValue": 1,
       "flat": true,
       "description": "A minor, mostly cosmetic nuisance attached to the effect."
     },
@@ -437,6 +491,7 @@
       "name": "Removable",
       "category": "flaw",
       "costFormula": "-1, -2, or -4 points per 5 total points (by tier)",
+      "costValue": 1,
       "flat": true,
       "description": "The power can be taken away from you under the right circumstances."
     },
@@ -445,6 +500,7 @@
       "name": "Resistible",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Grants a resistance check to an effect that normally wouldn't allow one."
     },
@@ -453,6 +509,7 @@
       "name": "Sense-Dependent",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "The target must be able to perceive the effect's source for it to work."
     },
@@ -461,6 +518,7 @@
       "name": "Short-Term",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "The effect only works for a handful of uses before it needs to recharge."
     },
@@ -469,6 +527,7 @@
       "name": "Side Effect",
       "category": "flaw",
       "costFormula": "-1 or -2 points per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Failing to land the effect (or always, at the higher cost) backfires on you."
     },
@@ -477,6 +536,7 @@
       "name": "Tiring",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "Using the effect leaves you Fatigued, like spending Extra Effort."
     },
@@ -485,6 +545,7 @@
       "name": "Uncontrolled",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "You don't control when or how the effect activates — the GM does."
     },
@@ -493,6 +554,7 @@
       "name": "Unreliable",
       "category": "flaw",
       "costFormula": "-1 point per rank",
+      "costValue": 1,
       "flat": false,
       "description": "The effect has a real chance of simply not working each time you use it."
     }

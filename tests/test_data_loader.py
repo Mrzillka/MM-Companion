@@ -66,5 +66,34 @@ def test_costs_are_loaded() -> None:
     assert "skill_modifier" in data.costs.power_level.caps
 
 
+def test_effects_and_modifiers_are_loaded() -> None:
+    data = load_game_data()
+    assert len(data.effects) == 42
+    assert len(data.modifiers) == 61
+
+
+def test_effect_carries_numeric_base_cost_and_integration() -> None:
+    data = load_game_data()
+    by_id = {e.id: e for e in data.effects}
+    damage = by_id["damage"]
+    assert isinstance(damage.base_cost_value, int)
+    assert damage.base_cost_value == 1
+    # The nested statIntegration object is flattened onto the record.
+    assert damage.stat_pattern == "instant_action"
+    assert damage.stat_affects == "none"
+    # Enhanced Trait is the configurable-target effect.
+    assert by_id["enhanced_trait"].configurable_target is True
+
+
+def test_modifiers_are_categorised_with_numeric_cost() -> None:
+    data = load_game_data()
+    for modifier in data.modifiers:
+        assert modifier.category in {"extra", "flaw"}
+        assert isinstance(modifier.cost_value, int)
+        assert modifier.cost_value >= 0  # magnitude only; sign comes from category
+    categories = {m.category for m in data.modifiers}
+    assert categories == {"extra", "flaw"}
+
+
 def test_load_game_data_is_cached() -> None:
     assert load_game_data() is load_game_data()

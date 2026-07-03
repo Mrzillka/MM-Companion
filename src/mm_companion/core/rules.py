@@ -14,7 +14,8 @@ from __future__ import annotations
 import math
 
 from .character import Character
-from .data_loader import GameData, Resistance, Skill
+from .data_loader import GameData, Modifier, Resistance, Skill
+from .powers import Power, PowerEffectInstance
 
 
 def _skill_for_row(game_data: GameData, row_id: str) -> Skill | None:
@@ -112,6 +113,53 @@ def power_points_remaining(char: Character, game_data: GameData) -> int:
     """Unspent power points (budget minus :func:`power_points_spent`; may go negative)."""
 
     return char.power_points_total - power_points_spent(char, game_data)
+
+
+def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: bool) -> int:
+    """Sum the ``cost_value`` of the given modifier selections in one bucket.
+
+    ``sign`` is ``+1`` for extras and ``-1`` for flaws; ``flat`` selects either the
+    per-rank bucket (``flat=False``) or the one-time bucket (``flat=True``).
+    """
+
+    catalog: dict[str, Modifier] = {m.id: m for m in game_data.modifiers}
+    total = 0
+    for selection in mods:
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None or modifier.flat != flat:
+            continue
+        total += sign * modifier.cost_value
+    return total
+
+
+def effect_total_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
+    """Power-point cost of one assembled effect (``mm-powers-architecture.md`` §2).
+
+    ``per_rank = base + Σ per-rank extras − Σ per-rank flaws`` (floored at 1 — flaws
+    can't push a per-rank cost below 1 PP), then
+    ``total = per_rank × rank + Σ flat extras − Σ flat flaws``. An unknown effect id
+    contributes nothing.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return 0
+
+    per_rank = base.base_cost_value
+    per_rank += _signed_modifier_cost(effect.extras, +1, game_data, flat=False)
+    per_rank += _signed_modifier_cost(effect.flaws, -1, game_data, flat=False)
+    per_rank = max(1, per_rank)
+
+    flat = _signed_modifier_cost(effect.extras, +1, game_data, flat=True)
+    flat += _signed_modifier_cost(effect.flaws, -1, game_data, flat=True)
+
+    return per_rank * effect.rank + flat
+
+
+def power_total_cost(power: Power, game_data: GameData) -> int:
+    """Total power-point cost of a power: the sum of its effects' costs."""
+
+    return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
 def power_level_violations(char: Character, game_data: GameData) -> list[str]:

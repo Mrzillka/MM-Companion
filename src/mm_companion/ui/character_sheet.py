@@ -43,7 +43,7 @@ class CharacterSheet(QScrollArea):
         self.base_info = BaseInfoSection(self._data, self.character)
         self.stats = StatsSection(self._data, self.character)
         self.skills = SkillsSection(self._data, self.character)
-        self.powers = PowersSection()
+        self.powers = PowersSection(self._data, self.character)
 
         for section in (self.base_info, self.stats, self.skills, self.powers):
             layout.addWidget(section)
@@ -80,3 +80,4 @@ class CharacterSheet(QScrollArea):
         self.base_info.set_locked(locked)
         self.stats.set_locked(locked)
         self.skills.set_locked(locked)
+        self.powers.set_locked(locked)

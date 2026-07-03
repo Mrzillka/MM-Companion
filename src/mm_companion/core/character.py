@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .data_loader import GameData
+from .powers import Power
 
 
 @dataclass
@@ -48,6 +49,7 @@ class Character:
     focuses: dict[str, list[str]] = field(default_factory=dict)
     advantages: list[AdvantageSelection] = field(default_factory=list)
     conditions: set[str] = field(default_factory=set)
+    powers: list[Power] = field(default_factory=list)
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -89,6 +91,7 @@ class Character:
             "focuses": {k: list(v) for k, v in self.focuses.items()},
             "advantages": [{"name": a.name, "rank": a.rank} for a in self.advantages],
             "conditions": sorted(self.conditions),
+            "powers": [p.to_dict() for p in self.powers],
         }
 
     @classmethod
@@ -111,4 +114,5 @@ class Character:
                 for a in raw.get("advantages", [])
             ],
             conditions=set(raw.get("conditions", [])),
+            powers=[Power.from_dict(p) for p in raw.get("powers", [])],
         )

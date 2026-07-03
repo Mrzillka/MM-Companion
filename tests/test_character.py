@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
     defense_class,
     power_level_violations,
@@ -33,9 +34,24 @@ def test_to_dict_from_dict_round_trip() -> None:
     char.focuses["Close Combat"] = ["Swords"]
     char.advantages.append(AdvantageSelection("Close Attack", 2))
     char.conditions.add("dazed")
+    char.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
+    )
 
     restored = Character.from_dict(char.to_dict())
     assert restored == char
+
+
+def test_saved_powers_count_toward_points_spent() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    baseline = power_points_spent(char, data)
+
+    char.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
+    )
+    # Damage costs 1 PP/rank, so a rank-8 power adds 8 to the build.
+    assert power_points_spent(char, data) == baseline + 8
 
 
 def test_power_points_spent_matches_hand_computed_build() -> None:

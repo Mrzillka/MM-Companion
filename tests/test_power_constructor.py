@@ -7,7 +7,7 @@ mutation methods the drop handlers delegate to (``add_effect`` / ``attach_modifi
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.character_sheet import CharacterSheet
@@ -348,3 +348,130 @@ def test_powers_section_launches_and_locks(qapp: QApplication) -> None:
     assert button.isVisibleTo(sheet.powers)
     sheet.set_locked(True)
     assert not button.isVisibleTo(sheet.powers)
+
+
+def test_save_button_emits_finished_power_and_closes(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    window._name.setText("Fire Blast")
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+
+    saved: list = []
+    window.powerSaved.connect(saved.append)
+    window._save_power()
+
+    assert saved and saved[0] is window.power
+    assert saved[0].name == "Fire Blast"
+    assert not window.isVisible()  # saving closes the window
+
+
+def test_save_button_rejects_an_empty_power(qapp: QApplication, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = PowerConstructorWindow(load_game_data())
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+
+    saved: list = []
+    window.powerSaved.connect(saved.append)
+    window._save_power()  # no effects on the canvas
+
+    assert saved == []  # nothing handed off
+
+
+def test_saved_power_lands_on_the_sheet_and_reports_change(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    changes: list = []
+    sheet.powers.changed.connect(lambda: changes.append(True))
+
+    sheet.powers._open_constructor()
+    window = sheet.powers._windows[0]
+    window._name.setText("Fire Blast")
+    window.canvas.add_effect("damage")  # a rank-1 Damage effect
+    window._save_power()
+
+    # The power is stored on the shared model and the section reports the change,
+    # so the sheet recomputes spent points and the window is dropped from the list.
+    assert [p.name for p in sheet.character.powers] == ["Fire Blast"]
+    assert changes
+    assert sheet.powers._windows == []
+
+
+def test_loaded_powers_repopulate_the_section(qapp: QApplication) -> None:
+    from mm_companion.core.character import Character
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
+    )
+
+    sheet = CharacterSheet(data, character)
+    assert not sheet.powers._empty.isVisibleTo(sheet.powers)  # not the empty state
+    labels = [lbl.text() for lbl in sheet.powers._list_host.findChildren(QLabel)]
+    assert "Fire Blast" in labels
+    assert "8 PP" in labels
+
+
+def test_pl_warning_appears_only_when_a_power_breaks_a_cap(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), power_level=10)
+    card = window.canvas.add_effect("damage")
+
+    card._rank.setValue(20)  # exactly at the PL 10 cap of 20
+    assert not window._warning.isVisibleTo(window)
+
+    card._rank.setValue(25)  # over the cap
+    assert window._warning.isVisibleTo(window)
+    assert "Damage rank 25" in window._warning.toolTip()
+
+
+def test_pl_check_is_skipped_without_a_power_level(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())  # no PL context
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(30)
+    assert not window._warning.isVisibleTo(window)
+
+
+def test_warn_enforcement_saves_an_over_cap_power(qapp: QApplication, monkeypatch) -> None:
+    from mm_companion.core import storage
+
+    monkeypatch.setattr(storage, "pl_enforcement", lambda: storage.PL_ENFORCE_WARN)
+    window = PowerConstructorWindow(load_game_data(), power_level=10)
+    window.canvas.add_effect("damage")._rank.setValue(25)
+
+    saved: list = []
+    window.powerSaved.connect(saved.append)
+    window._save_power()
+    assert saved  # warning mode still lets it through
+
+
+def test_block_enforcement_refuses_an_over_cap_power(qapp: QApplication, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from mm_companion.core import storage
+
+    monkeypatch.setattr(storage, "pl_enforcement", lambda: storage.PL_ENFORCE_BLOCK)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    window = PowerConstructorWindow(load_game_data(), power_level=10)
+    window.canvas.add_effect("damage")._rank.setValue(25)
+
+    saved: list = []
+    window.powerSaved.connect(saved.append)
+    window._save_power()
+    assert saved == []  # blocking mode refuses the save (no power handed off)
+
+
+def test_section_row_marks_a_power_that_breaks_the_cap(qapp: QApplication) -> None:
+    from mm_companion.core.character import Character
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)  # PL 10, cap 20
+    character.powers.append(
+        Power(name="Overkill", effects=[PowerEffectInstance(effect_id="damage", rank=30)])
+    )
+
+    sheet = CharacterSheet(data, character)
+    warnings = [lbl for lbl in sheet.powers._list_host.findChildren(QLabel) if lbl.text() == "⚠"]
+    assert warnings  # the over-cap power carries a warning marker
+    assert "Damage rank 30" in warnings[0].toolTip()

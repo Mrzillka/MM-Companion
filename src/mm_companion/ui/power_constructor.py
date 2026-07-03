@@ -19,8 +19,15 @@ Interaction (all drag-and-drop):
   a flat point per alternate) — the modifier chips aren't touched.
 
 The window owns a single :class:`~mm_companion.core.powers.Power` and mutates it;
-costs always come from :mod:`mm_companion.core.rules`, never computed inline.
-Writing the finished power back onto a character is deferred.
+costs always come from :mod:`mm_companion.core.rules`, never computed inline. A
+**Save Power** button hands the finished power to the host section via
+:attr:`PowerConstructorWindow.powerSaved` and closes the window.
+
+Given the character's Power Level, the editor flags a power that breaks a PL cap
+(:func:`~mm_companion.core.rules.power_pl_violations`) with a live warning. Whether
+that merely warns or actually blocks the save is a single app-wide switch —
+:func:`~mm_companion.core.storage.pl_enforcement` — so it can move to a settings
+toggle later without touching this window.
 """
 
 from __future__ import annotations
@@ -40,6 +47,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -50,6 +58,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core import storage
 from mm_companion.core.data_loader import GameData, Modifier, load_game_data
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
@@ -65,6 +74,7 @@ from mm_companion.core.rules import (
     effect_cost_formula,
     effect_stat_rows,
     effect_total_cost,
+    power_pl_violations,
     power_total_cost,
 )
 from mm_companion.ui.flow_layout import FlowLayout
@@ -813,11 +823,20 @@ class PowerConstructorWindow(QMainWindow):
     """Standalone brick-builder window for assembling a single power."""
 
     closed = Signal()
-    powerSaved = Signal(object)  # reserved for the deferred character write-back
+    powerSaved = Signal(object)  # carries the finished Power to the host section
 
-    def __init__(self, data: GameData | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        data: GameData | None = None,
+        parent: QWidget | None = None,
+        *,
+        power_level: int | None = None,
+    ) -> None:
         super().__init__(parent)
         self._data = data or load_game_data()
+        # The character's PL, used to flag cap breaches; None disables the check
+        # (a constructor opened without a character context).
+        self._power_level = power_level
         self.power = Power()
         self.setWindowTitle("Power Constructor")
         self.resize(900, 600)
@@ -832,6 +851,7 @@ class PowerConstructorWindow(QMainWindow):
 
         self._refresh_cost()
         self._refresh_game_terms()
+        self._refresh_pl_warning()
 
     # -- left: the palette of bricks --------------------------------------
     def _build_palette(self) -> QWidget:
@@ -932,17 +952,36 @@ class PowerConstructorWindow(QMainWindow):
         self._terms = PowerTermsView()
         layout.addWidget(self._terms)
 
+        cost_row = QHBoxLayout()
         self._cost = QLabel()
         self._cost.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self._cost)
+        cost_row.addWidget(self._cost)
+        cost_row.addStretch()
+        # A live Power Level warning: hidden while the power is within caps, it
+        # names the breach on its tooltip when it isn't.
+        self._warning = QLabel()
+        self._warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
+        self._warning.setVisible(False)
+        cost_row.addWidget(self._warning)
+        layout.addLayout(cost_row)
 
         self.canvas = PowerCanvas(self.power, self._data)
         self.canvas.changed.connect(self._refresh_cost)
         self.canvas.changed.connect(self._refresh_game_terms)
+        self.canvas.changed.connect(self._refresh_pl_warning)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.canvas)
         layout.addWidget(scroll, stretch=1)
+
+        # A save bar pinned below the canvas hands the finished power to the sheet.
+        actions = QHBoxLayout()
+        actions.addStretch()
+        self._save_button = QPushButton("Save Power")
+        self._save_button.setToolTip("Add this power to the character sheet")
+        self._save_button.clicked.connect(self._save_power)
+        actions.addWidget(self._save_button)
+        layout.addLayout(actions)
         return panel
 
     def _on_name_changed(self, text: str) -> None:
@@ -956,6 +995,47 @@ class PowerConstructorWindow(QMainWindow):
 
     def _refresh_game_terms(self) -> None:
         self._terms.set_power(self.power, self._data)
+
+    def _pl_violations(self) -> list[str]:
+        """Power Level cap breaches for the current power (empty without a PL context)."""
+        if self._power_level is None:
+            return []
+        return power_pl_violations(self.power, self._power_level, self._data)
+
+    def _refresh_pl_warning(self) -> None:
+        """Show or hide the live PL warning from the current violations."""
+        violations = self._pl_violations()
+        if violations:
+            self._warning.setText("⚠ Exceeds Power Level")
+            self._warning.setToolTip("\n".join(violations))
+        self._warning.setVisible(bool(violations))
+
+    def _save_power(self) -> None:
+        """Hand the assembled power to the host section, then close.
+
+        A power with no effects has nothing to cost or resolve, so it is rejected
+        with a prompt rather than saved empty. A power that breaks a PL cap is
+        rejected only when enforcement is set to *block* — otherwise the live
+        warning has already flagged it and the save is allowed to proceed.
+        """
+        if not self.power.effects:
+            QMessageBox.information(
+                self,
+                "Nothing to save",
+                "Add at least one effect before saving this power.",
+            )
+            return
+        violations = self._pl_violations()
+        if violations and storage.pl_enforcement() == storage.PL_ENFORCE_BLOCK:
+            QMessageBox.warning(
+                self,
+                "Exceeds Power Level",
+                "This power can't be saved because it breaks Power Level caps:\n\n• "
+                + "\n• ".join(violations),
+            )
+            return
+        self.powerSaved.emit(self.power)
+        self.close()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.closed.emit()

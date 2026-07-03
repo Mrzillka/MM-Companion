@@ -54,7 +54,7 @@ class CharacterSheet(QScrollArea):
         self.stats.abilityChanged.connect(self.skills.set_ability_value)
 
         # Recompute derived values whenever any section reports a build change.
-        for section in (self.base_info, self.stats, self.skills):
+        for section in (self.base_info, self.stats, self.skills, self.powers):
             section.changed.connect(self._recompute_derived)
         self._recompute_derived()
 
@@ -65,6 +65,7 @@ class CharacterSheet(QScrollArea):
         self.base_info.edited.connect(self.edited)
         self.stats.changed.connect(self.edited)
         self.skills.changed.connect(self.edited)
+        self.powers.changed.connect(self.edited)
 
         self.setWidget(content)
         self.setWidgetResizable(True)

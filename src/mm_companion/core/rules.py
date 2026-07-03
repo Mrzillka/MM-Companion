@@ -86,8 +86,9 @@ def power_points_spent(char: Character, game_data: GameData) -> int:
 
     Abilities and combat stats cost per rank (combat stats — the ``derived`` ones —
     at the combat rate); non-derived resistances cost per rank; skills cost 1 PP
-    per N ranks (a higher N for focused skills); advantages cost per rank. Negative
-    ability/combat ranks refund points.
+    per N ranks (a higher N for focused skills); advantages cost per rank; each saved
+    power costs its assembled :func:`power_total_cost`. Negative ability/combat ranks
+    refund points.
     """
 
     costs = game_data.costs.traits
@@ -113,6 +114,9 @@ def power_points_spent(char: Character, game_data: GameData) -> int:
 
     for adv in char.advantages:
         total += adv.rank * costs.advantage_per_rank
+
+    for power in char.powers:
+        total += power_total_cost(power, game_data)
 
     return total
 
@@ -291,6 +295,42 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
         full = [effect_total_cost(e, game_data) for e in power.effects]
         return max(full) + (len(full) - 1) * array_alternate_cost(game_data)
     return sum(effect_total_cost(e, game_data) for e in power.effects)
+
+
+def power_pl_violations(power: Power, power_level: int, game_data: GameData) -> list[str]:
+    """Power Level cap breaches within a single power (empty list = within caps).
+
+    Applies the attack + effect-rank cap (``max_attack + effect_rank <= power_level
+    * 2``, ``mm-core-mechanics.md`` §7) to each effect that resolves against a
+    resistance — the offensive effects, marked by a
+    :attr:`~mm_companion.core.data_loader.Effect.resistance_dc_base`. The only attack
+    bonus known at the power level is the effect's own Accurate/Inaccurate
+    adjustment (the character's base attack is out of scope here), so this flags an
+    effect whose rank alone — plus that adjustment — already breaks the cap; it does
+    not yet fold in the character's combat bonus. Returns one message per offending
+    effect. The cap is read from ``game_data`` (``attack_effect``), never hardcoded.
+    """
+
+    cap = game_data.costs.power_level.caps.get("attack_effect")
+    if cap is None:
+        return []
+    limit = cap.limit(power_level)
+
+    violations: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None or base.resistance_dc_base is None:
+            continue  # not an attack/resisted effect — this cap doesn't apply
+        impact = _effective_stats(effect, game_data)[3]
+        # A perception-range attack drops its roll, so no Accurate bonus rides along.
+        attack_bonus = 0 if impact.drops_check else impact.check_bonus
+        load = effect.rank + attack_bonus
+        if load > limit:
+            violations.append(
+                f"{base.name} rank {effect.rank} exceeds the PL {power_level} "
+                f"attack/effect cap of {limit}."
+            )
+    return violations
 
 
 # The base game-term fields, in display order, with their table labels.

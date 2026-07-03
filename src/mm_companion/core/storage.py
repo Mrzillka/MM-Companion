@@ -27,10 +27,18 @@ CHARACTERS_DIRNAME = "characters"
 GM_CHARACTERS_DIRNAME = "gm_characters"
 IMAGES_DIRNAME = "images"
 
+# How the builder reacts to a power that breaks a Power Level cap. ``warn`` flags
+# it but still lets it through; ``block`` refuses the save. There is no settings UI
+# yet, so this rides on the default below — change the default (or, later, the
+# saved setting) to switch the whole app between warning and enforcing.
+PL_ENFORCE_WARN = "warn"
+PL_ENFORCE_BLOCK = "block"
+
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
     "theme": "system",
     "ruleset": "4e",
+    "pl_enforcement": PL_ENFORCE_WARN,
 }
 
 
@@ -103,3 +111,14 @@ def load_settings() -> dict:
         return json.loads(workspace.settings_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return dict(DEFAULT_SETTINGS)
+
+
+def pl_enforcement() -> str:
+    """How the builder should treat a Power Level cap breach — ``warn`` or ``block``.
+
+    The single seam the UI consults so warn-vs-block is one switch. Reads the
+    ``pl_enforcement`` setting, defaulting to :data:`PL_ENFORCE_WARN` when unset or
+    unrecognized; a settings UI can later write the other value here.
+    """
+    value = load_settings().get("pl_enforcement", PL_ENFORCE_WARN)
+    return value if value in (PL_ENFORCE_WARN, PL_ENFORCE_BLOCK) else PL_ENFORCE_WARN

@@ -20,6 +20,7 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_effect_stats,
     power_game_terms,
+    power_pl_violations,
     power_total_cost,
 )
 
@@ -552,3 +553,37 @@ def test_linked_game_terms_prefix_a_header() -> None:
         effects=[PowerEffectInstance("damage", rank=8), PowerEffectInstance("affliction", rank=4)],
     )
     assert power_game_terms(power, data).startswith("Linked (all effects activate together):")
+
+
+def test_pl_violations_flag_an_attack_effect_over_the_cap() -> None:
+    data = load_game_data()
+    # PL 10 → attack + effect-rank cap of 20. A rank-20 Damage is exactly at the cap.
+    at_cap = Power(effects=[PowerEffectInstance("damage", rank=20)])
+    assert power_pl_violations(at_cap, 10, data) == []
+
+    over = Power(effects=[PowerEffectInstance("damage", rank=21)])
+    violations = power_pl_violations(over, 10, data)
+    assert len(violations) == 1
+    assert "Damage rank 21" in violations[0]
+    assert "20" in violations[0]  # names the PL 10 cap
+
+
+def test_pl_violations_ignore_non_attack_effects() -> None:
+    data = load_game_data()
+    # Flight imposes no resistance check, so the attack cap doesn't apply at any rank.
+    power = Power(effects=[PowerEffectInstance("flight", rank=30)])
+    assert power_pl_violations(power, 10, data) == []
+
+
+def test_pl_violations_count_the_powers_own_accurate_bonus() -> None:
+    data = load_game_data()
+    # Rank 20 is at the cap, but Accurate adds +2 to the attack, pushing it over.
+    effect = PowerEffectInstance("damage", rank=20, extras=[ModifierSelection("accurate")])
+    assert power_pl_violations(Power(effects=[effect]), 10, data)
+
+
+def test_pl_violations_respect_inaccurate_trade_off() -> None:
+    data = load_game_data()
+    # Inaccurate lowers the attack, so a rank-21 Damage trades back under the cap.
+    effect = PowerEffectInstance("damage", rank=21, flaws=[ModifierSelection("inaccurate")])
+    assert power_pl_violations(Power(effects=[effect]), 10, data) == []

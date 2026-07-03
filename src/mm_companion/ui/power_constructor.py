@@ -81,6 +81,8 @@ class BrickWidget(QFrame):
         self._mime = mime
         self._payload = payload
         self._press_pos = None
+        # The visible text (name + cost) is what the palette search box matches on.
+        self.search_key = f"{title} {subtitle}".lower()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
@@ -566,23 +568,61 @@ class PowerConstructorWindow(QMainWindow):
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
             if m.category == "flaw"
         ]
-        tabs.addTab(self._brick_list(effects), "Effects")
-        tabs.addTab(self._brick_list(extras), "Extras")
-        tabs.addTab(self._brick_list(flaws), "Flaws")
+        # Keep each tab's search box + bricks addressable (also the test seam).
+        self._search_tabs: dict[str, tuple[QLineEdit, list[BrickWidget]]] = {}
+        tabs.addTab(self._build_search_tab("effects", effects, "Search effects"), "Effects")
+        tabs.addTab(self._build_search_tab("extras", extras, "Search extras"), "Extras")
+        tabs.addTab(self._build_search_tab("flaws", flaws, "Search flaws"), "Flaws")
         return tabs
 
-    def _brick_list(self, bricks: list[BrickWidget]) -> QScrollArea:
+    def _build_search_tab(self, key: str, bricks: list[BrickWidget], placeholder: str) -> QWidget:
+        """A scrollable brick list with a live search box pinned above it.
+
+        Typing filters the bricks instantly to those whose name or cost text
+        contains the query (case-insensitive substring); clearing shows them all.
+        """
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+
+        search = QLineEdit()
+        search.setPlaceholderText(placeholder)
+        search.setClearButtonEnabled(True)  # a one-click reset
+        outer.addWidget(search)
+
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setSpacing(4)
         for brick in bricks:
             layout.addWidget(brick)
+        empty = QLabel("No matches")
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setEnabled(False)
+        empty.setVisible(False)
+        layout.addWidget(empty)
         layout.addStretch()
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(container)
-        return scroll
+        outer.addWidget(scroll, stretch=1)
+
+        search.textChanged.connect(
+            lambda text, bs=bricks, e=empty: self._filter_bricks(text, bs, e)
+        )
+        self._search_tabs[key] = (search, bricks)
+        return tab
+
+    @staticmethod
+    def _filter_bricks(text: str, bricks: list[BrickWidget], empty: QLabel) -> None:
+        needle = text.strip().lower()
+        matches = 0
+        for brick in bricks:
+            visible = needle in brick.search_key
+            brick.setVisible(visible)
+            matches += visible
+        empty.setVisible(matches == 0)
 
     # -- right: the power being built -------------------------------------
     def _build_editor(self) -> QWidget:

@@ -212,6 +212,31 @@ def test_menu_attaches_an_effect_specific_modifier_and_disables_it(qapp: QApplic
     assert not rocket.isEnabled()
 
 
+def test_palette_search_filters_bricks_instantly(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    search, bricks = window._search_tabs["effects"]
+
+    search.setText("damage")
+    shown = [b for b in bricks if not b.isHidden()]
+    assert shown  # at least the Damage brick
+    assert all("damage" in b.search_key for b in shown)
+    assert any(b.isHidden() for b in bricks)  # non-matches are hidden
+
+    search.clear()  # clearing restores the whole list
+    assert all(not b.isHidden() for b in bricks)
+
+
+def test_palette_search_is_case_insensitive_and_per_tab(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    effects_search, effect_bricks = window._search_tabs["effects"]
+    _, extra_bricks = window._search_tabs["extras"]
+
+    effects_search.setText("HEAL")  # upper-case still matches "Healing"
+    assert any(not b.isHidden() for b in effect_bricks)
+    # Searching the Effects tab leaves the Extras tab's bricks untouched.
+    assert all(not b.isHidden() for b in extra_bricks)
+
+
 def test_name_and_description_write_to_model(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     window._name.setText("Fire Blast")

@@ -63,6 +63,13 @@ class PowerEffectInstance:
     ``config`` holds effect-specific choices (e.g. which trait an Enhanced Trait
     targets); ``descriptors`` are free-text flavor tags. Both are open-ended and
     unused by cost math this pass.
+
+    ``toggled_on`` and ``suppressed`` are the effect's *runtime* state (see
+    ``mm-powers-architecture.md`` §5-7), separate from the point build: a
+    Sustained/Continuous effect the player has switched off is ``toggled_on=False``,
+    and ``suppressed`` is a transient Nullify flag. Both feed
+    :func:`mm_companion.core.rules.effect_is_active`; they default to the active
+    state so a freshly built or older-format effect reads as on.
     """
 
     effect_id: str
@@ -71,6 +78,8 @@ class PowerEffectInstance:
     flaws: list[ModifierSelection] = field(default_factory=list)
     config: dict = field(default_factory=dict)
     descriptors: list[str] = field(default_factory=list)
+    toggled_on: bool = True
+    suppressed: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -80,6 +89,8 @@ class PowerEffectInstance:
             "flaws": [m.to_dict() for m in self.flaws],
             "config": dict(self.config),
             "descriptors": list(self.descriptors),
+            "toggled_on": self.toggled_on,
+            "suppressed": self.suppressed,
         }
 
     @classmethod
@@ -91,6 +102,8 @@ class PowerEffectInstance:
             flaws=[ModifierSelection.from_dict(m) for m in raw.get("flaws", [])],
             config=dict(raw.get("config", {})),
             descriptors=list(raw.get("descriptors", [])),
+            toggled_on=bool(raw.get("toggled_on", True)),
+            suppressed=bool(raw.get("suppressed", False)),
         )
 
 
@@ -102,6 +115,11 @@ class Power:
     is only meaningful with two or more of them: ``independent`` (the default) and
     ``linked`` both sum their effects' costs, while ``array`` pays only for the
     costliest effect plus a flat point per alternate.
+
+    ``activated`` and ``item_present`` are whole-power *runtime* state (§7): the
+    Activation gate needs ``activated``, and a Removable gate's bonus applies only
+    while ``item_present``. Both default to the active state (see
+    :func:`mm_companion.core.rules.effect_is_active`).
     """
 
     name: str = ""
@@ -109,6 +127,8 @@ class Power:
     descriptors: list[str] = field(default_factory=list)
     effects: list[PowerEffectInstance] = field(default_factory=list)
     structure: str = STRUCTURE_INDEPENDENT
+    activated: bool = True
+    item_present: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -117,6 +137,8 @@ class Power:
             "descriptors": list(self.descriptors),
             "effects": [e.to_dict() for e in self.effects],
             "structure": self.structure,
+            "activated": self.activated,
+            "item_present": self.item_present,
         }
 
     @classmethod
@@ -128,4 +150,6 @@ class Power:
             descriptors=list(raw.get("descriptors", [])),
             effects=[PowerEffectInstance.from_dict(e) for e in raw.get("effects", [])],
             structure=structure if structure in STRUCTURES else STRUCTURE_INDEPENDENT,
+            activated=bool(raw.get("activated", True)),
+            item_present=bool(raw.get("item_present", True)),
         )

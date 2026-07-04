@@ -384,6 +384,7 @@
       "costFormula": "-1 or -2 points flat",
       "costValue": 1,
       "flat": true,
+      "gate": "activation",
       "description": "The whole power needs an extra action to switch on before any of its effects can be used."
     },
     {
@@ -500,6 +501,7 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "gate": "limited",
       "description": "Only works in specific circumstances or on specific targets."
     },
     {
@@ -538,6 +540,7 @@
       "costFormula": "-1, -2, or -4 points per 5 total points (by tier)",
       "costValue": 1,
       "flat": true,
+      "gate": "removable",
       "description": "The power can be taken away from you under the right circumstances."
     },
     {

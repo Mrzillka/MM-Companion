@@ -81,11 +81,14 @@ def test_effect_carries_numeric_base_cost_and_integration() -> None:
     damage = by_id["damage"]
     assert isinstance(damage.base_cost_value, int)
     assert damage.base_cost_value == 1
-    # The nested statIntegration object is flattened onto the record.
-    assert damage.stat_pattern == "instant_action"
-    assert damage.stat_affects == "none"
-    # Enhanced Trait is the configurable-target effect.
-    assert by_id["enhanced_trait"].configurable_target is True
+    # The nested statIntegration object is parsed into a typed component: an
+    # instant-action effect that boosts no trait.
+    assert damage.integration.pattern == "instant_action"
+    assert damage.integration.trait_boost is None
+    # Enhanced Trait is the configurable-target booster.
+    enhanced = by_id["enhanced_trait"]
+    assert enhanced.integration.trait_boost is not None
+    assert enhanced.integration.trait_boost.configurable is True
 
 
 def test_modifiers_are_categorised_with_numeric_cost() -> None:

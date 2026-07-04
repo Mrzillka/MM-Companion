@@ -415,17 +415,17 @@ class EffectCard(QFrame):
     def _build_target_picker(self, effect) -> QWidget | None:
         """A combo choosing which trait a configurable booster (Enhanced Trait) raises.
 
-        Returns ``None`` unless the effect is ``configurable_target`` and its
-        ``stat_affects`` names a numeric trait category (so senses/movement pickers
+        Returns ``None`` unless the effect's :class:`TraitBoost` is ``configurable``
+        and its ``affects`` names a numeric trait category (so senses/movement pickers
         don't appear). The options — abilities, resistances, and skills — are read
         from the game data, not hardcoded; the chosen key is stored in
         ``instance.config['target']``.
         """
 
-        if effect is None or not effect.configurable_target:
+        boost = effect.integration.trait_boost if effect and effect.integration else None
+        if boost is None or not boost.configurable:
             return None
-        affects = set(effect.stat_affects.split("|")) if effect.stat_affects else set()
-        if not (affects & TRAIT_CATEGORIES):
+        if not (boost.affects & TRAIT_CATEGORIES):
             return None
 
         host = QWidget()

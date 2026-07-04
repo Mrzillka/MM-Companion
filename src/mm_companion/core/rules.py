@@ -16,6 +16,14 @@ import re
 from dataclasses import dataclass
 
 from .character import Character
+from .components import (
+    GATE_ACTIVATION,
+    GATE_REMOVABLE,
+    GATE_TOGGLE,
+    INSTANT_ACTION,
+    PASSIVE_TOGGLE,
+    RESOURCE_POOL,
+)
 from .data_loader import GameData, Modifier, Resistance, Skill
 from .powers import (
     ALTERNATE_EFFECT_MODIFIER,
@@ -47,8 +55,8 @@ def _resistance(game_data: GameData, key: str) -> Resistance | None:
     return None
 
 
-# The trait categories an effect's ``stat_affects`` can name that map to a numeric
-# trait bonus on the sheet (``defense`` resistances live in the resistances list).
+# The trait categories a ``TraitBoost`` can name that map to a numeric trait bonus on
+# the sheet (``defense`` resistances live in the resistances list).
 TRAIT_CATEGORIES = frozenset({"ability", "resistance", "defense", "skill"})
 
 
@@ -68,15 +76,16 @@ class TraitBonus:
 def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
     """The trait key one effect boosts, or ``""`` when it isn't a trait booster.
 
-    The target is the player's choice (``config['target']``) for a configurable
-    effect or the effect's baked-in ``stat_target`` otherwise, and only when the
-    effect's ``stat_affects`` names a numeric trait category.
+    Reads the effect's :class:`~mm_companion.core.components.TraitBoost` component:
+    the target is the player's choice (``config['target']``) for a ``configurable``
+    boost or the baked-in ``target`` (e.g. Protection) otherwise, and only when the
+    boost's ``affects`` names a numeric trait category.
     """
 
-    affects = set(base.stat_affects.split("|")) if base.stat_affects else set()
-    if not (affects & TRAIT_CATEGORIES):
+    boost = base.integration.trait_boost if base.integration else None
+    if boost is None or not (boost.affects & TRAIT_CATEGORIES):
         return ""
-    target = effect.config.get("target", "") if base.configurable_target else base.stat_target
+    target = effect.config.get("target", "") if boost.configurable else boost.target
     return target or ""
 
 
@@ -102,17 +111,75 @@ def _trait_name(game_data: GameData, target: str) -> str:
     return target  # skills (and anything else) display by their key/name
 
 
+def _effect_gates(effect: PowerEffectInstance, game_data: GameData) -> set[str]:
+    """The runtime gate kinds an effect carries, from its attached modifiers (§7)."""
+
+    catalog = game_data.modifier_catalog()
+    gates: set[str] = set()
+    for sel in list(effect.extras) + list(effect.flaws):
+        mod = catalog.get(sel.modifier_id)
+        if mod and mod.gate:
+            gates.add(mod.gate)
+    return gates
+
+
+def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data: GameData) -> bool:
+    """Whether a passive effect's standing bonus currently applies (§6).
+
+    Instant-action and resource-pool effects are never standing contributors. An
+    otherwise-passive effect is on unless a gate switches it off: a runtime Nullify
+    (``effect.suppressed``); a Sustained/Continuous toggle the player has turned off
+    (``effect.toggled_on``, for a ``passive_toggle`` pattern or a toggle-gated
+    effect); an Activation gate on an un-activated power (``power.activated``); or a
+    Removable gate whose item is absent (``power.item_present``). The Limited gate is
+    informational — the player self-applies it — and never gates here.
+    """
+
+    pattern = base.integration.pattern if base.integration else ""
+    if pattern in (INSTANT_ACTION, RESOURCE_POOL):
+        return False
+    if effect.suppressed:
+        return False
+    gates = _effect_gates(effect, game_data)
+    if GATE_ACTIVATION in gates and not power.activated:
+        return False
+    if GATE_REMOVABLE in gates and not power.item_present:
+        return False
+    if (pattern == PASSIVE_TOGGLE or GATE_TOGGLE in gates) and not effect.toggled_on:
+        return False
+    return True
+
+
+def power_runtime_gates(power: Power, game_data: GameData) -> set[str]:
+    """The union of runtime gate kinds across a power's effects (empty if none).
+
+    Includes the implicit toggle gate of any ``passive_toggle`` effect. The UI uses
+    this to decide whether a power needs an on/off control.
+    """
+
+    gates: set[str] = set()
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        if base.integration and base.integration.pattern == PASSIVE_TOGGLE:
+            gates.add(GATE_TOGGLE)
+        gates |= _effect_gates(effect, game_data)
+    return gates
+
+
 def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:
     """Trait bonuses every saved power grants, grouped ``category -> {key: TraitBonus}``.
 
     A power enhances a trait when one of its effects is a trait booster — an
-    Enhanced-Trait-style effect (``configurable_target``, the target read from the
-    instance ``config['target']``) or a fixed-target one like Protection (the target
-    baked into the effect's ``stat_target``) — and its ``stat_affects`` names a trait
-    category. The bonus is the effect's rank, added to the resolved target; the
-    category is inferred from which trait list the target key belongs to (abilities,
-    resistances, or skills). Effects that boost non-numeric traits (senses, movement)
-    or carry no resolvable target are skipped. Multiple powers stack on one trait.
+    Enhanced-Trait-style effect (a configurable :class:`TraitBoost`, the target read
+    from the instance ``config['target']``) or a fixed-target one like Protection
+    (the target baked into the boost) — its ``affects`` names a trait category, *and*
+    the effect is currently active (:func:`effect_is_active`, so a switched-off or
+    suppressed power drops out). The bonus is the effect's rank, added to the resolved
+    target; the category is inferred from which trait list the target key belongs to
+    (abilities, resistances, or skills). Effects that boost non-numeric traits (senses,
+    movement) or carry no resolvable target are skipped. Multiple powers stack.
     """
 
     result: dict[str, dict[str, TraitBonus]] = {"ability": {}, "resistance": {}, "skill": {}}
@@ -128,6 +195,8 @@ def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[
             category = _trait_category(game_data, target)
             if not category:
                 continue  # target isn't a trait we track
+            if not effect_is_active(power, effect, base, game_data):
+                continue  # switched off, suppressed, or not a standing bonus
             source = power.name or base.name
             bucket = result[category]
             prior = bucket.get(target)

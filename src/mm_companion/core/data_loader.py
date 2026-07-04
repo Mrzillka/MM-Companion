@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib import resources
 
+from .components import Integration, TraitBoost
+
 DATA_PACKAGE = "mm_companion"
 PLACEHOLDER_FILE = "placeholder.json"
 
@@ -217,13 +219,11 @@ class Effect:
     A power is assembled from one or more of these, each carrying its own extras
     and flaws. ``base_cost`` is the human-readable prose (e.g. ``"1 per rank"``);
     ``base_cost_value`` is the canonical machine-readable points-per-rank used for
-    automatic cost calculation. ``configurable_target`` marks Enhanced-Trait-style
-    effects that target a chosen trait. ``stat_pattern``/``stat_affects``/``stat_target``
-    are the flattened ``statIntegration`` object describing how the effect patches
-    stats: ``stat_affects`` is the trait *category* it can boost
-    (``ability``/``resistance``/``defense``/``skill``/…), and ``stat_target`` is the
-    specific trait key for a fixed-target booster like Protection (``"TOUGHNESS"``),
-    left blank when the player chooses the target (``configurable_target``).
+    automatic cost calculation. ``integration`` is the parsed ``statIntegration``
+    component (see :class:`mm_companion.core.components.Integration`) describing how
+    the effect patches stats — its activation ``pattern`` and, for the passive
+    trait-boosting effects (Enhanced Trait, Protection), a ``trait_boost`` naming the
+    trait categories it can raise and any fixed target.
     ``config_fields`` are the effect's configurable qualities (Affliction's
     conditions, etc.), the player's choices for which live in the instance's config.
     ``measure`` is a rank-derived real-world quantity the effect exposes (a movement
@@ -243,14 +243,11 @@ class Effect:
     resistance: str | None = None
     base_cost: str = ""
     base_cost_value: int = 1
-    configurable_target: bool = False
-    stat_pattern: str = ""
-    stat_affects: str = ""
+    integration: Integration = field(default_factory=Integration)
     description: str = ""
     config_fields: tuple[EffectConfigField, ...] = ()
     measure: Measure | None = None
     resistance_dc_base: int | None = None
-    stat_target: str = ""
 
 
 @dataclass(frozen=True)
@@ -286,6 +283,12 @@ class Modifier:
     into the Damage rank for its resistance DC and Power Level cap. It is the one
     modifier field that reaches back into character stats, so cost/PL math must be
     given the character to resolve it.
+
+    ``gate`` marks a flaw that can switch an effect's standing bonus off at runtime
+    (one of :mod:`mm_companion.core.components`'s ``GATE_*`` kinds): Activation
+    (``"activation"``), Removable (``"removable"``), Limited (``"limited"``). Empty
+    for modifiers with no runtime gate. Consulted by
+    :func:`mm_companion.core.rules.effect_is_active`.
     """
 
     id: str
@@ -303,6 +306,7 @@ class Modifier:
     step_field: str = ""
     step_by: int = 0
     adds_ability: str = ""
+    gate: str = ""
 
 
 @dataclass(frozen=True)
@@ -484,8 +488,24 @@ def _parse_measure(raw: dict | None) -> Measure | None:
     )
 
 
+def _parse_integration(raw: dict, configurable: bool) -> Integration:
+    """Build the typed :class:`Integration` from an effect's ``statIntegration``.
+
+    A :class:`TraitBoost` is attached only for the trait-boosting effects — those
+    the player targets (``configurable``, e.g. Enhanced Trait) or that carry a fixed
+    ``target`` (e.g. Protection). ``affects`` is the ``"a|b"`` category string split
+    into a set.
+    """
+
+    affects = frozenset(a for a in raw.get("affects", "").split("|") if a)
+    target = raw.get("target", "")
+    boost = None
+    if configurable or target:
+        boost = TraitBoost(affects=affects, target=target, configurable=configurable)
+    return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
+
+
 def _parse_effect(e: dict) -> Effect:
-    integration = e.get("statIntegration", {})
     return Effect(
         id=e["id"],
         name=e["name"],
@@ -497,10 +517,9 @@ def _parse_effect(e: dict) -> Effect:
         resistance=e.get("resistance"),
         base_cost=e.get("baseCost", ""),
         base_cost_value=int(e.get("baseCostValue", 1)),
-        configurable_target=bool(e.get("configurableTarget", False)),
-        stat_pattern=integration.get("pattern", ""),
-        stat_affects=integration.get("affects", ""),
-        stat_target=integration.get("target", ""),
+        integration=_parse_integration(
+            e.get("statIntegration", {}), bool(e.get("configurableTarget", False))
+        ),
         description=e.get("description", ""),
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
         measure=_parse_measure(e.get("measure")),
@@ -526,6 +545,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
         adds_ability=m.get("addsAbility", ""),
+        gate=m.get("gate", ""),
         description=m.get("description", ""),
     )
 

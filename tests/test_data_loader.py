@@ -16,13 +16,16 @@ def test_load_game_data_returns_populated_sections() -> None:
     assert data.advantages
 
 
-def test_resistances_link_to_known_abilities() -> None:
+def test_resistances_link_to_known_traits() -> None:
     data = load_game_data()
+    # A resistance derives from an ability (Toughness ← Stamina) or, for Dodge, from
+    # the Defense combat trait, which is itself a (derived) resistance.
     ability_keys = {a.key for a in data.abilities}
+    resistance_keys = {r.key for r in data.resistances}
     for resistance in data.resistances:
-        if resistance.derived:  # combat stats (e.g. Defence) link to no ability
+        if resistance.derived:  # combat stats (e.g. Defence) link to no base
             continue
-        assert resistance.ability in ability_keys
+        assert resistance.ability in ability_keys | resistance_keys
 
 
 def test_skills_link_to_known_abilities() -> None:

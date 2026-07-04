@@ -135,6 +135,13 @@ clean (see Licensing below).
   arrangement saved before the dock set changes is rejected and the default
   applies. Because Qt signals are object-to-object, the cross-block wiring keeps
   working even when a block is floated into a separate window.
+- A **Fixed Layout** toggle (Settings menu) pins the blocks in the classic
+  stacked arrangement — the way the sheet looked before docking. It calls
+  `CharacterSheet.set_rearrangeable(False)`, which strips each dock's
+  features (no drag/float/close) and its title bar (an empty title-bar widget)
+  and snaps the blocks back to the default layout; the View menu is disabled while
+  fixed. The mode persists as the `layout_mode` setting (`storage.layout_mode()`,
+  `flexible`/`fixed`) and is applied on open.
 - `CharacterSheet` owns the mutable per-character state as a single
   `core.character.Character` and passes it to each data-driven section. The
   sections are **views over that model**: widgets seed from it and write back to

@@ -34,11 +34,18 @@ IMAGES_DIRNAME = "images"
 PL_ENFORCE_WARN = "warn"
 PL_ENFORCE_BLOCK = "block"
 
+# Whether the character sheet's blocks can be rearranged. ``flexible`` lets the
+# user drag, float, and re-dock the blocks freely; ``fixed`` pins them in the
+# classic stacked layout with no title bars, as the sheet looked before docking.
+LAYOUT_FLEXIBLE = "flexible"
+LAYOUT_FIXED = "fixed"
+
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
     "theme": "system",
     "ruleset": "4e",
     "pl_enforcement": PL_ENFORCE_WARN,
+    "layout_mode": LAYOUT_FLEXIBLE,
 }
 
 
@@ -142,3 +149,13 @@ def pl_enforcement() -> str:
     """
     value = load_settings().get("pl_enforcement", PL_ENFORCE_WARN)
     return value if value in (PL_ENFORCE_WARN, PL_ENFORCE_BLOCK) else PL_ENFORCE_WARN
+
+
+def layout_mode() -> str:
+    """Whether the sheet's blocks are rearrangeable — ``flexible`` or ``fixed``.
+
+    Reads the ``layout_mode`` setting, defaulting to :data:`LAYOUT_FLEXIBLE` when
+    unset or unrecognized.
+    """
+    value = load_settings().get("layout_mode", LAYOUT_FLEXIBLE)
+    return value if value in (LAYOUT_FLEXIBLE, LAYOUT_FIXED) else LAYOUT_FLEXIBLE

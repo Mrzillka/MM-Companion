@@ -62,6 +62,25 @@ def test_saving_clears_dirty(qapp: QApplication) -> None:
     assert "*" not in win.windowTitle()
 
 
+def test_fixed_layout_action_persists_and_disables_view_menu(qapp: QApplication) -> None:
+    win = MainWindow(locked=False)
+    assert win._view_menu.isEnabled()  # flexible by default
+
+    win._fixed_layout_action.setChecked(True)
+
+    assert storage.layout_mode() == storage.LAYOUT_FIXED
+    assert not win._view_menu.isEnabled()
+
+
+def test_saved_fixed_layout_applies_on_open(qapp: QApplication) -> None:
+    storage.update_settings(layout_mode=storage.LAYOUT_FIXED)
+
+    win = MainWindow(locked=False)
+
+    assert win._fixed_layout_action.isChecked()
+    assert not win._view_menu.isEnabled()
+
+
 def test_clean_window_closes_without_prompting(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
     event = QCloseEvent()

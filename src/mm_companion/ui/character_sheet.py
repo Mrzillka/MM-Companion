@@ -138,6 +138,28 @@ class CharacterSheet(QMainWindow):
         """Return the docks to the default arrangement."""
         self._apply_default_layout()
 
+    def set_rearrangeable(self, enabled: bool) -> None:
+        """Toggle whether the blocks can be dragged, floated, or closed.
+
+        When disabled ("fixed" mode), the blocks snap back to the default
+        arrangement and shed their dock title bars, so the sheet reads as the
+        classic fixed stack it was before docking. When re-enabled, the native
+        title bars and drag/float/close affordances return.
+        """
+        for dock in self.docks.values():
+            if enabled:
+                dock.setFeatures(
+                    QDockWidget.DockWidgetFeature.DockWidgetMovable
+                    | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+                    | QDockWidget.DockWidgetFeature.DockWidgetClosable
+                )
+                dock.setTitleBarWidget(None)  # restore the native title bar
+            else:
+                dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+                dock.setTitleBarWidget(QWidget(dock))  # empty widget hides the title bar
+        if not enabled:
+            self._apply_default_layout()
+
     # -- signal wiring -------------------------------------------------------
 
     def _wire_sections(self) -> None:

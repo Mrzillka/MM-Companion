@@ -226,6 +226,25 @@ def test_reset_layout_redocks_and_reshows_panels(qapp: QApplication) -> None:
     assert not sheet.docks["dock_powers"].isHidden()
 
 
+def test_fixed_mode_pins_and_hides_dock_chrome(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QDockWidget
+
+    sheet = CharacterSheet(load_game_data())
+    sheet.docks["dock_skills"].setFloating(True)
+
+    sheet.set_rearrangeable(False)
+    for dock in sheet.docks.values():
+        assert dock.features() == QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
+        assert dock.titleBarWidget() is not None  # empty title bar hides the chrome
+        assert not dock.isFloating()  # snapped back into the default stack
+
+    # Re-enabling restores the native title bar and the drag/float affordances.
+    sheet.set_rearrangeable(True)
+    for dock in sheet.docks.values():
+        assert dock.titleBarWidget() is None
+        assert dock.features() & QDockWidget.DockWidgetFeature.DockWidgetMovable
+
+
 def test_floating_a_dock_keeps_cross_block_wiring_live(qapp: QApplication) -> None:
     data = load_game_data()
     sheet = CharacterSheet(data)

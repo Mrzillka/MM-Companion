@@ -10,8 +10,11 @@ import pytest
 from mm_companion.core import storage
 from mm_companion.core.storage import (
     DEFAULT_SETTINGS,
+    LAYOUT_FIXED,
+    LAYOUT_FLEXIBLE,
     ensure_workspace,
     get_workspace,
+    layout_mode,
     load_settings,
     save_settings,
     update_settings,
@@ -64,3 +67,16 @@ def test_update_settings_merges_and_persists_a_layout(_home: Path) -> None:
     assert result["layout"] == {"window_geometry": "geo", "dock_state": "state"}
     assert result["theme"] == DEFAULT_SETTINGS["theme"]
     assert load_settings()["layout"]["dock_state"] == "state"
+
+
+def test_layout_mode_defaults_to_flexible(_home: Path) -> None:
+    assert DEFAULT_SETTINGS["layout_mode"] == LAYOUT_FLEXIBLE
+    assert layout_mode() == LAYOUT_FLEXIBLE  # no settings file yet
+
+
+def test_layout_mode_reads_the_saved_value(_home: Path) -> None:
+    update_settings(layout_mode=LAYOUT_FIXED)
+    assert layout_mode() == LAYOUT_FIXED
+
+    update_settings(layout_mode="nonsense")  # unrecognized falls back to flexible
+    assert layout_mode() == LAYOUT_FLEXIBLE

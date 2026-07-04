@@ -58,6 +58,13 @@ class MainWindow(QMainWindow):
         # Restore the remembered window size and dock arrangement, if any.
         self._restore_layout()
 
+        # Apply the saved layout mode (flexible vs. fixed) without re-persisting it.
+        fixed = storage.layout_mode() == storage.LAYOUT_FIXED
+        self._fixed_layout_action.blockSignals(True)
+        self._fixed_layout_action.setChecked(fixed)
+        self._fixed_layout_action.blockSignals(False)
+        self._apply_layout_mode(fixed)
+
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar."""
         menu_bar = self.menuBar()
@@ -71,16 +78,23 @@ class MainWindow(QMainWindow):
         # Exit closes the sheet; closing brings the launcher back (see closeEvent).
         file_menu.addAction("Exit").triggered.connect(self.close)
 
-        view_menu = menu_bar.addMenu("&View")
+        self._view_menu = menu_bar.addMenu("&View")
         # A show/hide toggle per dock, so a panel closed with its × can be
         # reopened, plus a reset back to the default arrangement.
         for dock in self._sheet.docks.values():
-            view_menu.addAction(dock.toggleViewAction())
-        view_menu.addSeparator()
-        view_menu.addAction("Reset Layout").triggered.connect(self._sheet.reset_layout)
+            self._view_menu.addAction(dock.toggleViewAction())
+        self._view_menu.addSeparator()
+        self._view_menu.addAction("Reset Layout").triggered.connect(self._sheet.reset_layout)
 
         settings_menu = menu_bar.addMenu("&Settings")
         self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
+
+        # Fixed layout pins the blocks in the classic stacked arrangement — the way
+        # the sheet looked before the blocks became draggable.
+        self._fixed_layout_action = settings_menu.addAction("Fixed Layout")
+        self._fixed_layout_action.setCheckable(True)
+        self._fixed_layout_action.setToolTip("Pin the blocks in the classic stacked layout")
+        self._fixed_layout_action.toggled.connect(self._on_fixed_layout_toggled)
 
         self._lock_action = settings_menu.addAction("Lock")
         self._lock_action.setCheckable(True)
@@ -153,6 +167,19 @@ class MainWindow(QMainWindow):
         geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
         storage.update_settings(
             layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
+        )
+
+    def _apply_layout_mode(self, fixed: bool) -> None:
+        """Pin or free the blocks and enable the View menu only when they're free."""
+        self._sheet.set_rearrangeable(not fixed)
+        # In fixed mode there is nothing to rearrange, so the View menu is inert.
+        self._view_menu.setEnabled(not fixed)
+
+    def _on_fixed_layout_toggled(self, fixed: bool) -> None:
+        """Apply the fixed/flexible layout mode and remember it globally."""
+        self._apply_layout_mode(fixed)
+        storage.update_settings(
+            layout_mode=storage.LAYOUT_FIXED if fixed else storage.LAYOUT_FLEXIBLE
         )
 
     def _on_edited(self) -> None:

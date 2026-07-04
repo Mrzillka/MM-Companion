@@ -44,6 +44,27 @@ def test_horizontally_pinned_blocks_have_a_max_width() -> None:
     assert sizes["powers"].max_height == UNBOUNDED
 
 
+def test_abilities_and_resistances_share_one_fixed_size() -> None:
+    sizes = load_block_sizes()
+    abilities, resistances = sizes["abilities"], sizes["resistances"]
+
+    # Identical constraints, and fixed (non-resizable) in both dimensions.
+    assert abilities == resistances
+    assert abilities.min_width == abilities.max_width
+    assert abilities.min_height == abilities.max_height
+
+
+def test_abilities_and_resistances_docks_are_fixed_and_equal(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+
+    ability_dock = sheet.docks["dock_abilities"]
+    resistance_dock = sheet.docks["dock_resistances"]
+    for dock in (ability_dock, resistance_dock):
+        assert dock.minimumWidth() == dock.maximumWidth()
+        assert dock.minimumHeight() == dock.maximumHeight()
+    assert ability_dock.minimumSize() == resistance_dock.minimumSize()
+
+
 def test_docks_apply_the_configured_constraints(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     sizes = load_block_sizes()

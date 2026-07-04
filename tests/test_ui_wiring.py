@@ -198,61 +198,44 @@ def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
     assert sheet.abilities._abilities["INT"].value() == 5
 
 
-def test_sheet_exposes_six_named_docks(qapp: QApplication) -> None:
+def test_sheet_exposes_six_blocks(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
 
-    assert set(sheet.docks) == {
-        "dock_base_info",
-        "dock_abilities",
-        "dock_resistances",
-        "dock_advantages",
-        "dock_skills",
-        "dock_powers",
+    assert set(sheet.block_keys()) == {
+        "base_info",
+        "abilities",
+        "resistances",
+        "advantages",
+        "skills",
+        "powers",
     }
-    # Object names are required for save/restoreState, and each dock wraps a block.
-    for name, dock in sheet.docks.items():
-        assert dock.objectName() == name
-        assert dock.widget() is not None
+    # Every block is placed exactly once across the arrangement's rows.
+    placed = [key for row in sheet.arrangement()["rows"] for key in row]
+    assert sorted(placed) == sorted(sheet.block_keys())
 
 
 def test_reset_layout_redocks_and_reshows_panels(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
-    sheet.docks["dock_skills"].setFloating(True)
-    sheet.docks["dock_powers"].hide()
+    sheet.float_block("skills")
+    sheet.hide_block("powers")
 
     sheet.reset_layout()
 
-    assert not sheet.docks["dock_skills"].isFloating()
-    assert not sheet.docks["dock_powers"].isHidden()
+    arrangement = sheet.arrangement()
+    assert arrangement["floating"] == {}
+    assert arrangement["hidden"] == []
+    placed = [key for row in arrangement["rows"] for key in row]
+    assert "skills" in placed and "powers" in placed
 
 
-def test_fixed_mode_pins_and_hides_dock_chrome(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QDockWidget
-
-    sheet = CharacterSheet(load_game_data())
-    sheet.docks["dock_skills"].setFloating(True)
-
-    sheet.set_rearrangeable(False)
-    for dock in sheet.docks.values():
-        assert dock.features() == QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
-        assert dock.titleBarWidget() is not None  # empty title bar hides the chrome
-        assert not dock.isFloating()  # snapped back into the default stack
-
-    # Re-enabling restores the native title bar and the drag/float affordances.
-    sheet.set_rearrangeable(True)
-    for dock in sheet.docks.values():
-        assert dock.titleBarWidget() is None
-        assert dock.features() & QDockWidget.DockWidgetFeature.DockWidgetMovable
-
-
-def test_floating_a_dock_keeps_cross_block_wiring_live(qapp: QApplication) -> None:
+def test_floating_a_block_keeps_cross_block_wiring_live(qapp: QApplication) -> None:
     data = load_game_data()
     sheet = CharacterSheet(data)
     sheet.character.skill_ranks["Stealth"] = 2
 
-    # Tear the Skills panel out into its own window, then edit an ability: the
+    # Tear the Skills block out into its own window, then edit an ability: the
     # abilities→skills wiring must still fire across the window boundary.
-    sheet.docks["dock_skills"].setFloating(True)
+    sheet.float_block("skills")
     sheet.abilities._abilities["AGL"].setValue(3)
 
     stealth_row = next(row for row in sheet.skills._rows if row[1] == "Stealth")

@@ -113,44 +113,54 @@ clean (see Licensing below).
   from `closeEvent` — a cancelled Save (or Save As dialog) leaves the window open.
   Seeding a loaded character does **not** mark it dirty (a `_loading` guard in
   `BaseInfoSection`, plus the fact that section signals connect after construction).
-- UI construction: `MainWindow` → `CharacterSheet` (a **nested `QMainWindow`**
-  used as a dock host) → six blocks, each a `QGroupBox` wrapped in a scrollable
-  `QDockWidget`: `BaseInfoSection`, `AbilitiesSection`, `ResistancesSection`,
-  `AdvantagesSection`, `SkillsSection`, `PowersSection`. The user can drag a block
-  to re-dock, split, or tab it, resize it, or tear it out into its own floating
-  window. Abilities/Resistances/Advantages were split out of the former
-  `StatsSection`; Abilities and Resistances share the grid helpers in
+- The whole sheet scrolls as **one page**, and the blocks are rearranged on a
+  **custom scrollable canvas** (not Qt docking). A `QMainWindow` dock host can't
+  live inside a `QScrollArea` — its drag-drop and layout break — so scroll +
+  free-form drag/float/redock is done by hand instead. Each block shows **all** of
+  its content and never scrolls on its own; the page scrolls vertically when the
+  blocks don't all fit. `MainWindow` opens at 1000×860.
+- UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
+  `QScrollArea` → `BlockCanvas`) → six blocks, each a section `QGroupBox` wrapped
+  in a `BlockFrame`: `BaseInfoSection`, `AbilitiesSection`, `ResistancesSection`,
+  `AdvantagesSection`, `SkillsSection`, `PowersSection`. `CharacterSheet` is the
+  central widget directly (no outer wrapper — the sheet's own `QScrollArea` is the
+  page the wheel guard targets). Abilities/Resistances/Advantages were split out of
+  the former `StatsSection`; Abilities and Resistances share the grid helpers in
   `ui/sections/stat_grid.py`. The data-driven blocks take the `GameData` and build
   widgets by iterating over the data lists — no hardcoded ability/skill names.
-  Each dock has a stable `objectName` (required for `saveState`/`restoreState`),
-  and `CharacterSheet.docks` maps those names to the docks. The default
-  arrangement lives in `CharacterSheet._apply_default_layout()` (Base Info across
-  the top, Abilities | Resistances | Advantages, then Skills, then Powers).
-- Window layout persists globally: `MainWindow` saves its geometry and the sheet's
-  dock arrangement (`CharacterSheet.save_layout()`, a base64 `saveState`) to the
-  `layout` key in `settings.json` on close via `storage.update_settings`, and
-  restores them on open (`_restore_layout`). A **View** menu offers a show/hide
-  toggle per dock (`dock.toggleViewAction()`) and a **Reset Layout** action
-  (`CharacterSheet.reset_layout()`). `LAYOUT_VERSION` guards `saveState`, so an
-  arrangement saved before the dock set changes is rejected and the default
-  applies. Because Qt signals are object-to-object, the cross-block wiring keeps
-  working even when a block is floated into a separate window.
-- A **Fixed Layout** toggle (Settings menu) pins the blocks in the classic
-  stacked arrangement — the way the sheet looked before docking. It calls
-  `CharacterSheet.set_rearrangeable(False)`, which strips each dock's
-  features (no drag/float/close) and its title bar (an empty title-bar widget)
-  and snaps the blocks back to the default layout; the View menu is disabled while
-  fixed. The mode persists as the `layout_mode` setting (`storage.layout_mode()`,
-  `flexible`/`fixed`) and is applied on open.
+- `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
+  handle, plus float `↗` and close `✕` buttons) above the section, no inner scroll
+  area, sized to its content. A floated block moves into a `BlockWindow` (a
+  top-level window owned by the sheet); its title bar reuses the same drag gesture,
+  so you drag it back onto the page to re-dock.
+- `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
+  arrangement — `_rows` (an ordered list of rows, each an ordered list of block
+  keys), `_windows` (floated blocks), and `_hidden` (closed blocks). It renders a
+  `RowWidget` per row (fixed-width blocks keep their size, growable blocks stretch)
+  and owns the drag controller: `title_bar_pressed/moved/released` run one manual
+  gesture (float-out at drag start, `_hit_test` → a `DropIndicator`, dock-on-drop
+  or leave-floating), plus edge auto-scroll. Structural ops `float_block`,
+  `dock_block`, `show_block`/`hide_block`, `arrangement`, `apply_arrangement`,
+  `default_arrangement` are the headless-testable seams (drag outcomes without
+  synthetic mouse events). The default arrangement is `DEFAULT_ROWS` (Base Info
+  full width, the Abilities | Resistances pair, then Advantages, Skills, Powers).
+- Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
+  geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
+  `{version, rows, floating, hidden}`) to the `layout` key in `settings.json` on
+  close, and restores on open (`_restore_layout`). `restore_layout` validates
+  (schema `SCHEMA_VERSION`; every block placed exactly once) and returns False to
+  fall back to the default. A **View** menu has a checkable show/hide toggle per
+  block (kept in sync via `BlockCanvas.block_visibility_changed`) and a **Reset
+  Layout** action (`CharacterSheet.reset_layout()`). Cross-block wiring is
+  object-to-object Qt signals, so it keeps working when a block is floated out.
 - Each block's min/max size lives in `ui/block_sizes.json` (loaded by
   `ui/block_sizes.py::load_block_sizes`, keyed by block: `abilities`,
-  `resistances`, …) and is applied to the dock in `CharacterSheet._make_dock`. A
-  `max_width` pins a block so it can't be stretched horizontally (Abilities and
-  Resistances are compact grids); a `max_height` pins it vertically (Base
-  Information); the content blocks (Advantages/Skills/Powers) grow freely and
-  absorb the slack. Tweak the JSON to retune — no code change. This is UI config,
-  **not** game content, so it lives under `ui/` (bundled via the `ui/*.json`
-  `package-data` entry), not the OGL `data/` dir.
+  `resistances`, …) and is applied to the `BlockFrame` in `block_frame.py`. A
+  `max_width == min_width` pins a block's width so it can't stretch (Abilities and
+  Resistances are compact grids); the content blocks (Advantages/Skills/Powers)
+  grow to fill their row. Tweak the JSON to retune — no code change. This is UI
+  config, **not** game content, so it lives under `ui/` (bundled via the
+  `ui/*.json` `package-data` entry), not the OGL `data/` dir.
 - `CharacterSheet` owns the mutable per-character state as a single
   `core.character.Character` and passes it to each data-driven section. The
   sections are **views over that model**: widgets seed from it and write back to
@@ -179,9 +189,10 @@ through rather than reinvent. When building new sheet widgets, use it:
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
   boxes, and inner tables from hijacking the page scroll: a guarded widget only
   reacts to the wheel once it has keyboard focus, otherwise the wheel is
-  redirected to the enclosing page. `make_spin_box` guards by default. Each block
-  is wrapped in its own `QScrollArea` inside its dock, so the guard finds a
-  per-panel page to scroll.
+  redirected to the enclosing page. `make_spin_box` guards by default. The guard
+  walks up to the **outermost** enclosing scroll area, which is the single page
+  scroll area that `CharacterSheet` owns around the whole canvas (blocks have no
+  inner scroll areas of their own).
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
   out); a locked field keeps showing its value but sheds its input chrome

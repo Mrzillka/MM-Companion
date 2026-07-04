@@ -1,28 +1,32 @@
-"""The character sheet: six rearrangeable dock panels over one shared model.
+"""The character sheet: six blocks on a scrollable, free-form canvas.
 
-The sheet is a :class:`QMainWindow` used purely as a dock host: each block (Base
-Information, Abilities, Resistances, Advantages, Skills, Powers) lives in its own
-:class:`QDockWidget`, so the user can drag a block to re-dock it, split or tab
-blocks together, resize them, or tear one out into its own floating window. It is
-embedded as the outer :class:`~mm_companion.ui.main_window.MainWindow`'s central
-widget.
+The sheet is a scrolling page: a :class:`QScrollArea` hosting a
+:class:`~mm_companion.ui.block_canvas.BlockCanvas` that arranges the six blocks
+(Base Information, Abilities, Resistances, Advantages, Skills, Powers). The user
+can drag a block to reorder it, put blocks side by side, tear one out into its
+own window, and drag that window back to re-dock it — all while the whole page
+scrolls vertically and each block shows its full content (no per-block scroll).
 
-It still owns the shared :class:`Character` model that the blocks read and write,
-and recomputes derived values (spent power points) whenever a block reports a
-build change. The cross-block wiring (abilities feed skills and resistances,
-powers feed the enhanced totals, the build facts re-derive the power cards) works
-across windows unchanged — Qt signals don't care which window a block lives in.
-Emits :attr:`edited` on any user edit so a host window can track unsaved changes.
+It owns the shared :class:`Character` model that the blocks read and write, and
+recomputes derived values (spent power points) whenever a block reports a build
+change. The cross-block wiring (abilities feed skills and resistances, powers
+feed the enhanced totals, the build facts re-derive the power cards) works across
+windows unchanged — Qt signals don't care which window a block lives in. Emits
+:attr:`edited` on any user edit so a host window can track unsaved changes.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, Qt, Signal
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QScrollArea, QWidget
+import json
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent
+from mm_companion.ui.block_canvas import BlockCanvas
+from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.block_sizes import load_block_sizes
 from mm_companion.ui.sections import (
     AbilitiesSection,
@@ -33,13 +37,9 @@ from mm_companion.ui.sections import (
     SkillsSection,
 )
 
-# Bumped whenever the set of docks changes, so a saved arrangement from an older
-# layout is rejected by restoreState and we fall back to the default.
-LAYOUT_VERSION = 1
 
-
-class CharacterSheet(QMainWindow):
-    """Dock host for the character sheet's six blocks over a shared model."""
+class CharacterSheet(QWidget):
+    """Scrollable, free-form canvas of the sheet's six blocks over a shared model."""
 
     edited = Signal()
 
@@ -53,12 +53,6 @@ class CharacterSheet(QMainWindow):
         self._data = data or load_game_data()
         self.character = character or Character.new_default(self._data)
 
-        self.setDockNestingEnabled(True)
-        # A zero-size central widget lets the six docks tile the whole window.
-        central = QWidget()
-        central.setMaximumSize(0, 0)
-        self.setCentralWidget(central)
-
         self.base_info = BaseInfoSection(self._data, self.character)
         self.abilities = AbilitiesSection(self._data, self.character)
         self.resistances = ResistancesSection(self._data, self.character)
@@ -66,109 +60,91 @@ class CharacterSheet(QMainWindow):
         self.skills = SkillsSection(self._data, self.character)
         self.powers = PowersSection(self._data, self.character)
 
-        # (section, block key, dock title). The block key names the dock
-        # (`dock_<key>`, its stable objectName for save/restoreState) and looks up
-        # the block's size constraints in block_sizes.json.
-        self._panels = [
-            (self.base_info, "base_info", "Base Information"),
-            (self.abilities, "abilities", "Abilities"),
-            (self.resistances, "resistances", "Resistances"),
-            (self.advantages, "advantages", "Advantages"),
-            (self.skills, "skills", "Skills"),
-            (self.powers, "powers", "Powers"),
+        # (block key, dock title, section). The key names the block for the layout
+        # model and looks up its size constraints in block_sizes.json.
+        panels = [
+            ("base_info", "Base Information", self.base_info),
+            ("abilities", "Abilities", self.abilities),
+            ("resistances", "Resistances", self.resistances),
+            ("advantages", "Advantages", self.advantages),
+            ("skills", "Skills", self.skills),
+            ("powers", "Powers", self.powers),
         ]
-        self._block_sizes = load_block_sizes()
-        self.docks: dict[str, QDockWidget] = {
-            f"dock_{key}": self._make_dock(section, key, title)
-            for section, key, title in self._panels
-        }
+        self._canvas = BlockCanvas(panels, load_block_sizes())
 
-        self._apply_default_layout()
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setWidget(self._canvas)
+        self._canvas.set_scroll_area(self._scroll)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._scroll)
+
         self._wire_sections()
 
-    # -- dock construction / layout -----------------------------------------
+    # -- layout model / persistence -----------------------------------------
 
-    def _make_dock(self, section: QWidget, key: str, title: str) -> QDockWidget:
-        """Wrap a section in a scrollable dock so it can be moved and floated."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(section)
+    def block_keys(self) -> list[str]:
+        """The six block keys, in construction order."""
+        return self._canvas.block_keys()
 
-        dock = QDockWidget(title, self)
-        dock.setObjectName(f"dock_{key}")
-        dock.setWidget(scroll)
-        dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        # Constrain the block from block_sizes.json: a max bound keeps the block
-        # from being stretched in that direction, a min keeps it usable.
-        size = self._block_sizes.get(key)
-        if size is not None:
-            dock.setMinimumSize(size.min_width, size.min_height)
-            dock.setMaximumSize(size.max_width, size.max_height)
-        # Added here so the dock belongs to the window; _apply_default_layout
-        # positions it.
-        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, dock)
-        return dock
+    def block_frame(self, key: str) -> BlockFrame:
+        """The :class:`BlockFrame` wrapping the block *key* (size constraints live here)."""
+        return self._canvas.block_frame(key)
 
-    def _apply_default_layout(self) -> None:
-        """Arrange the docks in the default grid: Base Information across the top,
-        Abilities | Resistances | Advantages in the next row, then Skills, then
-        Powers. Also un-floats and re-shows any dock the user had closed."""
-        d = self.docks
-        for dock in d.values():
-            dock.setFloating(False)
-            dock.show()
+    def page_scroll_area(self) -> QScrollArea:
+        """The outer page scroll area (the wheel guard redirects the wheel here)."""
+        return self._scroll
 
-        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, d["dock_base_info"])
-        # Stack the main rows vertically under Base Information.
-        self.splitDockWidget(d["dock_base_info"], d["dock_abilities"], Qt.Orientation.Vertical)
-        self.splitDockWidget(d["dock_abilities"], d["dock_skills"], Qt.Orientation.Vertical)
-        self.splitDockWidget(d["dock_skills"], d["dock_powers"], Qt.Orientation.Vertical)
-        # Abilities | Resistances | Advantages side by side in their row.
-        self.splitDockWidget(d["dock_abilities"], d["dock_resistances"], Qt.Orientation.Horizontal)
-        self.splitDockWidget(d["dock_resistances"], d["dock_advantages"], Qt.Orientation.Horizontal)
+    def float_block(self, key: str) -> None:
+        """Tear a block out into its own window."""
+        self._canvas.float_block(key)
 
-    # -- layout persistence --------------------------------------------------
+    def dock_block(self, key: str, row: int, slot: int, new_row: bool = False) -> None:
+        """Dock a block into the arrangement at (row, slot)."""
+        self._canvas.dock_block(key, row, slot, new_row=new_row)
+
+    def show_block(self, key: str) -> None:
+        self._canvas.show_block(key)
+
+    def hide_block(self, key: str) -> None:
+        self._canvas.hide_block(key)
+
+    def is_block_hidden(self, key: str) -> bool:
+        return self._canvas.is_hidden(key)
+
+    def arrangement(self) -> dict:
+        """The current arrangement as a plain dict (rows / floating / hidden)."""
+        return self._canvas.arrangement()
+
+    @property
+    def canvas(self) -> BlockCanvas:
+        return self._canvas
 
     def save_layout(self) -> str:
-        """The dock arrangement as a base64 string (for settings.json)."""
-        return bytes(self.saveState(LAYOUT_VERSION).toBase64()).decode("ascii")
+        """The block arrangement as a JSON string (for settings.json)."""
+        return json.dumps(self._canvas.arrangement())
 
-    def restore_layout(self, state_b64: str | None) -> bool:
-        """Restore a dock arrangement saved by :meth:`save_layout`.
+    def restore_layout(self, state: str | None) -> bool:
+        """Restore an arrangement saved by :meth:`save_layout`.
 
-        Returns whether it applied — a missing or incompatible state (e.g. from an
-        older :data:`LAYOUT_VERSION`) returns False so the caller keeps the default.
+        Returns whether it applied — a missing, malformed, or incompatible state
+        returns False so the caller keeps the default arrangement.
         """
-        if not state_b64:
+        if not state:
             return False
-        state = QByteArray.fromBase64(state_b64.encode("ascii"))
-        return self.restoreState(state, LAYOUT_VERSION)
+        try:
+            model = json.loads(state)
+        except (ValueError, TypeError):
+            return False
+        return self._canvas.apply_arrangement(model)
 
     def reset_layout(self) -> None:
-        """Return the docks to the default arrangement."""
-        self._apply_default_layout()
-
-    def set_rearrangeable(self, enabled: bool) -> None:
-        """Toggle whether the blocks can be dragged, floated, or closed.
-
-        When disabled ("fixed" mode), the blocks snap back to the default
-        arrangement and shed their dock title bars, so the sheet reads as the
-        classic fixed stack it was before docking. When re-enabled, the native
-        title bars and drag/float/close affordances return.
-        """
-        for dock in self.docks.values():
-            if enabled:
-                dock.setFeatures(
-                    QDockWidget.DockWidgetFeature.DockWidgetMovable
-                    | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-                    | QDockWidget.DockWidgetFeature.DockWidgetClosable
-                )
-                dock.setTitleBarWidget(None)  # restore the native title bar
-            else:
-                dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-                dock.setTitleBarWidget(QWidget(dock))  # empty widget hides the title bar
-        if not enabled:
-            self._apply_default_layout()
+        """Return the blocks to the default arrangement (un-float and un-hide)."""
+        self._canvas.reset()
 
     # -- signal wiring -------------------------------------------------------
 
@@ -225,6 +201,6 @@ class CharacterSheet(QMainWindow):
         self.base_info.set_pool_current("power_points", spent)
 
     def set_locked(self, locked: bool) -> None:
-        """Toggle read-only view mode across every block."""
+        """Toggle read-only view mode across every block (incl. floated ones)."""
         for section in self._sections():
             section.set_locked(locked)

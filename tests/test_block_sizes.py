@@ -54,32 +54,36 @@ def test_abilities_and_resistances_share_one_fixed_size() -> None:
     assert abilities.min_height == abilities.max_height
 
 
-def test_abilities_and_resistances_docks_are_fixed_and_equal(qapp: QApplication) -> None:
+def test_abilities_and_resistances_frames_are_fixed_and_equal(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
 
-    ability_dock = sheet.docks["dock_abilities"]
-    resistance_dock = sheet.docks["dock_resistances"]
-    for dock in (ability_dock, resistance_dock):
-        assert dock.minimumWidth() == dock.maximumWidth()
-        assert dock.minimumHeight() == dock.maximumHeight()
-    assert ability_dock.minimumSize() == resistance_dock.minimumSize()
+    ability_frame = sheet.block_frame("abilities")
+    resistance_frame = sheet.block_frame("resistances")
+    for frame in (ability_frame, resistance_frame):
+        assert frame.minimumWidth() == frame.maximumWidth()
+        assert frame.minimumHeight() == frame.maximumHeight()
+    assert ability_frame.minimumSize() == resistance_frame.minimumSize()
 
 
-def test_docks_apply_the_configured_constraints(qapp: QApplication) -> None:
+def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     sizes = load_block_sizes()
 
     for key, spec in sizes.items():
-        dock = sheet.docks[f"dock_{key}"]
-        assert dock.minimumWidth() == spec.min_width
-        assert dock.minimumHeight() == spec.min_height
-        # A configured max pins the dock exactly; an unbounded dimension is left
-        # effectively unconstrained (Qt's dock layout reports its own large max).
+        frame = sheet.block_frame(key)
+        # The configured minimum is a floor. The section sits directly in the frame
+        # (no inner scroll area), so a block whose content needs more than the
+        # configured minimum — e.g. Base Information or the Advantages picker —
+        # reports the larger content-driven minimum instead.
+        assert frame.minimumWidth() >= spec.min_width
+        assert frame.minimumHeight() >= spec.min_height
+        # A configured max pins the frame exactly; an unbounded dimension is left
+        # effectively unconstrained (Qt reports its own large max).
         if spec.max_width < UNBOUNDED:
-            assert dock.maximumWidth() == spec.max_width
+            assert frame.maximumWidth() == spec.max_width
         else:
-            assert dock.maximumWidth() >= 100_000
+            assert frame.maximumWidth() >= 100_000
         if spec.max_height < UNBOUNDED:
-            assert dock.maximumHeight() == spec.max_height
+            assert frame.maximumHeight() == spec.max_height
         else:
-            assert dock.maximumHeight() >= 100_000
+            assert frame.maximumHeight() >= 100_000

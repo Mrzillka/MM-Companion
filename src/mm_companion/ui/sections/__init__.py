@@ -2,7 +2,8 @@
 
 Each block is a ``QGroupBox`` built by iterating over the loaded
 :class:`~mm_companion.core.data_loader.GameData` — no hardcoded ability, skill,
-or advantage names. The sheet hosts each block in its own dock widget.
+or advantage names. The sheet wraps each block in a draggable
+:class:`~mm_companion.ui.block_frame.BlockFrame` on its scrollable canvas.
 """
 
 from __future__ import annotations

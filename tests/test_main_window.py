@@ -62,23 +62,26 @@ def test_saving_clears_dirty(qapp: QApplication) -> None:
     assert "*" not in win.windowTitle()
 
 
-def test_fixed_layout_action_persists_and_disables_view_menu(qapp: QApplication) -> None:
+def test_view_menu_hides_and_shows_a_block(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
-    assert win._view_menu.isEnabled()  # flexible by default
+    action = win._block_actions["advantages"]
+    assert action.isChecked()  # visible by default
 
-    win._fixed_layout_action.setChecked(True)
+    action.setChecked(False)
+    assert win._sheet.is_block_hidden("advantages")
+    assert "advantages" not in [k for row in win._sheet.arrangement()["rows"] for k in row]
 
-    assert storage.layout_mode() == storage.LAYOUT_FIXED
-    assert not win._view_menu.isEnabled()
+    action.setChecked(True)
+    assert not win._sheet.is_block_hidden("advantages")
 
 
-def test_saved_fixed_layout_applies_on_open(qapp: QApplication) -> None:
-    storage.update_settings(layout_mode=storage.LAYOUT_FIXED)
-
+def test_hiding_a_block_updates_its_view_menu_toggle(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
 
-    assert win._fixed_layout_action.isChecked()
-    assert not win._view_menu.isEnabled()
+    # Hiding elsewhere (a block's × button) keeps the View toggle in sync.
+    win._sheet.hide_block("powers")
+
+    assert not win._block_actions["powers"].isChecked()
 
 
 def test_clean_window_closes_without_prompting(qapp: QApplication) -> None:

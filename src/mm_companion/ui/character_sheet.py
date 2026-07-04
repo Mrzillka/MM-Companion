@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QDockWidget, QMainWindow, QScrollArea, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent
+from mm_companion.ui.block_sizes import load_block_sizes
 from mm_companion.ui.sections import (
     AbilitiesSection,
     AdvantagesSection,
@@ -65,18 +66,21 @@ class CharacterSheet(QMainWindow):
         self.skills = SkillsSection(self._data, self.character)
         self.powers = PowersSection(self._data, self.character)
 
-        # (section, dock object name, dock title) — object names are required for
-        # save/restoreState and must stay stable across releases.
+        # (section, block key, dock title). The block key names the dock
+        # (`dock_<key>`, its stable objectName for save/restoreState) and looks up
+        # the block's size constraints in block_sizes.json.
         self._panels = [
-            (self.base_info, "dock_base_info", "Base Information"),
-            (self.abilities, "dock_abilities", "Abilities"),
-            (self.resistances, "dock_resistances", "Resistances"),
-            (self.advantages, "dock_advantages", "Advantages"),
-            (self.skills, "dock_skills", "Skills"),
-            (self.powers, "dock_powers", "Powers"),
+            (self.base_info, "base_info", "Base Information"),
+            (self.abilities, "abilities", "Abilities"),
+            (self.resistances, "resistances", "Resistances"),
+            (self.advantages, "advantages", "Advantages"),
+            (self.skills, "skills", "Skills"),
+            (self.powers, "powers", "Powers"),
         ]
+        self._block_sizes = load_block_sizes()
         self.docks: dict[str, QDockWidget] = {
-            name: self._make_dock(section, name, title) for section, name, title in self._panels
+            f"dock_{key}": self._make_dock(section, key, title)
+            for section, key, title in self._panels
         }
 
         self._apply_default_layout()
@@ -84,16 +88,22 @@ class CharacterSheet(QMainWindow):
 
     # -- dock construction / layout -----------------------------------------
 
-    def _make_dock(self, section: QWidget, object_name: str, title: str) -> QDockWidget:
+    def _make_dock(self, section: QWidget, key: str, title: str) -> QDockWidget:
         """Wrap a section in a scrollable dock so it can be moved and floated."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(section)
 
         dock = QDockWidget(title, self)
-        dock.setObjectName(object_name)
+        dock.setObjectName(f"dock_{key}")
         dock.setWidget(scroll)
         dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        # Constrain the block from block_sizes.json: a max bound keeps the block
+        # from being stretched in that direction, a min keeps it usable.
+        size = self._block_sizes.get(key)
+        if size is not None:
+            dock.setMinimumSize(size.min_width, size.min_height)
+            dock.setMaximumSize(size.max_width, size.max_height)
         # Added here so the dock belongs to the window; _apply_default_layout
         # positions it.
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, dock)

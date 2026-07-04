@@ -142,6 +142,15 @@ clean (see Licensing below).
   and snaps the blocks back to the default layout; the View menu is disabled while
   fixed. The mode persists as the `layout_mode` setting (`storage.layout_mode()`,
   `flexible`/`fixed`) and is applied on open.
+- Each block's min/max size lives in `ui/block_sizes.json` (loaded by
+  `ui/block_sizes.py::load_block_sizes`, keyed by block: `abilities`,
+  `resistances`, …) and is applied to the dock in `CharacterSheet._make_dock`. A
+  `max_width` pins a block so it can't be stretched horizontally (Abilities and
+  Resistances are compact grids); a `max_height` pins it vertically (Base
+  Information); the content blocks (Advantages/Skills/Powers) grow freely and
+  absorb the slack. Tweak the JSON to retune — no code change. This is UI config,
+  **not** game content, so it lives under `ui/` (bundled via the `ui/*.json`
+  `package-data` entry), not the OGL `data/` dir.
 - `CharacterSheet` owns the mutable per-character state as a single
   `core.character.Character` and passes it to each data-driven section. The
   sections are **views over that model**: widgets seed from it and write back to

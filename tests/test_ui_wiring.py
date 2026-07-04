@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.rules import power_points_spent, skill_total
+from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+from mm_companion.core.rules import power_points_spent, resistance_total, skill_total
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
@@ -79,6 +80,32 @@ def test_budget_within_a_band_leaves_power_level_alone(qapp: QApplication) -> No
 
     assert sheet.character.power_level == 10
     assert sheet.character.power_points_total == 10 * per_level + 5
+
+
+def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.powers.append(
+        Power(
+            name="Armor",
+            effects=[
+                PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])
+            ],
+        )
+    )
+    sheet = CharacterSheet(data, char)
+    assert resistance_total(char, data, "TOUGHNESS") == 6  # active by default
+
+    checkbox = sheet.powers.findChild(QCheckBox)  # the row's "Active" switch
+    assert checkbox is not None and checkbox.isChecked()
+
+    fired: list[int] = []
+    sheet.powers.changed.connect(lambda: fired.append(1))
+    checkbox.setChecked(False)
+
+    assert fired  # the section signals a change so the sheet re-derives
+    assert char.powers[0].item_present is False
+    assert resistance_total(char, data, "TOUGHNESS") == 0
 
 
 def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:

@@ -17,12 +17,14 @@ from mm_companion.core.rules import (
     array_base_index,
     effect_cost_formula,
     effect_game_terms,
+    effect_is_active,
     effect_stat_rows,
     effect_total_cost,
     effective_ability,
     effective_effect_stats,
     power_game_terms,
     power_pl_violations,
+    power_runtime_gates,
     power_total_cost,
     power_trait_bonuses,
     resistance_total,
@@ -502,6 +504,8 @@ def test_power_round_trips_through_dict() -> None:
         description="whoosh",
         descriptors=["fire"],
         structure=STRUCTURE_ARRAY,
+        activated=False,
+        item_present=False,
         effects=[
             PowerEffectInstance(
                 "damage",
@@ -510,6 +514,8 @@ def test_power_round_trips_through_dict() -> None:
                 flaws=[ModifierSelection("limited", rank=1)],
                 config={"target": "combat.attack"},
                 descriptors=["fire"],
+                toggled_on=False,
+                suppressed=True,
             )
         ],
     )
@@ -517,6 +523,17 @@ def test_power_round_trips_through_dict() -> None:
     assert restored.to_dict() == power.to_dict()
     assert restored.effects[0].extras[0].modifier_id == "ranged"
     assert restored.structure == STRUCTURE_ARRAY
+    # Runtime on/off state survives the round trip.
+    assert restored.activated is False and restored.item_present is False
+    assert restored.effects[0].toggled_on is False
+    assert restored.effects[0].suppressed is True
+
+
+def test_older_saves_without_runtime_flags_default_to_active() -> None:
+    # A power JSON from before runtime state existed omits the flags → reads as on.
+    restored = Power.from_dict({"name": "Legacy", "effects": [{"effect_id": "protection"}]})
+    assert restored.activated is True and restored.item_present is True
+    assert restored.effects[0].toggled_on is True and restored.effects[0].suppressed is False
 
 
 def test_structure_defaults_to_independent_and_rejects_junk() -> None:
@@ -685,7 +702,7 @@ def test_enhanced_trait_boosts_a_chosen_ability() -> None:
 def test_protection_boosts_toughness_via_its_fixed_target() -> None:
     data = load_game_data()
     char = _char_with(Power(name="Armor", effects=[PowerEffectInstance("protection", rank=5)]))
-    # Protection carries no config target — it's baked into the effect's stat_target.
+    # Protection carries no config target — it's baked into the effect's TraitBoost.
     assert resistance_total(char, data, "TOUGHNESS") == 5
 
 
@@ -696,6 +713,97 @@ def test_enhanced_ability_propagates_into_linked_skill_total() -> None:
     )
     char.skill_ranks["Athletics"] = 1  # Athletics is Strength-linked
     assert skill_total(char, data, "Athletics") == 5  # effective STR 4 + 1 rank
+
+
+# -- runtime effect state: activation / removable / toggle / suppression (§5-7) --
+
+
+def test_removable_power_bonus_drops_when_item_absent() -> None:
+    data = load_game_data()
+    power = Power(
+        name="Armor",
+        effects=[PowerEffectInstance("protection", rank=5, flaws=[ModifierSelection("removable")])],
+    )
+    char = _char_with(power)
+    assert power_runtime_gates(power, data) == {"removable"}
+    assert resistance_total(char, data, "TOUGHNESS") == 5  # item present by default
+    power.item_present = False  # taken away → the Removable gate switches the bonus off
+    assert resistance_total(char, data, "TOUGHNESS") == 0
+    power.item_present = True  # restored
+    assert resistance_total(char, data, "TOUGHNESS") == 5
+
+
+def test_activation_gate_requires_the_power_switched_on() -> None:
+    data = load_game_data()
+    power = Power(
+        name="Focus",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_trait",
+                rank=3,
+                config={"target": "STR"},
+                flaws=[ModifierSelection("activation")],
+            )
+        ],
+    )
+    char = _char_with(power)
+    assert effective_ability(char, data, "STR") == 3
+    power.activated = False
+    assert effective_ability(char, data, "STR") == 0
+
+
+def test_suppressed_effect_contributes_no_bonus() -> None:
+    data = load_game_data()
+    power = Power(name="Armor", effects=[PowerEffectInstance("protection", rank=4)])
+    char = _char_with(power)
+    assert resistance_total(char, data, "TOUGHNESS") == 4
+    power.effects[0].suppressed = True  # a transient Nullify
+    assert resistance_total(char, data, "TOUGHNESS") == 0
+
+
+def test_permanent_ungated_effect_is_always_active() -> None:
+    data = load_game_data()
+    base = {e.id: e for e in data.effects}["protection"]
+    power = Power(effects=[PowerEffectInstance("protection", rank=2)])
+    assert power_runtime_gates(power, data) == set()
+    assert effect_is_active(power, power.effects[0], base, data) is True
+
+
+def test_toggle_pattern_follows_the_toggle_switch() -> None:
+    data = load_game_data()
+    base = {e.id: e for e in data.effects}["flight"]  # a passive_toggle movement effect
+    flight = PowerEffectInstance("flight", rank=2)
+    power = Power(effects=[flight])
+    assert power_runtime_gates(power, data) == {"toggle"}
+    assert effect_is_active(power, flight, base, data) is True
+    flight.toggled_on = False
+    assert effect_is_active(power, flight, base, data) is False
+
+
+def test_instant_effect_is_never_a_standing_contributor() -> None:
+    data = load_game_data()
+    base = {e.id: e for e in data.effects}["damage"]
+    dmg = PowerEffectInstance("damage", rank=5)
+    assert effect_is_active(Power(effects=[dmg]), dmg, base, data) is False
+
+
+def test_limited_gate_is_informational_and_never_gates() -> None:
+    data = load_game_data()
+    power = Power(
+        name="Sun Power",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_trait",
+                rank=3,
+                config={"target": "STR"},
+                flaws=[ModifierSelection("limited")],
+            )
+        ],
+    )
+    char = _char_with(power)
+    # Limited is a gate kind the UI surfaces, but the engine never auto-switches it off.
+    assert power_runtime_gates(power, data) == {"limited"}
+    assert effective_ability(char, data, "STR") == 3
 
 
 def test_enhanced_trait_can_boost_a_skill_directly() -> None:

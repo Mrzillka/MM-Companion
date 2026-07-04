@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -29,7 +30,12 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.powers import Power
-from mm_companion.core.rules import power_pl_violations, power_total_cost, powers_points_spent
+from mm_companion.core.rules import (
+    power_pl_violations,
+    power_runtime_gates,
+    power_total_cost,
+    powers_points_spent,
+)
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.widgets import title_with_cost
 
@@ -122,6 +128,16 @@ class PowersSection(QGroupBox):
             layout.addWidget(warning)
         layout.addStretch()
 
+        # A power with a runtime gate (Activation / Removable / a Sustained toggle)
+        # gets an on/off switch; while off its standing bonuses drop off the sheet.
+        if power_runtime_gates(power, self._data):
+            active = QCheckBox("Active")
+            active.setChecked(self._power_is_active(power))
+            active.setToolTip("Switch this power on/off — its bonuses apply only while active.")
+            active.setEnabled(not self._locked)
+            active.toggled.connect(lambda on, p=power: self._set_power_active(p, on))
+            layout.addWidget(active)
+
         cost = QLabel(f"{power_total_cost(power, self._data)} PP")
         cost.setEnabled(False)
         layout.addWidget(cost)
@@ -139,6 +155,26 @@ class PowersSection(QGroupBox):
             self._character.powers.remove(power)
             self._rebuild_list()
             self.changed.emit()
+
+    # -- runtime on/off ---------------------------------------------------
+    @staticmethod
+    def _power_is_active(power: Power) -> bool:
+        """Whether every runtime switch on the power is currently in its 'on' state."""
+        return power.activated and power.item_present and all(e.toggled_on for e in power.effects)
+
+    def _set_power_active(self, power: Power, active: bool) -> None:
+        """Flip all of the power's runtime switches together and re-derive the sheet.
+
+        A single "Active" control drives whichever gate the power carries (Activation,
+        Removable, or a Sustained toggle); ``rules.effect_is_active`` reads only the
+        flags the power's gates make relevant. The ``changed`` signal is already wired
+        to refresh the stats/skills sections, so the boosted totals update live.
+        """
+        power.activated = active
+        power.item_present = active
+        for effect in power.effects:
+            effect.toggled_on = active
+        self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:
         """In read-only view mode, hide the editing entry points (Add / Remove)."""

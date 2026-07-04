@@ -50,6 +50,13 @@ def readonly_item(text: str, *, center: bool = False) -> QTableWidgetItem:
     return item
 
 
+def title_with_cost(title: str, points: int) -> str:
+    """A group-box title annotated with its running power-point cost, e.g.
+    ``"Abilities — 24 PP"`` — kept in one place so every section reads the same."""
+
+    return f"{title} — {points} PP"
+
+
 def hline_separator() -> QFrame:
     """A sunken horizontal rule used to divide primary from derived stats."""
     line = QFrame()

@@ -35,10 +35,10 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
-from mm_companion.core.rules import effective_ability, skill_total
+from mm_companion.core.rules import effective_ability, skill_points_spent, skill_total
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, readonly_item
+from mm_companion.ui.widgets import make_spin_box, readonly_item, title_with_cost
 
 RANK_MIN, RANK_MAX = 0, 20
 MOD_MIN, MOD_MAX = -20, 20
@@ -308,3 +308,5 @@ class SkillsSection(QGroupBox):
             total = skill_total(self._character, self._data, row_id)
             ability_rank_item.setText(str(ability))
             total_item.setText(str(total))
+        # Keep the section title's running point cost current.
+        self.setTitle(title_with_cost("Skills", skill_points_spent(self._character, self._data)))

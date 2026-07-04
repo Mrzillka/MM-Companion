@@ -10,13 +10,22 @@ green beside the base spin box — ``→ 5`` — without replacing the bought va
 boost itself is computed in :func:`~mm_companion.core.rules.power_trait_bonuses`.
 :meth:`StatsSection.refresh_enhancements` recomputes these labels, and the sheet
 calls it whenever a power changes.
+
+Resistances are *derived* from a base trait (Toughness and Fortitude from Stamina,
+Will from Awareness, Dodge from the Defense combat trait): a resistance's spin box
+holds the **total** value, which starts equal to that base. Only the difference
+from the base costs power points — raising the spin box above the base spends
+points, lowering it below refunds them (:func:`~mm_companion.core.rules.resistance_base`
+gives the base, and the model stores just the bought delta). So when the base trait
+changes, an unmodified resistance follows it (:meth:`StatsSection._refresh_resistance_bases`
+re-seeds the spin boxes) while a bought difference is preserved.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -35,10 +44,16 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import power_trait_bonuses
+from mm_companion.core.rules import (
+    ability_points_spent,
+    advantage_points_spent,
+    power_trait_bonuses,
+    resistance_base,
+    resistance_points_spent,
+)
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import hline_separator, make_spin_box
+from mm_companion.ui.widgets import hline_separator, make_spin_box, title_with_cost
 
 STAT_MIN, STAT_MAX = -5, 30
 STAT_SPIN_WIDTH = 80
@@ -75,29 +90,33 @@ class StatsSection(QGroupBox):
         self._advantages_by_name = {a.name: a for a in data.advantages}
 
         layout = QHBoxLayout(self)
-        layout.addWidget(
-            self._build_stat_group(
-                "Abilities",
-                data.abilities,
-                self._abilities,
-                self._ability_enh,
-                character.abilities,
-                self._on_ability_changed,
-            )
+        self._ability_box = self._build_stat_group(
+            "Abilities",
+            data.abilities,
+            self._abilities,
+            self._ability_enh,
+            character.abilities,
+            self._on_ability_changed,
         )
-        layout.addWidget(
-            self._build_stat_group(
-                "Resistances",
-                data.resistances,
-                self._resistances,
-                self._resistance_enh,
-                character.resistances,
-                self._on_resistance_changed,
-            )
+        layout.addWidget(self._ability_box)
+        self._resistance_box = self._build_stat_group(
+            "Resistances",
+            data.resistances,
+            self._resistances,
+            self._resistance_enh,
+            character.resistances,
+            self._on_resistance_changed,
         )
-        layout.addWidget(self._build_advantages(data), stretch=1)
+        layout.addWidget(self._resistance_box)
+        self._advantage_box = self._build_advantages(data)
+        layout.addWidget(self._advantage_box, stretch=1)
+        # The resistance spin boxes hold the *total* (base + bought), so display the
+        # base on top of the stored delta now that the ability spin boxes exist.
+        self._refresh_resistance_bases()
         # Seed the enhancement labels from any powers a loaded character carries.
         self.refresh_enhancements()
+        # Show each group's running point cost in its title.
+        self._refresh_costs()
 
     def _add_stat_row(
         self, grid: QGridLayout, row: int, name: str, abbr: str, spin: QSpinBox, enh: QLabel
@@ -158,19 +177,63 @@ class StatsSection(QGroupBox):
     def _on_ability_changed(self, key: str, value: int) -> None:
         self._character.abilities[key] = value
         self.abilityChanged.emit(key, value)
+        # A resistance derived from this ability follows it (its bought delta is kept).
+        self._refresh_resistance_bases()
         self.refresh_enhancements()  # the base moved, so the "→ total" does too
+        self._refresh_costs()
         self.changed.emit()
 
     def _on_resistance_changed(self, key: str, value: int) -> None:
-        self._character.resistances[key] = value
+        # The spin box holds the total; only the difference from the derived base is
+        # bought (and costs/refunds points), so store that delta on the model.
+        base = resistance_base(self._character, self._data, key)
+        self._character.resistances[key] = value - base
+        # Dodge derives from the Defense trait, so changing one resistance can move
+        # another; re-seed them all (guarded, so this doesn't re-enter).
+        self._refresh_resistance_bases()
         self.refresh_enhancements()
+        self._refresh_costs()
         self.changed.emit()
+
+    def _refresh_costs(self) -> None:
+        """Show each group's running point cost in its title (Abilities/Resistances/
+        Advantages), recomputed from the model so it tracks every edit."""
+
+        self._ability_box.setTitle(
+            title_with_cost("Abilities", ability_points_spent(self._character, self._data))
+        )
+        self._resistance_box.setTitle(
+            title_with_cost("Resistances", resistance_points_spent(self._character, self._data))
+        )
+        self._advantage_box.setTitle(
+            title_with_cost("Advantages", advantage_points_spent(self._character, self._data))
+        )
+
+    def _refresh_resistance_bases(self) -> None:
+        """Show each resistance's total (derived base + bought delta) in its spin box.
+
+        The model stores only the bought delta, so the displayed total is
+        :func:`~mm_companion.core.rules.resistance_base` plus that delta. Signals are
+        blocked while re-seeding so following the base doesn't count as a fresh edit.
+        """
+
+        for res in self._data.resistances:
+            spin = self._resistances.get(res.key)
+            if spin is None:
+                continue
+            base = resistance_base(self._character, self._data, res.key)
+            bought = self._character.resistances.get(res.key, 0)
+            blocker = QSignalBlocker(spin)
+            spin.setValue(base + bought)
+            del blocker
 
     def refresh_enhancements(self) -> None:
         """Recompute each trait's power-enhanced total and show it beside the base.
 
         A trait with no power bonus keeps its label hidden, so the column only
-        appears for traits an Enhanced-Trait/Protection power actually raises.
+        appears for traits an Enhanced-Trait/Protection power actually raises. The
+        base a bonus adds to is the spin box's own value, which for a resistance is
+        already its full derived total.
         """
 
         bonuses = power_trait_bonuses(self._character, self._data)
@@ -261,6 +324,7 @@ class StatsSection(QGroupBox):
         # The table rows stay 1:1 (and in order) with the model's advantage list.
         self._character.advantages.append(AdvantageSelection(advantage.name, rank))
         self._append_advantage_row(advantage.name, rank, advantage.description, advantage.ranked)
+        self._refresh_costs()
         self.changed.emit()
 
     def _remove_advantage(self) -> None:
@@ -270,6 +334,7 @@ class StatsSection(QGroupBox):
             if 0 <= row < len(self._character.advantages):
                 del self._character.advantages[row]
         if rows:
+            self._refresh_costs()
             self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:

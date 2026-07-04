@@ -177,19 +177,41 @@ def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
     return total
 
 
-def resistance_total(char: Character, game_data: GameData, key: str) -> int:
-    """A resistance's total: its linked (effective) ability plus bought and power ranks.
+def resistance_base(char: Character, game_data: GameData, key: str) -> int:
+    """The trait a resistance derives from, before its bought ranks and power boosts.
 
-    Derived resistances with no linked ability (e.g. Defence) are just their bought
-    plus power ranks. A power that enhances the linked ability (or the resistance
-    itself, e.g. Protection → Toughness) raises the total.
+    Fortitude and Toughness derive from Stamina, Will from Awareness — an *ability*,
+    read at its effective value (:func:`effective_ability`). Dodge instead derives
+    from the Defense combat trait, which is itself a (derived) resistance, so the base
+    can be another resistance's total. A resistance with no linked trait (Defense
+    itself) has base 0. This is the value a "no ranks bought" resistance equals.
     """
 
     res = _resistance(game_data, key)
+    base_key = res.ability if res else ""
+    if not base_key:
+        return 0
+    if any(a.key == base_key for a in game_data.abilities):
+        return effective_ability(char, game_data, base_key)
+    if any(r.key == base_key for r in game_data.resistances):
+        return resistance_total(char, game_data, base_key)
+    return 0
+
+
+def resistance_total(char: Character, game_data: GameData, key: str) -> int:
+    """A resistance's total: its derived base plus the bought and power ranks.
+
+    The base is the linked trait's value (:func:`resistance_base`) — Stamina for
+    Toughness/Fortitude, Awareness for Will, the Defense trait for Dodge; derived
+    resistances with no linked trait (Defence itself) have base 0. On top of that sit
+    the ranks bought above the base and any power boost (Protection → Toughness). A
+    power that raises the linked trait therefore raises the total too.
+    """
+
+    base = resistance_base(char, game_data, key)
     bought = char.resistances.get(key, 0)
-    ability_value = effective_ability(char, game_data, res.ability) if res and res.ability else 0
     bonus = _trait_bonus(char, game_data, "resistance", key)
-    return ability_value + bought + (bonus.amount if bonus else 0)
+    return base + bought + (bonus.amount if bonus else 0)
 
 
 def defense_class(char: Character, game_data: GameData, key: str = "DEF") -> int:
@@ -213,29 +235,44 @@ def initiative(char: Character, bonus: int = 0, game_data: GameData | None = Non
     return agility + bonus
 
 
-def power_points_spent(char: Character, game_data: GameData) -> int:
-    """Total power points the character's current build costs (``mm-core-mechanics.md`` §6).
+def ability_points_spent(char: Character, game_data: GameData) -> int:
+    """Power points spent on abilities and combat stats (``mm-core-mechanics.md`` §6).
 
-    Abilities and combat stats cost per rank (combat stats — the ``derived`` ones —
-    at the combat rate); non-derived resistances cost per rank; skills cost 1 PP
-    per N ranks (a higher N for focused skills); advantages cost per rank; each saved
-    power costs its assembled :func:`power_total_cost`. Negative ability/combat ranks
-    refund points.
+    Each ability costs per rank; the ``derived`` combat stats (Attack) cost at the
+    combat rate. Negative ranks refund points.
     """
 
     costs = game_data.costs.traits
     total = 0
-
     for ability in game_data.abilities:
         rank = char.abilities.get(ability.key, 0)
         rate = costs.combat_per_rank if ability.derived else costs.ability_per_rank
         total += rank * rate
+    return total
 
+
+def resistance_points_spent(char: Character, game_data: GameData) -> int:
+    """Power points spent on resistances (``mm-core-mechanics.md`` §6).
+
+    Only the ranks *bought above the derived base* cost points (that delta is what
+    the model stores); non-derived resistances cost per rank, the ``derived`` combat
+    Defense at the combat rate. Ranks bought below the base refund points.
+    """
+
+    costs = game_data.costs.traits
+    total = 0
     for res in game_data.resistances:
         bought = char.resistances.get(res.key, 0)
         rate = costs.combat_per_rank if res.derived else costs.resistance_per_rank
         total += bought * rate
+    return total
 
+
+def skill_points_spent(char: Character, game_data: GameData) -> int:
+    """Power points spent on skills: 1 PP per N ranks (a higher N for focused skills)."""
+
+    costs = game_data.costs.traits
+    total = 0
     for row_id, ranks in char.skill_ranks.items():
         if ranks <= 0:
             continue
@@ -243,14 +280,37 @@ def power_points_spent(char: Character, game_data: GameData) -> int:
         focused = bool(skill and skill.focused)
         per_pp = costs.skill_focus_ranks_per_pp if focused else costs.skill_ranks_per_pp
         total += math.ceil(ranks / per_pp)
-
-    for adv in char.advantages:
-        total += adv.rank * costs.advantage_per_rank
-
-    for power in char.powers:
-        total += power_total_cost(power, game_data)
-
     return total
+
+
+def advantage_points_spent(char: Character, game_data: GameData) -> int:
+    """Power points spent on advantages: the advantage rate per rank."""
+
+    rate = game_data.costs.traits.advantage_per_rank
+    return sum(adv.rank * rate for adv in char.advantages)
+
+
+def powers_points_spent(char: Character, game_data: GameData) -> int:
+    """Power points spent on powers: each saved power's assembled :func:`power_total_cost`."""
+
+    return sum(power_total_cost(power, game_data) for power in char.powers)
+
+
+def power_points_spent(char: Character, game_data: GameData) -> int:
+    """Total power points the character's current build costs (``mm-core-mechanics.md`` §6).
+
+    The sum of the per-category costs — abilities/combat stats, resistances, skills,
+    advantages, and powers — each of which is also available on its own for the
+    per-section totals the sheet shows.
+    """
+
+    return (
+        ability_points_spent(char, game_data)
+        + resistance_points_spent(char, game_data)
+        + skill_points_spent(char, game_data)
+        + advantage_points_spent(char, game_data)
+        + powers_points_spent(char, game_data)
+    )
 
 
 def power_points_remaining(char: Character, game_data: GameData) -> int:

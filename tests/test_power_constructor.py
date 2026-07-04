@@ -601,3 +601,135 @@ def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) ->
 
     sheet.powers._remove_power(character.powers[0])
     assert not tough.isVisibleTo(sheet.stats)  # boost cleared when the power goes
+
+
+# -- edit-in-place ------------------------------------------------------------
+
+
+def test_editing_seeds_the_window_from_the_existing_power(qapp: QApplication) -> None:
+    from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")])
+    power = Power(name="Fire Blast", description="whoosh", effects=[effect])
+
+    window = PowerConstructorWindow(load_game_data(), power=power)
+
+    # The name, description, effect card, and its rank/modifier chip all seed from
+    # the power being edited.
+    assert window.windowTitle() == "Edit Power"
+    assert window._name.text() == "Fire Blast"
+    assert window._description.toPlainText() == "whoosh"
+    assert len(window.canvas.cards) == 1
+    card = window.canvas.cards[0]
+    assert card._rank.value() == 8
+    assert [c.selection.modifier_id for c in card._chips] == ["ranged"]
+    assert window._cost.text() == "Total cost: 16 PP"  # (1 + 1) * 8
+
+
+def test_editing_works_on_a_copy_until_saved(qapp: QApplication) -> None:
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    power = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=8)])
+    window = PowerConstructorWindow(load_game_data(), power=power)
+
+    # The window edits a distinct copy, so mutating it leaves the original alone
+    # until a save hands the copy back.
+    assert window.power is not power
+    window._name.setText("Ice Blast")
+    window.canvas.cards[0]._rank.setValue(3)
+    assert power.name == "Fire Blast"  # original untouched
+    assert power.effects[0].rank == 8
+
+
+def test_editing_a_multi_effect_power_restores_its_structure(qapp: QApplication) -> None:
+    from mm_companion.core.powers import STRUCTURE_ARRAY, Power, PowerEffectInstance
+
+    power = Power(
+        name="Elements",
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8),
+            PowerEffectInstance("affliction", rank=2),
+        ],
+    )
+    window = PowerConstructorWindow(load_game_data(), power=power)
+
+    # The structure switch is shown and reflects the loaded Array, and the cards
+    # carry their base/alternate badges.
+    assert window.canvas._mode_bar.isVisibleTo(window.canvas)
+    assert window.power.structure == STRUCTURE_ARRAY
+    assert window.canvas.cards[0]._role_badge.text() == "Base"
+    assert window.canvas.cards[1]._role_badge.text().startswith("Alternate")
+    assert window._cost.text() == "Total cost: 9 PP"  # 8 base + 1 flat alternate
+
+
+def test_editing_from_the_section_replaces_the_power_in_place(qapp: QApplication) -> None:
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=8)])
+    )
+    keep = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=4)])
+    character.powers.append(keep)
+    sheet = CharacterSheet(data, character)
+
+    changes: list = []
+    sheet.powers.changed.connect(lambda: changes.append(True))
+
+    sheet.powers._edit_power(character.powers[0])
+    window = sheet.powers._windows[0]
+    window._name.setText("Ice Blast")
+    window.canvas.cards[0]._rank.setValue(10)
+    window._save_power()
+
+    # The edited power replaces the original at its index (not appended), the other
+    # power is untouched, and the section reports the change.
+    assert [p.name for p in character.powers] == ["Ice Blast", "Force Field"]
+    assert character.powers[0].effects[0].rank == 10
+    assert character.powers[1] is keep
+    assert changes
+    assert sheet.powers._windows == []
+
+
+def test_closing_the_editor_without_saving_leaves_the_power_unchanged(qapp: QApplication) -> None:
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    original = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=8)])
+    character.powers.append(original)
+    sheet = CharacterSheet(data, character)
+
+    sheet.powers._edit_power(character.powers[0])
+    window = sheet.powers._windows[0]
+    window._name.setText("Ice Blast")
+    window.canvas.cards[0]._rank.setValue(3)
+    window.close()  # no save
+
+    # The stored power is still the original object, unmodified.
+    assert character.powers == [original]
+    assert character.powers[0].name == "Fire Blast"
+    assert character.powers[0].effects[0].rank == 8
+    assert sheet.powers._windows == []
+
+
+def test_edit_button_hidden_in_locked_view(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QPushButton
+
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=8)])
+    )
+    sheet = CharacterSheet(data, character)
+
+    def edit_buttons() -> list[QPushButton]:
+        return [b for b in sheet.powers._list_host.findChildren(QPushButton) if b.text() == "✎"]
+
+    assert edit_buttons() and all(b.isVisibleTo(sheet.powers) for b in edit_buttons())
+    sheet.set_locked(True)
+    assert all(not b.isVisibleTo(sheet.powers) for b in edit_buttons())

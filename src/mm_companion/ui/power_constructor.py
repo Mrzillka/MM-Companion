@@ -315,6 +315,10 @@ class EffectCard(QFrame):
         self._cost.setAlignment(Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self._cost)
 
+        # When editing an existing power the instance already carries its extras and
+        # flaws — render a chip for each (the config form built above already reads
+        # them, e.g. an attached Extra Condition, so only the chips need seeding).
+        self._seed_modifier_chips()
         self._refresh_cost()
 
     # -- effect-specific qualities (config) -------------------------------
@@ -522,15 +526,34 @@ class EffectCard(QFrame):
         bucket = self.instance.flaws if is_flaw else self.instance.extras
         bucket.append(selection)
 
+        self._build_chip(modifier, selection, is_flaw)
+        self._populate_config_form()  # a gating extra may change a field's type
+        self._refresh_cost()
+        self.changed.emit()
+
+    def _build_chip(self, modifier: Modifier, selection: ModifierSelection, is_flaw: bool) -> None:
+        """Render a chip for a selection already recorded on the instance.
+
+        Shared by :meth:`attach_modifier` (which first appends the selection) and
+        :meth:`_seed_modifier_chips` (which renders ones already present on load).
+        """
         chip = ModifierChip(modifier, selection)
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(self._on_chip_changed)
         self._chips.append(chip)
         (self._flaws_group if is_flaw else self._extras_group).add_chip(chip)
         self._hint.setVisible(False)
-        self._populate_config_form()  # a gating extra may change a field's type
-        self._refresh_cost()
-        self.changed.emit()
+
+    def _seed_modifier_chips(self) -> None:
+        """Render chips for the instance's pre-existing extras and flaws (edit mode)."""
+        for selection in self.instance.extras:
+            modifier = self._modifier(selection.modifier_id)
+            if modifier is not None:
+                self._build_chip(modifier, selection, is_flaw=False)
+        for selection in self.instance.flaws:
+            modifier = self._modifier(selection.modifier_id)
+            if modifier is not None:
+                self._build_chip(modifier, selection, is_flaw=True)
 
     def _remove_chip(self, chip: ModifierChip) -> None:
         if chip.selection in self.instance.extras:
@@ -690,15 +713,32 @@ class PowerCanvas(QFrame):
         """Append a new effect to the power and render its card."""
         instance = PowerEffectInstance(effect_id=effect_id)
         self._power.effects.append(instance)
+        card = self._build_card(instance)
+        self._sync_structure_ui()
+        self.changed.emit()
+        return card
+
+    def _build_card(self, instance: PowerEffectInstance) -> EffectCard:
+        """Render a card for an effect instance already on the power."""
         card = EffectCard(instance, self._data)
         card.changed.connect(self._on_card_changed)
         card.removeRequested.connect(self._remove_card)
         self._cards.append(card)
         self._layout.insertWidget(self._layout.count() - 1, card)  # before the stretch
         self._hint.setVisible(False)
-        self._sync_structure_ui()
-        self.changed.emit()
         return card
+
+    def load_power(self) -> None:
+        """Seed cards for a power that already carries effects (edit mode).
+
+        The effects are already on ``self._power``; this renders a card for each and
+        brings the structure switch in line with the loaded structure without
+        emitting :attr:`changed` (the window refreshes its cost/summary itself).
+        """
+        for instance in self._power.effects:
+            self._build_card(instance)
+        self._sync_structure_ui()
+        self._mode_bar.set_structure(self._power.structure)
 
     def _remove_card(self, card: EffectCard) -> None:
         if card.instance in self._power.effects:
@@ -902,6 +942,7 @@ class PowerConstructorWindow(QMainWindow):
         parent: QWidget | None = None,
         *,
         character: Character | None = None,
+        power: Power | None = None,
     ) -> None:
         super().__init__(parent)
         self._data = data or load_game_data()
@@ -909,8 +950,12 @@ class PowerConstructorWindow(QMainWindow):
         # for Strength-Based Damage, Attack for the PL cap) and to flag cap breaches.
         # None disables the check (a constructor opened without a character context).
         self._character = character
-        self.power = Power()
-        self.setWindowTitle("Power Constructor")
+        # Editing works on a deep copy so closing the window without saving leaves
+        # the character's stored power untouched; the copy is what `powerSaved` hands
+        # back, and the host section swaps it in for the original on save.
+        self._editing = power is not None
+        self.power = Power.from_dict(power.to_dict()) if self._editing else Power()
+        self.setWindowTitle("Edit Power" if self._editing else "Power Constructor")
         self.resize(900, 600)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -921,9 +966,20 @@ class PowerConstructorWindow(QMainWindow):
         splitter.setSizes([260, 640])
         self.setCentralWidget(splitter)
 
+        if self._editing:
+            self._seed_from_power()
+
         self._refresh_cost()
         self._refresh_game_terms()
         self._refresh_pl_warning()
+
+    def _seed_from_power(self) -> None:
+        """Populate the editor from the (copied) power being edited."""
+        self._name.setText(self.power.name)
+        self._description.setPlainText(self.power.description)
+        self.canvas.load_power()
+        self._save_button.setText("Save Changes")
+        self._save_button.setToolTip("Update this power on the character sheet")
 
     # -- left: the palette of bricks --------------------------------------
     def _build_palette(self) -> QWidget:

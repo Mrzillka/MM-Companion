@@ -6,8 +6,10 @@ its own window; saving there hands the finished
 :class:`~mm_companion.core.powers.Power` back through
 :attr:`~mm_companion.ui.power_constructor.PowerConstructorWindow.powerSaved`, which
 this section appends to the shared :class:`~mm_companion.core.character.Character`
-and shows as a removable row (name + assembled point cost, plus a ⚠ marker when the
-power breaks a Power Level cap for the character's PL). It follows the standard
+and shows as a row (name + assembled point cost, plus a ⚠ marker when the power
+breaks a Power Level cap for the character's PL). Each row carries an edit button
+that reopens the constructor pre-loaded with that power — editing a deep copy that
+replaces the original in place on save — and a remove button. It follows the standard
 section contract (``data`` + ``character`` constructor, ``changed`` signal,
 ``set_locked``) so it slots into the sheet like the others, and — because saved
 powers live on the model — a loaded character repopulates its list at construction.
@@ -90,6 +92,31 @@ class PowersSection(QGroupBox):
         self._rebuild_list()
         self.changed.emit()
 
+    def _edit_power(self, power: Power) -> None:
+        """Reopen the constructor pre-loaded with an existing power for editing.
+
+        The constructor edits a deep copy and hands it back on save; the copy then
+        replaces the original in place (identity match), so an unsaved close is a
+        no-op and a save swaps in exactly the power that was opened.
+        """
+        window = PowerConstructorWindow(self._data, character=self._character, power=power)
+        window.powerSaved.connect(
+            lambda edited, original=power: self._on_power_edited(original, edited)
+        )
+        window.closed.connect(lambda w=window: self._on_window_closed(w))
+        self._windows.append(window)
+        window.show()
+
+    def _on_power_edited(self, original: Power, edited: Power) -> None:
+        for index, existing in enumerate(self._character.powers):
+            if existing is original:  # identity, not value — powers can be equal
+                self._character.powers[index] = edited
+                break
+        else:  # the original was removed while the editor was open — treat as an add
+            self._character.powers.append(edited)
+        self._rebuild_list()
+        self.changed.emit()
+
     def _on_window_closed(self, window: PowerConstructorWindow) -> None:
         if window in self._windows:
             self._windows.remove(window)
@@ -141,6 +168,13 @@ class PowersSection(QGroupBox):
         cost = QLabel(f"{power_total_cost(power, self._data)} PP")
         cost.setEnabled(False)
         layout.addWidget(cost)
+
+        edit = QPushButton("✎")
+        edit.setFixedWidth(24)
+        edit.setToolTip("Edit this power")
+        edit.clicked.connect(lambda _checked=False, p=power: self._edit_power(p))
+        edit.setVisible(not self._locked)  # editing chrome hidden in view mode
+        layout.addWidget(edit)
 
         remove = QPushButton("✕")
         remove.setFixedWidth(24)

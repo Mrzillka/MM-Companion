@@ -257,9 +257,9 @@ def test_effect_stat_rows_render_a_rank_range_as_a_distance() -> None:
 def test_effect_stat_rows_fill_in_the_attack_bonus_and_save_dc() -> None:
     data = load_game_data()
     rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("damage", rank=8), data)}
-    # Attack bonus reads as the effect rank; Damage's Toughness DC is 15 + rank.
+    # Attack bonus reads as the effect rank; Damage's Toughness DC is 10 + rank.
     assert rows["check"].value == "8 vs. Defense"
-    assert rows["resistance"].value == "Toughness vs. 23"
+    assert rows["resistance"].value == "Toughness vs. 18"
 
 
 def test_effect_stat_rows_use_a_ten_base_dc_for_non_damage() -> None:
@@ -278,7 +278,7 @@ def test_attack_roll_shows_the_characters_attack_when_given() -> None:
     # The attack roll is the character's Attack, not the effect rank; the DC still
     # tracks the rank.
     assert rows["check"].value == "6 vs. Defense"
-    assert rows["resistance"].value == "Toughness vs. 23"
+    assert rows["resistance"].value == "Toughness vs. 18"
 
 
 def test_attack_roll_adds_accurate_over_the_characters_attack() -> None:
@@ -349,7 +349,7 @@ def test_effect_stat_rows_perception_range_drops_the_attack_roll() -> None:
     rows = {r.key: r for r in effect_stat_rows(effect, data)}
     assert "check" not in rows  # no attack roll row at all
     assert rows["range"].value == "Perception" and rows["range"].change == "better"
-    assert rows["resistance"].value == "Toughness vs. 23"  # target still resists
+    assert rows["resistance"].value == "Toughness vs. 18"  # target still resists
 
 
 def test_effect_stat_rows_area_keeps_the_attack_roll_with_a_note() -> None:

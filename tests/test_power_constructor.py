@@ -510,9 +510,9 @@ def test_constructor_shows_strength_folded_into_the_damage_dc(qapp: QApplication
     card._rank.setValue(8)
     card.attach_modifier("strength_based")
 
-    # Toughness DC = 15 + effective rank (8 + 5) = 28, not the bought-rank 23.
+    # Toughness DC = 10 + effective rank (8 + 5) = 23, not the bought-rank 18.
     rows = {r.key: r for r in window._terms.effect_rows[0]}
-    assert rows["resistance"].value == "Toughness vs. 28"
+    assert rows["resistance"].value == "Toughness vs. 23"
 
 
 def test_constructor_summary_shows_the_characters_attack_bonus(qapp: QApplication) -> None:

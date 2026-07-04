@@ -212,7 +212,7 @@
         "affects": "none"
       },
       "description": "A direct harmful attack — the basis for most offensive powers.",
-      "resistanceDcBase": 15
+      "resistanceDcBase": 10
     },
     {
       "id": "deflect",

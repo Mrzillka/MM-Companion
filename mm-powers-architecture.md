@@ -45,7 +45,7 @@ power_total_cost      = sum(effect_total_cost for every effect in the power)
 
 Minimum cost per rank is 1 Power Point — flaws can't push a per-rank cost below that. This is
 the number that gets deducted from the character's Power Point pool (see
-`mm-core-mechanics.md` §6) when the power is added to the character.
+`mm-core-mechanics.md` §7) when the power is added to the character.
 
 ---
 
@@ -145,7 +145,7 @@ This is the case you called out — a power that should *conditionally* patch an
 ```
 Reasoning:
 - Base rank 4, target = Attack (same per-rank cost as buying Attack ranks directly — 2
-  PP/rank, per `mm-core-mechanics.md` §6 — so 8 PP normally).
+  PP/rank, per `mm-core-mechanics.md` §7 — so 8 PP normally).
 - The `removable` flaw (equipment tier) discounts the cost based on the power's total cost
   (see `modifiers.json`), dropping it to 6 PP here, but attaches a condition: **this bonus
   only applies while the equipment is present and not disabled.**

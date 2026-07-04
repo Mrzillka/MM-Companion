@@ -305,7 +305,7 @@ def initiative(char: Character, bonus: int = 0, game_data: GameData | None = Non
 
 
 def ability_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on abilities and combat stats (``mm-core-mechanics.md`` §6).
+    """Power points spent on abilities and combat stats (``mm-core-mechanics.md`` §7).
 
     Each ability costs per rank; the ``derived`` combat stats (Attack) cost at the
     combat rate. Negative ranks refund points.
@@ -321,7 +321,7 @@ def ability_points_spent(char: Character, game_data: GameData) -> int:
 
 
 def resistance_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on resistances (``mm-core-mechanics.md`` §6).
+    """Power points spent on resistances (``mm-core-mechanics.md`` §7).
 
     Only the ranks *bought above the derived base* cost points (that delta is what
     the model stores); non-derived resistances cost per rank, the ``derived`` combat
@@ -366,7 +366,7 @@ def powers_points_spent(char: Character, game_data: GameData) -> int:
 
 
 def power_points_spent(char: Character, game_data: GameData) -> int:
-    """Total power points the character's current build costs (``mm-core-mechanics.md`` §6).
+    """Total power points the character's current build costs (``mm-core-mechanics.md`` §7).
 
     The sum of the per-category costs — abilities/combat stats, resistances, skills,
     advantages, and powers — each of which is also available on its own for the
@@ -392,7 +392,7 @@ def min_power_points(power_level: int, game_data: GameData) -> int:
     """The minimum power-point budget a Power Level requires: ``PL × pp_per_level``.
 
     A character's Power Level sets the floor on their point budget — a PL 10 hero is
-    built on at least 150 points at 15 points per level (``mm-core-mechanics.md`` §6).
+    built on at least 150 points at 15 points per level (``mm-core-mechanics.md`` §7).
     Data-driven: the per-level rate comes from ``costs.json``, never hardcoded here.
     """
 
@@ -881,7 +881,7 @@ def _numeric_roll(text: str, actor_bonus: int, dc: int | None, *, resistance: bo
     becomes ``actor_bonus`` — the effect rank, plus any Accurate/Inaccurate
     adjustment — so ``"Attack vs. Defense"`` reads ``"8 vs. Defense"``. A resisted
     threshold (``"Effect"`` / ``"Effect DC"`` after ``vs.``) becomes the save
-    ``dc``, so ``"Toughness vs. Effect"`` reads ``"Toughness vs. 23"``. A bare
+    ``dc``, so ``"Toughness vs. Effect"`` reads ``"Toughness vs. 18"``. A bare
     resistance name a config override left behind (e.g. Affliction's ``"Will"``)
     gets the DC appended. ``dc`` is ``None`` for effects that impose no save DC (the
     phrase's threshold is then left as prose).
@@ -1089,9 +1089,9 @@ def power_game_terms(power: Power, game_data: GameData) -> str:
 def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     """Report Power Level cap breaches (``mm-core-mechanics.md`` §7); empty list = valid.
 
-    Evaluates the caps whose inputs exist today: per-skill modifier, Dodge +
-    Toughness, and Fortitude + Will. The attack + effect-rank cap is deferred
-    until powers are modelled.
+    Evaluates the character-wide caps: per-skill modifier, Dodge + Toughness, and
+    Fortitude + Will. The attack + effect-rank cap is per-power and checked in
+    :func:`power_pl_violations` instead.
     """
 
     caps = game_data.costs.power_level.caps

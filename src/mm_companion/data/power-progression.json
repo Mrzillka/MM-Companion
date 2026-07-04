@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Character-build progression tables for Mutants & Masterminds 4e \u2014 Starting Power Points and Power Level caps by Power Level, plus the basic trait cost reference. These are game-functional numbers (budget/limit tables), not creative expression, reproduced in full. Companion to mm-core-mechanics.md sections 6-7, which describe the formulas these tables tabulate exactly.",
+    "description": "Character-build progression tables for Mutants & Masterminds 4e \u2014 Starting Power Points and Power Level caps by Power Level, plus the basic trait cost reference. These are game-functional numbers (budget/limit tables), not creative expression, reproduced in full. Companion to mm-core-mechanics.md section 7, which describes the formulas these tables tabulate exactly.",
     "extrapolation": "Beyond PL 20, each additional Power Level adds +15 Starting Power Points, +1 to max Skill Modifier, +2 to each of max Attack+Effect / max Defense-or-Dodge+Toughness / max Fortitude+Will, and the Heroic Advantage cap continues as floor(PL/2).",
     "formulaKey": {
       "maxSkillModifier": "The total modifier (ability + skill rank + advantage bonuses) for any single skill cannot exceed this.",

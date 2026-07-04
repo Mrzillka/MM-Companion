@@ -562,7 +562,7 @@ def test_picking_a_target_writes_it_to_the_effect_config(qapp: QApplication) -> 
 
 def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
-    sheet.stats._abilities["STR"].setValue(2)
+    sheet.abilities._abilities["STR"].setValue(2)
 
     sheet.powers._open_constructor()
     window = sheet.powers._windows[0]
@@ -573,8 +573,8 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
     combo.setCurrentIndex(combo.findData("STR"))
     window._save_power()
 
-    enh = sheet.stats._ability_enh["STR"]
-    assert enh.isVisibleTo(sheet.stats)
+    enh = sheet.abilities._ability_enh["STR"]
+    assert enh.isVisibleTo(sheet.abilities)
     assert enh.text() == "→ 5"  # 2 bought + 3 boost
     assert "Mighty" in enh.toolTip()
 
@@ -596,11 +596,11 @@ def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) ->
     )
     sheet = CharacterSheet(data, character)
 
-    tough = sheet.stats._resistance_enh["TOUGHNESS"]
-    assert tough.isVisibleTo(sheet.stats)  # Protection boost shown on load
+    tough = sheet.resistances._resistance_enh["TOUGHNESS"]
+    assert tough.isVisibleTo(sheet.resistances)  # Protection boost shown on load
 
     sheet.powers._remove_power(character.powers[0])
-    assert not tough.isVisibleTo(sheet.stats)  # boost cleared when the power goes
+    assert not tough.isVisibleTo(sheet.resistances)  # boost cleared when the power goes
 
 
 # -- edit-in-place ------------------------------------------------------------

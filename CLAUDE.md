@@ -71,7 +71,10 @@ clean (see Licensing below).
   Application Support elsewhere; override with `MM_COMPANION_HOME`) holding
   `settings.json`, a `characters/` dir, and a `gm_characters/` dir. It is
   idempotent and never clobbers edited settings. `core.storage` is pure Python
-  (no Qt) and computes paths itself so it works headless in CI.
+  (no Qt) and computes paths itself so it works headless in CI. `save_settings`/
+  `update_settings` write the file back (e.g. the UI's window `layout`, stored as
+  opaque base64 strings so no Qt types leak into `core`); `load_settings` tolerates
+  unknown keys.
 - The app launches into `StartWindow` (`ui/start_window.py`), a standalone
   launcher: four action buttons (Create New Character, Open Existing, Open GM
   Mode, Exit) beside a scrollable library of `CharacterCard`s (image, name, PL).
@@ -110,11 +113,28 @@ clean (see Licensing below).
   from `closeEvent` — a cancelled Save (or Save As dialog) leaves the window open.
   Seeding a loaded character does **not** mark it dirty (a `_loading` guard in
   `BaseInfoSection`, plus the fact that section signals connect after construction).
-- UI construction: `MainWindow` → `CharacterSheet` (a `QScrollArea`) → four
-  stacked sections: `BaseInfoSection`, `StatsSection`, `SkillsSection`,
-  `PowersSection`. The data-driven sections take the `GameData` and build
+- UI construction: `MainWindow` → `CharacterSheet` (a **nested `QMainWindow`**
+  used as a dock host) → six blocks, each a `QGroupBox` wrapped in a scrollable
+  `QDockWidget`: `BaseInfoSection`, `AbilitiesSection`, `ResistancesSection`,
+  `AdvantagesSection`, `SkillsSection`, `PowersSection`. The user can drag a block
+  to re-dock, split, or tab it, resize it, or tear it out into its own floating
+  window. Abilities/Resistances/Advantages were split out of the former
+  `StatsSection`; Abilities and Resistances share the grid helpers in
+  `ui/sections/stat_grid.py`. The data-driven blocks take the `GameData` and build
   widgets by iterating over the data lists — no hardcoded ability/skill names.
-  (`PowersSection` takes no data yet — it is still a placeholder.)
+  Each dock has a stable `objectName` (required for `saveState`/`restoreState`),
+  and `CharacterSheet.docks` maps those names to the docks. The default
+  arrangement lives in `CharacterSheet._apply_default_layout()` (Base Info across
+  the top, Abilities | Resistances | Advantages, then Skills, then Powers).
+- Window layout persists globally: `MainWindow` saves its geometry and the sheet's
+  dock arrangement (`CharacterSheet.save_layout()`, a base64 `saveState`) to the
+  `layout` key in `settings.json` on close via `storage.update_settings`, and
+  restores them on open (`_restore_layout`). A **View** menu offers a show/hide
+  toggle per dock (`dock.toggleViewAction()`) and a **Reset Layout** action
+  (`CharacterSheet.reset_layout()`). `LAYOUT_VERSION` guards `saveState`, so an
+  arrangement saved before the dock set changes is rejected and the default
+  applies. Because Qt signals are object-to-object, the cross-block wiring keeps
+  working even when a block is floated into a separate window.
 - `CharacterSheet` owns the mutable per-character state as a single
   `core.character.Character` and passes it to each data-driven section. The
   sections are **views over that model**: widgets seed from it and write back to
@@ -123,9 +143,10 @@ clean (see Licensing below).
   `core.rules`, never in the widgets — e.g. skill totals come from
   `rules.skill_total`, not an inline formula.
 - Cross-section reactivity uses Qt signals over that shared model. Ability spin
-  boxes emit `StatsSection.abilityChanged(key, value)` →
-  `SkillsSection.set_ability_value`, which refreshes skill totals from the
-  model. Each section also emits a generic `changed` signal; `CharacterSheet`
+  boxes emit `AbilitiesSection.abilityChanged(key, value)` →
+  `SkillsSection.set_ability_value` (refreshes skill totals) and →
+  `ResistancesSection.follow_ability_change` (re-seeds bases derived from that
+  ability). Each block also emits a generic `changed` signal; `CharacterSheet`
   connects them to recompute build-wide derived values (currently
   `rules.power_points_spent`, pushed into the power-points pool label via
   `BaseInfoSection.set_pool_current`). Follow this pattern — write to the model
@@ -142,7 +163,9 @@ through rather than reinvent. When building new sheet widgets, use it:
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
   boxes, and inner tables from hijacking the page scroll: a guarded widget only
   reacts to the wheel once it has keyboard focus, otherwise the wheel is
-  redirected to the enclosing page. `make_spin_box` guards by default.
+  redirected to the enclosing page. `make_spin_box` guards by default. Each block
+  is wrapped in its own `QScrollArea` inside its dock, so the guard finds a
+  per-panel page to scroll.
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
   out); a locked field keeps showing its value but sheds its input chrome

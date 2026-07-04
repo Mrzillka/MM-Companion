@@ -31,7 +31,7 @@ def _wheel(widget) -> QWheelEvent:
 
 def test_unfocused_spin_box_ignores_wheel(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
-    spin = next(iter(sheet.stats._abilities.values()))
+    spin = next(iter(sheet.abilities._abilities.values()))
     spin.setValue(5)
 
     QApplication.sendEvent(spin, _wheel(spin))
@@ -40,7 +40,7 @@ def test_unfocused_spin_box_ignores_wheel(qapp: QApplication) -> None:
 
 def test_focused_spin_box_reacts_to_wheel(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
-    spin = next(iter(sheet.stats._abilities.values()))
+    spin = next(iter(sheet.abilities._abilities.values()))
     spin.setValue(5)
 
     sheet.show()

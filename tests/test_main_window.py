@@ -53,7 +53,7 @@ def test_loading_a_character_does_not_start_dirty(qapp: QApplication) -> None:
 
 def test_saving_clears_dirty(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
-    win._sheet.stats._abilities["STR"].setValue(3)
+    win._sheet.abilities._abilities["STR"].setValue(3)
     assert win._dirty is True
 
     win._write(storage.get_workspace().characters_dir / "hero.json")
@@ -73,7 +73,7 @@ def test_close_can_be_cancelled_when_dirty(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     win = MainWindow(locked=False)
-    win._sheet.stats._abilities["STR"].setValue(3)
+    win._sheet.abilities._abilities["STR"].setValue(3)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Cancel)
 
     event = QCloseEvent()
@@ -86,7 +86,7 @@ def test_close_can_discard_unsaved_changes(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     win = MainWindow(locked=False)
-    win._sheet.stats._abilities["STR"].setValue(3)
+    win._sheet.abilities._abilities["STR"].setValue(3)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Discard)
 
     event = QCloseEvent()
@@ -101,7 +101,7 @@ def test_close_save_persists_then_accepts(
     win = MainWindow(locked=False)
     # Give it a path so the Save branch doesn't open a dialog.
     win._path = storage.get_workspace().characters_dir / "onclose.json"
-    win._sheet.stats._abilities["STR"].setValue(4)
+    win._sheet.abilities._abilities["STR"].setValue(4)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Save)
 
     event = QCloseEvent()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QByteArray, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QMessageBox, QWidget
 
@@ -55,6 +55,9 @@ class MainWindow(QMainWindow):
         # Track unsaved changes only after the initial seed/lock has settled.
         self._sheet.edited.connect(self._on_edited)
 
+        # Restore the remembered window size and dock arrangement, if any.
+        self._restore_layout()
+
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar."""
         menu_bar = self.menuBar()
@@ -67,6 +70,14 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         # Exit closes the sheet; closing brings the launcher back (see closeEvent).
         file_menu.addAction("Exit").triggered.connect(self.close)
+
+        view_menu = menu_bar.addMenu("&View")
+        # A show/hide toggle per dock, so a panel closed with its × can be
+        # reopened, plus a reset back to the default arrangement.
+        for dock in self._sheet.docks.values():
+            view_menu.addAction(dock.toggleViewAction())
+        view_menu.addSeparator()
+        view_menu.addAction("Reset Layout").triggered.connect(self._sheet.reset_layout)
 
         settings_menu = menu_bar.addMenu("&Settings")
         self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
@@ -123,6 +134,27 @@ class MainWindow(QMainWindow):
         self._child_windows.append(window)
         window.show()
 
+    # -- layout persistence --------------------------------------------------
+
+    def _restore_layout(self) -> None:
+        """Restore the remembered window geometry and dock arrangement.
+
+        The layout is a global UI preference stored in settings.json; a missing or
+        incompatible entry simply leaves the default arrangement in place.
+        """
+        layout = storage.load_settings().get("layout") or {}
+        geometry = layout.get("window_geometry")
+        if isinstance(geometry, str) and geometry:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
+        self._sheet.restore_layout(layout.get("dock_state"))
+
+    def _persist_layout(self) -> None:
+        """Save the window geometry and dock arrangement as a global preference."""
+        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        storage.update_settings(
+            layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
+        )
+
     def _on_edited(self) -> None:
         """Mark the sheet dirty on the first user edit since the last save."""
         if not self._dirty:
@@ -139,6 +171,7 @@ class MainWindow(QMainWindow):
         if self._dirty and not self._confirm_close():
             event.ignore()
             return
+        self._persist_layout()
         self.closed.emit()
         super().closeEvent(event)
 

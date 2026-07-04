@@ -13,6 +13,8 @@ from mm_companion.core.storage import (
     ensure_workspace,
     get_workspace,
     load_settings,
+    save_settings,
+    update_settings,
 )
 
 
@@ -45,3 +47,20 @@ def test_home_env_var_overrides_the_root(_home: Path, monkeypatch: pytest.Monkey
     custom = _home / "custom"
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(custom))
     assert get_workspace().root == custom
+
+
+def test_save_settings_replaces_the_file(_home: Path) -> None:
+    save_settings({"theme": "dark", "layout": {"dock_state": "abc123"}})
+
+    assert load_settings() == {"theme": "dark", "layout": {"dock_state": "abc123"}}
+
+
+def test_update_settings_merges_and_persists_a_layout(_home: Path) -> None:
+    ensure_workspace()
+
+    result = update_settings(layout={"window_geometry": "geo", "dock_state": "state"})
+
+    # The new key is stored alongside the untouched defaults, and it round-trips.
+    assert result["layout"] == {"window_geometry": "geo", "dock_state": "state"}
+    assert result["theme"] == DEFAULT_SETTINGS["theme"]
+    assert load_settings()["layout"]["dock_state"] == "state"

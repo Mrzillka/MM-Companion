@@ -19,14 +19,14 @@ def qapp() -> QApplication:
 
 def test_ability_spin_writes_to_model(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
-    sheet.stats._abilities["STR"].setValue(4)
+    sheet.abilities._abilities["STR"].setValue(4)
     assert sheet.character.abilities["STR"] == 4
 
 
 def test_skill_rank_flows_to_model_and_total(qapp: QApplication) -> None:
     data = load_game_data()
     sheet = CharacterSheet(data)
-    sheet.stats._abilities["AGL"].setValue(3)
+    sheet.abilities._abilities["AGL"].setValue(3)
 
     # Drive the Stealth rank spin box via the row it renders into.
     stealth_row = next(row for row in sheet.skills._rows if row[1] == "Stealth")
@@ -41,7 +41,7 @@ def test_skill_rank_flows_to_model_and_total(qapp: QApplication) -> None:
 def test_spent_power_points_reflected_in_pool_label(qapp: QApplication) -> None:
     data = load_game_data()
     sheet = CharacterSheet(data)
-    sheet.stats._abilities["STR"].setValue(4)  # 4 * 2 = 8 PP
+    sheet.abilities._abilities["STR"].setValue(4)  # 4 * 2 = 8 PP
 
     spent = power_points_spent(sheet.character, data)
     assert spent == 8
@@ -133,10 +133,10 @@ def test_raising_an_ability_re_derives_the_power_cards(qapp: QApplication) -> No
     sheet = CharacterSheet(data, char)
     assert not _pl_warning_shown(sheet)  # 19 ≤ 20
 
-    sheet.stats._abilities["STR"].setValue(6)  # editing the sheet fact
+    sheet.abilities._abilities["STR"].setValue(6)  # editing the sheet fact
     assert _pl_warning_shown(sheet)  # 21 > 20 — the card re-derived and now warns
 
-    sheet.stats._abilities["STR"].setValue(4)
+    sheet.abilities._abilities["STR"].setValue(4)
     assert not _pl_warning_shown(sheet)  # back under the cap, marker clears
 
 
@@ -195,4 +195,46 @@ def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
     char.abilities["INT"] = 5
     sheet = CharacterSheet(data, char)
     assert sheet.character is char
-    assert sheet.stats._abilities["INT"].value() == 5
+    assert sheet.abilities._abilities["INT"].value() == 5
+
+
+def test_sheet_exposes_six_named_docks(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+
+    assert set(sheet.docks) == {
+        "dock_base_info",
+        "dock_abilities",
+        "dock_resistances",
+        "dock_advantages",
+        "dock_skills",
+        "dock_powers",
+    }
+    # Object names are required for save/restoreState, and each dock wraps a block.
+    for name, dock in sheet.docks.items():
+        assert dock.objectName() == name
+        assert dock.widget() is not None
+
+
+def test_reset_layout_redocks_and_reshows_panels(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    sheet.docks["dock_skills"].setFloating(True)
+    sheet.docks["dock_powers"].hide()
+
+    sheet.reset_layout()
+
+    assert not sheet.docks["dock_skills"].isFloating()
+    assert not sheet.docks["dock_powers"].isHidden()
+
+
+def test_floating_a_dock_keeps_cross_block_wiring_live(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.character.skill_ranks["Stealth"] = 2
+
+    # Tear the Skills panel out into its own window, then edit an ability: the
+    # abilities→skills wiring must still fire across the window boundary.
+    sheet.docks["dock_skills"].setFloating(True)
+    sheet.abilities._abilities["AGL"].setValue(3)
+
+    stealth_row = next(row for row in sheet.skills._rows if row[1] == "Stealth")
+    assert stealth_row[3].text() == "5"  # AGL 3 + 2 ranks

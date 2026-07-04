@@ -29,8 +29,9 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.powers import Power
-from mm_companion.core.rules import power_pl_violations, power_total_cost
+from mm_companion.core.rules import power_pl_violations, power_total_cost, powers_points_spent
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.widgets import title_with_cost
 
 
 class PowersSection(QGroupBox):
@@ -98,6 +99,8 @@ class PowersSection(QGroupBox):
         for power in self._character.powers:
             self._list_layout.addWidget(self._make_row(power))
         self._empty.setVisible(not self._character.powers)
+        # Keep the section title's running point cost current.
+        self.setTitle(title_with_cost("Powers", powers_points_spent(self._character, self._data)))
 
     def _make_row(self, power: Power) -> QFrame:
         row = QFrame()

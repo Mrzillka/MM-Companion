@@ -44,10 +44,16 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import power_trait_bonuses, resistance_base
+from mm_companion.core.rules import (
+    ability_points_spent,
+    advantage_points_spent,
+    power_trait_bonuses,
+    resistance_base,
+    resistance_points_spent,
+)
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import hline_separator, make_spin_box
+from mm_companion.ui.widgets import hline_separator, make_spin_box, title_with_cost
 
 STAT_MIN, STAT_MAX = -5, 30
 STAT_SPIN_WIDTH = 80
@@ -84,32 +90,33 @@ class StatsSection(QGroupBox):
         self._advantages_by_name = {a.name: a for a in data.advantages}
 
         layout = QHBoxLayout(self)
-        layout.addWidget(
-            self._build_stat_group(
-                "Abilities",
-                data.abilities,
-                self._abilities,
-                self._ability_enh,
-                character.abilities,
-                self._on_ability_changed,
-            )
+        self._ability_box = self._build_stat_group(
+            "Abilities",
+            data.abilities,
+            self._abilities,
+            self._ability_enh,
+            character.abilities,
+            self._on_ability_changed,
         )
-        layout.addWidget(
-            self._build_stat_group(
-                "Resistances",
-                data.resistances,
-                self._resistances,
-                self._resistance_enh,
-                character.resistances,
-                self._on_resistance_changed,
-            )
+        layout.addWidget(self._ability_box)
+        self._resistance_box = self._build_stat_group(
+            "Resistances",
+            data.resistances,
+            self._resistances,
+            self._resistance_enh,
+            character.resistances,
+            self._on_resistance_changed,
         )
-        layout.addWidget(self._build_advantages(data), stretch=1)
+        layout.addWidget(self._resistance_box)
+        self._advantage_box = self._build_advantages(data)
+        layout.addWidget(self._advantage_box, stretch=1)
         # The resistance spin boxes hold the *total* (base + bought), so display the
         # base on top of the stored delta now that the ability spin boxes exist.
         self._refresh_resistance_bases()
         # Seed the enhancement labels from any powers a loaded character carries.
         self.refresh_enhancements()
+        # Show each group's running point cost in its title.
+        self._refresh_costs()
 
     def _add_stat_row(
         self, grid: QGridLayout, row: int, name: str, abbr: str, spin: QSpinBox, enh: QLabel
@@ -173,6 +180,7 @@ class StatsSection(QGroupBox):
         # A resistance derived from this ability follows it (its bought delta is kept).
         self._refresh_resistance_bases()
         self.refresh_enhancements()  # the base moved, so the "→ total" does too
+        self._refresh_costs()
         self.changed.emit()
 
     def _on_resistance_changed(self, key: str, value: int) -> None:
@@ -184,7 +192,22 @@ class StatsSection(QGroupBox):
         # another; re-seed them all (guarded, so this doesn't re-enter).
         self._refresh_resistance_bases()
         self.refresh_enhancements()
+        self._refresh_costs()
         self.changed.emit()
+
+    def _refresh_costs(self) -> None:
+        """Show each group's running point cost in its title (Abilities/Resistances/
+        Advantages), recomputed from the model so it tracks every edit."""
+
+        self._ability_box.setTitle(
+            title_with_cost("Abilities", ability_points_spent(self._character, self._data))
+        )
+        self._resistance_box.setTitle(
+            title_with_cost("Resistances", resistance_points_spent(self._character, self._data))
+        )
+        self._advantage_box.setTitle(
+            title_with_cost("Advantages", advantage_points_spent(self._character, self._data))
+        )
 
     def _refresh_resistance_bases(self) -> None:
         """Show each resistance's total (derived base + bought delta) in its spin box.
@@ -301,6 +324,7 @@ class StatsSection(QGroupBox):
         # The table rows stay 1:1 (and in order) with the model's advantage list.
         self._character.advantages.append(AdvantageSelection(advantage.name, rank))
         self._append_advantage_row(advantage.name, rank, advantage.description, advantage.ranked)
+        self._refresh_costs()
         self.changed.emit()
 
     def _remove_advantage(self) -> None:
@@ -310,6 +334,7 @@ class StatsSection(QGroupBox):
             if 0 <= row < len(self._character.advantages):
                 del self._character.advantages[row]
         if rows:
+            self._refresh_costs()
             self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:

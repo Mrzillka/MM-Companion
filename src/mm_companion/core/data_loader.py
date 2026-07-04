@@ -229,8 +229,8 @@ class Effect:
     ``measure`` is a rank-derived real-world quantity the effect exposes (a movement
     speed, a leap distance). ``resistance_dc_base`` is the fixed part of the save DC
     an attack imposes — the resistance DC is ``resistance_dc_base + rank`` (10 for
-    most resistible effects, 15 for Damage, 0 for the opposed ones like Move Object)
-    — left ``None`` for effects that impose no save DC.
+    most resistible effects, 0 for the opposed ones like Move Object) — left
+    ``None`` for effects that impose no save DC.
     """
 
     id: str
@@ -311,7 +311,7 @@ class Modifier:
 
 @dataclass(frozen=True)
 class TraitCosts:
-    """Power-point cost constants for the point-bought traits (``mm-core-mechanics.md`` §6)."""
+    """Power-point cost constants for the point-bought traits (``mm-core-mechanics.md`` §7)."""
 
     ability_per_rank: int
     combat_per_rank: int

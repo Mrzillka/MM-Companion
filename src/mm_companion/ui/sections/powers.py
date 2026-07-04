@@ -6,16 +6,23 @@ its own window; saving there hands the finished
 :class:`~mm_companion.core.powers.Power` back through
 :attr:`~mm_companion.ui.power_constructor.PowerConstructorWindow.powerSaved`, which
 this section appends to the shared :class:`~mm_companion.core.character.Character`
-and shows as a row (name + assembled point cost, plus a ⚠ marker when the power
-breaks a Power Level cap for the character's PL). Each row carries an edit button
-that reopens the constructor pre-loaded with that power — editing a deep copy that
-replaces the original in place on save — and a remove button. It follows the standard
-section contract (``data`` + ``character`` constructor, ``changed`` signal,
-``set_locked``) so it slots into the sheet like the others, and — because saved
-powers live on the model — a loaded character repopulates its list at construction.
+and shows as a *card*. Each card reads top-to-bottom like a stat-block entry: a
+header (name, assembled point cost, a ⚠ marker when the power breaks a Power Level
+cap, and — for a runtime-gated power — an on/off switch), the free-text description,
+a per-effect summary listing each effect's extras and flaws, and a bottom line
+dedicated to roll information (attack bonus, save DC). Hovering the card reveals the
+full auto-generated game-term breakdown as a tooltip, the same data the Power
+Constructor shows while building. Each card carries an edit button that reopens the
+constructor pre-loaded with that power — editing a deep copy that replaces the
+original in place on save — and a remove button. It follows the standard section
+contract (``data`` + ``character`` constructor, ``changed`` signal, ``set_locked``)
+so it slots into the sheet like the others, and — because saved powers live on the
+model — a loaded character repopulates its list at construction.
 """
 
 from __future__ import annotations
+
+import html
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -31,15 +38,31 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.powers import Power
+from mm_companion.core.powers import (
+    STRUCTURE_ARRAY,
+    STRUCTURE_LINKED,
+    ModifierSelection,
+    Power,
+    PowerEffectInstance,
+)
 from mm_companion.core.rules import (
+    array_alternate_cost,
+    array_base_index,
+    effect_effective_rank,
+    effect_stat_rows,
     power_pl_violations,
     power_runtime_gates,
     power_total_cost,
     powers_points_spent,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
-from mm_companion.ui.widgets import title_with_cost
+from mm_companion.ui.widgets import hline_separator, title_with_cost
+
+# Tints for a stat a modifier changed, matching the Power Constructor's
+# PowerTermsView: an extra improved it (green), a flaw limited it (red).
+_TINT_BETTER = "#2e9e4f"
+_TINT_WORSE = "#d15b5b"
+_TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE}
 
 
 class PowersSection(QGroupBox):
@@ -122,6 +145,18 @@ class PowersSection(QGroupBox):
             self._windows.remove(window)
 
     # -- power list -------------------------------------------------------
+    def refresh(self) -> None:
+        """Rebuild the cards from the current character state.
+
+        The public seam the sheet calls when a fact *outside* this section changes a
+        power's displayed numbers — an ability (a Strength-Based Damage folds in
+        Strength; an attack power's PL cap tracks Attack) or the character's Power
+        Level (which sets every attack cap). Re-derives cost, effective ranks, roll
+        values, the PL-breach warning, and the tooltip. It only reads the model, so it
+        never emits :attr:`changed` (no signal loop back to the triggering section).
+        """
+        self._rebuild_list()
+
     def _rebuild_list(self) -> None:
         """Rebuild the row per power from the model, toggling the empty label."""
         while self._list_layout.count():
@@ -130,19 +165,59 @@ class PowersSection(QGroupBox):
                 widget.setParent(None)
                 widget.deleteLater()
         for power in self._character.powers:
-            self._list_layout.addWidget(self._make_row(power))
+            self._list_layout.addWidget(self._make_card(power))
         self._empty.setVisible(not self._character.powers)
         # Keep the section title's running point cost current.
         self.setTitle(title_with_cost("Powers", powers_points_spent(self._character, self._data)))
 
-    def _make_row(self, power: Power) -> QFrame:
-        row = QFrame()
-        row.setFrameShape(QFrame.Shape.StyledPanel)
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(6, 2, 6, 2)
+    def _make_card(self, power: Power) -> QFrame:
+        """A stat-block card for one power: header, description, effects, roll line.
+
+        The whole card carries the full game-term breakdown on its tooltip (the same
+        data the Power Constructor shows while building), so hovering reveals every
+        derived system value.
+        """
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setToolTip(self._system_tooltip(power))
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+
+        layout.addWidget(self._header_row(power))
+
+        if power.description:
+            desc = QLabel(power.description)
+            desc.setWordWrap(True)
+            desc.setStyleSheet("color: gray; font-style: italic;")
+            layout.addWidget(desc)
+
+        effects = self._effects_block(power)
+        if effects is not None:
+            layout.addWidget(effects)
+
+        # A dedicated bottom line for the numbers that come up mid-play: the attack
+        # bonus and the save DC each effect imposes.
+        layout.addWidget(hline_separator())
+        layout.addWidget(self._rolls_label(power))
+        return card
+
+    def _header_row(self, power: Power) -> QWidget:
+        """Name + PL warning on the left; the on/off switch, cost, and edit/remove
+        chrome on the right.
+
+        Returns a host widget (not a bare layout) so every child has a parent the
+        moment it is created. Calling ``setVisible(True)`` on a *parentless* widget
+        shows it as a momentary top-level window — on Windows that flashes a small
+        window on screen and is slow to realize; the edit/remove buttons hit exactly
+        that path, so the header must own them before their visibility is set.
+        """
+        host = QWidget()
+        layout = QHBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         name = QLabel(power.name or "Unnamed Power")
-        name.setStyleSheet("font-weight: bold;")
+        name.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(name)
 
         # A power that breaks a PL cap carries a warning marker naming the breach;
@@ -169,20 +244,181 @@ class PowersSection(QGroupBox):
         cost.setEnabled(False)
         layout.addWidget(cost)
 
+        # Add each button to the (host-owned) layout *before* setting visibility:
+        # addWidget reparents it to `host`, so setVisible acts on a parented child.
+        # Calling setVisible on a still-parentless widget shows it as a momentary
+        # top-level window (the Windows flash / lag this method's docstring warns of).
         edit = QPushButton("✎")
         edit.setFixedWidth(24)
         edit.setToolTip("Edit this power")
         edit.clicked.connect(lambda _checked=False, p=power: self._edit_power(p))
-        edit.setVisible(not self._locked)  # editing chrome hidden in view mode
         layout.addWidget(edit)
+        edit.setVisible(not self._locked)  # editing chrome hidden in view mode
 
         remove = QPushButton("✕")
         remove.setFixedWidth(24)
         remove.setToolTip("Remove this power")
         remove.clicked.connect(lambda _checked=False, p=power: self._remove_power(p))
-        remove.setVisible(not self._locked)  # editing chrome hidden in view mode
         layout.addWidget(remove)
-        return row
+        remove.setVisible(not self._locked)  # editing chrome hidden in view mode
+        return host
+
+    # -- effect summary (name + extras/flaws) -----------------------------
+    def _effects_block(self, power: Power) -> QWidget | None:
+        """A stacked, per-effect summary; ``None`` for a power with no effects."""
+        if not power.effects:
+            return None
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setSpacing(3)
+        for index, effect in enumerate(power.effects):
+            layout.addWidget(self._effect_summary(power, effect, index))
+        return host
+
+    def _effect_summary(self, power: Power, effect: PowerEffectInstance, index: int) -> QWidget:
+        """One effect: its name and effective rank, a composite role note, and its
+        attached extras (green) and flaws (red)."""
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(self._effect_title(effect))
+        title.setStyleSheet("font-weight: bold;")
+        header.addWidget(title)
+        note = self._role_note(power, index)
+        if note:
+            role = QLabel(note)
+            role.setStyleSheet("color: gray; font-style: italic;")
+            header.addWidget(role)
+        header.addStretch()
+        layout.addLayout(header)
+
+        extras = self._modifier_names(effect.extras)
+        if extras:
+            label = QLabel("Extras: " + ", ".join(extras))
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {_TINT_BETTER};")
+            layout.addWidget(label)
+        flaws = self._modifier_names(effect.flaws)
+        if flaws:
+            label = QLabel("Flaws: " + ", ".join(flaws))
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {_TINT_WORSE};")
+            layout.addWidget(label)
+        return box
+
+    def _effect_title(self, effect: PowerEffectInstance) -> str:
+        """``"Damage 8"`` — the effect's name at its effective rank (a Strength-Based
+        Damage folds in the wielder's Strength, matching the constructor)."""
+        base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
+        rank = effect_effective_rank(effect, self._data, self._character)
+        return f"{base.name if base else effect.effect_id} {rank}"
+
+    def _modifier_names(self, selections: list[ModifierSelection]) -> list[str]:
+        """Resolve each selection to its modifier name, tagging a ranked one taken
+        above rank 1 with its rank (e.g. ``"Accurate ×2"``)."""
+        catalog = self._data.modifier_catalog()
+        names: list[str] = []
+        for selection in selections:
+            modifier = catalog.get(selection.modifier_id)
+            if modifier is None:
+                continue
+            label = modifier.name
+            if modifier.ranked and selection.rank > 1:
+                label = f"{modifier.name} ×{selection.rank}"
+            names.append(label)
+        return names
+
+    def _role_note(self, power: Power, index: int) -> str:
+        """A composite effect's part: ``"base"``/``"alternate …"`` for an array or
+        ``"linked"``; empty for a single or independent-multi effect."""
+        if len(power.effects) < 2:
+            return ""
+        if power.structure == STRUCTURE_LINKED:
+            return "linked"
+        if power.structure == STRUCTURE_ARRAY:
+            if index == array_base_index(power, self._data):
+                return "base"
+            return f"alternate ({array_alternate_cost(self._data)} pt)"
+        return ""
+
+    # -- roll line --------------------------------------------------------
+    def _rolls_label(self, power: Power) -> QLabel:
+        """The bottom roll line; a muted placeholder when the power rolls nothing."""
+        text = self._rolls_text(power)
+        label = QLabel(f"🎲 {text}" if text else "No attack or resistance roll")
+        label.setWordWrap(True)
+        if text:
+            label.setStyleSheet("color: #6a86c0;")  # a calm blue reserved for dice info
+        else:
+            label.setEnabled(False)
+        return label
+
+    def _rolls_text(self, power: Power) -> str:
+        """The attack bonus and save DC each effect imposes, read from the same
+        game-term rows the constructor shows; effect-prefixed for a multi-effect power."""
+        multi = len(power.effects) > 1
+        parts: list[str] = []
+        for effect in power.effects:
+            rows = {r.key: r for r in effect_stat_rows(effect, self._data, self._character)}
+            segments = []
+            if "check" in rows:
+                segments.append(rows["check"].value)
+            if "resistance" in rows:
+                segments.append(rows["resistance"].value)
+            elif "effect_dc" in rows:  # a save DC with no shown check/resistance phrase
+                segments.append(rows["effect_dc"].value)
+            if not segments:
+                continue
+            line = " · ".join(segments)
+            if multi:
+                base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
+                line = f"{base.name if base else effect.effect_id}: {line}"
+            parts.append(line)
+        return "    ".join(parts)
+
+    # -- hover tooltip: the full game-term breakdown ----------------------
+    def _system_tooltip(self, power: Power) -> str:
+        """Rich-text breakdown of every effect's game-term stats for the card tooltip.
+
+        Mirrors the Power Constructor's PowerTermsView: a structure header for a
+        composite power, then each effect at its effective rank with its stat rows,
+        each modifier-changed value tinted green (better) or red (worse)."""
+        if not power.effects:
+            return ""
+        blocks: list[str] = []
+        header = self._structure_header(power)
+        if header:
+            blocks.append(f"<b>{html.escape(header)}</b>")
+        for index, effect in enumerate(power.effects):
+            title = html.escape(self._effect_title(effect))
+            note = self._role_note(power, index)
+            if note:
+                title += f" <i>{html.escape(note)}</i>"
+            rows = []
+            for stat in effect_stat_rows(effect, self._data, self._character):
+                value = html.escape(stat.value)
+                tint = _TINTS.get(stat.change)
+                if tint:
+                    value = f"<span style='color:{tint}'>{value}</span>"
+                rows.append(f"{html.escape(stat.label)}: {value}")
+            body = "<br>".join(rows)
+            blocks.append(f"<p style='margin:4px 0 0 0'><b>{title}</b><br>{body}</p>")
+        return "".join(blocks)
+
+    @staticmethod
+    def _structure_header(power: Power) -> str:
+        if len(power.effects) < 2:
+            return ""
+        if power.structure == STRUCTURE_LINKED:
+            return "Linked (all effects activate together)"
+        if power.structure == STRUCTURE_ARRAY:
+            return "Array (one effect active at a time)"
+        return ""
 
     def _remove_power(self, power: Power) -> None:
         if power in self._character.powers:
@@ -203,11 +439,16 @@ class PowersSection(QGroupBox):
         Removable, or a Sustained toggle); ``rules.effect_is_active`` reads only the
         flags the power's gates make relevant. The ``changed`` signal is already wired
         to refresh the stats/skills sections, so the boosted totals update live.
+
+        The cards are rebuilt too: switching off a power that boosts an ability
+        (Enhanced Trait) lowers the *effective* ability another power reads — a
+        Strength-Based Damage's rank, PL cap, and save DC all move with it.
         """
         power.activated = active
         power.item_present = active
         for effect in power.effects:
             effect.toggled_on = active
+        self._rebuild_list()
         self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:

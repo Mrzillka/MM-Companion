@@ -63,6 +63,14 @@ class CharacterSheet(QScrollArea):
         self.powers.changed.connect(self.stats.refresh_enhancements)
         self.powers.changed.connect(self.skills.refresh_totals)
 
+        # And the reverse: a power's displayed numbers derive from character facts, so
+        # editing an ability (Strength feeds a Strength-Based Damage; Attack sets an
+        # attack power's PL cap) or the Power Level (which caps every attack power)
+        # re-derives the power cards — costs, effective ranks, roll values, and the
+        # PL-breach warnings. `refresh` only reads the model, so it never loops back.
+        self.stats.changed.connect(self.powers.refresh)
+        self.base_info.changed.connect(self.powers.refresh)
+
         # Surface any user edit for unsaved-change tracking. The stats/skills
         # `changed` signal already fires on every edit they make; base_info has
         # edits (name, conditions, image) that don't affect the point build, so

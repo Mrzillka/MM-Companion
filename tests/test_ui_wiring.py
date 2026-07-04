@@ -108,6 +108,87 @@ def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
     assert resistance_total(char, data, "TOUGHNESS") == 0
 
 
+def _pl_warning_shown(sheet: CharacterSheet) -> bool:
+    """Whether any power card is showing the ⚠ Power-Level-breach marker."""
+    from PySide6.QtWidgets import QLabel
+
+    return any(label.text() == "⚠" for label in sheet.powers.findChildren(QLabel))
+
+
+def test_raising_an_ability_re_derives_the_power_cards(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 10  # attack cap of 20 on attack + effective rank
+    char.abilities["STR"] = 4
+    # Strength-Based Damage folds Strength into its rank: rank 15 + STR 4 = 19 (under
+    # the cap), but STR 6 pushes it to 21 — the card must catch up when STR changes.
+    char.powers.append(
+        Power(
+            name="Smash",
+            effects=[
+                PowerEffectInstance("damage", rank=15, extras=[ModifierSelection("strength_based")])
+            ],
+        )
+    )
+    sheet = CharacterSheet(data, char)
+    assert not _pl_warning_shown(sheet)  # 19 ≤ 20
+
+    sheet.stats._abilities["STR"].setValue(6)  # editing the sheet fact
+    assert _pl_warning_shown(sheet)  # 21 > 20 — the card re-derived and now warns
+
+    sheet.stats._abilities["STR"].setValue(4)
+    assert not _pl_warning_shown(sheet)  # back under the cap, marker clears
+
+
+def test_raising_power_level_clears_a_power_cards_warning(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 10  # cap 20
+    char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=21)]))
+    sheet = CharacterSheet(data, char)
+    assert _pl_warning_shown(sheet)  # rank 21 over the PL 10 cap
+
+    sheet.base_info._characteristics["power_level"].setValue(11)  # cap rises to 22
+    assert not _pl_warning_shown(sheet)  # the card re-derived against the new cap
+
+
+def test_toggling_an_enhancer_re_derives_a_dependent_power_card(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 12
+    char.abilities["STR"] = 2
+    # Rage boosts STR by 6 but is gated by Activation; Punch is Strength-Based, so its
+    # save DC reads the *effective* STR — switching Rage off must move Punch's card.
+    char.powers.append(
+        Power(
+            name="Rage",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=6,
+                    config={"target": "STR"},
+                    flaws=[ModifierSelection("activation")],
+                )
+            ],
+        )
+    )
+    char.powers.append(
+        Power(
+            name="Punch",
+            effects=[
+                PowerEffectInstance("damage", rank=10, extras=[ModifierSelection("strength_based")])
+            ],
+        )
+    )
+    sheet = CharacterSheet(data, char)
+    # Rage on: effective STR 8 → Damage rank 18 → Toughness DC 28.
+    assert "Toughness vs. 28" in sheet.powers._rolls_text(char.powers[1])
+
+    sheet.powers.findChild(QCheckBox).setChecked(False)  # switch Rage off
+    # Rage off: effective STR 2 → Damage rank 12 → Toughness DC 22.
+    assert "Toughness vs. 22" in sheet.powers._rolls_text(char.powers[1])
+
+
 def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
     data = load_game_data()
     char = Character.new_default(data)

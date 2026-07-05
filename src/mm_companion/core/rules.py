@@ -518,10 +518,31 @@ def reconcile_points_to_level(power_level: int, power_points: int, game_data: Ga
     return power_points
 
 
-def _modifier_magnitude(modifier: Modifier, selection) -> int:
-    """One modifier's cost magnitude: ``cost_value``, times its rank when ``ranked``."""
+def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
+    """A cost magnitude a chosen config option overrides the modifier's with, if any.
 
-    return modifier.cost_value * (selection.rank if modifier.ranked else 1)
+    The first of the modifier's config fields whose selected option carries a
+    ``cost_value`` (a Side Effect always/on-failure toggle, a Removable tier) wins;
+    ``None`` when no such choice is set, leaving the modifier's own ``cost_value``.
+    """
+
+    for cfg in modifier.config_fields:
+        chosen = selection.config.get(cfg.key)
+        option = next(
+            (o for o in cfg.options if o.value == chosen and o.cost_value is not None), None
+        )
+        if option is not None:
+            return option.cost_value
+    return None
+
+
+def _modifier_magnitude(modifier: Modifier, selection) -> int:
+    """One modifier's cost magnitude: ``cost_value`` (or a config override), times its
+    rank when ``ranked``."""
+
+    override = _modifier_config_cost(modifier, selection)
+    magnitude = modifier.cost_value if override is None else override
+    return magnitude * (selection.rank if modifier.ranked else 1)
 
 
 def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: bool) -> int:
@@ -769,6 +790,65 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         elif rank > power_level:  # auto-hit effect: rank alone is capped at PL
             violations.append(
                 f"{base.name} rank {rank} exceeds the PL {power_level} rank cap of {power_level}."
+            )
+    return violations
+
+
+def effect_allocation_used(effect: PowerEffectInstance, game_data: GameData) -> int:
+    """Ranks the effect's Tier-4 config fields have spent from its rank pool.
+
+    A Tier-4 effect (Enhanced Senses/Movement, Comprehend, Immunity, Feature) spends
+    its rank as a currency: an ``allocation`` field sums the chosen tier cost of each
+    selected option, a ``repeatable`` field with a numeric column sums those ranks,
+    and a plain ``repeatable`` (Feature) counts one per row. Other field types spend
+    nothing. Returns the total spent across all such fields.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return 0
+    used = 0
+    for cfg in base.config_fields:
+        value = effect.config.get(cfg.key)
+        if not value:
+            continue
+        if cfg.type == "allocation":
+            by_id = {o.id: o for o in cfg.alloc_options}
+            for entry in value:
+                option = by_id.get(entry.get("id"))
+                if option is None or not option.tiers:
+                    continue
+                tier = min(max(int(entry.get("tier", 1)), 1), len(option.tiers))
+                used += option.tiers[tier - 1]
+        elif cfg.type == "repeatable":
+            int_key = next((c.key for c in cfg.columns if c.type == "int"), None)
+            if int_key is not None:
+                used += sum(int(row.get(int_key, 0) or 0) for row in value)
+            else:
+                used += len(value)
+    return used
+
+
+def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
+    """Over-allocation breaches: a Tier-4 effect spending more ranks than it has.
+
+    Enhanced Senses/Movement, Comprehend, Immunity, and Feature allocate the effect's
+    rank across a menu (see :func:`effect_allocation_used`); spending more than the
+    effect's rank is invalid. Returns one message per over-allocated effect.
+    """
+
+    violations: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        if not any(f.type in ("allocation", "repeatable") for f in base.config_fields):
+            continue
+        used = effect_allocation_used(effect, game_data)
+        if used > effect.rank:
+            violations.append(
+                f"{base.name}: allocated {used} of {effect.rank} ranks "
+                f"— {used - effect.rank} over budget."
             )
     return violations
 
@@ -1089,8 +1169,8 @@ def effect_stat_rows(
         if value:
             rows.append(EffectStat("measure", base_effect.measure.label, "", value, ""))
     for field in base_effect.config_fields:
-        if field.overrides:
-            continue
+        if field.overrides or field.type == "checkbox":
+            continue  # a checkbox is a toggle or surfaced via a readout, not a value row
         value = effect.config.get(field.key)
         if value:
             rows.append(EffectStat(field.key, field.label, "", _config_display(field, value), ""))
@@ -1100,14 +1180,119 @@ def effect_stat_rows(
     if target and _trait_category(game_data, target):
         raised = f"{_trait_name(game_data, target)} +{effect.rank}"
         rows.append(EffectStat("enhances", "Enhances", "", raised, "better"))
+    # Tier-5 derived readouts (Growth's size mods, Insubstantial's state, ...) — purely
+    # computed information, appended as untinted (or sign-tinted) rows.
+    rows.extend(effect_readout_rows(effect, game_data))
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
     return rows
 
 
+def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
+    """The effect's Tier-5 derived readout rows (``mm-powers-ui-design.md`` §2 Tier 5).
+
+    Reads the effect's entries in ``effect_readouts.json`` and renders each by its
+    ``kind`` — a Growth/Shrinking size shift into its Size Table modifiers, an
+    Insubstantial rank into its state name, a Communication rank into its range band,
+    a Burrowing rank into per-terrain speeds, and so on. These are never editable, so
+    the UI shows them as read-only rows. Empty when the effect has no readouts.
+    """
+
+    rows: list[EffectStat] = []
+    for readout in game_data.effect_readouts.get(effect.effect_id, ()):
+        rows.extend(_readout_rows(readout, effect, game_data))
+    return rows
+
+
+def _readout_rows(readout, effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
+    """Render one :class:`~mm_companion.core.data_loader.Readout` to table rows."""
+
+    rank = effect.rank
+    data = readout.data
+    if readout.kind == "size_table":
+        sign = int(data.get("sign", 1))
+        size = game_data.measurements.size_row(sign * rank)
+        if size is None or rank <= 0:
+            return []
+        out = [EffectStat("size", readout.label or "Size", "", size.size_category, "")]
+        for label, mod in (
+            ("Defense", size.defense_mod),
+            ("Damage", size.damage_mod),
+            ("Toughness", size.toughness_mod),
+            ("Speed", size.speed_mod),
+            ("Intimidation", size.intimidation_mod),
+            ("Stealth", size.stealth_mod),
+        ):
+            if mod:
+                change = "better" if mod > 0 else "worse"
+                out.append(EffectStat(f"size_{label.lower()}", label, "", f"{mod:+d}", change))
+        return out
+    if readout.kind == "state":
+        by_rank = {int(k): v for k, v in data.get("byRank", {}).items()}
+        if not by_rank:
+            return []
+        eligible = [k for k in sorted(by_rank) if k <= rank]
+        chosen = by_rank[eligible[-1]] if eligible else by_rank[min(by_rank)]
+        return [EffectStat(readout.label.lower() or "state", readout.label, "", chosen, "")]
+    if readout.kind == "measure_offsets":
+        column = data.get("column", "distance")
+        out = []
+        for row in data.get("rows", []):
+            value = game_data.measurements.label(column, rank + int(row.get("offset", 0)))
+            if not value:
+                continue
+            if row.get("perRound"):
+                value = f"{value}/round"
+            out.append(EffectStat("readout", row.get("label", ""), "", value, ""))
+        return out
+    if readout.kind == "thresholds":
+        return [
+            EffectStat("readout", row.get("label", ""), "", row.get("text", ""), "")
+            for row in data.get("rows", [])
+            if rank >= int(row.get("minRank", 0))
+        ]
+    if readout.kind == "config_flag":
+        on = bool(effect.config.get(data.get("key", "")))
+        text = data.get("trueText", "") if on else data.get("falseText", "")
+        return [EffectStat(readout.label.lower() or "readout", readout.label, "", text, "")]
+    if readout.kind == "points_per_rank":
+        per = int(data.get("perRank", 1))
+        return [EffectStat("pool", readout.label, "", f"{rank * per} points", "")]
+    return []
+
+
 def _config_display(field, value) -> str:
     """Display text for a stored config ``value``: an option's label, or, for a
-    multiselect list, its labels joined with ``+`` (falls back to the raw value)."""
+    multiselect list, its labels joined with ``+`` (falls back to the raw value).
+
+    ``allocation`` values (a list of ``{"id", "tier"}``) render as their option
+    labels (tiered ones carry the chosen tier number); ``repeatable`` values (a list
+    of row dicts) render as their named rows, an Immunity scope carrying its rank."""
+
+    if field.type == "allocation":
+        by_id = {o.id: o for o in field.alloc_options}
+        parts = []
+        for entry in value:
+            option = by_id.get(entry.get("id"))
+            if option is None:
+                continue
+            label = option.label
+            if len(option.tiers) > 1:
+                label += f" {entry.get('tier', 1)}"
+            parts.append(label)
+        return ", ".join(parts)
+    if field.type == "repeatable":
+        name_key = field.columns[0].key if field.columns else "name"
+        int_key = next((c.key for c in field.columns if c.type == "int"), None)
+        parts = []
+        for row in value:
+            name = str(row.get(name_key, "")).strip()
+            if not name:
+                continue
+            if int_key and row.get(int_key):
+                name += f" ({row[int_key]})"
+            parts.append(name)
+        return ", ".join(parts)
 
     values = value if isinstance(value, list) else [value]
     labels = (next((o.label for o in field.options if o.value == v), v) for v in values)
@@ -1144,7 +1329,7 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
     # Configured qualities that don't override a stat are appended (e.g. conditions).
     chosen = []
     for field in base.config_fields:
-        if field.overrides:
+        if field.overrides or field.type == "checkbox":
             continue
         value = effect.config.get(field.key)
         if value:

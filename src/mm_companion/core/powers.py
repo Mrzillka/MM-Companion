@@ -43,17 +43,31 @@ class ModifierSelection:
     ``rank`` is carried for the ranked modifiers; unranked ones leave it at 1.
     Whether it adds or subtracts, and whether it applies per rank or once, comes
     from the referenced :class:`~mm_companion.core.data_loader.Modifier`.
+
+    ``config`` holds a modifier's own choices for the few extras/flaws that need
+    them (a Removable tier, a Side Effect's backfire text and always/on-failure
+    toggle, a Triggered/Limited condition — see ``mm-powers-ui-design.md`` §4). It
+    is empty for the plain modifiers, and a modifier that discounts by tier
+    (Removable, Side Effect) reads its value here rather than from a fixed cost.
     """
 
     modifier_id: str
     rank: int = 1
+    config: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {"modifier_id": self.modifier_id, "rank": self.rank}
+        data = {"modifier_id": self.modifier_id, "rank": self.rank}
+        if self.config:
+            data["config"] = dict(self.config)
+        return data
 
     @classmethod
     def from_dict(cls, raw: dict) -> ModifierSelection:
-        return cls(modifier_id=raw["modifier_id"], rank=int(raw.get("rank", 1)))
+        return cls(
+            modifier_id=raw["modifier_id"],
+            rank=int(raw.get("rank", 1)),
+            config=dict(raw.get("config", {})),
+        )
 
 
 @dataclass

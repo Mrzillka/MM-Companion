@@ -73,10 +73,12 @@ from mm_companion.core.rules import (
     TRAIT_CATEGORIES,
     array_alternate_cost,
     array_base_index,
+    effect_allocation_used,
     effect_cost_formula,
     effect_effective_rank,
     effect_stat_rows,
     effect_total_cost,
+    power_allocation_violations,
     power_pl_violations,
     power_total_cost,
 )
@@ -177,21 +179,65 @@ class ModifierChip(QFrame):
         tint = "#2e5e33" if modifier.category == "extra" else "#5e2e2e"
         self.setStyleSheet(f"ModifierChip {{ background: {tint}; border-radius: 6px; }}")
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 3, 2)
-        layout.setSpacing(4)
-        layout.addWidget(QLabel(modifier.name))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 2, 3, 2)
+        outer.setSpacing(2)
+        header = QHBoxLayout()
+        header.setSpacing(4)
+        header.addWidget(QLabel(modifier.name))
         if modifier.ranked:
             rank = make_spin_box(1, 30, value=selection.rank, buttons=False, max_width=44)
             rank.setPrefix("×")
             rank.valueChanged.connect(self._on_rank_changed)
-            layout.addWidget(rank)
+            header.addWidget(rank)
         remove = QPushButton("✕")
         remove.setFlat(True)
         remove.setFixedWidth(18)
         remove.setCursor(Qt.CursorShape.PointingHandCursor)
         remove.clicked.connect(lambda: self.removeRequested.emit(self))
-        layout.addWidget(remove)
+        header.addWidget(remove)
+        outer.addLayout(header)
+
+        # A few modifiers carry their own choices (Removable tier, Side Effect
+        # backfire, a Triggered/Limited condition — see mm-powers-ui-design.md §4).
+        # A choice with a cost (the tier, the always/on-failure toggle) feeds the cost
+        # engine straight from the selection's config.
+        if modifier.config_fields:
+            outer.addLayout(self._build_config(modifier))
+
+    def _build_config(self, modifier: Modifier) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        for cfg in modifier.config_fields:
+            if cfg.type == "select":
+                combo = QComboBox()
+                for option in cfg.options:
+                    combo.addItem(option.label, option.value)
+                index = combo.findData(self.selection.config.get(cfg.key))
+                combo.setCurrentIndex(index if index >= 0 else 0)
+                guard_wheel(combo)
+                if cfg.hint:
+                    combo.setToolTip(cfg.hint)
+                combo.currentIndexChanged.connect(
+                    lambda _i, c=combo, k=cfg.key: self._on_config(k, c.currentData())
+                )
+                row.addWidget(combo)
+            else:  # text
+                edit = QLineEdit(self.selection.config.get(cfg.key, ""))
+                edit.setPlaceholderText(cfg.label)
+                if cfg.hint:
+                    edit.setToolTip(cfg.hint)
+                edit.textChanged.connect(lambda text, k=cfg.key: self._on_config(k, text))
+                row.addWidget(edit)
+        return row
+
+    def _on_config(self, key: str, value) -> None:
+        if value:
+            self.selection.config[key] = value
+        else:
+            self.selection.config.pop(key, None)
+        self.changed.emit()
 
     def _on_rank_changed(self, value: int) -> None:
         self.selection.rank = value
@@ -247,6 +293,9 @@ class EffectCard(QFrame):
         self.instance = instance
         self._data = game_data
         self._chips: list[ModifierChip] = []
+        # Callables that refresh each Tier-4 allocation field's "used / rank" readout;
+        # rebuilt with the config form and fired when the effect's rank changes.
+        self._alloc_updaters: list = []
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setAcceptDrops(True)
 
@@ -343,6 +392,7 @@ class EffectCard(QFrame):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+        self._alloc_updaters = []  # rebuilt below alongside the fresh widgets
 
         effect = self._effect()
         if effect is None or not effect.config_fields:
@@ -351,20 +401,35 @@ class EffectCard(QFrame):
         form = QFormLayout(form_host)
         form.setContentsMargins(0, 0, 0, 0)
         for field in effect.config_fields:
+            if field.hidden_with and self._has_extra(field.hidden_with):
+                # A gating extra (e.g. Variable Conditions) defers this choice to
+                # use-time — show a note in place of the input instead of the widget.
+                note = QLabel("chosen when used")
+                note.setEnabled(False)
+                form.addRow(field.label, note)
+                continue
             field_type = self._effective_type(field)
             self._normalize_config(field.key, field_type)
-            form.addRow(field.label, self._config_widget(field, field_type))
+            widget = self._config_widget(field, field_type)
+            if field.hint:
+                widget.setToolTip(field.hint)
+            form.addRow(field.label, widget)
         self._config_layout.addWidget(form_host)
 
+    # Config field types whose stored value is a list rather than a scalar.
+    _LIST_TYPES = ("multiselect", "allocation", "repeatable")
+
     def _normalize_config(self, key: str, field_type: str) -> None:
-        """Keep the stored value shaped like the current input type: a list for
-        multiselect, a single value otherwise (collapsing a list to its first)."""
+        """Keep the stored value shaped like the current input type: a list for the
+        list-valued types, a single value otherwise (collapsing a list to its first)."""
         value = self.instance.config.get(key)
         if value is None:
             return
-        if field_type == "multiselect" and not isinstance(value, list):
-            self.instance.config[key] = [value]
-        elif field_type != "multiselect" and isinstance(value, list):
+        if field_type in self._LIST_TYPES and not isinstance(value, list):
+            # A former single-select collapsing into a multiselect keeps its value;
+            # a non-list under allocation/repeatable is malformed, so reset it.
+            self.instance.config[key] = [value] if field_type == "multiselect" else []
+        elif field_type not in self._LIST_TYPES and isinstance(value, list):
             if value:
                 self.instance.config[key] = value[0]
             else:
@@ -375,6 +440,12 @@ class EffectCard(QFrame):
             edit = QLineEdit(self.instance.config.get(field.key, ""))
             edit.textChanged.connect(lambda text, k=field.key: self._on_config_changed(k, text))
             return edit
+        if field_type == "checkbox":
+            return self._checkbox_widget(field)
+        if field_type == "allocation":
+            return self._allocation_widget(field)
+        if field_type == "repeatable":
+            return self._repeatable_widget(field)
         if field_type == "multiselect":
             return self._multiselect_widget(field)
         combo = QComboBox()
@@ -407,6 +478,208 @@ class EffectCard(QFrame):
                 )
             )
         return container
+
+    def _allocation_widget(self, field) -> QWidget:
+        """A Tier-4 rank-allocation checklist (Enhanced Senses/Movement, Comprehend).
+
+        Each option is a check box; a tiered option (``2/4/6``) adds a small combo to
+        pick which tier. A live "Allocated N / rank" readout under the list turns red
+        when the selections spend more than the effect's rank. Selections are stored
+        in ``instance.config[key]`` as ``[{"id", "tier"}, ...]``.
+        """
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(3)
+        grid_host = QWidget()
+        flow = FlowLayout(grid_host)
+        outer.addWidget(grid_host)
+        total = QLabel()
+        outer.addWidget(total)
+
+        chosen = {
+            e["id"]: int(e.get("tier", 1))
+            for e in self.instance.config.get(field.key, [])
+            if isinstance(e, dict) and "id" in e
+        }
+        controls: list[tuple] = []
+
+        def update_total() -> None:
+            used = effect_allocation_used(self.instance, self._data)
+            rank = self._rank.value()
+            total.setText(f"Allocated {used} / {rank} ranks")
+            total.setStyleSheet("color: #d15b5b; font-weight: bold;" if used > rank else "")
+
+        def commit() -> None:
+            new = []
+            for option, box, combo in controls:
+                if box.isChecked():
+                    tier = int(combo.currentData()) if combo is not None else 1
+                    new.append({"id": option.id, "tier": tier})
+            self.instance.config[field.key] = new
+            update_total()
+            self.changed.emit()
+
+        for option in field.alloc_options:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(3)
+            label = option.label + (f" ({option.per_note})" if option.per_note else "")
+            box = QCheckBox(label)
+            box.setChecked(option.id in chosen)
+            row_layout.addWidget(box)
+            combo = None
+            if len(option.tiers) > 1:
+                combo = QComboBox()
+                for index, cost in enumerate(option.tiers, start=1):
+                    combo.addItem(f"{cost} ranks", index)
+                combo.setCurrentIndex(min(max(chosen.get(option.id, 1), 1), len(option.tiers)) - 1)
+                combo.setEnabled(box.isChecked())
+                guard_wheel(combo)
+                combo.currentIndexChanged.connect(lambda _i: commit())
+                row_layout.addWidget(combo)
+            else:
+                cost = QLabel(f"({option.tiers[0]})")
+                cost.setEnabled(False)
+                row_layout.addWidget(cost)
+            controls.append((option, box, combo))
+
+            def on_toggle(checked: bool, c=combo) -> None:
+                if c is not None:
+                    c.setEnabled(checked)
+                commit()
+
+            box.toggled.connect(on_toggle)
+            flow.addWidget(row)
+
+        self._alloc_updaters.append(update_total)
+        update_total()
+        return container
+
+    def _repeatable_widget(self, field) -> QWidget:
+        """A Tier-4 variable-length row list (Immunity scopes, Features).
+
+        Each row has one widget per :class:`RepeatableColumn` (a line edit for text, a
+        spin for an ``int`` rank) plus a remove button; an "Add" button appends a row.
+        A "used / rank" readout meters the rows against the effect's rank (summed ranks
+        for Immunity, one per row for Feature). Rows are stored in
+        ``instance.config[key]`` as a list of ``{column_key: value}`` dicts.
+        """
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+        rows_host = QWidget()
+        rows_layout = QVBoxLayout(rows_host)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(2)
+        outer.addWidget(rows_host)
+        total = QLabel()
+
+        existing = self.instance.config.get(field.key)
+        if not isinstance(existing, list):
+            existing = []
+        row_widgets: list[tuple[QWidget, dict]] = []
+
+        def update_total() -> None:
+            used = effect_allocation_used(self.instance, self._data)
+            rank = self._rank.value()
+            total.setText(f"Allocated {used} / {rank} ranks")
+            total.setStyleSheet("color: #d15b5b; font-weight: bold;" if used > rank else "")
+
+        def commit() -> None:
+            rows = []
+            for _widget, cells in row_widgets:
+                row = {}
+                for column in field.columns:
+                    cell = cells[column.key]
+                    row[column.key] = cell.value() if column.type == "int" else cell.text().strip()
+                if any(str(v).strip() for v in row.values()):
+                    rows.append(row)
+            self.instance.config[field.key] = rows
+            update_total()
+            self.changed.emit()
+
+        def add_row(initial: dict | None = None) -> None:
+            initial = initial or {}
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(3)
+            cells: dict = {}
+            for column in field.columns:
+                if column.type == "int":
+                    cell = make_spin_box(
+                        0,
+                        30,
+                        value=int(initial.get(column.key, 0) or 0),
+                        buttons=False,
+                        max_width=48,
+                    )
+                    cell.valueChanged.connect(lambda _v: commit())
+                    row_layout.addWidget(cell)
+                else:
+                    cell = QLineEdit(str(initial.get(column.key, "")))
+                    cell.setPlaceholderText(column.label)
+                    cell.textChanged.connect(lambda _t: commit())
+                    row_layout.addWidget(cell, 1)
+                cells[column.key] = cell
+            remove = QPushButton("✕")
+            remove.setFlat(True)
+            remove.setFixedWidth(20)
+            row_layout.addWidget(remove)
+            rows_layout.addWidget(row)
+            entry = (row, cells)
+            row_widgets.append(entry)
+
+            def do_remove(_checked: bool = False) -> None:
+                if entry in row_widgets:
+                    row_widgets.remove(entry)
+                row.setParent(None)
+                row.deleteLater()
+                commit()
+
+            remove.clicked.connect(do_remove)
+
+        for row_data in existing:
+            if isinstance(row_data, dict):
+                add_row(row_data)
+
+        add_button = QPushButton("＋ Add")
+        add_button.clicked.connect(lambda: add_row())
+        outer.addWidget(add_button)
+        outer.addWidget(total)
+
+        self._alloc_updaters.append(update_total)
+        update_total()
+        return container
+
+    def _checkbox_widget(self, field) -> QWidget:
+        """A boolean toggle. When ``toggles`` names an extra it attaches/detaches that
+        modifier (e.g. Damage's Strength-Based); otherwise it stores a bool in config."""
+        box = QCheckBox()
+        if field.toggles:
+            box.setChecked(self._has_extra(field.toggles))
+            box.toggled.connect(lambda on, mid=field.toggles: self._toggle_modifier(mid, on))
+        else:
+            box.setChecked(bool(self.instance.config.get(field.key)))
+            box.toggled.connect(lambda on, k=field.key: self._on_config_changed(k, on))
+        return box
+
+    def _toggle_modifier(self, modifier_id: str, on: bool) -> None:
+        """Attach or detach ``modifier_id`` to match a checkbox, if not already so."""
+        attached = self._has_extra(modifier_id) or any(
+            sel.modifier_id == modifier_id for sel in self.instance.flaws
+        )
+        if on and not attached:
+            self.attach_modifier(modifier_id)
+        elif not on and attached:
+            chip = next((c for c in self._chips if c.selection.modifier_id == modifier_id), None)
+            if chip is not None:
+                self._remove_chip(chip)
 
     def _on_config_changed(self, key: str, value) -> None:
         if value:
@@ -570,6 +843,8 @@ class EffectCard(QFrame):
 
     def _on_rank_changed(self, value: int) -> None:
         self.instance.rank = value
+        for update_total in self._alloc_updaters:  # the rank is the allocation budget
+            update_total()
         self._refresh_cost()
         self.changed.emit()
 
@@ -1130,27 +1405,51 @@ class PowerConstructorWindow(QMainWindow):
             return []
         return power_pl_violations(self.power, self._character, self._data)
 
+    def _alloc_violations(self) -> list[str]:
+        """Tier-4 over-allocation breaches (an effect spending ranks it doesn't have)."""
+        return power_allocation_violations(self.power, self._data)
+
     def _refresh_pl_warning(self) -> None:
-        """Show or hide the live PL warning from the current violations."""
-        violations = self._pl_violations()
-        if violations:
-            self._warning.setText("⚠ Exceeds Power Level")
-            self._warning.setToolTip("\n".join(violations))
-        self._warning.setVisible(bool(violations))
+        """Show or hide the live warning from the current PL and allocation breaches."""
+        pl = self._pl_violations()
+        alloc = self._alloc_violations()
+        if pl and alloc:
+            headline = "⚠ Over Power Level & over-allocated"
+        elif pl:
+            headline = "⚠ Exceeds Power Level"
+        elif alloc:
+            headline = "⚠ Over-allocated"
+        else:
+            headline = ""
+        if headline:
+            self._warning.setText(headline)
+            self._warning.setToolTip("\n".join((*pl, *alloc)))
+        self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:
         """Hand the assembled power to the host section, then close.
 
         A power with no effects has nothing to cost or resolve, so it is rejected
-        with a prompt rather than saved empty. A power that breaks a PL cap is
-        rejected only when enforcement is set to *block* — otherwise the live
-        warning has already flagged it and the save is allowed to proceed.
+        with a prompt rather than saved empty. An over-allocated Tier-4 effect (one
+        spending more ranks than it has) is always rejected — that's a build error,
+        not a house-rule choice. A power that breaks a PL cap is rejected only when
+        enforcement is set to *block* — otherwise the live warning has already flagged
+        it and the save is allowed to proceed.
         """
         if not self.power.effects:
             QMessageBox.information(
                 self,
                 "Nothing to save",
                 "Add at least one effect before saving this power.",
+            )
+            return
+        alloc = self._alloc_violations()
+        if alloc:
+            QMessageBox.warning(
+                self,
+                "Over-allocated",
+                "This power can't be saved because an effect allocates more ranks "
+                "than it has:\n\n• " + "\n• ".join(alloc),
             )
             return
         violations = self._pl_violations()

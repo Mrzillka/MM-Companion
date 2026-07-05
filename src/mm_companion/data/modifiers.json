@@ -365,6 +365,9 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
+      "config": [
+        { "key": "trigger", "label": "Trigger", "type": "text", "hint": "The event that sets it off (e.g. 'when I take damage')." }
+      ],
       "description": "Lets you pre-set the effect to activate automatically on a chosen event."
     },
     {
@@ -375,6 +378,9 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
+      "config": [
+        { "key": "pool", "label": "Descriptor pool", "type": "text", "hint": "Which descriptors it can shift between, or 'any' (GM discretion)." }
+      ],
       "description": "Lets you change the effect's descriptor (fire, cold, sonic, etc.) on the fly."
     },
     {
@@ -502,6 +508,9 @@
       "costValue": 1,
       "flat": false,
       "gate": "limited",
+      "config": [
+        { "key": "condition", "label": "Limited to", "type": "text", "hint": "The circumstance or target it is restricted to (e.g. 'only at night')." }
+      ],
       "description": "Only works in specific circumstances or on specific targets."
     },
     {
@@ -541,6 +550,18 @@
       "costValue": 1,
       "flat": true,
       "gate": "removable",
+      "config": [
+        {
+          "key": "tier",
+          "label": "Tier",
+          "type": "select",
+          "hint": "How readily the item is taken away (a simplified flat discount, not the full per-5-points formula).",
+          "options": [
+            { "value": "removable", "label": "Removable", "costValue": 1 },
+            { "value": "easily_removable", "label": "Easily Removable", "costValue": 2 }
+          ]
+        }
+      ],
       "description": "The power can be taken away from you under the right circumstances."
     },
     {
@@ -577,6 +598,18 @@
       "costFormula": "-1 or -2 points per rank",
       "costValue": 1,
       "flat": false,
+      "config": [
+        {
+          "key": "when",
+          "label": "Backfires",
+          "type": "select",
+          "options": [
+            { "value": "on_failure", "label": "Only on failure", "costValue": 1 },
+            { "value": "always", "label": "Always", "costValue": 2 }
+          ]
+        },
+        { "key": "detail", "label": "Backfire", "type": "text", "hint": "What the side effect does to you." }
+      ],
       "description": "Failing to land the effect (or always, at the higher cost) backfires on you."
     },
     {

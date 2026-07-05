@@ -1,0 +1,78 @@
+{
+  "_meta": {
+    "description": "Derived, display-only readouts for Tier-5 power effects (see mm-powers-ui-design.md section 2). These surface rank-dependent behaviour the player does not choose — a Growth character's size modifiers, an Insubstantial state, a Communication range band — as an info readout rather than an editable field. All values are game-functional numbers/labels derived from the rules, not copyrighted prose. Companion to effects.json and measurements.json.",
+    "kindKey": {
+      "size_table": "Emit the Size Table modifiers for a size shift of sign * rank (Growth +, Shrinking -); reuses measurements.json's sizeTable.",
+      "state": "Pick the byRank entry with the greatest rank key <= the effect's rank; show it as one label/value row.",
+      "measure_offsets": "One row per entry, showing the measurement (measurements.json column) at rank + offset; perRound appends '/round'.",
+      "thresholds": "One row per entry whose minRank <= the effect's rank (rank-gated flavour readouts).",
+      "config_flag": "A row whose value is trueText or falseText depending on whether config[key] is set (a player choice about content, not a rank).",
+      "points_per_rank": "A computed row of rank * perRank points (Variable's sub-budget pool)."
+    }
+  },
+  "effectReadouts": {
+    "growth": [
+      { "kind": "size_table", "label": "Size", "sign": 1 }
+    ],
+    "shrinking": [
+      { "kind": "size_table", "label": "Size", "sign": -1 }
+    ],
+    "insubstantial": [
+      {
+        "kind": "state",
+        "label": "State",
+        "byRank": {
+          "1": "Fluid (liquid form)",
+          "2": "Gaseous",
+          "3": "Energy",
+          "4": "Incorporeal"
+        }
+      }
+    ],
+    "communication": [
+      {
+        "kind": "state",
+        "label": "Range",
+        "byRank": {
+          "1": "Same city",
+          "2": "Same region / state",
+          "3": "Same continent",
+          "4": "Worldwide",
+          "5": "Unlimited (same planet)"
+        }
+      }
+    ],
+    "burrowing": [
+      {
+        "kind": "measure_offsets",
+        "column": "distance",
+        "rows": [
+          { "label": "Through soil / sand", "offset": 0, "perRound": true },
+          { "label": "Through clay / packed earth", "offset": -1, "perRound": true },
+          { "label": "Through rock", "offset": -2, "perRound": true }
+        ]
+      }
+    ],
+    "flight": [
+      {
+        "kind": "thresholds",
+        "rows": [
+          { "minRank": 11, "label": "Supersonic", "text": "Breaks the sound barrier" },
+          { "minRank": 20, "label": "Global", "text": "Circles the globe in minutes" }
+        ]
+      }
+    ],
+    "illusion": [
+      {
+        "kind": "config_flag",
+        "label": "Maintenance",
+        "key": "moving",
+        "trueText": "Concentrate action (moving / interactive)",
+        "falseText": "Sustain action (static)"
+      }
+    ],
+    "variable": [
+      { "kind": "points_per_rank", "label": "Power pool", "perRank": 5 }
+    ]
+  }
+}

@@ -172,11 +172,46 @@ class ConfigOption:
     """One selectable value for an :class:`EffectConfigField`.
 
     ``value`` is what gets stored in ``PowerEffectInstance.config``; ``label`` is
-    what the UI shows (e.g. value ``"dazed"`` shown as ``"Dazed"``).
+    what the UI shows (e.g. value ``"dazed"`` shown as ``"Dazed"``). ``cost_value``,
+    when set on a *modifier's* config option, overrides that modifier's cost
+    magnitude while the option is chosen — so a Side Effect's always/on-failure
+    toggle or a Removable tier changes the discount (see ``mm-powers-ui-design.md``
+    §4). ``None`` leaves the modifier's own ``cost_value`` in force.
     """
 
     value: str
     label: str
+    cost_value: int | None = None
+
+
+@dataclass(frozen=True)
+class AllocationOption:
+    """One named sub-ability on a Tier-4 ``allocation`` field (Enhanced Senses etc.).
+
+    ``tiers`` lists the rank cost of each successive tier of the option — a single
+    entry for a fixed-cost option (``(2,)`` = 2 ranks), several for a tiered one
+    (``(2, 4, 6)`` = increasing scope). Picking the option consumes the chosen
+    tier's cost from the effect's rank pool. ``per_note`` is an optional qualifier
+    shown after the label (e.g. ``"per environment"``, ``"per sense"``).
+    """
+
+    id: str
+    label: str
+    tiers: tuple[int, ...] = (1,)
+    per_note: str = ""
+
+
+@dataclass(frozen=True)
+class RepeatableColumn:
+    """One column of a Tier-4 ``repeatable`` field's rows (Immunity, Feature).
+
+    ``type`` is ``"text"`` (free text) or ``"int"`` (a rank spin). ``key`` names
+    where the value lives inside each stored row dict.
+    """
+
+    key: str
+    label: str
+    type: str = "text"
 
 
 @dataclass(frozen=True)
@@ -186,12 +221,28 @@ class EffectConfigField:
     Effects like Affliction require player choices — which resistance it targets,
     which condition each degree inflicts. Each field is stored under ``key`` in the
     :class:`~mm_companion.core.powers.PowerEffectInstance` ``config`` dict. ``type``
-    is ``"select"`` (one of ``options``), ``"multiselect"`` (a list of them), or
-    ``"text"`` (free text). ``overrides``, if set, names a base game-term field (e.g.
-    ``"resistance"``) that the chosen value replaces in the generated summary;
-    otherwise the choice is appended to it. ``multiselect_with`` names an extra whose
-    presence upgrades a ``select`` field to ``multiselect`` — e.g. Affliction's
-    ``extra_condition`` lets each degree hold two same-degree conditions.
+    is one of:
+
+    - ``"select"`` — one of ``options``;
+    - ``"multiselect"`` — a list of ``options``;
+    - ``"text"`` — free text;
+    - ``"checkbox"`` — a boolean that, if ``toggles`` is set, attaches/detaches that
+      named extra rather than storing a value (e.g. Damage's Strength-Based);
+    - ``"allocation"`` — a checklist of ``alloc_options`` whose chosen tier costs sum
+      against the effect's rank (Enhanced Senses/Movement, Comprehend); stored as a
+      list of ``{"id", "tier"}`` dicts;
+    - ``"repeatable"`` — a variable-length list of rows shaped by ``columns``
+      (Immunity scopes, Features); stored as a list of row dicts.
+
+    ``overrides``, if set, names a base game-term field (e.g. ``"resistance"``) that
+    the chosen value replaces in the generated summary; otherwise the choice is
+    appended to it. ``multiselect_with`` names an extra whose presence upgrades a
+    ``select`` field to ``multiselect`` — e.g. Affliction's ``extra_condition`` lets
+    each degree hold two same-degree conditions. ``hidden_with`` names an extra whose
+    presence hides the field entirely (Affliction's ``variable_conditions`` defers
+    the degree choices to use-time). ``toggles`` is the extra a ``checkbox`` field
+    attaches. ``hint`` is helper text shown under an ``allocation``/``repeatable``
+    field (e.g. Immunity's suggested-rank tiers).
     """
 
     key: str
@@ -199,7 +250,12 @@ class EffectConfigField:
     type: str = "select"
     overrides: str | None = None
     multiselect_with: str | None = None
+    hidden_with: str | None = None
+    toggles: str | None = None
+    hint: str = ""
     options: tuple[ConfigOption, ...] = ()
+    alloc_options: tuple[AllocationOption, ...] = ()
+    columns: tuple[RepeatableColumn, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -312,6 +368,7 @@ class Modifier:
     step_by: int = 0
     adds_ability: str = ""
     gate: str = ""
+    config_fields: tuple[EffectConfigField, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -354,6 +411,26 @@ class Costs:
 
 
 @dataclass(frozen=True)
+class SizeRow:
+    """One row of the Size Table (from ``measurements.json``'s ``sizeTable``).
+
+    Maps a size rank (a Growth rank is a positive shift, Shrinking a negative one)
+    to its size category and the combat/skill modifiers that size confers.
+    """
+
+    size_category: str
+    size_rank: int
+    spaces: float
+    reach: int
+    defense_mod: int
+    damage_mod: int
+    toughness_mod: int
+    speed_mod: int
+    intimidation_mod: int
+    stealth_mod: int
+
+
+@dataclass(frozen=True)
 class Measurements:
     """The rank → real-world measurement conversion tables (from ``measurements.json``).
 
@@ -361,12 +438,39 @@ class Measurements:
     only pass a different ``system``; the UI shows imperial for now. ``label`` returns
     the book's own display string for a rank/column (e.g. distance rank 3 →
     ``"60 feet"``), or ``""`` when the rank is outside the tabulated −5…30 range.
+    ``size_row`` returns the :class:`SizeRow` for a size rank (clamped to the table's
+    range), driving Growth/Shrinking's derived combat modifiers.
     """
 
     by_rank: dict[int, dict[str, dict[str, str]]]  # rank -> system -> column -> label
+    size_by_rank: dict[int, SizeRow] = field(default_factory=dict)
 
     def label(self, column: str, rank: int, system: str = "imperial") -> str:
         return self.by_rank.get(rank, {}).get(system, {}).get(column, "")
+
+    def size_row(self, size_rank: int) -> SizeRow | None:
+        """The size-table row for ``size_rank``, clamped to the tabulated range."""
+        if not self.size_by_rank:
+            return None
+        lo = min(self.size_by_rank)
+        hi = max(self.size_by_rank)
+        return self.size_by_rank.get(max(lo, min(hi, size_rank)))
+
+
+@dataclass(frozen=True)
+class Readout:
+    """A derived, display-only Tier-5 readout for an effect (from ``effect_readouts.json``).
+
+    ``kind`` selects how :func:`mm_companion.core.rules.effect_readout_rows` renders it
+    (``"size_table"``, ``"state"``, ``"measure_offsets"``, ``"thresholds"``,
+    ``"config_flag"``, ``"points_per_rank"``); ``label`` is the row label; ``data``
+    holds the kind-specific parameters (the byRank map, the offset rows, ...). These
+    are computed information, never editable — see ``mm-powers-ui-design.md`` §2 Tier 5.
+    """
+
+    kind: str
+    label: str = ""
+    data: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -398,6 +502,7 @@ class GameData:
     costs: Costs
     measurements: Measurements
     game_term_ladders: dict[str, tuple[str, ...]]
+    effect_readouts: dict[str, tuple[Readout, ...]] = field(default_factory=dict)
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -477,9 +582,31 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         type=c.get("type", "select"),
         overrides=c.get("overrides"),
         multiselect_with=c.get("multiselectWith"),
+        hidden_with=c.get("hiddenWith"),
+        toggles=c.get("toggles"),
+        hint=c.get("hint", ""),
         options=tuple(
-            ConfigOption(value=o["value"], label=o.get("label", o["value"]))
+            ConfigOption(
+                value=o["value"],
+                label=o.get("label", o["value"]),
+                cost_value=o.get("costValue"),
+            )
             for o in c.get("options", [])
+        ),
+        alloc_options=tuple(
+            AllocationOption(
+                id=o["id"],
+                label=o.get("label", o["id"]),
+                tiers=tuple(int(t) for t in o.get("tiers", (1,))),
+                per_note=o.get("perNote", ""),
+            )
+            for o in c.get("allocOptions", [])
+        ),
+        columns=tuple(
+            RepeatableColumn(
+                key=col["key"], label=col.get("label", col["key"]), type=col.get("type", "text")
+            )
+            for col in c.get("columns", [])
         ),
     )
 
@@ -552,6 +679,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_by=int(m.get("stepBy", 0)),
         adds_ability=m.get("addsAbility", ""),
         gate=m.get("gate", ""),
+        config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         description=m.get("description", ""),
     )
 
@@ -596,7 +724,43 @@ def _parse_measurements(raw: dict) -> Measurements:
             labels["time"] = time_label
             systems[system] = labels
         by_rank[rank] = systems
-    return Measurements(by_rank=by_rank)
+
+    size_by_rank: dict[int, SizeRow] = {}
+    for row in raw.get("sizeTable", []):
+        size_rank = int(row["sizeRank"])
+        size_by_rank[size_rank] = SizeRow(
+            size_category=row["sizeCategory"],
+            size_rank=size_rank,
+            spaces=float(row["spaces"]),
+            reach=int(row["reach"]),
+            defense_mod=int(row["defenseMod"]),
+            damage_mod=int(row["damageMod"]),
+            toughness_mod=int(row["toughnessMod"]),
+            speed_mod=int(row["speedMod"]),
+            intimidation_mod=int(row["intimidationMod"]),
+            stealth_mod=int(row["stealthMod"]),
+        )
+    return Measurements(by_rank=by_rank, size_by_rank=size_by_rank)
+
+
+def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
+    """Parse ``effect_readouts.json`` into ``effect id -> (Readout, ...)``.
+
+    Each readout keeps its ``kind`` and ``label``; everything else on the entry is
+    carried in ``data`` for the renderer to interpret per kind.
+    """
+
+    result: dict[str, tuple[Readout, ...]] = {}
+    for effect_id, items in raw.get("effectReadouts", {}).items():
+        result[effect_id] = tuple(
+            Readout(
+                kind=item["kind"],
+                label=item.get("label", ""),
+                data={k: v for k, v in item.items() if k not in ("kind", "label")},
+            )
+            for item in items
+        )
+    return result
 
 
 def _parse_costs(raw: dict) -> Costs:
@@ -628,6 +792,7 @@ def load_game_data() -> GameData:
     effects_raw = _read_json("effects.json")
     modifiers_raw = _read_json("modifiers.json")
     effect_modifiers_raw = _read_json("effect_modifiers.json")
+    effect_readouts_raw = _read_json("effect_readouts.json")
     costs_raw = _read_json("costs.json")
     measurements_raw = _read_json("measurements.json")
 
@@ -645,4 +810,5 @@ def load_game_data() -> GameData:
         costs=_parse_costs(costs_raw),
         measurements=_parse_measurements(measurements_raw),
         game_term_ladders=_parse_ladders(modifiers_raw),
+        effect_readouts=_parse_readouts(effect_readouts_raw),
     )

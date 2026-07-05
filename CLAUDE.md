@@ -10,7 +10,11 @@ early development: it has a character-sheet UI, a data loader, and a headless
 `core` rules layer — d20 resolution, a mutable character model, character math,
 point-cost accounting, and Power Level validation. Characters save to and load
 from the per-user workspace as JSON (via `core.library`), wired into the File
-menu and the launcher; powers are not yet modelled.
+menu and the launcher. Powers *are* modelled now: a player assembles a `Power`
+out of base effects, extras, and flaws in a drag-and-drop **Power Constructor**;
+`core` derives the point cost, game-term summary, effective ranks, runtime
+on/off state, and per-power PL validation, and an active power's trait boosts
+flow through the whole sheet (see "The powers layer" below).
 
 ## Commands
 
@@ -40,7 +44,12 @@ dependency direction is strictly **`ui` → `core` → `data`**:
 - `src/mm_companion/core/` — rules engine. Pure Python, **no PySide6 imports**,
   must not import `ui`: `data_loader.py` (game content), `dice.py` (d20
   resolution / degrees of success), `character.py` (the mutable `Character`
-  state model), `rules.py` (derived math, point costs, PL validation).
+  state model, now carrying a `powers` list), `powers.py` (the assembled-power
+  data model — `Power`, `PowerEffectInstance`, `ModifierSelection`),
+  `components.py` (frozen behaviour components for effects — `Integration`,
+  `TraitBoost`, and the pattern/gate constants), `rules.py` (derived math, point
+  costs, PL validation, *and* all the powers math — effect/power cost, effective
+  ranks, trait bonuses, game-term summaries, runtime gating).
 - `src/mm_companion/data/` — game *content* as JSON/YAML data files, no code.
 - `src/mm_companion/ui/` — PySide6 interface. Depends on `core`; never
   implements game rules itself.
@@ -56,16 +65,25 @@ clean (see Licensing below).
 
 - `core/data_loader.py` is the *only* entry point for game content. It parses
   the bundled JSON into frozen dataclasses (`Field`, `Characteristic`,
-  `Ability`, `Resistance`, `Skill`, `Advantage`, `Condition`, and a `Costs`
-  record of point costs / PL caps) aggregated in a `GameData` record.
+  `Ability`, `Resistance`, `Skill`, `Advantage`, `Condition`; the powers records
+  `Effect`, `Modifier`, `EffectConfigField` + its option/column helpers,
+  `Measure`, `Readout`; the `Measurements`/`SizeRow` conversion tables; and a
+  `Costs` record of point costs / PL caps) aggregated in a `GameData` record.
+  `GameData.modifier_catalog()` merges the general and effect-specific modifier
+  pools into one `id -> Modifier` lookup for cost math and summaries.
   `load_game_data()` is `lru_cache`d — one parse per process.
 - Content is aggregated from several files, loaded via `importlib.resources`
   (not filesystem paths) so it works when installed as a package: core traits
   from `placeholder.json`; the rich 4e catalogs from `skills.json`,
   `advantages.json`, and `conditions.json`; point costs and PL caps from
-  `costs.json`; the powers layer from `effects.json` (base effects), `modifiers.json`
-  (the general extra/flaw pool + game-term ladders), and `effect_modifiers.json`
-  (effect-specific extras/flaws, keyed by effect id).
+  `costs.json`; rank → real-world measurement tables and the Size Table from
+  `measurements.json`; and the powers layer from `effects.json` (base effects,
+  each with a `statIntegration` and configurable qualities), `modifiers.json`
+  (the general extra/flaw pool + game-term ladders), `effect_modifiers.json`
+  (effect-specific extras/flaws, keyed by effect id), and `effect_readouts.json`
+  (per-effect derived Tier-5 readouts). The powers rules and UI are documented in
+  `mm-powers-architecture.md`, `mm-powers-ui-design.md`, and
+  `mm-modifiers-ui-design.md`.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
@@ -178,6 +196,75 @@ clean (see Licensing below).
   `rules.power_points_spent`, pushed into the power-points pool label via
   `BaseInfoSection.set_pool_current`). Follow this pattern — write to the model
   and emit a signal — rather than sections reaching into each other.
+- Powers participate in the same web both ways. A `PowersSection.changed`
+  re-runs the enhancement refresh on Abilities/Resistances/Skills (an active
+  trait-boosting power raises their *effective* values), and conversely an
+  Abilities/Resistances/Advantages/Base-Info `changed` calls
+  `PowersSection.refresh` to re-derive the power cards' numbers (a Strength-Based
+  Damage folds in Strength; every attack cap tracks the character's PL/Attack).
+  `refresh` only reads the model, so it never emits `changed` — no signal loop.
+
+## The powers layer (matters when touching powers)
+
+Powers are the most complex part, and are split the same core/data/ui way. Read
+`mm-powers-architecture.md` for the full model; the shape:
+
+- There is **no fixed catalog of powers** — a player assembles a
+  `core.powers.Power` (a titled, described bundle) out of parts: one or more
+  `PowerEffectInstance` (a base `Effect` from `effects.json` at a chosen rank),
+  each carrying its own `ModifierSelection` extras and flaws (referencing
+  `modifiers.json` / `effect_modifiers.json`). This is plain, JSON-serializable
+  data (`to_dict`/`from_dict`); it holds no costs — those are derived in `rules`.
+- A multi-effect power has a `structure` (`independent`, `linked`, or `array`).
+  The structure is the source of truth, **not** per-effect modifier chips:
+  independent and linked sum their effects' costs (linked is a +0 bundle), an
+  array pays the costliest effect in full plus a flat point per alternate. Cost
+  math and the game-terms summary read `structure` to decide.
+- `core.components.py` is an ECS-style split: effect *instances* are entities;
+  the frozen **components** describing behaviour are the base effect's parsed
+  `Integration` (a `statIntegration` `pattern` — `passive_permanent`,
+  `passive_toggle`, `instant_action`, `resource_pool` — plus an optional
+  `TraitBoost` for Enhanced-Trait / Protection), and per-instance **gate kinds**
+  derived from a flaw's `gate` tag (`activation`, `removable`, `toggle`,
+  `limited`). The *systems* reading these — `effect_is_active`,
+  `power_trait_bonuses`, `effective_ability`, … — live in `rules`.
+- **Cost** (`rules`): `effect_total_cost` = `ceil` of net per-rank cost × rank
+  (with M&M's sub-1-PP/rank fraction rule) plus flat modifiers; `power_total_cost`
+  folds in the structure. `effect_cost_formula` renders the human-readable
+  breakdown. All numbers are data-driven (`base_cost_value`, modifier
+  `cost_value`, config `cost_value` overrides) — never hardcoded.
+- **Effective vs. bought**: `effect_effective_rank` adds an ability a modifier
+  folds in (Strength-Based Damage → Strength) to the bought rank — this is the
+  rank that sets save DCs and PL caps, while cost counts only the bought rank.
+  A power's active `TraitBoost` feeds `effective_ability` / `resistance_total` /
+  `skill_total`, so an Enhanced-Trait boost flows through the whole sheet; the
+  power pays for it, so the boosted trait's own point cost is unchanged.
+- **Runtime state** (separate from the point build): `effect.toggled_on` /
+  `effect.suppressed` and `power.activated` / `power.item_present` gate whether a
+  passive bonus currently applies (`effect_is_active`). The UI drives all of a
+  power's gates from one "Active" switch.
+- **Game-term summary**: `effect_stat_rows` / `effect_game_terms` /
+  `power_game_terms` render each effect's Type/Range/Action/Duration/Check/
+  Resistance with modifier and config overrides applied, tinting a field an extra
+  improved (better) or a flaw limited (worse), resolving check/DC phrases to real
+  numbers, and appending measures, configured qualities, trait-boost lines, and
+  the Tier-5 `effect_readout_rows`.
+- **Validation** (warnings for now): `power_pl_violations` (per-power attack +
+  effect-rank / auto-hit rank caps, read against the wielder),
+  `power_allocation_violations` (a Tier-4 effect over-spending its rank pool),
+  and `power_linked_range_violations`. Whether a PL breach merely warns or blocks
+  the save is the single app-wide seam `core.storage.pl_enforcement()`
+  (`"warn"` / `"block"`), so it can become a settings toggle later.
+- **UI**: `PowersSection` ("Add Power") launches the standalone
+  `ui/power_constructor.py::PowerConstructorWindow` — a drag-and-drop
+  brick-builder (a palette of Effect/Extra/Flaw bricks → an effect-card canvas,
+  a `PowerModeBar` for the structure once ≥2 effects). It hands the finished
+  `Power` back via `powerSaved`; the section appends it to the shared `Character`
+  and renders a stat-block **card** (header with cost, ⚠ PL-breach marker, and an
+  on/off switch for a gated power; description; per-effect extras/flaws; a roll
+  line; the full game-term breakdown on hover). Cards carry edit (reopens the
+  constructor on a deep copy, replaced in place on save) and remove buttons. The
+  constructor always gets costs from `rules`, never inline.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

@@ -122,6 +122,10 @@ class Advantage:
 
     ``types`` is one or more category tags (Combat, Skill, Fortune, ...);
     ``max_rank`` is a hard cap when the rules specify one (``None`` otherwise);
+    ``max_rank_kind`` says how that cap is derived (``"fixed"`` uses ``max_rank``,
+    ``"power_level_half"`` is Improved Initiative's ``ceil(PL/2)``, ``"heroic_budget"``
+    draws from the shared Heroic pool, ``"power_level"``/``"none"`` impose no
+    standalone number — see ``advantages.json``'s ``maxRankKindKey``);
     ``focused`` advantages apply to one chosen focus and are bought again per
     focus. ``description`` is short summary text the UI shows.
     """
@@ -132,6 +136,7 @@ class Advantage:
     id: str = ""
     types: tuple[str, ...] = ()
     max_rank: int | None = None
+    max_rank_kind: str = "none"
     focused: bool = False
 
     @property
@@ -447,6 +452,7 @@ def _parse_advantage(a: dict) -> Advantage:
         id=a.get("id", ""),
         types=types,
         max_rank=a.get("maxRank"),
+        max_rank_kind=a.get("maxRankKind", "none"),
         focused=bool(a.get("focused", False)),
     )
 

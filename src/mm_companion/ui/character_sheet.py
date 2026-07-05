@@ -174,6 +174,9 @@ class CharacterSheet(QWidget):
         self.resistances.changed.connect(self.powers.refresh)
         self.advantages.changed.connect(self.powers.refresh)
         self.base_info.changed.connect(self.powers.refresh)
+        # The Heroic-advantage budget is floor(PL/2), so a Power Level edit reshapes
+        # the advantage rank caps and the budget display.
+        self.base_info.changed.connect(self.advantages.refresh_limits)
 
         # Surface any user edit for unsaved-change tracking. The stats/skills
         # `changed` signals already fire on every edit; base_info has edits (name,

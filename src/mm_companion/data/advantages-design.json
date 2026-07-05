@@ -1,0 +1,2304 @@
+{
+  "_meta": {
+    "description": "Full mechanical specification for every Mutants & Masterminds 4e advantage, for implementing character logic and combat automation. 'effect' fields are original paraphrases of the rulebook's functional rules (exact bonuses, triggers, caps) \u2014 not copied prose. Read mm-advantages-design.md first for the pattern definitions referenced in 'patterns' below.",
+    "maxRankKindKey": {
+      "fixed": "A specific numeric cap given in the rules, independent of Power Level (e.g. Improved Critical: 4)",
+      "power_level": "Capped only by the Power Level limit of the underlying trait it modifies (mm-core-mechanics.md \u00a77 / power-progression.json's powerLevelLimits) \u2014 see each entry's 'maxRankFormula' for which specific limit column applies",
+      "power_level_half": "A standalone formula unique to Improved Initiative: ceil(PowerLevel/2). See '_meta.improvedInitiativeCapByPowerLevel'.",
+      "heroic_budget": "Capped by the character's shared Heroic-advantage budget: floor(PowerLevel/2) TOTAL ranks split across every Heroic-type advantage the character has. See '_meta.heroicAdvantageBudgetByPowerLevel'.",
+      "none": "Not ranked, or ranked with no cap beyond GM discretion"
+    },
+    "heroicAdvantageBudgetByPowerLevel": {
+      "formula": "floor(powerLevel / 2)",
+      "description": "The maximum TOTAL ranks a character can have across ALL Heroic-type advantages combined (Determination, Edit Scene, Guidance, Holding Back, Improvised Effect, Luck, Partner Bond, Prepared Effect, Ultimate Effort, Untapped Potential, Well-Equipped, plus the flat 1-rank contributions of unranked Heroic advantages like Encouragement). This is ONE shared pool, not a separate cap per advantage \u2014 buying Edit Scene 2 and Guidance 3 on a PL 10 character (budget 5) already uses the entire budget and leaves 0 ranks for any other Heroic advantage.",
+      "byPowerLevel": {
+        "1": 0,
+        "2": 1,
+        "3": 1,
+        "4": 2,
+        "5": 2,
+        "6": 3,
+        "7": 3,
+        "8": 4,
+        "9": 4,
+        "10": 5,
+        "11": 5,
+        "12": 6,
+        "13": 6,
+        "14": 7,
+        "15": 7,
+        "16": 8,
+        "17": 8,
+        "18": 9,
+        "19": 9,
+        "20": 10
+      }
+    },
+    "improvedInitiativeCapByPowerLevel": {
+      "formula": "ceil(powerLevel / 2)",
+      "description": "Improved Initiative's own rank cap \u2014 distinct from the shared Heroic-advantage budget above and from the general Power Level combat caps. This is a standalone formula that only governs this one advantage.",
+      "byPowerLevel": {
+        "1": 1,
+        "2": 1,
+        "3": 2,
+        "4": 2,
+        "5": 3,
+        "6": 3,
+        "7": 4,
+        "8": 4,
+        "9": 5,
+        "10": 5,
+        "11": 6,
+        "12": 6,
+        "13": 7,
+        "14": 7,
+        "15": 8,
+        "16": 8,
+        "17": 9,
+        "18": 9,
+        "19": 10,
+        "20": 10
+      }
+    }
+  },
+  "advantages": [
+    {
+      "id": "agile_grab",
+      "name": "Agile Grab",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "You aren't Vulnerable while maintaining a hold from a Grab action.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "grab",
+        "notes": "Suppresses the Vulnerable condition Grab normally imposes on the grabber while the hold is maintained."
+      }
+    },
+    {
+      "id": "alternate_feint",
+      "name": "Alternate Feint",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Lets you make the Feint action's check using a chosen trait other than your attack bonus (e.g. Acrobatics, Deception, Expertise, Intimidation, or a power effect rank), fixed when you take the advantage. Each alternate trait is a separate advantage instance.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "feint",
+        "notes": "Substitutes a configured trait for attack bonus on the Feint check."
+      }
+    },
+    {
+      "id": "alternate_initiative",
+      "name": "Alternate Initiative",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Your Initiative bonus is based on Intellect, Awareness, or Presence (chosen permanently) instead of Agility.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "target": "combat.initiative",
+        "notes": "Substitute configured ability (INT/AWE/PRE) for AGL in the initiative formula."
+      }
+    },
+    {
+      "id": "animal_empathy",
+      "name": "Animal Empathy",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Removes the normal -10 penalty on interaction skill checks used on animals. You don't need a shared language; at GM discretion an Expertise skill (e.g. Animal Handling) can substitute for an interaction skill when dealing with animals.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "notes": "Removes -10 penalty on interaction-skill checks targeting animals."
+      }
+    },
+    {
+      "id": "assessment",
+      "name": "Assessment",
+      "types": [
+        "General"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Once per turn as a free action, the GM secretly rolls your Insight vs. a target's Deception check result (or DC 10+their Deception if unaware) to learn their attack/Defense bonuses relative to yours; extra degrees of success reveal exact numbers. Failure teaches nothing and blocks retrying that scene without Extra Effort (2+ degrees of failure risk the GM giving false info). Assessing multiple opponents in one turn imposes a cumulative -1 penalty per extra target (a group of identical minions counts as one target).",
+      "patterns": [
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "notes": "Each additional rank lets you assess one more simultaneous opponent without the multi-target penalty."
+      }
+    },
+    {
+      "id": "beginners_luck",
+      "name": "Beginner's Luck",
+      "types": [
+        "Fortune"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Spend a Hero Point for a +5 bonus, for the rest of the scene, on checks with one skill you have 4 or fewer ranks in \u2014 including skills you have zero ranks in, even ones that normally can't be used untrained.",
+      "patterns": [
+        "hero_point_spend"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "notes": "+5 to one chosen skill (<=4 ranks) for the scene."
+      }
+    },
+    {
+      "id": "benefit",
+      "name": "Benefit",
+      "types": [
+        "General"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "A significant, GM-defined perk (alternate legal identity, diplomatic immunity, security clearance, organizational status, wealth, etc.) that scales in scope with rank. Each distinct Benefit is a separate advantage instance.",
+      "patterns": [
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "notes": "Content and per-rank scaling set by the GM; no formula to compute."
+      }
+    },
+    {
+      "id": "blind_shot",
+      "name": "Blind Shot",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Ranged attack checks ignore penalties for Concealment.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "rangedAttack",
+        "notes": "Removes concealment penalty."
+      }
+    },
+    {
+      "id": "blind_strike",
+      "name": "Blind Strike",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Close attack checks ignore penalties for Concealment.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "closeAttack",
+        "notes": "Removes concealment penalty."
+      }
+    },
+    {
+      "id": "close_attack",
+      "name": "Close Attack",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 to all close attack checks per rank. Capped by the maxAttackPlusEffectRank (Attack side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "combat.closeAttack",
+        "perRank": 1
+      },
+      "maxRankFormula": "powerLevelLimits.maxAttackPlusEffectRank, from power-progression.json"
+    },
+    {
+      "id": "close_defense",
+      "name": "Close Defense",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 Defense against close-range attacks per rank. Capped by the maxDefenseOrDodgePlusToughness (Defense side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "defense.vsClose",
+        "perRank": 1
+      },
+      "maxRankFormula": "powerLevelLimits.maxDefenseOrDodgePlusToughness, from power-progression.json"
+    },
+    {
+      "id": "connections",
+      "name": "Connections",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Make a Persuasion check (DC 10 for a simple favor, up to DC 25+ for difficult/costly ones, set by the GM) to call on your network for advice, information, legal help, or resources. Takes at least a few minutes and requires a means of contact; the GM can veto dangerous or plot-breaking requests.",
+      "patterns": [
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "notes": "Persuasion check, DC set by GM per request."
+      }
+    },
+    {
+      "id": "contacts",
+      "name": "Contacts",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Your first Investigation check to gather information on a new subject only takes one minute instead of the normal duration, provided you can reach your network. Further checks on the same subject take normal time.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "notes": "Reduces time for the first Investigation check per subject to 1 minute."
+      }
+    },
+    {
+      "id": "counterattack",
+      "name": "Counterattack",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If hit by a close attack, use your reaction for an immediate close attack against the attacker.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onHitBySelf_closeAttack",
+        "grantedAction": "closeAttack"
+      }
+    },
+    {
+      "id": "critical_volley",
+      "name": "Critical Volley",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "On a ranged critical hit, use your reaction for another immediate ranged attack against the same target, resolved separately.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfRangedCriticalHit",
+        "grantedAction": "rangedAttack",
+        "sameTarget": true
+      }
+    },
+    {
+      "id": "damaging_escape",
+      "name": "Damaging Escape",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you succeed on an Escape action against a Grab, use your reaction for an immediate unarmed attack against the opponent who held you (your choice if multiple).",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfEscapeSuccess",
+        "grantedAction": "unarmedAttack"
+      }
+    },
+    {
+      "id": "damaging_grab",
+      "name": "Damaging Grab",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you Grab and hold (or increase your hold on) a target, you can also inflict your Strength Damage on them as part of that same Grab action, instead of needing a separate Attack action to squeeze them.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "grab",
+        "notes": "Adds Strength Damage to a successful hold/hold-increase, folded into the same action."
+      }
+    },
+    {
+      "id": "dazing_interaction",
+      "name": "Dazing Interaction",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Make an Impress check with a chosen interaction skill to Daze an opponent (Stunned instead with 2+ degrees of success). The target gets a new resistance check at the end of each of their turns; success removes the condition. Each interaction skill you can use this with is a separate advantage.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "impress",
+        "conditionImposed": "dazed_or_stunned"
+      }
+    },
+    {
+      "id": "defensive_grab",
+      "name": "Defensive Grab",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If an opponent's close attack against you misses, use your reaction for an immediate Grab against them.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfCloseAttackMissed",
+        "grantedAction": "grab"
+      }
+    },
+    {
+      "id": "defensive_roll",
+      "name": "Defensive Roll",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 Toughness per rank from agility and mobility. On 2+ degrees of success on a resistance check using this bonus, you take no damage condition at all (like Hardened Toughness). You lose the no-condition benefit (but keep the flat bonus) while Vulnerable or Defenseless, and lose the entire advantage's benefits while Stunned. Capped by the maxDefenseOrDodgePlusToughness (Toughness side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "perRank": 1,
+        "conditionFlag": "not_stunned",
+        "notes": "The 'no condition on 2+ DoS' clause additionally requires not Vulnerable/Defenseless."
+      },
+      "maxRankFormula": "powerLevelLimits.maxDefenseOrDodgePlusToughness, from power-progression.json"
+    },
+    {
+      "id": "defensive_throw",
+      "name": "Defensive Throw",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If an opponent's close attack against you misses, use your reaction for an immediate Trip against them.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfCloseAttackMissed",
+        "grantedAction": "trip"
+      }
+    },
+    {
+      "id": "determination",
+      "name": "Determination",
+      "types": [
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Once per adventure, immediately remove your own Dazed, Fatigued, or Stunned condition, or grant yourself a fresh resistance check against an ongoing effect. Using it to remove Fatigued functions like a free use of Extra Effort with no Fatigue cost. Each rank adds one more use per adventure. Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use"
+      ],
+      "implementation": {
+        "resetsOn": "adventure",
+        "usesPerRank": 1
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "diehard",
+      "name": "Diehard",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you gain the Dying condition, you automatically stabilize with no Stamina check required. Further damage (e.g. a Finishing Attack) can still kill you.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfGainDying",
+        "notes": "Auto-stabilize, bypassing the normal stabilization check."
+      }
+    },
+    {
+      "id": "dive_for_cover",
+      "name": "Dive for Cover",
+      "types": [
+        "Command",
+        "Reaction"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "When an ally is targeted by an Area Effect or ranged attack, use your reaction for a Command action letting allies who can hear you immediately drop Prone if they wish, changing their Cover/Concealment against the attack. At 2 ranks, allies can also move up to speed rank -2 before dropping Prone.",
+      "patterns": [
+        "command_grant",
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onAllyTargetedByAreaOrRanged",
+        "grantedAction": "dropProne",
+        "rank2Bonus": "move at speed-2 first"
+      }
+    },
+    {
+      "id": "edit_scene",
+      "name": "Edit Scene",
+      "types": [
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Once per adventure, make a small GM-approved addition to the scene's description that helps you or your allies (the GM decides what's plausible; it can't guarantee automatic success). Each rank adds one more use per adventure. Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use",
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "resetsOn": "adventure",
+        "usesPerRank": 1
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "eidetic_memory",
+      "name": "Eidetic Memory",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Perfect recall of anything you've observed, plus a +5 bonus on resistance checks against memory-altering/erasing effects. The GM may also grant you the benefit of the Guidance advantage whenever it involves something your character would remember, at no cost.",
+      "patterns": [
+        "gm_adjudicated",
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "resistance vs memory effects",
+        "perRank": 5,
+        "notes": "Flat +5 vs memory alteration; recall/Guidance benefit is GM-adjudicated."
+      }
+    },
+    {
+      "id": "elusive_target",
+      "name": "Elusive Target",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "While in close combat with one or more opponents, you gain partial cover against ranged attacks: +2 Defense. At 2 ranks, this becomes full cover: +5 Defense against ranged attacks while in close combat.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "target": "defense.vsRanged",
+        "conditionFlag": "in_close_combat",
+        "rank1": 2,
+        "rank2": 5
+      }
+    },
+    {
+      "id": "encouragement",
+      "name": "Encouragement",
+      "types": [
+        "Command",
+        "Fortune",
+        "Heroic"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Take a Command action and spend a Hero Point to grant an ally able to see/hear you one benefit of Extra Effort at no Fatigue cost to either of you. Stacks with that ally's own Extra Effort use, or with their Extraordinary Effort advantage. Not independently ranked, but each instance of this advantage still costs 1 rank against the character's shared Heroic-advantage budget (floor(Power Level / 2) total ranks across all Heroic-type advantages \u2014 see the design doc's rank-cap section). Numeric examples of that shared budget: PL 1 -> 0; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "command_grant",
+        "hero_point_spend"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "trigger": "command_action",
+        "notes": "Counts toward the owner's heroic-advantage rank budget."
+      },
+      "maxRankFormula": "flat 1-rank cost against the shared floor(powerLevel/2) Heroic-advantage budget"
+    },
+    {
+      "id": "equipment",
+      "name": "Equipment",
+      "types": [
+        "General"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Grants 5 Equipment Points worth of configurable gear per rank from the Equipment chapter. Points can be reconfigured at the start of each adventure, or between scenes with access to your headquarters/cache (possibly via Edit Scene).",
+      "patterns": [
+        "npc_follower"
+      ],
+      "implementation": {
+        "notes": "Not a follower, but same 'own sub-budget scaling with rank' shape: pointsPerRank = 5."
+      }
+    },
+    {
+      "id": "evasion",
+      "name": "Evasion",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "+5 bonus on Dodge resistance checks against Area Effects. At 2 ranks, succeeding on that Dodge check means the Area Effect has no effect on you at all.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "target": "resistances.dodge_vs_area",
+        "rank1": 5,
+        "rank2Bonus": "no effect at all on success"
+      }
+    },
+    {
+      "id": "extraordinary_effort",
+      "name": "Extraordinary Effort",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When using Extra Effort, gain two of the listed benefits at once (even stacking two of the same one), but the Fatigue cost doubles \u2014 you gain two instances of Fatigued, likely leaving you Exhausted.",
+      "patterns": [
+        "resource_limited_use"
+      ],
+      "implementation": {
+        "notes": "Modifies the Extra Effort resolution: double benefit, double Fatigue cost."
+      }
+    },
+    {
+      "id": "fallen_inspiration",
+      "name": "Fallen Inspiration",
+      "types": [
+        "Combat",
+        "Fortune"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you're Incapacitated (including Dying or Dead), each aware ally in the scene gains a Hero Point. Allies lose this bonus Hero Point if unused by the end of the scene.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfIncapacitated",
+        "notes": "Grants a Hero Point to each aware ally, expiring at scene end if unused."
+      }
+    },
+    {
+      "id": "fascinating_interaction",
+      "name": "Fascinating Interaction",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "One chosen interaction skill can be used for an Impress check to Stun a target with fascination, preventing other actions. Maintain with a Concentrate action each turn; the target gets a new resistance check at the end of their turn. Ends if you stop performing, can't interact, they resist, or danger intervenes. Can affect a group at once (same result for all) but not usable during a conflict. Each skill is a separate advantage.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "impress",
+        "conditionImposed": "stunned",
+        "notes": "Sustained via Concentrate; unusable in active combat."
+      }
+    },
+    {
+      "id": "fast_feint",
+      "name": "Fast Feint",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Perform a Feint as a simple action with no penalty (normally a simple-action Feint carries a -5 penalty).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "feint",
+        "notes": "Removes the -5 penalty for using Feint as a simple action."
+      }
+    },
+    {
+      "id": "favored_environment",
+      "name": "Favored Environment",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Choose an environment/situation you're especially adapted to when configured. While in it, gain a +2 bonus to either Attack or Defense (choose at the start of your turn; lasts until your next turn). Not limited by Power Level. Each environment is a separate advantage; should be meaningfully limited, not something you're always in.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "target": "combat.attack_or_defense",
+        "amount": 2,
+        "conditionFlag": "in_favored_environment",
+        "notes": "Not subject to PL caps."
+      }
+    },
+    {
+      "id": "favored_foe",
+      "name": "Favored Foe",
+      "types": [
+        "Skill"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "Choose a category of opponent (creature type, profession, etc. \u2014 not something as broad as 'humans' or 'villains') when configured. Gain +2 on Deception, Intimidation, Insight, and Perception checks (including Impress checks) dealing with them, not limited by Power Level. At 2 ranks, the bonus becomes +5.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "target": "skills.[deception,intimidation,insight,perception]",
+        "conditionFlag": "vs_favored_foe",
+        "rank1": 2,
+        "rank2": 5
+      }
+    },
+    {
+      "id": "fearless",
+      "name": "Fearless",
+      "types": [
+        "General"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "Resistance to Fear effects (including anything imposing Frightened): bonus to resistance checks equal to half the effect's rank, rounded up. At 2 ranks, upgrades to full Immunity to Fear effects (automatic success).",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "resistance_category.fear",
+        "rank1": "resistance (half effect rank, rounded up)",
+        "rank2": "immunity"
+      }
+    },
+    {
+      "id": "fearsome_presence",
+      "name": "Fearsome Presence",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you first appear in a scene, or at the start of your first turn in a conflict, make a free Intimidation Impress check to Demoralize as a free action.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "trigger": "onSceneEntryOrFirstTurn",
+        "grantedAction": "impress_demoralize"
+      }
+    },
+    {
+      "id": "follow_up_strike",
+      "name": "Follow-Up Strike",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "On a close-attack critical hit, use your reaction for another immediate close attack against the same or a different target within range.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfCloseCriticalHit",
+        "grantedAction": "closeAttack",
+        "sameTarget": false
+      }
+    },
+    {
+      "id": "grabbing_block",
+      "name": "Grabbing Block",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "On a successful Block against a close attack, immediately perform a Grab against the attacker.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfBlockSuccess",
+        "grantedAction": "grab"
+      }
+    },
+    {
+      "id": "grabbing_finesse",
+      "name": "Grabbing Finesse",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use your Attack bonus instead of Strength for opposed Grab checks.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "action": "grab",
+        "substituteFor": "Attack bonus instead of Strength"
+      }
+    },
+    {
+      "id": "great_endurance",
+      "name": "Great Endurance",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "+5 on checks to avoid Fatigued, to hold your breath, to resist starvation/thirst effects, to resist hot/cold environments, and to resist suffocation/drowning.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "checks.[fatigue,breath,hazard_environment,suffocation]",
+        "amount": 5
+      }
+    },
+    {
+      "id": "guidance",
+      "name": "Guidance",
+      "types": [
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Once per adventure, gain a GM-decided flash of insight or clue that helps move the story forward. Each rank adds one more use per adventure. Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use",
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "resetsOn": "adventure",
+        "usesPerRank": 1
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "hide_in_plain_sight",
+      "name": "Hide in Plain Sight",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use Stealth to hide even while others are already aware of you, with no penalty, so long as you have Cover or Concealment reachable within your movement speed. Normally you cannot Stealth-hide from someone who can already accurately perceive you.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "notes": "Removes the normal restriction against hiding from someone already aware of you."
+      }
+    },
+    {
+      "id": "holding_back",
+      "name": "Holding Back",
+      "types": [
+        "Fortune",
+        "Heroic"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Spend a Hero Point in an appropriately dramatic moment to gain +1 Power Level and 15 bonus Power Points worth of traits (configured in advance) for the rest of the scene \u2014 but this triggers a chosen drawback (Berserk, Controlled, Hunted, Inert, Monstrosity, or Unleashed) that isn't a normal complication (no Hero Point earned for it). Generally usable once per adventure. Each rank adds +15 more Power Points and +1 more Power Level when triggered. Not independently ranked, but each instance of this advantage still costs 1 rank against the character's shared Heroic-advantage budget (floor(Power Level / 2) total ranks across all Heroic-type advantages \u2014 see the design doc's rank-cap section). Numeric examples of that shared budget: PL 1 -> 0; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "hero_point_spend",
+        "resource_limited_use"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "resetsOn": "adventure",
+        "notes": "Grants temporary PP/PL boost with a mandatory narrative drawback."
+      },
+      "maxRankFormula": "flat 1-rank cost against the shared floor(powerLevel/2) Heroic-advantage budget"
+    },
+    {
+      "id": "impressive_superiority",
+      "name": "Impressive Superiority",
+      "types": [
+        "Combat",
+        "Reaction",
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If an opponent misses you with an attack or fails a skill check against you, use your reaction for an immediate Impress action against them.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onOpponentMissOrFailedCheckVsSelf",
+        "grantedAction": "impress"
+      }
+    },
+    {
+      "id": "improved_aim",
+      "name": "Improved Aim",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you take the Aim action (roll two dice, keep the better), if either die rolls 10 or less, add +10 to it, like a use of Luck; if both roll 10 or less, choose one to boost.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "aim",
+        "notes": "Boosts a low die roll on Aim by +10."
+      }
+    },
+    {
+      "id": "improved_block",
+      "name": "Improved Block",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "+2 bonus to your attack check when performing a Block action. At 2 ranks, the bonus becomes +5.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "block",
+        "rank1": 2,
+        "rank2": 5
+      }
+    },
+    {
+      "id": "improved_critical",
+      "name": "Improved Critical",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": 4,
+      "maxRankKind": "fixed",
+      "effect": "Choose one attack when configured: it scores a Critical Hit on a die roll of 19 or 20 (only a natural 20 is an Added Success; a missed attack is never a critical regardless of roll). Each additional rank widens the critical range by 1, up to 16-20 at 4 ranks. Each specific attack is a separate advantage, though it can cover a themed array of attacks that share an attack check.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "attack_with_configured_weapon",
+        "critRangeBase": 19,
+        "critRangePerExtraRank": 1
+      }
+    },
+    {
+      "id": "improved_defense",
+      "name": "Improved Defense",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "The Defend action grants +5 Defense until the start of your next turn, instead of the normal +2.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "defend",
+        "notes": "Replaces Defend's normal +2 bonus with +5."
+      }
+    },
+    {
+      "id": "improved_disarm",
+      "name": "Improved Disarm",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "+2 bonus to your attack check for a Disarm action. At 2 ranks, the bonus becomes +5.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "disarm",
+        "rank1": 2,
+        "rank2": 5
+      }
+    },
+    {
+      "id": "improved_grab",
+      "name": "Improved Grab",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "You only need one arm to take or maintain a Grab action (normally requires two).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "grab",
+        "notes": "Removes the two-arm requirement."
+      }
+    },
+    {
+      "id": "improved_hold",
+      "name": "Improved Hold",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Opponents you've successfully Grabbed take a -5 penalty on their Escape attempts against your hold.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "target": "opponent_escape_check_vs_self",
+        "amount": -5
+      }
+    },
+    {
+      "id": "improved_initiative",
+      "name": "Improved Initiative",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level_half",
+      "effect": "+4 to your Initiative rank per rank. Capped at ceil(Power Level / 2) ranks in this advantage specifically \u2014 a standalone formula, NOT the general Power Level combat cap and NOT the shared Heroic-advantage budget. Numeric examples: PL 1 -> 1 rank max (+4 Initiative); PL 5 -> 3 ranks max (+12); PL 10 (default) -> 5 ranks max (+20); PL 15 -> 8 ranks max (+32); PL 20 -> 10 ranks max (+40).",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "combat.initiative",
+        "perRank": 4,
+        "notes": "maxRank = ceil(powerLevel/2), computed per character, not a fixed table number."
+      },
+      "maxRankFormula": "ceil(powerLevel / 2)"
+    },
+    {
+      "id": "improved_smash",
+      "name": "Improved Smash",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "No penalty on your attack check when Smashing an object held by another character (normally up to a -5 penalty).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "smash",
+        "notes": "Removes the held-object penalty."
+      }
+    },
+    {
+      "id": "improved_strike",
+      "name": "Improved Strike",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 to your Strength-based close-combat Damage rank per rank. Capped by the maxAttackPlusEffectRank (Damage/effect side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "combat.closeDamage_strengthBased",
+        "perRank": 1
+      },
+      "maxRankFormula": "powerLevelLimits.maxAttackPlusEffectRank, from power-progression.json"
+    },
+    {
+      "id": "improved_team_attack",
+      "name": "Improved Team Attack",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "You can contribute to a Team Attack even if your attack's effect rank isn't within 5 of the others (normally required). At 2 ranks, your attack doesn't even need to be the same effect type as the others (the combined attack still uses the main attack's effect).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "team_attack",
+        "rank2Bonus": "different effect types can combine"
+      }
+    },
+    {
+      "id": "improved_treatment",
+      "name": "Improved Treatment",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When using Treatment to revive a subject: DC 10 success removes a Dazed/Hit/Impaired condition (each extra degree of success removes another Hit; can also clear Fatigued's effects, though the condition itself needs rest). DC 15 success removes Disabled or Stunned (and can clear Exhausted's effects, condition itself still needs rest).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "treatment_revive",
+        "notes": "Adds condition-removal tiers keyed to DC 10 / DC 15 success."
+      }
+    },
+    {
+      "id": "improved_trip",
+      "name": "Improved Trip",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When performing a Trip action, you choose whether the target resists with Dodge or Strength (normally the target chooses).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "trip",
+        "notes": "Attacker picks the resisted trait instead of the defender."
+      }
+    },
+    {
+      "id": "improvised_effect",
+      "name": "Improvised Effect",
+      "types": [
+        "Heroic",
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Use a technical skill (commonly Magic or Technology, others by GM approval) to prepare and use Improvised Effects (see the Powers chapter). Each different skill usable this way is a separate advantage, and each counts toward your heroic-advantage rank budget. Not independently ranked, but each instance of this advantage still costs 1 rank against the character's shared Heroic-advantage budget (floor(Power Level / 2) total ranks across all Heroic-type advantages \u2014 see the design doc's rank-cap section). Numeric examples of that shared budget: PL 1 -> 0; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "notes": "Grants access to the Improvised Effects subsystem via a named technical skill."
+      },
+      "maxRankFormula": "flat 1-rank cost against the shared floor(powerLevel/2) Heroic-advantage budget"
+    },
+    {
+      "id": "improvised_tools",
+      "name": "Improvised Tools",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "No penalty for using technical skills without proper tools. If you have literally no tools at all, you still only suffer a -2 penalty instead of the normal -5.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "notes": "Removes the no-proper-tools penalty; caps the no-tools-at-all penalty at -2 instead of -5."
+      }
+    },
+    {
+      "id": "improvised_weapons",
+      "name": "Improvised Weapons",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "Use your Close Combat: Unarmed skill bonus for attack checks with improvised weapons (normally uses Close Combat: Improvised Weapons instead). Each rank grants +1 Damage rank with improvised weapons. Capped by the maxAttackPlusEffectRank (Damage/effect side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "skill_usage_rule",
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "combat.improvisedWeaponDamage",
+        "perRank": 1,
+        "notes": "Also substitutes Unarmed skill for the dedicated Improvised Weapons focus."
+      },
+      "maxRankFormula": "powerLevelLimits.maxAttackPlusEffectRank, from power-progression.json"
+    },
+    {
+      "id": "inspiration",
+      "name": "Inspiration",
+      "types": [
+        "Command",
+        "Fortune"
+      ],
+      "ranked": true,
+      "maxRank": 5,
+      "maxRankKind": "fixed",
+      "effect": "Once per scene, take a Command action and spend a Hero Point to grant every ally who can see/hear you a +1 bonus on all checks until the start of your next turn, not limited by Power Level. You don't gain the bonus yourself. Multiple Inspiration users don't stack; only the highest applies. Each rank adds +1 to the granted bonus, up to +5 at 5 ranks.",
+      "patterns": [
+        "command_grant",
+        "hero_point_spend"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "trigger": "command_action",
+        "perRank": 1,
+        "notes": "Once per scene; affects allies only, non-stacking across multiple Inspiration sources."
+      }
+    },
+    {
+      "id": "instant_counter",
+      "name": "Instant Counter",
+      "types": [
+        "General",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use your reaction to counter a narrowly-defined type of opposing effect (a specific attack type, spell school, etc. \u2014 GM must approve the definition, must not be too broad like 'all Damage effects') with one of your own effects, as if you had a Ready action prepared. Each specific counterable effect type is a separate advantage.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onMatchingEffectUsedAgainstSelf",
+        "grantedAction": "counter_with_own_effect"
+      }
+    },
+    {
+      "id": "instant_up",
+      "name": "Instant Up",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "The Stand action doesn't leave you Hindered; you move at full Speed rank the turn you stand up.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "stand",
+        "notes": "Removes the Hindered-until-end-of-turn penalty from standing."
+      }
+    },
+    {
+      "id": "interpose",
+      "name": "Interpose",
+      "types": [
+        "General",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When an ally within your movement speed would be hit by an attack or a Dodge-resistible hazard, use your reaction to move between them and the attack, becoming the target instead \u2014 effectively granting your ally total cover while the attack/hazard affects you normally.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onAllyTargetedInRange",
+        "grantedAction": "redirect_to_self"
+      }
+    },
+    {
+      "id": "jack_of_all_trades",
+      "name": "Jack-of-All-Trades",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use any skill other than Expertise or Languages untrained, even ones that normally can't be used untrained \u2014 but you get no benefit of ranks you don't have.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "scope": "all_skills_except_expertise_languages",
+        "notes": "Allows untrained use; doesn't grant ranks."
+      }
+    },
+    {
+      "id": "know_it_all",
+      "name": "Know-It-All",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use any Intellect-based Expertise skill untrained, including for answering difficult questions \u2014 but with no benefit of ranks you don't have.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "scope": "expertise_intellect_based",
+        "notes": "Allows untrained use of Intellect Expertise skills specifically."
+      }
+    },
+    {
+      "id": "leadership",
+      "name": "Leadership",
+      "types": [
+        "Command",
+        "Fortune"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "As a Command action, spend a Hero Point to immediately grant an ally who can see/hear you the benefit of one non-Fortune advantage (Determination, Inspiration, and Luck are common choices) until the end of their next turn. Ranked advantages are granted at rank 1 only. Each additional rank lets you grant it to one more ally simultaneously per use, spending an additional Hero Point per extra ally, and allows granting different advantages to different allies.",
+      "patterns": [
+        "command_grant",
+        "hero_point_spend"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "trigger": "command_action",
+        "notes": "Excludes Fortune-type advantages from what can be granted."
+      }
+    },
+    {
+      "id": "luck",
+      "name": "Luck",
+      "types": [
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Once per adventure, re-roll a d20 result you just rolled. If the re-roll shows 1-10, add +10, guaranteeing the re-roll lands in the 11-20 range. Each rank adds one more use per adventure. Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use"
+      ],
+      "implementation": {
+        "resetsOn": "adventure",
+        "usesPerRank": 1,
+        "notes": "Reroll floor: result is always treated as 11-20."
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "menacing_attack",
+      "name": "Menacing Attack",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If you render an opponent Incapacitated (including Dying or Dead, at GM discretion), use your reaction for an immediate Intimidation Impress action to Demoralize.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfIncapacitatesOpponent",
+        "grantedAction": "impress_demoralize"
+      }
+    },
+    {
+      "id": "minion",
+      "name": "Minion",
+      "types": [
+        "General"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "You have an NPC minion built with (rank x 15) Power Points, subject to normal Power Level limits and the Minion traits, with an automatically Helpful Attitude toward you. Minions can't have their own minions and don't earn or gain Hero Points, though you can spend command advantages like Leadership on their behalf. Lost minions are replaced between adventures. Multiple Minions extra: instead of more PP, doubles the minion count per rank (2, 4, 8...) of the same general type.",
+      "patterns": [
+        "npc_follower"
+      ],
+      "implementation": {
+        "followerType": "minion",
+        "ppPerRank": 15
+      }
+    },
+    {
+      "id": "partner_bond",
+      "name": "Partner Bond",
+      "types": [
+        "Fortune",
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Choose one other character as your partner when configured. Once per adventure, grant that partner a Hero Point, with the added ability to grant fortune-advantage benefits (other than Partner Bond itself) \u2014 requires mutual line of sight/hearing. Each rank adds one more use per adventure. Each additional partner is a separate advantage (Focused). Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use",
+        "hero_point_spend"
+      ],
+      "implementation": {
+        "resetsOn": "adventure",
+        "usesPerRank": 1
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "precise_shot",
+      "name": "Precise Shot",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Ranged attack checks ignore penalties for less-than-total Cover.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "rangedAttack",
+        "notes": "Removes partial/normal cover penalty (total cover still blocks entirely)."
+      }
+    },
+    {
+      "id": "precise_strike",
+      "name": "Precise Strike",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Close attack checks ignore penalties for less-than-total Cover.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "closeAttack",
+        "notes": "Removes partial/normal cover penalty (total cover still blocks entirely)."
+      }
+    },
+    {
+      "id": "prepared_effect",
+      "name": "Prepared Effect",
+      "types": [
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "At the start of each adventure, you have an already-prepared Improvised Effect (limited to what a routine check could prepare) you can define and use once during the adventure; it lasts a scene, as usual. Each rank adds one more prepared effect at the start of each adventure. Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use"
+      ],
+      "implementation": {
+        "resetsOn": "adventure",
+        "usesPerRank": 1
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "prone_fighting",
+      "name": "Prone Fighting",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "No -5 penalty to your close attack checks while Prone, and opponents get no +5 bonus to close attacks against you while you're Prone.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "conditionFlag": "self_prone",
+        "notes": "Suppresses both halves of the normal Prone combat penalty."
+      }
+    },
+    {
+      "id": "ranged_attack",
+      "name": "Ranged Attack",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 to all ranged attack checks per rank. Capped by the maxAttackPlusEffectRank (Attack side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "combat.rangedAttack",
+        "perRank": 1
+      },
+      "maxRankFormula": "powerLevelLimits.maxAttackPlusEffectRank, from power-progression.json"
+    },
+    {
+      "id": "ranged_defense",
+      "name": "Ranged Defense",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 Defense against ranged attacks per rank. Capped by the maxDefenseOrDodgePlusToughness (Defense side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "defense.vsRanged",
+        "perRank": 1
+      },
+      "maxRankFormula": "powerLevelLimits.maxDefenseOrDodgePlusToughness, from power-progression.json"
+    },
+    {
+      "id": "ranged_pin",
+      "name": "Ranged Pin",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Attack a target adjacent to a suitable surface (wall, tree, etc.) against their Dodge DC; on a hit, they become Restrained (Immobile + Vulnerable), pinned to the surface. They must take an Escape action against DC 15 to break free.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "rangedAttack",
+        "conditionImposed": "restrained",
+        "escapeDC": 15
+      }
+    },
+    {
+      "id": "redirect",
+      "name": "Redirect",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If an attack against you misses, use your reaction to redirect it at another target you can accurately perceive within the original attack's range; the GM rolls a new attack check using the original attacker's modifier against the new target.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfAttackMissed",
+        "grantedAction": "redirect_attack"
+      }
+    },
+    {
+      "id": "reflexive_block",
+      "name": "Reflexive Block",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use your reaction to perform a Block action, lasting until the start of your next turn.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "on_demand_reaction",
+        "grantedAction": "block"
+      }
+    },
+    {
+      "id": "reverse_hold",
+      "name": "Reverse Hold",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you succeed on an Escape action against a Grab, use your reaction for an opposed Grab check against the opponent you just escaped, trying to put them in a hold instead (your choice if multiple opponents held you).",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfEscapeSuccess",
+        "grantedAction": "grab"
+      }
+    },
+    {
+      "id": "reviving_team_attack",
+      "name": "Reviving Team Attack",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you successfully contribute to a Team Attack, instead of adding to the attack's rank, you can remove one Dazed or Stunned condition from another team-attack contributor per degree of success on your check (choosing a different character/condition each time).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "team_attack",
+        "notes": "Trades rank contribution for condition removal on allies."
+      }
+    },
+    {
+      "id": "ricochet",
+      "name": "Ricochet",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Choose a ranged attack when configured: it can bounce off a surface (even a character) once before hitting its target, for trick shots or bypassing cover; cover is determined from the last bounce point. The bounce doesn't harm what it hits and can't damage multiple targets at once. Each rank adds one more bounce before hitting. Each attack is a separate advantage.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "rangedAttack",
+        "bouncesPerRank": 1
+      }
+    },
+    {
+      "id": "riposte",
+      "name": "Riposte",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If an opponent misses you with a close attack, use your reaction for an immediate close attack against them.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfCloseAttackMissed",
+        "grantedAction": "closeAttack"
+      }
+    },
+    {
+      "id": "rush_of_victory",
+      "name": "Rush of Victory",
+      "types": [
+        "Combat",
+        "Command",
+        "Fortune",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If you render a non-Minion opponent Incapacitated (including Dying/Dead at GM discretion), spend a Hero Point to let every ally who can see/hear you use their reaction to Recover, even if they already took the Recover action this scene.",
+      "patterns": [
+        "command_grant",
+        "hero_point_spend",
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "trigger": "onSelfIncapacitatesNonMinion"
+      }
+    },
+    {
+      "id": "seize_initiative",
+      "name": "Seize Initiative",
+      "types": [
+        "Fortune"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When making an Initiative check at the start of combat, spend a Hero Point to automatically act first in the Initiative Order. If multiple characters do this simultaneously, they roll Initiative normally among themselves and act before everyone else, who then act in their normal order.",
+      "patterns": [
+        "hero_point_spend"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "trigger": "initiative_roll"
+      }
+    },
+    {
+      "id": "set_up",
+      "name": "Set-Up",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Transfer the benefit of your successful Feint or Impress check to an ally who can see/hear you, rather than keeping it yourself. Each additional rank lets you simultaneously transfer the benefit to one more ally (including yourself).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "feint_or_impress",
+        "notes": "Redirects the resulting Vulnerable/condition benefit to chosen allies instead of the user."
+      }
+    },
+    {
+      "id": "sidekick",
+      "name": "Sidekick",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "You have a Sidekick \u2014 a full NPC character (not subject to Minion rules) built with (rank x 5) Power Points, subject to normal Power Level, automatically Helpful toward you. Sidekicks don't have their own Hero Points, but you can spend your own Hero Points on their behalf as if you had Leadership solely for them.",
+      "patterns": [
+        "npc_follower"
+      ],
+      "implementation": {
+        "followerType": "sidekick",
+        "ppPerRank": 5
+      }
+    },
+    {
+      "id": "skill_expertise",
+      "name": "Skill Expertise",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Choose one specialization of a trained skill when configured; roll two dice for checks with that specialization and keep the better result. Each specific specialization is a separate advantage.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "ruleType": "reroll_keep_best",
+        "scope": "one_specialization"
+      }
+    },
+    {
+      "id": "skill_mastery",
+      "name": "Skill Mastery",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Choose one trained skill when configured; you can treat checks with it as routine even under time pressure or risk (normally routine checks require no pressure/risk). Doesn't grant routine checks for skills that never allow them. Each skill is a separate advantage.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "ruleType": "always_routine",
+        "scope": "one_skill"
+      }
+    },
+    {
+      "id": "sleeper_hold",
+      "name": "Sleeper Hold",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "After winning an opposed Grab check, spend a Concentrate action each subsequent turn to force the held target into a Fortitude check vs. DC (10 + your Strength rank): success = no effect, 1 degree of failure = Dazed, 2 = Stunned, 3+ = Asleep. Continued Concentration forces new checks (failure escalates one degree further). Sleeping targets get a Fortitude check each minute to wake, or can be deliberately woken. No effect on targets with Fortitude Immunity or Hardened/Impervious Toughness >= your Strength rank.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "grab_sustained",
+        "dc": "10 + strength_rank",
+        "conditionLadder": [
+          "dazed",
+          "stunned",
+          "asleep"
+        ]
+      }
+    },
+    {
+      "id": "snap_shot",
+      "name": "Snap Shot",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When a target moves within your ranged attack's range, use your reaction for a ranged attack against them at a -5 penalty.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onTargetMovesIntoRange",
+        "grantedAction": "rangedAttack",
+        "actionPenalty": -5
+      }
+    },
+    {
+      "id": "split_attack",
+      "name": "Split Attack",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Choose a specific attack when configured. On an Attack action, divide that attack's effect rank between two different targets (each attacked once per action), as you wish, no lower than rank 1 per target; make a separate attack check for each. Each additional rank lets you split among one more target (rank 2 = three targets, etc.). Each specific attack is a separate advantage.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "attack_with_configured_effect",
+        "extraTargetsPerRank": 1
+      }
+    },
+    {
+      "id": "startling_intimidation",
+      "name": "Startling Intimidation",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use Intimidation in place of Deception for an Impress action to Distract a target.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "substituteFor": "Intimidation instead of Deception for Distract-Impress"
+      }
+    },
+    {
+      "id": "stunning_strike",
+      "name": "Stunning Strike",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "On a close unarmed attack, choose to forgo damage and instead force a Fortitude check vs. DC (10 + your Strength rank): success = no effect, 1 degree of failure = Dazed, 2 = Stunned, 3+ = Incapacitated. Target gets a new Fortitude check at the end of each turn to remove Dazed/Stunned; Incapacitated targets check each minute. No effect on Fortitude-Immune targets.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "unarmedAttack",
+        "dc": "10 + strength_rank",
+        "conditionLadder": [
+          "dazed",
+          "stunned",
+          "incapacitated"
+        ]
+      }
+    },
+    {
+      "id": "surprise_attack",
+      "name": "Surprise Attack",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If you successfully attack a Surprised or Defenseless target with no penalties on your attack check, the resistance DC of your attack increases by +5.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "conditionFlag": "target_surprised_or_defenseless_and_no_attack_penalty",
+        "amount": 5,
+        "target": "effect_dc"
+      }
+    },
+    {
+      "id": "swift_strike",
+      "name": "Swift Strike",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When a target moves into range of your close attack, use your reaction for an immediate close attack against them at a -5 penalty.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onTargetMovesIntoCloseRange",
+        "grantedAction": "closeAttack",
+        "actionPenalty": -5
+      }
+    },
+    {
+      "id": "tactical_advance",
+      "name": "Tactical Advance",
+      "types": [
+        "Combat",
+        "Command",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you impose Dazed or Stunned on an opponent, allies who can see/hear you can use their reaction for a Move action toward that opponent.",
+      "patterns": [
+        "command_grant",
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfImposesDazedOrStunned",
+        "grantedAction": "move_toward_target"
+      }
+    },
+    {
+      "id": "tactical_genius",
+      "name": "Tactical Genius",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Your limit for Command-type advantages is based on your Intellect rank instead of Presence.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "substituteFor": "Intellect instead of Presence for the Command-advantage rank limit"
+      }
+    },
+    {
+      "id": "tactical_training",
+      "name": "Tactical Training",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use Expertise: Tactics in place of Deception for its Distracting/Innuendo/Tricking actions and in place of Intimidation for Demoralizing, but only to share benefits with teammates (e.g. sending Innuendo messages, or transferring a Distracting Impress via Set-Up) \u2014 only usable with others who also have this advantage and have trained with you.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "substituteFor": "Expertise: Tactics instead of Deception/Intimidation for specific interaction actions, teammates only"
+      }
+    },
+    {
+      "id": "takedown",
+      "name": "Takedown",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": 2,
+      "maxRankKind": "fixed",
+      "effect": "If you Incapacitate a Minion, make an immediate free extra Attack action (same attack/modifier) against another adjacent Minion in range. Chain continues as free actions as long as you keep Incapacitating Minions. At 2 ranks, targets don't need to be adjacent \u2014 you can move between attacks (total movement still capped at your normal speed for the round); the chain stops on a miss or no valid targets.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfIncapacitatesMinion",
+        "grantedAction": "attack_another_minion",
+        "rank2Bonus": "targets need not be adjacent; may move between attacks"
+      }
+    },
+    {
+      "id": "taunting_interaction",
+      "name": "Taunting Interaction",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use an interaction skill for an Impress action to inflame an opponent's emotions. On success, target is Impaired (Disabled with 2+ degrees of success). New resistance check at the end of each of their turns removes the condition. Each interaction skill is a separate advantage.",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "impress",
+        "conditionImposed": "impaired_or_disabled"
+      }
+    },
+    {
+      "id": "team_code",
+      "name": "Team Code",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "You and teammates sharing this advantage can plan tactics via free-action code words/phrases without being overheard, and gain +5 on Deception/Insight checks using Innuendo to relay tactical info among teammates.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "target": "skills.[deception,insight]_innuendo_teammates",
+        "amount": 5
+      }
+    },
+    {
+      "id": "teamwork",
+      "name": "Teamwork",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "+5 bonus on your check when supporting a Team Check, using the Aid action, or contributing to a Team Attack.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "checks.[team_check,aid,team_attack]",
+        "amount": 5
+      }
+    },
+    {
+      "id": "throwing_mastery",
+      "name": "Throwing Mastery",
+      "types": [
+        "Combat"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 Damage rank with thrown weapons per rank. You can also throw ordinarily-harmless small objects (cards, pens, paper clips) as Damage 1 thrown weapons. Capped by the maxAttackPlusEffectRank (Damage/effect side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "combat.thrownWeaponDamage",
+        "perRank": 1
+      },
+      "maxRankFormula": "powerLevelLimits.maxAttackPlusEffectRank, from power-progression.json"
+    },
+    {
+      "id": "tough",
+      "name": "Tough",
+      "types": [
+        "General"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "power_level",
+      "effect": "+1 Toughness rank per rank. GMs commonly set a house rank cap of 2-4 depending on series style, though the rules default to the Power Level limit. Capped by the maxDefenseOrDodgePlusToughness (Toughness side) Power Level limit, shared with base rank and any other stacking bonuses toward that same combined total. Numeric examples of that combined cap (power-progression.json's powerLevelLimits): PL 1 -> 2; PL 5 -> 10; PL 10 (default) -> 20; PL 15 -> 30; PL 20 -> 40 \u2014 shared with whatever base rank + other bonuses already apply to that same combined total.",
+      "patterns": [
+        "passive_stat_bonus"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "perRank": 1,
+        "notes": "GM may impose an additional flat cap (typically 2-4) beyond the PL limit."
+      },
+      "maxRankFormula": "powerLevelLimits.maxDefenseOrDodgePlusToughness, from power-progression.json"
+    },
+    {
+      "id": "tracking",
+      "name": "Tracking",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Use Perception or Survival to follow tracks with an acute sense, as if you had the Tracking effect of Enhanced Senses.",
+      "patterns": [
+        "skill_usage_rule"
+      ],
+      "implementation": {
+        "notes": "Grants a Tracking-equivalent sensory capability via Perception/Survival."
+      }
+    },
+    {
+      "id": "trance",
+      "name": "Trance",
+      "types": [
+        "General"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "After a minute of meditation and a DC 15 Awareness check, enter a deathlike trance: add Awareness rank to Stamina for breath-holding duration, use the higher of Fortitude/Will for resistance to suffocation/disease/poison/biological hazards (which can also be suspended for the trance's duration). Others need a Perception check opposed by your Awareness to tell you're not dead. You're aware of surroundings, can end the trance at will as a simple action, but can't act otherwise (GM may allow limited mental communication).",
+      "patterns": [
+        "gm_adjudicated",
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "activationDC": 15,
+        "notes": "Grants a suite of resistance bonuses while immobile and unresponsive."
+      }
+    },
+    {
+      "id": "ultimate_effort",
+      "name": "Ultimate Effort",
+      "types": [
+        "Fortune",
+        "Heroic"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Pick a specific check (an attack, a resistance with one Defense, or one non-combat skill) when configured. Spend a Hero Point before rolling to skip the die and treat the result as a flat 20 + your check modifier (not a natural 20, so no Added Success/Critical). Each Focused instance targets a different specific check. Not independently ranked, but each instance of this advantage still costs 1 rank against the character's shared Heroic-advantage budget (floor(Power Level / 2) total ranks across all Heroic-type advantages \u2014 see the design doc's rank-cap section). Numeric examples of that shared budget: PL 1 -> 0; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "hero_point_spend"
+      ],
+      "implementation": {
+        "cost": "heroPoint",
+        "notes": "Must be declared before the die is rolled; result is fixed at modifier+20."
+      },
+      "maxRankFormula": "flat 1-rank cost against the shared floor(powerLevel/2) Heroic-advantage budget"
+    },
+    {
+      "id": "uncanny_dodge",
+      "name": "Uncanny Dodge",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "You are never Vulnerable from being Surprised or otherwise caught off guard. You can still be made Vulnerable by effects/situations that limit your mobility.",
+      "patterns": [
+        "conditional_stat_bonus"
+      ],
+      "implementation": {
+        "notes": "Suppresses the Vulnerable-from-surprise case specifically; other Vulnerable sources still apply."
+      }
+    },
+    {
+      "id": "untapped_potential",
+      "name": "Untapped Potential",
+      "types": [
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "When you use Extra Effort to raise an effect's rank, gain 2 ranks instead of 1 (not subject to Power Level limits, same as other Extra Effort rank boosts). Each additional rank adds +1 more to that increase. Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use"
+      ],
+      "implementation": {
+        "notes": "Modifies the Extra Effort rank-boost formula rather than tracking separate uses."
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "up_and_at_em",
+      "name": "Up and At 'Em",
+      "types": [
+        "Combat",
+        "Command"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "Take a Command action to let all allies who can see/hear you immediately Stand as if they had Instant Up (no Hindered penalty, full Speed that turn).",
+      "patterns": [
+        "command_grant"
+      ],
+      "implementation": {
+        "trigger": "command_action",
+        "grantedAction": "stand_with_instant_up"
+      }
+    },
+    {
+      "id": "variable_team_attack",
+      "name": "Variable Team Attack",
+      "types": [
+        "Combat"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "When you successfully contribute to a Team Attack, instead of adding to the attack's rank, apply a 1-point Variable Descriptor to its effect (2-point if your team-attack check got 3+ degrees of success).",
+      "patterns": [
+        "action_modifier"
+      ],
+      "implementation": {
+        "action": "team_attack",
+        "notes": "Trades rank contribution for a Variable Descriptor application."
+      }
+    },
+    {
+      "id": "weapon_bind",
+      "name": "Weapon Bind",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If a weapon-based close attack against you misses, use your reaction for an immediate Disarm against the attacker.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfWeaponCloseAttackMissed",
+        "grantedAction": "disarm"
+      }
+    },
+    {
+      "id": "weapon_break",
+      "name": "Weapon Break",
+      "types": [
+        "Combat",
+        "Reaction"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "If a weapon-based close attack against you misses, use your reaction for an immediate Smash against the attacker's weapon.",
+      "patterns": [
+        "reaction_trigger"
+      ],
+      "implementation": {
+        "trigger": "onSelfWeaponCloseAttackMissed",
+        "grantedAction": "smash_weapon"
+      }
+    },
+    {
+      "id": "well_equipped",
+      "name": "Well-Equipped",
+      "types": [
+        "Heroic"
+      ],
+      "ranked": true,
+      "maxRank": null,
+      "maxRankKind": "heroic_budget",
+      "effect": "Once per adventure, have a single piece of Equipment 'on-hand' so long as it's within your normal Equipment Point allotment (or worth <=5 Equipment Points if you lack the Equipment advantage). Each rank adds one more use per adventure. Ranks are drawn from the character's shared Heroic-advantage budget (floor(Power Level / 2) TOTAL ranks split across every Heroic-type advantage on the sheet, not a separate cap for this advantage alone). Numeric examples: PL 1 -> 0 ranks available; PL 5 -> 2; PL 10 (default) -> 5; PL 15 -> 7; PL 20 -> 10.",
+      "patterns": [
+        "resource_limited_use"
+      ],
+      "implementation": {
+        "resetsOn": "adventure",
+        "usesPerRank": 1
+      },
+      "maxRankFormula": "floor(powerLevel / 2), shared across all Heroic-type advantages"
+    },
+    {
+      "id": "well_informed",
+      "name": "Well-Informed",
+      "types": [
+        "Skill"
+      ],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "effect": "On first encountering an individual/group/organization, make an immediate Investigation or Persuasion check (can be taken as routine) to see what you already know about them, per the Investigation skill's information-gathering guidelines. Only one check per subject on first encounter; the GM may allow another after significant time passes, or for a Hero Point.",
+      "patterns": [
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "notes": "One-time free information check per new subject; GM sets the information yield."
+      }
+    }
+  ]
+}

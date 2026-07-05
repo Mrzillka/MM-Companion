@@ -853,6 +853,38 @@ def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
     return violations
 
 
+def power_linked_range_violations(power: Power, game_data: GameData) -> list[str]:
+    """Linked-effect Range mismatches (``mm-powers-architecture.md`` §4).
+
+    Linked effects fire together as one, so they must share the same Range. Reads
+    each effect's *effective* Range (base range with any modifier overrides applied,
+    via :func:`_effective_stats`) and flags any that differs from the first effect's.
+    Returns one message per mismatched effect. Empty unless the power is Linked with
+    two or more effects.
+    """
+
+    if power.structure != STRUCTURE_LINKED or len(power.effects) < 2:
+        return []
+    ranges = [_effective_stats(effect, game_data)[1].get("range", "") for effect in power.effects]
+    first = ranges[0]
+    violations: list[str] = []
+    for effect, range_ in zip(power.effects[1:], ranges[1:], strict=True):
+        if range_ != first:
+            name = _effect_name(effect, game_data)
+            violations.append(
+                f"{name}: Range '{range_}' differs from the first linked effect's "
+                f"'{first}' — linked effects must share the same Range."
+            )
+    return violations
+
+
+def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """The display name of an effect's base, falling back to its raw id."""
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    return base.name if base else effect.effect_id
+
+
 # The base game-term fields, in display order, with their table labels.
 _STAT_FIELDS = (
     ("effect_type", "Type"),

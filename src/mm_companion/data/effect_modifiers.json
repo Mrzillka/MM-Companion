@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Effect-specific extras and flaws for Mutants & Masterminds 4e — modifiers that only apply to (or only make sense on) one particular base effect from effects.json, as opposed to the general-purpose pool in modifiers.json. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (category, costFormula, flat) reflect game rules/facts, not copyrighted prose.",
     "usageNote": "When building a Power's effect instance, a modifier picker should offer BOTH the relevant entries from modifiers.json (general pool) AND the entries here for the chosen effectId. The two pools are additive, not exclusive — e.g. a Damage effect can take the general 'Ranged' extra AND the Damage-specific 'Strength-Based' extra at the same time.",
-    "coverageNote": "Not every effect in effects.json has entries here. Many simpler effects (Comprehend, Move Object, Postcognition, Precognition, Regeneration, Speed, Swimming) rely solely on the general modifiers.json pool and have no effect-specific extras/flaws of their own. A few effects (Enhanced Movement, Enhanced Senses) instead grant a menu of purchasable sub-abilities as part of configuring the base effect rather than true cost modifiers — that selection menu is a future 'effect options' data concern, not modeled here.",
+    "coverageNote": "Not every effect in effects.json has entries here. Simpler effects (Comprehend, Postcognition, Precognition, Speed, Swimming) rely solely on the general modifiers.json pool and have no effect-specific extras/flaws of their own (verified directly against the source text, not just assumed). Enhanced Movement and Comprehend instead grant a menu of purchasable sub-abilities as part of configuring the base effect rather than true cost modifiers -- see mm-powers-ui-design.md for that menu data. Enhanced Senses has BOTH a sub-ability menu AND a small set of genuine general-purpose extras/flaws layered on top (included below).",
     "categoryKey": {
       "extra": "Increases the effect's cost and adds a benefit",
       "flaw": "Decreases the effect's cost and adds a restriction"
@@ -17,374 +17,2198 @@
   "effectModifiers": {
     "affliction": {
       "extras": [
-        { "id": "concentration_affliction", "name": "Concentration", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Concentration"}, "description": "Reapplies the Affliction each turn you Concentrate to maintain it." },
-        { "id": "contagious_affliction", "name": "Contagious", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Spreads to anyone who touches an affected target." },
-        { "id": "cumulative", "name": "Cumulative", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Repeated failed resistance checks stack toward a worse degree." },
-        { "id": "empowering", "name": "Empowering", "costFormula": "included in base rank pricing", "costValue": 0, "flat": true, "description": "The major condition transforms the target into a form with bonus power points." },
-        { "id": "progressive", "name": "Progressive", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "description": "Each failed resistance check against the ongoing Affliction worsens it by a degree." },
-        { "id": "prolonged", "name": "Prolonged", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "description": "Further resistance checks only happen once per scene instead of per round or minute." },
-        { "id": "reversible_affliction", "name": "Reversible", "costFormula": "+1 or +2 points flat", "costValue": 1, "flat": true, "description": "You can remove the conditions you imposed at will." },
-        { "id": "sustained_affliction", "name": "Sustained", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "overrides": {"duration": "Sustained"}, "description": "Reapplies a fresh Affliction each turn while you Sustain it, no attack roll needed." },
-        { "id": "variable_conditions", "name": "Variable Conditions", "costFormula": "+1 or +2 points per rank", "costValue": 1, "flat": false, "description": "Choose which conditions to impose at the moment of use instead of locking them in." }
+        {
+          "id": "concentration_affliction",
+          "name": "Concentration",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Concentration"
+          },
+          "description": "Reapplies the Affliction each turn you Concentrate to maintain it."
+        },
+        {
+          "id": "contagious_affliction",
+          "name": "Contagious",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Spreads to anyone who touches an affected target."
+        },
+        {
+          "id": "cumulative",
+          "name": "Cumulative",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Repeated failed resistance checks stack toward a worse degree."
+        },
+        {
+          "id": "empowering",
+          "name": "Empowering",
+          "costFormula": "included in base rank pricing",
+          "costValue": 0,
+          "flat": true,
+          "description": "The major condition transforms the target into a form with bonus power points."
+        },
+        {
+          "id": "progressive",
+          "name": "Progressive",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "description": "Each failed resistance check against the ongoing Affliction worsens it by a degree."
+        },
+        {
+          "id": "prolonged",
+          "name": "Prolonged",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "description": "Further resistance checks only happen once per scene instead of per round or minute."
+        },
+        {
+          "id": "reversible_affliction",
+          "name": "Reversible",
+          "costFormula": "+1 or +2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "You can remove the conditions you imposed at will."
+        },
+        {
+          "id": "sustained_affliction",
+          "name": "Sustained",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Reapplies a fresh Affliction each turn while you Sustain it, no attack roll needed."
+        },
+        {
+          "id": "variable_conditions",
+          "name": "Variable Conditions",
+          "costFormula": "+1 or +2 points per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Choose which conditions to impose at the moment of use instead of locking them in."
+        }
       ],
       "flaws": [
-        { "id": "decreasing_difficulty", "name": "Decreasing Difficulty", "costFormula": "-1 point flat", "costValue": 1, "flat": true, "description": "Each repeated resistance check against it gets easier for the target." },
-        { "id": "instant_recovery", "name": "Instant Recovery", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "The imposed conditions clear automatically once the effect's duration ends." },
-        { "id": "limited_degree", "name": "Limited Degree", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "One degree of failure imposes no condition at all." },
-        { "id": "onset", "name": "Onset", "costFormula": "-1 point flat or per rank", "costValue": 1, "flat": true, "description": "Conditions don't take hold immediately — they kick in after a delay." }
+        {
+          "id": "decreasing_difficulty",
+          "name": "Decreasing Difficulty",
+          "costFormula": "-1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Each repeated resistance check against it gets easier for the target."
+        },
+        {
+          "id": "instant_recovery",
+          "name": "Instant Recovery",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "The imposed conditions clear automatically once the effect's duration ends."
+        },
+        {
+          "id": "limited_degree",
+          "name": "Limited Degree",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "config": [
+            {
+              "key": "degree",
+              "label": "No effect at",
+              "type": "select",
+              "hidesField": true,
+              "hint": "Which degree of failure imposes no condition.",
+              "options": [
+                {
+                  "value": "degree1",
+                  "label": "1st degree (Mild)"
+                },
+                {
+                  "value": "degree2",
+                  "label": "2nd degree (Moderate)"
+                },
+                {
+                  "value": "degree3",
+                  "label": "3rd degree (Major)"
+                }
+              ]
+            }
+          ],
+          "description": "One degree of failure imposes no condition at all."
+        },
+        {
+          "id": "onset",
+          "name": "Onset",
+          "costFormula": "-1 point flat or per rank",
+          "costValue": 1,
+          "flat": true,
+          "description": "Conditions don't take hold immediately — they kick in after a delay."
+        }
       ]
     },
     "burrowing": {
       "extras": [
-        { "id": "penetrating_burrowing", "name": "Penetrating", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you dig through materials otherwise too hard to burrow through." },
-        { "id": "ranged_burrowing", "name": "Ranged", "costFormula": "+1 or +2 points per rank", "costValue": 1, "flat": false, "overrides": {"range": "Ranged"}, "description": "Dig tunnels remotely, or grant Burrowing to someone else at a distance." }
+        {
+          "id": "penetrating_burrowing",
+          "name": "Penetrating",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you dig through materials otherwise too hard to burrow through."
+        },
+        {
+          "id": "ranged_burrowing",
+          "name": "Ranged",
+          "costFormula": "+1 or +2 points per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Ranged"
+          },
+          "description": "Dig tunnels remotely, or grant Burrowing to someone else at a distance."
+        }
       ],
       "flaws": [
-        { "id": "limited_burrowing", "name": "Limited", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only works through certain materials, like loose soil but not rock." },
-        { "id": "no_collapse", "name": "No Collapse", "costFormula": "-1 point flat", "costValue": 1, "flat": true, "description": "Your tunnels always stay stable and can't be collapsed on purpose." },
-        { "id": "no_tunnel", "name": "No Tunnel", "costFormula": "-1 point flat", "costValue": 1, "flat": true, "description": "Your tunnels always collapse behind you instead of staying open." }
+        {
+          "id": "limited_burrowing",
+          "name": "Limited",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only works through certain materials, like loose soil but not rock."
+        },
+        {
+          "id": "no_collapse",
+          "name": "No Collapse",
+          "costFormula": "-1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Your tunnels always stay stable and can't be collapsed on purpose."
+        },
+        {
+          "id": "no_tunnel",
+          "name": "No Tunnel",
+          "costFormula": "-1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Your tunnels always collapse behind you instead of staying open."
+        }
       ]
     },
     "communication": {
       "extras": [
-        { "id": "broadcast", "name": "Broadcast", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Reaches every receiver in range simultaneously." },
-        { "id": "dimensional_comm", "name": "Dimensional", "costFormula": "+1 point flat per rank", "costValue": 1, "flat": true, "ranked": true, "description": "Extends your signal into other dimensions." },
-        { "id": "rapid", "name": "Rapid", "costFormula": "+1 point flat per rank", "costValue": 1, "flat": true, "ranked": true, "description": "Transmits information far faster than normal speech." },
-        { "id": "selective_comm", "name": "Selective", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you pick exactly who among your broadcast receivers gets the message." },
-        { "id": "subtle_comm", "name": "Subtle", "costFormula": "+1 or +2 points flat", "costValue": 1, "flat": true, "description": "Encrypts or hides your transmission from eavesdroppers." }
+        {
+          "id": "broadcast",
+          "name": "Broadcast",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Reaches every receiver in range simultaneously."
+        },
+        {
+          "id": "dimensional_comm",
+          "name": "Dimensional",
+          "costFormula": "+1 point flat per rank",
+          "costValue": 1,
+          "flat": true,
+          "ranked": true,
+          "description": "Extends your signal into other dimensions."
+        },
+        {
+          "id": "rapid",
+          "name": "Rapid",
+          "costFormula": "+1 point flat per rank",
+          "costValue": 1,
+          "flat": true,
+          "ranked": true,
+          "description": "Transmits information far faster than normal speech."
+        },
+        {
+          "id": "selective_comm",
+          "name": "Selective",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you pick exactly who among your broadcast receivers gets the message."
+        },
+        {
+          "id": "subtle_comm",
+          "name": "Subtle",
+          "costFormula": "+1 or +2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Encrypts or hides your transmission from eavesdroppers."
+        }
       ],
       "flaws": [
-        { "id": "limited_comm", "name": "Limited", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only reaches a specific group, like a species or organization." },
-        { "id": "one_way", "name": "One-Way", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You can transmit but not receive replies." },
-        { "id": "sense_dependent_comm", "name": "Sense-Dependent (carried effect)", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Another linked effect only works while your Communication channel is open." }
+        {
+          "id": "limited_comm",
+          "name": "Limited",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only reaches a specific group, like a species or organization."
+        },
+        {
+          "id": "one_way",
+          "name": "One-Way",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You can transmit but not receive replies."
+        },
+        {
+          "id": "sense_dependent_comm",
+          "name": "Sense-Dependent (carried effect)",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Another linked effect only works while your Communication channel is open."
+        }
       ]
     },
     "concealment": {
+      "extras": [
+        {
+          "id": "affects_others_concealment",
+          "name": "Affects Others",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Extends your Concealment to another character you're touching (or at range, with the Ranged extra)."
+        },
+        {
+          "id": "precise_concealment",
+          "name": "Precise",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Freely dial your Concealment from total to partial to none, or conceal only part of yourself, as a free action."
+        }
+      ],
       "flaws": [
-        { "id": "resistible_concealment", "name": "Resistible", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Anyone aware of or looking for you gets a resistance check to see through it." }
+        {
+          "id": "blending",
+          "name": "Blending",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only works while moving no faster than a slow walk (speed rank 1)."
+        },
+        {
+          "id": "limited_concealment",
+          "name": "Limited",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only works under specific conditions, like in fog, shadows, or against technological senses."
+        },
+        {
+          "id": "partial",
+          "name": "Partial",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only grants Partial Concealment (a smaller penalty to attacks, easier to see through) instead of Full Concealment."
+        },
+        {
+          "id": "passive",
+          "name": "Passive",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Drops the moment you take a standard action requiring a check, reactivating next turn."
+        },
+        {
+          "id": "resistible_concealment",
+          "name": "Resistible",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Anyone aware of or looking for you gets a resistance check to see through it."
+        }
       ]
     },
     "create": {
       "extras": [
-        { "id": "continuous_create", "name": "Continuous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Continuous"}, "description": "Created objects need no upkeep and persist until destroyed or dismissed." },
-        { "id": "equipment_create", "name": "Equipment", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you create fully-functional equipment instead of inert objects." },
-        { "id": "increased_volume", "name": "Increased Volume", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Raises the maximum volume of objects you can create." },
-        { "id": "movable_create", "name": "Movable", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Grants a Move Object effect that only works on your own creations." },
-        { "id": "permanent_create", "name": "Permanent", "costFormula": "+0 per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Permanent"}, "description": "Created objects need no maintenance but can never be repaired or altered afterward." },
-        { "id": "precise_create", "name": "Precise", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets you create objects with fine detail and moving parts." },
-        { "id": "selective_create", "name": "Selective", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Your created objects can selectively let some attacks or characters pass through." },
-        { "id": "self_repairing", "name": "Self-Repairing", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Damaged creations mend themselves automatically each turn." },
-        { "id": "stationary_create", "name": "Stationary", "costFormula": "+0 per rank", "costValue": 0, "flat": false, "description": "Created objects hang immobile in the air, resisting being moved." },
-        { "id": "subtle_create", "name": "Subtle", "costFormula": "+1 or +2 points flat", "costValue": 1, "flat": true, "description": "Creations look completely real, or are undetectable as constructs." },
-        { "id": "variable_opacity", "name": "Variable Opacity", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Choose whether each creation is opaque, translucent, or transparent." }
+        {
+          "id": "continuous_create",
+          "name": "Continuous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "Created objects need no upkeep and persist until destroyed or dismissed."
+        },
+        {
+          "id": "equipment_create",
+          "name": "Equipment",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you create fully-functional equipment instead of inert objects."
+        },
+        {
+          "id": "increased_volume",
+          "name": "Increased Volume",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Raises the maximum volume of objects you can create."
+        },
+        {
+          "id": "movable_create",
+          "name": "Movable",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Grants a Move Object effect that only works on your own creations."
+        },
+        {
+          "id": "permanent_create",
+          "name": "Permanent",
+          "costFormula": "+0 per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Permanent"
+          },
+          "description": "Created objects need no maintenance but can never be repaired or altered afterward."
+        },
+        {
+          "id": "precise_create",
+          "name": "Precise",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you create objects with fine detail and moving parts."
+        },
+        {
+          "id": "selective_create",
+          "name": "Selective",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Your created objects can selectively let some attacks or characters pass through."
+        },
+        {
+          "id": "self_repairing",
+          "name": "Self-Repairing",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Damaged creations mend themselves automatically each turn."
+        },
+        {
+          "id": "stationary_create",
+          "name": "Stationary",
+          "costFormula": "+0 per rank",
+          "costValue": 0,
+          "flat": false,
+          "description": "Created objects hang immobile in the air, resisting being moved."
+        },
+        {
+          "id": "subtle_create",
+          "name": "Subtle",
+          "costFormula": "+1 or +2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Creations look completely real, or are undetectable as constructs."
+        },
+        {
+          "id": "variable_opacity",
+          "name": "Variable Opacity",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Choose whether each creation is opaque, translucent, or transparent."
+        }
       ],
       "flaws": [
-        { "id": "feedback_create", "name": "Feedback", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You're hurt when a creation you're maintaining is damaged." },
-        { "id": "fragile", "name": "Fragile", "costFormula": "-1 point flat per rank", "costValue": 1, "flat": true, "ranked": true, "description": "Lowers the maximum Toughness of your created objects." },
-        { "id": "proportional", "name": "Proportional", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You split ranks between an object's size and its toughness instead of getting both at full rank." },
-        { "id": "small", "name": "Small", "costFormula": "-1 point flat per rank", "costValue": 1, "flat": true, "ranked": true, "description": "Lowers the maximum volume of objects you can create." },
-        { "id": "weakness_create", "name": "Weakness", "costFormula": "-1 or -2 points per rank", "costValue": 1, "flat": false, "description": "Your creations automatically fail their Damage resistance checks." }
+        {
+          "id": "feedback_create",
+          "name": "Feedback",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You're hurt when a creation you're maintaining is damaged."
+        },
+        {
+          "id": "fragile",
+          "name": "Fragile",
+          "costFormula": "-1 point flat per rank",
+          "costValue": 1,
+          "flat": true,
+          "ranked": true,
+          "description": "Lowers the maximum Toughness of your created objects."
+        },
+        {
+          "id": "proportional",
+          "name": "Proportional",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You split ranks between an object's size and its toughness instead of getting both at full rank."
+        },
+        {
+          "id": "small",
+          "name": "Small",
+          "costFormula": "-1 point flat per rank",
+          "costValue": 1,
+          "flat": true,
+          "ranked": true,
+          "description": "Lowers the maximum volume of objects you can create."
+        },
+        {
+          "id": "weakness_create",
+          "name": "Weakness",
+          "costFormula": "-1 or -2 points per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Your creations automatically fail their Damage resistance checks."
+        }
       ]
     },
     "damage": {
       "extras": [
-        { "id": "strength_based", "name": "Strength-Based", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "addsAbility": "STR", "description": "Adds your Strength rank to this Damage effect's rank, like a melee weapon or claws." }
+        {
+          "id": "strength_based",
+          "name": "Strength-Based",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "addsAbility": "STR",
+          "description": "Adds your Strength rank to this Damage effect's rank, like a melee weapon or claws."
+        }
       ]
     },
     "deflect": {
       "extras": [
-        { "id": "aura_deflect", "name": "Aura", "costFormula": "+3 points per rank", "costValue": 3, "flat": false, "overrides": {"action": "None"}, "description": "Blocks attacks against you automatically, with no action required." },
-        { "id": "free_action_deflect", "name": "Free Action", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "overrides": {"action": "Free"}, "description": "Lets you Deflect as a free action." },
-        { "id": "ranged_deflect", "name": "Ranged", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Ranged"}, "description": "Lets you Deflect attacks aimed at allies within range." },
-        { "id": "reaction_deflect", "name": "Reaction", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"action": "Reaction"}, "description": "Lets you Deflect using your reaction for the round." },
-        { "id": "redirect_deflect", "name": "Redirect", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "A successful block lets you use the Redirect advantage." },
-        { "id": "reflect", "name": "Reflect", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Every successful block automatically redirects the attack, no action needed." },
-        { "id": "simple_action_deflect", "name": "Simple Action", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"action": "Simple"}, "description": "Lets you Deflect as a simple action." }
+        {
+          "id": "aura_deflect",
+          "name": "Aura",
+          "costFormula": "+3 points per rank",
+          "costValue": 3,
+          "flat": false,
+          "overrides": {
+            "action": "None"
+          },
+          "description": "Blocks attacks against you automatically, with no action required."
+        },
+        {
+          "id": "free_action_deflect",
+          "name": "Free Action",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "overrides": {
+            "action": "Free"
+          },
+          "description": "Lets you Deflect as a free action."
+        },
+        {
+          "id": "ranged_deflect",
+          "name": "Ranged",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Ranged"
+          },
+          "description": "Lets you Deflect attacks aimed at allies within range."
+        },
+        {
+          "id": "reaction_deflect",
+          "name": "Reaction",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "action": "Reaction"
+          },
+          "description": "Lets you Deflect using your reaction for the round."
+        },
+        {
+          "id": "redirect_deflect",
+          "name": "Redirect",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "A successful block lets you use the Redirect advantage."
+        },
+        {
+          "id": "reflect",
+          "name": "Reflect",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Every successful block automatically redirects the attack, no action needed."
+        },
+        {
+          "id": "simple_action_deflect",
+          "name": "Simple Action",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "action": "Simple"
+          },
+          "description": "Lets you Deflect as a simple action."
+        }
       ],
       "flaws": [
-        { "id": "limited_deflect", "name": "Limited", "costFormula": "-1 point per rank or by category", "costValue": 1, "flat": false, "description": "Only deflects a specific category of ranged attack." }
+        {
+          "id": "limited_deflect",
+          "name": "Limited",
+          "costFormula": "-1 point per rank or by category",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only deflects a specific category of ranged attack."
+        }
       ]
     },
     "elongation": {
       "extras": [
-        { "id": "slithering_elongation", "name": "Slithering", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Grants the Slithering movement effect while elongated." },
-        { "id": "striding", "name": "Striding", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Longer strides grant ranks of Speed." },
-        { "id": "swinging_elongation", "name": "Swinging", "costFormula": "+2 points flat", "costValue": 2, "flat": true, "description": "Grants the Swinging movement effect using your stretched limbs." }
+        {
+          "id": "slithering_elongation",
+          "name": "Slithering",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Grants the Slithering movement effect while elongated."
+        },
+        {
+          "id": "striding",
+          "name": "Striding",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Longer strides grant ranks of Speed."
+        },
+        {
+          "id": "swinging_elongation",
+          "name": "Swinging",
+          "costFormula": "+2 points flat",
+          "costValue": 2,
+          "flat": true,
+          "description": "Grants the Swinging movement effect using your stretched limbs."
+        }
       ]
     },
     "enhanced_trait": {
       "extras": [
-        { "id": "sustained_enhanced_trait", "name": "Sustained", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Sustained"}, "description": "Turns the bonus into a toggle you activate and maintain, usable for power stunts." }
+        {
+          "id": "sustained_enhanced_trait",
+          "name": "Sustained",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Turns the bonus into a toggle you activate and maintain, usable for power stunts."
+        }
       ],
       "flaws": [
-        { "id": "limited_enhanced_trait", "name": "Limited", "costFormula": "-1 point per rank (typically)", "costValue": 1, "flat": false, "description": "The bonus only applies in a specific circumstance, like at night or while angry." },
-        { "id": "reduced_trait", "name": "Reduced Trait", "costFormula": "-1x the cost of the reduced trait, flat", "costValue": 0, "flat": true, "description": "Boosts one trait at the cost of lowering another." }
+        {
+          "id": "limited_enhanced_trait",
+          "name": "Limited",
+          "costFormula": "-1 point per rank (typically)",
+          "costValue": 1,
+          "flat": false,
+          "description": "The bonus only applies in a specific circumstance, like at night or while angry."
+        },
+        {
+          "id": "reduced_trait",
+          "name": "Reduced Trait",
+          "costFormula": "-1x the cost of the reduced trait, flat",
+          "costValue": 0,
+          "flat": true,
+          "config": [
+            {
+              "key": "reduced_target",
+              "label": "Reduces",
+              "type": "select",
+              "source": "traits",
+              "hint": "Which trait is lowered to pay for the boosted one."
+            }
+          ],
+          "description": "Boosts one trait at the cost of lowering another."
+        }
       ]
     },
     "environment": {
       "extras": [
-        { "id": "shape_environment", "name": "Shape", "costFormula": "+0 points", "costValue": 0, "flat": true, "description": "Changes the area's default shape from a sphere to a cone, cube, or similar." },
-        { "id": "variable_environment", "name": "Variable", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you mix and match different environmental hazards within your point budget." }
+        {
+          "id": "shape_environment",
+          "name": "Shape",
+          "costFormula": "+0 points",
+          "costValue": 0,
+          "flat": true,
+          "description": "Changes the area's default shape from a sphere to a cone, cube, or similar."
+        },
+        {
+          "id": "variable_environment",
+          "name": "Variable",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you mix and match different environmental hazards within your point budget."
+        }
       ]
     },
     "extra_limbs": {
       "extras": [
-        { "id": "continuous_extra_limbs", "name": "Continuous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Continuous"}, "description": "Extra limbs stay active without needing upkeep once toggled on." },
-        { "id": "projection_extra_limbs", "name": "Projection", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Harm to your extra limbs doesn't carry over to you." },
-        { "id": "sustained_extra_limbs", "name": "Sustained", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Sustained"}, "description": "Extra limbs can be toggled on and off but need upkeep to stay active." },
-        { "id": "variable_extra_limbs", "name": "Variable", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Reassign your limbs between grabbing and stability use each turn." }
+        {
+          "id": "continuous_extra_limbs",
+          "name": "Continuous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "Extra limbs stay active without needing upkeep once toggled on."
+        },
+        {
+          "id": "projection_extra_limbs",
+          "name": "Projection",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Harm to your extra limbs doesn't carry over to you."
+        },
+        {
+          "id": "sustained_extra_limbs",
+          "name": "Sustained",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Extra limbs can be toggled on and off but need upkeep to stay active."
+        },
+        {
+          "id": "variable_extra_limbs",
+          "name": "Variable",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Reassign your limbs between grabbing and stability use each turn."
+        }
       ],
       "flaws": [
-        { "id": "distracting_extra_limbs", "name": "Distracting", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You're left Vulnerable while actively using your extra limbs." },
-        { "id": "limited_to_extra_limbs", "name": "Limited to Extra Limbs", "costFormula": "-1 point per rank (typically)", "costValue": 1, "flat": false, "description": "Another effect or modifier only works through your extra limbs." }
+        {
+          "id": "distracting_extra_limbs",
+          "name": "Distracting",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You're left Vulnerable while actively using your extra limbs."
+        },
+        {
+          "id": "limited_to_extra_limbs",
+          "name": "Limited to Extra Limbs",
+          "costFormula": "-1 point per rank (typically)",
+          "costValue": 1,
+          "flat": false,
+          "description": "Another effect or modifier only works through your extra limbs."
+        }
       ]
     },
     "feature": {
       "extras": [
-        { "id": "sustained_feature", "name": "Sustained", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Sustained"}, "description": "Makes an otherwise-passive Feature something you actively activate and maintain." }
+        {
+          "id": "sustained_feature",
+          "name": "Sustained",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Makes an otherwise-passive Feature something you actively activate and maintain."
+        }
       ]
     },
     "flight": {
       "extras": [
-        { "id": "continuous_flight", "name": "Continuous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Continuous"}, "description": "You hover in place automatically without needing to maintain the effect." },
-        { "id": "safe_landing", "name": "Safe Landing", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "You float safely down if your Flight ever fails or ends." },
-        { "id": "subtle_flight", "name": "Subtle", "costFormula": "+1 or +2 points flat", "costValue": 1, "flat": true, "description": "Removes the noise, wind, or visible trail your Flight normally leaves." }
+        {
+          "id": "continuous_flight",
+          "name": "Continuous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "You hover in place automatically without needing to maintain the effect."
+        },
+        {
+          "id": "safe_landing",
+          "name": "Safe Landing",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "You float safely down if your Flight ever fails or ends."
+        },
+        {
+          "id": "subtle_flight",
+          "name": "Subtle",
+          "costFormula": "+1 or +2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Removes the noise, wind, or visible trail your Flight normally leaves."
+        }
       ],
       "flaws": [
-        { "id": "concentration_flight", "name": "Concentration", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Concentration"}, "description": "Flying takes constant focus, leaving little room to do anything else." },
-        { "id": "distracting_flight", "name": "Distracting", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You're Vulnerable the whole time you're flying." },
-        { "id": "gliding", "name": "Gliding", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You can only gain altitude by catching favorable winds or thermals." },
-        { "id": "levitation", "name": "Levitation", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You can only move straight up and down, not side to side." },
-        { "id": "platform", "name": "Platform", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Your Flight depends on standing on a physical platform that can be knocked away." },
-        { "id": "restrainable", "name": "Restrainable", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Being Immobilized grounds you until you can reactivate the effect." },
-        { "id": "rocket", "name": "Rocket", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You can only fly in a straight line; turning costs an extra action." }
+        {
+          "id": "concentration_flight",
+          "name": "Concentration",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Concentration"
+          },
+          "description": "Flying takes constant focus, leaving little room to do anything else."
+        },
+        {
+          "id": "distracting_flight",
+          "name": "Distracting",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You're Vulnerable the whole time you're flying."
+        },
+        {
+          "id": "gliding",
+          "name": "Gliding",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You can only gain altitude by catching favorable winds or thermals."
+        },
+        {
+          "id": "levitation",
+          "name": "Levitation",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You can only move straight up and down, not side to side."
+        },
+        {
+          "id": "platform",
+          "name": "Platform",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Your Flight depends on standing on a physical platform that can be knocked away."
+        },
+        {
+          "id": "restrainable",
+          "name": "Restrainable",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Being Immobilized grounds you until you can reactivate the effect."
+        },
+        {
+          "id": "rocket",
+          "name": "Rocket",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You can only fly in a straight line; turning costs an extra action."
+        }
       ]
     },
     "fortune_control": {
       "extras": [
-        { "id": "additional_use", "name": "Additional Use", "costFormula": "+1 point flat per use", "costValue": 1, "flat": true, "description": "Grants an extra use of Fortune Control per rank (capped by heroic-advantage limits)." },
-        { "id": "enhanced_advantages", "name": "Enhanced Advantages", "costFormula": "+1 point flat per advantage", "costValue": 1, "flat": true, "description": "Lets you acquire fortune/heroic advantages through this effect." }
+        {
+          "id": "additional_use",
+          "name": "Additional Use",
+          "costFormula": "+1 point flat per use",
+          "costValue": 1,
+          "flat": true,
+          "description": "Grants an extra use of Fortune Control per rank (capped by heroic-advantage limits)."
+        },
+        {
+          "id": "enhanced_advantages",
+          "name": "Enhanced Advantages",
+          "costFormula": "+1 point flat per advantage",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you acquire fortune/heroic advantages through this effect."
+        }
       ],
       "flaws": [
-        { "id": "action_fortune_control", "name": "Action", "costFormula": "-1 or -2 points per rank", "costValue": 1, "flat": false, "stepField": "action", "stepBy": 1, "description": "Requires a slower action to use, limiting when you can respond to others." },
-        { "id": "attack_check_fortune", "name": "Attack Check", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Ranged", "check": "Attack vs. Defense"}, "description": "Requires a successful ranged attack check to affect a target." },
-        { "id": "resistible_fortune", "name": "Resistible", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Targets get a resistance check to avoid its effects." },
-        { "id": "side_effect_fortune", "name": "Side Effect", "costFormula": "-1 or -2 points per rank", "costValue": 1, "flat": false, "description": "A failed use backfires as a complication, with no Hero Point awarded." }
+        {
+          "id": "action_fortune_control",
+          "name": "Action",
+          "costFormula": "-1 or -2 points per rank",
+          "costValue": 1,
+          "flat": false,
+          "stepField": "action",
+          "stepBy": 1,
+          "description": "Requires a slower action to use, limiting when you can respond to others."
+        },
+        {
+          "id": "attack_check_fortune",
+          "name": "Attack Check",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Ranged",
+            "check": "Attack vs. Defense"
+          },
+          "description": "Requires a successful ranged attack check to affect a target."
+        },
+        {
+          "id": "resistible_fortune",
+          "name": "Resistible",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Targets get a resistance check to avoid its effects."
+        },
+        {
+          "id": "side_effect_fortune",
+          "name": "Side Effect",
+          "costFormula": "-1 or -2 points per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "A failed use backfires as a complication, with no Hero Point awarded."
+        }
       ]
     },
     "growth": {
       "extras": [
-        { "id": "growth_momentum", "name": "Growth Momentum", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Growing on your turn and landing a close hit penalizes the target's resistance check." },
-        { "id": "permanent_growth", "name": "Permanent", "costFormula": "+0 per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Permanent"}, "description": "Your larger size becomes your normal, permanent size category at no extra cost." }
+        {
+          "id": "growth_momentum",
+          "name": "Growth Momentum",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Growing on your turn and landing a close hit penalizes the target's resistance check."
+        },
+        {
+          "id": "permanent_growth",
+          "name": "Permanent",
+          "costFormula": "+0 per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Permanent"
+          },
+          "description": "Your larger size becomes your normal, permanent size category at no extra cost."
+        }
       ]
     },
     "healing": {
       "extras": [
-        { "id": "area_effect_healing", "name": "Area Effect", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Heals every willing subject within the affected area." },
-        { "id": "energizing", "name": "Energizing", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Removes Fatigued and Exhausted conditions instead of damage conditions." },
-        { "id": "perception_range_healing", "name": "Perception Range", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "overrides": {"range": "Perception"}, "description": "Heals any subject you can accurately perceive, no touch required." },
-        { "id": "persistent_healing", "name": "Persistent", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Can heal damage from effects that are normally Incurable." },
-        { "id": "ranged_healing", "name": "Ranged", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Ranged"}, "description": "Works at normal range instead of requiring touch." },
-        { "id": "repair", "name": "Repair", "costFormula": "+1 point per rank (+0 if repair-only)", "costValue": 1, "flat": false, "description": "Lets you mend damage conditions on objects, not just people." },
-        { "id": "resurrection", "name": "Resurrection", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Can restore a dead subject to life, at the cost of Extra Effort." },
-        { "id": "selective_healing", "name": "Selective", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you choose who in an Area Effect Healing benefits and who doesn't." }
+        {
+          "id": "area_effect_healing",
+          "name": "Area Effect",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Heals every willing subject within the affected area."
+        },
+        {
+          "id": "energizing",
+          "name": "Energizing",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Removes Fatigued and Exhausted conditions instead of damage conditions."
+        },
+        {
+          "id": "perception_range_healing",
+          "name": "Perception Range",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "overrides": {
+            "range": "Perception"
+          },
+          "description": "Heals any subject you can accurately perceive, no touch required."
+        },
+        {
+          "id": "persistent_healing",
+          "name": "Persistent",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Can heal damage from effects that are normally Incurable."
+        },
+        {
+          "id": "ranged_healing",
+          "name": "Ranged",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Ranged"
+          },
+          "description": "Works at normal range instead of requiring touch."
+        },
+        {
+          "id": "repair",
+          "name": "Repair",
+          "costFormula": "+1 point per rank (+0 if repair-only)",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you mend damage conditions on objects, not just people."
+        },
+        {
+          "id": "resurrection",
+          "name": "Resurrection",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Can restore a dead subject to life, at the cost of Extra Effort."
+        },
+        {
+          "id": "selective_healing",
+          "name": "Selective",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you choose who in an Area Effect Healing benefits and who doesn't."
+        }
       ],
       "flaws": [
-        { "id": "empathic", "name": "Empathic", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You take on the conditions you heal from someone else." },
-        { "id": "limited_healing", "name": "Limited", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Restricted to one type of damage, or only usable on others (or only on yourself)." },
-        { "id": "temporary_healing", "name": "Temporary", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "The healed conditions return after about an hour." }
+        {
+          "id": "empathic",
+          "name": "Empathic",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You take on the conditions you heal from someone else."
+        },
+        {
+          "id": "limited_healing",
+          "name": "Limited",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Restricted to one type of damage, or only usable on others (or only on yourself)."
+        },
+        {
+          "id": "temporary_healing",
+          "name": "Temporary",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "The healed conditions return after about an hour."
+        }
       ]
     },
     "illusion": {
       "extras": [
-        { "id": "active_illusion", "name": "Active", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Even a moving, interactive illusion only needs a Sustain action to maintain." },
-        { "id": "continuous_illusion", "name": "Continuous", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "overrides": {"duration": "Continuous"}, "description": "An active illusion needs no maintenance once set in motion." },
-        { "id": "selective_illusion", "name": "Selective", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Choose exactly who perceives the illusion." }
+        {
+          "id": "active_illusion",
+          "name": "Active",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Even a moving, interactive illusion only needs a Sustain action to maintain."
+        },
+        {
+          "id": "continuous_illusion",
+          "name": "Continuous",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "An active illusion needs no maintenance once set in motion."
+        },
+        {
+          "id": "selective_illusion",
+          "name": "Selective",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Choose exactly who perceives the illusion."
+        }
       ],
       "flaws": [
-        { "id": "feedback_illusion", "name": "Feedback", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "A successful physical attack on your illusion stuns you." },
-        { "id": "limited_to_minds", "name": "Limited to Minds", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Mindless devices like cameras can't perceive the illusion at all." },
-        { "id": "limited_to_one_subject", "name": "Limited to One Subject", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only one observer at a time can perceive it." },
-        { "id": "resistible_illusion", "name": "Resistible", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Observers get an early resistance check to see through it on first encounter." }
+        {
+          "id": "feedback_illusion",
+          "name": "Feedback",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "A successful physical attack on your illusion stuns you."
+        },
+        {
+          "id": "limited_to_minds",
+          "name": "Limited to Minds",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Mindless devices like cameras can't perceive the illusion at all."
+        },
+        {
+          "id": "limited_to_one_subject",
+          "name": "Limited to One Subject",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only one observer at a time can perceive it."
+        },
+        {
+          "id": "resistible_illusion",
+          "name": "Resistible",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Observers get an early resistance check to see through it on first encounter."
+        }
       ]
     },
     "immunity": {
       "extras": [
-        { "id": "affects_others_immunity", "name": "Affects Others", "costFormula": "+0 or +1 point per rank", "costValue": 1, "flat": false, "description": "Grants your Immunity to someone else by touch." },
-        { "id": "area_effect_immunity", "name": "Area Effect", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Extends a shared Immunity to everyone in an area, like a life-support bubble." },
-        { "id": "ranged_immunity", "name": "Ranged", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Ranged"}, "description": "Lets a shared Immunity be granted at a distance." },
-        { "id": "redirect_immunity", "name": "Redirect", "costFormula": "+1 point flat (or per rank for sustained/continuous)", "costValue": 1, "flat": true, "description": "Lets you redirect attacks you're immune to at a new target." },
-        { "id": "sustained_immunity", "name": "Sustained", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Sustained"}, "description": "Turns a normally-permanent Immunity into something you activate and maintain." }
+        {
+          "id": "affects_others_immunity",
+          "name": "Affects Others",
+          "costFormula": "+0 or +1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Grants your Immunity to someone else by touch."
+        },
+        {
+          "id": "area_effect_immunity",
+          "name": "Area Effect",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Extends a shared Immunity to everyone in an area, like a life-support bubble."
+        },
+        {
+          "id": "ranged_immunity",
+          "name": "Ranged",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Ranged"
+          },
+          "description": "Lets a shared Immunity be granted at a distance."
+        },
+        {
+          "id": "redirect_immunity",
+          "name": "Redirect",
+          "costFormula": "+1 point flat (or per rank for sustained/continuous)",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you redirect attacks you're immune to at a new target."
+        },
+        {
+          "id": "sustained_immunity",
+          "name": "Sustained",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Turns a normally-permanent Immunity into something you activate and maintain."
+        }
       ],
       "flaws": [
-        { "id": "concentration_immunity", "name": "Concentration", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Concentration"}, "description": "Requires a Concentrate action each turn to keep the Immunity active." },
-        { "id": "resistance_immunity", "name": "Resistance", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Halves the effect's rank before you resist instead of ignoring it outright." }
+        {
+          "id": "concentration_immunity",
+          "name": "Concentration",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Concentration"
+          },
+          "description": "Requires a Concentrate action each turn to keep the Immunity active."
+        },
+        {
+          "id": "resistance_immunity",
+          "name": "Resistance",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Halves the effect's rank before you resist instead of ignoring it outright."
+        }
       ]
     },
     "insubstantial": {
       "extras": [
-        { "id": "affects_corporeal", "name": "Affects Corporeal", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets an incorporeal character still affect the physical world." },
-        { "id": "affects_others_insubstantial", "name": "Affects Others", "costFormula": "+0 or +1 point per rank", "costValue": 1, "flat": false, "description": "Extends your Insubstantial state to another willing character by touch." },
-        { "id": "continuous_insubstantial", "name": "Continuous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Continuous"}, "description": "Stay insubstantial until you choose to return to solid form." },
-        { "id": "linked_insubstantial", "name": "Linked", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "description": "Notes that other effects commonly activate together with going insubstantial." },
-        { "id": "normally_insubstantial", "name": "Normally Insubstantial", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "description": "Insubstantial is your natural state; becoming solid is what requires upkeep." },
-        { "id": "permanent_insubstantial", "name": "Permanent", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Permanent"}, "description": "You're always insubstantial and can't voluntarily become solid." },
-        { "id": "precise_insubstantial", "name": "Precise", "costFormula": "included in configuration", "costValue": 0, "flat": true, "description": "Lets part of your body stay solid while the rest remains insubstantial." },
-        { "id": "subtle_insubstantial", "name": "Subtle", "costFormula": "+1 or +2 points flat", "costValue": 1, "flat": true, "description": "Makes your insubstantial state hard or impossible to notice." }
+        {
+          "id": "affects_corporeal",
+          "name": "Affects Corporeal",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets an incorporeal character still affect the physical world."
+        },
+        {
+          "id": "affects_others_insubstantial",
+          "name": "Affects Others",
+          "costFormula": "+0 or +1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Extends your Insubstantial state to another willing character by touch."
+        },
+        {
+          "id": "continuous_insubstantial",
+          "name": "Continuous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "Stay insubstantial until you choose to return to solid form."
+        },
+        {
+          "id": "linked_insubstantial",
+          "name": "Linked",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "description": "Notes that other effects commonly activate together with going insubstantial."
+        },
+        {
+          "id": "normally_insubstantial",
+          "name": "Normally Insubstantial",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "description": "Insubstantial is your natural state; becoming solid is what requires upkeep."
+        },
+        {
+          "id": "permanent_insubstantial",
+          "name": "Permanent",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Permanent"
+          },
+          "description": "You're always insubstantial and can't voluntarily become solid."
+        },
+        {
+          "id": "precise_insubstantial",
+          "name": "Precise",
+          "costFormula": "included in configuration",
+          "costValue": 0,
+          "flat": true,
+          "description": "Lets part of your body stay solid while the rest remains insubstantial."
+        },
+        {
+          "id": "subtle_insubstantial",
+          "name": "Subtle",
+          "costFormula": "+1 or +2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Makes your insubstantial state hard or impossible to notice."
+        }
       ],
       "flaws": [
-        { "id": "limited_to_while_insubstantial", "name": "Limited to While Insubstantial", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Another effect or modifier only works while you're insubstantial." },
-        { "id": "no_strength", "name": "No Strength", "costFormula": "-5 points flat", "costValue": 5, "flat": true, "description": "Removes your effective Strength while in the lowest (fluid) rank." }
+        {
+          "id": "limited_to_while_insubstantial",
+          "name": "Limited to While Insubstantial",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Another effect or modifier only works while you're insubstantial."
+        },
+        {
+          "id": "no_strength",
+          "name": "No Strength",
+          "costFormula": "-5 points flat",
+          "costValue": 5,
+          "flat": true,
+          "description": "Removes your effective Strength while in the lowest (fluid) rank."
+        }
       ]
     },
     "leaping": {
       "flaws": [
-        { "id": "acrobatics_check_required", "name": "Acrobatics Check Required", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Needs a successful Acrobatics check to use your full Leaping rank." },
-        { "id": "full_power_leaping", "name": "Full Power", "costFormula": "-1 point flat", "costValue": 1, "flat": true, "description": "You can only make maximum-distance leaps, never shorter controlled ones." }
+        {
+          "id": "acrobatics_check_required",
+          "name": "Acrobatics Check Required",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Needs a successful Acrobatics check to use your full Leaping rank."
+        },
+        {
+          "id": "full_power_leaping",
+          "name": "Full Power",
+          "costFormula": "-1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "You can only make maximum-distance leaps, never shorter controlled ones."
+        }
       ]
     },
     "lifting": {
       "extras": [
-        { "id": "still_strength", "name": "Still Strength", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets you exert your Lifting just by touching something, without needing leverage." }
+        {
+          "id": "still_strength",
+          "name": "Still Strength",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you exert your Lifting just by touching something, without needing leverage."
+        }
       ]
     },
     "mind_reading": {
       "extras": [
-        { "id": "cumulative_mind_reading", "name": "Cumulative", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "New degrees of success stack onto your existing degree of contact." },
-        { "id": "effortless", "name": "Effortless", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Retrying after a bad failure never requires Extra Effort." },
-        { "id": "sensory_link", "name": "Sensory Link", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you perceive through the target's senses once contact is deep enough." },
-        { "id": "subtle_mind_reading", "name": "Subtle", "costFormula": "+1 or +2 points flat", "costValue": 1, "flat": true, "description": "Makes the mental intrusion hard or impossible to detect." }
+        {
+          "id": "cumulative_mind_reading",
+          "name": "Cumulative",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "New degrees of success stack onto your existing degree of contact."
+        },
+        {
+          "id": "effortless",
+          "name": "Effortless",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Retrying after a bad failure never requires Extra Effort."
+        },
+        {
+          "id": "sensory_link",
+          "name": "Sensory Link",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you perceive through the target's senses once contact is deep enough."
+        },
+        {
+          "id": "subtle_mind_reading",
+          "name": "Subtle",
+          "costFormula": "+1 or +2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Makes the mental intrusion hard or impossible to detect."
+        }
       ],
       "flaws": [
-        { "id": "close_mind_reading", "name": "Close", "costFormula": "-2 points per rank", "costValue": 2, "flat": false, "overrides": {"range": "Close"}, "description": "Requires touching and maintaining physical contact with an unwilling target." },
-        { "id": "feedback_mind_reading", "name": "Feedback", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You suffer if the subject you're reading is harmed." },
-        { "id": "limited_by_language", "name": "Limited by Language", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only works if you share a language with the subject." },
-        { "id": "limited_to_emotions", "name": "Limited to Emotions", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only reads emotional states, not coherent thoughts or memories." },
-        { "id": "limited_to_sensory_link", "name": "Limited to Sensory Link", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Can only tap into senses, never read thoughts or memories." },
-        { "id": "limited_to_surface", "name": "Limited to Surface", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Caps you at the shallowest degree of mental contact." },
-        { "id": "sense_dependent_mind_reading", "name": "Sense-Dependent", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Requires an additional sense of the target, like seeing their expression." }
+        {
+          "id": "close_mind_reading",
+          "name": "Close",
+          "costFormula": "-2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "overrides": {
+            "range": "Close"
+          },
+          "description": "Requires touching and maintaining physical contact with an unwilling target."
+        },
+        {
+          "id": "feedback_mind_reading",
+          "name": "Feedback",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You suffer if the subject you're reading is harmed."
+        },
+        {
+          "id": "limited_by_language",
+          "name": "Limited by Language",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only works if you share a language with the subject."
+        },
+        {
+          "id": "limited_to_emotions",
+          "name": "Limited to Emotions",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only reads emotional states, not coherent thoughts or memories."
+        },
+        {
+          "id": "limited_to_sensory_link",
+          "name": "Limited to Sensory Link",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Can only tap into senses, never read thoughts or memories."
+        },
+        {
+          "id": "limited_to_surface",
+          "name": "Limited to Surface",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Caps you at the shallowest degree of mental contact."
+        },
+        {
+          "id": "sense_dependent_mind_reading",
+          "name": "Sense-Dependent",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Requires an additional sense of the target, like seeing their expression."
+        }
       ]
     },
     "morph": {
       "extras": [
-        { "id": "metamorph", "name": "Metamorph", "costFormula": "+1 point flat per rank", "costValue": 1, "flat": true, "ranked": true, "description": "Grants a fully separate set of traits per alternate form, not just a new look." }
+        {
+          "id": "metamorph",
+          "name": "Metamorph",
+          "costFormula": "+1 point flat per rank",
+          "costValue": 1,
+          "flat": true,
+          "ranked": true,
+          "description": "Grants a fully separate set of traits per alternate form, not just a new look."
+        }
       ],
       "flaws": [
-        { "id": "resistible_morph", "name": "Resistible", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "A successful resistance check sees through your disguised form." }
+        {
+          "id": "resistible_morph",
+          "name": "Resistible",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "A successful resistance check sees through your disguised form."
+        }
       ]
     },
     "nullify": {
       "extras": [
-        { "id": "affects_insubstantial_nullify", "name": "Affects Insubstantial", "costFormula": "no extra cost (clarification only)", "costValue": 0, "flat": true, "description": "Confirms Nullify can affect insubstantial targets without a special modifier." },
-        { "id": "alternate_resistance_nullify", "name": "Alternate Resistance", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"resistance": "Fortitude"}, "description": "Uses Fortitude instead of Will for the opposed check." },
-        { "id": "area_effect_nullify", "name": "Area Effect", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "checkNote": "area", "description": "Counters every valid target within an area with a single check." },
-        { "id": "broad_nullify", "name": "Broad", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Counters a broad category of descriptor, like all magical effects." },
-        { "id": "concentration_nullify", "name": "Concentration", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Concentration"}, "description": "Suppresses the countered effect for as long as you keep concentrating." },
-        { "id": "continuous_nullify", "name": "Continuous", "costFormula": "+3 points per rank", "costValue": 3, "flat": false, "overrides": {"duration": "Continuous"}, "description": "Suppresses the countered effect indefinitely with no upkeep." },
-        { "id": "effortless_nullify", "name": "Effortless", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Retrying after a bad failure never requires Extra Effort." },
-        { "id": "impose_flaw", "name": "Impose Flaw", "costFormula": "up to -1 point per rank in value", "costValue": 1, "flat": false, "description": "Instead of shutting an effect off, saddles it with a temporary flaw." },
-        { "id": "precise_nullify", "name": "Precise", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets a Simultaneous Nullify pick which of a target's effects are hit." },
-        { "id": "reaction_nullify", "name": "Reaction", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "overrides": {"action": "Reaction"}, "description": "Usable as a reaction without needing to Ready first." },
-        { "id": "selective_nullify", "name": "Selective", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets an Area Nullify pick who is and isn't affected." },
-        { "id": "simultaneous_nullify", "name": "Simultaneous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Counters every effect of the chosen descriptor a target has, at once." },
-        { "id": "sustained_nullify", "name": "Sustained", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Sustained"}, "description": "Suppresses the countered effect for as long as you keep sustaining it." }
+        {
+          "id": "affects_insubstantial_nullify",
+          "name": "Affects Insubstantial",
+          "costFormula": "no extra cost (clarification only)",
+          "costValue": 0,
+          "flat": true,
+          "description": "Confirms Nullify can affect insubstantial targets without a special modifier."
+        },
+        {
+          "id": "alternate_resistance_nullify",
+          "name": "Alternate Resistance",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "resistance": "Fortitude"
+          },
+          "description": "Uses Fortitude instead of Will for the opposed check."
+        },
+        {
+          "id": "area_effect_nullify",
+          "name": "Area Effect",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "checkNote": "area",
+          "description": "Counters every valid target within an area with a single check."
+        },
+        {
+          "id": "broad_nullify",
+          "name": "Broad",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Counters a broad category of descriptor, like all magical effects."
+        },
+        {
+          "id": "concentration_nullify",
+          "name": "Concentration",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Concentration"
+          },
+          "description": "Suppresses the countered effect for as long as you keep concentrating."
+        },
+        {
+          "id": "continuous_nullify",
+          "name": "Continuous",
+          "costFormula": "+3 points per rank",
+          "costValue": 3,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "Suppresses the countered effect indefinitely with no upkeep."
+        },
+        {
+          "id": "effortless_nullify",
+          "name": "Effortless",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Retrying after a bad failure never requires Extra Effort."
+        },
+        {
+          "id": "impose_flaw",
+          "name": "Impose Flaw",
+          "costFormula": "up to -1 point per rank in value",
+          "costValue": 1,
+          "flat": false,
+          "description": "Instead of shutting an effect off, saddles it with a temporary flaw."
+        },
+        {
+          "id": "precise_nullify",
+          "name": "Precise",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets a Simultaneous Nullify pick which of a target's effects are hit."
+        },
+        {
+          "id": "reaction_nullify",
+          "name": "Reaction",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "overrides": {
+            "action": "Reaction"
+          },
+          "description": "Usable as a reaction without needing to Ready first."
+        },
+        {
+          "id": "selective_nullify",
+          "name": "Selective",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets an Area Nullify pick who is and isn't affected."
+        },
+        {
+          "id": "simultaneous_nullify",
+          "name": "Simultaneous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Counters every effect of the chosen descriptor a target has, at once."
+        },
+        {
+          "id": "sustained_nullify",
+          "name": "Sustained",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Suppresses the countered effect for as long as you keep sustaining it."
+        }
       ],
       "flaws": [
-        { "id": "close_range_nullify", "name": "Close Range", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Close"}, "description": "Requires touching the target instead of working at range." }
+        {
+          "id": "close_range_nullify",
+          "name": "Close Range",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Close"
+          },
+          "description": "Requires touching the target instead of working at range."
+        }
       ]
     },
     "obscure": {
       "extras": [
-        { "id": "continuous_obscure", "name": "Continuous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Continuous"}, "description": "The obscured area needs no maintenance once established." },
-        { "id": "independent_obscure", "name": "Independent", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "description": "Fades on its own over time instead of needing upkeep, but can't be relocated." },
-        { "id": "selective_obscure", "name": "Selective", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Choose who is and isn't affected by the obscured area." }
+        {
+          "id": "continuous_obscure",
+          "name": "Continuous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "The obscured area needs no maintenance once established."
+        },
+        {
+          "id": "independent_obscure",
+          "name": "Independent",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "description": "Fades on its own over time instead of needing upkeep, but can't be relocated."
+        },
+        {
+          "id": "selective_obscure",
+          "name": "Selective",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Choose who is and isn't affected by the obscured area."
+        }
       ],
       "flaws": [
-        { "id": "close_range_obscure", "name": "Close Range", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "overrides": {"range": "Close"}, "description": "The obscured area is always centered on you." }
+        {
+          "id": "close_range_obscure",
+          "name": "Close Range",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Close"
+          },
+          "description": "The obscured area is always centered on you."
+        }
       ]
     },
     "protection": {
       "extras": [
-        { "id": "sustained_protection", "name": "Sustained", "costFormula": "+0 points per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Sustained"}, "description": "Turns the normally-always-on bonus into something you activate and maintain." }
+        {
+          "id": "sustained_protection",
+          "name": "Sustained",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Turns the normally-always-on bonus into something you activate and maintain."
+        }
       ],
       "flaws": [
-        { "id": "fades_protection", "name": "Fades", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Each resistance check it's used for wears the protection down by a rank." },
-        { "id": "limited_protection", "name": "Limited", "costFormula": "-1 point per rank (typically)", "costValue": 1, "flat": false, "description": "Only protects against a specific category of damage." },
-        { "id": "noticeable_protection", "name": "Noticeable", "costFormula": "-1 point flat", "costValue": 1, "flat": true, "description": "Your toughened state is visibly obvious, like armored skin." },
-        { "id": "unreliable_protection", "name": "Unreliable", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only offers partial coverage — some attacks get through." }
+        {
+          "id": "fades_protection",
+          "name": "Fades",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Each resistance check it's used for wears the protection down by a rank."
+        },
+        {
+          "id": "limited_protection",
+          "name": "Limited",
+          "costFormula": "-1 point per rank (typically)",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only protects against a specific category of damage."
+        },
+        {
+          "id": "noticeable_protection",
+          "name": "Noticeable",
+          "costFormula": "-1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Your toughened state is visibly obvious, like armored skin."
+        },
+        {
+          "id": "unreliable_protection",
+          "name": "Unreliable",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only offers partial coverage — some attacks get through."
+        }
       ]
     },
     "quickness": {
       "flaws": [
-        { "id": "limited_to_one_task", "name": "Limited to One Task", "costFormula": "-2 points per rank", "costValue": 2, "flat": false, "description": "Only speeds up one specific kind of task." },
-        { "id": "mental_quickness", "name": "Mental Quickness", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only speeds up mental tasks." },
-        { "id": "physical_quickness", "name": "Physical Quickness", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only speeds up routine physical tasks." }
+        {
+          "id": "limited_to_one_task",
+          "name": "Limited to One Task",
+          "costFormula": "-2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "description": "Only speeds up one specific kind of task."
+        },
+        {
+          "id": "mental_quickness",
+          "name": "Mental Quickness",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only speeds up mental tasks."
+        },
+        {
+          "id": "physical_quickness",
+          "name": "Physical Quickness",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only speeds up routine physical tasks."
+        }
       ]
     },
     "remote_sensing": {
       "extras": [
-        { "id": "simultaneous_remote_sensing", "name": "Simultaneous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you use your remote and normal senses at the same time." },
-        { "id": "subtle_remote_sensing", "name": "Subtle", "costFormula": "+1 point flat per rank", "costValue": 1, "flat": true, "ranked": true, "description": "Makes your remote sensor harder, then impossible, to detect." },
-        { "id": "targeting_remote_sensing", "name": "Targeting", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you use Perception Range effects through your remote sensing point." }
+        {
+          "id": "communication_remote_sensing",
+          "name": "Communication",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "description": "Lets you also communicate with subjects over your Remote Sensing range."
+        },
+        {
+          "id": "dimensional_remote_sensing",
+          "name": "Dimensional",
+          "costFormula": "+1/+2/+3 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Extends Remote Sensing into other dimensions (one, a related group, or any)."
+        },
+        {
+          "id": "protected_remote_sensing",
+          "name": "Protected",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Sensory attacks targeted at your remote sensing point don't affect you."
+        },
+        {
+          "id": "simultaneous_remote_sensing",
+          "name": "Simultaneous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you use your remote and normal senses at the same time."
+        },
+        {
+          "id": "subtle_remote_sensing",
+          "name": "Subtle",
+          "costFormula": "+1 point flat per rank",
+          "costValue": 1,
+          "flat": true,
+          "ranked": true,
+          "description": "Makes your remote sensor harder, then impossible, to detect."
+        },
+        {
+          "id": "targeting_remote_sensing",
+          "name": "Targeting",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you use Perception Range effects through your remote sensing point."
+        }
       ],
       "flaws": [
-        { "id": "feedback_remote_sensing", "name": "Feedback", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Attacks on your remote sensing point can hurt you." },
-        { "id": "medium_remote_sensing", "name": "Medium", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Only works through a specific medium, like mirrors or shadows." },
-        { "id": "noticeable_remote_sensing", "name": "Noticeable", "costFormula": "-1 point flat", "costValue": 1, "flat": true, "description": "Your remote sensing point has an obvious tell, like glowing eyes." }
+        {
+          "id": "feedback_remote_sensing",
+          "name": "Feedback",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Attacks on your remote sensing point can hurt you."
+        },
+        {
+          "id": "medium_remote_sensing",
+          "name": "Medium",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only works through a specific medium, like mirrors or shadows."
+        },
+        {
+          "id": "noticeable_remote_sensing",
+          "name": "Noticeable",
+          "costFormula": "-1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Your remote sensing point has an obvious tell, like glowing eyes."
+        }
       ]
     },
     "shrinking": {
       "extras": [
-        { "id": "atomic", "name": "Atomic", "costFormula": "+1 point flat (requires Microscopic)", "costValue": 1, "flat": true, "description": "Shrinks you down to the molecular or atomic scale." },
-        { "id": "microscopic", "name": "Microscopic", "costFormula": "+1 point flat (requires Shrinking 5)", "costValue": 1, "flat": true, "description": "Shrinks you down to a cellular scale." },
-        { "id": "normal_speed_shrinking", "name": "Normal Speed", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Your speed isn't reduced while shrunk." },
-        { "id": "permanent_shrinking", "name": "Permanent", "costFormula": "+0 per rank", "costValue": 0, "flat": false, "overrides": {"duration": "Permanent"}, "description": "Your smaller size becomes your normal, permanent size category at no extra cost." }
+        {
+          "id": "atomic",
+          "name": "Atomic",
+          "costFormula": "+1 point flat (requires Microscopic)",
+          "costValue": 1,
+          "flat": true,
+          "description": "Shrinks you down to the molecular or atomic scale."
+        },
+        {
+          "id": "microscopic",
+          "name": "Microscopic",
+          "costFormula": "+1 point flat (requires Shrinking 5)",
+          "costValue": 1,
+          "flat": true,
+          "description": "Shrinks you down to a cellular scale."
+        },
+        {
+          "id": "normal_speed_shrinking",
+          "name": "Normal Speed",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Your speed isn't reduced while shrunk."
+        },
+        {
+          "id": "permanent_shrinking",
+          "name": "Permanent",
+          "costFormula": "+0 per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Permanent"
+          },
+          "description": "Your smaller size becomes your normal, permanent size category at no extra cost."
+        }
       ]
     },
     "summon": {
       "extras": [
-        { "id": "multiple_minions", "name": "Multiple Minions", "costFormula": "+2 points per rank", "costValue": 2, "flat": false, "description": "Doubles the number of minions you can summon at once." },
-        { "id": "sacrifice", "name": "Sacrifice", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets you shift an incoming effect onto one of your summoned minions." },
-        { "id": "telepathic_command", "name": "Telepathic Command", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets you issue orders to your minions telepathically." },
-        { "id": "variable_type", "name": "Variable Type", "costFormula": "+1 or +2 points per rank", "costValue": 1, "flat": false, "description": "Lets you summon different kinds of minions instead of always the same one." }
+        {
+          "id": "controlled_summon",
+          "name": "Controlled",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Your minions have no free will; they're under your total, direct control."
+        },
+        {
+          "id": "heroic_summon",
+          "name": "Heroic",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Summoned characters are full NPCs rather than being bound by minion rules."
+        },
+        {
+          "id": "horde",
+          "name": "Horde",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Summon your full Multiple Minions count at once with one standard action, Vulnerable until your next turn."
+        },
+        {
+          "id": "memory_merge",
+          "name": "Memory Merge",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "You gain a vanishing minion's memories as if you'd experienced them yourself."
+        },
+        {
+          "id": "mental_link",
+          "name": "Mental Link",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you communicate with and command your minions telepathically."
+        },
+        {
+          "id": "multiple_minions",
+          "name": "Multiple Minions",
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "description": "Doubles your total minion count per rank taken."
+        },
+        {
+          "id": "sacrifice",
+          "name": "Sacrifice",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you redirect a resisted effect onto one of your minions instead of yourself."
+        },
+        {
+          "id": "variable_type",
+          "name": "Variable Type",
+          "costFormula": "+1 point per rank (general type), +2 (broad type)",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you summon different kinds of minions instead of always an identical one."
+        }
       ],
       "flaws": [
-        { "id": "attitude", "name": "Attitude", "costFormula": "-1 or -2 points per rank", "costValue": 1, "flat": false, "description": "Summoned minions start out uncooperative rather than loyal." },
-        { "id": "hostile", "name": "Hostile", "costFormula": "included with Attitude-style flaws", "costValue": 0, "flat": true, "description": "A failed summon check turns the minion against you instead." },
-        { "id": "resistible_summon", "name": "Resistible", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Minions get a resistance check to avoid being summoned at all." }
+        {
+          "id": "attitude",
+          "name": "Attitude",
+          "costFormula": "-1 or -2 points per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Summoned minions start out uncooperative rather than loyal."
+        },
+        {
+          "id": "hostile",
+          "name": "Hostile",
+          "costFormula": "included with Attitude-style flaws",
+          "costValue": 0,
+          "flat": true,
+          "description": "A failed summon check turns the minion against you instead."
+        },
+        {
+          "id": "resistible_summon",
+          "name": "Resistible",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Minions get a resistance check to avoid being summoned at all."
+        }
       ]
     },
     "teleport": {
       "extras": [
-        { "id": "accurate_teleport", "name": "Accurate", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you teleport to a place you can only describe, not directly perceive." },
-        { "id": "change_direction", "name": "Change Direction", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets you change facing after you arrive." },
-        { "id": "change_velocity", "name": "Change Velocity", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets you arrive at rest instead of retaining your prior momentum." },
-        { "id": "easy", "name": "Easy", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Removes the Dazed/Vulnerable penalty after an extended teleport." },
-        { "id": "extended", "name": "Extended", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "description": "Lets you make a much longer teleport at the cost of two actions." },
-        { "id": "increased_mass_teleport", "name": "Increased Mass", "costFormula": "+1 point flat per rank", "costValue": 1, "flat": true, "ranked": true, "description": "Lets you carry more mass along when you teleport." },
-        { "id": "known_location", "name": "Known Location", "costFormula": "+1 point flat per location", "costValue": 1, "flat": true, "description": "Lets you teleport to a memorized place without perceiving it." },
-        { "id": "turnabout", "name": "Turnabout", "costFormula": "+1 point flat", "costValue": 1, "flat": true, "description": "Lets you teleport in, act, and teleport back as part of the same turn." }
+        {
+          "id": "accurate_teleport",
+          "name": "Accurate",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you teleport to a place you can only describe, not directly perceive."
+        },
+        {
+          "id": "change_direction",
+          "name": "Change Direction",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you change facing after you arrive."
+        },
+        {
+          "id": "change_velocity",
+          "name": "Change Velocity",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you arrive at rest instead of retaining your prior momentum."
+        },
+        {
+          "id": "easy",
+          "name": "Easy",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Removes the Dazed/Vulnerable penalty after an extended teleport."
+        },
+        {
+          "id": "extended",
+          "name": "Extended",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you make a much longer teleport at the cost of two actions."
+        },
+        {
+          "id": "increased_mass_teleport",
+          "name": "Increased Mass",
+          "costFormula": "+1 point flat per rank",
+          "costValue": 1,
+          "flat": true,
+          "ranked": true,
+          "description": "Lets you carry more mass along when you teleport."
+        },
+        {
+          "id": "known_location",
+          "name": "Known Location",
+          "costFormula": "+1 point flat per location",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you teleport to a memorized place without perceiving it."
+        },
+        {
+          "id": "turnabout",
+          "name": "Turnabout",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you teleport in, act, and teleport back as part of the same turn."
+        }
       ],
       "flaws": [
-        { "id": "extended_only", "name": "Extended Only", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You can only make the longer, riskier extended teleport." },
-        { "id": "medium_teleport", "name": "Medium", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "Requires a medium to teleport from and to, like wires or shadows." }
+        {
+          "id": "extended_only",
+          "name": "Extended Only",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You can only make the longer, riskier extended teleport."
+        },
+        {
+          "id": "medium_teleport",
+          "name": "Medium",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Requires a medium to teleport from and to, like wires or shadows."
+        }
       ]
     },
     "transmute": {
       "extras": [
-        { "id": "continuous_transmute", "name": "Continuous", "costFormula": "+1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Continuous"}, "description": "Makes the transformation permanent and irreversible except by another Transmute." }
+        {
+          "id": "continuous_transmute",
+          "name": "Continuous",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Continuous"
+          },
+          "description": "Makes the transformation permanent and irreversible except by another Transmute."
+        }
       ],
       "flaws": [
-        { "id": "concentration_transmute", "name": "Concentration", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "overrides": {"duration": "Concentration"}, "description": "Requires a Concentrate action each turn to maintain the transformation." }
+        {
+          "id": "concentration_transmute",
+          "name": "Concentration",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Concentration"
+          },
+          "description": "Requires a Concentrate action each turn to maintain the transformation."
+        }
       ]
     },
     "variable": {
       "extras": [
-        { "id": "action_variable", "name": "Action", "costFormula": "+1 point per rank (simple), +2 (free)", "costValue": 1, "flat": false, "description": "Lets you reconfigure your Variable pool faster than the default Concentrate action." },
-        { "id": "triggered_variable", "name": "Triggered", "costFormula": "+3 points per rank", "costValue": 3, "flat": false, "description": "Automatically reconfigures in response to a chosen triggering event." }
+        {
+          "id": "action_variable",
+          "name": "Action",
+          "costFormula": "+1 point per rank (simple), +2 (free)",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you reconfigure your Variable pool faster than the default Concentrate action."
+        },
+        {
+          "id": "triggered_variable",
+          "name": "Triggered",
+          "costFormula": "+3 points per rank",
+          "costValue": 3,
+          "flat": false,
+          "description": "Automatically reconfigures in response to a chosen triggering event."
+        }
       ],
       "flaws": [
-        { "id": "slow_variable", "name": "Slow", "costFormula": "-1 point per rank", "costValue": 1, "flat": false, "description": "You can only reconfigure your Variable pool outside of action time." }
+        {
+          "id": "slow_variable",
+          "name": "Slow",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "You can only reconfigure your Variable pool outside of action time."
+        }
+      ]
+    },
+    "move_object": {
+      "extras": [
+        {
+          "id": "damaging_move_object",
+          "name": "Damaging",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Lets you directly inflict Damage with Move Object instead of just moving things."
+        },
+        {
+          "id": "perception_move_object",
+          "name": "Perception",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Perception"
+          },
+          "dropsCheck": true,
+          "description": "Lets you target anything you can accurately perceive, no attack roll needed."
+        },
+        {
+          "id": "precise_move_object",
+          "name": "Precise",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Lets you perform fine manipulation tasks, like tying knots or typing."
+        },
+        {
+          "id": "subtle_move_object",
+          "name": "Subtle",
+          "costFormula": "+1 or +2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Removes the normally-visible manifestation (glow, tractor beam, etc.)."
+        }
+      ],
+      "flaws": [
+        {
+          "id": "close_range_move_object",
+          "name": "Close Range",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "range": "Close"
+          },
+          "description": "Only works on objects right next to you, like the Lifting effect."
+        },
+        {
+          "id": "concentration_move_object",
+          "name": "Concentration",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "overrides": {
+            "duration": "Concentration"
+          },
+          "description": "Requires a Concentrate action each turn to use or maintain."
+        },
+        {
+          "id": "limited_direction",
+          "name": "Limited Direction",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Can only move objects along a fixed path, like straight up/down or directly toward/away from you."
+        },
+        {
+          "id": "limited_material",
+          "name": "Limited Material",
+          "costFormula": "-1 or -2 points per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Only works on a specific type of material, like metal, plants, or water."
+        }
+      ]
+    },
+    "regeneration": {
+      "extras": [
+        {
+          "id": "diehard_regeneration",
+          "name": "Diehard",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Automatically stabilize when Dying, no check needed."
+        },
+        {
+          "id": "persistent_regeneration",
+          "name": "Persistent",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Can regenerate even Incurable damage conditions."
+        },
+        {
+          "id": "sustained_regeneration",
+          "name": "Sustained",
+          "costFormula": "+0 points per rank",
+          "costValue": 0,
+          "flat": false,
+          "overrides": {
+            "duration": "Sustained"
+          },
+          "description": "Requires a Sustain action throughout recovery (so it stops while Incapacitated), but allows Extra Effort to boost it temporarily."
+        }
+      ],
+      "flaws": [
+        {
+          "id": "not_against_descriptor",
+          "name": "Not Against [Descriptor]",
+          "costFormula": "-1 point per rank, or -1/-2 points flat for rare descriptors",
+          "costValue": 1,
+          "flat": false,
+          "description": "Can't heal damage from one specific descriptor (fire, holy weapons, etc.)."
+        },
+        {
+          "id": "only_when_dead",
+          "name": "Only When Dead",
+          "costFormula": "-2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "description": "Only kicks in to reverse death, not while just injured."
+        },
+        {
+          "id": "only_when_incapacitated",
+          "name": "Only When Incapacitated",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Doesn't start working until you're Incapacitated, then stops once you've fully recovered."
+        },
+        {
+          "id": "source",
+          "name": "Source",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Requires access to a specific resource (sunlight, electricity, raw material) during recovery."
+        }
+      ]
+    },
+    "enhanced_senses": {
+      "extras": [
+        {
+          "id": "affects_others_enhanced_senses",
+          "name": "Affects Others",
+          "costFormula": "+0 or +1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Grants the benefit of one or more of your Enhanced Senses to another character."
+        },
+        {
+          "id": "area_enhanced_senses",
+          "name": "Area",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Extends an Affects-Others sense to everyone in an area at once."
+        },
+        {
+          "id": "ranged_enhanced_senses",
+          "name": "Ranged",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Extends the range at which you can grant an Affects-Others sense to someone else."
+        }
+      ],
+      "flaws": [
+        {
+          "id": "limited_enhanced_senses",
+          "name": "Limited",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "The sense only works on certain things or under certain circumstances."
+        },
+        {
+          "id": "noticeable_enhanced_senses",
+          "name": "Noticeable",
+          "costFormula": "-1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Has an obvious tell, like glowing eyes or an audible hum."
+        },
+        {
+          "id": "unreliable_enhanced_senses",
+          "name": "Unreliable",
+          "costFormula": "-1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "The GM secretly rolls reliability; it may simply fail, or feed you wrong information."
+        }
       ]
     }
   }

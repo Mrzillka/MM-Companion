@@ -89,11 +89,55 @@ from mm_companion.ui.widgets import make_spin_box
 # Custom drag payload formats: the record id travels as the mime data.
 EFFECT_MIME = "application/x-mm-effect"
 MODIFIER_MIME = "application/x-mm-modifier"
+# A chip carries its own index when dragged to reorder within its group.
+CHIP_MIME = "application/x-mm-chip"
+
+# The rank ceiling for effect and modifier spin boxes. Kept well above the usual
+# PL-bound ranks so allocation-heavy effects — an Immunity whose named scopes sum
+# past 30 (e.g. all Fortitude + all Will effects), a stacked Enhanced Trait — aren't
+# clipped by the input. It's a UI guard rail, not a rules cap.
+RANK_MAX = 250
+
+# The accent used to light up a drop target while a compatible brick hovers over it.
+# Kept semi-transparent and paired with palette() roles so both borders and fills read
+# on light and dark themes alike.
+_ACCENT = "#4a90d9"
+
+# Effect card chrome — a rounded, padded panel. The drag state swaps to an accent
+# border + faint fill so a hovering modifier clearly lands "on this card".
+_CARD_STYLE = "EffectCard { border: 1px solid palette(mid); border-radius: 8px; }"
+_CARD_STYLE_DRAG = (
+    f"EffectCard {{ border: 2px solid {_ACCENT}; border-radius: 8px;"
+    f" background: rgba(74, 144, 217, 0.10); }}"
+)
+
+# Canvas chrome — dashed while empty (a "drop here" affordance), solid once it holds
+# cards, and an accent dashed border while an effect brick hovers.
+_CANVAS_STYLE_EMPTY = "PowerCanvas { border: 2px dashed palette(mid); border-radius: 8px; }"
+_CANVAS_STYLE_FILLED = "PowerCanvas { border: 1px solid palette(mid); border-radius: 8px; }"
+_CANVAS_STYLE_DRAG = (
+    f"PowerCanvas {{ border: 2px dashed {_ACCENT}; border-radius: 8px;"
+    f" background: rgba(74, 144, 217, 0.08); }}"
+)
 
 
 def _mime_id(mime: QMimeData, fmt: str) -> str:
     """Decode the record id carried by a drag in the given format."""
     return bytes(mime.data(fmt)).decode("utf-8")
+
+
+def _move_item(seq: list, from_index: int, to_index: int) -> bool:
+    """Move ``seq[from_index]`` so it lands at insertion point ``to_index``.
+
+    ``to_index`` is an insertion index in the *original* list (0..len), so a drop
+    just before or just after the item is a no-op. Returns whether the order changed,
+    so callers can skip firing change signals for a drag that settled in place.
+    """
+    target = to_index - 1 if to_index > from_index else to_index
+    if target == from_index:
+        return False
+    seq.insert(target, seq.pop(from_index))
+    return True
 
 
 class BrickWidget(QFrame):
@@ -175,7 +219,9 @@ class ModifierChip(QFrame):
     def __init__(self, modifier: Modifier, selection: ModifierSelection) -> None:
         super().__init__()
         self.selection = selection
+        self._press_pos = None
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
         tint = "#2e5e33" if modifier.category == "extra" else "#5e2e2e"
         self.setStyleSheet(f"ModifierChip {{ background: {tint}; border-radius: 6px; }}")
 
@@ -186,7 +232,7 @@ class ModifierChip(QFrame):
         header.setSpacing(4)
         header.addWidget(QLabel(modifier.name))
         if modifier.ranked:
-            rank = make_spin_box(1, 30, value=selection.rank, buttons=False, max_width=44)
+            rank = make_spin_box(1, RANK_MAX, value=selection.rank, buttons=False, max_width=44)
             rank.setPrefix("×")
             rank.valueChanged.connect(self._on_rank_changed)
             header.addWidget(rank)
@@ -243,17 +289,45 @@ class ModifierChip(QFrame):
         self.selection.rank = value
         self.changed.emit()
 
+    # -- drag to reorder within the group ---------------------------------
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if self._press_pos is None:
+            return
+        moved = (event.position().toPoint() - self._press_pos).manhattanLength()
+        if moved < QApplication.startDragDistance():
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(CHIP_MIME, b"1")  # the source chip is read from drag.source()
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab())  # drag a ghost of the chip itself
+        drag.exec(Qt.DropAction.MoveAction)
+        self._press_pos = None
+
 
 class ModifierGroup(QWidget):
     """A titled, vertically-stacked run of modifier chips, hidden while empty.
 
     An :class:`EffectCard` keeps one of these for extras and one for flaws; each
     reveals itself only once its first chip is added and hides again when its last
-    chip is removed.
+    chip is removed. Chips can be **dragged within the group to reorder** them — the
+    card mirrors the new order onto its backing selection list, which matters when two
+    modifiers touch the same stat (later ones win). Reorder drops arrive as
+    :attr:`reordered` ``(from_index, to_index)`` where ``to_index`` is an insertion
+    point in the pre-move list.
     """
+
+    reordered = Signal(int, int)
 
     def __init__(self, title: str) -> None:
         super().__init__()
+        self._chips: list[QWidget] = []
+        self.setAcceptDrops(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
@@ -266,14 +340,79 @@ class ModifierGroup(QWidget):
         self.setVisible(False)
 
     def add_chip(self, chip: QWidget) -> None:
+        self._chips.append(chip)
         self._chip_layout.addWidget(chip)
         self.setVisible(True)
 
     def remove_chip(self, chip: QWidget) -> None:
+        if chip in self._chips:
+            self._chips.remove(chip)
         self._chip_layout.removeWidget(chip)
         chip.setParent(None)
         chip.deleteLater()
-        self.setVisible(self._chip_layout.count() > 0)
+        self.setVisible(bool(self._chips))
+
+    # -- reordering (drop handlers delegate to move_chip, the test seam) ---
+    def move_chip(self, from_index: int, to_index: int) -> None:
+        """Reorder the chip at ``from_index`` to insertion point ``to_index``.
+
+        A drop that settles in place is a no-op (no relayout, no signal); otherwise
+        the chip widgets are re-laid-out in the new order and :attr:`reordered` fires
+        so the card can move the matching selection.
+        """
+        if not 0 <= from_index < len(self._chips):
+            return
+        if not _move_item(self._chips, from_index, to_index):
+            return
+        for chip in self._chips:  # re-add every chip in the new order
+            self._chip_layout.removeWidget(chip)
+        for chip in self._chips:
+            self._chip_layout.addWidget(chip)
+        self._chip_layout.invalidate()
+        self.reordered.emit(from_index, to_index)
+
+    def _drop_index(self, pos) -> int:
+        """The insertion index for a drop at ``pos`` — before the nearest chip, or
+        after it when the drop lands on its right half."""
+        if not self._chips:
+            return 0
+        nearest = min(
+            range(len(self._chips)),
+            key=lambda i: (self._chips[i].geometry().center() - pos).manhattanLength(),
+        )
+        center = self._chips[nearest].geometry().center()
+        return nearest + (1 if pos.x() > center.x() else 0)
+
+    def _accepts(self, event) -> bool:
+        return event.mimeData().hasFormat(CHIP_MIME) and event.source() in self._chips
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Only accept a chip dragged from this same group — a reorder, never a move
+        # between the Extras and Flaws groups (that would change its category).
+        if self._accepts(event):
+            self.setStyleSheet("ModifierGroup { background: rgba(74, 144, 217, 0.12); }")
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if self._accepts(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.setStyleSheet("")
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.setStyleSheet("")
+        source = event.source()
+        if source not in self._chips:
+            event.ignore()
+            return
+        self.move_chip(self._chips.index(source), self._drop_index(event.position().toPoint()))
+        event.acceptProposedAction()
 
 
 class EffectCard(QFrame):
@@ -296,7 +435,8 @@ class EffectCard(QFrame):
         # Callables that refresh each Tier-4 allocation field's "used / rank" readout;
         # rebuilt with the config form and fired when the effect's rank changes.
         self._alloc_updaters: list = []
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("EffectCard")
+        self.setStyleSheet(_CARD_STYLE)
         self.setAcceptDrops(True)
 
         effect = self._effect()
@@ -313,7 +453,7 @@ class EffectCard(QFrame):
         header.addWidget(self._role_badge)
         header.addStretch()
         header.addWidget(QLabel("Rank"))
-        self._rank = make_spin_box(1, 30, value=instance.rank, buttons=False, max_width=44)
+        self._rank = make_spin_box(1, RANK_MAX, value=instance.rank, buttons=False, max_width=44)
         self._rank.valueChanged.connect(self._on_rank_changed)
         header.addWidget(self._rank)
         remove = QPushButton("✕")
@@ -340,6 +480,12 @@ class EffectCard(QFrame):
 
         self._extras_group = ModifierGroup("Extras")
         self._flaws_group = ModifierGroup("Flaws")
+        self._extras_group.reordered.connect(
+            lambda frm, to: self._reorder_bucket(self.instance.extras, frm, to)
+        )
+        self._flaws_group.reordered.connect(
+            lambda frm, to: self._reorder_bucket(self.instance.flaws, frm, to)
+        )
         layout.addWidget(self._extras_group)
         layout.addWidget(self._flaws_group)
 
@@ -362,6 +508,7 @@ class EffectCard(QFrame):
 
         self._cost = QLabel()
         self._cost.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._cost.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._cost)
 
         # When editing an existing power the instance already carries its extras and
@@ -614,7 +761,7 @@ class EffectCard(QFrame):
                 if column.type == "int":
                     cell = make_spin_box(
                         0,
-                        30,
+                        RANK_MAX,
                         value=int(initial.get(column.key, 0) or 0),
                         buttons=False,
                         max_width=48,
@@ -780,11 +927,17 @@ class EffectCard(QFrame):
     # -- drops ------------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.mimeData().hasFormat(MODIFIER_MIME):
+            self.setStyleSheet(_CARD_STYLE_DRAG)  # light up as a drop target
             event.acceptProposedAction()
         else:
             event.ignore()
 
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.setStyleSheet(_CARD_STYLE)
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.setStyleSheet(_CARD_STYLE)
         self.attach_modifier(_mime_id(event.mimeData(), MODIFIER_MIME))
         event.acceptProposedAction()
 
@@ -840,6 +993,17 @@ class EffectCard(QFrame):
         self._populate_config_form()  # removing a gating extra may downgrade a field
         self._refresh_cost()
         self.changed.emit()
+
+    def _reorder_bucket(self, bucket: list, from_index: int, to_index: int) -> None:
+        """Mirror a chip reorder onto its backing selection list (extras or flaws).
+
+        Chips are kept index-aligned with their bucket, so the group's indices apply
+        directly. Order can change which of two stat-touching modifiers wins, so the
+        cost/summary recompute.
+        """
+        if _move_item(bucket, from_index, to_index):
+            self._refresh_cost()
+            self.changed.emit()
 
     def _on_rank_changed(self, value: int) -> None:
         self.instance.rank = value
@@ -957,7 +1121,7 @@ class PowerCanvas(QFrame):
         self._power = power
         self._data = game_data
         self._cards: list[EffectCard] = []
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("PowerCanvas")
         self.setAcceptDrops(True)
 
         self._layout = QVBoxLayout(self)
@@ -967,21 +1131,38 @@ class PowerCanvas(QFrame):
         self._mode_bar.setVisible(False)
         self._mode_bar.changed.connect(self._on_structure_changed)
         self._layout.addWidget(self._mode_bar)
-        self._hint = QLabel("Drag an effect here to start building your power")
+        self._hint = QLabel("＋\nDrag an effect here to start building your power")
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setEnabled(False)
-        self._hint.setMinimumHeight(80)
+        self._hint.setMinimumHeight(120)
         self._layout.addWidget(self._hint)
         self._layout.addStretch()
+        self._update_canvas_style()
+
+    def _update_canvas_style(self, drag_over: bool = False) -> None:
+        """Pick the frame chrome for the current state: accent while a brick hovers,
+        dashed while empty (a drop affordance), solid once it holds cards."""
+        if drag_over:
+            self.setStyleSheet(_CANVAS_STYLE_DRAG)
+        elif self._cards:
+            self.setStyleSheet(_CANVAS_STYLE_FILLED)
+        else:
+            self.setStyleSheet(_CANVAS_STYLE_EMPTY)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.mimeData().hasFormat(EFFECT_MIME):
+            self._update_canvas_style(drag_over=True)
             event.acceptProposedAction()
         else:
             event.ignore()
 
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._update_canvas_style()
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.add_effect(_mime_id(event.mimeData(), EFFECT_MIME))
+        self._update_canvas_style()
         event.acceptProposedAction()
 
     def add_effect(self, effect_id: str) -> EffectCard:
@@ -1001,6 +1182,7 @@ class PowerCanvas(QFrame):
         self._cards.append(card)
         self._layout.insertWidget(self._layout.count() - 1, card)  # before the stretch
         self._hint.setVisible(False)
+        self._update_canvas_style()
         return card
 
     def load_power(self) -> None:
@@ -1022,6 +1204,7 @@ class PowerCanvas(QFrame):
         card.setParent(None)
         card.deleteLater()
         self._hint.setVisible(not self._cards)
+        self._update_canvas_style()
         self._sync_structure_ui()
         self.changed.emit()
 
@@ -1231,14 +1414,20 @@ class PowerConstructorWindow(QMainWindow):
         self._editing = power is not None
         self.power = Power.from_dict(power.to_dict()) if self._editing else Power()
         self.setWindowTitle("Edit Power" if self._editing else "Power Constructor")
-        self.resize(900, 600)
+        self.resize(1150, 640)
 
+        # Three columns: the brick palette, the build panel (the effect canvas the
+        # player works in), and the read-only game-term summary. The summary lives in
+        # its own column so it can grow with each added effect without ever shrinking
+        # the construction canvas beside it.
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_palette())
-        splitter.addWidget(self._build_editor())
+        splitter.addWidget(self._build_build_panel())
+        splitter.addWidget(self._build_summary_panel())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([260, 640])
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([250, 580, 320])
         self.setCentralWidget(splitter)
 
         if self._editing:
@@ -1256,15 +1445,23 @@ class PowerConstructorWindow(QMainWindow):
         self._save_button.setText("Save Changes")
         self._save_button.setToolTip("Update this power on the character sheet")
 
+    # The effect palette is grouped by the effect's game-term type; the sections
+    # read in a from-offense-to-utility order rather than the raw data order.
+    _EFFECT_TYPE_ORDER = (
+        "Attack",
+        "Defense",
+        "Control",
+        "Alteration",
+        "Movement",
+        "Sensory",
+        "General",
+    )
+
     # -- left: the palette of bricks --------------------------------------
     def _build_palette(self) -> QWidget:
         from PySide6.QtWidgets import QTabWidget  # local: only used here
 
         tabs = QTabWidget()
-        effects = [
-            BrickWidget(e.name, e.base_cost, EFFECT_MIME, e.id)
-            for e in sorted(self._data.effects, key=lambda e: e.name)
-        ]
         extras = [
             BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
@@ -1277,16 +1474,39 @@ class PowerConstructorWindow(QMainWindow):
         ]
         # Keep each tab's search box + bricks addressable (also the test seam).
         self._search_tabs: dict[str, tuple[QLineEdit, list[BrickWidget]]] = {}
-        tabs.addTab(self._build_search_tab("effects", effects, "Search effects"), "Effects")
-        tabs.addTab(self._build_search_tab("extras", extras, "Search extras"), "Extras")
-        tabs.addTab(self._build_search_tab("flaws", flaws, "Search flaws"), "Flaws")
+        tabs.addTab(
+            self._build_search_tab("effects", "Search effects", groups=self._effect_groups()),
+            "Effects",
+        )
+        tabs.addTab(self._build_search_tab("extras", "Search extras", bricks=extras), "Extras")
+        tabs.addTab(self._build_search_tab("flaws", "Search flaws", bricks=flaws), "Flaws")
         return tabs
 
-    def _build_search_tab(self, key: str, bricks: list[BrickWidget], placeholder: str) -> QWidget:
+    def _effect_groups(self) -> list[tuple[str, list[BrickWidget]]]:
+        """The effect bricks bucketed under their game-term type, in reading order."""
+        by_type: dict[str, list[BrickWidget]] = {}
+        for effect in sorted(self._data.effects, key=lambda e: e.name):
+            brick = BrickWidget(effect.name, effect.base_cost, EFFECT_MIME, effect.id)
+            by_type.setdefault(effect.effect_type, []).append(brick)
+        ordered = [t for t in self._EFFECT_TYPE_ORDER if t in by_type]
+        ordered += [t for t in by_type if t not in self._EFFECT_TYPE_ORDER]  # any stragglers
+        return [(t, by_type[t]) for t in ordered]
+
+    def _build_search_tab(
+        self,
+        key: str,
+        placeholder: str,
+        *,
+        bricks: list[BrickWidget] | None = None,
+        groups: list[tuple[str, list[BrickWidget]]] | None = None,
+    ) -> QWidget:
         """A scrollable brick list with a live search box pinned above it.
 
-        Typing filters the bricks instantly to those whose name or cost text
-        contains the query (case-insensitive substring); clearing shows them all.
+        Pass a flat ``bricks`` list or, for the Effects tab, ``groups`` of
+        ``(section title, bricks)`` rendered under sticky-styled headers. Typing
+        filters the bricks instantly to those whose name contains the query
+        (case-insensitive substring), hiding any section left with no matches;
+        clearing shows them all.
         """
         tab = QWidget()
         outer = QVBoxLayout(tab)
@@ -1301,8 +1521,22 @@ class PowerConstructorWindow(QMainWindow):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setSpacing(4)
-        for brick in bricks:
-            layout.addWidget(brick)
+
+        # A flat list is one unnamed section; grouped tabs get a header per section.
+        # Sections drive both layout and the search's empty-header hiding.
+        sections: list[tuple[QLabel | None, list[BrickWidget]]] = []
+        all_bricks: list[BrickWidget] = []
+        for title, group in groups or [(None, bricks or [])]:
+            header = None
+            if title is not None:
+                header = QLabel(title)
+                header.setStyleSheet("font-weight: bold; color: palette(mid); padding-top: 4px;")
+                layout.addWidget(header)
+            for brick in group:
+                layout.addWidget(brick)
+            sections.append((header, group))
+            all_bricks.extend(group)
+
         empty = QLabel("No matches")
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty.setEnabled(False)
@@ -1316,23 +1550,28 @@ class PowerConstructorWindow(QMainWindow):
         outer.addWidget(scroll, stretch=1)
 
         search.textChanged.connect(
-            lambda text, bs=bricks, e=empty: self._filter_bricks(text, bs, e)
+            lambda text, s=sections, bs=all_bricks, e=empty: self._filter_bricks(text, s, bs, e)
         )
-        self._search_tabs[key] = (search, bricks)
+        self._search_tabs[key] = (search, all_bricks)
         return tab
 
     @staticmethod
-    def _filter_bricks(text: str, bricks: list[BrickWidget], empty: QLabel) -> None:
+    def _filter_bricks(
+        text: str,
+        sections: list[tuple[QLabel | None, list[BrickWidget]]],
+        bricks: list[BrickWidget],
+        empty: QLabel,
+    ) -> None:
         needle = text.strip().lower()
-        matches = 0
         for brick in bricks:
-            visible = needle in brick.search_key
-            brick.setVisible(visible)
-            matches += visible
-        empty.setVisible(matches == 0)
+            brick.setVisible(needle in brick.search_key)
+        for header, group in sections:  # hide a section header with no visible bricks
+            if header is not None:
+                header.setVisible(any(not b.isHidden() for b in group))
+        empty.setVisible(all(b.isHidden() for b in bricks))
 
-    # -- right: the power being built -------------------------------------
-    def _build_editor(self) -> QWidget:
+    # -- centre: the power being built ------------------------------------
+    def _build_build_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
@@ -1344,24 +1583,20 @@ class PowerConstructorWindow(QMainWindow):
         self._description = QTextEdit()
         self._description.setPlaceholderText("Description / flavor text")
         # A compact two-ish line box: the flavor text is short, so keep it from
-        # eating vertical room the game-term table and canvas need.
+        # eating vertical room the canvas needs.
         self._description.setFixedHeight(50)
         self._description.textChanged.connect(self._on_description_changed)
+        guard_wheel(self._description)  # don't let the box steal the page wheel
         layout.addWidget(self._description)
 
-        # A read-only, auto-generated game-terms table sits under the free-text
-        # description — it is derived from the effects/modifiers, not editable, and
-        # tints each stat a modifier changed (green better, red worse).
-        self._terms = PowerTermsView()
-        layout.addWidget(self._terms)
-
+        # A prominent cost bar sits just above the canvas: the running total on the
+        # left, the live Power Level / allocation warning on the right (hidden while
+        # the power is within caps, naming the breach on its tooltip when it isn't).
         cost_row = QHBoxLayout()
         self._cost = QLabel()
-        self._cost.setStyleSheet("font-weight: bold;")
+        self._cost.setStyleSheet("font-size: 15px; font-weight: bold;")
         cost_row.addWidget(self._cost)
         cost_row.addStretch()
-        # A live Power Level warning: hidden while the power is within caps, it
-        # names the breach on its tooltip when it isn't.
         self._warning = QLabel()
         self._warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
         self._warning.setVisible(False)
@@ -1385,6 +1620,31 @@ class PowerConstructorWindow(QMainWindow):
         self._save_button.clicked.connect(self._save_power)
         actions.addWidget(self._save_button)
         layout.addLayout(actions)
+        return panel
+
+    # -- right: the read-only game-term summary ---------------------------
+    def _build_summary_panel(self) -> QWidget:
+        """The auto-generated game-terms breakdown, in its own scrolling column.
+
+        Derived from the effects/modifiers (never editable), it tints each stat a
+        modifier changed (green better, red worse). Housed apart from the canvas so
+        it can grow effect by effect without stealing the construction area's height.
+        """
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(4, 0, 0, 0)
+
+        heading = QLabel("Game terms")
+        heading.setStyleSheet("font-weight: bold;")
+        layout.addWidget(heading)
+
+        self._terms = PowerTermsView()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(self._terms)
+        guard_wheel(scroll)
+        layout.addWidget(scroll, stretch=1)
         return panel
 
     def _on_name_changed(self, text: str) -> None:

@@ -267,6 +267,32 @@ def test_palette_search_is_case_insensitive_and_per_tab(qapp: QApplication) -> N
     assert all(not b.isHidden() for b in extra_bricks)
 
 
+def test_effects_palette_is_grouped_by_type_with_headers(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    _, bricks = window._search_tabs["effects"]
+
+    # Every effect still shows up (the flat seam is the union of all sections)...
+    assert len(bricks) == 42
+    # ...and the section headers (a superset of the effect types) are present.
+    headers = {lbl.text() for lbl in window.findChildren(QLabel)}
+    assert {"Attack", "Movement", "Sensory"} <= headers
+
+
+def test_search_hides_empty_section_headers(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    search, _ = window._search_tabs["effects"]
+
+    def header(text: str) -> QLabel:
+        return next(lbl for lbl in window.findChildren(QLabel) if lbl.text() == text)
+
+    search.setText("damage")  # an Attack effect, so only the Attack header survives
+    assert not header("Attack").isHidden()
+    assert header("Movement").isHidden()  # no Movement match → its header hides
+
+    search.clear()
+    assert not header("Movement").isHidden()  # cleared search brings every header back
+
+
 def test_name_and_description_write_to_model(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     window._name.setText("Fire Blast")
@@ -811,6 +837,38 @@ def test_modifier_chip_text_field_writes_config(qapp: QApplication) -> None:
     edit = chip.findChild(QLineEdit)
     edit.setText("only at night")
     assert chip.selection.config == {"condition": "only at night"}
+
+
+def test_reordering_chips_reorders_the_backing_selection_list(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")  # extra 0
+    card.attach_modifier("accurate")  # extra 1
+
+    assert [s.modifier_id for s in card.instance.extras] == ["ranged", "accurate"]
+
+    # Drag the first chip past the second (insertion point 2 in the pre-move list).
+    changes: list = []
+    card.changed.connect(lambda: changes.append(True))
+    card._extras_group.move_chip(0, 2)
+
+    assert [s.modifier_id for s in card.instance.extras] == ["accurate", "ranged"]
+    assert card._extras_group._chips[0].selection.modifier_id == "accurate"
+    assert changes  # a real reorder reports a change
+
+
+def test_reordering_a_chip_in_place_is_a_no_op(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")
+    card.attach_modifier("accurate")
+
+    changes: list = []
+    card.changed.connect(lambda: changes.append(True))
+    card._extras_group.move_chip(0, 1)  # dropped just after itself → no change
+
+    assert [s.modifier_id for s in card.instance.extras] == ["ranged", "accurate"]
+    assert changes == []  # settling in place fires nothing
 
 
 def test_variable_conditions_hides_the_degree_pickers(qapp: QApplication) -> None:

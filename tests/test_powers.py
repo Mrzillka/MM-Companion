@@ -15,13 +15,16 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
+    effect_allocation_used,
     effect_cost_formula,
     effect_game_terms,
     effect_is_active,
+    effect_readout_rows,
     effect_stat_rows,
     effect_total_cost,
     effective_ability,
     effective_effect_stats,
+    power_allocation_violations,
     power_game_terms,
     power_pl_violations,
     power_runtime_gates,
@@ -37,6 +40,129 @@ def test_base_effect_cost_is_per_rank() -> None:
     # Damage is 1 PP/rank; rank 8 with no modifiers costs 8.
     effect = PowerEffectInstance("damage", rank=8)
     assert effect_total_cost(effect, data) == 8
+
+
+def test_allocation_used_sums_selected_tier_costs() -> None:
+    data = load_game_data()
+    # Enhanced Senses: Accurate at tier 1 (2 ranks) + Acute at tier 2 (2 ranks) = 4.
+    effect = PowerEffectInstance(
+        "enhanced_senses",
+        rank=4,
+        config={"senses": [{"id": "accurate", "tier": 1}, {"id": "acute", "tier": 2}]},
+    )
+    assert effect_allocation_used(effect, data) == 4
+    assert power_allocation_violations(Power(effects=[effect]), data) == []
+
+
+def test_over_allocation_is_flagged() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "comprehend", rank=3, config={"categories": [{"id": "languages", "tier": 4}]}
+    )
+    assert effect_allocation_used(effect, data) == 4
+    violations = power_allocation_violations(Power(effects=[effect]), data)
+    assert len(violations) == 1 and "over budget" in violations[0]
+
+
+def test_repeatable_immunity_sums_ranks_and_feature_counts_rows() -> None:
+    data = load_game_data()
+    immunity = PowerEffectInstance(
+        "immunity", rank=10, config={"scopes": [{"name": "Fire", "rank": 10}]}
+    )
+    assert effect_allocation_used(immunity, data) == 10
+    feature = PowerEffectInstance(
+        "feature", rank=1, config={"features": [{"name": "Battery"}, {"name": "Remote"}]}
+    )
+    assert effect_allocation_used(feature, data) == 2  # one per row
+    assert power_allocation_violations(Power(effects=[feature]), data)  # 2 rows > rank 1
+
+
+def test_allocation_choices_appear_in_game_terms() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "comprehend", rank=4, config={"categories": [{"id": "languages", "tier": 3}]}
+    )
+    line = effect_game_terms(effect, data)
+    assert "Languages 3" in line
+
+
+def test_growth_readout_maps_rank_to_size_table_modifiers() -> None:
+    data = load_game_data()
+    rows = {r.label: r for r in effect_readout_rows(PowerEffectInstance("growth", rank=2), data)}
+    assert rows["Size"].value == "Huge"
+    assert rows["Damage"].value == "+2" and rows["Damage"].change == "better"
+    assert rows["Defense"].value == "-2" and rows["Defense"].change == "worse"
+    # Shrinking is the same table in the opposite direction.
+    shrink = {
+        r.label: r for r in effect_readout_rows(PowerEffectInstance("shrinking", rank=2), data)
+    }
+    assert shrink["Size"].value == "Tiny"
+    assert shrink["Stealth"].value == "+4" and shrink["Stealth"].change == "better"
+
+
+def test_state_readout_clamps_above_the_table() -> None:
+    data = load_game_data()
+
+    def state(rank: int) -> str:
+        return effect_readout_rows(PowerEffectInstance("insubstantial", rank=rank), data)[0].value
+
+    assert state(3) == "Energy"
+    assert state(9) == "Incorporeal"  # clamped to the highest defined rank
+
+
+def test_illusion_maintenance_readout_flips_on_the_moving_checkbox() -> None:
+    data = load_game_data()
+    static = effect_readout_rows(PowerEffectInstance("illusion", rank=4), data)[0]
+    moving = effect_readout_rows(
+        PowerEffectInstance("illusion", rank=4, config={"moving": True}), data
+    )[0]
+    assert "Sustain" in static.value
+    assert "Concentrate" in moving.value
+
+
+def test_checkbox_config_does_not_crash_game_terms() -> None:
+    data = load_game_data()
+    # Illusion's 'moving' is a bare boolean config — it must not reach _config_display.
+    line = effect_game_terms(PowerEffectInstance("illusion", rank=4, config={"moving": True}), data)
+    assert line.startswith("Illusion 4")
+    assert "moving" not in line.lower()  # surfaced via the readout, not the term line
+
+
+def test_side_effect_toggle_changes_the_per_rank_discount() -> None:
+    data = load_game_data()
+    # Damage 8: on-failure Side Effect is -1/rank (net 0 → 4 PP); always is -2/rank
+    # (net -1 → ceil(8/3) = 3 PP).
+    on_failure = PowerEffectInstance("damage", rank=8, flaws=[ModifierSelection("side_effect")])
+    always = PowerEffectInstance(
+        "damage", rank=8, flaws=[ModifierSelection("side_effect", config={"when": "always"})]
+    )
+    assert effect_total_cost(on_failure, data) == 4
+    assert effect_total_cost(always, data) == 3
+
+
+def test_removable_tier_changes_the_flat_discount() -> None:
+    data = load_game_data()
+    # Protection 10: Removable is -1 flat by default, Easily Removable -2.
+    default = PowerEffectInstance("protection", rank=10, flaws=[ModifierSelection("removable")])
+    easily = PowerEffectInstance(
+        "protection",
+        rank=10,
+        flaws=[ModifierSelection("removable", config={"tier": "easily_removable"})],
+    )
+    assert effect_total_cost(default, data) == 9
+    assert effect_total_cost(easily, data) == 8
+
+
+def test_modifier_config_round_trips_through_json() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "damage",
+        rank=8,
+        flaws=[ModifierSelection("side_effect", config={"when": "always", "detail": "prone"})],
+    )
+    restored = PowerEffectInstance.from_dict(effect.to_dict())
+    assert restored.flaws[0].config == {"when": "always", "detail": "prone"}
+    assert effect_total_cost(restored, data) == 3
 
 
 def test_per_rank_extra_scales_with_rank() -> None:
@@ -452,6 +578,7 @@ def test_affliction_exposes_config_fields() -> None:
     affliction = next(e for e in data.effects if e.id == "affliction")
     assert [f.key for f in affliction.config_fields] == [
         "resistance",
+        "overcomeBy",
         "degree1",
         "degree2",
         "degree3",

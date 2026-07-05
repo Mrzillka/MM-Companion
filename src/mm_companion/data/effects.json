@@ -53,6 +53,18 @@
           "type": "select",
           "overrides": "resistance",
           "options": [
+            { "value": "Dodge", "label": "Dodge" },
+            { "value": "Fortitude", "label": "Fortitude" },
+            { "value": "Will", "label": "Will" }
+          ]
+        },
+        {
+          "key": "overcomeBy",
+          "label": "Overcome by",
+          "type": "select",
+          "hint": "Defaults to the resisting defense; may differ (e.g. resisted by Dodge, overcome by Will).",
+          "options": [
+            { "value": "Dodge", "label": "Dodge" },
             { "value": "Fortitude", "label": "Fortitude" },
             { "value": "Will", "label": "Will" }
           ]
@@ -62,11 +74,18 @@
           "label": "1st degree",
           "type": "select",
           "multiselectWith": "extra_condition",
+          "hiddenWith": "variable_conditions",
           "options": [
             { "value": "dazed", "label": "Dazed" },
+            { "value": "deaf", "label": "Deafened" },
+            { "value": "disabled", "label": "Disabled (one trait)" },
             { "value": "fatigued", "label": "Fatigued" },
+            { "value": "figment", "label": "Figment" },
             { "value": "hindered", "label": "Hindered" },
             { "value": "impaired", "label": "Impaired" },
+            { "value": "indifferent", "label": "Indifferent" },
+            { "value": "prone", "label": "Prone" },
+            { "value": "unaware", "label": "Unaware (one non-accurate sense)" },
             { "value": "vulnerable", "label": "Vulnerable" }
           ]
         },
@@ -75,28 +94,41 @@
           "label": "2nd degree",
           "type": "select",
           "multiselectWith": "extra_condition",
+          "hiddenWith": "variable_conditions",
           "options": [
+            { "value": "blind", "label": "Blinded" },
             { "value": "compelled", "label": "Compelled" },
+            { "value": "confused", "label": "Confused" },
             { "value": "defenseless", "label": "Defenseless" },
             { "value": "disabled", "label": "Disabled" },
             { "value": "exhausted", "label": "Exhausted" },
+            { "value": "favorable", "label": "Favorable" },
+            { "value": "frightened", "label": "Frightened" },
             { "value": "immobile", "label": "Immobile" },
-            { "value": "prone", "label": "Prone" },
-            { "value": "stunned", "label": "Stunned" }
+            { "value": "phantasm", "label": "Phantasm" },
+            { "value": "stunned", "label": "Stunned" },
+            { "value": "susceptible", "label": "Susceptible" },
+            { "value": "unaware", "label": "Unaware (one accurate sense)" },
+            { "value": "unfavorable", "label": "Unfavorable" }
           ]
         },
         {
           "key": "degree3",
           "label": "3rd degree",
           "type": "select",
-          "multiselectWith": "extra_condition",
+          "hiddenWith": "variable_conditions",
           "options": [
             { "value": "asleep", "label": "Asleep" },
             { "value": "controlled", "label": "Controlled" },
+            { "value": "debilitated", "label": "Debilitated" },
+            { "value": "delusion", "label": "Delusion" },
+            { "value": "helpful", "label": "Helpful" },
+            { "value": "hostile", "label": "Hostile" },
             { "value": "incapacitated", "label": "Incapacitated" },
             { "value": "paralyzed", "label": "Paralyzed" },
             { "value": "transformed", "label": "Transformed" },
-            { "value": "unaware", "label": "Unaware" }
+            { "value": "unaware", "label": "Unaware (all senses)" },
+            { "value": "unconscious", "label": "Unconscious" }
           ]
         }
       ],
@@ -138,6 +170,23 @@
         "pattern": "passive_toggle",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "medium",
+          "label": "Medium",
+          "type": "select",
+          "hint": "The sense the messages travel through (a required choice).",
+          "options": [
+            { "value": "Sight", "label": "Sight" },
+            { "value": "Hearing", "label": "Hearing" },
+            { "value": "Smell", "label": "Smell" },
+            { "value": "Touch", "label": "Touch" },
+            { "value": "Radio", "label": "Radio" },
+            { "value": "Mental", "label": "Mental" },
+            { "value": "Special", "label": "Special" }
+          ]
+        }
+      ],
       "description": "Lets you send and receive messages over distance through a chosen medium."
     },
     {
@@ -156,6 +205,22 @@
         "pattern": "passive_permanent",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "categories",
+          "label": "Comprehend",
+          "type": "allocation",
+          "hint": "Spend the effect's ranks across categories; each is independently tiered (Languages scales furthest).",
+          "allocOptions": [
+            { "id": "animals", "label": "Animals", "tiers": [1, 2] },
+            { "id": "computers", "label": "Computers", "tiers": [1, 2] },
+            { "id": "languages", "label": "Languages", "tiers": [1, 2, 3, 4] },
+            { "id": "objects", "label": "Objects", "tiers": [2] },
+            { "id": "plants", "label": "Plants", "tiers": [2] },
+            { "id": "spirits", "label": "Spirits", "tiers": [1, 2] }
+          ]
+        }
+      ],
       "description": "Lets you understand or be understood by languages, animals, or alien minds."
     },
     {
@@ -211,6 +276,15 @@
         "pattern": "instant_action",
         "affects": "none"
       },
+      "config": [
+        {
+          "key": "strengthBased",
+          "label": "Strength-Based",
+          "type": "checkbox",
+          "toggles": "strength_based",
+          "hint": "Adds your Strength rank to the Damage rank (and its cost)."
+        }
+      ],
       "description": "A direct harmful attack — the basis for most offensive powers.",
       "resistanceDcBase": 10
     },
@@ -230,6 +304,14 @@
         "pattern": "instant_action",
         "affects": "none"
       },
+      "config": [
+        {
+          "key": "limitedCategory",
+          "label": "Limited to",
+          "type": "text",
+          "hint": "If the Limited flaw is taken, the attack category this deflects (e.g. thrown weapons only)."
+        }
+      ],
       "description": "Bats away or redirects an incoming ranged attack."
     },
     {
@@ -266,6 +348,28 @@
         "pattern": "passive_toggle",
         "affects": "movement"
       },
+      "config": [
+        {
+          "key": "modes",
+          "label": "Movement modes",
+          "type": "allocation",
+          "hint": "Check modes to spend the effect's ranks; tiered modes let you buy increasing scope.",
+          "allocOptions": [
+            { "id": "dimensional_travel", "label": "Dimensional Travel", "tiers": [2, 4, 6] },
+            { "id": "environmental_adaptation", "label": "Environmental Adaptation", "tiers": [1], "perNote": "per environment" },
+            { "id": "permeate", "label": "Permeate", "tiers": [2, 4, 6] },
+            { "id": "safe_fall", "label": "Safe Fall", "tiers": [1] },
+            { "id": "slithering", "label": "Slithering", "tiers": [1] },
+            { "id": "space_travel", "label": "Space Travel", "tiers": [2, 4, 6] },
+            { "id": "stable", "label": "Stable", "tiers": [1], "perNote": "per mode" },
+            { "id": "sure_footed", "label": "Sure-Footed", "tiers": [1, 2] },
+            { "id": "swinging", "label": "Swinging", "tiers": [2] },
+            { "id": "trackless", "label": "Trackless", "tiers": [1], "perNote": "per sense" },
+            { "id": "wall_crawling", "label": "Wall-Crawling", "tiers": [1, 2] },
+            { "id": "water_walking", "label": "Water-Walking", "tiers": [1, 2] }
+          ]
+        }
+      ],
       "description": "Grants specialized movement abilities like wall-crawling or safe falling."
     },
     {
@@ -284,6 +388,37 @@
         "pattern": "passive_permanent",
         "affects": "senses"
       },
+      "config": [
+        {
+          "key": "senses",
+          "label": "Sense qualities",
+          "type": "allocation",
+          "hint": "Spend the effect's ranks across sense qualities (each applied to a chosen sense or sense type). Tiered qualities buy increasing scope.",
+          "allocOptions": [
+            { "id": "accurate", "label": "Accurate", "tiers": [2, 4] },
+            { "id": "acute", "label": "Acute", "tiers": [1, 2] },
+            { "id": "analytical", "label": "Analytical", "tiers": [1, 2] },
+            { "id": "counters_concealment", "label": "Counters Concealment", "tiers": [2] },
+            { "id": "counters_illusion", "label": "Counters Illusion", "tiers": [1] },
+            { "id": "danger_sense", "label": "Danger Sense", "tiers": [2] },
+            { "id": "dark_vision", "label": "Dark-Vision", "tiers": [2] },
+            { "id": "direction_sense", "label": "Direction Sense", "tiers": [1] },
+            { "id": "distance_sense", "label": "Distance Sense", "tiers": [1] },
+            { "id": "extended", "label": "Extended", "tiers": [1, 2], "perNote": "per sense" },
+            { "id": "infravision", "label": "Infravision", "tiers": [1] },
+            { "id": "low_light_vision", "label": "Low-Light Vision", "tiers": [1] },
+            { "id": "microscopic_vision", "label": "Microscopic Vision", "tiers": [1, 2, 3, 4] },
+            { "id": "penetrates_concealment", "label": "Penetrates Concealment", "tiers": [4] },
+            { "id": "radio", "label": "Radio", "tiers": [1] },
+            { "id": "radius", "label": "Radius", "tiers": [1] },
+            { "id": "ranged", "label": "Ranged", "tiers": [1] },
+            { "id": "rapid", "label": "Rapid", "tiers": [1, 2, 3], "perNote": "per sense" },
+            { "id": "tracking", "label": "Tracking", "tiers": [1, 2] },
+            { "id": "ultra_hearing", "label": "Ultra-Hearing", "tiers": [1] },
+            { "id": "ultravision", "label": "Ultravision", "tiers": [1] }
+          ]
+        }
+      ],
       "description": "Improves existing senses or grants entirely new ones."
     },
     {
@@ -356,6 +491,18 @@
         "pattern": "passive_permanent",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "features",
+          "label": "Features",
+          "type": "repeatable",
+          "hint": "Each rank buys one minor custom capability (e.g. Battery, Built-in Equipment, Quick Change, Remote). Number of features may not exceed the effect's rank.",
+          "columns": [
+            { "key": "name", "label": "Feature", "type": "text" },
+            { "key": "description", "label": "Notes", "type": "text" }
+          ]
+        }
+      ],
       "description": "A minor, custom-defined convenience or utility not covered by another effect."
     },
     {
@@ -447,6 +594,14 @@
         "pattern": "instant_action",
         "affects": "none"
       },
+      "config": [
+        {
+          "key": "moving",
+          "label": "Moves / interacts",
+          "type": "checkbox",
+          "hint": "A moving or interactive illusion needs a Concentrate action to maintain; a static one only needs Sustain."
+        }
+      ],
       "description": "Creates false sensory impressions that fool one or more senses.",
       "resistanceDcBase": 10
     },
@@ -466,6 +621,18 @@
         "pattern": "passive_permanent",
         "affects": "resistance"
       },
+      "config": [
+        {
+          "key": "scopes",
+          "label": "Immune to",
+          "type": "repeatable",
+          "hint": "Suggested ranks — 1: a single hazard; 2: critical hits / all suffocation; 5: an uncommon descriptor; 10: a common descriptor (cold, fire); 20: a very common damage type; 30: everything one resistance covers. Named scopes' ranks sum to the effect rank.",
+          "columns": [
+            { "key": "name", "label": "Scope", "type": "text" },
+            { "key": "rank", "label": "Ranks", "type": "int" }
+          ]
+        }
+      ],
       "description": "Removes the need to resist a specific effect or descriptor entirely."
     },
     {
@@ -595,6 +762,14 @@
         "pattern": "instant_action",
         "affects": "none"
       },
+      "config": [
+        {
+          "key": "scope",
+          "label": "Nullifies",
+          "type": "text",
+          "hint": "A descriptor, effect type, or named power (GM-approved; broad scopes need review)."
+        }
+      ],
       "description": "Suppresses or shuts down another power or effect."
     },
     {

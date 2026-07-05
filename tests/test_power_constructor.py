@@ -149,12 +149,13 @@ def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> 
     card = window.canvas.add_effect("affliction")
 
     # By default the degrees are single-select combos and there are no check boxes.
-    assert len(card.findChildren(QComboBox)) == 4  # resistance + 3 degrees
+    assert len(card.findChildren(QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
     assert card.findChildren(QCheckBox) == []
 
     card.attach_modifier("extra_condition")  # the Affliction-only gating extra
-    assert card.findChildren(QCheckBox)  # degrees are now multiselect
-    assert len(card.findChildren(QComboBox)) == 1  # only resistance stays a combo
+    assert card.findChildren(QCheckBox)  # 1st/2nd degrees are now multiselect
+    # resistance, overcomeBy, and the 3rd degree stay single-select combos
+    assert len(card.findChildren(QComboBox)) == 3
 
 
 def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -> None:
@@ -187,7 +188,7 @@ def test_effect_without_config_has_no_combos(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QComboBox
 
     window = PowerConstructorWindow(load_game_data())
-    card = window.canvas.add_effect("damage")  # Damage has no config fields
+    card = window.canvas.add_effect("damage")  # Damage's only config is a checkbox
     assert card.findChildren(QComboBox) == []
 
 
@@ -601,3 +602,93 @@ def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) ->
 
     sheet.powers._remove_power(character.powers[0])
     assert not tough.isVisibleTo(sheet.stats)  # boost cleared when the power goes
+
+
+def test_damage_strength_based_checkbox_toggles_the_extra(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    box = next(b for b in card.findChildren(QCheckBox))  # the Strength-Based config
+
+    box.setChecked(True)
+    assert [s.modifier_id for s in card.instance.extras] == ["strength_based"]
+    box.setChecked(False)
+    assert card.instance.extras == []
+
+
+def test_allocation_checklist_spends_ranks_and_warns_when_over(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_senses")
+    card._rank.setValue(2)
+
+    boxes = {b.text().split(" (")[0]: b for b in card.findChildren(QCheckBox)}
+    boxes["Accurate"].setChecked(True)  # tiered 2/4 → default tier 1 = 2 ranks
+    assert card.instance.config["senses"] == [{"id": "accurate", "tier": 1}]
+    assert not window._warning.isVisibleTo(window)  # 2 of 2 ranks — exactly on budget
+
+    boxes["Acute"].setChecked(True)  # +1 rank → 3 of 2, over budget
+    assert window._warning.isVisibleTo(window)
+    assert "Over-allocated" in window._warning.text()
+
+
+def test_repeatable_rows_add_remove_and_persist(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLineEdit, QPushButton
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("feature")
+    card._rank.setValue(2)
+
+    add = next(b for b in card.findChildren(QPushButton) if "Add" in b.text())
+    add.click()
+    name = next(e for e in card.findChildren(QLineEdit) if e.placeholderText() == "Feature")
+    name.setText("Battery")
+    assert card.instance.config["features"] == [{"name": "Battery", "description": ""}]
+
+    remove = next(b for b in card.findChildren(QPushButton) if b.text() == "✕" and b.isFlat())
+    remove.click()
+    assert card.instance.config["features"] == []
+
+
+def test_modifier_chip_config_drives_cost(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("protection")
+    card._rank.setValue(10)
+    card.attach_modifier("removable")
+    assert window._cost.text() == "Total cost: 9 PP"  # -1 flat by default
+
+    chip = card._chips[0]
+    combo = chip.findChild(QComboBox)  # the tier selector
+    combo.setCurrentIndex(combo.findData("easily_removable"))
+    assert chip.selection.config == {"tier": "easily_removable"}
+    assert window._cost.text() == "Total cost: 8 PP"  # -2 flat
+
+
+def test_modifier_chip_text_field_writes_config(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLineEdit
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("limited")  # a flaw carrying a free-text condition
+
+    chip = card._chips[0]
+    edit = chip.findChild(QLineEdit)
+    edit.setText("only at night")
+    assert chip.selection.config == {"condition": "only at night"}
+
+
+def test_variable_conditions_hides_the_degree_pickers(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox, QLabel
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    assert len(card.findChildren(QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
+
+    card.attach_modifier("variable_conditions")  # defers the choices to use-time
+    assert len(card.findChildren(QComboBox)) == 2  # only resistance + overcomeBy remain
+    notes = [lbl.text() for lbl in card.findChildren(QLabel)]
+    assert notes.count("chosen when used") == 3  # one per hidden degree

@@ -113,6 +113,26 @@ def load_settings() -> dict:
         return dict(DEFAULT_SETTINGS)
 
 
+def save_settings(settings: dict) -> None:
+    """Write *settings* to the settings file, creating the workspace if needed.
+
+    Unlike :func:`ensure_workspace` (which only writes defaults when the file is
+    absent), this replaces the file wholesale — use it to persist edited settings.
+    The stored dict is opaque to ``core``; the UI keeps things like the window
+    ``layout`` (base64 strings) here so no Qt types leak into this layer.
+    """
+    workspace = ensure_workspace()
+    workspace.settings_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+
+
+def update_settings(**changes: object) -> dict:
+    """Merge *changes* into the saved settings and persist them; returns the result."""
+    settings = load_settings()
+    settings.update(changes)
+    save_settings(settings)
+    return settings
+
+
 def pl_enforcement() -> str:
     """How the builder should treat a Power Level cap breach — ``warn`` or ``block``.
 

@@ -48,7 +48,7 @@ Repository = "https://github.com/Mrzillka/MM-Companion"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mm_companion = ["data/**/*.json", "data/**/*.yaml", "data/**/*.yml"]
+mm_companion = ["data/**/*.json", "data/**/*.yaml", "data/**/*.yml", "ui/*.json"]
 
 [tool.black]
 line-length = 100

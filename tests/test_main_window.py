@@ -53,13 +53,35 @@ def test_loading_a_character_does_not_start_dirty(qapp: QApplication) -> None:
 
 def test_saving_clears_dirty(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
-    win._sheet.stats._abilities["STR"].setValue(3)
+    win._sheet.abilities._abilities["STR"].setValue(3)
     assert win._dirty is True
 
     win._write(storage.get_workspace().characters_dir / "hero.json")
 
     assert win._dirty is False
     assert "*" not in win.windowTitle()
+
+
+def test_view_menu_hides_and_shows_a_block(qapp: QApplication) -> None:
+    win = MainWindow(locked=False)
+    action = win._block_actions["advantages"]
+    assert action.isChecked()  # visible by default
+
+    action.setChecked(False)
+    assert win._sheet.is_block_hidden("advantages")
+    assert "advantages" not in [k for row in win._sheet.arrangement()["rows"] for k in row]
+
+    action.setChecked(True)
+    assert not win._sheet.is_block_hidden("advantages")
+
+
+def test_hiding_a_block_updates_its_view_menu_toggle(qapp: QApplication) -> None:
+    win = MainWindow(locked=False)
+
+    # Hiding elsewhere (a block's × button) keeps the View toggle in sync.
+    win._sheet.hide_block("powers")
+
+    assert not win._block_actions["powers"].isChecked()
 
 
 def test_clean_window_closes_without_prompting(qapp: QApplication) -> None:
@@ -73,7 +95,7 @@ def test_close_can_be_cancelled_when_dirty(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     win = MainWindow(locked=False)
-    win._sheet.stats._abilities["STR"].setValue(3)
+    win._sheet.abilities._abilities["STR"].setValue(3)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Cancel)
 
     event = QCloseEvent()
@@ -86,7 +108,7 @@ def test_close_can_discard_unsaved_changes(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     win = MainWindow(locked=False)
-    win._sheet.stats._abilities["STR"].setValue(3)
+    win._sheet.abilities._abilities["STR"].setValue(3)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Discard)
 
     event = QCloseEvent()
@@ -101,7 +123,7 @@ def test_close_save_persists_then_accepts(
     win = MainWindow(locked=False)
     # Give it a path so the Save branch doesn't open a dialog.
     win._path = storage.get_workspace().characters_dir / "onclose.json"
-    win._sheet.stats._abilities["STR"].setValue(4)
+    win._sheet.abilities._abilities["STR"].setValue(4)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Save)
 
     event = QCloseEvent()

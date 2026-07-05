@@ -49,9 +49,14 @@ def test_focused_skills_expose_focuses() -> None:
 
 def test_advantages_carry_type_tags() -> None:
     data = load_game_data()
+    valid_kinds = {"fixed", "power_level", "power_level_half", "heroic_budget", "none"}
     for advantage in data.advantages:
         assert advantage.types  # at least one category tag
         assert advantage.type == advantage.types[0]  # legacy single-type accessor
+        assert advantage.max_rank_kind in valid_kinds
+        # A fixed cap must give the number it points at; the others carry none.
+        if advantage.max_rank_kind == "fixed":
+            assert advantage.max_rank is not None
 
 
 def test_condition_graph_references_known_ids() -> None:

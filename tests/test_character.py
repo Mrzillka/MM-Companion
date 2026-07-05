@@ -6,7 +6,11 @@ from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    advantage_rank_cap,
+    advantage_violations,
     defense_class,
+    heroic_advantage_budget,
+    heroic_advantage_ranks,
     min_power_points,
     power_level_for_points,
     power_level_violations,
@@ -153,3 +157,43 @@ def test_clean_build_has_no_violations() -> None:
     char.abilities["AGL"] = 2
     char.skill_ranks["Stealth"] = 4  # total 6, well under cap
     assert power_level_violations(char, data) == []
+
+
+def _advantage(data, name):
+    return next(a for a in data.advantages if a.name == name)
+
+
+def test_advantage_rank_cap_reads_the_cap_kind() -> None:
+    data = load_game_data()
+    # Fixed cap: Improved Critical is Ranked 4 regardless of Power Level.
+    assert advantage_rank_cap(_advantage(data, "Improved Critical"), 10) == 4
+    # Improved Initiative caps at ceil(PL / 2).
+    assert advantage_rank_cap(_advantage(data, "Improved Initiative"), 10) == 5
+    assert advantage_rank_cap(_advantage(data, "Improved Initiative"), 5) == 3
+    # PL-shared and Heroic-budget advantages carry no standalone number here.
+    assert advantage_rank_cap(_advantage(data, "Close Attack"), 10) is None
+    assert advantage_rank_cap(_advantage(data, "Luck"), 10) is None
+    # An unranked advantage is always a single rank.
+    assert advantage_rank_cap(_advantage(data, "Diehard"), 10) == 1
+
+
+def test_heroic_budget_pools_across_heroic_advantages() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # PL 10 -> budget 5
+    assert heroic_advantage_budget(char.power_level) == 5
+    char.advantages.append(AdvantageSelection("Luck", 3))  # ranked Heroic: 3
+    char.advantages.append(AdvantageSelection("Encouragement", 1))  # unranked Heroic: flat 1
+    char.advantages.append(AdvantageSelection("Close Attack", 4))  # not Heroic: ignored
+    assert heroic_advantage_ranks(char, data) == 4
+    assert advantage_violations(char, data) == []
+
+
+def test_advantage_violations_flag_over_cap_and_over_budget() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # PL 10
+    char.advantages.append(AdvantageSelection("Improved Critical", 5))  # cap 4
+    char.advantages.append(AdvantageSelection("Determination", 4))
+    char.advantages.append(AdvantageSelection("Guidance", 3))  # Heroic total 7 > budget 5
+    violations = advantage_violations(char, data)
+    assert any("Improved Critical" in v for v in violations)
+    assert any("Heroic advantages" in v for v in violations)

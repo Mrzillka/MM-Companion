@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QByteArray, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QMessageBox, QWidget
 
@@ -35,7 +35,10 @@ class MainWindow(QMainWindow):
         locked: bool = True,
     ) -> None:
         super().__init__(parent)
-        self.resize(900, 800)
+        # Comfortably fits Base Information's natural width; the blocks stay well
+        # inside this, so the sheet only ever scrolls vertically inside the central
+        # scroll area when the blocks are taller than the window (see below).
+        self.resize(1000, 860)
         # The file this sheet is saved to, or None until the first save.
         self._path: Path | None = Path(path) if path else None
         # Whether the sheet has unsaved edits since the last save/load.
@@ -46,6 +49,8 @@ class MainWindow(QMainWindow):
 
         self._sheet = CharacterSheet(character=character)
         self._build_menu_bar(locked)
+        # The sheet is itself a scrolling page (it owns its scroll area), so it is
+        # the central widget directly — no outer wrapper.
         self.setCentralWidget(self._sheet)
         self._update_title()
 
@@ -54,6 +59,9 @@ class MainWindow(QMainWindow):
         self._sheet.set_locked(locked)
         # Track unsaved changes only after the initial seed/lock has settled.
         self._sheet.edited.connect(self._on_edited)
+
+        # Restore the remembered window size and block arrangement, if any.
+        self._restore_layout()
 
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar."""
@@ -67,6 +75,22 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         # Exit closes the sheet; closing brings the launcher back (see closeEvent).
         file_menu.addAction("Exit").triggered.connect(self.close)
+
+        self._view_menu = menu_bar.addMenu("&View")
+        # A show/hide toggle per block, so a block closed with its × can be
+        # reopened, plus a reset back to the default arrangement.
+        self._block_actions: dict = {}
+        for key in self._sheet.block_keys():
+            action = self._view_menu.addAction(self._sheet.block_frame(key).title)
+            action.setCheckable(True)
+            action.setChecked(not self._sheet.is_block_hidden(key))
+            action.toggled.connect(lambda visible, k=key: self._on_block_toggled(k, visible))
+            self._block_actions[key] = action
+        self._view_menu.addSeparator()
+        self._view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
+        # Keep the View toggles in sync when a block is hidden/shown elsewhere
+        # (its × button, a drag, or Reset Layout).
+        self._sheet.canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
 
         settings_menu = menu_bar.addMenu("&Settings")
         self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
@@ -123,6 +147,53 @@ class MainWindow(QMainWindow):
         self._child_windows.append(window)
         window.show()
 
+    # -- layout persistence --------------------------------------------------
+
+    def _restore_layout(self) -> None:
+        """Restore the remembered window geometry and block arrangement.
+
+        The layout is a global UI preference stored in settings.json; a missing or
+        incompatible entry simply leaves the default arrangement in place. The
+        ``dock_state`` value is now the sheet's JSON arrangement (see
+        ``CharacterSheet.save_layout``); the key name is kept for continuity.
+        """
+        layout = storage.load_settings().get("layout") or {}
+        geometry = layout.get("window_geometry")
+        if isinstance(geometry, str) and geometry:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
+        self._sheet.restore_layout(layout.get("dock_state"))
+
+    def _persist_layout(self) -> None:
+        """Save the window geometry and block arrangement as a global preference."""
+        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        storage.update_settings(
+            layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
+        )
+
+    def _on_block_toggled(self, key: str, visible: bool) -> None:
+        """Show or hide a block from its View-menu toggle."""
+        if visible:
+            self._sheet.show_block(key)
+        else:
+            self._sheet.hide_block(key)
+
+    def _on_block_visibility_changed(self, key: str, visible: bool) -> None:
+        """Keep a block's View-menu toggle in sync when it's hidden/shown elsewhere."""
+        action = self._block_actions.get(key)
+        if action is None or action.isChecked() == visible:
+            return
+        action.blockSignals(True)
+        action.setChecked(visible)
+        action.blockSignals(False)
+
+    def _reset_layout(self) -> None:
+        """Restore the default arrangement and resync the View-menu toggles."""
+        self._sheet.reset_layout()
+        for key, action in self._block_actions.items():
+            action.blockSignals(True)
+            action.setChecked(not self._sheet.is_block_hidden(key))
+            action.blockSignals(False)
+
     def _on_edited(self) -> None:
         """Mark the sheet dirty on the first user edit since the last save."""
         if not self._dirty:
@@ -139,6 +210,7 @@ class MainWindow(QMainWindow):
         if self._dirty and not self._confirm_close():
             event.ignore()
             return
+        self._persist_layout()
         self.closed.emit()
         super().closeEvent(event)
 

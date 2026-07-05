@@ -206,8 +206,8 @@ def test_effect_specific_menu_lists_only_this_effects_modifiers(qapp: QApplicati
 
 def test_effect_without_specific_modifiers_hides_the_menu_button(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
-    # Move Object relies solely on the general pool (no effect_modifiers entry).
-    card = window.canvas.add_effect("move_object")
+    # Speed relies solely on the general pool (no effect_modifiers entry).
+    card = window.canvas.add_effect("speed")
     assert not card._specific_button.isVisibleTo(card)
 
 
@@ -882,3 +882,46 @@ def test_variable_conditions_hides_the_degree_pickers(qapp: QApplication) -> Non
     assert len(card.findChildren(QComboBox)) == 2  # only resistance + overcomeBy remain
     notes = [lbl.text() for lbl in card.findChildren(QLabel)]
     assert notes.count("chosen when used") == 3  # one per hidden degree
+
+
+def test_limited_degree_hides_the_chosen_degree_picker(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    # resistance + overcomeBy + 3 degree pickers.
+    assert len(card.findChildren(QComboBox)) == 5
+
+    card.attach_modifier("limited_degree")  # an Affliction flaw with a degree picker
+    # The flaw defaults to its first option (1st degree), so that degree's condition
+    # picker vanishes; the chip's own degree combo replaces it in the count.
+    selection = card.instance.flaws[0]
+    assert selection.config["degree"] == "degree1"
+    notes = [lbl.text() for lbl in card.findChildren(QLabel)]
+    assert "no effect (Limited Degree)" in notes
+
+    # Re-point the flaw at the 3rd degree: the hidden picker follows the choice.
+    chip = card._chips[0]
+    degree_combo = chip.findChild(QComboBox)
+    degree_combo.setCurrentIndex(degree_combo.findData("degree3"))
+    assert card.instance.flaws[0].config["degree"] == "degree3"
+    # degree3 is now suppressed; degree1's picker is back.
+    assert "degree3" not in card.instance.config  # the disabled tier stores no condition
+
+
+def test_reduced_trait_offers_a_data_driven_trait_picker(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card.attach_modifier("reduced_trait")  # an Enhanced Trait flaw: which trait drops
+    chip = card._chips[0]
+    combo = chip.findChild(QComboBox)
+    assert combo is not None
+    # The picker is populated from the game data (abilities/resistances/skills), not
+    # a static option list, and defaults to the unset "choose a trait" row.
+    labels = [combo.itemText(i).strip() for i in range(combo.count())]
+    assert "Strength" in labels and "Dodge" in labels
+    assert combo.currentData() == ""  # no trait forced by default
+    combo.setCurrentIndex(combo.findData("STR"))
+    assert card.instance.flaws[0].config["reduced_target"] == "STR"

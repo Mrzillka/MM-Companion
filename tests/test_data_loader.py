@@ -108,9 +108,9 @@ def test_modifiers_are_categorised_with_numeric_cost() -> None:
 
 def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
     data = load_game_data()
-    assert len(data.effect_modifiers) == 33  # effects with their own extras/flaws
+    assert len(data.effect_modifiers) == 36  # effects with their own extras/flaws
     total = sum(len(mods) for mods in data.effect_modifiers.values())
-    assert total == 194
+    assert total == 228
     for mods in data.effect_modifiers.values():
         for modifier in mods:
             # Category is injected from the extras/flaws array, not stored per entry.
@@ -120,12 +120,31 @@ def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
     damage_specific = {m.id: m for m in data.effect_modifiers["damage"]}
     assert damage_specific["strength_based"].category == "extra"
     assert damage_specific["strength_based"].cost_value == 0  # "+0 points per rank"
+    # Strength-Based folds the wielder's Strength into the effect's effective rank.
+    assert damage_specific["strength_based"].adds_ability == "STR"
+
+
+def test_effect_specific_modifiers_retain_mechanical_fields() -> None:
+    # The catalog re-audit added new effect-specific modifiers; each must still carry
+    # the machine-readable cost/override fields the cost engine and summary consume,
+    # not just prose (a bare id/name/costFormula entry would silently cost 0 points).
+    data = load_game_data()
+    by_id = {m.id: m for mods in data.effect_modifiers.values() for m in mods}
+    # A newly-added Move Object extra: Perception range auto-hits and forces the range.
+    perception = by_id["perception_move_object"]
+    assert perception.cost_value == 1
+    assert perception.drops_check is True
+    assert perception.overrides == {"range": "Perception"}
+    # A newly-added Regeneration extra priced at +0 that still forces Sustained duration.
+    sustained_regen = by_id["sustained_regeneration"]
+    assert sustained_regen.cost_value == 0
+    assert sustained_regen.overrides == {"duration": "Sustained"}
 
 
 def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
     data = load_game_data()
     catalog = data.modifier_catalog()
-    assert len(catalog) == 62 + 194  # ids are globally unique, so no collisions
+    assert len(catalog) == 62 + 228  # ids are globally unique, so no collisions
     assert catalog["ranged"].category == "extra"  # general pool
     assert catalog["strength_based"].category == "extra"  # effect-specific pool
 

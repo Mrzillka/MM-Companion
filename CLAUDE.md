@@ -63,8 +63,9 @@ clean (see Licensing below).
   (not filesystem paths) so it works when installed as a package: core traits
   from `placeholder.json`; the rich 4e catalogs from `skills.json`,
   `advantages.json`, and `conditions.json`; point costs and PL caps from
-  `costs.json`. (`effects.json`/`modifiers.json` exist for powers but aren't
-  loaded yet.)
+  `costs.json`; the powers layer from `effects.json` (base effects), `modifiers.json`
+  (the general extra/flaw pool + game-term ladders), and `effect_modifiers.json`
+  (effect-specific extras/flaws, keyed by effect id).
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /

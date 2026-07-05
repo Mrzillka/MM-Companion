@@ -241,8 +241,15 @@ class EffectConfigField:
     each degree hold two same-degree conditions. ``hidden_with`` names an extra whose
     presence hides the field entirely (Affliction's ``variable_conditions`` defers
     the degree choices to use-time). ``toggles`` is the extra a ``checkbox`` field
-    attaches. ``hint`` is helper text shown under an ``allocation``/``repeatable``
-    field (e.g. Immunity's suggested-rank tiers).
+    attaches. ``source``, on a ``select`` field, names a data-driven option source
+    to populate instead of a static ``options`` list — currently ``"traits"``
+    (abilities, resistances, and skills), used by Enhanced Trait's Reduced Trait
+    flaw to pick which trait is lowered. ``hides_field``, on a *modifier's* config
+    field, marks that the chosen value is the ``key`` of one of the *parent effect's*
+    config fields to hide — Affliction's Limited Degree flaw picks a degree tier
+    (``degree1``/``degree2``/``degree3``) whose condition picker then disappears.
+    ``hint`` is helper text shown under an ``allocation``/``repeatable`` field
+    (e.g. Immunity's suggested-rank tiers).
     """
 
     key: str
@@ -252,6 +259,8 @@ class EffectConfigField:
     multiselect_with: str | None = None
     hidden_with: str | None = None
     toggles: str | None = None
+    source: str | None = None
+    hides_field: bool = False
     hint: str = ""
     options: tuple[ConfigOption, ...] = ()
     alloc_options: tuple[AllocationOption, ...] = ()
@@ -584,6 +593,8 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         multiselect_with=c.get("multiselectWith"),
         hidden_with=c.get("hiddenWith"),
         toggles=c.get("toggles"),
+        source=c.get("source"),
+        hides_field=bool(c.get("hidesField", False)),
         hint=c.get("hint", ""),
         options=tuple(
             ConfigOption(

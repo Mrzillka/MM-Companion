@@ -79,6 +79,7 @@ from mm_companion.core.rules import (
     effect_stat_rows,
     effect_total_cost,
     power_allocation_violations,
+    power_linked_range_violations,
     power_pl_violations,
     power_total_cost,
 )
@@ -138,6 +139,38 @@ def _move_item(seq: list, from_index: int, to_index: int) -> bool:
         return False
     seq.insert(target, seq.pop(from_index))
     return True
+
+
+def _disable_section_headings(combo: QComboBox) -> None:
+    """Grey out a trait combo's section-heading rows (those carrying ``None`` data)
+    so they read as group labels rather than selectable traits."""
+    model = combo.model()
+    for index in range(combo.count()):
+        if combo.itemData(index) is None:
+            item = model.item(index)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+
+
+def _fill_trait_combo(combo: QComboBox, game_data, current: str) -> None:
+    """Populate ``combo`` with the character's traits (abilities, resistances, skills)
+    grouped under disabled headings, and select ``current``. Data-driven — the trait
+    names come from the game data, never hardcoded. Shared by Enhanced Trait's "which
+    trait goes up" picker and any modifier config field with ``source="traits"`` (the
+    Reduced Trait flaw's "which trait goes down")."""
+    combo.addItem("— choose a trait —", "")
+    combo.addItem("Abilities", None)  # a disabled section heading
+    for ability in game_data.abilities:
+        combo.addItem(f"  {ability.name}", ability.key)
+    combo.addItem("Resistances", None)
+    for res in game_data.resistances:
+        if not res.derived:  # skip the derived Defence aggregate
+            combo.addItem(f"  {res.name}", res.key)
+    combo.addItem("Skills", None)
+    for skill in game_data.skills:
+        combo.addItem(f"  {skill.name}", skill.name)
+    _disable_section_headings(combo)
+    index = combo.findData(current)
+    combo.setCurrentIndex(index if index >= 0 else 0)
 
 
 class BrickWidget(QFrame):
@@ -216,9 +249,10 @@ class ModifierChip(QFrame):
     removeRequested = Signal(object)
     changed = Signal()
 
-    def __init__(self, modifier: Modifier, selection: ModifierSelection) -> None:
+    def __init__(self, modifier: Modifier, selection: ModifierSelection, game_data=None) -> None:
         super().__init__()
         self.selection = selection
+        self._data = game_data
         self._press_pos = None
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
@@ -258,10 +292,18 @@ class ModifierChip(QFrame):
         for cfg in modifier.config_fields:
             if cfg.type == "select":
                 combo = QComboBox()
-                for option in cfg.options:
-                    combo.addItem(option.label, option.value)
-                index = combo.findData(self.selection.config.get(cfg.key))
-                combo.setCurrentIndex(index if index >= 0 else 0)
+                if cfg.source == "traits" and self._data is not None:
+                    # Data-driven trait list (Reduced Trait's "which trait goes down").
+                    _fill_trait_combo(combo, self._data, self.selection.config.get(cfg.key, ""))
+                else:
+                    for option in cfg.options:
+                        combo.addItem(option.label, option.value)
+                    index = combo.findData(self.selection.config.get(cfg.key))
+                    combo.setCurrentIndex(index if index >= 0 else 0)
+                # Persist the shown default so downstream logic (cost, Limited Degree
+                # field-hiding) reflects what the closed combo already displays.
+                if not self.selection.config.get(cfg.key) and combo.currentData():
+                    self.selection.config[cfg.key] = combo.currentData()
                 guard_wheel(combo)
                 if cfg.hint:
                     combo.setToolTip(cfg.hint)
@@ -528,6 +570,22 @@ class EffectCard(QFrame):
             return "multiselect"
         return field.type
 
+    def _hidden_config_keys(self) -> set[str]:
+        """Effect config-field keys suppressed by an attached modifier whose own config
+        declares ``hides_field`` — the modifier's chosen value names the effect field to
+        hide (Affliction's Limited Degree picks which degree tier imposes no condition)."""
+        hidden: set[str] = set()
+        for selection in (*self.instance.extras, *self.instance.flaws):
+            modifier = self._modifier(selection.modifier_id)
+            if modifier is None:
+                continue
+            for cfg in modifier.config_fields:
+                if cfg.hides_field:
+                    value = selection.config.get(cfg.key)
+                    if value:
+                        hidden.add(value)
+        return hidden
+
     def _populate_config_form(self) -> None:
         """(Re)build the config form to match the effect's current modifiers.
 
@@ -544,10 +602,19 @@ class EffectCard(QFrame):
         effect = self._effect()
         if effect is None or not effect.config_fields:
             return
+        disabled_keys = self._hidden_config_keys()
         form_host = QWidget()
         form = QFormLayout(form_host)
         form.setContentsMargins(0, 0, 0, 0)
         for field in effect.config_fields:
+            if field.key in disabled_keys:
+                # A flaw's config (Affliction's Limited Degree) turned this tier off:
+                # drop any stored choice and show a note instead of the picker.
+                self.instance.config.pop(field.key, None)
+                note = QLabel("no effect (Limited Degree)")
+                note.setEnabled(False)
+                form.addRow(field.label, note)
+                continue
             if field.hidden_with and self._has_extra(field.hidden_with):
                 # A gating extra (e.g. Variable Conditions) defers this choice to
                 # use-time — show a note in place of the input instead of the widget.
@@ -856,37 +923,13 @@ class EffectCard(QFrame):
         form = QFormLayout(host)
         form.setContentsMargins(0, 0, 0, 0)
         combo = QComboBox()
-        combo.addItem("— choose a trait —", "")
-        combo.addItem("Abilities", None)  # a disabled section heading
-        for ability in self._data.abilities:
-            combo.addItem(f"  {ability.name}", ability.key)
-        combo.addItem("Resistances", None)
-        for res in self._data.resistances:
-            if not res.derived:  # skip the derived Defence aggregate
-                combo.addItem(f"  {res.name}", res.key)
-        combo.addItem("Skills", None)
-        for skill in self._data.skills:
-            combo.addItem(f"  {skill.name}", skill.name)
-        self._disable_section_headings(combo)
-
-        current = combo.findData(self.instance.config.get("target", ""))
-        combo.setCurrentIndex(current if current >= 0 else 0)
+        _fill_trait_combo(combo, self._data, self.instance.config.get("target", ""))
         guard_wheel(combo)
         combo.currentIndexChanged.connect(
             lambda _i, c=combo: self._on_config_changed("target", c.currentData())
         )
         form.addRow("Enhances", combo)
         return host
-
-    @staticmethod
-    def _disable_section_headings(combo: QComboBox) -> None:
-        """Grey out the section-heading rows (those carrying ``None`` data) so they
-        read as group labels rather than selectable traits."""
-        model = combo.model()
-        for index in range(combo.count()):
-            if combo.itemData(index) is None:
-                item = model.item(index)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
 
     # -- effect-specific modifier menu ------------------------------------
     def _populate_specific_menu(self) -> None:
@@ -963,9 +1006,9 @@ class EffectCard(QFrame):
         Shared by :meth:`attach_modifier` (which first appends the selection) and
         :meth:`_seed_modifier_chips` (which renders ones already present on load).
         """
-        chip = ModifierChip(modifier, selection)
+        chip = ModifierChip(modifier, selection, self._data)
         chip.removeRequested.connect(self._remove_chip)
-        chip.changed.connect(self._on_chip_changed)
+        chip.changed.connect(lambda m=modifier: self._on_chip_changed(m))
         self._chips.append(chip)
         (self._flaws_group if is_flaw else self._extras_group).add_chip(chip)
         self._hint.setVisible(False)
@@ -1012,7 +1055,11 @@ class EffectCard(QFrame):
         self._refresh_cost()
         self.changed.emit()
 
-    def _on_chip_changed(self) -> None:
+    def _on_chip_changed(self, modifier: Modifier | None = None) -> None:
+        # A modifier whose config hides one of this effect's fields (Limited Degree
+        # choosing a degree) must rebuild the form so the picker appears/disappears.
+        if modifier is not None and any(f.hides_field for f in modifier.config_fields):
+            self._populate_config_form()
         self._refresh_cost()
         self.changed.emit()
 
@@ -1669,21 +1716,26 @@ class PowerConstructorWindow(QMainWindow):
         """Tier-4 over-allocation breaches (an effect spending ranks it doesn't have)."""
         return power_allocation_violations(self.power, self._data)
 
+    def _linked_violations(self) -> list[str]:
+        """Linked effects that don't share a common Range (a build error)."""
+        return power_linked_range_violations(self.power, self._data)
+
     def _refresh_pl_warning(self) -> None:
-        """Show or hide the live warning from the current PL and allocation breaches."""
+        """Show or hide the live warning from the current PL, allocation, and link breaches."""
         pl = self._pl_violations()
         alloc = self._alloc_violations()
-        if pl and alloc:
-            headline = "⚠ Over Power Level & over-allocated"
-        elif pl:
-            headline = "⚠ Exceeds Power Level"
-        elif alloc:
-            headline = "⚠ Over-allocated"
-        else:
-            headline = ""
+        linked = self._linked_violations()
+        headlines = []
+        if pl:
+            headlines.append("over Power Level")
+        if alloc:
+            headlines.append("over-allocated")
+        if linked:
+            headlines.append("mismatched linked Range")
+        headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
-            self._warning.setToolTip("\n".join((*pl, *alloc)))
+            self._warning.setToolTip("\n".join((*pl, *alloc, *linked)))
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:
@@ -1710,6 +1762,15 @@ class PowerConstructorWindow(QMainWindow):
                 "Over-allocated",
                 "This power can't be saved because an effect allocates more ranks "
                 "than it has:\n\n• " + "\n• ".join(alloc),
+            )
+            return
+        linked = self._linked_violations()
+        if linked:
+            QMessageBox.warning(
+                self,
+                "Mismatched linked Range",
+                "This power can't be saved because its linked effects don't share "
+                "the same Range:\n\n• " + "\n• ".join(linked),
             )
             return
         violations = self._pl_violations()

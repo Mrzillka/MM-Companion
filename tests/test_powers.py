@@ -26,6 +26,7 @@ from mm_companion.core.rules import (
     effective_effect_stats,
     power_allocation_violations,
     power_game_terms,
+    power_linked_range_violations,
     power_pl_violations,
     power_runtime_gates,
     power_total_cost,
@@ -980,3 +981,44 @@ def test_trait_boost_does_not_change_point_cost() -> None:
     # STR costs for the 2 *bought* ranks (4 PP), not the boosted 5; the boost is
     # paid by the power's own cost (enhanced_trait 2/rank × 3 = 6).
     assert power_points_spent(char, data) == 2 * 2 + 6
+
+
+def test_linked_effects_with_matching_range_are_clean() -> None:
+    data = load_game_data()
+    # Two Close-range effects linked together share a Range — no violation.
+    power = Power(
+        effects=[PowerEffectInstance("damage", rank=5), PowerEffectInstance("affliction", rank=5)],
+        structure=STRUCTURE_LINKED,
+    )
+    assert power_linked_range_violations(power, data) == []
+
+
+def test_linked_effects_with_mismatched_range_are_flagged() -> None:
+    data = load_game_data()
+    # Damage is Close, Flight is Personal — linking them is a Range mismatch.
+    power = Power(
+        effects=[PowerEffectInstance("damage", rank=5), PowerEffectInstance("flight", rank=5)],
+        structure=STRUCTURE_LINKED,
+    )
+    violations = power_linked_range_violations(power, data)
+    assert len(violations) == 1
+    assert "Flight" in violations[0] and "Range" in violations[0]
+
+
+def test_range_override_reconciles_a_linked_mismatch() -> None:
+    data = load_game_data()
+    # A Ranged extra pushes the Damage effect to Ranged range, matching a naturally
+    # ranged partner — the override participates in the Range comparison.
+    ranged_damage = PowerEffectInstance("damage", rank=5, extras=[ModifierSelection("ranged")])
+    move = PowerEffectInstance("move_object", rank=5)  # Ranged by default
+    power = Power(effects=[ranged_damage, move], structure=STRUCTURE_LINKED)
+    assert power_linked_range_violations(power, data) == []
+
+
+def test_linked_range_check_ignores_non_linked_structures() -> None:
+    data = load_game_data()
+    power = Power(
+        effects=[PowerEffectInstance("damage", rank=5), PowerEffectInstance("flight", rank=5)],
+        structure=STRUCTURE_ARRAY,
+    )
+    assert power_linked_range_violations(power, data) == []

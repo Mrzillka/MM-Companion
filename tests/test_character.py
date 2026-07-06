@@ -18,6 +18,7 @@ from mm_companion.core.rules import (
     power_points_spent,
     reconcile_points_to_level,
     resistance_total,
+    skill_points_spent,
     skill_total,
 )
 
@@ -39,6 +40,8 @@ def test_to_dict_from_dict_round_trip() -> None:
     char.abilities["STR"] = 4
     char.skill_ranks["Stealth"] = 6
     char.focuses["Close Combat"] = ["Swords"]
+    char.specializations["Stealth"] = ["Urban"]
+    char.skill_ranks["Stealth::spec::Urban"] = 4
     char.advantages.append(AdvantageSelection("Close Attack", 2))
     char.conditions.add("dazed")
     char.powers.append(
@@ -68,12 +71,59 @@ def test_power_points_spent_matches_hand_computed_build() -> None:
     char.abilities["ATK"] = 2  # derived combat: 2 * 2 = 4
     char.resistances["TOUGHNESS"] = 4  # 4 * 1 = 4
     char.resistances["DEF"] = 2  # derived combat: 2 * 2 = 4
-    char.skill_ranks["Stealth"] = 4  # ceil(4 / 2) = 2
-    char.skill_ranks["Close Combat: Swords"] = 8  # focused: ceil(8 / 4) = 2
+    # Skills pool: 4 + 8 = 12 ranks at 2/PP (focused skills cost the normal rate) →
+    # ceil(12 / 2) = 6.
+    char.skill_ranks["Stealth"] = 4
+    char.skill_ranks["Close Combat: Swords"] = 8
     char.advantages.append(AdvantageSelection("Close Attack", 3))  # 3 * 1 = 3
 
-    assert power_points_spent(char, data) == 25
-    assert power_points_remaining(char, data) == 150 - 25
+    assert power_points_spent(char, data) == 27
+    assert power_points_remaining(char, data) == 150 - 27
+
+
+def test_skill_cost_is_pooled_across_skills() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # One rank in four different skills is 4 ranks total → ceil(4 / 2) = 2 PP, not
+    # 4 (one per row).
+    for name in ("Stealth", "Deception", "Perception", "Insight"):
+        char.skill_ranks[name] = 1
+    assert skill_points_spent(char, data) == 2
+
+
+def test_focused_skill_costs_the_normal_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A focused focus pools at 2 ranks/PP just like any skill (not the old 4/PP).
+    char.skill_ranks["Close Combat::Blades"] = 6
+    assert skill_points_spent(char, data) == 3  # ceil(6 / 2)
+
+
+def test_expertise_is_priced_at_the_specialized_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # Expertise's mandatory focus makes its ranks 4/PP (unlike other focused skills).
+    char.focuses["Expertise"] = ["Science"]
+    char.skill_ranks["Expertise::Science"] = 8
+    assert skill_points_spent(char, data) == 2  # ceil(8 / 4), not ceil(8 / 2)
+
+
+def test_specialized_pool_costs_half_and_pools_separately() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.specializations["Stealth"] = ["Urban"]
+    char.skill_ranks["Stealth::spec::Urban"] = 8  # 8 ranks at 4/PP → 2 PP
+    assert skill_points_spent(char, data) == 2
+
+
+def test_mixed_normal_and_specialized_ranks_round_together() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.skill_ranks["Stealth"] = 1  # 1/2 PP
+    char.specializations["Deception"] = ["Bluffing"]
+    char.skill_ranks["Deception::spec::Bluffing"] = 1  # 1/4 PP
+    # 1/2 + 1/4 = 3/4 → ceil = 1 PP (pooled rounding, not 1 + 1).
+    assert skill_points_spent(char, data) == 1
 
 
 def test_min_power_points_is_level_times_per_level_rate() -> None:

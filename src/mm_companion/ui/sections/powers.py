@@ -50,6 +50,7 @@ from mm_companion.core.rules import (
     array_base_index,
     effect_effective_rank,
     effect_stat_rows,
+    power_attack_skill_bonus,
     power_pl_violations,
     power_runtime_gates,
     power_total_cost,
@@ -362,9 +363,13 @@ class PowersSection(QGroupBox):
         """The attack bonus and save DC each effect imposes, read from the same
         game-term rows the constructor shows; effect-prefixed for a multi-effect power."""
         multi = len(power.effects) > 1
+        attack_bonus = power_attack_skill_bonus(power, self._character, self._data)
         parts: list[str] = []
         for effect in power.effects:
-            rows = {r.key: r for r in effect_stat_rows(effect, self._data, self._character)}
+            rows = {
+                r.key: r
+                for r in effect_stat_rows(effect, self._data, self._character, attack_bonus)
+            }
             segments = []
             if "check" in rows:
                 segments.append(rows["check"].value)
@@ -390,6 +395,7 @@ class PowersSection(QGroupBox):
         each modifier-changed value tinted green (better) or red (worse)."""
         if not power.effects:
             return ""
+        attack_bonus = power_attack_skill_bonus(power, self._character, self._data)
         blocks: list[str] = []
         header = self._structure_header(power)
         if header:
@@ -400,7 +406,7 @@ class PowersSection(QGroupBox):
             if note:
                 title += f" <i>{html.escape(note)}</i>"
             rows = []
-            for stat in effect_stat_rows(effect, self._data, self._character):
+            for stat in effect_stat_rows(effect, self._data, self._character, attack_bonus):
                 value = html.escape(stat.value)
                 tint = _TINTS.get(stat.change)
                 if tint:

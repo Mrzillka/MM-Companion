@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from fractions import Fraction
 
 from .character import Character
 from .components import (
@@ -337,19 +338,47 @@ def resistance_points_spent(char: Character, game_data: GameData) -> int:
     return total
 
 
+def _specialized_row_ids(char: Character) -> set[str]:
+    """Row ids of every specialized (narrow, half-cost) skill pool on the character.
+
+    A specialization is stored as a distinct row id ``"<Skill>::spec::<name>"`` whose
+    ranks live in ``skill_ranks`` like any other row; this set is what tells the cost
+    math to charge those ranks at the specialized rate.
+    """
+
+    return {
+        f"{skill}::spec::{name}" for skill, names in char.specializations.items() for name in names
+    }
+
+
 def skill_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on skills: 1 PP per N ranks (a higher N for focused skills)."""
+    """Power points spent on skills, pooled across every skill (``mm-skills-design.md`` §4/§7).
+
+    All skill ranks share one purchase pool that rounds *once*, so 1 rank in four
+    skills costs 2 PP, not 4. Ordinary ranks (most focused skills included) cost
+    ``skill_ranks_per_pp`` ranks per point; ranks in a specialized narrow pool — or in a
+    skill flagged ``specialized_cost`` (Expertise, whose mandatory focus is inherently
+    priced that way) — cost the cheaper ``skill_specialized_ranks_per_pp``. The two
+    fractional costs are summed and the total ceiled, so mixed builds round together
+    rather than per row.
+    """
 
     costs = game_data.costs.traits
-    total = 0
+    specialized = _specialized_row_ids(char)
+    normal_ranks = 0
+    specialized_ranks = 0
     for row_id, ranks in char.skill_ranks.items():
         if ranks <= 0:
             continue
         skill = _skill_for_row(game_data, row_id)
-        focused = bool(skill and skill.focused)
-        per_pp = costs.skill_focus_ranks_per_pp if focused else costs.skill_ranks_per_pp
-        total += math.ceil(ranks / per_pp)
-    return total
+        if row_id in specialized or (skill is not None and skill.specialized_cost):
+            specialized_ranks += ranks
+        else:
+            normal_ranks += ranks
+    total = Fraction(normal_ranks, costs.skill_ranks_per_pp) + Fraction(
+        specialized_ranks, costs.skill_specialized_ranks_per_pp
+    )
+    return math.ceil(total)
 
 
 def advantage_points_spent(char: Character, game_data: GameData) -> int:
@@ -745,6 +774,24 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
+def power_attack_skill_bonus(
+    power: Power, char: Character | None, game_data: GameData
+) -> int | None:
+    """The attack-roll bonus a power's linked Close/Ranged Combat focus supplies.
+
+    ``None`` when the power has no ``attack_skill`` link (or there is no character),
+    so callers fall back to the wielder's Attack ability. Otherwise the linked focus
+    row's :func:`skill_total` — which already folds in the Attack ability, since these
+    combat skills derive from ``ATK`` — so it *replaces* the bare Attack rather than
+    stacking with it. A dangling row id degrades to that ability value (its ranks read
+    as 0).
+    """
+
+    if not power.attack_skill or char is None:
+        return None
+    return skill_total(char, game_data, power.attack_skill)
+
+
 def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
     """Power Level cap breaches within a single power, for its wielding character.
 
@@ -755,7 +802,9 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
 
     - An effect that makes an **attack roll** obeys ``max_attack + effect_rank <=
       power_level * 2``. The attack bonus is the character's *effective* Attack
-      ability plus the power's own Accurate/Inaccurate; the effect rank is the
+      ability — or, when the power links a Close/Ranged Combat focus
+      (:func:`power_attack_skill_bonus`), that focus's total instead — plus the
+      power's own Accurate/Inaccurate; the effect rank is the
       *effective* rank (:func:`effect_effective_rank`), so a Strength-Based Damage
       folds in the wielder's Strength.
     - A resisted effect with **no attack roll** (auto-hit — Perception range, or a
@@ -770,7 +819,10 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         return []
     power_level = char.power_level
     limit = cap.limit(power_level)
-    attack_ability = effective_ability(char, game_data, "ATK")
+    # A power linked to a Close/Ranged Combat focus uses that focus's total as its
+    # attack bonus (replacing the bare Attack ability); otherwise the Attack ability.
+    linked = power_attack_skill_bonus(power, char, game_data)
+    attack_ability = linked if linked is not None else effective_ability(char, game_data, "ATK")
 
     violations: list[str] = []
     for effect in power.effects:
@@ -1115,7 +1167,10 @@ def _measure_value(measure, rank: int, game_data: GameData) -> str:
 
 
 def effect_stat_rows(
-    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None = None,
+    attack_bonus: int | None = None,
 ) -> list[EffectStat]:
     """The effect's non-empty game-term fields as tintable table rows.
 
@@ -1137,6 +1192,11 @@ def effect_stat_rows(
     resistance save DC uses the effective effect rank (a Strength-Based Damage folds in
     the wielder's Strength). Without a character both fall back to the effect rank, so a
     context-free summary still reads.
+
+    ``attack_bonus`` overrides the attacker's base d20 bonus for an "Attack vs. …"
+    phrase — a power linked to a Close/Ranged Combat focus passes that focus's total
+    (:func:`power_attack_skill_bonus`) so the shown roll matches the PL check. ``None``
+    keeps the default (the character's Attack ability, or the effect rank without one).
     """
 
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -1161,9 +1221,15 @@ def effect_stat_rows(
     )
     # The attacker's own d20 bonus in the check phrase. An "Attack vs. Defense" roll
     # uses the character's Attack (plus this power's Accurate/Inaccurate); an "Effect
-    # vs. …" / "Deflect vs. …" phrase instead uses the effect's own rank. Without a
-    # character we fall back to the effect rank so a context-free summary still reads.
-    attack = effective_ability(char, game_data, "ATK") if char is not None else effect.rank
+    # vs. …" / "Deflect vs. …" phrase instead uses the effect's own rank. A linked
+    # combat focus overrides the Attack via ``attack_bonus``. Without either we fall
+    # back to the effect rank so a context-free summary still reads.
+    if attack_bonus is not None:
+        attack = attack_bonus
+    elif char is not None:
+        attack = effective_ability(char, game_data, "ATK")
+    else:
+        attack = effect.rank
 
     def _actor(phrase: str, *, with_mods: bool) -> int:
         roll = attack if phrase.startswith("Attack") else effect.rank

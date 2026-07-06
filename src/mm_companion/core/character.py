@@ -32,9 +32,13 @@ class Character:
 
     Trait dicts are keyed by the content keys from :class:`GameData`
     (``abilities``/``resistances`` by their ``key``; ``skill_ranks``/``skill_mods``
-    by a *row id* — the skill name, or ``"<Skill>: <focus>"`` for a focused
-    instance). Missing keys read as ``0``, so the dicts only carry non-default
-    values.
+    by a *row id* — the skill name, ``"<Skill>::<focus>"`` for a focused instance, or
+    ``"<Skill>::spec::<name>"`` for a specialized (half-cost) rank pool). Missing keys
+    read as ``0``, so the dicts only carry non-default values.
+
+    ``focuses`` maps a focused skill's name to its chosen focuses; ``specializations``
+    maps *any* skill's name to its narrow specialized pools. Both drive which extra
+    rows the sheet renders; the ranks themselves live in ``skill_ranks``.
     """
 
     power_level: int = 10
@@ -47,6 +51,7 @@ class Character:
     skill_ranks: dict[str, int] = field(default_factory=dict)
     skill_mods: dict[str, int] = field(default_factory=dict)
     focuses: dict[str, list[str]] = field(default_factory=dict)
+    specializations: dict[str, list[str]] = field(default_factory=dict)
     advantages: list[AdvantageSelection] = field(default_factory=list)
     conditions: set[str] = field(default_factory=set)
     powers: list[Power] = field(default_factory=list)
@@ -89,6 +94,7 @@ class Character:
             "skill_ranks": dict(self.skill_ranks),
             "skill_mods": dict(self.skill_mods),
             "focuses": {k: list(v) for k, v in self.focuses.items()},
+            "specializations": {k: list(v) for k, v in self.specializations.items()},
             "advantages": [{"name": a.name, "rank": a.rank} for a in self.advantages],
             "conditions": sorted(self.conditions),
             "powers": [p.to_dict() for p in self.powers],
@@ -109,6 +115,7 @@ class Character:
             skill_ranks=dict(raw.get("skill_ranks", {})),
             skill_mods=dict(raw.get("skill_mods", {})),
             focuses={k: list(v) for k, v in raw.get("focuses", {}).items()},
+            specializations={k: list(v) for k, v in raw.get("specializations", {}).items()},
             advantages=[
                 AdvantageSelection(name=a["name"], rank=int(a.get("rank", 1)))
                 for a in raw.get("advantages", [])

@@ -79,6 +79,7 @@ from mm_companion.core.rules import (
     effect_stat_rows,
     effect_total_cost,
     power_allocation_violations,
+    power_attack_skill_bonus,
     power_linked_range_violations,
     power_pl_violations,
     power_total_cost,
@@ -1345,8 +1346,9 @@ class PowerTermsView(QWidget):
             label = QLabel(header)
             label.setStyleSheet("font-weight: bold;")
             self._layout.addWidget(label)
+        attack_bonus = power_attack_skill_bonus(power, char, game_data)
         for index, effect in enumerate(power.effects):
-            self._add_effect_block(effect, index, power, game_data, char)
+            self._add_effect_block(effect, index, power, game_data, char, attack_bonus)
 
     def _add_effect_block(
         self,
@@ -1355,6 +1357,7 @@ class PowerTermsView(QWidget):
         power: Power,
         game_data: GameData,
         char: Character | None = None,
+        attack_bonus: int | None = None,
     ) -> None:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         # The title carries the effective rank so a Strength-Based Damage reads at its
@@ -1375,7 +1378,7 @@ class PowerTermsView(QWidget):
         header.addStretch()
         self._layout.addLayout(header)
 
-        rows = effect_stat_rows(effect, game_data, char)
+        rows = effect_stat_rows(effect, game_data, char, attack_bonus)
         self.effect_rows.append(rows)
         pairs = self._PAIRS_PER_ROW
         grid = QGridLayout()
@@ -1636,6 +1639,14 @@ class PowerConstructorWindow(QMainWindow):
         guard_wheel(self._description)  # don't let the box steal the page wheel
         layout.addWidget(self._description)
 
+        # An optional link to one of the wielder's Close/Ranged Combat focuses. When
+        # set, that focus's total becomes this power's attack bonus (replacing the bare
+        # Attack ability) and drives its Attack PL cap. Only shown when the character
+        # actually has combat focuses to choose from.
+        attack_skill_row = self._build_attack_skill_row()
+        if attack_skill_row is not None:
+            layout.addWidget(attack_skill_row)
+
         # A prominent cost bar sits just above the canvas: the running total on the
         # left, the live Power Level / allocation warning on the right (hidden while
         # the power is within caps, naming the breach on its tooltip when it isn't).
@@ -1693,6 +1704,56 @@ class PowerConstructorWindow(QMainWindow):
         guard_wheel(scroll)
         layout.addWidget(scroll, stretch=1)
         return panel
+
+    def _combat_focus_options(self) -> list[tuple[str, str]]:
+        """``(display, row_id)`` for each Close/Ranged Combat focus the wielder has.
+
+        Combat skills are the focused ones linked to the Attack ability, so they're
+        found data-driven (no hardcoded names); a focus row id matches the skills
+        section's ``"<Skill>::<focus>"`` scheme.
+        """
+        if self._character is None:
+            return []
+        options: list[tuple[str, str]] = []
+        for skill in self._data.skills:
+            if skill.ability != "ATK" or not skill.focused:
+                continue
+            for focus in self._character.focuses.get(skill.name, []):
+                options.append((f"{skill.name}: {focus}", f"{skill.name}::{focus}"))
+        return options
+
+    def _build_attack_skill_row(self) -> QWidget | None:
+        """The "Attack skill" picker, or ``None`` when there are no combat focuses."""
+        options = self._combat_focus_options()
+        if not options:
+            self._attack_skill = None
+            return None
+        self._attack_skill = QComboBox()
+        self._attack_skill.addItem("— use Attack ability —", "")
+        for display, row_id in options:
+            self._attack_skill.addItem(display, row_id)
+        index = self._attack_skill.findData(self.power.attack_skill)
+        self._attack_skill.setCurrentIndex(index if index >= 0 else 0)
+        guard_wheel(self._attack_skill)
+        self._attack_skill.currentIndexChanged.connect(self._on_attack_skill_changed)
+
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        label = QLabel("Attack skill:")
+        label.setToolTip(
+            "Link this power's attack to a Close/Ranged Combat focus — that focus's "
+            "total replaces the character's Attack for this power's roll and PL cap."
+        )
+        row.addWidget(label)
+        row.addWidget(self._attack_skill, 1)
+        return host
+
+    def _on_attack_skill_changed(self) -> None:
+        self.power.attack_skill = self._attack_skill.currentData() or ""
+        self._refresh_game_terms()
+        self._refresh_pl_warning()
 
     def _on_name_changed(self, text: str) -> None:
         self.power.name = text

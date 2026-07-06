@@ -1,0 +1,1057 @@
+{
+  "_meta": {
+    "description": "Full mechanical specification for every Mutants & Masterminds 4e skill, for implementing skill-check resolution and character logic. All 'summary' and 'use.effect' fields are original paraphrases of the rulebook's functional rules (DCs, opposed traits, degree-of-success outcomes, timing) — not copied prose. Companion to skills.json (short always-visible tooltip copy + core metadata) and mm-skills-design.md (this file's pattern definitions and cost/limit rules). Read mm-skills-design.md first for the resolution-pattern ids referenced in each use's 'pattern' field.",
+    "abilityKey": {
+      "STR": "Strength",
+      "STA": "Stamina",
+      "AGL": "Agility",
+      "INT": "Intellect",
+      "AWE": "Awareness",
+      "PRE": "Presence",
+      "ATK": "Attack (combat ability, not a core ability)"
+    },
+    "categoryKey": {
+      "combat": "Bonus applies to attack checks; capped by the Attack PL limit, not the skill-bonus PL limit",
+      "interaction": "Social skill; requires a shared understood language and a subject with mental abilities; -5 if the subject can't hear/understand; usable on groups only for a single shared result",
+      "manipulation": "Requires fine physical manipulation (an AGL and STR rank plus use of limbs, or a Precise effect); penalty if hands are Impaired/Disabled",
+      "technical": "Requires tools; -5 without them (except routine 'operate' uses); covers operate/construct/repair/disable"
+    },
+    "resolutionPatternKey": {
+      "static_dc": "Check vs a fixed or table-driven DC set by task difficulty",
+      "opposed_check": "Check vs a named opposing trait's check result (or its routine 10+bonus)",
+      "resistance_check": "Skill substitutes for a resistance check to avoid/overcome an effect",
+      "impress_check": "An Impress action (see mm-actions-adventure.md) that imposes a condition on a target on success; target re-checks at end of each of its turns",
+      "attack_maneuver": "Feeds a combat maneuver (Feint/Trick/Grab/Escape/Block etc.) resolved in the actions layer",
+      "opposed_hide": "Stealth vs Perception to become/stay unnoticed; gated by Cover/Concealment",
+      "extended_construct": "Multi-step build/repair/disable with build-time ranks and per-degree time reduction",
+      "attack_bonus": "Flat bonus to attack checks with a configured focus (Close/Ranged Combat)",
+      "knowledge_check": "Expertise/Magic-style question answering; routine-eligible; GM often rolls in secret",
+      "gm_secret": "GM makes the check secretly; the player doesn't learn the raw result",
+      "narrative": "Resolution is a GM narrative call, not an engine-computed number"
+    },
+    "costRule": "1 Power Point per 2 skill ranks. Ranks bought as a narrow Specialization cost half as much: 1 PP per 4 specialized ranks, but each specialization is its own independent rank pool. Expertise is inherently specialization-priced (4 ranks/PP) because a focus is mandatory.",
+    "skillBonusLimit": "Total skill bonus (ability rank + skill rank + advantage/power bonuses, EXCLUDING circumstance modifiers) is capped at PowerLevel + 10. Two documented exceptions: Combat skills (Close/Ranged Combat) are governed by the Attack PL limit instead, and Languages is uncapped except at GM discretion. See power-progression.json's maxSkillModifier column.",
+    "degreeOfSuccessNote": "Many uses branch on degrees of success/failure. Convention used in 'use.effect' text: '1 success' = met DC; '2+ successes' = beat DC by 5+; '1 failure' = missed by up to 4; '2+ failures' = missed by 5+. The engine reads degrees from dice.py's resolution, never recomputes them per-skill.",
+    "untrainedNote": "trainedOnly=true skills auto-fail untrained. Some skills are partly trainedOnly: individual uses carry 'trainedOnly' to override the skill-level flag (e.g. Investigation's Searching is usable untrained even though the skill is Trained Only overall)."
+  },
+  "skills": [
+    {
+      "id": "acrobatics",
+      "name": "Acrobatics",
+      "ability": "AGL",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": [],
+      "action": "simple_or_free",
+      "summary": "Balance, tumbling, contortion, and acrobatic movement under difficult conditions.",
+      "specializations": ["Balancing", "Contorting", "Maneuvering", "Standing", "Tumbling"],
+      "uses": [
+        {
+          "id": "balancing",
+          "name": "Balancing",
+          "pattern": "static_dc",
+          "action": "free",
+          "effect": "Check to keep balance during hazardous movement. 1 failure: you spend your Move action just staying balanced and don't advance. 2+ failures: you lose balance and fall. You are both Hindered and Vulnerable while balancing; you can ignore either condition for +5 to the DC, or both for +10. If you fail a resistance check while balancing, make an immediate Balancing check at the original DC or fall.",
+          "dcTable": [
+            { "dc": 0, "example": "surface half a Space wide or wider" },
+            { "dc": 5, "example": "wide ledge" },
+            { "dc": 10, "example": "narrow ledge" },
+            { "dc": 15, "example": "balance beam" },
+            { "dc": 20, "example": "tightrope" }
+          ],
+          "modifiers": [
+            { "value": 2, "when": "surface slightly slippery" },
+            { "value": 5, "when": "surface very slippery" },
+            { "value": 2, "when": "surface slightly uneven" },
+            { "value": 5, "when": "surface very uneven or angled" },
+            { "value": 5, "when": "chosen to not be Hindered while balancing" },
+            { "value": 5, "when": "chosen to not be Vulnerable while balancing" }
+          ],
+          "crossRefs": ["conditions:hindered", "conditions:vulnerable", "environmental:falling"]
+        },
+        {
+          "id": "contorting",
+          "name": "Contorting",
+          "pattern": "static_dc",
+          "action": "part_of_move",
+          "effect": "DC 25 as part of a Move action to squeeze through a gap wide enough for your head but not your shoulders, or reach through an opening too narrow for your arm. 1 failure: no progress this turn. 2+ failures: can't retry without Extra Effort and may become stuck/Immobilized (GM's call) until a DC 15+ Acrobatics check frees you.",
+          "dc": 25,
+          "crossRefs": ["conditions:immobilized"]
+        },
+        {
+          "id": "maneuvering",
+          "name": "Maneuvering",
+          "pattern": "static_dc",
+          "action": "part_of_move",
+          "effect": "DC 15 to ignore the Hindered condition from certain terrain by acrobatically moving through it. 1 failure: Move action spent with no progress. 2+ failures: fall Prone.",
+          "dc": 15,
+          "crossRefs": ["conditions:hindered", "conditions:prone"]
+        },
+        {
+          "id": "standing",
+          "name": "Standing",
+          "pattern": "static_dc",
+          "action": "simple",
+          "effect": "DC 20 to take the Stand action (removing Prone) without becoming Hindered that round. 1 failure: you Stand but are Hindered. 2+ failures: simple action wasted, remain Prone. The Instant Up advantage does this automatically with no check.",
+          "dc": 20,
+          "crossRefs": ["conditions:prone", "conditions:hindered", "advantages:instant_up"]
+        },
+        {
+          "id": "tumbling",
+          "name": "Tumbling",
+          "pattern": "static_dc",
+          "action": "reaction",
+          "effect": "DC 5 to lessen fall damage, reducing it by 1 rank per degree of success. A fall reduced to rank 0 does no damage and you land on your feet as a free action; otherwise you end Prone. Safe Fall (Enhanced Movement) or Immunity to Falling Damage ignore falls entirely.",
+          "dc": 5,
+          "crossRefs": ["conditions:prone", "environmental:falling"]
+        }
+      ]
+    },
+    {
+      "id": "athletics",
+      "name": "Athletics",
+      "ability": "STR",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": [],
+      "action": "simple",
+      "summary": "Physical feats — climbing, jumping, running, swimming.",
+      "specializations": ["Climbing", "Jumping", "Running", "Swimming"],
+      "uses": [
+        {
+          "id": "climbing",
+          "name": "Climbing",
+          "pattern": "static_dc",
+          "action": "part_of_move",
+          "effect": "Check to climb a slope/wall/incline. 1 failure: no progress. 2+ failures: you fall from your attained height unless secured. If you fall, an Athletics resistance check at (initial DC + 10) catches you; someone in reach can also attempt it at the same DC. You are Vulnerable while climbing unless you accept +5 to the DC. A perfectly smooth vertical surface needs the Wall-Crawling effect. No tools where tools are needed: -5.",
+          "dcTable": [
+            { "dc": 0, "example": "a ladder" },
+            { "dc": 5, "example": "a knotted rope" },
+            { "dc": 10, "example": "a rope" },
+            { "dc": 15, "example": "an uneven surface such as a rock face" },
+            { "dc": 20, "example": "a rough surface such as a brick wall" }
+          ],
+          "modifiers": [
+            { "value": -10, "when": "can brace against two opposite walls (duct/chimney)" },
+            { "value": -5, "when": "corner with perpendicular walls to brace against" },
+            { "value": -5, "when": "climb of your size rank + 1 in distance or less" },
+            { "value": 2, "when": "surface slightly slippery" },
+            { "value": 5, "when": "surface very slippery" },
+            { "value": 5, "when": "climbing +1 speed rank faster (up to full ground speed)" },
+            { "value": 5, "when": "chosen to not be Vulnerable while climbing" }
+          ],
+          "crossRefs": ["conditions:vulnerable", "powers:enhanced_movement_wall_crawling", "environmental:falling"]
+        },
+        {
+          "id": "jumping",
+          "name": "Jumping",
+          "pattern": "static_dc",
+          "action": "part_of_move",
+          "effect": "Base jumps without a check: running long jump = distance rank 0 (move Speed 1 then jump as one Move action); standing long jump = distance rank -1; vertical jump = distance rank -2. Each degree of success on a DC 15 check adds +1 to the jump's distance rank, to a maximum of +3. The Leaping effect greatly improves this.",
+          "dc": 15,
+          "crossRefs": ["powers:leaping", "measurements:distance"]
+        },
+        {
+          "id": "running",
+          "name": "Running",
+          "pattern": "static_dc",
+          "action": "part_of_move",
+          "effect": "DC 15 as part of a Move action to run faster: success gives +1 ground speed rank until the start of your next turn. 1 failure: no change. 2+ failures: collide and fall Prone (or simply fall Prone if the path is clear). The Speed effect greatly improves ground speed.",
+          "dc": 15,
+          "crossRefs": ["conditions:prone", "powers:speed", "measurements:speed"]
+        },
+        {
+          "id": "swimming",
+          "name": "Swimming",
+          "pattern": "static_dc",
+          "action": "part_of_move",
+          "effect": "DC 10 to swim at speed rank 0 (higher DC for rough water). Each degree of success past the first adds +1 swim speed rank for one round, up to your ground speed rank (normally 2). 2+ failures: you go under and must hold your breath to avoid drowning. The Swimming effect improves swim speed; Immunity to Drowning removes the risk.",
+          "dc": 10,
+          "modifiers": [
+            { "value": 5, "when": "rescuing another character who cannot swim" },
+            { "value": 5, "when": "rough or choppy water" },
+            { "value": 10, "when": "stormy or turbulent water" }
+          ],
+          "crossRefs": ["powers:swimming", "powers:immunity_drowning", "environmental:suffocation"]
+        }
+      ]
+    },
+    {
+      "id": "close_combat",
+      "name": "Close Combat",
+      "ability": "ATK",
+      "trainedOnly": false,
+      "focused": true,
+      "categories": ["combat"],
+      "action": "standard",
+      "summary": "Attack-check bonus with one configured type of close attack; each focus is its own ranked skill.",
+      "focuses": ["Array", "Blades", "Bludgeons", "Disarming", "Grabbing", "Tripping", "Unarmed"],
+      "specializations": ["by specific weapon or attack, e.g. Hammers, Knives, Swords"],
+      "plLimit": "attack",
+      "uses": [
+        {
+          "id": "close_attack_bonus",
+          "name": "Close Attack Bonus",
+          "pattern": "attack_bonus",
+          "action": "standard",
+          "effect": "Adds your skill rank to attack checks with the configured focus only — not to defenses, and not to attacks outside that focus. Each focus is a separate Close Combat skill with its own rank. Unlike ordinary skills, this bonus is bounded by the Attack Power Level limit (attack + effect rank ≤ PL×2), not the skill-bonus limit. 'Unarmed' covers punches/kicks only; grabbing and tripping have their own focuses. For a broader attack bonus see the Close Attack advantage; for a per-power one see the Accurate extra.",
+          "crossRefs": ["advantages:close_attack", "powers:accurate_extra", "power-progression:maxAttackPlusEffectRank"]
+        }
+      ]
+    },
+    {
+      "id": "deception",
+      "name": "Deception",
+      "ability": "PRE",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": ["interaction"],
+      "action": "standard",
+      "summary": "Convincing lies, distraction, covert messages, and combat trickery.",
+      "specializations": ["Bluffing", "Disguise", "Distracting", "Innuendo", "Tricking"],
+      "uses": [
+        {
+          "id": "bluffing",
+          "name": "Bluffing",
+          "pattern": "opposed_check",
+          "action": "standard",
+          "opposedBy": ["deception", "insight"],
+          "effect": "Tell a believable lie; opposed by the target's Deception or Insight. The resistance modifier scales with how hard the lie is to believe and how much risk it demands of the target. If the target beats you by 10 or less on a risk-boosted deception, they merely balk at the risk rather than seeing through it; by 11+ they've seen through it outright.",
+          "modifiers": [
+            { "value": -5, "when": "target wants to believe you" },
+            { "value": 0, "when": "believable and doesn't affect the target much" },
+            { "value": 5, "when": "a little hard to believe or puts the target at some risk" },
+            { "value": 10, "when": "hard to believe or entails serious risk" },
+            { "value": 20, "when": "almost too incredible to consider" }
+          ]
+        },
+        {
+          "id": "distracting",
+          "name": "Distracting",
+          "pattern": "impress_check",
+          "action": "standard",
+          "effect": "Impress check to distract an opponent: on success the target is Vulnerable to your attacks, Defenseless with 2+ successes. Target re-checks at the end of each of its turns to shed the condition. Can also be used as an opposed check (vs the higher of target's Deception or Insight) to distract someone enough to let you Hide.",
+          "crossRefs": ["conditions:vulnerable", "conditions:defenseless", "skills:stealth", "actions:impress"]
+        },
+        {
+          "id": "innuendo",
+          "name": "Innuendo",
+          "pattern": "static_dc",
+          "action": "standard",
+          "effect": "Send covert messages hidden in ordinary conversation. The intended recipient must make a Deception or Insight check at the same DC to understand it. Eavesdroppers may attempt Insight vs the message DC to notice it (2+ successes to also understand it). 2+ failures on the receiver's check means the message is misinterpreted.",
+          "dcTable": [
+            { "dc": 10, "example": "basic message" },
+            { "dc": 15, "example": "complex message" },
+            { "dc": 20, "example": "message with new or detailed information" }
+          ],
+          "crossRefs": ["skills:insight"]
+        },
+        {
+          "id": "resisting",
+          "name": "Resisting",
+          "pattern": "resistance_check",
+          "action": "reaction",
+          "effect": "You may substitute your Deception skill for resistance checks against Deception attempts made on you, since you know the tricks."
+        },
+        {
+          "id": "tricking",
+          "name": "Tricking",
+          "pattern": "attack_maneuver",
+          "action": "standard",
+          "effect": "Use Deception in combat for a Trick maneuver, misleading an opponent into an unwise action. Resolved by the Trick action in the actions layer.",
+          "crossRefs": ["actions:trick"]
+        }
+      ]
+    },
+    {
+      "id": "disguise",
+      "name": "Disguise",
+      "ability": "AWE",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": ["manipulation", "technical"],
+      "action": "extended",
+      "summary": "Alter your appearance with makeup, costume, and props; opposed by observers' Perception.",
+      "specializations": ["by disguise type"],
+      "uses": [
+        {
+          "id": "disguise_self",
+          "name": "Create Disguise",
+          "pattern": "opposed_hide",
+          "action": "extended",
+          "gmSecret": true,
+          "opposedBy": ["perception"],
+          "effect": "Your Disguise check result is the DC of observers' Perception checks (rolled by the GM secretly, on first encounter and periodically after). Impersonating a specific person gives observers who know them a bonus to notice: regular associates +2, friends +5, intimates +10. Acting convincingly as who you appear to be also needs a Deception check vs the observer's Deception or Insight (adjusted by familiarity). Takes ≥ time rank 6 (8 minutes) and can be routine; speed up 1 time rank per -5 to the Deception check. Morph greatly enhances this.",
+          "modifiers": [
+            { "value": -5, "when": "insufficient props / disguising as someone very unlike you (up to -5)" },
+            { "value": 2, "when": "observer is a regular associate of the impersonated person" },
+            { "value": 5, "when": "observer is a friend of the impersonated person" },
+            { "value": 10, "when": "observer is an intimate/loved one of the impersonated person" }
+          ],
+          "crossRefs": ["skills:perception", "skills:deception", "powers:morph", "measurements:time"]
+        }
+      ]
+    },
+    {
+      "id": "expertise",
+      "name": "Expertise",
+      "ability": "INT",
+      "trainedOnly": true,
+      "focused": true,
+      "categories": [],
+      "action": "extended",
+      "summary": "Deep knowledge/training in one field; each field is a separate skill; mandatory specialization pricing.",
+      "focuses": ["one field per instance, e.g. Law, Science, Journalism, Law Enforcement, Streetwise, Physician"],
+      "specializations": ["by area of expertise"],
+      "costNote": "Because a focus is mandatory, Expertise is always priced at 4 ranks per Power Point (specialization rate), not 2.",
+      "uses": [
+        {
+          "id": "knowledge",
+          "name": "Knowledge",
+          "pattern": "knowledge_check",
+          "action": "extended",
+          "gmSecret": true,
+          "routineEligible": true,
+          "effect": "Answer a question within your field. DC 10 easy, 15 basic, 20+ difficult. Usually routine-eligible, and the GM may roll in secret. Covers everything except tasks specifically handled by other skills.",
+          "dcTable": [
+            { "dc": 10, "example": "easy question" },
+            { "dc": 15, "example": "basic question" },
+            { "dc": 20, "example": "difficult question (20+)" }
+          ]
+        },
+        {
+          "id": "profession",
+          "name": "Profession",
+          "pattern": "static_dc",
+          "action": "extended",
+          "routineEligible": true,
+          "effect": "Practice the field professionally: use its tools, do daily tasks, supervise untrained helpers, handle common problems. Most job checks are routine. Assumes any needed licensing/certification (licensing troubles are Complications)."
+        },
+        {
+          "id": "technical_expertise",
+          "name": "Technical Expertise",
+          "pattern": "extended_construct",
+          "action": "extended",
+          "category": "technical",
+          "effect": "Some Expertise fields count as technical skills (needing tools; -5 without) allowing operate/construct/repair/disable of related items — e.g. Expertise: Chemistry or Cooking. A technical Expertise cannot replace a dedicated skill like Magic or Technology.",
+          "crossRefs": ["skills:technology"]
+        },
+        {
+          "id": "untrained_expertise",
+          "name": "Untrained Expertise",
+          "pattern": "knowledge_check",
+          "action": "extended",
+          "trainedOnly": false,
+          "routineEligible": false,
+          "effect": "GM may allow untrained checks for broad 'general knowledge' areas, but only for easy/basic tasks (DC 10-15) and never as a routine check.",
+          "dc": 15
+        }
+      ],
+      "notes": "Ability modifier is usually INT but the GM may swap it per task (AGL for coordination-based job functions, AWE to notice details). A related Expertise may substitute for another skill at a -2 to -5 penalty at GM discretion. For 'knows everything' characters, pair high INT with the Know-It-All advantage."
+    },
+    {
+      "id": "insight",
+      "name": "Insight",
+      "ability": "AWE",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": ["interaction"],
+      "action": "free",
+      "summary": "Read intentions and emotions; detect lies, influence, and social mood.",
+      "specializations": ["Avoid Influence", "Detect Falsehood", "Detect Influence", "Evaluate", "Innuendo"],
+      "uses": [
+        {
+          "id": "avoid_influence",
+          "name": "Avoid Influence",
+          "pattern": "resistance_check",
+          "action": "reaction",
+          "effect": "Substitute an Insight resistance check to avoid or overcome certain interaction-skill effects; if you meet or beat your opponent's result you're unaffected, having seen through the attempt."
+        },
+        {
+          "id": "detect_falsehood",
+          "name": "Detect Falsehood",
+          "pattern": "gm_secret",
+          "action": "free",
+          "gmSecret": true,
+          "effect": "GM secretly checks whether you sense a statement or experience is false — essentially Avoid Influence for Deception, and also applies to sensing an Illusion/Hallucination or seeing through a disguise (opposed, or Insight vs the effect DC). Success tells you something is deceptive but not necessarily the truth.",
+          "crossRefs": ["skills:deception", "powers:illusion"]
+        },
+        {
+          "id": "detect_influence",
+          "name": "Detect Influence",
+          "pattern": "static_dc",
+          "action": "free",
+          "effect": "Notice someone acting under outside influence. DC = 10 + the effect rank or skill affecting them. Success: you notice they aren't acting of their own free will. 3+ successes: a general idea of what (and maybe who) is influencing them.",
+          "dcFormula": "10 + influencing effect rank or skill bonus"
+        },
+        {
+          "id": "evaluate",
+          "name": "Evaluate",
+          "pattern": "opposed_check",
+          "action": "free",
+          "gmSecret": true,
+          "opposedBy": ["deception"],
+          "effect": "Opposed by Deception, judge on meeting someone whether they're trustworthy. Or DC 20 to read a social situation's overall mood. 2+ failures: you misread the signs (so the GM may roll secretly).",
+          "dc": 20
+        },
+        {
+          "id": "innuendo",
+          "name": "Innuendo",
+          "pattern": "static_dc",
+          "action": "free",
+          "effect": "Use Insight to pick up hidden messages sent via Deception's Innuendo. Same DCs as that use.",
+          "crossRefs": ["skills:deception"]
+        }
+      ]
+    },
+    {
+      "id": "intimidation",
+      "name": "Intimidation",
+      "ability": "PRE",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": ["interaction"],
+      "action": "standard",
+      "summary": "Threats to coerce cooperation or demoralize foes in combat.",
+      "specializations": ["Coercing", "Demoralizing"],
+      "uses": [
+        {
+          "id": "coercing",
+          "name": "Coercing",
+          "pattern": "impress_check",
+          "action": "standard",
+          "effect": "Impress check to coerce cooperation: success treats the target's Attitude as Favorable (Helpful with 2+ successes) but only for actions taken in your presence. 2+ failures: the target may do the opposite. Win or lose, the target's true Attitude moves at least one step toward Hostile afterward.",
+          "crossRefs": ["actions:impress", "skills:persuasion"]
+        },
+        {
+          "id": "demoralizing",
+          "name": "Demoralizing",
+          "pattern": "impress_check",
+          "action": "standard",
+          "effect": "Impress check in combat to undermine confidence: success makes the target Impaired, Frightened with 2+ degrees. Target re-checks at the end of each of its turns to remove the condition.",
+          "crossRefs": ["conditions:impaired", "conditions:frightened", "actions:impress"]
+        },
+        {
+          "id": "resisting",
+          "name": "Resisting",
+          "pattern": "resistance_check",
+          "action": "reaction",
+          "effect": "Substitute Intimidation for resistance checks against Intimidation attempts on you."
+        }
+      ]
+    },
+    {
+      "id": "investigation",
+      "name": "Investigation",
+      "ability": "INT",
+      "trainedOnly": true,
+      "focused": false,
+      "categories": ["technical"],
+      "action": "extended",
+      "summary": "Search scenes, gather and analyze evidence, collect information, run surveillance.",
+      "specializations": ["Analyzing Evidence", "Gathering Evidence", "Gathering Information", "Searching", "Surveillance"],
+      "categoryNote": "Gathering and analyzing evidence are technical (need tools); the other uses are not.",
+      "uses": [
+        {
+          "id": "searching",
+          "name": "Searching",
+          "pattern": "static_dc",
+          "action": "extended",
+          "trainedOnly": false,
+          "gmSecret": true,
+          "effect": "Deliberately search an area for clues/hidden items/traps (Perception notices things instantly; Investigation finds them with effort). DC to find something deliberately hidden = the check result used to hide it. Search time = the time-measurement for the area's distance rank (e.g. an 8x8 ft room ≈ rank 1 = 1 minute; a square mile ≈ rank 10 = 2 hours).",
+          "dcTable": [
+            { "dc": 10, "example": "ransack an area to find a certain object" },
+            { "dc": 20, "example": "notice a secret compartment, simple trap, or obscure clue" },
+            { "dc": 25, "example": "find a well-hidden compartment/trap or extremely obscure clue (25+)" }
+          ],
+          "crossRefs": ["skills:perception", "skills:stealth", "skills:sleight_of_hand", "measurements:time", "measurements:distance"]
+        },
+        {
+          "id": "gathering_evidence",
+          "name": "Gathering Evidence",
+          "pattern": "static_dc",
+          "action": "extended",
+          "category": "technical",
+          "effect": "DC 15 to collect a piece of evidence for later analysis. 1 failure: analysis still possible but at -5. 2+ failures: evidence ruined, no analysis. 2+ successes: +5 bonus to the later analysis.",
+          "dc": 15
+        },
+        {
+          "id": "analyzing_evidence",
+          "name": "Analyzing Evidence",
+          "pattern": "static_dc",
+          "action": "extended",
+          "category": "technical",
+          "effect": "DC 15 to extract information from evidence you already have (it does not create clues where none exist). Modified by elapsed time and scene disturbance. 2+ failures: misleading/confusing results (GM's call).",
+          "dc": 15,
+          "modifiers": [
+            { "value": 2, "when": "per day since the event (max +10)" },
+            { "value": 5, "when": "crime scene is outdoors" },
+            { "value": 2, "when": "crime scene disturbed" },
+            { "value": 5, "when": "crime scene highly disturbed" }
+          ]
+        },
+        {
+          "id": "gathering_information",
+          "name": "Gathering Information",
+          "pattern": "static_dc",
+          "action": "extended",
+          "effect": "Spend ≥ an hour and make a check to pick up news and rumors. Degree of result sets how complete/protected the information is. 1 failure: waste time, learn nothing. 2 failures: you also alert someone interested in your questions.",
+          "dcTable": [
+            { "dc": 10, "example": "General — local happenings, rumors, gossip" },
+            { "dc": 15, "example": "Specific — answers a particular question" },
+            { "dc": 20, "example": "Restricted — not generally known; needs someone with access" },
+            { "dc": 25, "example": "Protected — hard and possibly dangerous to obtain" }
+          ]
+        },
+        {
+          "id": "surveillance",
+          "name": "Surveillance",
+          "pattern": "opposed_check",
+          "action": "extended",
+          "opposedBy": ["stealth"],
+          "effect": "Watch an area from a stationary spot: your Investigation result is the DC of a Stealth check to slip past your notice. For actively following a subject, use Stealth's Tailing instead.",
+          "crossRefs": ["skills:stealth"]
+        }
+      ]
+    },
+    {
+      "id": "languages",
+      "name": "Languages",
+      "ability": "INT",
+      "trainedOnly": true,
+      "focused": true,
+      "categories": [],
+      "action": "extended",
+      "summary": "Fluency in languages beyond your native one; ranks double the count each step; not PL-capped.",
+      "focuses": ["one additional language per instance"],
+      "specializations": [],
+      "plLimit": "none",
+      "rankTable": [
+        { "rank": 1, "additionalLanguages": 1 },
+        { "rank": 2, "additionalLanguages": 2 },
+        { "rank": 3, "additionalLanguages": 4 },
+        { "rank": 4, "additionalLanguages": 8 },
+        { "rank": 5, "additionalLanguages": 16 },
+        { "rank": 6, "additionalLanguages": 32 },
+        { "rank": 7, "additionalLanguages": 64 },
+        { "rank": 8, "additionalLanguages": 128 }
+      ],
+      "uses": [
+        {
+          "id": "fluency",
+          "name": "Fluency",
+          "pattern": "narrative",
+          "action": "n_a",
+          "effect": "Each rank grants fluency (spoken and literate) in a set of additional languages: 1 at rank 1, then doubling each rank (2, 4, 8, ...). Not limited by Power Level except at GM discretion. Rank 8 (128 languages) costs the same Power Points as the Comprehend Languages effect, which grants all languages, so there's little reason to go higher. Excess languages may be left unspecified and chosen when a new language is encountered (possibly via Edit Scene / a Hero Point).",
+          "crossRefs": ["powers:comprehend_languages", "advantages:edit_scene"]
+        }
+      ],
+      "notes": "Sharing an understood language is a prerequisite for interaction skills; lacking one imposes -5 on those checks."
+    },
+    {
+      "id": "magic",
+      "name": "Magic",
+      "ability": "INT",
+      "trainedOnly": true,
+      "focused": false,
+      "categories": ["technical"],
+      "action": "extended",
+      "summary": "Arcane lore and the practical, technical craft of magic; not a substitute for magical powers.",
+      "specializations": ["Constructing", "Disabling", "Lore", "Repairing", "Technique"],
+      "uses": [
+        {
+          "id": "lore",
+          "name": "Lore",
+          "pattern": "knowledge_check",
+          "action": "extended",
+          "trainedOnly": true,
+          "effect": "Answer questions about magical lore, creatures, or phenomena, using the same DC guidelines as Expertise's Knowledge. Unlike most Expertise, this cannot be used untrained (though a related Expertise may answer some questions at a penalty).",
+          "crossRefs": ["skills:expertise"]
+        },
+        {
+          "id": "technique",
+          "name": "Technique",
+          "pattern": "extended_construct",
+          "action": "extended",
+          "category": "technical",
+          "effect": "Use Magic as a technical skill to study, repair, and disable magical items/devices (needs tools and time per the Technical Skills rules). The GM sets item complexity and whether you can create as well as repair/disable.",
+          "crossRefs": ["skills:technology"]
+        },
+        {
+          "id": "improvised_effects",
+          "name": "Improvised Effects",
+          "pattern": "narrative",
+          "action": "extended",
+          "effect": "With the Improvised Effects advantage on Magic, prepare and perform effects like rituals or limited-use items. Any character trained in Magic can also spend a Hero Point to gain the advantage for a single such effect.",
+          "crossRefs": ["advantages:improvised_effect", "powers:improvised_effects"]
+        }
+      ],
+      "notes": "Option: the GM may require a Magic focus (Alchemy, Necromancy, Sorcery, etc.) or offer those as specializations; a -2 penalty applies to tasks outside a character's focus."
+    },
+    {
+      "id": "perception",
+      "name": "Perception",
+      "ability": "AWE",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": [],
+      "action": "free",
+      "summary": "Notice things with your senses; opposed by Stealth or set against a visibility DC.",
+      "specializations": ["by specific sense type"],
+      "uses": [
+        {
+          "id": "sight",
+          "name": "Sight",
+          "pattern": "opposed_check",
+          "action": "free",
+          "gmSecret": true,
+          "opposedBy": ["stealth"],
+          "effect": "Check vs a visibility DC or an opposed Stealth check. Plain sight is DC 0; subtle/overlooked things DC 5-10+. Also used to spot disguises and concealed objects.",
+          "dcTable": [
+            { "dc": 0, "example": "object in plain sight" },
+            { "dc": 5, "example": "subtle or easily overlooked object" },
+            { "dc": 10, "example": "harder-to-see object (10+)" }
+          ],
+          "crossRefs": ["skills:stealth", "skills:disguise", "skills:sleight_of_hand"]
+        },
+        {
+          "id": "hearing",
+          "name": "Hearing",
+          "pattern": "opposed_check",
+          "action": "free",
+          "gmSecret": true,
+          "opposedBy": ["stealth"],
+          "effect": "Check vs a loudness DC or opposed Stealth. Normal conversation DC 0, soft noise DC 10, loud noises are negative DCs. Through a door +5, solid wall +15. Waking to a sound while asleep +10.",
+          "modifiers": [
+            { "value": 5, "when": "listening through a door" },
+            { "value": 15, "when": "listening through a solid wall" },
+            { "value": 10, "when": "asleep (to wake to the sound)" }
+          ]
+        },
+        {
+          "id": "other_senses",
+          "name": "Other Senses",
+          "pattern": "static_dc",
+          "action": "free",
+          "effect": "Perceive with non-sight/hearing senses: obvious DC 0, less obvious DC 10, hidden DC 20+. Discerning fine detail needs 3+ degrees of success with an Acute sense. A general -1 applies per two Spaces of distance to the subject. Enhanced Senses provide extra options and modifiers.",
+          "modifiers": [
+            { "value": -1, "when": "per two Spaces of distance to the subject" }
+          ],
+          "crossRefs": ["powers:enhanced_senses", "measurements:distance"]
+        }
+      ],
+      "notes": "You make a Perception check automatically as a non-action whenever there's an opportunity to notice something new, unless Unaware. As a simple action you can deliberately observe something you missed. Acute perception (fine detail) needs 3+ degrees of success with an Acute sense."
+    },
+    {
+      "id": "performance",
+      "name": "Performance",
+      "ability": "PRE",
+      "trainedOnly": true,
+      "focused": true,
+      "categories": ["interaction"],
+      "action": "standard",
+      "summary": "Impress or sway audiences through a configured performing art; each art is its own skill.",
+      "focuses": ["Acting", "Comedy", "Dance", "Keyboards", "Oratory", "Percussion Instruments", "Poetry", "Singing", "Stringed Instruments", "Wind Instruments"],
+      "specializations": [],
+      "uses": [
+        {
+          "id": "impressing",
+          "name": "Impressing",
+          "pattern": "static_dc",
+          "action": "standard",
+          "effect": "DC 15 is a competent performance; each further degree is more impressive. 4+ degrees wins over even a Hostile audience. A performance that impresses grants a bonus on later interaction checks with that audience: +2 for success, +5 for 3+ degrees.",
+          "dc": 15
+        },
+        {
+          "id": "swaying",
+          "name": "Swaying",
+          "pattern": "static_dc",
+          "action": "standard",
+          "category": "interaction",
+          "effect": "Use Performance as an interaction skill to change Attitudes, using the same DCs and step-shift rules as Persuasion's Swaying.",
+          "crossRefs": ["skills:persuasion"]
+        }
+      ],
+      "notes": "Ability may be swapped from PRE at GM discretion (e.g. AGL for gymnastic Dance). Passive art forms (Drawing, Painting, Writing) are technical Expertise skills that create works, not Performance."
+    },
+    {
+      "id": "persuasion",
+      "name": "Persuasion",
+      "ability": "PRE",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": ["interaction"],
+      "action": "extended",
+      "summary": "Change Attitudes and win people over honestly; negotiation.",
+      "specializations": ["Negotiating", "Swaying", "a particular social group or environment"],
+      "uses": [
+        {
+          "id": "swaying",
+          "name": "Swaying",
+          "pattern": "static_dc",
+          "action": "extended",
+          "effect": "Change a subject's Attitude. DC scales with how far below Helpful the subject currently is. Success shifts Attitude one step; every two further degrees shift another step. 1 failure: no change and you can't retry this scene. 2+ failures: undo prior success and worsen the subject's Attitude one step. Rushing: reduce the time rank by 1 per +5 accepted to the DC.",
+          "dcTable": [
+            { "dc": 10, "example": "initial Attitude Helpful" },
+            { "dc": 15, "example": "initial Attitude Favorable" },
+            { "dc": 20, "example": "initial Attitude Indifferent" },
+            { "dc": 25, "example": "initial Attitude Unfavorable" },
+            { "dc": 30, "example": "initial Attitude Hostile" }
+          ],
+          "crossRefs": ["conditions:attitudes"]
+        },
+        {
+          "id": "negotiating",
+          "name": "Negotiating",
+          "pattern": "opposed_check",
+          "action": "extended",
+          "opposedBy": ["persuasion"],
+          "effect": "All participants roll Persuasion to see who gets the best result; also resolves two advocates pleading opposing cases to a third party. Advanced negotiations use a check sequence.",
+          "crossRefs": ["actions:interaction_sequences"]
+        }
+      ]
+    },
+    {
+      "id": "ranged_combat",
+      "name": "Ranged Combat",
+      "ability": "ATK",
+      "trainedOnly": false,
+      "focused": true,
+      "categories": ["combat"],
+      "action": "standard",
+      "summary": "Attack-check bonus with one configured type of ranged attack; each focus is its own ranked skill.",
+      "focuses": ["Array", "Guns", "Throwing"],
+      "specializations": ["by specific attack or weapon, e.g. Energy Blast, Pistols, Spears"],
+      "plLimit": "attack",
+      "uses": [
+        {
+          "id": "ranged_attack_bonus",
+          "name": "Ranged Attack Bonus",
+          "pattern": "attack_bonus",
+          "action": "standard",
+          "effect": "Adds your skill rank to attack checks with the configured focus only — not to defenses. Each focus is a separate Ranged Combat skill with its own rank. Bounded by the Attack Power Level limit, not the skill-bonus limit. For a broader ranged attack bonus see the Ranged Attack advantage.",
+          "crossRefs": ["advantages:ranged_attack", "power-progression:maxAttackPlusEffectRank"]
+        }
+      ]
+    },
+    {
+      "id": "sleight_of_hand",
+      "name": "Sleight of Hand",
+      "ability": "AGL",
+      "trainedOnly": true,
+      "focused": false,
+      "categories": ["manipulation"],
+      "action": "standard",
+      "summary": "Dexterous handwork — concealing, escaping restraints, close-up magic, planting, stealing.",
+      "specializations": ["Concealing", "Escaping", "Legerdemain", "Planting", "Stealing"],
+      "uses": [
+        {
+          "id": "concealing",
+          "name": "Concealing",
+          "pattern": "static_dc",
+          "action": "standard",
+          "effect": "Conceal a small item: your check result becomes the DC of an Investigation or Perception check to find it.",
+          "crossRefs": ["skills:investigation", "skills:perception"]
+        },
+        {
+          "id": "escaping",
+          "name": "Escaping",
+          "pattern": "static_dc",
+          "action": "standard",
+          "effect": "Slip out of restraints or Hindered/Immobilized conditions. Takes 1 minute (time rank 3) per check; each degree of success past the first reduces the time rank by 1. Also usable for an Escape action against a Grab. Restraint DCs: ropes 10, handcuffs 15, straightjacket 20; a power effect uses its effect DC.",
+          "dcTable": [
+            { "dc": 10, "example": "ropes" },
+            { "dc": 15, "example": "handcuffs" },
+            { "dc": 20, "example": "straightjacket" }
+          ],
+          "crossRefs": ["conditions:hindered", "conditions:immobilized", "actions:grab", "actions:escape", "measurements:time"]
+        },
+        {
+          "id": "legerdemain",
+          "name": "Legerdemain",
+          "pattern": "opposed_check",
+          "action": "standard",
+          "opposedBy": ["perception"],
+          "effect": "Minor close-up magic (vanishing a coin/card): DC 10 unless observed, in which case your check is opposed by the observer's Perception.",
+          "dc": 10,
+          "crossRefs": ["skills:perception"]
+        },
+        {
+          "id": "planting",
+          "name": "Planting",
+          "pattern": "opposed_check",
+          "action": "standard",
+          "opposedBy": ["perception"],
+          "effect": "DC 20 to plant a small object on someone (slip into a pocket, drop a tracer). The target's Perception check notices your attempt if it beats yours, whether or not you succeed at planting.",
+          "dc": 20,
+          "crossRefs": ["skills:perception"]
+        },
+        {
+          "id": "stealing",
+          "name": "Stealing",
+          "pattern": "opposed_check",
+          "action": "standard",
+          "opposedBy": ["perception"],
+          "effect": "DC 15 to covertly steal something from someone's possession. The target's Perception check notices your attempt if it beats yours, whether or not you succeed.",
+          "dc": 15,
+          "crossRefs": ["skills:perception"]
+        }
+      ]
+    },
+    {
+      "id": "stealth",
+      "name": "Stealth",
+      "ability": "AGL",
+      "trainedOnly": false,
+      "focused": false,
+      "categories": [],
+      "action": "simple",
+      "summary": "Go unnoticed; opposed by Perception; gated by Cover/Concealment.",
+      "specializations": ["Hiding", "Sneaking", "Tailing", "by specific environment or terrain"],
+      "uses": [
+        {
+          "id": "hiding",
+          "name": "Hiding",
+          "pattern": "opposed_hide",
+          "action": "simple",
+          "opposedBy": ["perception"],
+          "effect": "With Cover or Concealment, Stealth vs an observer's Perception to hide. You can't hide from someone aware of you without a distraction or the Hide in Plain Sight advantage, and you can't hide with no Cover/Concealment at all. While using Stealth you are Hindered (-1 movement speed rank); remove the Hindered condition by taking -5 on the Stealth check.",
+          "crossRefs": ["conditions:hindered", "actions:concealment", "actions:cover", "advantages:hide_in_plain_sight"]
+        },
+        {
+          "id": "distractions",
+          "name": "Hiding via Distraction",
+          "pattern": "opposed_hide",
+          "action": "simple",
+          "opposedBy": ["perception"],
+          "effect": "A successful Deception or Intimidation distraction lets you make a Stealth check while others are aware of you, at -5 (you must move quickly to Cover/Concealment).",
+          "modifiers": [
+            { "value": -5, "when": "hiding after a distraction while observed" }
+          ],
+          "crossRefs": ["skills:deception", "skills:intimidation"]
+        },
+        {
+          "id": "sneaking",
+          "name": "Sneaking",
+          "pattern": "opposed_check",
+          "action": "simple",
+          "opposedBy": ["perception"],
+          "effect": "Cover the sounds/signs of your movement, opposed by an observer's Perception (or their routine Perception if unalert)."
+        },
+        {
+          "id": "tailing",
+          "name": "Tailing",
+          "pattern": "opposed_check",
+          "action": "simple",
+          "opposedBy": ["perception"],
+          "effect": "Follow someone unnoticed at normal speed (needs some cover/concealment). Usually a check sequence of Stealth vs the subject's Perception.",
+          "crossRefs": ["actions:interaction_sequences"]
+        }
+      ]
+    },
+    {
+      "id": "survival",
+      "name": "Survival",
+      "ability": "AWE",
+      "trainedOnly": true,
+      "focused": false,
+      "categories": ["technical"],
+      "action": "extended",
+      "summary": "Endure and navigate the wilderness; forage; simple construction.",
+      "specializations": ["Avoid Hazards", "Construction", "Foraging", "Navigation", "by specific environment or terrain"],
+      "categoryNote": "Only the Simple Construction use is technical (needs tools; -5 without).",
+      "uses": [
+        {
+          "id": "avoid_hazards",
+          "name": "Avoid Hazards",
+          "pattern": "static_dc",
+          "action": "extended",
+          "effect": "DC 15 to gain +2 to resistance checks against severe weather/natural hazards, or +5 if stationary under shelter. Extend the bonus to one extra person per point your result exceeds the DC.",
+          "dc": 15,
+          "crossRefs": ["environmental:hazards"]
+        },
+        {
+          "id": "foraging",
+          "name": "Foraging",
+          "pattern": "static_dc",
+          "action": "extended",
+          "effect": "DC 10 to move at ground speed rank -1 while finding food/water for yourself plus one extra person per 2 points over the DC.",
+          "dc": 10,
+          "crossRefs": ["environmental:deprivation"]
+        },
+        {
+          "id": "navigation",
+          "name": "Navigation",
+          "pattern": "static_dc",
+          "action": "extended",
+          "effect": "DC 10 to navigate outdoors (15 if also avoiding hazards). Success keeps you on-course and roughly located.",
+          "dc": 10
+        },
+        {
+          "id": "simple_construction",
+          "name": "Simple Construction",
+          "pattern": "extended_construct",
+          "action": "extended",
+          "category": "technical",
+          "effect": "Use Survival as a technical skill to build shelters/simple items, repair simple items, and set traps for defense or hunting. -5 without tools.",
+          "crossRefs": ["skills:technology"]
+        }
+      ]
+    },
+    {
+      "id": "technology",
+      "name": "Technology",
+      "ability": "INT",
+      "trainedOnly": true,
+      "focused": false,
+      "categories": ["manipulation", "technical"],
+      "action": "extended",
+      "summary": "Operate, construct, repair, and disable technology; improvised effects.",
+      "specializations": ["Computers", "Constructing", "Disabling", "Electronics", "Operating", "Mechanics", "Repairing", "Security"],
+      "uses": [
+        {
+          "id": "operating",
+          "name": "Operating",
+          "pattern": "static_dc",
+          "action": "standard",
+          "trainedOnly": false,
+          "effect": "Routine use of common equipment needs no check and can be untrained. Using an unfamiliar/advanced item needs a check: DC 10 simple to 25+ highly advanced.",
+          "dcTable": [
+            { "dc": 10, "example": "simple/foreign item" },
+            { "dc": 25, "example": "highly advanced item (25+)" }
+          ]
+        },
+        {
+          "id": "constructing",
+          "name": "Constructing",
+          "pattern": "extended_construct",
+          "action": "extended",
+          "category": "technical",
+          "effect": "Build an item from scratch over one or more DC 15 checks, one per degree of complexity. Each success advances (or completes) construction; each extra degree of success cuts the time rank by 1 (to a GM minimum). A failed check wastes that step's time and forces a restart of it; 2+ failures may cause an accident. -5 without tools.",
+          "complexityTable": [
+            { "complexity": "Simple", "buildTimeRank": 10, "buildTime": "2 hours", "repairDC": 10, "repairTimeRank": 8, "repairTime": "30 minutes", "examples": "electronic timer, tripwire trap" },
+            { "complexity": "Moderate", "buildTimeRank": 12, "buildTime": "8 hours", "repairDC": 15, "repairTimeRank": 10, "repairTime": "2 hours", "examples": "radio direction finder, lock, engine component" },
+            { "complexity": "Complex", "buildTimeRank": 14, "buildTime": "24 hours", "repairDC": 20, "repairTimeRank": 12, "repairTime": "8 hours", "examples": "cell phone, combustion engine" },
+            { "complexity": "Advanced", "buildTimeRank": 16, "buildTime": "4 days", "repairDC": 25, "repairTimeRank": 14, "repairTime": "24 hours", "examples": "computer, vehicle" }
+          ],
+          "crossRefs": ["measurements:time"]
+        },
+        {
+          "id": "repairing",
+          "name": "Repairing",
+          "pattern": "extended_construct",
+          "action": "extended",
+          "category": "technical",
+          "effect": "Repair a damaged item at base DC 10, +5 per degree of complexity above Simple, and -2 time rank vs building it. Each degree of success past the first cuts the repair time rank by 1. Failure wastes the time with no progress (keep trying); 2+ failures may worsen the damage. Jury-rigging: -5 to the DC and resolves as a standard action, but fixes only one problem and lasts until end of scene; must then be fully repaired and can't be jury-rigged again until it is.",
+          "crossRefs": ["measurements:time"]
+        },
+        {
+          "id": "disabling",
+          "name": "Disabling",
+          "pattern": "extended_construct",
+          "action": "extended",
+          "category": "technical",
+          "gmSecret": true,
+          "effect": "Disable/shut down an item, usually ≥ 1 minute (time rank 3). DC by complexity: Simple 15, Moderate 20, Complex 25, Advanced 30, adjusted by security level. The GM rolls secretly. Success shuts it down without tripping security; extra degrees can cut time. 2+ failures may trip a security measure or cause a mishap.",
+          "dcTable": [
+            { "dc": 15, "example": "Simple" },
+            { "dc": 20, "example": "Moderate" },
+            { "dc": 25, "example": "Complex" },
+            { "dc": 30, "example": "Advanced" }
+          ],
+          "modifiers": [
+            { "value": -5, "when": "no security" },
+            { "value": 0, "when": "moderate security" },
+            { "value": 5, "when": "improved security" },
+            { "value": 10, "when": "advanced security" },
+            { "value": 5, "when": "also hiding evidence of tampering" }
+          ]
+        },
+        {
+          "id": "improvised_effects",
+          "name": "Improvised Effects",
+          "pattern": "narrative",
+          "action": "extended",
+          "effect": "With the Improvised Effects advantage on Technology, prepare and perform effects like limited-use tech devices. Any character trained in Technology can also spend a Hero Point to gain the advantage for a single such effect.",
+          "crossRefs": ["advantages:improvised_effect", "powers:improvised_effects"]
+        }
+      ]
+    },
+    {
+      "id": "treatment",
+      "name": "Treatment",
+      "ability": "INT",
+      "trainedOnly": true,
+      "focused": false,
+      "categories": ["manipulation", "technical"],
+      "action": "standard",
+      "summary": "Diagnose, provide care, revive, stabilize, and treat diseases/poisons.",
+      "specializations": ["Diagnosis", "Disease and Toxins", "Provide Care", "Revive", "Stabilize"],
+      "penaltyNote": "-5 without medical equipment/supplies; possibly a further penalty for unusual biology; -5 when treating yourself (and self-treatment is limited to diagnose/care/disease-poison).",
+      "uses": [
+        {
+          "id": "diagnosis",
+          "name": "Diagnosis",
+          "pattern": "static_dc",
+          "action": "extended",
+          "effect": "Takes ≥ 1 minute. DC 10 (higher for unusual conditions) to identify a subject's damage conditions. Success gives +2 to further Treatment checks for that condition, +5 with 3+ degrees.",
+          "dc": 10
+        },
+        {
+          "id": "revive",
+          "name": "Revive",
+          "pattern": "static_dc",
+          "action": "standard",
+          "effect": "Remove Dazed (DC 10), Stunned (DC 15), or Incapacitated (DC 20) from a subject. You are Vulnerable until the start of your next turn while doing this. Success removes only that condition; other conditions and remaining damage persist. With the Improved Treatment advantage you can grant extra benefits on a successful revive.",
+          "dcTable": [
+            { "dc": 10, "example": "remove Dazed" },
+            { "dc": 15, "example": "remove Stunned" },
+            { "dc": 20, "example": "remove Incapacitated" }
+          ],
+          "crossRefs": ["conditions:dazed", "conditions:stunned", "conditions:incapacitated", "conditions:vulnerable", "advantages:improved_treatment"]
+        },
+        {
+          "id": "stabilize",
+          "name": "Stabilize",
+          "pattern": "static_dc",
+          "action": "standard",
+          "effect": "DC 15 as a standard action to stabilize a Dying character.",
+          "dc": 15,
+          "crossRefs": ["conditions:dying"]
+        },
+        {
+          "id": "treat_ailments",
+          "name": "Treat Ailments",
+          "pattern": "static_dc",
+          "action": "standard",
+          "effect": "Each time an afflicted character makes a resistance check against a disease/poison/ailment, you make a Treatment check: 1 success gives them +2 to that resistance check, 3+ successes gives +5.",
+          "crossRefs": ["conditions:affliction"]
+        }
+      ]
+    },
+    {
+      "id": "vehicles",
+      "name": "Vehicles",
+      "ability": "AGL",
+      "trainedOnly": true,
+      "focused": false,
+      "categories": ["manipulation"],
+      "action": "standard",
+      "summary": "Operate ground, water, air, and space vehicles under pressure.",
+      "specializations": ["Driving", "Sailing", "Piloting"],
+      "uses": [
+        {
+          "id": "operate_vehicle",
+          "name": "Operate Vehicle",
+          "pattern": "static_dc",
+          "action": "standard",
+          "trainedOnly": false,
+          "effect": "Routine operation of known vehicles needs no check and may be untrained for common vehicles (cars) but not uncommon ones (boats, aircraft). A check is needed only in stressful/dramatic situations — chases, attacks, racing a deadline. DCs and specific checks come from the Vehicles rules in the equipment layer.",
+          "crossRefs": ["equipment:vehicles"]
+        }
+      ],
+      "notes": "Riding animal mounts is technically a separate Riding skill (AGL); most campaigns let Athletics stand in for it unless mounts are especially prominent."
+    }
+  ]
+}

@@ -103,6 +103,8 @@ class Skill:
     ``focuses`` lists the suggested focuses for a focused skill;
     ``specializations`` lists illustrative common uses of a non-focused skill.
     ``trained_only`` marks skills that can't be used untrained.
+    ``specialized_cost`` prices this skill's ordinary ranks at the cheaper
+    specialized rate (Expertise, whose mandatory focus makes it 4 ranks/PP).
     """
 
     name: str
@@ -114,6 +116,7 @@ class Skill:
     specializations: tuple[str, ...] = ()
     focuses: tuple[str, ...] = ()
     description: str = ""
+    specialized_cost: bool = False
 
 
 @dataclass(frozen=True)
@@ -389,7 +392,7 @@ class TraitCosts:
     resistance_per_rank: int
     advantage_per_rank: int
     skill_ranks_per_pp: int
-    skill_focus_ranks_per_pp: int
+    skill_specialized_ranks_per_pp: int
 
 
 @dataclass(frozen=True)
@@ -553,6 +556,7 @@ def _parse_skill(s: dict) -> Skill:
         specializations=tuple(s.get("specializations", ())),
         focuses=tuple(s.get("focuses", ())),
         description=s.get("description", ""),
+        specialized_cost=bool(s.get("specializedCost", False)),
     )
 
 

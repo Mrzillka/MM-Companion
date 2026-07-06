@@ -174,6 +174,9 @@ class CharacterSheet(QWidget):
         self.resistances.changed.connect(self.powers.refresh)
         self.advantages.changed.connect(self.powers.refresh)
         self.base_info.changed.connect(self.powers.refresh)
+        # A power can link a Close/Ranged Combat focus as its attack skill, so a skill
+        # rank/mod edit re-derives that power's attack bonus and PL check.
+        self.skills.changed.connect(self.powers.refresh)
         # The Heroic-advantage budget is floor(PL/2), so a Power Level edit reshapes
         # the advantage rank caps and the budget display.
         self.base_info.changed.connect(self.advantages.refresh_limits)

@@ -134,6 +134,12 @@ class Power:
     Activation gate needs ``activated``, and a Removable gate's bonus applies only
     while ``item_present``. Both default to the active state (see
     :func:`mm_companion.core.rules.effect_is_active`).
+
+    ``attack_skill`` optionally links the power's attack to a Close/Ranged Combat
+    focus row on the wielder (a row id like ``"Close Combat::Array"``, empty for
+    none). When set, that focus's total *replaces* the character's bare Attack for
+    this power's attack roll and its Attack PL cap (see
+    :func:`mm_companion.core.rules.power_attack_skill_bonus`).
     """
 
     name: str = ""
@@ -143,6 +149,7 @@ class Power:
     structure: str = STRUCTURE_INDEPENDENT
     activated: bool = True
     item_present: bool = True
+    attack_skill: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -153,6 +160,7 @@ class Power:
             "structure": self.structure,
             "activated": self.activated,
             "item_present": self.item_present,
+            "attack_skill": self.attack_skill,
         }
 
     @classmethod
@@ -166,4 +174,5 @@ class Power:
             structure=structure if structure in STRUCTURES else STRUCTURE_INDEPENDENT,
             activated=bool(raw.get("activated", True)),
             item_present=bool(raw.get("item_present", True)),
+            attack_skill=raw.get("attack_skill", ""),
         )

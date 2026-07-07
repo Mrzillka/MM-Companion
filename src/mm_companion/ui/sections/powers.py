@@ -28,7 +28,6 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -58,6 +57,7 @@ from mm_companion.core.rules import (
     powers_points_spent,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import hline_separator, title_with_cost
 
 # Tints for a stat a modifier changed, matching the Power Constructor's
@@ -67,7 +67,7 @@ _TINT_WORSE = "#d15b5b"
 _TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE}
 
 
-class PowersSection(QGroupBox):
+class PowersSection(TitledSection):
     """Powers section: launches the Power Constructor and lists saved powers."""
 
     changed = Signal()
@@ -78,7 +78,7 @@ class PowersSection(QGroupBox):
         character: Character,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__("Powers", parent)
+        super().__init__(parent)
         self._data = data
         self._character = character
         self._locked = False
@@ -170,7 +170,9 @@ class PowersSection(QGroupBox):
             self._list_layout.addWidget(self._make_card(power))
         self._empty.setVisible(not self._character.powers)
         # Keep the section title's running point cost current.
-        self.setTitle(title_with_cost("Powers", powers_points_spent(self._character, self._data)))
+        self.set_block_title(
+            title_with_cost("Powers", powers_points_spent(self._character, self._data))
+        )
 
     def _make_card(self, power: Power) -> QFrame:
         """A stat-block card for one power: header, description, effects, roll line.

@@ -23,7 +23,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -46,6 +45,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_grid import CONDITION_TINT, STRIKETHROUGH_CONDITIONS
+from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item, title_with_cost
 
@@ -57,7 +57,7 @@ HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
 SPIN_WIDTH = 56
 
 
-class SkillsSection(QGroupBox):
+class SkillsSection(TitledSection):
     """A table of skills whose total bonuses track the shared character model.
 
     Ranks, modifiers, and focuses are read from and written to the
@@ -69,7 +69,7 @@ class SkillsSection(QGroupBox):
     changed = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
-        super().__init__("Skills", parent)
+        super().__init__(parent)
 
         self._data = data
         self._character = character
@@ -439,7 +439,9 @@ class SkillsSection(QGroupBox):
             total_item.setText(str(effect.apply(total) if effect.active else total))
             self._style_condition(total_item, name_item, effect, total)
         # Keep the section title's running point cost current.
-        self.setTitle(title_with_cost("Skills", skill_points_spent(self._character, self._data)))
+        self.set_block_title(
+            title_with_cost("Skills", skill_points_spent(self._character, self._data))
+        )
 
     @staticmethod
     def _style_condition(total_item, name_item, effect, base_total: int) -> None:

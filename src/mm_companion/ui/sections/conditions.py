@@ -37,6 +37,7 @@ from mm_companion.core.rules import (
     roll_confused_action,
 )
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.widgets import hline_separator
 
 CONDITIONS_ROW_HEIGHT = 44
@@ -63,7 +64,8 @@ class ConditionsSection(QGroupBox):
     conditionsChanged = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
-        super().__init__("Conditions", parent)
+        super().__init__(parent)
+        strip_groupbox_caption(self)
 
         # While seeding from a (possibly loaded) character, edits are programmatic,
         # not the user's, so they must not mark the sheet dirty.

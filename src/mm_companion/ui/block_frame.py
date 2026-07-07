@@ -84,6 +84,10 @@ class TitleBar(QFrame):
         self._close_button.clicked.connect(lambda: self._host.request_hide(self._key))
         layout.addWidget(self._close_button)
 
+    def set_title(self, text: str) -> None:
+        """Update the drag handle's caption (a section reports its live title here)."""
+        self._label.setText(text)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._host.title_bar_pressed(self._key, event.globalPosition().toPoint())
@@ -139,7 +143,21 @@ class BlockFrame(QFrame):
         layout.addWidget(self.title_bar)
         layout.addWidget(section, stretch=1)
 
+        # A section may own a live caption (its running point cost); show it in the
+        # title bar rather than duplicating it inside the block. See TitledSection.
+        title_changed = getattr(section, "titleChanged", None)
+        if title_changed is not None:
+            title_changed.connect(self._set_title)
+        block_title = getattr(section, "block_title", None)
+        if callable(block_title) and block_title():
+            self._set_title(block_title())
+
         self._apply_size(size)
+
+    def _set_title(self, text: str) -> None:
+        """Reflect a section's live title in both the title bar and window title."""
+        self.title = text
+        self.title_bar.set_title(text)
 
     def _apply_size(self, size: BlockSize) -> None:
         """Pin the block's size from its :class:`BlockSize` (see class docstring)."""

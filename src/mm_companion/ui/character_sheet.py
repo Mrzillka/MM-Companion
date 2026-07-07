@@ -168,10 +168,14 @@ class CharacterSheet(QWidget):
         self.powers.changed.connect(self.skills.refresh_totals)
 
         # A condition change overlays penalties on the stat rows (a scoped Impaired on
-        # a skill, Hit on Toughness, a halved defense), so refresh the same views.
+        # a skill, Hit on Toughness, a halved defense), so refresh the same views. A
+        # Debilitated condition can also name an advantage or a power, which those
+        # sections strike through as effectively lost.
         self.base_info.conditionsChanged.connect(self.abilities.refresh_enhancements)
         self.base_info.conditionsChanged.connect(self.resistances.refresh_enhancements)
         self.base_info.conditionsChanged.connect(self.skills.refresh_totals)
+        self.base_info.conditionsChanged.connect(self.advantages.refresh_conditions)
+        self.base_info.conditionsChanged.connect(self.powers.refresh)
 
         # And the reverse: a power's displayed numbers derive from character facts,
         # so editing an ability/resistance/advantage or the Power Level re-derives

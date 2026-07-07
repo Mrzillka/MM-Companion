@@ -7,9 +7,10 @@ descriptor (Susceptible to "Fire Damage"), or controller (Controlled by whom). S
 condition's :class:`~mm_companion.core.data_loader.ConditionParameter` and gates its
 OK button when the parameter is ``required``.
 
-For a ``trait_select`` scope, picking the placeholder "a specific ability" / "a
-specific skill" reveals a second combo of the concrete traits, so the stored value is
-one the stat sections can match against a row.
+For a ``trait_select`` scope, picking a placeholder like "a specific ability" / "a
+specific skill" / "a specific advantage" / "a specific power" reveals a second combo of
+the concrete traits, so the stored value is one the stat sections can match against a row
+(Debilitated can name any of the four; Impaired/Disabled only an ability or skill).
 """
 
 from __future__ import annotations
@@ -31,9 +32,11 @@ from mm_companion.ui.wheel_guard import guard_wheel
 
 # Option values that mean "no scope" rather than a real subject — normalized to None.
 UNSCOPED_VALUES = {"", "All checks", "All senses"}
-# Placeholder options that open a second combo of concrete traits.
-SPECIFIC_ABILITY = "a specific ability"
-SPECIFIC_SKILL = "a specific skill"
+# The leading text of a placeholder option that opens a second combo of concrete
+# traits (e.g. "a specific ability", "a specific Skill") — matched case-insensitively.
+SPECIFIC_PREFIX = "a specific "
+# The nouns after that prefix that we can populate a concrete second combo for.
+_SPECIFIC_KINDS = frozenset({"ability", "skill", "advantage", "power"})
 
 
 class ConditionParameterDialog(QDialog):
@@ -108,17 +111,41 @@ class ConditionParameterDialog(QDialog):
         self._sync_specific()
         self._sync_ok()
 
+    def _specific_kind(self) -> str | None:
+        """The trait kind a "a specific …" primary option names (or ``None``).
+
+        Returns the lower-cased noun (``"ability"`` / ``"skill"`` / ``"advantage"`` /
+        ``"power"``) for a placeholder that should reveal the second combo.
+        """
+
+        choice = self._primary_value().lower()
+        if choice.startswith(SPECIFIC_PREFIX):
+            kind = choice[len(SPECIFIC_PREFIX) :].strip()
+            if kind in _SPECIFIC_KINDS:
+                return kind
+        return None
+
+    def _specific_options(self, kind: str) -> list[str]:
+        """Concrete choices for a "a specific <kind>" pick, drawn from data/character."""
+
+        if kind == "ability":
+            return [a.name for a in self._data.abilities]
+        if kind == "skill":
+            return [s.name for s in self._data.skills]
+        if kind == "advantage":
+            return [a.name for a in self._character.advantages]
+        if kind == "power":
+            return [p.name for p in self._character.powers if p.name]
+        return []
+
     def _sync_specific(self) -> None:
         """Show/populate the second combo when a "specific …" scope is chosen."""
 
-        choice = self._primary_value()
-        if choice == SPECIFIC_ABILITY:
-            options = [a.name for a in self._data.abilities]
-        elif choice == SPECIFIC_SKILL:
-            options = [s.name for s in self._data.skills]
-        else:
+        kind = self._specific_kind()
+        if kind is None:
             self._set_specific_visible(False)
             return
+        options = self._specific_options(kind)
         if [self._specific.itemText(i) for i in range(self._specific.count())] != options:
             self._specific.clear()
             self._specific.addItems(options)
@@ -135,15 +162,15 @@ class ConditionParameterDialog(QDialog):
         A "specific …" scope resolves to the concrete trait picked in the second combo.
         """
 
-        primary = self._primary_value()
-        if primary in (SPECIFIC_ABILITY, SPECIFIC_SKILL):
+        if self._specific_kind() is not None:
             chosen = self._specific.currentText().strip()
             return chosen or None
+        primary = self._primary_value()
         return None if primary in UNSCOPED_VALUES else primary
 
     def _sync_ok(self, *_: object) -> None:
         # A required parameter must resolve to a non-blank subject before OK is allowed.
-        needs_specific = self._primary_value() in (SPECIFIC_ABILITY, SPECIFIC_SKILL)
+        needs_specific = self._specific_kind() is not None
         blocked = (self._param.required and not self._primary_value()) or (
             needs_specific and not self._specific.currentText().strip()
         )

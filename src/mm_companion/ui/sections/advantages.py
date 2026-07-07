@@ -13,7 +13,8 @@ also draw from a shared per-character budget
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -34,9 +35,11 @@ from mm_companion.core.rules import (
     HEROIC_TYPE,
     advantage_points_spent,
     advantage_rank_cap,
+    debilitated_traits,
     heroic_advantage_budget,
     heroic_advantage_ranks,
 )
+from mm_companion.ui.sections.stat_grid import CONDITION_TINT
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, title_with_cost
 
@@ -108,6 +111,31 @@ class AdvantagesSection(QGroupBox):
 
         self._refresh_cost()
         self.refresh_limits()
+        self.refresh_conditions()
+
+    def refresh_conditions(self) -> None:
+        """Strike through (and redden) any advantage a Debilitated condition has lost.
+
+        Display-only, mirroring the abilities/skills overlay: the row's own point cost is
+        untouched — the advantage is just marked non-functional while debilitated. The
+        sheet calls this whenever the applied conditions change.
+        """
+
+        lost = debilitated_traits(self._character, self._data)
+        for row, selection in enumerate(self._character.advantages):
+            item = self._advantage_table.item(row, 0)
+            if item is None:
+                continue
+            struck = selection.name in lost
+            font = item.font()
+            font.setStrikeOut(struck)
+            item.setFont(font)
+            if struck:
+                item.setForeground(QBrush(QColor(CONDITION_TINT)))
+                item.setToolTip(f"Debilitated — {selection.name} is effectively lost")
+            else:
+                item.setData(Qt.ItemDataRole.ForegroundRole, None)
+                item.setToolTip("")
 
     def _append_advantage_row(self, name: str, rank: int, advantage: Advantage | None) -> None:
         """Add one row to the advantage table (kept 1:1 with the model list)."""
@@ -169,6 +197,7 @@ class AdvantagesSection(QGroupBox):
         self._append_advantage_row(advantage.name, rank, advantage)
         self._refresh_cost()
         self.refresh_limits()
+        self.refresh_conditions()
         self._sync_rank_enabled()
         self.changed.emit()
 
@@ -181,6 +210,7 @@ class AdvantagesSection(QGroupBox):
         if rows:
             self._refresh_cost()
             self.refresh_limits()
+            self.refresh_conditions()
             self._sync_rank_enabled()
             self.changed.emit()
 

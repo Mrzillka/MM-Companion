@@ -23,6 +23,7 @@ from .components import (
     GATE_TOGGLE,
     INSTANT_ACTION,
     MECH_CHECK_PENALTY,
+    MECH_DEBILITATE_TRAIT,
     MECH_MOVEMENT_MOD,
     PASSIVE_TOGGLE,
     RESOURCE_POOL,
@@ -1795,30 +1796,60 @@ class ConditionEffect:
 def condition_scope_penalty(
     character: Character, game_data: GameData, scope_keys: set[str]
 ) -> ConditionEffect:
-    """The check-penalty overlay for a stat row answering to *scope_keys*.
+    """The condition overlay for a stat row answering to *scope_keys*.
 
-    Sums every ``check_penalty`` condition that is unscoped (``None`` / ``"All checks"``)
-    or whose parameter is one of *scope_keys* (an ability row → ``{key, name}``; a skill
-    row → ``{row_id, base_name}``). Returns the total penalty, the contributing condition
-    ids, and a tooltip breakdown.
+    Two mechanisms feed a stat row. A ``check_penalty`` condition (Impaired/Disabled)
+    that is unscoped (``None`` / ``"All checks"``) or whose parameter is one of
+    *scope_keys* contributes a flat ``delta``. A ``debilitate_trait`` condition
+    (Debilitated) whose parameter matches *scope_keys* loses the trait outright — an
+    ``op="zero"`` that dominates the delta. Scope keys are an ability row → ``{key,
+    name}`` or a skill row → ``{row_id, base_name}``. Returns the merged penalty, the
+    contributing condition ids (for strikethrough), and a tooltip breakdown.
     """
 
     catalog = game_data.condition_catalog()
     total = 0
+    op = ""
     ids: set[str] = set()
     parts: list[str] = []
     for applied in character.conditions:
         cond = catalog.get(applied.condition_id)
-        if cond is None or cond.penalty is None or MECH_CHECK_PENALTY not in cond.mechanisms:
+        if cond is None:
             continue
         unscoped = applied.parameter in (None, "All checks")
-        if not (unscoped or applied.parameter in scope_keys):
-            continue
-        total += cond.penalty
-        ids.add(cond.id)
-        label = cond.name if unscoped else f"{cond.name} ({applied.parameter})"
-        parts.append(f"{cond.penalty:+d} {label}")
-    return ConditionEffect(delta=total, condition_ids=frozenset(ids), tooltip="; ".join(parts))
+        if MECH_CHECK_PENALTY in cond.mechanisms and cond.penalty is not None:
+            if not (unscoped or applied.parameter in scope_keys):
+                continue
+            total += cond.penalty
+            ids.add(cond.id)
+            label = cond.name if unscoped else f"{cond.name} ({applied.parameter})"
+            parts.append(f"{cond.penalty:+d} {label}")
+        elif MECH_DEBILITATE_TRAIT in cond.mechanisms and applied.parameter in scope_keys:
+            # A debilitated trait is effectively lost (skills read as untrained, an
+            # ability auto-fails its checks) — zero the shown number and strike it out.
+            op = "zero"
+            ids.add(cond.id)
+            parts.append(f"lost — {cond.name} ({applied.parameter})")
+    return ConditionEffect(
+        delta=total, op=op, condition_ids=frozenset(ids), tooltip="; ".join(parts)
+    )
+
+
+def debilitated_traits(character: Character, game_data: GameData) -> frozenset[str]:
+    """The set of trait names a Debilitated condition currently names (its parameter).
+
+    Lets the advantage/power views — which have no numeric row to overlay — strike
+    through a trait that is effectively lost. Abilities and skills use
+    :func:`condition_scope_penalty` instead.
+    """
+
+    catalog = game_data.condition_catalog()
+    names: set[str] = set()
+    for applied in character.conditions:
+        cond = catalog.get(applied.condition_id)
+        if cond is not None and MECH_DEBILITATE_TRAIT in cond.mechanisms and applied.parameter:
+            names.add(applied.parameter)
+    return frozenset(names)
 
 
 def resistance_condition_effect(

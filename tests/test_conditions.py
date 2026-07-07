@@ -6,8 +6,9 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFrame
 
-from mm_companion.core.character import AppliedCondition, Character
+from mm_companion.core.character import AdvantageSelection, AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
     apply_condition,
     condition_attack_mods,
@@ -15,6 +16,7 @@ from mm_companion.core.rules import (
     condition_resistance_penalty,
     condition_scope_penalty,
     condition_speed_rank_mod,
+    debilitated_traits,
     decrement_condition,
     expand_includes,
     hit_stack_penalty,
@@ -495,3 +497,77 @@ def test_flow_container_reports_wrapped_height(qapp2: QApplication) -> None:
     one_row = container.heightForWidth(1000)
     many_rows = container.heightForWidth(200)
     assert many_rows > one_row
+
+
+# --------------------------------------------------------------------------- #
+# Debilitated — a chosen trait is effectively lost across the sheet
+# --------------------------------------------------------------------------- #
+
+
+def test_debilitated_zeroes_and_strikes_a_scoped_row() -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "debilitated", data, parameter="Stealth")
+    effect = condition_scope_penalty(char, data, {"Stealth"})
+    assert effect.op == "zero" and effect.apply(6) == 0
+    assert "debilitated" in effect.condition_ids  # so the UI strikes the row through
+    # An unrelated row is untouched — Debilitated is always scoped to its named trait.
+    assert condition_scope_penalty(char, data, {"Acrobatics"}).active is False
+
+
+def test_debilitated_traits_lists_named_subjects() -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "debilitated", data, parameter="Leadership")
+    assert "Leadership" in debilitated_traits(char, data)
+    assert debilitated_traits(Character(), data) == frozenset()
+
+
+def test_dialog_two_step_resolves_a_specific_advantage(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    char.advantages.append(AdvantageSelection("Leadership"))
+    dialog = ConditionParameterDialog(data.condition_catalog()["debilitated"], data, char)
+    dialog._input.setCurrentText("a specific Advantage")  # capitalized in the catalog
+    dialog._on_scope_changed()
+    assert not dialog._specific.isHidden()  # second combo revealed for advantages too
+    options = [dialog._specific.itemText(i) for i in range(dialog._specific.count())]
+    assert options == ["Leadership"]
+    dialog._specific.setCurrentText("Leadership")
+    assert dialog.value() == "Leadership"
+
+
+def test_debilitated_advantage_row_struck_through(qapp2: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    char = sheet.character
+    advantage = data.advantages[0]
+    char.advantages.append(AdvantageSelection(advantage.name))
+    sheet.advantages._append_advantage_row(advantage.name, 1, advantage)
+
+    apply_condition(char, "debilitated", data, parameter=advantage.name)
+    sheet.advantages.refresh_conditions()
+    item = sheet.advantages._advantage_table.item(0, 0)
+    assert item.font().strikeOut() is True
+    assert item.foreground().color().name() == "#d15b5b"
+
+    remove_condition(char, char.conditions[0])
+    sheet.advantages.refresh_conditions()
+    assert item.font().strikeOut() is False
+
+
+def test_debilitated_power_card_struck_through(qapp2: QApplication) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    char = sheet.character
+    char.powers.append(Power(name="Force Field"))
+    apply_condition(char, "debilitated", data, parameter="Force Field")
+    sheet.powers.refresh()
+    struck = [
+        label
+        for label in sheet.powers.findChildren(QLabel)
+        if label.text() == "Force Field" and label.font().strikeOut()
+    ]
+    assert struck

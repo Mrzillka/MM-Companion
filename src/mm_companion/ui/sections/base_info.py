@@ -26,6 +26,7 @@ from mm_companion.core.rules import (
     reconcile_points_to_level,
 )
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
@@ -46,7 +47,8 @@ class BaseInfoSection(QGroupBox):
     edited = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
-        super().__init__("Base Information", parent)
+        super().__init__(parent)
+        strip_groupbox_caption(self)
 
         # While seeding from a (possibly loaded) character, edits are programmatic,
         # not the user's, so they must not mark the sheet dirty.

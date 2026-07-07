@@ -18,7 +18,6 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -40,13 +39,14 @@ from mm_companion.core.rules import (
     heroic_advantage_ranks,
 )
 from mm_companion.ui.sections.stat_grid import CONDITION_TINT
+from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, title_with_cost
 
 RANK_MIN, RANK_MAX = 1, 20
 
 
-class AdvantagesSection(QGroupBox):
+class AdvantagesSection(TitledSection):
     """A picker and table of advantages backed by the shared :class:`Character`.
 
     Emits :attr:`changed` whenever the point build changes, so the sheet can
@@ -56,7 +56,7 @@ class AdvantagesSection(QGroupBox):
     changed = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
-        super().__init__("Advantages", parent)
+        super().__init__(parent)
 
         self._data = data
         self._character = character
@@ -215,7 +215,7 @@ class AdvantagesSection(QGroupBox):
             self.changed.emit()
 
     def _refresh_cost(self) -> None:
-        self.setTitle(
+        self.set_block_title(
             title_with_cost("Advantages", advantage_points_spent(self._character, self._data))
         )
 

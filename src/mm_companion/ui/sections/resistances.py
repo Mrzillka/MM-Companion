@@ -18,7 +18,7 @@ sheet calls it whenever a power changes.
 from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, Signal
-from PySide6.QtWidgets import QGroupBox, QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QSpinBox, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
@@ -30,10 +30,11 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
+from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import title_with_cost
 
 
-class ResistancesSection(QGroupBox):
+class ResistancesSection(TitledSection):
     """Spin boxes for the derived resistances, backed by the shared :class:`Character`.
 
     Emits :attr:`changed` whenever the point build changes, so the sheet can
@@ -43,7 +44,7 @@ class ResistancesSection(QGroupBox):
     changed = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
-        super().__init__("Resistances", parent)
+        super().__init__(parent)
 
         self._data = data
         self._character = character
@@ -120,7 +121,7 @@ class ResistancesSection(QGroupBox):
         )
 
     def _refresh_cost(self) -> None:
-        self.setTitle(
+        self.set_block_title(
             title_with_cost("Resistances", resistance_points_spent(self._character, self._data))
         )
 

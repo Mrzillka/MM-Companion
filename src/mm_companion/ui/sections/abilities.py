@@ -12,7 +12,7 @@ sheet calls it whenever a power changes.
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QGroupBox, QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QSpinBox, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
@@ -23,10 +23,11 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
+from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import title_with_cost
 
 
-class AbilitiesSection(QGroupBox):
+class AbilitiesSection(TitledSection):
     """Spin boxes for every ability, backed by the shared :class:`Character`.
 
     Emits :attr:`abilityChanged` (key, value) whenever an ability spin box
@@ -39,7 +40,7 @@ class AbilitiesSection(QGroupBox):
     changed = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
-        super().__init__("Abilities", parent)
+        super().__init__(parent)
 
         self._data = data
         self._character = character
@@ -71,7 +72,7 @@ class AbilitiesSection(QGroupBox):
         self.changed.emit()
 
     def _refresh_cost(self) -> None:
-        self.setTitle(
+        self.set_block_title(
             title_with_cost("Abilities", ability_points_spent(self._character, self._data))
         )
 

@@ -1,27 +1,68 @@
 {
   "_meta": {
-    "description": "Condition catalog for Mutants & Masterminds 4e. All 'effect' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (category, supersedes, includes, recovery) reflect game rules/facts, not copyrighted prose.",
+    "description": "Consolidated condition catalog for Mutants & Masterminds 4e. Full mechanical specification for every condition plus a short always-visible 'tooltip' line per record. All 'effect'/'recovery'/'tooltip' fields are original paraphrases of the rulebook's functional rules (penalties, superseding logic, recovery checks, action limits) - not copied prose. Companion to mm-conditions-design.md (pattern definitions and resolution rules). Read mm-conditions-design.md first for the mechanism ids referenced in each condition's 'mechanisms' field.",
     "categoryKey": {
-      "condition": "A general status effect, imposed by an effect, action, or circumstance",
-      "damage_condition": "Specifically imposed by failing a Damage resistance check, part of the damage ladder",
-      "object_damage_condition": "The object/equipment equivalent of a damage condition"
+      "condition": "A general status effect imposed by an effect, action, or circumstance",
+      "damage_condition": "Imposed by failing a Damage resistance check; part of the damage ladder",
+      "object_damage_condition": "The object/equipment equivalent of a damage condition",
+      "meta": "Not a real status — a bookkeeping marker (Normal = no conditions)"
     },
-    "supersedesNote": "If a character already has a condition and gains one that supersedes it, the new (more severe) condition replaces it rather than stacking.",
-    "includesNote": "Some conditions are shorthand bundles of several simpler conditions at once, listed in 'includes'.",
     "damageLadder": [
       "hit",
       "dazed",
-      "stunned",
       "staggered",
+      "stunned",
       "incapacitated",
       "dying",
       "dead"
-    ]
+    ],
+    "objectDamageLadder": [
+      "hit",
+      "broken",
+      "destroyed"
+    ],
+    "structuralRulesKey": {
+      "includes": "This condition is shorthand for a bundle of simpler conditions applied at once. Removing the umbrella removes all of its members; conversely, if every member is individually cleared the umbrella may be considered cleared too (GM's call).",
+      "supersedes": "This condition replaces the listed less-severe conditions rather than stacking with them. Superseding is per-trait where a condition is trait-scoped (Disabled supersedes Impaired only for the same trait).",
+      "individualResolution": "Conditions inside a bundle resolve individually: removing Dazed from a Staggered (Dazed+Hindered) character leaves them Hindered. Imposing a superseding condition on part of a bundle changes only that part (Stunning a Staggered character yields Stunned+Hindered)."
+    },
+    "mechanismKey": {
+      "action_limit": "Caps or removes the character's available actions (free/simple/standard/reaction)",
+      "check_penalty": "A flat penalty on checks — all checks, or a named category/trait scope",
+      "defense_mod": "Alters Defense and/or Dodge rank (halve, zero, auto-fail Dodge)",
+      "movement_mod": "Alters movement speed rank",
+      "perception_mod": "Alters awareness / auto-fails Perception for a sense or overall",
+      "resistance_mod": "Alters resistance checks against a scoped effect/descriptor",
+      "stacking_penalty": "Applies once per instance; multiple copies of the condition accumulate",
+      "recurring_save": "The character retries a recovery check on a fixed cadence to shed the condition",
+      "debilitate_trait": "While applied, a chosen trait is treated as Debilitated / lost (see §Debilitation)",
+      "attack_mod": "Alters attack checks made by or against the character",
+      "random_action": "The character's action each turn is rolled randomly, not chosen",
+      "narrative": "Effect is a GM narrative call, not an engine-computed number"
+    },
+    "parameterNote": "Some conditions must be qualified with a subject when applied — which trait, sense, descriptor, or controller they concern. That is the 'parameter' block. type='trait_select'/'sense_select'/'descriptor_text'/'character_ref' drives a combobox or text input in the UI; the chosen value is stored on the applied-condition instance and folded into the displayed name (e.g. 'Impaired' + trait 'Attack' -> 'Attack Impaired'). A condition with parameter.required=false but present is narrative-scoped only.",
+    "debilitationNote": "Debilitating an ability cascades into hard conditions (see each entry's 'debilitates.cascade'): Strength->Incapacitated, Stamina->Dying (stabilize at -5), Agility->Paralyzed, any Mental (INT/AWE/PRE)->Unaware until restored to >= -5, Attack->auto-fail attacks, Defense->Defenseless, Initiative->acts last. Debilitated Skills read as untrained; Debilitated Advantages/Powers stop functioning. Absent (rank '-') traits behave like debilitated with a few extras (no Stamina treats Dying as Dead). The engine drives this from the chosen trait, not a hardcoded per-condition branch."
   },
   "conditions": [
     {
+      "id": "normal",
+      "name": "Normal",
+      "category": "meta",
+      "includes": [],
+      "supersedes": [],
+      "mechanisms": [
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Baseline — the character has no conditions applied. Used as a bookkeeping/reset marker, not an applicable status.",
+      "recovery": "n/a"
+    },
+    {
       "id": "asleep",
       "name": "Asleep",
+      "tooltip": "Unconscious. Wakes on a strong Perception check, sudden movement, or a noticeable effect.",
       "category": "condition",
       "includes": [
         "defenseless",
@@ -29,23 +70,43 @@
         "unaware"
       ],
       "supersedes": [],
-      "effect": "Unconscious. Wakes on a strong Perception check, sudden movement, or a noticeable effect.",
-      "recovery": "Automatic on waking."
+      "mechanisms": [
+        "action_limit",
+        "defense_mod",
+        "perception_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Unconscious — bundles Defenseless, Stunned, and Unaware.",
+      "recovery": "A hearing Perception check with 3+ degrees of success wakes and clears all of it, as does sudden movement (e.g. being shaken) or any noticeable effect that grants a resistance check."
     },
     {
       "id": "blind",
       "name": "Blind",
+      "tooltip": "Can't see; also counts as Sight Unaware and Vulnerable, plus impaired for sight-dependent tasks.",
       "category": "condition",
       "includes": [
-        "hindered"
+        "hindered",
+        "vulnerable"
       ],
       "supersedes": [],
-      "effect": "Can't see; also counts as Sight Unaware and Vulnerable, plus impaired for sight-dependent tasks.",
-      "recovery": "Depends on the cause; permanent if it's a fixed trait."
+      "mechanisms": [
+        "perception_mod",
+        "movement_mod",
+        "defense_mod",
+        "check_penalty"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Cannot see: Sight Unaware plus Hindered and Vulnerable, and Impaired or Disabled for vision-dependent tasks. A Blind character with an Accurate non-visual sense is only Sight Unaware and sheds the other conditions.",
+      "recovery": "Depends on the cause; permanent if it stems from a fixed trait."
     },
     {
       "id": "bound",
       "name": "Bound",
+      "tooltip": "Physically tied up or restrained solidly enough to stop movement and struggling.",
       "category": "condition",
       "includes": [
         "defenseless",
@@ -53,59 +114,144 @@
         "impaired"
       ],
       "supersedes": [],
-      "effect": "Physically tied up or restrained solidly enough to stop movement and struggling.",
+      "mechanisms": [
+        "defense_mod",
+        "movement_mod",
+        "check_penalty"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Tied up solidly — bundles Defenseless, Immobile, and Impaired.",
       "recovery": "Escape action or outside help."
     },
     {
       "id": "broken",
       "name": "Broken",
+      "tooltip": "An object no longer functions.",
       "category": "object_damage_condition",
       "includes": [],
       "supersedes": [],
-      "effect": "An object no longer functions.",
-      "recovery": "Repair."
+      "mechanisms": [
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "An object no longer functions, including as a barrier (a broken door or wall no longer blocks).",
+      "recovery": "Repair (Technology/appropriate technical skill)."
     },
     {
       "id": "compelled",
       "name": "Compelled",
+      "tooltip": "Forced to take a single standard action per turn chosen by whoever compelled you.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Forced to take a single standard action per turn chosen by whoever compelled you.",
-      "recovery": "Depends on the cause; Controlled supersedes this."
+      "mechanisms": [
+        "action_limit",
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "character_ref",
+        "required": true,
+        "label": "Controlling character",
+        "help": "Who dictates the single standard action each turn."
+      },
+      "debilitates": null,
+      "effect": "Directed by another: limited to a single standard action per turn (tradeable for a simple action) chosen by the controlling character. No other simple/free actions; reactions only if the controller spends their own reaction to compel one. Controlled supersedes this.",
+      "recovery": "Depends on the cause."
     },
     {
       "id": "confused",
       "name": "Confused",
+      "tooltip": "Acts unpredictably each turn — may attack the source of confusion, act normally, do nothing, flee in fear, or lash out randomly.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Acts unpredictably each turn — may attack the source of confusion, act normally, do nothing, flee in fear, or lash out randomly.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "random_action"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Acts randomly: at the start of each turn roll d20 — 1-2 attack the source of confusion; 3-5 act normally (still Confused); 6-10 do nothing (effectively Stunned that turn); 11-14 Frightened of the source; 15-20 attack the nearest other character.",
+      "recovery": "Depends on the cause.",
+      "randomTable": [
+        {
+          "range": "1-2",
+          "outcome": "attack the source of the Confusion"
+        },
+        {
+          "range": "3-5",
+          "outcome": "act normally, but remain Confused"
+        },
+        {
+          "range": "6-10",
+          "outcome": "do nothing, effectively Stunned for the turn"
+        },
+        {
+          "range": "11-14",
+          "outcome": "Frightened of the source of the Confusion"
+        },
+        {
+          "range": "15-20",
+          "outcome": "attack the nearest other character"
+        }
+      ]
     },
     {
       "id": "controlled",
       "name": "Controlled",
+      "tooltip": "Another character dictates your actions each turn, though you keep your normal capabilities.",
       "category": "condition",
       "includes": [],
       "supersedes": [
         "compelled"
       ],
-      "effect": "Another character dictates your actions each turn, though you keep your normal capabilities.",
+      "mechanisms": [
+        "action_limit",
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "character_ref",
+        "required": true,
+        "label": "Controlling character",
+        "help": "Who dictates this character's actions each turn."
+      },
+      "debilitates": null,
+      "effect": "Another character dictates all of this character's actions each turn; the character otherwise keeps its full normal capabilities and range of actions.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "dazed",
       "name": "Dazed",
+      "tooltip": "Limited to free actions plus one standard action per round; can't take reactions.",
       "category": "damage_condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Limited to free actions plus one standard action per round; can't take reactions.",
-      "recovery": "DC 10 Fortitude check at the end of the next turn (damage-caused); other causes may need a different check."
+      "mechanisms": [
+        "action_limit",
+        "recurring_save"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Limited to free actions plus a single standard action per round (tradeable for a simple action); cannot take reactions. Stunned supersedes Dazed.",
+      "recovery": "If damage-caused: DC 10 Stamina check at the end of each turn (time rank 0); success clears it. A non-damage cause may require a different check.",
+      "recoveryCheck": {
+        "trait": "STA",
+        "dc": 10,
+        "cadence": "end_of_turn",
+        "condition": "damage-caused"
+      }
     },
     {
       "id": "dead",
       "name": "Dead",
+      "tooltip": "Life has ended; no further recovery checks apply.",
       "category": "damage_condition",
       "includes": [
         "defenseless",
@@ -113,41 +259,121 @@
         "unaware"
       ],
       "supersedes": [],
-      "effect": "Life has ended; no further recovery checks apply.",
+      "mechanisms": [
+        "action_limit",
+        "defense_mod",
+        "perception_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Mortal existence ended — Defenseless, Stunned, Unaware, and unable to recover (effectively no Stamina rank). Some effects can still interact with or revive Dead characters.",
       "recovery": "None under normal rules."
     },
     {
       "id": "deaf",
       "name": "Deaf",
+      "tooltip": "Can't hear; counts as Hearing Unaware and is easier to catch off guard by sound.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Can't hear; counts as Hearing Unaware and is easier to catch off guard by sound.",
+      "mechanisms": [
+        "perception_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Cannot hear; Hearing Unaware, which can enable Surprise Attacks by sound.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "debilitated",
       "name": "Debilitated",
+      "tooltip": "Has effectively lost the use of a specific trait.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Has effectively lost the use of a specific trait.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "debilitate_trait"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "trait_select",
+        "required": true,
+        "label": "Debilitated trait",
+        "help": "Which ability, skill, advantage, or power is lost while this applies.",
+        "options": [
+          "Strength",
+          "Stamina",
+          "Agility",
+          "Intellect",
+          "Awareness",
+          "Presence",
+          "Attack",
+          "Defense",
+          "Initiative",
+          "a specific Skill",
+          "a specific Advantage",
+          "a specific Power"
+        ]
+      },
+      "debilitates": {
+        "cascade": {
+          "Strength": [
+            "incapacitated"
+          ],
+          "Stamina": [
+            "dying"
+          ],
+          "Agility": [
+            "paralyzed"
+          ],
+          "Intellect": [
+            "unaware"
+          ],
+          "Awareness": [
+            "unaware"
+          ],
+          "Presence": [
+            "unaware"
+          ],
+          "Attack": [],
+          "Defense": [
+            "defenseless"
+          ],
+          "Initiative": []
+        },
+        "notes": "Stamina debilitation also makes stabilization checks at -5. Mental (INT/AWE/PRE) debilitation keeps the character Unaware until the ability is restored to at least -5. Attack -> auto-fail attack checks. Initiative -> cannot roll Initiative and acts last. Debilitated Skills read as untrained (0 ranks); Debilitated Advantages/Powers stop functioning entirely. Ability ranks cannot be lowered further once debilitated."
+      },
+      "effect": "The chosen trait is effectively lost while this applies, and the character may gain the cascade conditions above depending on which trait it is. Character automatically fails any check requiring the debilitated trait.",
+      "recovery": "Depends on the cause; abilities restore to at least -5 to clear the associated hard conditions."
     },
     {
       "id": "defenseless",
       "name": "Defenseless",
+      "tooltip": "Defense treated as 0; automatically fails Dodge resistance checks and can be hit with a routine attack.",
       "category": "condition",
       "includes": [],
       "supersedes": [
         "vulnerable"
       ],
-      "effect": "Defense treated as 0; automatically fails Dodge resistance checks and can be hit with a routine attack.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "defense_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Defense rank treated as 0; auto-fails Dodge resistance checks; attackers may hit with a routine attack. If an attacker forgoes the routine check for a normal attack, any hit is a critical hit and may be a Finishing Attack.",
+      "recovery": "Depends on the cause.",
+      "defenseMod": {
+        "defense": "zero",
+        "dodge": "zero"
+      }
     },
     {
       "id": "delusion",
       "name": "Delusion",
+      "tooltip": "Highest degree of Hallucinating — the subject's whole perceived reality can be fabricated.",
       "category": "condition",
       "includes": [
         "unaware"
@@ -156,45 +382,102 @@
         "phantasm",
         "figment"
       ],
-      "effect": "Highest degree of Hallucinating — the subject's whole perceived reality can be fabricated.",
+      "mechanisms": [
+        "perception_mod",
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": false,
+        "label": "Hallucination content",
+        "help": "Optional narrative note describing the fabricated reality."
+      },
+      "debilitates": null,
+      "effect": "Highest degree of Hallucinating: total control of the subject's sensory impressions, up to a fully fabricated environment. The subject is Unaware of the real world.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "destroyed",
       "name": "Destroyed",
+      "tooltip": "An object is completely wrecked, in pieces or fragments.",
       "category": "object_damage_condition",
       "includes": [],
       "supersedes": [
         "broken"
       ],
-      "effect": "An object is completely wrecked, in pieces or fragments.",
+      "mechanisms": [
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "An object is completely wrecked — in pieces, fragments, or dust.",
       "recovery": "None; the object is gone."
     },
     {
       "id": "disabled",
       "name": "Disabled",
+      "tooltip": "-5 penalty on all checks, or on a specific named category of checks.",
       "category": "condition",
       "includes": [],
       "supersedes": [
         "impaired"
       ],
-      "effect": "-5 penalty on all checks, or on a specific named category of checks.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "check_penalty"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "trait_select",
+        "required": false,
+        "label": "Scoped to checks",
+        "help": "Leave blank for all checks, or name a category/trait (e.g. Attack, Fighting, Perception) — appended to the name as 'Attack Disabled', etc.",
+        "options": [
+          "All checks",
+          "Attack",
+          "Fighting",
+          "Perception",
+          "a specific ability",
+          "a specific skill"
+        ]
+      },
+      "debilitates": null,
+      "effect": "-5 penalty on all checks, or on a named category of checks if scoped. Supersedes Impaired where they apply to the same trait(s).",
+      "recovery": "Depends on the cause.",
+      "penalty": -5
     },
     {
       "id": "dying",
       "name": "Dying",
+      "tooltip": "Incapacitated and at serious risk of death; makes a stabilization check each turn.",
       "category": "damage_condition",
       "includes": [
         "incapacitated"
       ],
       "supersedes": [],
-      "effect": "Incapacitated and at serious risk of death; makes a stabilization check each turn.",
-      "recovery": "Stamina check to stabilize (self) or a Treatment check from another character. See mm-actions-adventure.md §3."
+      "mechanisms": [
+        "action_limit",
+        "defense_mod",
+        "perception_mod",
+        "recurring_save"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Incapacitated and near death. On gaining this, immediately make a DC 10 Stamina check: success = nothing happens; 2+ degrees of success = stabilize (become Incapacitated); failure = remain Dying; 3+ total degrees of failure = Dead. Then check at the start of each turn until death or stabilization. A character with no Stamina rank becomes Dead instead of Dying.",
+      "recovery": "Self: DC 10 Stamina check each turn to stabilize. Another character: DC 15 Treatment check. See mm-actions-adventure.md.",
+      "recoveryCheck": {
+        "trait": "STA",
+        "dc": 10,
+        "cadence": "start_of_turn",
+        "outcome": "2+ degrees stabilizes; 3+ cumulative failures = Dead"
+      }
     },
     {
       "id": "exhausted",
       "name": "Exhausted",
+      "tooltip": "Worn out from overexertion — reduced effectiveness and half speed.",
       "category": "condition",
       "includes": [
         "disabled",
@@ -203,89 +486,214 @@
       "supersedes": [
         "fatigued"
       ],
-      "effect": "Worn out from overexertion — reduced effectiveness and half speed.",
-      "recovery": "About 4 hours of rest, dropping back to Fatigued."
+      "mechanisms": [
+        "check_penalty",
+        "movement_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Worn out from overexertion — bundles Disabled and Hindered.",
+      "recovery": "About 4 hours of rest (time rank 11), dropping back to Fatigued.",
+      "recoveryCheck": {
+        "trait": null,
+        "dc": null,
+        "cadence": "time_rank_11_rest",
+        "outcome": "drops to Fatigued"
+      }
     },
     {
       "id": "fatigued",
       "name": "Fatigued",
+      "tooltip": "Tired from exertion — minor penalties and reduced speed.",
       "category": "condition",
       "includes": [
         "impaired",
         "hindered"
       ],
       "supersedes": [],
-      "effect": "Tired from exertion — minor penalties and reduced speed.",
-      "recovery": "About 1 hour of rest."
+      "mechanisms": [
+        "check_penalty",
+        "movement_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Tired from exertion — bundles Impaired and Hindered. Exhausted supersedes Fatigued.",
+      "recovery": "About 1 hour of rest (time rank 9).",
+      "recoveryCheck": {
+        "trait": null,
+        "dc": null,
+        "cadence": "time_rank_9_rest",
+        "outcome": "clears"
+      }
     },
     {
       "id": "figment",
       "name": "Figment",
+      "tooltip": "Mildest degree of Hallucinating — small, believable changes to perception.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Mildest degree of Hallucinating — small, believable changes to perception.",
+      "mechanisms": [
+        "perception_mod",
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": false,
+        "label": "Hallucination content",
+        "help": "Optional narrative note describing the minor false perception."
+      },
+      "debilitates": null,
+      "effect": "Mildest degree of Hallucinating: minor perceptual changes — making someone look like another person, editing colors, small objects, background noises, and the like.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "frightened",
       "name": "Frightened",
+      "tooltip": "-5 penalty on checks related to the source of fear, and can't willingly approach it.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "-5 penalty on checks related to the source of fear, and can't willingly approach it.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "check_penalty",
+        "movement_mod"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": true,
+        "label": "Object of fear",
+        "help": "What the character fears — scopes the penalty and the no-approach rule."
+      },
+      "debilitates": null,
+      "effect": "-5 on action checks related to the object of fear, and cannot willingly move closer to it.",
+      "recovery": "Depends on the cause.",
+      "penalty": -5
     },
     {
       "id": "hallucinating",
       "name": "Hallucinating",
+      "tooltip": "Perceiving things that aren't real; severity ranges from Figment to Phantasm to Delusion.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Perceiving things that aren't real; severity ranges from Figment to Phantasm to Delusion.",
+      "mechanisms": [
+        "perception_mod",
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": false,
+        "label": "Hallucination content",
+        "help": "Optional narrative note. Degree (Figment/Phantasm/Delusion) is tracked as its own condition."
+      },
+      "debilitates": null,
+      "effect": "Perceiving things that aren't real; severity is tracked by degree — Figment, Phantasm, or Delusion (each its own condition entry).",
       "recovery": "Depends on the cause."
     },
     {
       "id": "hindered",
       "name": "Hindered",
+      "tooltip": "Movement speed halved.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Movement speed halved.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "movement_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Movement at half speed (-1 to speed rank). Immobile supersedes Hindered.",
+      "recovery": "Depends on the cause.",
+      "speedRankMod": -1
     },
     {
       "id": "hit",
       "name": "Hit",
+      "tooltip": "Minor damage taken; stacking -1 penalty on further Damage resistance checks per Hit.",
       "category": "damage_condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Minor damage taken; stacking -1 penalty on further Damage resistance checks per Hit.",
-      "recovery": "DC 10 Stamina check once per minute removes one Hit."
+      "mechanisms": [
+        "stacking_penalty",
+        "resistance_mod",
+        "recurring_save"
+      ],
+      "stacking": true,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Minor damage taken. Each Hit stacks a cumulative -1 penalty on further Damage resistance checks. Objects can also take Hit conditions but do not recover from them on their own.",
+      "recovery": "DC 10 Stamina check once per minute (time rank 3); success removes one Hit. Objects don't self-recover.",
+      "recoveryCheck": {
+        "trait": "STA",
+        "dc": 10,
+        "cadence": "per_minute",
+        "outcome": "removes one Hit instance"
+      },
+      "stackingRule": {
+        "perInstancePenalty": -1,
+        "appliesTo": "damageResistanceChecks",
+        "removedPerRecovery": 1
+      }
     },
     {
       "id": "immobile",
       "name": "Immobile",
+      "tooltip": "Can't move from your current spot, though you can still act.",
       "category": "condition",
       "includes": [],
       "supersedes": [
         "hindered"
       ],
-      "effect": "Can't move from your current spot, though you can still act.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "movement_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "No movement speed — cannot move from the current spot, but can still act unless another condition prevents it.",
+      "recovery": "Depends on the cause.",
+      "speedRankMod": "zero"
     },
     {
       "id": "impaired",
       "name": "Impaired",
+      "tooltip": "-2 penalty on checks, either all of them or a named category.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "-2 penalty on checks, either all of them or a named category.",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "check_penalty"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "trait_select",
+        "required": false,
+        "label": "Scoped to checks",
+        "help": "Leave blank for all checks, or name a category/trait (e.g. Attack, Fighting, Perception) — appended to the name as 'Attack Impaired', etc.",
+        "options": [
+          "All checks",
+          "Attack",
+          "Fighting",
+          "Perception",
+          "a specific ability",
+          "a specific skill"
+        ]
+      },
+      "debilitates": null,
+      "effect": "-2 penalty on checks, either all of them or a named category. Disabled supersedes Impaired for the same trait(s).",
+      "recovery": "Depends on the cause.",
+      "penalty": -2
     },
     {
       "id": "incapacitated",
       "name": "Incapacitated",
+      "tooltip": "Down and out of the fight, usually knocked prone as well.",
       "category": "damage_condition",
       "includes": [
         "defenseless",
@@ -295,132 +703,310 @@
       "supersedes": [
         "staggered"
       ],
-      "effect": "Down and out of the fight, usually knocked prone as well.",
-      "recovery": "DC 10 Stamina check once per minute."
+      "mechanisms": [
+        "action_limit",
+        "defense_mod",
+        "perception_mod",
+        "recurring_save"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Down and out — bundles Defenseless, Stunned, and Unaware, and usually knocked Prone unless held up.",
+      "recovery": "DC 10 Stamina check once per minute (time rank 3); success clears it.",
+      "recoveryCheck": {
+        "trait": "STA",
+        "dc": 10,
+        "cadence": "per_minute",
+        "outcome": "clears"
+      }
     },
     {
       "id": "paralyzed",
       "name": "Paralyzed",
+      "tooltip": "Frozen and unable to act physically, though still mentally aware and able to take purely mental actions.",
       "category": "condition",
       "includes": [
         "defenseless",
         "immobile"
       ],
       "supersedes": [],
-      "effect": "Frozen and unable to act physically, though still mentally aware and able to take purely mental actions.",
+      "mechanisms": [
+        "action_limit",
+        "defense_mod",
+        "movement_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Frozen — Defenseless, Immobile, and physically Stunned; cannot take physical actions but stays aware and can take purely mental actions with no physical component.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "phantasm",
       "name": "Phantasm",
+      "tooltip": "Middle degree of Hallucinating — larger, more complex false perceptions.",
       "category": "condition",
       "includes": [],
       "supersedes": [
         "figment"
       ],
-      "effect": "Middle degree of Hallucinating — larger, more complex false perceptions.",
+      "mechanisms": [
+        "perception_mod",
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": false,
+        "label": "Hallucination content",
+        "help": "Optional narrative note describing the major false perception."
+      },
+      "debilitates": null,
+      "effect": "Middle degree of Hallucinating: major perceptual changes — a large or complex added element (explosion, symphony, fully interactive person), presence/absence of significant objects, or wholly disguising one thing as another.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "prone",
       "name": "Prone",
+      "tooltip": "Lying down — penalty on close attacks made, bonus for close attacks against you, penalty for ranged attacks against you, and reduced ground speed.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Lying down — penalty on close attacks made, bonus for close attacks against you, penalty for ranged attacks against you, and reduced ground speed.",
-      "recovery": "Stand action."
+      "mechanisms": [
+        "attack_mod",
+        "movement_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Lying down: -5 on your close attack checks; opponents get +5 on close attacks against you but -5 on ranged attacks against you; ground speed rank 0.",
+      "recovery": "Stand action (see mm-actions-adventure.md).",
+      "attackMods": {
+        "ownCloseAttack": -5,
+        "incomingCloseAttack": 5,
+        "incomingRangedAttack": -5
+      },
+      "speedRankMod": "zero"
     },
     {
       "id": "restrained",
       "name": "Restrained",
+      "tooltip": "Held or bound; becomes Immobile instead of Hindered if anchored to something fixed.",
       "category": "condition",
       "includes": [
         "hindered",
         "vulnerable"
       ],
       "supersedes": [],
-      "effect": "Held or bound; becomes Immobile instead of Hindered if anchored to something fixed.",
+      "mechanisms": [
+        "movement_mod",
+        "defense_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Held or bound — bundles Hindered and Vulnerable. Becomes Immobile instead of Hindered if anchored to something fixed; if held by another character, becomes Immobile but movable by the restrainer.",
       "recovery": "Escape action or outside help."
     },
     {
       "id": "staggered",
       "name": "Staggered",
+      "tooltip": "Badly hurt — limited actions and reduced speed.",
       "category": "damage_condition",
       "includes": [
         "dazed",
         "hindered"
       ],
       "supersedes": [],
-      "effect": "Badly hurt — limited actions and reduced speed.",
-      "recovery": "DC 10 Stamina check once per minute (if no worse condition is also present)."
+      "mechanisms": [
+        "action_limit",
+        "movement_mod",
+        "recurring_save"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Badly hurt — bundles Dazed and Hindered.",
+      "recovery": "If no worse damage condition is present: DC 10 Stamina check once per minute; success clears it.",
+      "recoveryCheck": {
+        "trait": "STA",
+        "dc": 10,
+        "cadence": "per_minute",
+        "condition": "no worse damage condition present",
+        "outcome": "clears"
+      }
     },
     {
       "id": "stunned",
       "name": "Stunned",
+      "tooltip": "Can't take any action at all, including free actions and reactions; Dodge rank halved.",
       "category": "damage_condition",
       "includes": [],
       "supersedes": [
         "dazed"
       ],
-      "effect": "Can't take any action at all, including free actions and reactions; Dodge rank halved.",
-      "recovery": "DC 10 Fortitude check at the end of the next turn (damage-caused); other causes may need a different check."
+      "mechanisms": [
+        "action_limit",
+        "defense_mod",
+        "recurring_save"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Cannot take any action at all — no free actions, no reactions — and Dodge rank is halved.",
+      "recovery": "If damage-caused: DC 10 Stamina check at the end of each turn (time rank 0); success clears it. A non-damage cause may require a different check.",
+      "recoveryCheck": {
+        "trait": "STA",
+        "dc": 10,
+        "cadence": "end_of_turn",
+        "condition": "damage-caused"
+      }
     },
     {
       "id": "surprised",
       "name": "Surprised",
+      "tooltip": "Caught completely off guard; normally lasts just one round.",
       "category": "condition",
       "includes": [
         "stunned",
         "vulnerable"
       ],
       "supersedes": [],
-      "effect": "Caught completely off guard; normally lasts just one round.",
+      "mechanisms": [
+        "action_limit",
+        "defense_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Caught off-guard — bundles Stunned and Vulnerable. Normally lasts only one round.",
       "recovery": "Automatic after the round it's applied."
     },
     {
       "id": "susceptible",
       "name": "Susceptible",
+      "tooltip": "Penalty on resistance checks against a specific effect or descriptor, equal to half that effect's rank.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Penalty on resistance checks against a specific effect or descriptor, equal to half that effect's rank.",
-      "recovery": "Depends on the cause; often a fixed trait."
+      "mechanisms": [
+        "resistance_mod"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": true,
+        "label": "Effect or descriptor",
+        "help": "What the character is Susceptible to (e.g. Fire Damage, Mind Control) — scopes the penalty."
+      },
+      "debilitates": null,
+      "effect": "Penalty on resistance checks against the named effect/descriptor equal to half that effect's rank (round down).",
+      "recovery": "Depends on the cause; often a fixed trait.",
+      "resistanceMod": {
+        "scope": "named descriptor",
+        "penaltyFormula": "-floor(effectRank / 2)"
+      }
     },
     {
       "id": "transformed",
       "name": "Transformed",
+      "tooltip": "Some or all of the character's traits are altered, sometimes drastically.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Some or all of the character's traits are altered, sometimes drastically.",
+      "mechanisms": [
+        "debilitate_trait",
+        "narrative"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": true,
+        "label": "Transformation",
+        "help": "Describe the altered form / which traits change while transformed."
+      },
+      "debilitates": {
+        "cascade": {},
+        "notes": "Some or all traits are altered — from appearance to full trait-rank changes, including removing and adding traits. The one hard limit: the character's total Power Point value cannot increase, though it may effectively decrease for the duration."
+      },
+      "effect": "Some or all of the character's traits are altered, potentially drastically, for the duration.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "unaware",
       "name": "Unaware",
+      "tooltip": "Oblivious to your surroundings, or to a specific sense if named (e.g. Sight Unaware); fails related Perception checks automatically.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Oblivious to your surroundings, or to a specific sense if named (e.g. Sight Unaware); fails related Perception checks automatically.",
+      "mechanisms": [
+        "perception_mod"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "sense_select",
+        "required": false,
+        "label": "Scoped to sense",
+        "help": "Leave blank for total unawareness, or name a sense — appended as 'Sight Unaware', 'Touch Unaware', etc.",
+        "options": [
+          "All senses",
+          "Sight",
+          "Hearing",
+          "Touch",
+          "Smell/Taste",
+          "a specific sense"
+        ]
+      },
+      "debilitates": null,
+      "effect": "Oblivious to surroundings — everything has total concealment from the character's Unaware sense(s) and they auto-fail Perception checks relying on them. A completely (all-sense) Unaware character is also Defenseless and Disabled.",
       "recovery": "Depends on the cause."
     },
     {
       "id": "vulnerable",
       "name": "Vulnerable",
+      "tooltip": "Defense and Dodge ranks are halved (round down).",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Defense and Dodge ranks are halved (round down).",
-      "recovery": "Depends on the cause."
+      "mechanisms": [
+        "defense_mod"
+      ],
+      "stacking": false,
+      "parameter": null,
+      "debilitates": null,
+      "effect": "Defense and Dodge ranks halved (round down). Defenseless supersedes Vulnerable.",
+      "recovery": "Depends on the cause.",
+      "defenseMod": {
+        "defense": "halve",
+        "dodge": "halve"
+      }
     },
     {
       "id": "weakness",
       "name": "Weakness",
+      "tooltip": "Penalty on resistance checks against a specific effect, and the best possible outcome is capped at one degree of failure.",
       "category": "condition",
       "includes": [],
       "supersedes": [],
-      "effect": "Penalty on resistance checks against a specific effect, and the best possible outcome is capped at one degree of failure.",
-      "recovery": "Usually a fixed trait; not something that clears in play."
+      "mechanisms": [
+        "resistance_mod"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "descriptor_text",
+        "required": true,
+        "label": "Effect or descriptor",
+        "help": "What the character has a Weakness to — scopes the penalty and the failure cap."
+      },
+      "debilitates": null,
+      "effect": "Penalty on resistance checks against the named effect/descriptor equal to half that effect's rank, AND the best possible result on that resistance check is capped at one degree of failure regardless of the roll.",
+      "recovery": "Usually a fixed trait; not something that clears in play.",
+      "resistanceMod": {
+        "scope": "named descriptor",
+        "penaltyFormula": "-floor(effectRank / 2)",
+        "bestOutcome": "one degree of failure"
+      }
     }
   ]
 }

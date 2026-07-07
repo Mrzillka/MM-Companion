@@ -30,7 +30,7 @@ def test_skill_rank_flows_to_model_and_total(qapp: QApplication) -> None:
 
     # Drive the Stealth rank spin box via the row it renders into.
     stealth_row = next(row for row in sheet.skills._rows if row[1] == "Stealth")
-    _, _, _, total_item = stealth_row
+    _, _, _, total_item, _ = stealth_row
     sheet.character.skill_ranks["Stealth"] = 4
     sheet.skills._refresh_totals()
 
@@ -198,13 +198,14 @@ def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
     assert sheet.abilities._abilities["INT"].value() == 5
 
 
-def test_sheet_exposes_six_blocks(qapp: QApplication) -> None:
+def test_sheet_exposes_seven_blocks(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
 
     assert set(sheet.block_keys()) == {
         "base_info",
         "abilities",
         "resistances",
+        "conditions",
         "advantages",
         "skills",
         "powers",

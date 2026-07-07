@@ -21,6 +21,7 @@ possible without ever splitting a block.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -37,8 +38,14 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
-from mm_companion.core.rules import effective_ability, skill_points_spent, skill_total
+from mm_companion.core.rules import (
+    condition_scope_penalty,
+    effective_ability,
+    skill_points_spent,
+    skill_total,
+)
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.sections.stat_grid import CONDITION_TINT, STRIKETHROUGH_CONDITIONS
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item, title_with_cost
 
@@ -79,10 +86,12 @@ class SkillsSection(QGroupBox):
         for skill in data.skills:
             if skill.focused:
                 self._focuses.setdefault(skill.name, [])
-        # (ability_key, row_id, ability_rank_item, total_item) for every rankable
-        # row, so the ability-rank and total cells can be recomputed when
-        # abilities change.
-        self._rows: list[tuple[str, str, QTableWidgetItem, QTableWidgetItem]] = []
+        # (ability_key, row_id, ability_rank_item, total_item, name_item) for every
+        # rankable row, so the ability-rank and total cells can be recomputed when
+        # abilities change and a condition overlay can restyle the total/name.
+        self._rows: list[
+            tuple[str, str, QTableWidgetItem, QTableWidgetItem, QTableWidgetItem | None]
+        ] = []
         # Rank/modifier spin boxes rebuilt on every layout pass, tracked so the
         # lock state can be re-applied to them.
         self._editable_spins: list[QSpinBox] = []
@@ -256,7 +265,9 @@ class SkillsSection(QGroupBox):
         can_specialize: bool = False,
         spec_name: str | None = None,
     ) -> None:
-        self._render_name_cell(table, row, skill, display, indent, can_specialize, spec_name)
+        name_item = self._render_name_cell(
+            table, row, skill, display, indent, can_specialize, spec_name
+        )
 
         abbr = self._ability_abbrs.get(skill.ability, skill.ability)
         table.setItem(row, COL_ABILITY, readonly_item(abbr, center=True))
@@ -284,7 +295,7 @@ class SkillsSection(QGroupBox):
 
         total_item = readonly_item("", center=True)
         table.setItem(row, COL_TOTAL, total_item)
-        self._rows.append((skill.ability, row_id, ability_rank_item, total_item))
+        self._rows.append((skill.ability, row_id, ability_rank_item, total_item, name_item))
 
     def _render_name_cell(
         self,
@@ -295,18 +306,21 @@ class SkillsSection(QGroupBox):
         indent: bool,
         can_specialize: bool,
         spec_name: str | None,
-    ) -> None:
+    ) -> QTableWidgetItem | None:
         """The skill's name cell, optionally with an inline add/remove control.
 
         A plain read-only label unless (and only while unlocked) the row needs a
         control: a ``＋`` to add a specialized pool on a non-focused skill's main row,
-        or a ``✕`` to drop a specialization row.
+        or a ``✕`` to drop a specialization row. Returns the name :class:`QTableWidgetItem`
+        for a plain cell (so a condition can strike it through) or ``None`` for a widget
+        cell.
         """
 
         name = ("    " if indent else "") + display
         if self._locked or (not can_specialize and spec_name is None):
-            table.setItem(row, COL_NAME, readonly_item(name))
-            return
+            item = readonly_item(name)
+            table.setItem(row, COL_NAME, item)
+            return item
 
         host = QWidget()
         hbox = QHBoxLayout(host)
@@ -331,6 +345,7 @@ class SkillsSection(QGroupBox):
             add.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
             hbox.addWidget(add)
         table.setCellWidget(row, COL_NAME, host)
+        return None
 
     # -- interaction ---------------------------------------------------------
 
@@ -410,12 +425,38 @@ class SkillsSection(QGroupBox):
         self._refresh_totals()
 
     def _refresh_totals(self) -> None:
-        for ability_key, row_id, ability_rank_item, total_item in self._rows:
+        for ability_key, row_id, ability_rank_item, total_item, name_item in self._rows:
             # The ABL column shows the *effective* ability (with any power boost) so
             # the row's columns still sum to the total.
             ability = effective_ability(self._character, self._data, ability_key)
             total = skill_total(self._character, self._data, row_id)
             ability_rank_item.setText(str(ability))
-            total_item.setText(str(total))
+            # A scoped Impaired/Disabled (or a global one) overlays the total in red,
+            # struck through for a lost-trait condition. This is display-only — the
+            # build math above (skill_total) is untouched.
+            base_name = row_id.split(":", 1)[0].strip()
+            effect = condition_scope_penalty(self._character, self._data, {row_id, base_name})
+            total_item.setText(str(effect.apply(total) if effect.active else total))
+            self._style_condition(total_item, name_item, effect, total)
         # Keep the section title's running point cost current.
         self.setTitle(title_with_cost("Skills", skill_points_spent(self._character, self._data)))
+
+    @staticmethod
+    def _style_condition(total_item, name_item, effect, base_total: int) -> None:
+        """Tint the total red (and strike the row) while a condition scopes to it."""
+
+        struck = effect.active and bool(effect.condition_ids & STRIKETHROUGH_CONDITIONS)
+        for item in (total_item, name_item):
+            if item is None:
+                continue
+            font = item.font()
+            font.setStrikeOut(struck)
+            item.setFont(font)
+            if effect.active:
+                item.setForeground(QBrush(QColor(CONDITION_TINT)))
+            else:
+                item.setData(Qt.ItemDataRole.ForegroundRole, None)
+        if effect.active:
+            total_item.setToolTip(f"{base_total} {effect.tooltip}")
+        else:
+            total_item.setToolTip("")

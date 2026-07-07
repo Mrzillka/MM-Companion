@@ -1,8 +1,9 @@
-"""The character sheet: six blocks on a scrollable, free-form canvas.
+"""The character sheet: seven blocks on a scrollable, free-form canvas.
 
 The sheet is a scrolling page: a :class:`QScrollArea` hosting a
-:class:`~mm_companion.ui.block_canvas.BlockCanvas` that arranges the six blocks
-(Base Information, Abilities, Resistances, Advantages, Skills, Powers). The user
+:class:`~mm_companion.ui.block_canvas.BlockCanvas` that arranges the seven blocks
+(Base Information, Abilities, Resistances, Conditions, Advantages, Skills, Powers).
+The user
 can drag a block to reorder it, put blocks side by side, tear one out into its
 own window, and drag that window back to re-dock it — all while the whole page
 scrolls vertically and each block shows its full content (no per-block scroll).
@@ -32,6 +33,7 @@ from mm_companion.ui.sections import (
     AbilitiesSection,
     AdvantagesSection,
     BaseInfoSection,
+    ConditionsSection,
     PowersSection,
     ResistancesSection,
     SkillsSection,
@@ -39,7 +41,7 @@ from mm_companion.ui.sections import (
 
 
 class CharacterSheet(QWidget):
-    """Scrollable, free-form canvas of the sheet's six blocks over a shared model."""
+    """Scrollable, free-form canvas of the sheet's seven blocks over a shared model."""
 
     edited = Signal()
 
@@ -56,6 +58,7 @@ class CharacterSheet(QWidget):
         self.base_info = BaseInfoSection(self._data, self.character)
         self.abilities = AbilitiesSection(self._data, self.character)
         self.resistances = ResistancesSection(self._data, self.character)
+        self.conditions = ConditionsSection(self._data, self.character)
         self.advantages = AdvantagesSection(self._data, self.character)
         self.skills = SkillsSection(self._data, self.character)
         self.powers = PowersSection(self._data, self.character)
@@ -66,6 +69,7 @@ class CharacterSheet(QWidget):
             ("base_info", "Base Information", self.base_info),
             ("abilities", "Abilities", self.abilities),
             ("resistances", "Resistances", self.resistances),
+            ("conditions", "Conditions", self.conditions),
             ("advantages", "Advantages", self.advantages),
             ("skills", "Skills", self.skills),
             ("powers", "Powers", self.powers),
@@ -88,7 +92,7 @@ class CharacterSheet(QWidget):
     # -- layout model / persistence -----------------------------------------
 
     def block_keys(self) -> list[str]:
-        """The six block keys, in construction order."""
+        """The seven block keys, in construction order."""
         return self._canvas.block_keys()
 
     def block_frame(self, key: str) -> BlockFrame:
@@ -167,6 +171,16 @@ class CharacterSheet(QWidget):
         self.powers.changed.connect(self.resistances.refresh_enhancements)
         self.powers.changed.connect(self.skills.refresh_totals)
 
+        # A condition change overlays penalties on the stat rows (a scoped Impaired on
+        # a skill, Hit on Toughness, a halved defense), so refresh the same views. A
+        # Debilitated condition can also name an advantage or a power, which those
+        # sections strike through as effectively lost.
+        self.conditions.conditionsChanged.connect(self.abilities.refresh_enhancements)
+        self.conditions.conditionsChanged.connect(self.resistances.refresh_enhancements)
+        self.conditions.conditionsChanged.connect(self.skills.refresh_totals)
+        self.conditions.conditionsChanged.connect(self.advantages.refresh_conditions)
+        self.conditions.conditionsChanged.connect(self.powers.refresh)
+
         # And the reverse: a power's displayed numbers derive from character facts,
         # so editing an ability/resistance/advantage or the Power Level re-derives
         # the power cards. `refresh` only reads the model, so it never loops back.
@@ -182,9 +196,10 @@ class CharacterSheet(QWidget):
         self.base_info.changed.connect(self.advantages.refresh_limits)
 
         # Surface any user edit for unsaved-change tracking. The stats/skills
-        # `changed` signals already fire on every edit; base_info has edits (name,
-        # conditions, image) that don't affect the build, so it carries `edited`.
+        # `changed` signals already fire on every edit; base_info (name, image) and
+        # conditions have edits that don't affect the build, so they carry `edited`.
         self.base_info.edited.connect(self.edited)
+        self.conditions.edited.connect(self.edited)
         self.abilities.changed.connect(self.edited)
         self.resistances.changed.connect(self.edited)
         self.advantages.changed.connect(self.edited)
@@ -196,6 +211,7 @@ class CharacterSheet(QWidget):
             self.base_info,
             self.abilities,
             self.resistances,
+            self.conditions,
             self.advantages,
             self.skills,
             self.powers,

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from mm_companion.core import library, storage
-from mm_companion.core.character import AdvantageSelection, Character
+from mm_companion.core.character import AdvantageSelection, AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
 
 
@@ -22,7 +22,7 @@ def _sample_character() -> Character:
     char.profile["hero_name"] = "Iron Man"
     char.abilities["STR"] = 4
     char.advantages.append(AdvantageSelection("Close Attack", 2))
-    char.conditions.add("dazed")
+    char.conditions.append(AppliedCondition("dazed"))
     return char
 
 

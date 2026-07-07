@@ -7,7 +7,39 @@ pattern, used here to lay out a variable number of condition chips.
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtWidgets import QLayout, QLayoutItem, QWidget
+from PySide6.QtGui import QResizeEvent
+from PySide6.QtWidgets import QLayout, QLayoutItem, QSizePolicy, QWidget
+
+
+class FlowContainer(QWidget):
+    """A host widget for a :class:`FlowLayout` that reports its wrapped height.
+
+    A plain ``QWidget`` does not advertise height-for-width to its parent layout, so
+    a vertical parent allocates it only its (single-row) size hint — and the wrapped
+    chip rows then paint past it and overlap whatever sits below. This subclass turns
+    height-for-width on and pins its ``minimumHeight`` to the flow's height at the
+    current width, so the enclosing block grows to fit every row instead.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        policy = self.sizePolicy()
+        policy.setHeightForWidth(True)
+        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(policy)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        layout = self.layout()
+        return layout.heightForWidth(width) if layout is not None else super().heightForWidth(width)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        layout = self.layout()
+        if layout is not None and self.width() > 0:
+            self.setMinimumHeight(layout.heightForWidth(self.width()))
+        super().resizeEvent(event)
 
 
 class FlowLayout(QLayout):

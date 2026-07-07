@@ -1,6 +1,6 @@
 """The scrollable, free-form canvas that arranges the character-sheet blocks.
 
-`BlockCanvas` is the single source of truth for how the six blocks are laid out.
+`BlockCanvas` is the single source of truth for how the seven blocks are laid out.
 It models the arrangement as an ordered list of *rows*, each an ordered list of
 block keys, plus a set of *floating* blocks (torn out into their own windows) and
 a set of *hidden* blocks (closed, reopenable from the View menu). It renders the
@@ -36,13 +36,14 @@ from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
 
 # Bumped whenever the persisted arrangement schema changes, so a layout saved by
 # an older version is rejected and the default applies.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # The default arrangement: Base Info full width, the compact Abilities|Resistances
-# pair, then Advantages, Skills, and Powers each full width.
+# pair, then Conditions, Advantages, Skills, and Powers each full width.
 DEFAULT_ROWS: list[list[str]] = [
     ["base_info"],
     ["abilities", "resistances"],
+    ["conditions"],
     ["advantages"],
     ["skills"],
     ["powers"],

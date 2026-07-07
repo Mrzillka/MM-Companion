@@ -26,6 +26,34 @@ def _pl10_character() -> Character:
     return Character.new_default(load_game_data())
 
 
+def test_attack_skill_combo_links_a_combat_focus_to_the_power(qapp: QApplication) -> None:
+    char = _pl10_character()
+    char.abilities["ATK"] = 3
+    char.focuses["Close Combat"] = ["Blades"]
+    char.skill_ranks["Close Combat::Blades"] = 4  # focus total = ATK 3 + 4 = 7
+    window = PowerConstructorWindow(load_game_data(), character=char)
+
+    combo = window._attack_skill
+    assert combo is not None  # the picker appears because the wielder has a focus
+    index = combo.findData("Close Combat::Blades")
+    assert index > 0
+    combo.setCurrentIndex(index)
+    assert window.power.attack_skill == "Close Combat::Blades"
+
+    # The game-term attack line now reads the focus total, replacing the bare Attack.
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["check"].value == "7 vs. Defense"
+
+
+def test_attack_skill_combo_absent_without_combat_focuses(qapp: QApplication) -> None:
+    # A character with no Close/Ranged Combat focuses has nothing to link, so the
+    # picker isn't built.
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    assert window._attack_skill is None
+
+
 def test_dropping_an_effect_adds_a_card_and_costs(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")

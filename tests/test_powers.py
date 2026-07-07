@@ -25,6 +25,7 @@ from mm_companion.core.rules import (
     effective_ability,
     effective_effect_stats,
     power_allocation_violations,
+    power_attack_skill_bonus,
     power_game_terms,
     power_linked_range_violations,
     power_pl_violations,
@@ -634,6 +635,7 @@ def test_power_round_trips_through_dict() -> None:
         structure=STRUCTURE_ARRAY,
         activated=False,
         item_present=False,
+        attack_skill="Close Combat::Blades",
         effects=[
             PowerEffectInstance(
                 "damage",
@@ -651,6 +653,7 @@ def test_power_round_trips_through_dict() -> None:
     assert restored.to_dict() == power.to_dict()
     assert restored.effects[0].extras[0].modifier_id == "ranged"
     assert restored.structure == STRUCTURE_ARRAY
+    assert restored.attack_skill == "Close Combat::Blades"
     # Runtime on/off state survives the round trip.
     assert restored.activated is False and restored.item_present is False
     assert restored.effects[0].toggled_on is False
@@ -799,6 +802,41 @@ def test_pl_violations_respect_inaccurate_trade_off() -> None:
     # Inaccurate lowers the attack, so a rank-21 Damage trades back under the cap.
     effect = PowerEffectInstance("damage", rank=21, flaws=[ModifierSelection("inaccurate")])
     assert power_pl_violations(Power(effects=[effect]), _pl_char(data), data) == []
+
+
+def test_power_attack_skill_bonus_uses_the_focus_total() -> None:
+    data = load_game_data()
+    char = _pl_char(data, atk=3)
+    char.focuses["Close Combat"] = ["Blades"]
+    char.skill_ranks["Close Combat::Blades"] = 4
+    power = Power(effects=[], attack_skill="Close Combat::Blades")
+    # Close Combat is an ATK skill, so its total already folds Attack in: 3 + 4 = 7.
+    assert power_attack_skill_bonus(power, char, data) == 7
+    # No link → None, so the caller falls back to the Attack ability.
+    assert power_attack_skill_bonus(Power(effects=[]), char, data) is None
+
+
+def test_pl_violations_use_the_linked_combat_skill_instead_of_attack() -> None:
+    data = load_game_data()
+    char = _pl_char(data, atk=2)
+    char.focuses["Ranged Combat"] = ["Guns"]
+    char.skill_ranks["Ranged Combat::Guns"] = 6  # focus total = ATK 2 + 6 = 8
+    effect = PowerEffectInstance("damage", rank=14)
+    linked = Power(effects=[effect], attack_skill="Ranged Combat::Guns")
+    violations = power_pl_violations(linked, char, data)  # 8 + 14 = 22 > 20
+    assert violations and "22" in violations[0]
+    # Without the link the bare Attack (2) replaces it: 2 + 14 = 16, under the cap.
+    assert power_pl_violations(Power(effects=[effect]), char, data) == []
+
+
+def test_effect_stat_rows_attack_bonus_overrides_the_attack_roll() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+    effect = PowerEffectInstance("damage", rank=8)
+    # A linked combat focus passes its total as attack_bonus, replacing Attack 6.
+    rows = {r.key: r for r in effect_stat_rows(effect, data, char, attack_bonus=9)}
+    assert rows["check"].value == "9 vs. Defense"
 
 
 # -- trait boosts from powers (Enhanced Trait, Protection) --------------------

@@ -35,6 +35,37 @@ GATE_REMOVABLE = "removable"  # only while the associated item is present
 GATE_TOGGLE = "toggle"  # a Sustained/Continuous switch the player sets
 GATE_LIMITED = "limited"  # a free-text condition the player self-applies (informational)
 
+# Condition mechanism tags — which engine subsystem a condition feeds
+# (``mm-conditions-design.md`` §4). Each names one place in the derived-stats /
+# turn-resolution layer; the condition supplies data, the subsystem does the math.
+# The resolver systems that read these live in :mod:`mm_companion.core.rules`.
+MECH_ACTION_LIMIT = "action_limit"  # caps available actions
+MECH_CHECK_PENALTY = "check_penalty"  # a flat penalty on checks (all or scoped)
+MECH_DEFENSE_MOD = "defense_mod"  # alters Defense/Dodge
+MECH_MOVEMENT_MOD = "movement_mod"  # alters movement speed rank
+MECH_PERCEPTION_MOD = "perception_mod"  # awareness / auto-failed Perception
+MECH_RESISTANCE_MOD = "resistance_mod"  # scoped resistance penalty
+MECH_STACKING_PENALTY = "stacking_penalty"  # accumulates per instance (Hit)
+MECH_RECURRING_SAVE = "recurring_save"  # a recovery check on a cadence (roll layer)
+MECH_DEBILITATE_TRAIT = "debilitate_trait"  # removes a trait, may cascade
+MECH_ATTACK_MOD = "attack_mod"  # attack checks by/against the character (Prone)
+MECH_RANDOM_ACTION = "random_action"  # the turn's action is rolled (roll layer)
+MECH_NARRATIVE = "narrative"  # no computed effect; a GM prompt/note
+MECHANISMS = (
+    MECH_ACTION_LIMIT,
+    MECH_CHECK_PENALTY,
+    MECH_DEFENSE_MOD,
+    MECH_MOVEMENT_MOD,
+    MECH_PERCEPTION_MOD,
+    MECH_RESISTANCE_MOD,
+    MECH_STACKING_PENALTY,
+    MECH_RECURRING_SAVE,
+    MECH_DEBILITATE_TRAIT,
+    MECH_ATTACK_MOD,
+    MECH_RANDOM_ACTION,
+    MECH_NARRATIVE,
+)
+
 
 @dataclass(frozen=True)
 class TraitBoost:

@@ -8,15 +8,12 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
-    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMenu,
     QPushButton,
     QSpinBox,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -24,23 +21,25 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Characteristic, Field, GameData
 from mm_companion.core.library import resolve_image_path
-from mm_companion.core.rules import power_level_for_points, reconcile_points_to_level
-from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.core.rules import (
+    power_level_for_points,
+    reconcile_points_to_level,
+)
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
 IMAGE_SIZE = 160
-CONDITIONS_ROW_HEIGHT = 44
 
 
 class BaseInfoSection(QGroupBox):
     """Descriptive fields, characteristics that can't be bought with power
     points (size, speed, ...), and a user-loadable character image.
 
-    Field, characteristic, and condition edits are written to the shared
-    :class:`Character`. Emits :attr:`changed` when an edit affects the point
-    build (power level / power points) so the sheet can recompute.
+    Field and characteristic edits are written to the shared :class:`Character`.
+    Emits :attr:`changed` when an edit affects the point build (power level /
+    power points) so the sheet can recompute. Conditions now live in their own
+    :class:`~mm_companion.ui.sections.conditions.ConditionsSection` block.
     """
 
     changed = Signal()
@@ -57,12 +56,6 @@ class BaseInfoSection(QGroupBox):
         self._profile_fields: dict[str, QLineEdit] = {}
         self._characteristics: dict[str, QWidget] = {}
         self._pool_current: dict[str, QLabel] = {}
-        self._condition_names: list[str] = [c.name for c in data.conditions]
-        self._condition_ids: dict[str, str] = {c.name: (c.id or c.name) for c in data.conditions}
-        self._condition_names_by_id: dict[str, str] = {
-            (c.id or c.name): c.name for c in data.conditions
-        }
-        self._conditions: dict[str, QWidget] = {}
         self._image_path: str | None = None
         self._locked = False
 
@@ -87,17 +80,12 @@ class BaseInfoSection(QGroupBox):
         self._loading = False
 
     def _seed_from_model(self) -> None:
-        """Render conditions and the image from a (possibly loaded) character.
+        """Render the image from a (possibly loaded) character.
 
-        Profile fields and characteristics seed themselves as they are built;
-        conditions and the image are populated here since they have no fixed set
-        of widgets to seed. Runs while ``_loading`` is set, so it does not mark
-        the sheet dirty.
+        Profile fields and characteristics seed themselves as they are built; the
+        image is populated here since it has no fixed set of widgets to seed. Runs
+        while ``_loading`` is set, so it does not mark the sheet dirty.
         """
-        for condition_id in sorted(self._character.conditions):
-            name = self._condition_names_by_id.get(condition_id)
-            if name is not None:
-                self._add_condition(name)
         if self._character.image_path:
             self._show_image(resolve_image_path(self._character.image_path))
 
@@ -284,80 +272,12 @@ class BaseInfoSection(QGroupBox):
         self._details_group.setChecked(False)  # starts collapsed
 
         column.addWidget(self._details_group)
-
-        # Under the profile fields: active conditions, added via a "+" button.
-        column.addWidget(self._build_conditions_group())
         column.addStretch()
         return column
 
-    def _build_conditions_group(self) -> QGroupBox:
-        group = QGroupBox("Conditions")
-        outer = QVBoxLayout(group)
-
-        header = QHBoxLayout()
-        self._add_condition_button = QToolButton()
-        self._add_condition_button.setText("+")
-        self._add_condition_button.setToolTip("Add a condition")
-        self._add_condition_button.clicked.connect(self._show_condition_menu)
-        header.addWidget(self._add_condition_button)
-        header.addStretch()
-        outer.addLayout(header)
-
-        chips = QWidget()
-        # Reserve a row's worth of height so the frame doesn't jump when the
-        # first chip is added.
-        chips.setMinimumHeight(CONDITIONS_ROW_HEIGHT)
-        self._conditions_flow = FlowLayout(chips)
-        outer.addWidget(chips)
-        return group
-
-    def _show_condition_menu(self) -> None:
-        menu = QMenu(self)
-        available = [n for n in self._condition_names if n not in self._conditions]
-        if available:
-            for name in available:
-                menu.addAction(name, lambda checked=False, n=name: self._add_condition(n))
-        else:
-            menu.addAction("All conditions added").setEnabled(False)
-        button = self._add_condition_button
-        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
-
-    def _add_condition(self, name: str) -> None:
-        if name in self._conditions:
-            return
-
-        chip = QFrame()
-        chip.setFrameShape(QFrame.Shape.StyledPanel)
-        chip_layout = QHBoxLayout(chip)
-        chip_layout.setContentsMargins(6, 1, 2, 1)
-        chip_layout.setSpacing(2)
-        chip_layout.addWidget(QLabel(name))
-
-        remove = QToolButton()
-        remove.setText("×")
-        remove.setAutoRaise(True)
-        remove.setToolTip(f"Remove {name}")
-        remove.clicked.connect(lambda: self._remove_condition(name))
-        chip_layout.addWidget(remove)
-
-        self._conditions[name] = chip
-        self._conditions_flow.addWidget(chip)
-        self._character.conditions.add(self._condition_ids.get(name, name))
-        self._emit_edited()
-
-    def _remove_condition(self, name: str) -> None:
-        chip = self._conditions.pop(name, None)
-        if chip is None:
-            return
-        self._conditions_flow.removeWidget(chip)
-        chip.deleteLater()
-        self._character.conditions.discard(self._condition_ids.get(name, name))
-        self._emit_edited()
-
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back, and
-        hide the image loader. Conditions stay editable in either mode — they
-        change constantly during play, unlike the rest of the build.
+        hide the image loader.
         """
         self._locked = locked
         for edit in self._profile_fields.values():

@@ -22,6 +22,7 @@ def test_block_sizes_load_for_every_block() -> None:
         "base_info",
         "abilities",
         "resistances",
+        "conditions",
         "advantages",
         "skills",
         "powers",
@@ -37,8 +38,9 @@ def test_horizontally_pinned_blocks_have_a_max_width() -> None:
     # Abilities and resistances are compact grids that shouldn't stretch wide.
     assert sizes["abilities"].max_width < UNBOUNDED
     assert sizes["resistances"].max_width < UNBOUNDED
-    # Base info shouldn't grow tall.
-    assert sizes["base_info"].max_height < UNBOUNDED
+    # Base info grows tall on demand — conditions (which can bundle into several
+    # chips) must never be clipped, so its height is unbounded.
+    assert sizes["base_info"].max_height == UNBOUNDED
     # The content blocks grow freely both ways.
     assert sizes["skills"].max_width == UNBOUNDED
     assert sizes["powers"].max_height == UNBOUNDED

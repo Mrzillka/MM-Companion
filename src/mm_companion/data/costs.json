@@ -6,7 +6,7 @@
     "resistance_per_rank": 1,
     "advantage_per_rank": 1,
     "skill_ranks_per_pp": 2,
-    "skill_focus_ranks_per_pp": 4
+    "skill_specialized_ranks_per_pp": 4
   },
   "power_level": {
     "pp_per_level": 15,

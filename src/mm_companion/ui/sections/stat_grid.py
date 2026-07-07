@@ -15,6 +15,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QSpinBox, QWidget
 
+from mm_companion.core.rules import ConditionEffect
 from mm_companion.ui.widgets import hline_separator, make_spin_box
 
 STAT_MIN, STAT_MAX = -5, 30
@@ -22,6 +23,10 @@ STAT_SPIN_WIDTH = 80
 
 # The green a power-boosted trait's "→ total" reads in, matching the summary tints.
 ENHANCED_TINT = "#2e9e4f"
+# The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
+CONDITION_TINT = "#d15b5b"
+# Conditions rendered struck through on the stat they hit (a lost/near-lost trait).
+STRIKETHROUGH_CONDITIONS = frozenset({"disabled", "debilitated"})
 
 
 def add_stat_row(
@@ -83,22 +88,58 @@ def build_stat_group(
     return container
 
 
-def apply_enhancements(spins: dict, labels: dict, bonuses: dict) -> None:
-    """Show or hide each trait's "→ total" label from the power bonuses.
+def _set_label_strike(label: QLabel, struck: bool) -> None:
+    font = label.font()
+    font.setStrikeOut(struck)
+    label.setFont(font)
 
-    A trait with no power bonus keeps its label hidden, so the column only
-    appears for traits a power actually raises. The base a bonus adds to is the
-    spin box's own value (for a resistance, already its full derived total).
+
+def apply_stat_effects(
+    spins: dict,
+    labels: dict,
+    bonuses: dict,
+    cond_effects: dict[str, ConditionEffect] | None = None,
+) -> None:
+    """Show or hide each trait's "→ total" label from power bonuses and conditions.
+
+    The label reads ``→ N``, where ``N`` is the spin box's value plus any power boost,
+    then a condition overlay (a Hit penalty on Toughness, a halved/zeroed active defense,
+    a scoped check penalty). A pure power boost tints green; any condition tints it red,
+    struck through when a lost-trait condition (Disabled/Debilitated) is involved. A trait
+    with neither keeps its label hidden.
     """
 
+    cond_effects = cond_effects or {}
     for key, label in labels.items():
         bonus = bonuses.get(key)
-        if bonus:
-            total = spins[key].value() + bonus.amount
-            label.setText(f"→ {total}")
-            label.setToolTip(f"+{bonus.amount} from {', '.join(bonus.sources)}")
-            label.setVisible(True)
-        else:
+        effect = cond_effects.get(key)
+        has_cond = effect is not None and effect.active
+        if not bonus and not has_cond:
             label.clear()
             label.setToolTip("")
+            _set_label_strike(label, False)
             label.setVisible(False)
+            continue
+
+        total = spins[key].value() + (bonus.amount if bonus else 0)
+        if has_cond:
+            total = effect.apply(total)
+        label.setText(f"→ {total}")
+
+        tips = []
+        if bonus:
+            tips.append(f"+{bonus.amount} from {', '.join(bonus.sources)}")
+        if has_cond and effect.tooltip:
+            tips.append(effect.tooltip)
+        label.setToolTip("\n".join(tips))
+
+        tint = CONDITION_TINT if has_cond else ENHANCED_TINT
+        label.setStyleSheet(f"color: {tint}; font-weight: bold;")
+        _set_label_strike(label, has_cond and bool(effect.condition_ids & STRIKETHROUGH_CONDITIONS))
+        label.setVisible(True)
+
+
+def apply_enhancements(spins: dict, labels: dict, bonuses: dict) -> None:
+    """Back-compat shim: power boosts only, no condition overlay."""
+
+    apply_stat_effects(spins, labels, bonuses, None)

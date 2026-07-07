@@ -5,26 +5,29 @@ short code and current rank, the skill's own ranks, and a free modifier. The
 total bonus is the sum of the ability rank, the skill ranks, and the modifier.
 Focused skills (Close Combat, Expertise, Ranged Combat) have no ranks of their
 own — the character instead adds focused instances, each of which becomes its
-own rankable row.
+own rankable row. Any skill can also carry *specialized* rows: narrow, half-cost
+rank pools rendered as extra indented rows under the skill.
 
 To save vertical space the skills are laid out across two side-by-side tables:
 the left flow fills the first table and the right flow fills the second. Neither
 table scrolls — each is sized to show all of its rows and grows as focuses are
 added, so the whole section scrolls with the page. The split is dynamic: skills
-are grouped
-into blocks (a plain skill is one block; a focused skill and its focus rows form
-a single block), and the blocks are divided between the two tables so their
-heights are as even as possible without ever splitting a focused group.
+are grouped into blocks (a plain skill is one block; a focused skill with its
+focus rows, plus any skill's specialization rows, form a single block), and the
+blocks are divided between the two tables so their heights are as even as
+possible without ever splitting a block.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
+    QLabel,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -35,8 +38,14 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
-from mm_companion.core.rules import effective_ability, skill_points_spent, skill_total
+from mm_companion.core.rules import (
+    condition_scope_penalty,
+    effective_ability,
+    skill_points_spent,
+    skill_total,
+)
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.sections.stat_grid import CONDITION_TINT, STRIKETHROUGH_CONDITIONS
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item, title_with_cost
 
@@ -71,13 +80,18 @@ class SkillsSection(QGroupBox):
         self._ranks = character.skill_ranks
         self._mods = character.skill_mods
         self._focuses = character.focuses
+        # Specializations (narrow, half-cost pools) can hang off any skill; the model
+        # only carries non-empty entries, so read with .get rather than seeding all.
+        self._specializations = character.specializations
         for skill in data.skills:
             if skill.focused:
                 self._focuses.setdefault(skill.name, [])
-        # (ability_key, row_id, ability_rank_item, total_item) for every rankable
-        # row, so the ability-rank and total cells can be recomputed when
-        # abilities change.
-        self._rows: list[tuple[str, str, QTableWidgetItem, QTableWidgetItem]] = []
+        # (ability_key, row_id, ability_rank_item, total_item, name_item) for every
+        # rankable row, so the ability-rank and total cells can be recomputed when
+        # abilities change and a condition overlay can restyle the total/name.
+        self._rows: list[
+            tuple[str, str, QTableWidgetItem, QTableWidgetItem, QTableWidgetItem | None]
+        ] = []
         # Rank/modifier spin boxes rebuilt on every layout pass, tracked so the
         # lock state can be re-applied to them.
         self._editable_spins: list[QSpinBox] = []
@@ -148,10 +162,15 @@ class SkillsSection(QGroupBox):
         """Divide the skills into two ordered groups of near-equal height.
 
         Each skill is a block whose height is one row, plus one row per focus for
-        focused skills; blocks are never split across the two groups.
+        focused skills and one per specialization for any skill; blocks are never split
+        across the two groups.
         """
 
-        sizes = [1 + len(self._focuses[s.name]) if s.focused else 1 for s in self._skills]
+        sizes = []
+        for skill in self._skills:
+            size = 1 + len(self._focuses[skill.name]) if skill.focused else 1
+            size += len(self._specializations.get(skill.name, []))
+            sizes.append(size)
         total = sum(sizes)
 
         best_split, best_diff = 0, None
@@ -164,8 +183,12 @@ class SkillsSection(QGroupBox):
         return self._skills[:best_split], self._skills[best_split:]
 
     def _expand(self, skills: list[Skill]) -> list[tuple]:
-        """Flatten skills into per-row specs: a focused skill yields a header row
-        followed by one row per focus; a plain skill yields a single row."""
+        """Flatten skills into per-row specs.
+
+        A focused skill yields a header row followed by one row per focus; a plain
+        skill yields a single row. Either way, any specialized pools follow as extra
+        indented ``"spec"`` rows.
+        """
 
         specs: list[tuple] = []
         for skill in skills:
@@ -177,33 +200,59 @@ class SkillsSection(QGroupBox):
                     specs.append(("focus", skill, display, row_id))
             else:
                 specs.append(("skill", skill, skill.name, skill.name))
+            for spec in self._specializations.get(skill.name, []):
+                display = f"{skill.name}: {spec} (specialized)"
+                row_id = f"{skill.name}::spec::{spec}"
+                specs.append(("spec", skill, display, row_id, spec))
         return specs
 
     def _render_side(self, table: QTableWidget, specs: list[tuple]) -> None:
         for row, spec in enumerate(specs):
-            if spec[0] == "header":
+            kind = spec[0]
+            if kind == "header":
                 self._render_group_header(table, row, spec[1])
+            elif kind == "spec":
+                _, skill, display, row_id, spec_name = spec
+                self._render_skill_row(
+                    table, row, skill, display, row_id, indent=True, spec_name=spec_name
+                )
             else:
                 _, skill, display, row_id = spec
-                indent = spec[0] == "focus"
-                self._render_skill_row(table, row, skill, display, row_id, indent=indent)
+                self._render_skill_row(
+                    table,
+                    row,
+                    skill,
+                    display,
+                    row_id,
+                    indent=(kind == "focus"),
+                    can_specialize=(kind == "skill"),
+                )
 
     def _render_group_header(self, table: QTableWidget, row: int, skill: Skill) -> None:
-        """Header cell block with an 'Add focus' button for a focused skill."""
+        """Header cell block with 'Add focus' / 'Add specialization' for a focused skill."""
 
         table.setItem(row, COL_NAME, readonly_item(skill.name))
 
         # In the locked (read-only) view there's nothing to add, so the header
-        # is just the skill name with no button.
+        # is just the skill name with no buttons.
         if self._locked:
             return
 
-        # The button spans every column after the name so it reads as one wide
+        # The buttons span every column after the name so they read as one wide
         # control rather than being crammed into a single narrow cell.
-        add_button = QPushButton("Add focus…")
-        add_button.clicked.connect(lambda _=False, s=skill: self._add_focus(s))
+        add_focus = QPushButton("Add focus…")
+        add_focus.clicked.connect(lambda _=False, s=skill: self._add_focus(s))
+        add_spec = QPushButton("Add specialization…")
+        add_spec.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
+        host = QWidget()
+        hbox = QHBoxLayout(host)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(4)
+        hbox.addWidget(add_focus)
+        hbox.addWidget(add_spec)
+        hbox.addStretch()
         table.setSpan(row, COL_ABILITY, 1, len(HEADERS) - COL_ABILITY)
-        table.setCellWidget(row, COL_ABILITY, add_button)
+        table.setCellWidget(row, COL_ABILITY, host)
 
     def _render_skill_row(
         self,
@@ -213,9 +262,12 @@ class SkillsSection(QGroupBox):
         display: str,
         row_id: str,
         indent: bool = False,
+        can_specialize: bool = False,
+        spec_name: str | None = None,
     ) -> None:
-        name = ("    " if indent else "") + display
-        table.setItem(row, COL_NAME, readonly_item(name))
+        name_item = self._render_name_cell(
+            table, row, skill, display, indent, can_specialize, spec_name
+        )
 
         abbr = self._ability_abbrs.get(skill.ability, skill.ability)
         table.setItem(row, COL_ABILITY, readonly_item(abbr, center=True))
@@ -243,7 +295,57 @@ class SkillsSection(QGroupBox):
 
         total_item = readonly_item("", center=True)
         table.setItem(row, COL_TOTAL, total_item)
-        self._rows.append((skill.ability, row_id, ability_rank_item, total_item))
+        self._rows.append((skill.ability, row_id, ability_rank_item, total_item, name_item))
+
+    def _render_name_cell(
+        self,
+        table: QTableWidget,
+        row: int,
+        skill: Skill,
+        display: str,
+        indent: bool,
+        can_specialize: bool,
+        spec_name: str | None,
+    ) -> QTableWidgetItem | None:
+        """The skill's name cell, optionally with an inline add/remove control.
+
+        A plain read-only label unless (and only while unlocked) the row needs a
+        control: a ``＋`` to add a specialized pool on a non-focused skill's main row,
+        or a ``✕`` to drop a specialization row. Returns the name :class:`QTableWidgetItem`
+        for a plain cell (so a condition can strike it through) or ``None`` for a widget
+        cell.
+        """
+
+        name = ("    " if indent else "") + display
+        if self._locked or (not can_specialize and spec_name is None):
+            item = readonly_item(name)
+            table.setItem(row, COL_NAME, item)
+            return item
+
+        host = QWidget()
+        hbox = QHBoxLayout(host)
+        hbox.setContentsMargins(4, 0, 0, 0)
+        hbox.setSpacing(4)
+        hbox.addWidget(QLabel(name))
+        hbox.addStretch()
+        if spec_name is not None:
+            remove = QPushButton("✕")
+            remove.setFlat(True)
+            remove.setFixedWidth(20)
+            remove.setToolTip("Remove this specialization")
+            remove.clicked.connect(
+                lambda _=False, s=skill, n=spec_name: self._remove_specialization(s, n)
+            )
+            hbox.addWidget(remove)
+        else:  # can_specialize
+            add = QPushButton("＋")
+            add.setFlat(True)
+            add.setFixedWidth(20)
+            add.setToolTip("Add a specialized (half-cost) rank pool for this skill")
+            add.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
+            hbox.addWidget(add)
+        table.setCellWidget(row, COL_NAME, host)
+        return None
 
     # -- interaction ---------------------------------------------------------
 
@@ -254,6 +356,28 @@ class SkillsSection(QGroupBox):
             self._focuses[skill.name].append(focus)
             self._rebuild()
             self.changed.emit()
+
+    def _add_specialization(self, skill: Skill) -> None:
+        name, ok = QInputDialog.getText(self, f"Add {skill.name} specialization", "Specialization:")
+        name = name.strip()
+        specs = self._specializations.setdefault(skill.name, [])
+        if ok and name and name not in specs:
+            specs.append(name)
+            self._rebuild()
+            self.changed.emit()
+
+    def _remove_specialization(self, skill: Skill, spec_name: str) -> None:
+        specs = self._specializations.get(skill.name, [])
+        if spec_name not in specs:
+            return
+        specs.remove(spec_name)
+        if not specs:  # keep the model tidy — drop the now-empty entry
+            self._specializations.pop(skill.name, None)
+        row_id = f"{skill.name}::spec::{spec_name}"
+        self._ranks.pop(row_id, None)
+        self._mods.pop(row_id, None)
+        self._rebuild()
+        self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:
         """Make the rank/modifier spin boxes read-only labels and drop the
@@ -301,12 +425,38 @@ class SkillsSection(QGroupBox):
         self._refresh_totals()
 
     def _refresh_totals(self) -> None:
-        for ability_key, row_id, ability_rank_item, total_item in self._rows:
+        for ability_key, row_id, ability_rank_item, total_item, name_item in self._rows:
             # The ABL column shows the *effective* ability (with any power boost) so
             # the row's columns still sum to the total.
             ability = effective_ability(self._character, self._data, ability_key)
             total = skill_total(self._character, self._data, row_id)
             ability_rank_item.setText(str(ability))
-            total_item.setText(str(total))
+            # A scoped Impaired/Disabled (or a global one) overlays the total in red,
+            # struck through for a lost-trait condition. This is display-only — the
+            # build math above (skill_total) is untouched.
+            base_name = row_id.split(":", 1)[0].strip()
+            effect = condition_scope_penalty(self._character, self._data, {row_id, base_name})
+            total_item.setText(str(effect.apply(total) if effect.active else total))
+            self._style_condition(total_item, name_item, effect, total)
         # Keep the section title's running point cost current.
         self.setTitle(title_with_cost("Skills", skill_points_spent(self._character, self._data)))
+
+    @staticmethod
+    def _style_condition(total_item, name_item, effect, base_total: int) -> None:
+        """Tint the total red (and strike the row) while a condition scopes to it."""
+
+        struck = effect.active and bool(effect.condition_ids & STRIKETHROUGH_CONDITIONS)
+        for item in (total_item, name_item):
+            if item is None:
+                continue
+            font = item.font()
+            font.setStrikeOut(struck)
+            item.setFont(font)
+            if effect.active:
+                item.setForeground(QBrush(QColor(CONDITION_TINT)))
+            else:
+                item.setData(Qt.ItemDataRole.ForegroundRole, None)
+        if effect.active:
+            total_item.setToolTip(f"{base_total} {effect.tooltip}")
+        else:
+            total_item.setToolTip("")

@@ -103,6 +103,8 @@ class Skill:
     ``focuses`` lists the suggested focuses for a focused skill;
     ``specializations`` lists illustrative common uses of a non-focused skill.
     ``trained_only`` marks skills that can't be used untrained.
+    ``specialized_cost`` prices this skill's ordinary ranks at the cheaper
+    specialized rate (Expertise, whose mandatory focus makes it 4 ranks/PP).
     """
 
     name: str
@@ -114,6 +116,7 @@ class Skill:
     specializations: tuple[str, ...] = ()
     focuses: tuple[str, ...] = ()
     description: str = ""
+    specialized_cost: bool = False
 
 
 @dataclass(frozen=True)
@@ -147,24 +150,130 @@ class Advantage:
 
 
 @dataclass(frozen=True)
+class ConditionParameter:
+    """The subject a condition must be qualified with when applied (§6).
+
+    ``type`` is one of ``trait_select`` / ``sense_select`` / ``descriptor_text`` /
+    ``character_ref`` and drives the UI control; ``options`` populates a combobox
+    (empty ⇒ free text). ``required`` gates whether the condition can be applied
+    before the subject is named — see ``mm-conditions-design.md`` §6.
+    """
+
+    type: str
+    required: bool = False
+    label: str = ""
+    help: str = ""
+    options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Debilitation:
+    """Trait-loss cascade for a ``debilitate_trait`` condition (§7).
+
+    ``cascade`` maps a chosen trait name to the hard conditions its loss triggers
+    (Strength → Incapacitated); an empty tuple means the trait is lost with no
+    cascade. ``notes`` carries the extra per-trait rules as prose.
+    """
+
+    cascade: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class DefenseMod:
+    """How a condition alters Defense/Dodge — each ``"halve"`` / ``"zero"`` or empty."""
+
+    defense: str = ""
+    dodge: str = ""
+
+
+@dataclass(frozen=True)
+class AttackMods:
+    """Prone-style attack modifiers (own close, incoming close, incoming ranged)."""
+
+    own_close: int = 0
+    incoming_close: int = 0
+    incoming_ranged: int = 0
+
+
+@dataclass(frozen=True)
+class ResistanceMod:
+    """Scoped resistance penalty (Susceptible / Weakness).
+
+    ``penalty_formula`` and ``best_outcome`` are read as data by the resistance
+    subsystem; the actual per-check math (which needs the incoming effect's rank)
+    is the roll layer's job.
+    """
+
+    scope: str = ""
+    penalty_formula: str = ""
+    best_outcome: str = ""
+
+
+@dataclass(frozen=True)
+class StackingRule:
+    """Per-instance accumulation rule (Hit): each instance adds ``per_instance_penalty``."""
+
+    per_instance_penalty: int = 0
+    applies_to: str = ""
+    removed_per_recovery: int = 0
+
+
+@dataclass(frozen=True)
+class RecoveryCheck:
+    """Structured recovery check (§8). Loaded now; consumed by the future roll layer."""
+
+    trait: str | None = None
+    dc: int | None = None
+    cadence: str = ""
+    condition: str = ""
+    outcome: str = ""
+
+
+@dataclass(frozen=True)
+class RandomActionRow:
+    """One row of a ``random_action`` table (Confused). Loaded now, roll layer later."""
+
+    range: str = ""
+    outcome: str = ""
+
+
+@dataclass(frozen=True)
 class Condition:
     """A status condition that can affect a character (dazed, stunned, ...).
 
     ``category`` distinguishes general conditions from the damage/object-damage
     ladders. ``includes`` lists ids of sub-conditions this one bundles in, and
     ``supersedes`` lists ids a more severe condition replaces — together these
-    form the condition graph the combat state machine walks. ``effect`` and
-    ``recovery`` are short summary text the UI may show.
+    form the condition graph the combat state machine walks (see
+    ``mm-conditions-design.md`` §3). ``mechanisms`` names which engine subsystems
+    the condition feeds (§4); the typed effect fields (``penalty``,
+    ``speed_rank_mod``, ``defense_mod``, …) carry the data those subsystems read so
+    the engine never parses ``effect`` prose. ``tooltip`` is a short always-visible
+    line; ``effect``/``recovery`` are the fuller summaries.
     """
 
     name: str
     description: str = ""
     id: str = ""
     category: str = ""
+    tooltip: str = ""
     includes: tuple[str, ...] = ()
     supersedes: tuple[str, ...] = ()
+    mechanisms: tuple[str, ...] = ()
+    stacking: bool = False
+    parameter: ConditionParameter | None = None
+    debilitates: Debilitation | None = None
     effect: str = ""
     recovery: str = ""
+    penalty: int | None = None
+    speed_rank_mod: int | None = None
+    defense_mod: DefenseMod | None = None
+    attack_mods: AttackMods | None = None
+    resistance_mod: ResistanceMod | None = None
+    stacking_rule: StackingRule | None = None
+    recovery_check: RecoveryCheck | None = None
+    random_table: tuple[RandomActionRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -389,7 +498,7 @@ class TraitCosts:
     resistance_per_rank: int
     advantage_per_rank: int
     skill_ranks_per_pp: int
-    skill_focus_ranks_per_pp: int
+    skill_specialized_ranks_per_pp: int
 
 
 @dataclass(frozen=True)
@@ -526,6 +635,11 @@ class GameData:
                 catalog.setdefault(modifier.id, modifier)
         return catalog
 
+    def condition_catalog(self) -> dict[str, Condition]:
+        """A single ``id -> Condition`` lookup, for the condition resolver in ``rules``."""
+
+        return {c.id: c for c in self.conditions}
+
 
 def _parse_characteristic(c: dict) -> Characteristic:
     options = list(c.get("options", []))
@@ -553,6 +667,7 @@ def _parse_skill(s: dict) -> Skill:
         specializations=tuple(s.get("specializations", ())),
         focuses=tuple(s.get("focuses", ())),
         description=s.get("description", ""),
+        specialized_cost=bool(s.get("specializedCost", False)),
     )
 
 
@@ -571,16 +686,109 @@ def _parse_advantage(a: dict) -> Advantage:
     )
 
 
+def _parse_condition_parameter(raw: dict | None) -> ConditionParameter | None:
+    if not raw:
+        return None
+    return ConditionParameter(
+        type=raw.get("type", ""),
+        required=bool(raw.get("required", False)),
+        label=raw.get("label", ""),
+        help=raw.get("help", ""),
+        options=tuple(raw.get("options", ())),
+    )
+
+
+def _parse_debilitation(raw: dict | None) -> Debilitation | None:
+    if not raw:
+        return None
+    cascade = {trait: tuple(conds) for trait, conds in raw.get("cascade", {}).items()}
+    return Debilitation(cascade=cascade, notes=raw.get("notes", ""))
+
+
+def _parse_speed_rank_mod(raw: int | str | None) -> int | None:
+    """``"zero"`` → 0, an int passes through, absent → ``None`` (no movement mod)."""
+
+    if raw is None:
+        return None
+    if raw == "zero":
+        return 0
+    return int(raw)
+
+
+def _parse_defense_mod(raw: dict | None) -> DefenseMod | None:
+    if not raw:
+        return None
+    return DefenseMod(defense=raw.get("defense", ""), dodge=raw.get("dodge", ""))
+
+
+def _parse_attack_mods(raw: dict | None) -> AttackMods | None:
+    if not raw:
+        return None
+    return AttackMods(
+        own_close=int(raw.get("ownCloseAttack", 0)),
+        incoming_close=int(raw.get("incomingCloseAttack", 0)),
+        incoming_ranged=int(raw.get("incomingRangedAttack", 0)),
+    )
+
+
+def _parse_resistance_mod(raw: dict | None) -> ResistanceMod | None:
+    if not raw:
+        return None
+    return ResistanceMod(
+        scope=raw.get("scope", ""),
+        penalty_formula=raw.get("penaltyFormula", ""),
+        best_outcome=raw.get("bestOutcome", ""),
+    )
+
+
+def _parse_stacking_rule(raw: dict | None) -> StackingRule | None:
+    if not raw:
+        return None
+    return StackingRule(
+        per_instance_penalty=int(raw.get("perInstancePenalty", 0)),
+        applies_to=raw.get("appliesTo", ""),
+        removed_per_recovery=int(raw.get("removedPerRecovery", 0)),
+    )
+
+
+def _parse_recovery_check(raw: dict | None) -> RecoveryCheck | None:
+    if not raw:
+        return None
+    return RecoveryCheck(
+        trait=raw.get("trait"),
+        dc=raw.get("dc"),
+        cadence=raw.get("cadence", ""),
+        condition=raw.get("condition", ""),
+        outcome=raw.get("outcome", ""),
+    )
+
+
 def _parse_condition(c: dict) -> Condition:
     return Condition(
         name=c["name"],
         description=c.get("description", ""),
         id=c.get("id", ""),
         category=c.get("category", ""),
+        tooltip=c.get("tooltip", ""),
         includes=tuple(c.get("includes", ())),
         supersedes=tuple(c.get("supersedes", ())),
+        mechanisms=tuple(c.get("mechanisms", ())),
+        stacking=bool(c.get("stacking", False)),
+        parameter=_parse_condition_parameter(c.get("parameter")),
+        debilitates=_parse_debilitation(c.get("debilitates")),
         effect=c.get("effect", ""),
         recovery=c.get("recovery", ""),
+        penalty=c.get("penalty"),
+        speed_rank_mod=_parse_speed_rank_mod(c.get("speedRankMod")),
+        defense_mod=_parse_defense_mod(c.get("defenseMod")),
+        attack_mods=_parse_attack_mods(c.get("attackMods")),
+        resistance_mod=_parse_resistance_mod(c.get("resistanceMod")),
+        stacking_rule=_parse_stacking_rule(c.get("stackingRule")),
+        recovery_check=_parse_recovery_check(c.get("recoveryCheck")),
+        random_table=tuple(
+            RandomActionRow(range=r.get("range", ""), outcome=r.get("outcome", ""))
+            for r in c.get("randomTable", ())
+        ),
     )
 
 

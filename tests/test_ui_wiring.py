@@ -30,7 +30,7 @@ def test_skill_rank_flows_to_model_and_total(qapp: QApplication) -> None:
 
     # Drive the Stealth rank spin box via the row it renders into.
     stealth_row = next(row for row in sheet.skills._rows if row[1] == "Stealth")
-    _, _, _, total_item = stealth_row
+    _, _, _, total_item, _ = stealth_row
     sheet.character.skill_ranks["Stealth"] = 4
     sheet.skills._refresh_totals()
 

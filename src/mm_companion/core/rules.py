@@ -27,7 +27,8 @@ from .components import (
     PASSIVE_TOGGLE,
     RESOURCE_POOL,
 )
-from .data_loader import Condition, GameData, Modifier, Resistance, Skill
+from .data_loader import Condition, GameData, Modifier, RandomActionRow, Resistance, Skill
+from .dice import roll_d20
 from .powers import (
     ALTERNATE_EFFECT_MODIFIER,
     STRUCTURE_ARRAY,
@@ -1760,3 +1761,151 @@ def condition_resistance_penalty(
         if applied.parameter.strip().lower() == want:
             total += -(effect_rank // 2)
     return total
+
+
+@dataclass(frozen=True)
+class ConditionEffect:
+    """A condition's overlay on one displayed stat row (display-only, pass 2).
+
+    ``delta`` is a flat modifier (negative), ``op`` an override (``"halve"`` / ``"zero"``)
+    taking precedence over ``delta``; ``condition_ids`` are the contributing conditions
+    (the UI decides which render struck through); ``tooltip`` is the breakdown text.
+    These never touch the point build — they only re-skin the number a section shows.
+    """
+
+    delta: int = 0
+    op: str = ""
+    condition_ids: frozenset[str] = frozenset()
+    tooltip: str = ""
+
+    @property
+    def active(self) -> bool:
+        return bool(self.delta or self.op or self.condition_ids)
+
+    def apply(self, value: int) -> int:
+        """The value after this overlay (``zero`` wins, then ``halve``, then ``delta``)."""
+
+        if self.op == "zero":
+            return 0
+        if self.op == "halve":
+            value //= 2
+        return value + self.delta
+
+
+def condition_scope_penalty(
+    character: Character, game_data: GameData, scope_keys: set[str]
+) -> ConditionEffect:
+    """The check-penalty overlay for a stat row answering to *scope_keys*.
+
+    Sums every ``check_penalty`` condition that is unscoped (``None`` / ``"All checks"``)
+    or whose parameter is one of *scope_keys* (an ability row → ``{key, name}``; a skill
+    row → ``{row_id, base_name}``). Returns the total penalty, the contributing condition
+    ids, and a tooltip breakdown.
+    """
+
+    catalog = game_data.condition_catalog()
+    total = 0
+    ids: set[str] = set()
+    parts: list[str] = []
+    for applied in character.conditions:
+        cond = catalog.get(applied.condition_id)
+        if cond is None or cond.penalty is None or MECH_CHECK_PENALTY not in cond.mechanisms:
+            continue
+        unscoped = applied.parameter in (None, "All checks")
+        if not (unscoped or applied.parameter in scope_keys):
+            continue
+        total += cond.penalty
+        ids.add(cond.id)
+        label = cond.name if unscoped else f"{cond.name} ({applied.parameter})"
+        parts.append(f"{cond.penalty:+d} {label}")
+    return ConditionEffect(delta=total, condition_ids=frozenset(ids), tooltip="; ".join(parts))
+
+
+def resistance_condition_effect(
+    character: Character, game_data: GameData, res_key: str
+) -> ConditionEffect:
+    """The condition overlay for one resistance row (display-only).
+
+    Toughness carries the Hit stacking penalty (a ``delta`` on Damage-resistance checks);
+    the active defenses Dodge and Defence carry Vulnerable/Defenseless halving/zeroing (an
+    ``op``). Other resistances get an inert effect.
+    """
+
+    catalog = game_data.condition_catalog()
+    delta = 0
+    op = ""
+    ids: set[str] = set()
+    parts: list[str] = []
+
+    if res_key == "TOUGHNESS":
+        pen = hit_stack_penalty(character, game_data)
+        if pen:
+            delta += pen
+            for applied in character.conditions:
+                cond = catalog.get(applied.condition_id)
+                if cond is not None and cond.stacking_rule is not None:
+                    ids.add(cond.id)
+                    parts.append(f"{pen:+d} {cond.name} ×{applied.count}")
+
+    if res_key in ("DODGE", "DEF"):
+        stat = "dodge" if res_key == "DODGE" else "defense"
+        chosen = condition_defense_mods(character, game_data).get(stat, "")
+        if chosen:
+            op = chosen
+            for applied in character.conditions:
+                cond = catalog.get(applied.condition_id)
+                if (
+                    cond is not None
+                    and cond.defense_mod is not None
+                    and getattr(cond.defense_mod, stat)
+                ):
+                    ids.add(cond.id)
+                    parts.append(f"{cond.name} {chosen}s {res_key.title()}")
+
+    return ConditionEffect(
+        delta=delta, op=op, condition_ids=frozenset(ids), tooltip="; ".join(parts)
+    )
+
+
+def decrement_condition(character: Character, applied: AppliedCondition) -> None:
+    """Shed one instance of a condition (Hit peels off one at a time, §5).
+
+    A stacking condition with more than one instance just loses a ``count``; anything
+    else (including an umbrella) is removed outright via :func:`remove_condition`.
+    """
+
+    if applied.count > 1:
+        applied.count -= 1
+    else:
+        remove_condition(character, applied)
+
+
+def _parse_die_range(text: str) -> tuple[int, int]:
+    text = text.strip()
+    if "-" in text:
+        low, high = text.split("-", 1)
+        return int(low), int(high)
+    return int(text), int(text)
+
+
+def roll_confused_action(
+    character: Character,
+    game_data: GameData,
+    *,
+    rng=None,
+    roll: int | None = None,
+) -> tuple[int, RandomActionRow | None]:
+    """Roll the Confused random-action table and return ``(die, row)``.
+
+    ``roll=`` forces the die (for tests); ``rng=`` seeds it otherwise. ``row`` is the
+    matching :class:`RandomActionRow` (``None`` only if the table has a gap).
+    """
+
+    confused = game_data.condition_catalog().get("confused")
+    die = roll if roll is not None else roll_d20(rng)
+    if confused is not None:
+        for row in confused.random_table:
+            low, high = _parse_die_range(row.range)
+            if low <= die <= high:
+                return die, row
+    return die, None

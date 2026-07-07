@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QFrame
 
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
@@ -12,11 +13,16 @@ from mm_companion.core.rules import (
     condition_attack_mods,
     condition_check_penalty,
     condition_resistance_penalty,
+    condition_scope_penalty,
     condition_speed_rank_mod,
+    decrement_condition,
     expand_includes,
     hit_stack_penalty,
     remove_condition,
+    resistance_condition_effect,
+    roll_confused_action,
 )
+from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.base_info import BaseInfoSection
 from mm_companion.ui.sections.condition_dialog import ConditionParameterDialog
 
@@ -291,16 +297,201 @@ def test_display_name_folds_parameter_and_count(qapp: QApplication) -> None:
 
 
 def test_parameter_dialog_normalizes_unscoped_value(qapp: QApplication) -> None:
-    catalog = load_game_data().condition_catalog()
-    dialog = ConditionParameterDialog(catalog["impaired"])
+    data = load_game_data()
+    dialog = ConditionParameterDialog(data.condition_catalog()["impaired"], data, Character())
     # The optional trait combo defaults to "All checks" -> treated as unscoped.
     assert dialog.value() is None
 
 
 def test_required_parameter_gates_the_ok_button(qapp: QApplication) -> None:
-    catalog = load_game_data().condition_catalog()
-    dialog = ConditionParameterDialog(catalog["susceptible"])  # required descriptor_text
+    data = load_game_data()
+    dialog = ConditionParameterDialog(
+        data.condition_catalog()["susceptible"], data, Character()
+    )  # required descriptor_text
     assert dialog._ok_button.isEnabled() is False
     dialog._input.setText("Fire Damage")
     assert dialog._ok_button.isEnabled() is True
     assert dialog.value() == "Fire Damage"
+
+
+def test_dialog_two_step_resolves_a_specific_skill(qapp: QApplication) -> None:
+    data = load_game_data()
+    dialog = ConditionParameterDialog(data.condition_catalog()["impaired"], data, Character())
+    dialog._input.setCurrentText("a specific skill")
+    dialog._on_scope_changed()
+    assert not dialog._specific.isHidden()  # the second combo is revealed
+    dialog._specific.setCurrentText("Stealth")
+    assert dialog.value() == "Stealth"
+
+
+# --------------------------------------------------------------------------- #
+# Pass 2 — condition effects surfaced on the sheet, plus box interactions
+# --------------------------------------------------------------------------- #
+
+
+def test_condition_scope_penalty_scoped_vs_unscoped() -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "impaired", data, parameter="Stealth")
+    on = condition_scope_penalty(char, data, {"Stealth"})
+    assert on.delta == -2 and on.condition_ids == frozenset({"impaired"})
+    assert condition_scope_penalty(char, data, {"Acrobatics"}).delta == 0
+    # A blanket Impaired reaches every row.
+    char2 = Character()
+    apply_condition(char2, "impaired", data)
+    assert condition_scope_penalty(char2, data, {"Anything"}).delta == -2
+
+
+def test_resistance_condition_effect_hit_and_defense() -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "hit", data)
+    apply_condition(char, "hit", data)
+    tough = resistance_condition_effect(char, data, "TOUGHNESS")
+    assert tough.delta == -2 and tough.apply(8) == 6
+    char = Character()
+    apply_condition(char, "vulnerable", data)
+    assert resistance_condition_effect(char, data, "DODGE").apply(10) == 5
+    char = Character()
+    apply_condition(char, "defenseless", data)
+    assert resistance_condition_effect(char, data, "DEF").apply(10) == 0
+
+
+def test_decrement_condition_peels_hits_one_at_a_time() -> None:
+    data = load_game_data()
+    char = Character()
+    for _ in range(3):
+        apply_condition(char, "hit", data)
+    decrement_condition(char, char.conditions[0])
+    assert char.conditions[0].count == 2
+    decrement_condition(char, char.conditions[0])
+    decrement_condition(char, char.conditions[0])
+    assert char.conditions == []
+
+
+def test_decrement_condition_removes_an_umbrella_whole() -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "incapacitated", data)
+    decrement_condition(char, next(c for c in char.conditions if c.condition_id == "incapacitated"))
+    assert char.conditions == []
+
+
+def test_roll_confused_action_matches_the_table() -> None:
+    data = load_game_data()
+    char = Character()
+    die, row = roll_confused_action(char, data, roll=8)
+    assert die == 8 and row is not None and "nothing" in row.outcome.lower()
+    die, row = roll_confused_action(char, data, roll=1)
+    assert die == 1 and "source" in row.outcome.lower()
+
+
+@pytest.fixture(scope="module")
+def qapp2() -> QApplication:
+    return QApplication.instance() or QApplication([])
+
+
+def _direct_chip_frames(section: BaseInfoSection) -> int:
+    total = 0
+    for _head, _rule, container in section._category_sections.values():
+        total += len(
+            container.findChildren(QFrame, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        )
+    return total
+
+
+def test_chips_sort_into_category_groups(qapp2: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "prone", data)  # general
+    apply_condition(char, "dazed", data)  # damage
+    section = BaseInfoSection(data, char)
+    general = section._category_sections["condition"][2]
+    damage = section._category_sections["damage_condition"][2]
+    opt = Qt.FindChildOption.FindDirectChildrenOnly
+    assert len(general.findChildren(QFrame, options=opt)) == 1
+    assert len(damage.findChildren(QFrame, options=opt)) == 1
+
+
+def test_no_ghost_chips_after_repeated_renders(qapp2: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    section = BaseInfoSection(data, char)
+    apply_condition(char, "incapacitated", data)
+    section._render_conditions()
+    apply_condition(char, "prone", data)
+    section._render_conditions()
+    apply_condition(char, "dazed", data)
+    section._render_conditions()
+    # Every chip frame still parented to a container is a live one.
+    assert _direct_chip_frames(section) == len(char.conditions)
+
+
+def test_scoped_impaired_reddens_skill_total_disabled_strikes(qapp2: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    char = sheet.character
+    sheet.skills._ranks["Stealth"] = 6
+    row = next(r for r in sheet.skills._rows if r[1] == "Stealth")
+    total_item = row[3]
+
+    apply_condition(char, "impaired", data, parameter="Stealth")
+    sheet.skills.refresh_totals()
+    assert total_item.text() == "4"  # 6 - 2, display only
+    assert total_item.foreground().color().name() == "#d15b5b"
+    assert total_item.font().strikeOut() is False
+
+    apply_condition(char, "disabled", data, parameter="Stealth")  # supersedes impaired
+    sheet.skills.refresh_totals()
+    assert total_item.text() == "1"  # 6 - 5
+    assert total_item.font().strikeOut() is True
+
+
+def test_hit_on_toughness_shows_a_red_effective_label(qapp2: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    char = sheet.character
+    sheet.abilities._abilities["STA"].setValue(3)  # Toughness base 3
+    apply_condition(char, "hit", data)
+    apply_condition(char, "hit", data)
+    sheet.resistances.refresh_enhancements()
+    label = sheet.resistances._resistance_enh["TOUGHNESS"]
+    assert label.text() == "→ 1"  # 3 - 2
+    assert not label.isHidden()
+
+
+def test_hit_chip_remove_button_decrements(qapp2: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "hit", data)
+    apply_condition(char, "hit", data)
+    section = BaseInfoSection(data, char)
+    section._shed_condition(char.conditions[0])
+    assert char.conditions[0].condition_id == "hit" and char.conditions[0].count == 1
+
+
+def test_confused_chip_records_a_roll(qapp2: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "confused", data)
+    section = BaseInfoSection(data, char)
+    section._roll_confused(char.conditions[0])
+    assert section._confused_rolls  # a rolled outcome was stored for the chip
+
+
+def test_flow_container_reports_wrapped_height(qapp2: QApplication) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+
+    container = FlowContainer()
+    flow = FlowLayout(container)
+    for _ in range(6):
+        label = QLabel("wide-chip-xxxxx")
+        label.setFixedSize(120, 24)
+        flow.addWidget(label)
+    # Narrow enough that six 120px chips must wrap to several rows.
+    assert container.sizePolicy().hasHeightForWidth() is True
+    one_row = container.heightForWidth(1000)
+    many_rows = container.heightForWidth(200)
+    assert many_rows > one_row

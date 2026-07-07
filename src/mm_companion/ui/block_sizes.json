@@ -2,8 +2,7 @@
   "_comment": "Per-block size constraints (pixels) for the character-sheet dock panels. Keyed by block. Omit a bound (or set it to null/0) to leave it unconstrained: a missing minimum is 0, a missing maximum is unbounded. max_width pins a block so it can't be stretched horizontally; max_height pins it vertically. Setting min == max in a dimension fixes that dimension (non-resizable); abilities and resistances share one fixed 280x300 size that fits all of either block's content.",
   "base_info": {
     "min_width": 500,
-    "min_height": 160,
-    "max_height": 340
+    "min_height": 160
   },
   "abilities": {
     "min_width": 280,

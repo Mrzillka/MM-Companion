@@ -25,10 +25,11 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     power_trait_bonuses,
     resistance_base,
+    resistance_condition_effect,
     resistance_points_spent,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_grid import apply_enhancements, build_stat_group
+from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
 from mm_companion.ui.widgets import title_with_cost
 
 
@@ -104,9 +105,19 @@ class ResistancesSection(QGroupBox):
             del blocker
 
     def refresh_enhancements(self) -> None:
-        """Recompute each resistance's power-enhanced total and show it beside the base."""
+        """Recompute each resistance's "→ total" from power boosts and conditions.
+
+        Conditions overlay Hit's penalty on Toughness and Vulnerable/Defenseless
+        halving/zeroing on the active defenses (Dodge, Defence).
+        """
         bonuses = power_trait_bonuses(self._character, self._data)
-        apply_enhancements(self._resistances, self._resistance_enh, bonuses["resistance"])
+        cond_effects = {
+            res.key: resistance_condition_effect(self._character, self._data, res.key)
+            for res in self._data.resistances
+        }
+        apply_stat_effects(
+            self._resistances, self._resistance_enh, bonuses["resistance"], cond_effects
+        )
 
     def _refresh_cost(self) -> None:
         self.setTitle(

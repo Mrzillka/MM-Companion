@@ -364,7 +364,11 @@
       "parameter": null,
       "debilitates": null,
       "effect": "Defense rank treated as 0; auto-fails Dodge resistance checks; attackers may hit with a routine attack. If an attacker forgoes the routine check for a normal attack, any hit is a critical hit and may be a Finishing Attack.",
-      "recovery": "Depends on the cause."
+      "recovery": "Depends on the cause.",
+      "defenseMod": {
+        "defense": "zero",
+        "dodge": "zero"
+      }
     },
     {
       "id": "delusion",
@@ -435,7 +439,7 @@
           "Fighting",
           "Perception",
           "a specific ability",
-          "a specific skill category"
+          "a specific skill"
         ]
       },
       "debilitates": null,
@@ -678,7 +682,7 @@
           "Fighting",
           "Perception",
           "a specific ability",
-          "a specific skill category"
+          "a specific skill"
         ]
       },
       "debilitates": null,

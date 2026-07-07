@@ -167,6 +167,12 @@ class CharacterSheet(QWidget):
         self.powers.changed.connect(self.resistances.refresh_enhancements)
         self.powers.changed.connect(self.skills.refresh_totals)
 
+        # A condition change overlays penalties on the stat rows (a scoped Impaired on
+        # a skill, Hit on Toughness, a halved defense), so refresh the same views.
+        self.base_info.conditionsChanged.connect(self.abilities.refresh_enhancements)
+        self.base_info.conditionsChanged.connect(self.resistances.refresh_enhancements)
+        self.base_info.conditionsChanged.connect(self.skills.refresh_totals)
+
         # And the reverse: a power's displayed numbers derive from character facts,
         # so editing an ability/resistance/advantage or the Power Level re-derives
         # the power cards. `refresh` only reads the model, so it never loops back.

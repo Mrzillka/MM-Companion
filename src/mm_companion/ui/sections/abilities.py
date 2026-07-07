@@ -16,9 +16,13 @@ from PySide6.QtWidgets import QGroupBox, QLabel, QSpinBox, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import ability_points_spent, power_trait_bonuses
+from mm_companion.core.rules import (
+    ability_points_spent,
+    condition_scope_penalty,
+    power_trait_bonuses,
+)
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_grid import apply_enhancements, build_stat_group
+from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
 from mm_companion.ui.widgets import title_with_cost
 
 
@@ -72,9 +76,13 @@ class AbilitiesSection(QGroupBox):
         )
 
     def refresh_enhancements(self) -> None:
-        """Recompute each ability's power-enhanced total and show it beside the base."""
+        """Recompute each ability's "→ total" from power boosts and condition penalties."""
         bonuses = power_trait_bonuses(self._character, self._data)
-        apply_enhancements(self._abilities, self._ability_enh, bonuses["ability"])
+        cond_effects = {
+            a.key: condition_scope_penalty(self._character, self._data, {a.key, a.name})
+            for a in self._data.abilities
+        }
+        apply_stat_effects(self._abilities, self._ability_enh, bonuses["ability"], cond_effects)
 
     def set_locked(self, locked: bool) -> None:
         """Make the ability spin boxes read-only labels (locked) or editable."""

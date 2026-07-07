@@ -65,12 +65,16 @@ clean (see Licensing below).
 
 - `core/data_loader.py` is the *only* entry point for game content. It parses
   the bundled JSON into frozen dataclasses (`Field`, `Characteristic`,
-  `Ability`, `Resistance`, `Skill`, `Advantage`, `Condition`; the powers records
-  `Effect`, `Modifier`, `EffectConfigField` + its option/column helpers,
+  `Ability`, `Resistance`, `Skill`, `Advantage`, `Condition` + its mechanical
+  sub-records (`ConditionParameter`, `Debilitation`, `DefenseMod`, `AttackMods`,
+  `ResistanceMod`, `StackingRule`, `RecoveryCheck`, `RandomActionRow`); the powers
+  records `Effect`, `Modifier`, `EffectConfigField` + its option/column helpers,
   `Measure`, `Readout`; the `Measurements`/`SizeRow` conversion tables; and a
   `Costs` record of point costs / PL caps) aggregated in a `GameData` record.
   `GameData.modifier_catalog()` merges the general and effect-specific modifier
-  pools into one `id -> Modifier` lookup for cost math and summaries.
+  pools into one `id -> Modifier` lookup for cost math and summaries;
+  `GameData.condition_catalog()` is the `id -> Condition` lookup the condition
+  resolver walks.
   `load_game_data()` is `lru_cache`d — one parse per process.
 - Content is aggregated from several files, loaded via `importlib.resources`
   (not filesystem paths) so it works when installed as a package: core traits
@@ -84,6 +88,20 @@ clean (see Licensing below).
   (per-effect derived Tier-5 readouts). The powers rules and UI are documented in
   `mm-powers-architecture.md`, `mm-powers-ui-design.md`, and
   `mm-modifiers-ui-design.md`.
+- Conditions are a small state-tracker, not a build cost. `conditions.json` is the
+  single consolidated catalog (short `tooltip` copy + `includes`/`supersedes` graph
+  + `mechanisms`/`parameter`/`debilitates` and typed penalty/mod fields), documented
+  in `mm-conditions-design.md`. A character's applied conditions live on
+  `Character.conditions` as a list of `AppliedCondition` (id + chosen `parameter` +
+  stacking `count` + `provenance` — the flattened set with back-refs). The non-roll
+  resolver in `core/rules.py` (`apply_condition`/`remove_condition`, `expand_includes`)
+  bundles umbrellas, applies per-part/trait-scoped supersession, stacks Hit, and
+  cascades debilitation; queryable accessors (`condition_check_penalty`,
+  `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods but do **not**
+  yet flow into the sheet's displayed numbers. `BaseInfoSection` drives it: the "+"
+  menu applies a condition (a `ConditionParameterDialog` first when it needs a
+  subject) and renders one chip per `AppliedCondition`. Dice/recovery/turn-economy
+  are out of scope for now.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /

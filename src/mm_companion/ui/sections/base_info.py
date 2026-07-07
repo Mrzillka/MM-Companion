@@ -6,6 +6,7 @@ from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -21,12 +22,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.character import Character
-from mm_companion.core.data_loader import Characteristic, Field, GameData
+from mm_companion.core.character import AppliedCondition, Character
+from mm_companion.core.data_loader import Characteristic, Condition, Field, GameData
 from mm_companion.core.library import resolve_image_path
-from mm_companion.core.rules import power_level_for_points, reconcile_points_to_level
+from mm_companion.core.rules import (
+    apply_condition,
+    power_level_for_points,
+    reconcile_points_to_level,
+    remove_condition,
+)
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.sections.condition_dialog import ConditionParameterDialog
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
@@ -57,12 +64,13 @@ class BaseInfoSection(QGroupBox):
         self._profile_fields: dict[str, QLineEdit] = {}
         self._characteristics: dict[str, QWidget] = {}
         self._pool_current: dict[str, QLabel] = {}
-        self._condition_names: list[str] = [c.name for c in data.conditions]
-        self._condition_ids: dict[str, str] = {c.name: (c.id or c.name) for c in data.conditions}
-        self._condition_names_by_id: dict[str, str] = {
-            (c.id or c.name): c.name for c in data.conditions
-        }
-        self._conditions: dict[str, QWidget] = {}
+        self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
+        # Conditions the "+" menu offers — statuses that apply to a character (not the
+        # object-damage ladder or the "normal" bookkeeping marker).
+        self._addable_conditions: list[Condition] = [
+            c for c in data.conditions if c.category in ("condition", "damage_condition")
+        ]
+        self._condition_chips: list[QFrame] = []
         self._image_path: str | None = None
         self._locked = False
 
@@ -94,10 +102,7 @@ class BaseInfoSection(QGroupBox):
         of widgets to seed. Runs while ``_loading`` is set, so it does not mark
         the sheet dirty.
         """
-        for condition_id in sorted(self._character.conditions):
-            name = self._condition_names_by_id.get(condition_id)
-            if name is not None:
-                self._add_condition(name)
+        self._render_conditions()
         if self._character.image_path:
             self._show_image(resolve_image_path(self._character.image_path))
 
@@ -313,46 +318,94 @@ class BaseInfoSection(QGroupBox):
 
     def _show_condition_menu(self) -> None:
         menu = QMenu(self)
-        available = [n for n in self._condition_names if n not in self._conditions]
-        if available:
-            for name in available:
-                menu.addAction(name, lambda checked=False, n=name: self._add_condition(n))
-        else:
-            menu.addAction("All conditions added").setEnabled(False)
+        for cond in sorted(self._addable_conditions, key=lambda c: c.name):
+            menu.addAction(cond.name, lambda checked=False, c=cond: self._choose_condition(c))
         button = self._add_condition_button
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
-    def _add_condition(self, name: str) -> None:
-        if name in self._conditions:
-            return
+    def _choose_condition(self, condition: Condition) -> None:
+        """Apply a picked condition, prompting for its parameter first if it needs one."""
+        parameter: str | None = None
+        if condition.parameter is not None:
+            dialog = ConditionParameterDialog(condition, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            parameter = dialog.value()
+        apply_condition(self._character, condition.id, self._data, parameter=parameter)
+        self._render_conditions()
+        self._emit_edited()
+
+    def _remove_condition(self, applied: AppliedCondition) -> None:
+        remove_condition(self._character, applied)
+        self._render_conditions()
+        self._emit_edited()
+
+    def _render_conditions(self) -> None:
+        """Rebuild the chip flow from the model so a directly-applied condition, the
+        members it bundles in, supersession, and stacking all stay 1:1 with the state.
+        """
+        for chip in self._condition_chips:
+            self._conditions_flow.removeWidget(chip)
+            chip.deleteLater()
+        self._condition_chips = []
+        for applied in self._character.conditions:
+            chip = self._build_condition_chip(applied)
+            self._condition_chips.append(chip)
+            self._conditions_flow.addWidget(chip)
+
+    def _build_condition_chip(self, applied: AppliedCondition) -> QFrame:
+        record = self._conditions_by_id.get(applied.condition_id)
+        name = self._condition_display_name(applied, record)
 
         chip = QFrame()
         chip.setFrameShape(QFrame.Shape.StyledPanel)
+        chip.setToolTip(self._condition_tooltip(applied, record))
         chip_layout = QHBoxLayout(chip)
         chip_layout.setContentsMargins(6, 1, 2, 1)
         chip_layout.setSpacing(2)
-        chip_layout.addWidget(QLabel(name))
+
+        label = QLabel(name)
+        # A bundled member (granted by an umbrella) reads muted so the directly
+        # applied conditions stand out.
+        if applied.provenance is not None:
+            label.setStyleSheet("color: palette(mid);")
+        chip_layout.addWidget(label)
 
         remove = QToolButton()
         remove.setText("×")
         remove.setAutoRaise(True)
         remove.setToolTip(f"Remove {name}")
-        remove.clicked.connect(lambda: self._remove_condition(name))
+        remove.clicked.connect(lambda checked=False, a=applied: self._remove_condition(a))
         chip_layout.addWidget(remove)
+        return chip
 
-        self._conditions[name] = chip
-        self._conditions_flow.addWidget(chip)
-        self._character.conditions.add(self._condition_ids.get(name, name))
-        self._emit_edited()
+    def _condition_display_name(self, applied: AppliedCondition, record: Condition | None) -> str:
+        """Fold the chosen parameter and stacking count into the shown name (§6):
+        ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
+        """
+        name = record.name if record else applied.condition_id
+        if applied.parameter:
+            ptype = record.parameter.type if record and record.parameter else ""
+            if ptype in ("trait_select", "sense_select"):
+                name = f"{applied.parameter} {name}"
+            else:
+                name = f"{name} ({applied.parameter})"
+        if applied.count > 1:
+            name = f"{name} ×{applied.count}"
+        return name
 
-    def _remove_condition(self, name: str) -> None:
-        chip = self._conditions.pop(name, None)
-        if chip is None:
-            return
-        self._conditions_flow.removeWidget(chip)
-        chip.deleteLater()
-        self._character.conditions.discard(self._condition_ids.get(name, name))
-        self._emit_edited()
+    def _condition_tooltip(self, applied: AppliedCondition, record: Condition | None) -> str:
+        if record is None:
+            return ""
+        parts: list[str] = []
+        if applied.provenance is not None:
+            umbrella = self._conditions_by_id.get(applied.provenance)
+            parts.append(f"via {umbrella.name if umbrella else applied.provenance}")
+        if record.effect:
+            parts.append(record.effect)
+        if record.recovery and record.recovery != "n/a":
+            parts.append(f"Recovery: {record.recovery}")
+        return "\n\n".join(parts)
 
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back, and

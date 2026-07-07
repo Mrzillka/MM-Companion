@@ -27,6 +27,48 @@ class AdvantageSelection:
 
 
 @dataclass
+class AppliedCondition:
+    """One condition currently on a character — an entity in the condition tracker.
+
+    The character's condition state is the *flattened* effect set with provenance
+    (``mm-conditions-design.md`` §3): an umbrella like Incapacitated is stored as the
+    umbrella itself plus a member row per bundled condition, each member carrying
+    ``provenance`` = the umbrella's id so removing the umbrella removes its members.
+
+    ``condition_id`` keys the catalog record; ``parameter`` is the chosen subject
+    (trait/sense/descriptor/controller) folded into the display name (§6); ``count``
+    is the stacking-instance count (1 for the non-stacking majority, >1 only for
+    Hit, §5); ``provenance`` is ``None`` for a directly applied condition.
+    """
+
+    condition_id: str
+    parameter: str | None = None
+    count: int = 1
+    provenance: str | None = None
+
+    def to_dict(self) -> dict:
+        """Serialize, omitting defaulted fields to keep saves compact."""
+
+        data: dict = {"id": self.condition_id}
+        if self.parameter is not None:
+            data["parameter"] = self.parameter
+        if self.count != 1:
+            data["count"] = self.count
+        if self.provenance is not None:
+            data["provenance"] = self.provenance
+        return data
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> AppliedCondition:
+        return cls(
+            condition_id=raw["id"],
+            parameter=raw.get("parameter"),
+            count=int(raw.get("count", 1)),
+            provenance=raw.get("provenance"),
+        )
+
+
+@dataclass
 class Character:
     """All per-character state for one character sheet.
 
@@ -53,7 +95,7 @@ class Character:
     focuses: dict[str, list[str]] = field(default_factory=dict)
     specializations: dict[str, list[str]] = field(default_factory=dict)
     advantages: list[AdvantageSelection] = field(default_factory=list)
-    conditions: set[str] = field(default_factory=set)
+    conditions: list[AppliedCondition] = field(default_factory=list)
     powers: list[Power] = field(default_factory=list)
 
     @classmethod
@@ -81,7 +123,7 @@ class Character:
         )
 
     def to_dict(self) -> dict:
-        """Serialize to plain JSON-friendly types (conditions become a sorted list)."""
+        """Serialize to plain JSON-friendly types (conditions become a list of dicts)."""
 
         return {
             "power_level": self.power_level,
@@ -96,7 +138,7 @@ class Character:
             "focuses": {k: list(v) for k, v in self.focuses.items()},
             "specializations": {k: list(v) for k, v in self.specializations.items()},
             "advantages": [{"name": a.name, "rank": a.rank} for a in self.advantages],
-            "conditions": sorted(self.conditions),
+            "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
         }
 
@@ -120,6 +162,14 @@ class Character:
                 AdvantageSelection(name=a["name"], rank=int(a.get("rank", 1)))
                 for a in raw.get("advantages", [])
             ],
-            conditions=set(raw.get("conditions", [])),
+            conditions=[
+                # Back-compat: an older save stored conditions as a bare list of ids.
+                (
+                    AppliedCondition(condition_id=c)
+                    if isinstance(c, str)
+                    else AppliedCondition.from_dict(c)
+                )
+                for c in raw.get("conditions", [])
+            ],
             powers=[Power.from_dict(p) for p in raw.get("powers", [])],
         )

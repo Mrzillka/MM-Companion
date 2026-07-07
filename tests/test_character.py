@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mm_companion.core.character import AdvantageSelection, Character
+from mm_companion.core.character import AdvantageSelection, AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
@@ -43,7 +43,7 @@ def test_to_dict_from_dict_round_trip() -> None:
     char.specializations["Stealth"] = ["Urban"]
     char.skill_ranks["Stealth::spec::Urban"] = 4
     char.advantages.append(AdvantageSelection("Close Attack", 2))
-    char.conditions.add("dazed")
+    char.conditions.append(AppliedCondition("dazed"))
     char.powers.append(
         Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
     )

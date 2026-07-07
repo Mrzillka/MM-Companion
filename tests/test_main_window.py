@@ -9,7 +9,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mm_companion.core import library, storage
-from mm_companion.core.character import Character
+from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.main_window import MainWindow
 
@@ -42,7 +42,7 @@ def test_editing_marks_dirty_and_flags_the_title(qapp: QApplication) -> None:
 def test_loading_a_character_does_not_start_dirty(qapp: QApplication) -> None:
     char = Character.new_default(load_game_data())
     char.profile["hero_name"] = "Seeded"
-    char.conditions.add("dazed")
+    char.conditions.append(AppliedCondition("dazed"))
     path = library.save_character(char)
 
     win = MainWindow(character=library.load_character(path), path=path, locked=True)

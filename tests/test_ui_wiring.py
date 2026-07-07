@@ -198,13 +198,14 @@ def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
     assert sheet.abilities._abilities["INT"].value() == 5
 
 
-def test_sheet_exposes_six_blocks(qapp: QApplication) -> None:
+def test_sheet_exposes_seven_blocks(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
 
     assert set(sheet.block_keys()) == {
         "base_info",
         "abilities",
         "resistances",
+        "conditions",
         "advantages",
         "skills",
         "powers",

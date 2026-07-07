@@ -98,10 +98,10 @@ clean (see Licensing below).
   bundles umbrellas, applies per-part/trait-scoped supersession, stacks Hit, and
   cascades debilitation; queryable accessors (`condition_check_penalty`,
   `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods but do **not**
-  yet flow into the sheet's displayed numbers. `BaseInfoSection` drives it: the "+"
-  menu applies a condition (a `ConditionParameterDialog` first when it needs a
-  subject) and renders one chip per `AppliedCondition`. Dice/recovery/turn-economy
-  are out of scope for now.
+  yet flow into the sheet's displayed numbers. `ConditionsSection` (its own block)
+  drives it: the "+" menu applies a condition (a `ConditionParameterDialog` first
+  when it needs a subject) and renders one chip per `AppliedCondition`. Dice/recovery/
+  turn-economy are out of scope for now.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
@@ -144,12 +144,13 @@ clean (see Licensing below).
   through unchanged). So a saved character keeps its picture even if the original
   file moves or is deleted.
 - Unsaved-change tracking: `CharacterSheet` emits `edited` on any user edit
-  (`BaseInfoSection.edited` covers name/conditions/image, which don't affect the
-  point build; stats/skills reuse their `changed` signal). `MainWindow` flags the
-  title with `*` while dirty, clears it on save, and prompts Save/Discard/Cancel
-  from `closeEvent` — a cancelled Save (or Save As dialog) leaves the window open.
-  Seeding a loaded character does **not** mark it dirty (a `_loading` guard in
-  `BaseInfoSection`, plus the fact that section signals connect after construction).
+  (`BaseInfoSection.edited` covers name/image and `ConditionsSection.edited` covers
+  conditions, neither of which affects the point build; stats/skills reuse their
+  `changed` signal). `MainWindow` flags the title with `*` while dirty, clears it on
+  save, and prompts Save/Discard/Cancel from `closeEvent` — a cancelled Save (or Save
+  As dialog) leaves the window open. Seeding a loaded character does **not** mark it
+  dirty (a `_loading` guard in `BaseInfoSection`/`ConditionsSection`, plus the fact
+  that section signals connect after construction).
 - The whole sheet scrolls as **one page**, and the blocks are rearranged on a
   **custom scrollable canvas** (not Qt docking). A `QMainWindow` dock host can't
   live inside a `QScrollArea` — its drag-drop and layout break — so scroll +
@@ -157,9 +158,10 @@ clean (see Licensing below).
   its content and never scrolls on its own; the page scrolls vertically when the
   blocks don't all fit. `MainWindow` opens at 1000×860.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
-  `QScrollArea` → `BlockCanvas`) → six blocks, each a section `QGroupBox` wrapped
+  `QScrollArea` → `BlockCanvas`) → seven blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `AbilitiesSection`, `ResistancesSection`,
-  `AdvantagesSection`, `SkillsSection`, `PowersSection`. `CharacterSheet` is the
+  `ConditionsSection`, `AdvantagesSection`, `SkillsSection`, `PowersSection`.
+  `CharacterSheet` is the
   central widget directly (no outer wrapper — the sheet's own `QScrollArea` is the
   page the wheel guard targets). Abilities/Resistances/Advantages were split out of
   the former `StatsSection`; Abilities and Resistances share the grid helpers in
@@ -180,7 +182,8 @@ clean (see Licensing below).
   `dock_block`, `show_block`/`hide_block`, `arrangement`, `apply_arrangement`,
   `default_arrangement` are the headless-testable seams (drag outcomes without
   synthetic mouse events). The default arrangement is `DEFAULT_ROWS` (Base Info
-  full width, the Abilities | Resistances pair, then Advantages, Skills, Powers).
+  full width, the Abilities | Resistances pair, then Conditions, Advantages, Skills,
+  Powers).
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
   `{version, rows, floating, hidden}`) to the `layout` key in `settings.json` on

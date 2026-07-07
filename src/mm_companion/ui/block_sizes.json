@@ -16,6 +16,10 @@
     "max_width": 280,
     "max_height": 300
   },
+  "conditions": {
+    "min_width": 340,
+    "min_height": 150
+  },
   "advantages": {
     "min_width": 340,
     "min_height": 150

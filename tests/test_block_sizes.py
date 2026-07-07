@@ -22,6 +22,7 @@ def test_block_sizes_load_for_every_block() -> None:
         "base_info",
         "abilities",
         "resistances",
+        "conditions",
         "advantages",
         "skills",
         "powers",

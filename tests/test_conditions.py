@@ -25,8 +25,8 @@ from mm_companion.core.rules import (
     roll_confused_action,
 )
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.sections.base_info import BaseInfoSection
 from mm_companion.ui.sections.condition_dialog import ConditionParameterDialog
+from mm_companion.ui.sections.conditions import ConditionsSection
 
 
 def _ids(char: Character) -> list[str]:
@@ -272,14 +272,14 @@ def test_section_renders_a_chip_per_applied_condition(qapp: QApplication) -> Non
     data = load_game_data()
     char = Character()
     apply_condition(char, "incapacitated", data)  # 1 umbrella + 3 members
-    section = BaseInfoSection(data, char)
+    section = ConditionsSection(data, char)
     assert len(section._condition_chips) == len(char.conditions) == 4
 
 
 def test_choosing_a_plain_condition_updates_model_and_chips(qapp: QApplication) -> None:
     data = load_game_data()
     char = Character()
-    section = BaseInfoSection(data, char)
+    section = ConditionsSection(data, char)
     section._choose_condition(data.condition_catalog()["prone"])
     assert _ids(char) == ["prone"]
     assert len(section._condition_chips) == 1
@@ -288,7 +288,7 @@ def test_choosing_a_plain_condition_updates_model_and_chips(qapp: QApplication) 
 def test_display_name_folds_parameter_and_count(qapp: QApplication) -> None:
     data = load_game_data()
     catalog = data.condition_catalog()
-    section = BaseInfoSection(data, Character())
+    section = ConditionsSection(data, Character())
     impaired = AppliedCondition("impaired", parameter="Attack")
     assert section._condition_display_name(impaired, catalog["impaired"]) == "Attack Impaired"
     hit = AppliedCondition("hit", count=3)
@@ -393,7 +393,7 @@ def qapp2() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
-def _direct_chip_frames(section: BaseInfoSection) -> int:
+def _direct_chip_frames(section: ConditionsSection) -> int:
     total = 0
     for _head, _rule, container in section._category_sections.values():
         total += len(
@@ -407,7 +407,7 @@ def test_chips_sort_into_category_groups(qapp2: QApplication) -> None:
     char = Character()
     apply_condition(char, "prone", data)  # general
     apply_condition(char, "dazed", data)  # damage
-    section = BaseInfoSection(data, char)
+    section = ConditionsSection(data, char)
     general = section._category_sections["condition"][2]
     damage = section._category_sections["damage_condition"][2]
     opt = Qt.FindChildOption.FindDirectChildrenOnly
@@ -418,7 +418,7 @@ def test_chips_sort_into_category_groups(qapp2: QApplication) -> None:
 def test_no_ghost_chips_after_repeated_renders(qapp2: QApplication) -> None:
     data = load_game_data()
     char = Character()
-    section = BaseInfoSection(data, char)
+    section = ConditionsSection(data, char)
     apply_condition(char, "incapacitated", data)
     section._render_conditions()
     apply_condition(char, "prone", data)
@@ -467,7 +467,7 @@ def test_hit_chip_remove_button_decrements(qapp2: QApplication) -> None:
     char = Character()
     apply_condition(char, "hit", data)
     apply_condition(char, "hit", data)
-    section = BaseInfoSection(data, char)
+    section = ConditionsSection(data, char)
     section._shed_condition(char.conditions[0])
     assert char.conditions[0].condition_id == "hit" and char.conditions[0].count == 1
 
@@ -476,7 +476,7 @@ def test_confused_chip_records_a_roll(qapp2: QApplication) -> None:
     data = load_game_data()
     char = Character()
     apply_condition(char, "confused", data)
-    section = BaseInfoSection(data, char)
+    section = ConditionsSection(data, char)
     section._roll_confused(char.conditions[0])
     assert section._confused_rolls  # a rolled outcome was stored for the chip
 

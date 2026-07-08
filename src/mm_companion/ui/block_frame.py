@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -132,6 +132,7 @@ class BlockFrame(QFrame):
         self.key = key
         self.title = title
         self.section = section
+        self._size = BlockSize()
         self.setObjectName("blockFrame")
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
@@ -161,16 +162,34 @@ class BlockFrame(QFrame):
 
     def _apply_size(self, size: BlockSize) -> None:
         """Pin the block's size from its :class:`BlockSize` (see class docstring)."""
-        self.setMinimumSize(size.min_width, size.min_height)
+        self._size = size
+        self.setMinimumWidth(size.min_width)
         if size.max_width < UNBOUNDED:
             self.setMaximumWidth(size.max_width)
         if size.max_height < UNBOUNDED:
             self.setMaximumHeight(size.max_height)
         # A block whose width is pinned (abilities/resistances) shouldn't stretch;
-        # the others expand to share their row's width. Height always hugs content.
+        # the others expand to share their row's width. Vertically a block never
+        # shrinks below its own content (see minimumSizeHint), so the page scrolls
+        # when the blocks don't all fit instead of squashing them.
         fixed_width = size.max_width < UNBOUNDED and size.max_width == size.min_width
         h_policy = QSizePolicy.Policy.Fixed if fixed_width else QSizePolicy.Policy.Expanding
-        self.setSizePolicy(h_policy, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(h_policy, QSizePolicy.Policy.Minimum)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Never let a block shrink below its full content height.
+
+        The JSON ``min_height`` is only a floor; the block's real minimum is its
+        content, so every block always shows *all* of its content and the page
+        scrolls when they don't all fit — rather than the layout squashing a
+        block down to the floor and clipping it (e.g. Base Info's image). Capped
+        at ``max_height`` when a block pins that dimension.
+        """
+        hint = super().minimumSizeHint()
+        height = max(self._size.min_height, self.sizeHint().height())
+        if self._size.max_height < UNBOUNDED:
+            height = min(height, self._size.max_height)
+        return QSize(max(hint.width(), self.minimumWidth()), height)
 
     def set_locked(self, locked: bool) -> None:
         """Forward read-only view mode to the section; the title bar stays live."""

@@ -63,8 +63,10 @@ def test_abilities_and_resistances_frames_are_fixed_and_equal(qapp: QApplication
     resistance_frame = sheet.block_frame("resistances")
     for frame in (ability_frame, resistance_frame):
         assert frame.minimumWidth() == frame.maximumWidth()
-        assert frame.minimumHeight() == frame.maximumHeight()
-    assert ability_frame.minimumSize() == resistance_frame.minimumSize()
+        # Height is pinned via the effective minimum (minimumSizeHint), capped at
+        # the configured max, so a fixed block can neither grow nor shrink.
+        assert frame.minimumSizeHint().height() == frame.maximumHeight()
+    assert ability_frame.minimumSizeHint() == resistance_frame.minimumSizeHint()
 
 
 def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> None:
@@ -76,9 +78,11 @@ def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> No
         # The configured minimum is a floor. The section sits directly in the frame
         # (no inner scroll area), so a block whose content needs more than the
         # configured minimum — e.g. Base Information or the Advantages picker —
-        # reports the larger content-driven minimum instead.
+        # reports the larger content-driven minimum instead. Height is enforced
+        # through the effective minimum (minimumSizeHint), so a block is never
+        # squashed below its content; the page scrolls instead.
         assert frame.minimumWidth() >= spec.min_width
-        assert frame.minimumHeight() >= spec.min_height
+        assert frame.minimumSizeHint().height() >= spec.min_height
         # A configured max pins the frame exactly; an unbounded dimension is left
         # effectively unconstrained (Qt reports its own large max).
         if spec.max_width < UNBOUNDED:

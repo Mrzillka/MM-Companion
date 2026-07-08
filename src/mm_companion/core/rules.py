@@ -133,7 +133,9 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
 
     Instant-action and resource-pool effects are never standing contributors. An
     otherwise-passive effect is on unless a gate switches it off: a runtime Nullify
-    (``effect.suppressed``); a Sustained/Continuous toggle the player has turned off
+    (``effect.suppressed``); an array member the player hasn't currently selected
+    (``power.array_active`` — only one member of an array is active at a time); a
+    Sustained/Continuous toggle the player has turned off
     (``effect.toggled_on``, for a ``passive_toggle`` pattern or a toggle-gated
     effect); an Activation gate on an un-activated power (``power.activated``); or a
     Removable gate whose item is absent (``power.item_present``). The Limited gate is
@@ -144,6 +146,8 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
     if pattern in (INSTANT_ACTION, RESOURCE_POOL):
         return False
     if effect.suppressed:
+        return False
+    if not power.array_active:  # an array member not currently selected as active
         return False
     gates = _effect_gates(effect, game_data)
     if GATE_ACTIVATION in gates and not power.activated:
@@ -484,9 +488,14 @@ def advantage_violations(char: Character, game_data: GameData) -> list[str]:
 
 
 def powers_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on powers: each saved power's assembled :func:`power_total_cost`."""
+    """Power points spent on powers: each saved power's :func:`power_display_cost`.
 
-    return sum(power_total_cost(power, game_data) for power in char.powers)
+    Cross-power arrays share a point pool, so an Alternate Effect contributes only the
+    flat alternate cost while its base pays full (see :func:`power_display_cost`);
+    standalone and linked powers cost their full assembled total.
+    """
+
+    return sum(power_display_cost(power, char, game_data) for power in char.powers)
 
 
 def power_points_spent(char: Character, game_data: GameData) -> int:
@@ -785,6 +794,76 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
+def array_base(char: Character, power: Power) -> Power | None:
+    """The base power of a power's cross-power array, or ``None`` when it's standalone.
+
+    A power with an ``alternate_of`` reference is an Alternate Effect of another power;
+    this resolves that id against ``char.powers``. Returns ``None`` when the power is
+    not an alternate, or when its referenced base is missing (a dangling reference —
+    :func:`power_array_violations` reports that separately).
+    """
+
+    if not power.alternate_of:
+        return None
+    return next((p for p in char.powers if p.id == power.alternate_of), None)
+
+
+def array_members(char: Character, base_power: Power) -> list[Power]:
+    """``base_power`` plus every power that is an Alternate Effect of it.
+
+    The members of a cross-power array share one point pool. Order is the base first,
+    then the alternates in ``char.powers`` order. A power that isn't anyone's base
+    still returns just ``[base_power]``.
+    """
+
+    members = [base_power]
+    members.extend(
+        p for p in char.powers if p.alternate_of == base_power.id and p is not base_power
+    )
+    return members
+
+
+def linked_group(char: Character, power: Power) -> list[Power]:
+    """Every power that switches on/off together with ``power`` (including itself).
+
+    ``linked_with`` is an **undirected** relationship — storing it on one side links
+    both — so this walks the connected component over the union of both directions.
+    Dangling ids are ignored. Order follows ``char.powers``; the result always
+    contains ``power``.
+    """
+
+    by_id = {p.id: p for p in char.powers}
+    seen: set[str] = set()
+    stack = [power]
+    while stack:
+        current = stack.pop()
+        if current.id in seen:
+            continue
+        seen.add(current.id)
+        # Outgoing links, plus any power that names this one (the other direction).
+        neighbours = list(current.linked_with)
+        neighbours.extend(p.id for p in char.powers if current.id in p.linked_with)
+        for neighbour_id in neighbours:
+            neighbour = by_id.get(neighbour_id)
+            if neighbour is not None and neighbour.id not in seen:
+                stack.append(neighbour)
+    return [p for p in char.powers if p.id in seen] or [power]
+
+
+def power_display_cost(power: Power, char: Character, game_data: GameData) -> int:
+    """The point cost a power contributes to the build, accounting for arrays.
+
+    A power that is a valid Alternate Effect of another (its ``alternate_of`` resolves
+    to a base in ``char.powers``) costs only the flat :func:`array_alternate_cost`,
+    since it shares the base's point pool. Every other power — a base, a standalone, or
+    a linked one (linking is a +0 bundle) — costs its full :func:`power_total_cost`.
+    """
+
+    if array_base(char, power) is not None:
+        return array_alternate_cost(game_data)
+    return power_total_cost(power, game_data)
+
+
 def effect_attack_skill_bonus(
     effect: PowerEffectInstance, char: Character | None, game_data: GameData
 ) -> int | None:
@@ -954,6 +1033,46 @@ def power_linked_range_violations(power: Power, game_data: GameData) -> list[str
                 f"'{first}' — linked effects must share the same Range."
             )
     return violations
+
+
+def power_array_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
+    """Cross-power Alternate Effect problems (``mm-powers-architecture.md`` §4).
+
+    An Alternate Effect shares its base power's point pool, so its own full cost must
+    not exceed the base's — otherwise the base is mis-chosen and the array is
+    under-paid. This reports, for a power whose ``alternate_of`` is set:
+
+    - a **dangling** reference (the named base is no longer on the character),
+    - a **self**-reference,
+    - a **chained** array (the base is itself an alternate — arrays are one level),
+    - the key case: this alternate's :func:`power_total_cost` **exceeds** the base's.
+
+    Warnings only (like :func:`power_pl_violations`); enforcement is the app-wide
+    :func:`mm_companion.core.storage.pl_enforcement` seam. Empty for a standalone power
+    or a valid, no-costlier alternate.
+    """
+
+    if not power.alternate_of:
+        return []
+    if power.alternate_of == power.id:
+        return ["This power can't be an Alternate Effect of itself."]
+    base = next((p for p in char.powers if p.id == power.alternate_of), None)
+    if base is None:
+        return ["Alternate Effect base is missing — it was removed or never saved."]
+    if base.alternate_of:
+        return [
+            f"'{base.name or 'the base power'}' is itself an alternate — "
+            "point an Alternate Effect at a base power, not another alternate."
+        ]
+    this_cost = power_total_cost(power, game_data)
+    base_cost = power_total_cost(base, game_data)
+    if this_cost > base_cost:
+        return [
+            f"This alternate costs {this_cost} PP, over base "
+            f"'{base.name or 'the base power'}' ({base_cost} PP) — raise the base or "
+            "trim this alternate so the base is the costliest member."
+        ]
+    return []
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:

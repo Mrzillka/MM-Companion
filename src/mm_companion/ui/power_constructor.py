@@ -82,6 +82,7 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_ability,
     power_allocation_violations,
+    power_array_violations,
     power_linked_range_violations,
     power_pl_violations,
     power_total_cost,
@@ -1610,6 +1611,51 @@ class PowerTermsView(QWidget):
                 item.layout().deleteLater()
 
 
+class RelationshipChip(QFrame):
+    """A power-level Linked / Alternate Effect chip whose combo picks the target power.
+
+    Styled like a :class:`ModifierChip` (a tinted rounded frame with a remove button),
+    but instead of modifying one effect it names another *power* this one relates to:
+    ``kind`` is ``"linked"`` (switch on/off together) or ``"alternate"`` (be an
+    Alternate Effect of the chosen base). Choosing the power happens **in the chip**,
+    via the combo — emitting :attr:`changed` so the window can sync the model.
+    """
+
+    removeRequested = Signal(object)
+    changed = Signal()
+
+    def __init__(self, kind: str, others: list[Power], current: str = "") -> None:
+        super().__init__()
+        self.kind = kind
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        tint = "#3a6f4a" if kind == "linked" else "#7a5c1e"  # match linked/alternate badges
+        self.setStyleSheet(f"RelationshipChip {{ background: {tint}; border-radius: 6px; }}")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 3, 2)
+        row.setSpacing(4)
+        row.addWidget(QLabel("Linked with" if kind == "linked" else "Alternate Effect of"))
+        self._combo = QComboBox()
+        self._combo.addItem("— choose a power —", "")
+        for power in others:
+            self._combo.addItem(power.name or "Unnamed Power", power.id)
+        index = self._combo.findData(current)
+        self._combo.setCurrentIndex(index if index >= 0 else 0)
+        guard_wheel(self._combo)
+        self._combo.currentIndexChanged.connect(lambda _i: self.changed.emit())
+        row.addWidget(self._combo)
+        remove = QPushButton("✕")
+        remove.setFlat(True)
+        remove.setFixedWidth(18)
+        remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove.clicked.connect(lambda: self.removeRequested.emit(self))
+        row.addWidget(remove)
+
+    def power_id(self) -> str:
+        """The id of the power this chip currently points at (empty when unset)."""
+        return self._combo.currentData() or ""
+
+
 class PowerConstructorWindow(QMainWindow):
     """Standalone brick-builder window for assembling a single power."""
 
@@ -1813,6 +1859,13 @@ class PowerConstructorWindow(QMainWindow):
         guard_wheel(self._description)  # don't let the box steal the page wheel
         layout.addWidget(self._description)
 
+        # Cross-power relationships (§4): make this power an Alternate Effect of, or
+        # switch it on/off together with, other already-saved powers. Only shown when
+        # there is a character with at least one *other* power to relate to.
+        relationships = self._build_relationships()
+        if relationships is not None:
+            layout.addWidget(relationships)
+
         # A prominent cost bar sits just above the canvas: the running total on the
         # left, the live Power Level / allocation warning on the right (hidden while
         # the power is within caps, naming the breach on its tooltip when it isn't).
@@ -1871,6 +1924,116 @@ class PowerConstructorWindow(QMainWindow):
         layout.addWidget(scroll, stretch=1)
         return panel
 
+    # -- cross-power relationships ----------------------------------------
+    def _other_powers(self) -> list[Power]:
+        """The character's other saved powers this one can relate to (never itself).
+
+        Empty without a character. The power being edited is excluded by ``id`` (an
+        edit works on a same-id deep copy), so it can't link to or alternate itself.
+        """
+        if self._character is None:
+            return []
+        return [p for p in self._character.powers if p.id != self.power.id]
+
+    def _build_relationships(self) -> QWidget | None:
+        """A power-level Relationships area: add Linked / Alternate Effect **chips**,
+        each with a combo that picks the target power.
+
+        Returns ``None`` when there are no other powers to relate to, so a first power
+        (or a constructor opened without a character) simply shows nothing here.
+        """
+        self._rel_others = self._other_powers()
+        if not self._rel_others:
+            return None
+        self._rel_chips: list[RelationshipChip] = []
+
+        host = QWidget()
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+        heading = QLabel("Relationships")
+        heading.setStyleSheet("font-weight: bold;")
+        outer.addWidget(heading)
+        chip_host = QWidget()
+        self._rel_chip_layout = FlowLayout(chip_host)
+        outer.addWidget(chip_host)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        add_linked = QPushButton("＋ Linked")
+        add_linked.setToolTip("Link this power to another so they switch on/off together.")
+        add_linked.clicked.connect(lambda: self._add_relationship_chip("linked"))
+        buttons.addWidget(add_linked)
+        self._add_alt_button = QPushButton("＋ Alternate Effect")
+        self._add_alt_button.setToolTip(
+            "Make this power an Alternate Effect of another — they share one point "
+            "pool, so only the base pays full and this costs a flat point."
+        )
+        self._add_alt_button.clicked.connect(lambda: self._add_relationship_chip("alternate"))
+        buttons.addWidget(self._add_alt_button)
+        buttons.addStretch()
+        outer.addLayout(buttons)
+
+        # Seed chips from an existing power (edit mode). Seeding only mirrors the model
+        # that's already set, so it skips the sync/refresh that a user edit runs (the
+        # cost/warning widgets aren't built yet at this point in construction).
+        for power_id in self.power.linked_with:
+            self._make_relationship_chip("linked", power_id)
+        if self.power.alternate_of:
+            self._make_relationship_chip("alternate", self.power.alternate_of)
+        self._update_alt_button()
+        return host
+
+    def _make_relationship_chip(self, kind: str, current: str = "") -> RelationshipChip:
+        """Create a relationship chip and mount it, without touching the model."""
+        chip = RelationshipChip(kind, self._rel_others, current)
+        chip.changed.connect(self._sync_relationships)
+        chip.removeRequested.connect(self._remove_relationship_chip)
+        self._rel_chips.append(chip)
+        self._rel_chip_layout.addWidget(chip)
+        return chip
+
+    def _add_relationship_chip(self, kind: str, current: str = "") -> RelationshipChip:
+        """Add a chip from a user action, then update the model and warnings."""
+        chip = self._make_relationship_chip(kind, current)
+        self._update_alt_button()
+        self._sync_relationships()
+        return chip
+
+    def _remove_relationship_chip(self, chip: RelationshipChip) -> None:
+        if chip in self._rel_chips:
+            self._rel_chips.remove(chip)
+        self._rel_chip_layout.removeWidget(chip)
+        chip.setParent(None)
+        chip.deleteLater()
+        self._update_alt_button()
+        self._sync_relationships()
+
+    def _update_alt_button(self) -> None:
+        """Only one Alternate Effect base makes sense, so disable the add button once
+        an alternate chip is present."""
+        has_alt = any(c.kind == "alternate" for c in self._rel_chips)
+        self._add_alt_button.setEnabled(not has_alt)
+
+    def _sync_relationships(self) -> None:
+        """Mirror the current chips onto the power's ``linked_with`` / ``alternate_of``,
+        then refresh the cost note and warnings. An unset or duplicate chip is ignored."""
+        linked: list[str] = []
+        alternate = ""
+        for chip in self._rel_chips:
+            power_id = chip.power_id()
+            if not power_id:
+                continue
+            if chip.kind == "linked":
+                if power_id not in linked:
+                    linked.append(power_id)
+            else:
+                alternate = power_id
+        self.power.linked_with = linked
+        self.power.alternate_of = alternate
+        self._refresh_cost()
+        self._refresh_pl_warning()
+
     def _on_name_changed(self, text: str) -> None:
         self.power.name = text
 
@@ -1878,7 +2041,16 @@ class PowerConstructorWindow(QMainWindow):
         self.power.description = self._description.toPlainText()
 
     def _refresh_cost(self) -> None:
-        self._cost.setText(f"Total cost: {power_total_cost(self.power, self._data)} PP")
+        # Always show the power's own full assembled cost; when it's an Alternate
+        # Effect of an existing base, note the flat point it actually contributes.
+        text = f"Total cost: {power_total_cost(self.power, self._data)} PP"
+        if self.power.alternate_of and self._character is not None:
+            base = next(
+                (p for p in self._character.powers if p.id == self.power.alternate_of), None
+            )
+            if base is not None:
+                text += f" · as alternate: {array_alternate_cost(self._data)} PP"
+        self._cost.setText(text)
 
     def _refresh_game_terms(self) -> None:
         self._terms.set_power(self.power, self._data, self._character)
@@ -1897,11 +2069,19 @@ class PowerConstructorWindow(QMainWindow):
         """Linked effects that don't share a common Range (a build error)."""
         return power_linked_range_violations(self.power, self._data)
 
+    def _array_violations(self) -> list[str]:
+        """Alternate Effect problems — chiefly an alternate that out-costs its base."""
+        if self._character is None:
+            return []
+        return power_array_violations(self.power, self._character, self._data)
+
     def _refresh_pl_warning(self) -> None:
-        """Show or hide the live warning from the current PL, allocation, and link breaches."""
+        """Show or hide the live warning from the current PL, allocation, link, and
+        Alternate Effect breaches."""
         pl = self._pl_violations()
         alloc = self._alloc_violations()
         linked = self._linked_violations()
+        array = self._array_violations()
         headlines = []
         if pl:
             headlines.append("over Power Level")
@@ -1909,10 +2089,12 @@ class PowerConstructorWindow(QMainWindow):
             headlines.append("over-allocated")
         if linked:
             headlines.append("mismatched linked Range")
+        if array:
+            headlines.append("over base cost")
         headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
-            self._warning.setToolTip("\n".join((*pl, *alloc, *linked)))
+            self._warning.setToolTip("\n".join((*pl, *alloc, *linked, *array)))
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:
@@ -1948,6 +2130,15 @@ class PowerConstructorWindow(QMainWindow):
                 "Mismatched linked Range",
                 "This power can't be saved because its linked effects don't share "
                 "the same Range:\n\n• " + "\n• ".join(linked),
+            )
+            return
+        array = self._array_violations()
+        if array and storage.pl_enforcement() == storage.PL_ENFORCE_BLOCK:
+            QMessageBox.warning(
+                self,
+                "Alternate Effect over base",
+                "This power can't be saved because its Alternate Effect is invalid:\n\n• "
+                + "\n• ".join(array),
             )
             return
         violations = self._pl_violations()

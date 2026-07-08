@@ -14,7 +14,9 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     array_alternate_cost,
+    array_base,
     array_base_index,
+    array_members,
     effect_allocation_used,
     effect_attack_skill_bonus,
     effect_cost_formula,
@@ -26,13 +28,17 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_ability,
     effective_effect_stats,
+    linked_group,
     power_allocation_violations,
+    power_array_violations,
+    power_display_cost,
     power_game_terms,
     power_linked_range_violations,
     power_pl_violations,
     power_runtime_gates,
     power_total_cost,
     power_trait_bonuses,
+    powers_points_spent,
     resistance_total,
     skill_total,
 )
@@ -1084,3 +1090,123 @@ def test_linked_range_check_ignores_non_linked_structures() -> None:
         structure=STRUCTURE_ARRAY,
     )
     assert power_linked_range_violations(power, data) == []
+
+
+# -- cross-power relationships: Linked & Alternate Effect ------------------
+
+
+def test_power_roundtrips_cross_power_fields() -> None:
+    power = Power(
+        name="A",
+        effects=[PowerEffectInstance("damage", rank=5)],
+        linked_with=["other-id"],
+        alternate_of="base-id",
+        array_active=False,
+    )
+    clone = Power.from_dict(power.to_dict())
+    assert clone.id == power.id
+    assert clone.linked_with == ["other-id"]
+    assert clone.alternate_of == "base-id"
+    assert clone.array_active is False
+
+
+def test_legacy_power_without_id_is_migrated() -> None:
+    # A power saved before ids existed still round-trips, minted a fresh id.
+    clone = Power.from_dict({"name": "Old", "effects": []})
+    assert clone.id  # non-empty
+    assert clone.alternate_of == "" and clone.linked_with == []
+
+
+def _character_with_powers(*powers: Power) -> Character:
+    char = Character()
+    char.powers = list(powers)
+    return char
+
+
+def test_alternate_effect_shares_the_point_pool() -> None:
+    data = load_game_data()
+    base = Power(name="Fire Bolt", effects=[PowerEffectInstance("damage", rank=10)])  # 10 PP
+    alt = Power(name="Ice Bolt", effects=[PowerEffectInstance("damage", rank=6)])  # 6 PP
+    char = _character_with_powers(base, alt)
+    alt.alternate_of = base.id
+
+    assert power_display_cost(base, char, data) == 10  # base pays full
+    assert power_display_cost(alt, char, data) == array_alternate_cost(data)  # flat
+    # Total is base full + one flat alternate, not 10 + 6.
+    assert powers_points_spent(char, data) == 10 + array_alternate_cost(data)
+    assert [p.name for p in array_members(char, base)] == ["Fire Bolt", "Ice Bolt"]
+    assert array_base(char, alt) is base
+
+
+def test_linked_powers_do_not_change_cost() -> None:
+    data = load_game_data()
+    a = Power(name="A", effects=[PowerEffectInstance("damage", rank=10)])
+    b = Power(name="B", effects=[PowerEffectInstance("damage", rank=6)])
+    char = _character_with_powers(a, b)
+    a.linked_with = [b.id]  # linking is a +0 bundle
+    assert powers_points_spent(char, data) == 16
+
+
+def test_alternate_costlier_than_base_is_flagged() -> None:
+    data = load_game_data()
+    base = Power(name="Weak", effects=[PowerEffectInstance("damage", rank=5)])  # 5 PP
+    alt = Power(name="Strong", effects=[PowerEffectInstance("damage", rank=9)])  # 9 PP
+    char = _character_with_powers(base, alt)
+    alt.alternate_of = base.id
+    violations = power_array_violations(alt, char, data)
+    assert len(violations) == 1 and "over base" in violations[0]
+    # A cheaper alternate is clean.
+    alt.effects[0].rank = 3
+    assert power_array_violations(alt, char, data) == []
+
+
+def test_alternate_dangling_self_and_chained_bases_are_flagged() -> None:
+    data = load_game_data()
+    base = Power(name="Base", effects=[PowerEffectInstance("damage", rank=8)])
+    mid = Power(name="Mid", effects=[PowerEffectInstance("damage", rank=4)])
+    tail = Power(name="Tail", effects=[PowerEffectInstance("damage", rank=4)])
+    char = _character_with_powers(base, mid, tail)
+
+    lonely = Power(name="Lonely", alternate_of="missing", effects=[])
+    assert "missing" in power_array_violations(lonely, char, data)[0]
+
+    base.alternate_of = base.id  # self-reference
+    assert "itself" in power_array_violations(base, char, data)[0]
+    base.alternate_of = ""
+
+    mid.alternate_of = base.id  # a valid alternate
+    tail.alternate_of = mid.id  # chained onto an alternate — not allowed
+    assert "another alternate" in power_array_violations(tail, char, data)[0]
+
+
+def test_inactive_array_member_drops_its_trait_boost() -> None:
+    data = load_game_data()
+    base = Power(name="Base", effects=[PowerEffectInstance("damage", rank=8)])
+    boost = Power(
+        name="Might",
+        effects=[PowerEffectInstance("enhanced_trait", rank=4, config={"target": "STR"})],
+    )
+    char = _character_with_powers(base, boost)
+    boost.alternate_of = base.id
+
+    # Selected (active) → the +4 Strength boost flows through.
+    boost.array_active = True
+    assert effective_ability(char, data, "STR") == 4
+    # Not the selected member → gated off, boost drops.
+    boost.array_active = False
+    assert effective_ability(char, data, "STR") == 0
+
+
+def test_linked_group_is_the_transitive_closure() -> None:
+    a = Power(name="A")
+    b = Power(name="B")
+    c = Power(name="C")
+    lone = Power(name="Lone")
+    char = _character_with_powers(a, b, c, lone)
+    a.linked_with = [b.id]  # A—B
+    b.linked_with = [c.id]  # B—C (so A—B—C is one group)
+
+    # Reachable from any member, both directions, transitively.
+    assert {p.name for p in linked_group(char, a)} == {"A", "B", "C"}
+    assert {p.name for p in linked_group(char, c)} == {"A", "B", "C"}
+    assert [p.name for p in linked_group(char, lone)] == ["Lone"]

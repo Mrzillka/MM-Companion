@@ -27,6 +27,7 @@ import html
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -46,18 +47,23 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     array_alternate_cost,
+    array_base,
     array_base_index,
+    array_members,
     debilitated_traits,
     effect_attack_skill_bonus,
     effect_effective_rank,
     effect_stat_rows,
+    linked_group,
+    power_array_violations,
+    power_display_cost,
     power_pl_violations,
     power_runtime_gates,
-    power_total_cost,
     powers_points_spent,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, title_with_cost
 
 # Tints for a stat a modifier changed, matching the Power Constructor's
@@ -161,6 +167,7 @@ class PowersSection(TitledSection):
 
     def _rebuild_list(self) -> None:
         """Rebuild the row per power from the model, toggling the empty label."""
+        self._normalize_arrays()  # exactly one active member per array before drawing
         while self._list_layout.count():
             widget = self._list_layout.takeAt(0).widget()
             if widget is not None:
@@ -195,6 +202,18 @@ class PowersSection(TitledSection):
             desc.setWordWrap(True)
             desc.setStyleSheet("color: gray; font-style: italic;")
             layout.addWidget(desc)
+
+        # A cross-power relationship note (Alternate Effect of / Linked with), and —
+        # on an array's base — a picker for which member is currently active.
+        note = self._relationship_note(power)
+        if note:
+            label = QLabel(note)
+            label.setWordWrap(True)
+            label.setStyleSheet("color: #6a86c0; font-style: italic;")
+            layout.addWidget(label)
+        selector = self._array_selector(power)
+        if selector is not None:
+            layout.addWidget(selector)
 
         effects = self._effects_block(power)
         if effects is not None:
@@ -233,9 +252,12 @@ class PowersSection(TitledSection):
             name.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(name)
 
-        # A power that breaks a PL cap carries a warning marker naming the breach;
-        # enforcement is a warning for now (see storage.pl_enforcement).
-        violations = power_pl_violations(power, self._character, self._data)
+        # A power that breaks a PL cap — or is an invalid Alternate Effect (costs more
+        # than its base) — carries a warning marker naming the breach; enforcement is a
+        # warning for now (see storage.pl_enforcement).
+        violations = power_pl_violations(
+            power, self._character, self._data
+        ) + power_array_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
@@ -253,7 +275,9 @@ class PowersSection(TitledSection):
             active.toggled.connect(lambda on, p=power: self._set_power_active(p, on))
             layout.addWidget(active)
 
-        cost = QLabel(f"{power_total_cost(power, self._data)} PP")
+        # An Alternate Effect contributes only its flat pooled cost; every other power
+        # shows its full assembled cost (power_display_cost handles the distinction).
+        cost = QLabel(f"{power_display_cost(power, self._character, self._data)} PP")
         cost.setEnabled(False)
         layout.addWidget(cost)
 
@@ -444,6 +468,84 @@ class PowersSection(TitledSection):
             self._rebuild_list()
             self.changed.emit()
 
+    # -- cross-power relationships ----------------------------------------
+    def _relationship_note(self, power: Power) -> str:
+        """A muted note naming this power's cross-power ties, or empty for none.
+
+        Reports an Alternate Effect's resolved base and the (transitively closed)
+        set of powers it switches on/off with."""
+        parts: list[str] = []
+        base = array_base(self._character, power)
+        if base is not None:
+            parts.append(f"Alternate Effect of {base.name or 'Unnamed Power'}")
+        linked = [p for p in linked_group(self._character, power) if p is not power]
+        if linked:
+            names = ", ".join(p.name or "Unnamed Power" for p in linked)
+            parts.append(f"Linked with {names}")
+        return " · ".join(parts)
+
+    def _array_selector(self, power: Power) -> QWidget | None:
+        """On an array's base card, a picker for which member is currently active.
+
+        Only the base carries it (an alternate points *at* the base), and only when
+        the array actually has alternates. Choosing a member activates it and gates
+        the others off (via ``array_active`` → ``rules.effect_is_active``)."""
+        if power.alternate_of:
+            return None  # an alternate — the selector lives on its base
+        members = array_members(self._character, power)
+        if len(members) < 2:
+            return None
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Active:"))
+        combo = QComboBox()
+        for member in members:
+            combo.addItem(member.name or "Unnamed Power", member.id)
+        active = next((m for m in members if m.array_active), members[0])
+        index = combo.findData(active.id)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        combo.setToolTip("Only one array member runs at a time — pick the active one.")
+        combo.setEnabled(not self._locked)
+        guard_wheel(combo)
+        combo.currentIndexChanged.connect(
+            lambda _i, ms=members, c=combo: self._set_array_active(ms, c.currentData())
+        )
+        row.addWidget(combo)
+        row.addStretch()
+        return host
+
+    def _normalize_arrays(self) -> None:
+        """Keep exactly one active member per cross-power array before rendering.
+
+        Each fresh alternate defaults ``array_active=True`` like the base, so an array
+        can transiently have several 'active' members; this collapses each array to a
+        single active one (keeping the current choice when there is exactly one, else
+        defaulting to the base). Any power not in a multi-member array is forced active
+        so a former alternate is never left permanently gated off. Pure runtime
+        housekeeping — it doesn't emit :attr:`changed`."""
+        handled: set[str] = set()
+        for power in self._character.powers:
+            base = array_base(self._character, power) or power
+            if base.id in handled:
+                continue
+            handled.add(base.id)
+            members = array_members(self._character, base)
+            if len(members) < 2:
+                base.array_active = True
+                continue
+            active = [m for m in members if m.array_active]
+            chosen = active[0] if len(active) == 1 else members[0]
+            for member in members:
+                member.array_active = member is chosen
+
+    def _set_array_active(self, members: list[Power], member_id: str) -> None:
+        """Make one array member the active one and gate the rest off, then re-derive."""
+        for member in members:
+            member.array_active = member.id == member_id
+        self._rebuild_list()
+        self.changed.emit()
+
     # -- runtime on/off ---------------------------------------------------
     @staticmethod
     def _power_is_active(power: Power) -> bool:
@@ -451,21 +553,24 @@ class PowersSection(TitledSection):
         return power.activated and power.item_present and all(e.toggled_on for e in power.effects)
 
     def _set_power_active(self, power: Power, active: bool) -> None:
-        """Flip all of the power's runtime switches together and re-derive the sheet.
+        """Flip the power's runtime switches — and its whole linked group — together.
 
         A single "Active" control drives whichever gate the power carries (Activation,
         Removable, or a Sustained toggle); ``rules.effect_is_active`` reads only the
-        flags the power's gates make relevant. The ``changed`` signal is already wired
-        to refresh the stats/skills sections, so the boosted totals update live.
+        flags the power's gates make relevant. Linked powers switch on/off as one, so
+        every member of :func:`~mm_companion.core.rules.linked_group` is flipped too.
+        The ``changed`` signal is already wired to refresh the stats/skills sections,
+        so the boosted totals update live.
 
         The cards are rebuilt too: switching off a power that boosts an ability
         (Enhanced Trait) lowers the *effective* ability another power reads — a
         Strength-Based Damage's rank, PL cap, and save DC all move with it.
         """
-        power.activated = active
-        power.item_present = active
-        for effect in power.effects:
-            effect.toggled_on = active
+        for member in linked_group(self._character, power):
+            member.activated = active
+            member.item_present = active
+            for effect in member.effects:
+                effect.toggled_on = active
         self._rebuild_list()
         self.changed.emit()
 

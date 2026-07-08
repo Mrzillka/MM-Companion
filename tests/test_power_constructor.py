@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 
@@ -1021,3 +1022,56 @@ def test_reduced_trait_offers_a_data_driven_trait_picker(qapp: QApplication) -> 
     assert combo.currentData() == ""  # no trait forced by default
     combo.setCurrentIndex(combo.findData("STR"))
     assert card.instance.flaws[0].config["reduced_target"] == "STR"
+
+
+def test_relationship_chip_combo_writes_alternate_and_linked(qapp: QApplication) -> None:
+    # A Linked / Alternate Effect chip carries a combo that names the target power, and
+    # choosing there writes back to the power being built.
+    char = _pl10_character()
+    other = Power(name="Base Power", effects=[PowerEffectInstance("damage", rank=8)])
+    char.powers.append(other)
+    window = PowerConstructorWindow(load_game_data(), character=char)
+
+    # Add an Alternate Effect chip; its combo picks the base power.
+    alt_chip = window._add_relationship_chip("alternate")
+    index = alt_chip._combo.findData(other.id)
+    assert index >= 0
+    alt_chip._combo.setCurrentIndex(index)
+    assert window.power.alternate_of == other.id
+    # Only one Alternate Effect base makes sense — the add button is now disabled.
+    assert not window._add_alt_button.isEnabled()
+
+    # Add a Linked chip pointing at the same power.
+    linked_chip = window._add_relationship_chip("linked")
+    linked_chip._combo.setCurrentIndex(linked_chip._combo.findData(other.id))
+    assert other.id in window.power.linked_with
+
+    # Removing the alternate chip clears the reference and re-enables the button.
+    window._remove_relationship_chip(alt_chip)
+    assert window.power.alternate_of == ""
+    assert window._add_alt_button.isEnabled()
+
+
+def test_relationship_chips_seed_from_an_edited_power(qapp: QApplication) -> None:
+    # Editing a power that already relates to others seeds a chip per relationship.
+    char = _pl10_character()
+    base = Power(name="Base", effects=[PowerEffectInstance("damage", rank=8)])
+    partner = Power(name="Partner", effects=[PowerEffectInstance("damage", rank=4)])
+    char.powers.extend([base, partner])
+    editing = Power(
+        name="Alt",
+        effects=[PowerEffectInstance("damage", rank=3)],
+        alternate_of=base.id,
+        linked_with=[partner.id],
+    )
+    char.powers.append(editing)
+    window = PowerConstructorWindow(load_game_data(), character=char, power=editing)
+
+    kinds = sorted(c.kind for c in window._rel_chips)
+    assert kinds == ["alternate", "linked"]
+
+
+def test_relationships_area_absent_without_other_powers(qapp: QApplication) -> None:
+    # A first power (nothing else saved) has nothing to relate to — no chips area built.
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    assert not hasattr(window, "_rel_chips")

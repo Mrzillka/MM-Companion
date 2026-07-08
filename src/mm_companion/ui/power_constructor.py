@@ -74,12 +74,15 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
     effect_allocation_used,
+    effect_attack_skill_bonus,
     effect_cost_formula,
     effect_effective_rank,
+    effect_makes_attack,
     effect_stat_rows,
     effect_total_cost,
+    effective_ability,
     power_allocation_violations,
-    power_attack_skill_bonus,
+    power_array_violations,
     power_linked_range_violations,
     power_pl_violations,
     power_total_cost,
@@ -87,6 +90,25 @@ from mm_companion.core.rules import (
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
+
+
+def combat_focus_options(character: Character | None, game_data: GameData) -> list[tuple[str, str]]:
+    """``(display, row_id)`` for each Close/Ranged Combat focus the wielder has.
+
+    Combat skills are the focused ones linked to the Attack ability, so they're
+    found data-driven (no hardcoded names); a focus row id matches the skills
+    section's ``"<Skill>::<focus>"`` scheme. Empty without a character.
+    """
+    if character is None:
+        return []
+    options: list[tuple[str, str]] = []
+    for skill in game_data.skills:
+        if skill.ability != "ATK" or not skill.focused:
+            continue
+        for focus in character.focuses.get(skill.name, []):
+            options.append((f"{skill.name}: {focus}", f"{skill.name}::{focus}"))
+    return options
+
 
 # Custom drag payload formats: the record id travels as the mime data.
 EFFECT_MIME = "application/x-mm-effect"
@@ -245,15 +267,27 @@ class ModifierChip(QFrame):
     A ``ranked`` modifier (bought in its own ranks, e.g. Accurate) also carries a
     rank spin box; changing it writes back to the :class:`ModifierSelection` and
     emits :attr:`changed` so the card can recompute its cost.
+
+    A modifier that folds an ability into the effect (``adds_ability``, e.g.
+    Strength-Based) carries an "amount used" spin box so the player can use only
+    part of that ability. It is bounded by the wielder's effective ability and,
+    when left at full, stores nothing so it keeps tracking the ability dynamically.
     """
 
     removeRequested = Signal(object)
     changed = Signal()
 
-    def __init__(self, modifier: Modifier, selection: ModifierSelection, game_data=None) -> None:
+    def __init__(
+        self,
+        modifier: Modifier,
+        selection: ModifierSelection,
+        game_data=None,
+        character: Character | None = None,
+    ) -> None:
         super().__init__()
         self.selection = selection
         self._data = game_data
+        self._character = character
         self._press_pos = None
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
@@ -285,6 +319,50 @@ class ModifierChip(QFrame):
         # engine straight from the selection's config.
         if modifier.config_fields:
             outer.addLayout(self._build_config(modifier))
+
+        # A "how much of the ability to use" spin box for an ability-folding modifier
+        # (Strength-Based). Bounded by the wielder's effective ability; full = tracks it.
+        if modifier.adds_ability:
+            outer.addLayout(self._build_amount(modifier.adds_ability))
+
+    def _ability_cap(self, ability_key: str) -> int:
+        """The wielder's effective ability rank — the most this modifier can fold in.
+
+        Falls back to :data:`RANK_MAX` without a character (a constructor opened
+        outside a character context), so the spin box stays usable but unbounded.
+        """
+        if self._character is None:
+            return RANK_MAX
+        return max(0, effective_ability(self._character, self._data, ability_key))
+
+    def _build_amount(self, ability_key: str) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        abbr = next(
+            (a.abbr for a in getattr(self._data, "abilities", []) if a.key == ability_key),
+            ability_key,
+        )
+        row.addWidget(QLabel(f"{abbr} used"))
+        cap = self._ability_cap(ability_key)
+        # No stored amount means "use it all" — seed the spin box at the cap.
+        current = self.selection.config.get("amount")
+        value = cap if current is None else max(0, min(int(current), cap))
+        spin = make_spin_box(0, cap, value=value, buttons=False, max_width=48)
+        spin.setToolTip(f"How many ranks of your {abbr} this effect uses (max {cap}).")
+        spin.valueChanged.connect(lambda v, c=cap: self._on_amount_changed(v, c))
+        row.addWidget(spin)
+        row.addStretch()
+        return row
+
+    def _on_amount_changed(self, value: int, cap: int) -> None:
+        # At full the amount is left unset so it keeps tracking the ability; below
+        # full it's pinned to the chosen ranks.
+        if value >= cap:
+            self.selection.config.pop("amount", None)
+        else:
+            self.selection.config["amount"] = value
+        self.changed.emit()
 
     def _build_config(self, modifier: Modifier) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -470,10 +548,21 @@ class EffectCard(QFrame):
     changed = Signal()
     removeRequested = Signal(object)
 
-    def __init__(self, instance: PowerEffectInstance, game_data: GameData) -> None:
+    def __init__(
+        self,
+        instance: PowerEffectInstance,
+        game_data: GameData,
+        focus_options: list[tuple[str, str]] | None = None,
+        character: Character | None = None,
+    ) -> None:
         super().__init__()
         self.instance = instance
         self._data = game_data
+        # The wielder, so an ability-folding chip (Strength-Based) can bound its
+        # "amount used" spin box by the character's effective ability.
+        self._character = character
+        # Close/Ranged Combat focuses the wielder can link this effect's attack to.
+        self._focus_options = focus_options or []
         self._chips: list[ModifierChip] = []
         # Callables that refresh each Tier-4 allocation field's "used / rank" readout;
         # rebuilt with the config form and fired when the effect's rank changes.
@@ -512,6 +601,14 @@ class EffectCard(QFrame):
         target_picker = self._build_target_picker(effect)
         if target_picker is not None:
             layout.addWidget(target_picker)
+
+        # An optional link from *this effect's* attack to one of the wielder's
+        # Close/Ranged Combat focuses: a "Use attack skill" checkbox reveals the
+        # picker, whose focus total then replaces the bare Attack for this effect's
+        # roll and PL cap. Only built when the character actually has combat focuses.
+        attack_skill_row = self._build_attack_skill_row()
+        if attack_skill_row is not None:
+            layout.addWidget(attack_skill_row)
 
         # The config form is rebuilt on demand: attaching Extra Condition upgrades
         # Affliction's degree pickers from single-select to multiselect.
@@ -559,6 +656,69 @@ class EffectCard(QFrame):
         # them, e.g. an attached Extra Condition, so only the chips need seeding).
         self._seed_modifier_chips()
         self._refresh_cost()
+
+    # -- attack-skill link ------------------------------------------------
+    def _build_attack_skill_row(self) -> QWidget | None:
+        """A "Use attack skill" checkbox plus focus picker, or ``None`` when the
+        wielder has no Close/Ranged Combat focuses to link to.
+
+        The row is only *shown* for an effect that resolves with an attack roll; a
+        Perception-Range flaw (or a base effect that never rolls to hit) hides it via
+        :meth:`_refresh_attack_skill_visibility`, since there's no attack to reskill.
+        """
+        self._attack_skill_row = None
+        if not self._focus_options:
+            self._attack_skill_check = None
+            self._attack_skill = None
+            return None
+
+        self._attack_skill_check = QCheckBox("Use attack skill")
+        self._attack_skill_check.setToolTip(
+            "Link this effect's attack to a Close/Ranged Combat focus — that focus's "
+            "total replaces the character's Attack for this effect's roll and PL cap."
+        )
+        self._attack_skill = QComboBox()
+        for display, row_id in self._focus_options:
+            self._attack_skill.addItem(display, row_id)
+        guard_wheel(self._attack_skill)
+
+        # Seed from the instance: a stored link ticks the box and selects its focus.
+        linked = bool(self.instance.attack_skill)
+        self._attack_skill_check.setChecked(linked)
+        self._attack_skill.setVisible(linked)
+        if linked:
+            index = self._attack_skill.findData(self.instance.attack_skill)
+            self._attack_skill.setCurrentIndex(index if index >= 0 else 0)
+
+        self._attack_skill_check.toggled.connect(self._on_use_attack_skill_toggled)
+        self._attack_skill.currentIndexChanged.connect(self._on_attack_skill_changed)
+
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        row.addWidget(self._attack_skill_check)
+        row.addWidget(self._attack_skill, 1)
+        self._attack_skill_row = host
+        host.setVisible(effect_makes_attack(self.instance, self._data))
+        return host
+
+    def _refresh_attack_skill_visibility(self) -> None:
+        """Show the attack-skill row only while the effect still makes an attack roll
+        (a Perception-Range flaw drops the roll, so the link no longer applies)."""
+        if self._attack_skill_row is not None:
+            self._attack_skill_row.setVisible(effect_makes_attack(self.instance, self._data))
+
+    def _on_use_attack_skill_toggled(self, checked: bool) -> None:
+        self._attack_skill.setVisible(checked)
+        # Checked → link the selected focus; unchecked → drop the link entirely.
+        self.instance.attack_skill = self._attack_skill.currentData() or "" if checked else ""
+        self.changed.emit()
+
+    def _on_attack_skill_changed(self) -> None:
+        if self._attack_skill_check is not None and self._attack_skill_check.isChecked():
+            self.instance.attack_skill = self._attack_skill.currentData() or ""
+            self.changed.emit()
 
     # -- effect-specific qualities (config) -------------------------------
     def _has_extra(self, modifier_id: str) -> bool:
@@ -998,6 +1158,7 @@ class EffectCard(QFrame):
 
         self._build_chip(modifier, selection, is_flaw)
         self._populate_config_form()  # a gating extra may change a field's type
+        self._refresh_attack_skill_visibility()  # Perception Range drops the attack roll
         self._refresh_cost()
         self.changed.emit()
 
@@ -1007,7 +1168,7 @@ class EffectCard(QFrame):
         Shared by :meth:`attach_modifier` (which first appends the selection) and
         :meth:`_seed_modifier_chips` (which renders ones already present on load).
         """
-        chip = ModifierChip(modifier, selection, self._data)
+        chip = ModifierChip(modifier, selection, self._data, self._character)
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(lambda m=modifier: self._on_chip_changed(m))
         self._chips.append(chip)
@@ -1035,6 +1196,7 @@ class EffectCard(QFrame):
         self._chips.remove(chip)
         self._hint.setVisible(not self._chips)
         self._populate_config_form()  # removing a gating extra may downgrade a field
+        self._refresh_attack_skill_visibility()  # removing Perception Range restores it
         self._refresh_cost()
         self.changed.emit()
 
@@ -1164,10 +1326,21 @@ class PowerCanvas(QFrame):
 
     changed = Signal()
 
-    def __init__(self, power: Power, game_data: GameData) -> None:
+    def __init__(
+        self,
+        power: Power,
+        game_data: GameData,
+        focus_options: list[tuple[str, str]] | None = None,
+        character: Character | None = None,
+    ) -> None:
         super().__init__()
         self._power = power
         self._data = game_data
+        # The wielder, passed to each card so an ability-folding chip can bound its
+        # "amount used" spin box.
+        self._character = character
+        # Combat focuses each effect card can offer as an attack-skill link.
+        self._focus_options = focus_options or []
         self._cards: list[EffectCard] = []
         self.setObjectName("PowerCanvas")
         self.setAcceptDrops(True)
@@ -1224,7 +1397,7 @@ class PowerCanvas(QFrame):
 
     def _build_card(self, instance: PowerEffectInstance) -> EffectCard:
         """Render a card for an effect instance already on the power."""
-        card = EffectCard(instance, self._data)
+        card = EffectCard(instance, self._data, self._focus_options, self._character)
         card.changed.connect(self._on_card_changed)
         card.removeRequested.connect(self._remove_card)
         self._cards.append(card)
@@ -1346,8 +1519,8 @@ class PowerTermsView(QWidget):
             label = QLabel(header)
             label.setStyleSheet("font-weight: bold;")
             self._layout.addWidget(label)
-        attack_bonus = power_attack_skill_bonus(power, char, game_data)
         for index, effect in enumerate(power.effects):
+            attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
             self._add_effect_block(effect, index, power, game_data, char, attack_bonus)
 
     def _add_effect_block(
@@ -1438,6 +1611,51 @@ class PowerTermsView(QWidget):
                 item.layout().deleteLater()
 
 
+class RelationshipChip(QFrame):
+    """A power-level Linked / Alternate Effect chip whose combo picks the target power.
+
+    Styled like a :class:`ModifierChip` (a tinted rounded frame with a remove button),
+    but instead of modifying one effect it names another *power* this one relates to:
+    ``kind`` is ``"linked"`` (switch on/off together) or ``"alternate"`` (be an
+    Alternate Effect of the chosen base). Choosing the power happens **in the chip**,
+    via the combo — emitting :attr:`changed` so the window can sync the model.
+    """
+
+    removeRequested = Signal(object)
+    changed = Signal()
+
+    def __init__(self, kind: str, others: list[Power], current: str = "") -> None:
+        super().__init__()
+        self.kind = kind
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        tint = "#3a6f4a" if kind == "linked" else "#7a5c1e"  # match linked/alternate badges
+        self.setStyleSheet(f"RelationshipChip {{ background: {tint}; border-radius: 6px; }}")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 3, 2)
+        row.setSpacing(4)
+        row.addWidget(QLabel("Linked with" if kind == "linked" else "Alternate Effect of"))
+        self._combo = QComboBox()
+        self._combo.addItem("— choose a power —", "")
+        for power in others:
+            self._combo.addItem(power.name or "Unnamed Power", power.id)
+        index = self._combo.findData(current)
+        self._combo.setCurrentIndex(index if index >= 0 else 0)
+        guard_wheel(self._combo)
+        self._combo.currentIndexChanged.connect(lambda _i: self.changed.emit())
+        row.addWidget(self._combo)
+        remove = QPushButton("✕")
+        remove.setFlat(True)
+        remove.setFixedWidth(18)
+        remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove.clicked.connect(lambda: self.removeRequested.emit(self))
+        row.addWidget(remove)
+
+    def power_id(self) -> str:
+        """The id of the power this chip currently points at (empty when unset)."""
+        return self._combo.currentData() or ""
+
+
 class PowerConstructorWindow(QMainWindow):
     """Standalone brick-builder window for assembling a single power."""
 
@@ -1458,6 +1676,8 @@ class PowerConstructorWindow(QMainWindow):
         # for Strength-Based Damage, Attack for the PL cap) and to flag cap breaches.
         # None disables the check (a constructor opened without a character context).
         self._character = character
+        # Combat focuses each effect card can offer as an attack-skill link.
+        self._focus_options = combat_focus_options(character, self._data)
         # Editing works on a deep copy so closing the window without saving leaves
         # the character's stored power untouched; the copy is what `powerSaved` hands
         # back, and the host section swaps it in for the original on save.
@@ -1639,13 +1859,12 @@ class PowerConstructorWindow(QMainWindow):
         guard_wheel(self._description)  # don't let the box steal the page wheel
         layout.addWidget(self._description)
 
-        # An optional link to one of the wielder's Close/Ranged Combat focuses. When
-        # set, that focus's total becomes this power's attack bonus (replacing the bare
-        # Attack ability) and drives its Attack PL cap. Only shown when the character
-        # actually has combat focuses to choose from.
-        attack_skill_row = self._build_attack_skill_row()
-        if attack_skill_row is not None:
-            layout.addWidget(attack_skill_row)
+        # Cross-power relationships (§4): make this power an Alternate Effect of, or
+        # switch it on/off together with, other already-saved powers. Only shown when
+        # there is a character with at least one *other* power to relate to.
+        relationships = self._build_relationships()
+        if relationships is not None:
+            layout.addWidget(relationships)
 
         # A prominent cost bar sits just above the canvas: the running total on the
         # left, the live Power Level / allocation warning on the right (hidden while
@@ -1661,7 +1880,7 @@ class PowerConstructorWindow(QMainWindow):
         cost_row.addWidget(self._warning)
         layout.addLayout(cost_row)
 
-        self.canvas = PowerCanvas(self.power, self._data)
+        self.canvas = PowerCanvas(self.power, self._data, self._focus_options, self._character)
         self.canvas.changed.connect(self._refresh_cost)
         self.canvas.changed.connect(self._refresh_game_terms)
         self.canvas.changed.connect(self._refresh_pl_warning)
@@ -1705,54 +1924,114 @@ class PowerConstructorWindow(QMainWindow):
         layout.addWidget(scroll, stretch=1)
         return panel
 
-    def _combat_focus_options(self) -> list[tuple[str, str]]:
-        """``(display, row_id)`` for each Close/Ranged Combat focus the wielder has.
+    # -- cross-power relationships ----------------------------------------
+    def _other_powers(self) -> list[Power]:
+        """The character's other saved powers this one can relate to (never itself).
 
-        Combat skills are the focused ones linked to the Attack ability, so they're
-        found data-driven (no hardcoded names); a focus row id matches the skills
-        section's ``"<Skill>::<focus>"`` scheme.
+        Empty without a character. The power being edited is excluded by ``id`` (an
+        edit works on a same-id deep copy), so it can't link to or alternate itself.
         """
         if self._character is None:
             return []
-        options: list[tuple[str, str]] = []
-        for skill in self._data.skills:
-            if skill.ability != "ATK" or not skill.focused:
-                continue
-            for focus in self._character.focuses.get(skill.name, []):
-                options.append((f"{skill.name}: {focus}", f"{skill.name}::{focus}"))
-        return options
+        return [p for p in self._character.powers if p.id != self.power.id]
 
-    def _build_attack_skill_row(self) -> QWidget | None:
-        """The "Attack skill" picker, or ``None`` when there are no combat focuses."""
-        options = self._combat_focus_options()
-        if not options:
-            self._attack_skill = None
+    def _build_relationships(self) -> QWidget | None:
+        """A power-level Relationships area: add Linked / Alternate Effect **chips**,
+        each with a combo that picks the target power.
+
+        Returns ``None`` when there are no other powers to relate to, so a first power
+        (or a constructor opened without a character) simply shows nothing here.
+        """
+        self._rel_others = self._other_powers()
+        if not self._rel_others:
             return None
-        self._attack_skill = QComboBox()
-        self._attack_skill.addItem("— use Attack ability —", "")
-        for display, row_id in options:
-            self._attack_skill.addItem(display, row_id)
-        index = self._attack_skill.findData(self.power.attack_skill)
-        self._attack_skill.setCurrentIndex(index if index >= 0 else 0)
-        guard_wheel(self._attack_skill)
-        self._attack_skill.currentIndexChanged.connect(self._on_attack_skill_changed)
+        self._rel_chips: list[RelationshipChip] = []
 
         host = QWidget()
-        row = QHBoxLayout(host)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        label = QLabel("Attack skill:")
-        label.setToolTip(
-            "Link this power's attack to a Close/Ranged Combat focus — that focus's "
-            "total replaces the character's Attack for this power's roll and PL cap."
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+        heading = QLabel("Relationships")
+        heading.setStyleSheet("font-weight: bold;")
+        outer.addWidget(heading)
+        chip_host = QWidget()
+        self._rel_chip_layout = FlowLayout(chip_host)
+        outer.addWidget(chip_host)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        add_linked = QPushButton("＋ Linked")
+        add_linked.setToolTip("Link this power to another so they switch on/off together.")
+        add_linked.clicked.connect(lambda: self._add_relationship_chip("linked"))
+        buttons.addWidget(add_linked)
+        self._add_alt_button = QPushButton("＋ Alternate Effect")
+        self._add_alt_button.setToolTip(
+            "Make this power an Alternate Effect of another — they share one point "
+            "pool, so only the base pays full and this costs a flat point."
         )
-        row.addWidget(label)
-        row.addWidget(self._attack_skill, 1)
+        self._add_alt_button.clicked.connect(lambda: self._add_relationship_chip("alternate"))
+        buttons.addWidget(self._add_alt_button)
+        buttons.addStretch()
+        outer.addLayout(buttons)
+
+        # Seed chips from an existing power (edit mode). Seeding only mirrors the model
+        # that's already set, so it skips the sync/refresh that a user edit runs (the
+        # cost/warning widgets aren't built yet at this point in construction).
+        for power_id in self.power.linked_with:
+            self._make_relationship_chip("linked", power_id)
+        if self.power.alternate_of:
+            self._make_relationship_chip("alternate", self.power.alternate_of)
+        self._update_alt_button()
         return host
 
-    def _on_attack_skill_changed(self) -> None:
-        self.power.attack_skill = self._attack_skill.currentData() or ""
-        self._refresh_game_terms()
+    def _make_relationship_chip(self, kind: str, current: str = "") -> RelationshipChip:
+        """Create a relationship chip and mount it, without touching the model."""
+        chip = RelationshipChip(kind, self._rel_others, current)
+        chip.changed.connect(self._sync_relationships)
+        chip.removeRequested.connect(self._remove_relationship_chip)
+        self._rel_chips.append(chip)
+        self._rel_chip_layout.addWidget(chip)
+        return chip
+
+    def _add_relationship_chip(self, kind: str, current: str = "") -> RelationshipChip:
+        """Add a chip from a user action, then update the model and warnings."""
+        chip = self._make_relationship_chip(kind, current)
+        self._update_alt_button()
+        self._sync_relationships()
+        return chip
+
+    def _remove_relationship_chip(self, chip: RelationshipChip) -> None:
+        if chip in self._rel_chips:
+            self._rel_chips.remove(chip)
+        self._rel_chip_layout.removeWidget(chip)
+        chip.setParent(None)
+        chip.deleteLater()
+        self._update_alt_button()
+        self._sync_relationships()
+
+    def _update_alt_button(self) -> None:
+        """Only one Alternate Effect base makes sense, so disable the add button once
+        an alternate chip is present."""
+        has_alt = any(c.kind == "alternate" for c in self._rel_chips)
+        self._add_alt_button.setEnabled(not has_alt)
+
+    def _sync_relationships(self) -> None:
+        """Mirror the current chips onto the power's ``linked_with`` / ``alternate_of``,
+        then refresh the cost note and warnings. An unset or duplicate chip is ignored."""
+        linked: list[str] = []
+        alternate = ""
+        for chip in self._rel_chips:
+            power_id = chip.power_id()
+            if not power_id:
+                continue
+            if chip.kind == "linked":
+                if power_id not in linked:
+                    linked.append(power_id)
+            else:
+                alternate = power_id
+        self.power.linked_with = linked
+        self.power.alternate_of = alternate
+        self._refresh_cost()
         self._refresh_pl_warning()
 
     def _on_name_changed(self, text: str) -> None:
@@ -1762,7 +2041,16 @@ class PowerConstructorWindow(QMainWindow):
         self.power.description = self._description.toPlainText()
 
     def _refresh_cost(self) -> None:
-        self._cost.setText(f"Total cost: {power_total_cost(self.power, self._data)} PP")
+        # Always show the power's own full assembled cost; when it's an Alternate
+        # Effect of an existing base, note the flat point it actually contributes.
+        text = f"Total cost: {power_total_cost(self.power, self._data)} PP"
+        if self.power.alternate_of and self._character is not None:
+            base = next(
+                (p for p in self._character.powers if p.id == self.power.alternate_of), None
+            )
+            if base is not None:
+                text += f" · as alternate: {array_alternate_cost(self._data)} PP"
+        self._cost.setText(text)
 
     def _refresh_game_terms(self) -> None:
         self._terms.set_power(self.power, self._data, self._character)
@@ -1781,11 +2069,19 @@ class PowerConstructorWindow(QMainWindow):
         """Linked effects that don't share a common Range (a build error)."""
         return power_linked_range_violations(self.power, self._data)
 
+    def _array_violations(self) -> list[str]:
+        """Alternate Effect problems — chiefly an alternate that out-costs its base."""
+        if self._character is None:
+            return []
+        return power_array_violations(self.power, self._character, self._data)
+
     def _refresh_pl_warning(self) -> None:
-        """Show or hide the live warning from the current PL, allocation, and link breaches."""
+        """Show or hide the live warning from the current PL, allocation, link, and
+        Alternate Effect breaches."""
         pl = self._pl_violations()
         alloc = self._alloc_violations()
         linked = self._linked_violations()
+        array = self._array_violations()
         headlines = []
         if pl:
             headlines.append("over Power Level")
@@ -1793,10 +2089,12 @@ class PowerConstructorWindow(QMainWindow):
             headlines.append("over-allocated")
         if linked:
             headlines.append("mismatched linked Range")
+        if array:
+            headlines.append("over base cost")
         headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
-            self._warning.setToolTip("\n".join((*pl, *alloc, *linked)))
+            self._warning.setToolTip("\n".join((*pl, *alloc, *linked, *array)))
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:
@@ -1832,6 +2130,15 @@ class PowerConstructorWindow(QMainWindow):
                 "Mismatched linked Range",
                 "This power can't be saved because its linked effects don't share "
                 "the same Range:\n\n• " + "\n• ".join(linked),
+            )
+            return
+        array = self._array_violations()
+        if array and storage.pl_enforcement() == storage.PL_ENFORCE_BLOCK:
+            QMessageBox.warning(
+                self,
+                "Alternate Effect over base",
+                "This power can't be saved because its Alternate Effect is invalid:\n\n• "
+                + "\n• ".join(array),
             )
             return
         violations = self._pl_violations()

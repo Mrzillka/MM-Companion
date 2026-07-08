@@ -133,7 +133,9 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
 
     Instant-action and resource-pool effects are never standing contributors. An
     otherwise-passive effect is on unless a gate switches it off: a runtime Nullify
-    (``effect.suppressed``); a Sustained/Continuous toggle the player has turned off
+    (``effect.suppressed``); an array member the player hasn't currently selected
+    (``power.array_active`` — only one member of an array is active at a time); a
+    Sustained/Continuous toggle the player has turned off
     (``effect.toggled_on``, for a ``passive_toggle`` pattern or a toggle-gated
     effect); an Activation gate on an un-activated power (``power.activated``); or a
     Removable gate whose item is absent (``power.item_present``). The Limited gate is
@@ -144,6 +146,8 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
     if pattern in (INSTANT_ACTION, RESOURCE_POOL):
         return False
     if effect.suppressed:
+        return False
+    if not power.array_active:  # an array member not currently selected as active
         return False
     gates = _effect_gates(effect, game_data)
     if GATE_ACTIVATION in gates and not power.activated:
@@ -484,9 +488,14 @@ def advantage_violations(char: Character, game_data: GameData) -> list[str]:
 
 
 def powers_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on powers: each saved power's assembled :func:`power_total_cost`."""
+    """Power points spent on powers: each saved power's :func:`power_display_cost`.
 
-    return sum(power_total_cost(power, game_data) for power in char.powers)
+    Cross-power arrays share a point pool, so an Alternate Effect contributes only the
+    flat alternate cost while its base pays full (see :func:`power_display_cost`);
+    standalone and linked powers cost their full assembled total.
+    """
+
+    return sum(power_display_cost(power, char, game_data) for power in char.powers)
 
 
 def power_points_spent(char: Character, game_data: GameData) -> int:
@@ -649,6 +658,11 @@ def effect_rank_trait_bonus(
     Strength-Based Damage picks up the wielder's Strength (Enhanced Trait boosts to
     that ability included). Zero without a character or when no such modifier is
     attached. The bought point cost is unaffected — the folded-in rank is free.
+
+    A selection may cap how much of the ability it uses via ``config["amount"]`` (the
+    Strength-Based chip's spin box): when set, no more than that many ranks are folded
+    in (and never more than the wielder actually has). Absent, the full ability is
+    used and tracks it dynamically.
     """
 
     if char is None:
@@ -658,7 +672,9 @@ def effect_rank_trait_bonus(
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier and modifier.adds_ability:
-            bonus += effective_ability(char, game_data, modifier.adds_ability)
+            ability = effective_ability(char, game_data, modifier.adds_ability)
+            amount = selection.config.get("amount")
+            bonus += ability if amount is None else min(int(amount), ability)
     return bonus
 
 
@@ -778,12 +794,82 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
-def power_attack_skill_bonus(
-    power: Power, char: Character | None, game_data: GameData
-) -> int | None:
-    """The attack-roll bonus a power's linked Close/Ranged Combat focus supplies.
+def array_base(char: Character, power: Power) -> Power | None:
+    """The base power of a power's cross-power array, or ``None`` when it's standalone.
 
-    ``None`` when the power has no ``attack_skill`` link (or there is no character),
+    A power with an ``alternate_of`` reference is an Alternate Effect of another power;
+    this resolves that id against ``char.powers``. Returns ``None`` when the power is
+    not an alternate, or when its referenced base is missing (a dangling reference —
+    :func:`power_array_violations` reports that separately).
+    """
+
+    if not power.alternate_of:
+        return None
+    return next((p for p in char.powers if p.id == power.alternate_of), None)
+
+
+def array_members(char: Character, base_power: Power) -> list[Power]:
+    """``base_power`` plus every power that is an Alternate Effect of it.
+
+    The members of a cross-power array share one point pool. Order is the base first,
+    then the alternates in ``char.powers`` order. A power that isn't anyone's base
+    still returns just ``[base_power]``.
+    """
+
+    members = [base_power]
+    members.extend(
+        p for p in char.powers if p.alternate_of == base_power.id and p is not base_power
+    )
+    return members
+
+
+def linked_group(char: Character, power: Power) -> list[Power]:
+    """Every power that switches on/off together with ``power`` (including itself).
+
+    ``linked_with`` is an **undirected** relationship — storing it on one side links
+    both — so this walks the connected component over the union of both directions.
+    Dangling ids are ignored. Order follows ``char.powers``; the result always
+    contains ``power``.
+    """
+
+    by_id = {p.id: p for p in char.powers}
+    seen: set[str] = set()
+    stack = [power]
+    while stack:
+        current = stack.pop()
+        if current.id in seen:
+            continue
+        seen.add(current.id)
+        # Outgoing links, plus any power that names this one (the other direction).
+        neighbours = list(current.linked_with)
+        neighbours.extend(p.id for p in char.powers if current.id in p.linked_with)
+        for neighbour_id in neighbours:
+            neighbour = by_id.get(neighbour_id)
+            if neighbour is not None and neighbour.id not in seen:
+                stack.append(neighbour)
+    return [p for p in char.powers if p.id in seen] or [power]
+
+
+def power_display_cost(power: Power, char: Character, game_data: GameData) -> int:
+    """The point cost a power contributes to the build, accounting for arrays.
+
+    A power that is a valid Alternate Effect of another (its ``alternate_of`` resolves
+    to a base in ``char.powers``) costs only the flat :func:`array_alternate_cost`,
+    since it shares the base's point pool. Every other power — a base, a standalone, or
+    a linked one (linking is a +0 bundle) — costs its full :func:`power_total_cost`.
+    """
+
+    if array_base(char, power) is not None:
+        return array_alternate_cost(game_data)
+    return power_total_cost(power, game_data)
+
+
+def effect_attack_skill_bonus(
+    effect: PowerEffectInstance, char: Character | None, game_data: GameData
+) -> int | None:
+    """The attack-roll bonus an effect's linked Close/Ranged Combat focus supplies.
+
+    ``None`` when the effect has no ``attack_skill`` link (or there is no character),
     so callers fall back to the wielder's Attack ability. Otherwise the linked focus
     row's :func:`skill_total` — which already folds in the Attack ability, since these
     combat skills derive from ``ATK`` — so it *replaces* the bare Attack rather than
@@ -791,9 +877,25 @@ def power_attack_skill_bonus(
     as 0).
     """
 
-    if not power.attack_skill or char is None:
+    if not effect.attack_skill or char is None:
         return None
-    return skill_total(char, game_data, power.attack_skill)
+    return skill_total(char, game_data, effect.attack_skill)
+
+
+def effect_makes_attack(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether the effect resolves with an **attack roll** (vs. auto-hit / no check).
+
+    True when the base effect's check phrase is an "Attack …" roll and no attached
+    modifier drops it (a Perception-Range extra removes the roll, making the effect
+    auto-hit). This is the same condition :func:`power_pl_violations` uses to pick the
+    attack-plus-rank cap, and what gates the constructor's attack-skill picker.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return False
+    impact = _effective_stats(effect, game_data)[3]
+    return "Attack" in (base.check or "") and not impact.drops_check
 
 
 def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
@@ -806,8 +908,8 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
 
     - An effect that makes an **attack roll** obeys ``max_attack + effect_rank <=
       power_level * 2``. The attack bonus is the character's *effective* Attack
-      ability — or, when the power links a Close/Ranged Combat focus
-      (:func:`power_attack_skill_bonus`), that focus's total instead — plus the
+      ability — or, when the effect links a Close/Ranged Combat focus
+      (:func:`effect_attack_skill_bonus`), that focus's total instead — plus the
       power's own Accurate/Inaccurate; the effect rank is the
       *effective* rank (:func:`effect_effective_rank`), so a Strength-Based Damage
       folds in the wielder's Strength.
@@ -823,20 +925,19 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         return []
     power_level = char.power_level
     limit = cap.limit(power_level)
-    # A power linked to a Close/Ranged Combat focus uses that focus's total as its
-    # attack bonus (replacing the bare Attack ability); otherwise the Attack ability.
-    linked = power_attack_skill_bonus(power, char, game_data)
-    attack_ability = linked if linked is not None else effective_ability(char, game_data, "ATK")
 
     violations: list[str] = []
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None or base.resistance_dc_base is None:
             continue  # not an attack/resisted effect — these caps don't apply
+        # An effect linked to a Close/Ranged Combat focus uses that focus's total as
+        # its attack bonus (replacing the bare Attack ability); otherwise the Attack.
+        linked = effect_attack_skill_bonus(effect, char, game_data)
+        attack_ability = linked if linked is not None else effective_ability(char, game_data, "ATK")
         impact = _effective_stats(effect, game_data)[3]
         rank = effect_effective_rank(effect, game_data, char)
-        makes_attack = "Attack" in (base.check or "") and not impact.drops_check
-        if makes_attack:
+        if effect_makes_attack(effect, game_data):
             attack = attack_ability + impact.check_bonus
             if attack + rank > limit:
                 violations.append(
@@ -932,6 +1033,46 @@ def power_linked_range_violations(power: Power, game_data: GameData) -> list[str
                 f"'{first}' — linked effects must share the same Range."
             )
     return violations
+
+
+def power_array_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
+    """Cross-power Alternate Effect problems (``mm-powers-architecture.md`` §4).
+
+    An Alternate Effect shares its base power's point pool, so its own full cost must
+    not exceed the base's — otherwise the base is mis-chosen and the array is
+    under-paid. This reports, for a power whose ``alternate_of`` is set:
+
+    - a **dangling** reference (the named base is no longer on the character),
+    - a **self**-reference,
+    - a **chained** array (the base is itself an alternate — arrays are one level),
+    - the key case: this alternate's :func:`power_total_cost` **exceeds** the base's.
+
+    Warnings only (like :func:`power_pl_violations`); enforcement is the app-wide
+    :func:`mm_companion.core.storage.pl_enforcement` seam. Empty for a standalone power
+    or a valid, no-costlier alternate.
+    """
+
+    if not power.alternate_of:
+        return []
+    if power.alternate_of == power.id:
+        return ["This power can't be an Alternate Effect of itself."]
+    base = next((p for p in char.powers if p.id == power.alternate_of), None)
+    if base is None:
+        return ["Alternate Effect base is missing — it was removed or never saved."]
+    if base.alternate_of:
+        return [
+            f"'{base.name or 'the base power'}' is itself an alternate — "
+            "point an Alternate Effect at a base power, not another alternate."
+        ]
+    this_cost = power_total_cost(power, game_data)
+    base_cost = power_total_cost(base, game_data)
+    if this_cost > base_cost:
+        return [
+            f"This alternate costs {this_cost} PP, over base "
+            f"'{base.name or 'the base power'}' ({base_cost} PP) — raise the base or "
+            "trim this alternate so the base is the costliest member."
+        ]
+    return []
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -1198,8 +1339,8 @@ def effect_stat_rows(
     context-free summary still reads.
 
     ``attack_bonus`` overrides the attacker's base d20 bonus for an "Attack vs. …"
-    phrase — a power linked to a Close/Ranged Combat focus passes that focus's total
-    (:func:`power_attack_skill_bonus`) so the shown roll matches the PL check. ``None``
+    phrase — an effect linked to a Close/Ranged Combat focus passes that focus's total
+    (:func:`effect_attack_skill_bonus`) so the shown roll matches the PL check. ``None``
     keeps the default (the character's Attack ability, or the effect rank without one).
     """
 

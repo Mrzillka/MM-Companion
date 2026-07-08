@@ -90,6 +90,27 @@ Power (array example: "elemental control")
  └─ alternate: Move Object 8, Ranged, Limited to metal   (+1 pt flat)
 ```
 
+### Two ways to build these in this app
+
+Linked and Array come in a **within-power** form and a **cross-power** form, and both
+are supported side by side:
+
+- **Within a power** — a multi-effect `Power` carries a `structure`
+  (`independent`/`linked`/`array`) governing how *its own effects* combine. This is the
+  in-constructor mode bar (see `mm-powers-ui-design.md`).
+- **Between whole powers** — each `Power` also relates to other saved powers:
+  `linked_with` names powers it switches on/off together with, and `alternate_of` makes
+  it an Alternate Effect of another power (referenced by the target's stable `Power.id`).
+  A cross-power array shares one point pool the same way: the base pays its full
+  `power_total_cost`, each alternate contributes only the flat `array_alternate_cost`
+  (`rules.power_display_cost` / `powers_points_spent`). The base is the power the
+  alternate *points at* — not auto-chosen — so if an alternate's own full cost exceeds
+  its base, `rules.power_array_violations` warns (like a PL-cap breach) rather than
+  reshuffling; it also flags dangling, self-, and chained references. Runtime:
+  `linked_group` (transitive closure over `linked_with`) toggles together, and one array
+  member is active at a time via the per-power `array_active` runtime flag, which
+  `rules.effect_is_active` reads so an inactive member's bonuses drop off the sheet.
+
 ---
 
 ## 5. The critical part: how effects patch character stats

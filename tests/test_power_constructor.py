@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 
@@ -26,32 +27,75 @@ def _pl10_character() -> Character:
     return Character.new_default(load_game_data())
 
 
-def test_attack_skill_combo_links_a_combat_focus_to_the_power(qapp: QApplication) -> None:
+def test_attack_skill_combo_links_a_combat_focus_to_the_effect(qapp: QApplication) -> None:
     char = _pl10_character()
     char.abilities["ATK"] = 3
     char.focuses["Close Combat"] = ["Blades"]
     char.skill_ranks["Close Combat::Blades"] = 4  # focus total = ATK 3 + 4 = 7
     window = PowerConstructorWindow(load_game_data(), character=char)
 
-    combo = window._attack_skill
-    assert combo is not None  # the picker appears because the wielder has a focus
-    index = combo.findData("Close Combat::Blades")
-    assert index > 0
-    combo.setCurrentIndex(index)
-    assert window.power.attack_skill == "Close Combat::Blades"
-
-    # The game-term attack line now reads the focus total, replacing the bare Attack.
     card = window.canvas.add_effect("damage")
     card._rank.setValue(8)
+    # The picker lives on the effect card and is off until "Use attack skill" is ticked.
+    assert card._attack_skill_check is not None
+    assert not card._attack_skill_check.isChecked()
+    assert card.instance.attack_skill == ""
+
+    card._attack_skill_check.setChecked(True)
+    index = card._attack_skill.findData("Close Combat::Blades")
+    assert index >= 0
+    card._attack_skill.setCurrentIndex(index)
+    assert card.instance.attack_skill == "Close Combat::Blades"
+
+    # The game-term attack line now reads the focus total, replacing the bare Attack.
     rows = {r.key: r for r in window._terms.effect_rows[0]}
     assert rows["check"].value == "7 vs. Defense"
+
+    # Unticking drops the link, so the roll falls back to the bare Attack (3).
+    card._attack_skill_check.setChecked(False)
+    assert card.instance.attack_skill == ""
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["check"].value == "3 vs. Defense"
 
 
 def test_attack_skill_combo_absent_without_combat_focuses(qapp: QApplication) -> None:
     # A character with no Close/Ranged Combat focuses has nothing to link, so the
-    # picker isn't built.
+    # per-effect picker isn't built.
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
-    assert window._attack_skill is None
+    card = window.canvas.add_effect("damage")
+    assert card._attack_skill is None
+    assert card._attack_skill_check is None
+
+
+def _char_with_focus() -> Character:
+    char = _pl10_character()
+    char.focuses["Close Combat"] = ["Blades"]
+    char.skill_ranks["Close Combat::Blades"] = 4
+    return char
+
+
+def test_attack_skill_row_hidden_for_a_non_attack_effect(qapp: QApplication) -> None:
+    # Protection resolves with no attack roll, so there's nothing to reskill — the
+    # row is built (the wielder has a focus) but stays hidden.
+    window = PowerConstructorWindow(load_game_data(), character=_char_with_focus())
+    card = window.canvas.add_effect("protection")
+    assert card._attack_skill_check is not None
+    assert card._attack_skill_row.isHidden()
+
+
+def test_perception_range_hides_the_attack_skill_row(qapp: QApplication) -> None:
+    # Damage rolls to hit, so the row shows; a Perception-Range extra makes it auto-hit,
+    # so the row hides — and removing the extra restores it.
+    window = PowerConstructorWindow(load_game_data(), character=_char_with_focus())
+    card = window.canvas.add_effect("damage")
+    assert not card._attack_skill_row.isHidden()
+
+    card.attach_modifier("perception_range")
+    assert card._attack_skill_row.isHidden()
+
+    chip = card._chips[-1]
+    card._remove_chip(chip)
+    assert not card._attack_skill_row.isHidden()
 
 
 def test_dropping_an_effect_adds_a_card_and_costs(qapp: QApplication) -> None:
@@ -91,6 +135,31 @@ def test_ranked_modifier_chip_has_a_rank_spin_box_that_drives_cost(qapp: QApplic
 
     assert window.power.effects[0].extras[0].rank == 3
     assert window._cost.text() == "Total cost: 8 PP"  # 1*5 + 1*3
+
+
+def test_strength_based_chip_has_an_amount_spin_box_bounded_by_strength(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    char = _pl10_character()
+    char.abilities["STR"] = 6
+    window = PowerConstructorWindow(load_game_data(), character=char)
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("strength_based")
+
+    chip = card._chips[0]
+    spin = chip.findChild(QSpinBox)
+    assert spin is not None
+    assert spin.maximum() == 6  # capped at the wielder's Strength
+    assert spin.value() == 6  # seeded at full — nothing stored yet
+    assert "amount" not in window.power.effects[0].extras[0].config
+
+    spin.setValue(2)  # use only part of Strength
+    assert window.power.effects[0].extras[0].config["amount"] == 2
+
+    spin.setValue(6)  # back to full — the stored cap is cleared so it tracks Strength
+    assert "amount" not in window.power.effects[0].extras[0].config
 
 
 def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None:
@@ -953,3 +1022,56 @@ def test_reduced_trait_offers_a_data_driven_trait_picker(qapp: QApplication) -> 
     assert combo.currentData() == ""  # no trait forced by default
     combo.setCurrentIndex(combo.findData("STR"))
     assert card.instance.flaws[0].config["reduced_target"] == "STR"
+
+
+def test_relationship_chip_combo_writes_alternate_and_linked(qapp: QApplication) -> None:
+    # A Linked / Alternate Effect chip carries a combo that names the target power, and
+    # choosing there writes back to the power being built.
+    char = _pl10_character()
+    other = Power(name="Base Power", effects=[PowerEffectInstance("damage", rank=8)])
+    char.powers.append(other)
+    window = PowerConstructorWindow(load_game_data(), character=char)
+
+    # Add an Alternate Effect chip; its combo picks the base power.
+    alt_chip = window._add_relationship_chip("alternate")
+    index = alt_chip._combo.findData(other.id)
+    assert index >= 0
+    alt_chip._combo.setCurrentIndex(index)
+    assert window.power.alternate_of == other.id
+    # Only one Alternate Effect base makes sense — the add button is now disabled.
+    assert not window._add_alt_button.isEnabled()
+
+    # Add a Linked chip pointing at the same power.
+    linked_chip = window._add_relationship_chip("linked")
+    linked_chip._combo.setCurrentIndex(linked_chip._combo.findData(other.id))
+    assert other.id in window.power.linked_with
+
+    # Removing the alternate chip clears the reference and re-enables the button.
+    window._remove_relationship_chip(alt_chip)
+    assert window.power.alternate_of == ""
+    assert window._add_alt_button.isEnabled()
+
+
+def test_relationship_chips_seed_from_an_edited_power(qapp: QApplication) -> None:
+    # Editing a power that already relates to others seeds a chip per relationship.
+    char = _pl10_character()
+    base = Power(name="Base", effects=[PowerEffectInstance("damage", rank=8)])
+    partner = Power(name="Partner", effects=[PowerEffectInstance("damage", rank=4)])
+    char.powers.extend([base, partner])
+    editing = Power(
+        name="Alt",
+        effects=[PowerEffectInstance("damage", rank=3)],
+        alternate_of=base.id,
+        linked_with=[partner.id],
+    )
+    char.powers.append(editing)
+    window = PowerConstructorWindow(load_game_data(), character=char, power=editing)
+
+    kinds = sorted(c.kind for c in window._rel_chips)
+    assert kinds == ["alternate", "linked"]
+
+
+def test_relationships_area_absent_without_other_powers(qapp: QApplication) -> None:
+    # A first power (nothing else saved) has nothing to relate to — no chips area built.
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    assert not hasattr(window, "_rel_chips")

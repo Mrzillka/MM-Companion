@@ -14,9 +14,13 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     array_alternate_cost,
+    array_base,
     array_base_index,
+    array_members,
     effect_allocation_used,
+    effect_attack_skill_bonus,
     effect_cost_formula,
+    effect_effective_rank,
     effect_game_terms,
     effect_is_active,
     effect_readout_rows,
@@ -24,14 +28,17 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_ability,
     effective_effect_stats,
+    linked_group,
     power_allocation_violations,
-    power_attack_skill_bonus,
+    power_array_violations,
+    power_display_cost,
     power_game_terms,
     power_linked_range_violations,
     power_pl_violations,
     power_runtime_gates,
     power_total_cost,
     power_trait_bonuses,
+    powers_points_spent,
     resistance_total,
     skill_total,
 )
@@ -635,7 +642,6 @@ def test_power_round_trips_through_dict() -> None:
         structure=STRUCTURE_ARRAY,
         activated=False,
         item_present=False,
-        attack_skill="Close Combat::Blades",
         effects=[
             PowerEffectInstance(
                 "damage",
@@ -646,6 +652,7 @@ def test_power_round_trips_through_dict() -> None:
                 descriptors=["fire"],
                 toggled_on=False,
                 suppressed=True,
+                attack_skill="Close Combat::Blades",
             )
         ],
     )
@@ -653,7 +660,7 @@ def test_power_round_trips_through_dict() -> None:
     assert restored.to_dict() == power.to_dict()
     assert restored.effects[0].extras[0].modifier_id == "ranged"
     assert restored.structure == STRUCTURE_ARRAY
-    assert restored.attack_skill == "Close Combat::Blades"
+    assert restored.effects[0].attack_skill == "Close Combat::Blades"
     # Runtime on/off state survives the round trip.
     assert restored.activated is False and restored.item_present is False
     assert restored.effects[0].toggled_on is False
@@ -783,6 +790,28 @@ def test_pl_violations_fold_strength_into_a_strength_based_damage() -> None:
     assert over and "rank 21" in over[0]
 
 
+def test_strength_based_amount_caps_the_folded_in_strength() -> None:
+    data = load_game_data()
+    char = _pl_char(data, strength=8)
+    # No amount stored → full Strength folds in: rank 10 + 8 = 18.
+    full = PowerEffectInstance("damage", rank=10, extras=[ModifierSelection("strength_based")])
+    assert effect_effective_rank(full, data, char) == 18
+    # amount=3 uses only 3 of the 8 Strength: rank 10 + 3 = 13.
+    capped = PowerEffectInstance(
+        "damage",
+        rank=10,
+        extras=[ModifierSelection("strength_based", config={"amount": 3})],
+    )
+    assert effect_effective_rank(capped, data, char) == 13
+    # A stored amount above the wielder's actual Strength never folds in more than it.
+    greedy = PowerEffectInstance(
+        "damage",
+        rank=10,
+        extras=[ModifierSelection("strength_based", config={"amount": 20})],
+    )
+    assert effect_effective_rank(greedy, data, char) == 18
+
+
 def test_pl_violations_ignore_non_attack_effects() -> None:
     data = load_game_data()
     # Flight imposes no resistance check, so the attack cap doesn't apply at any rank.
@@ -804,16 +833,16 @@ def test_pl_violations_respect_inaccurate_trade_off() -> None:
     assert power_pl_violations(Power(effects=[effect]), _pl_char(data), data) == []
 
 
-def test_power_attack_skill_bonus_uses_the_focus_total() -> None:
+def test_effect_attack_skill_bonus_uses_the_focus_total() -> None:
     data = load_game_data()
     char = _pl_char(data, atk=3)
     char.focuses["Close Combat"] = ["Blades"]
     char.skill_ranks["Close Combat::Blades"] = 4
-    power = Power(effects=[], attack_skill="Close Combat::Blades")
+    effect = PowerEffectInstance("damage", attack_skill="Close Combat::Blades")
     # Close Combat is an ATK skill, so its total already folds Attack in: 3 + 4 = 7.
-    assert power_attack_skill_bonus(power, char, data) == 7
+    assert effect_attack_skill_bonus(effect, char, data) == 7
     # No link → None, so the caller falls back to the Attack ability.
-    assert power_attack_skill_bonus(Power(effects=[]), char, data) is None
+    assert effect_attack_skill_bonus(PowerEffectInstance("damage"), char, data) is None
 
 
 def test_pl_violations_use_the_linked_combat_skill_instead_of_attack() -> None:
@@ -821,12 +850,13 @@ def test_pl_violations_use_the_linked_combat_skill_instead_of_attack() -> None:
     char = _pl_char(data, atk=2)
     char.focuses["Ranged Combat"] = ["Guns"]
     char.skill_ranks["Ranged Combat::Guns"] = 6  # focus total = ATK 2 + 6 = 8
-    effect = PowerEffectInstance("damage", rank=14)
-    linked = Power(effects=[effect], attack_skill="Ranged Combat::Guns")
+    effect = PowerEffectInstance("damage", rank=14, attack_skill="Ranged Combat::Guns")
+    linked = Power(effects=[effect])
     violations = power_pl_violations(linked, char, data)  # 8 + 14 = 22 > 20
     assert violations and "22" in violations[0]
     # Without the link the bare Attack (2) replaces it: 2 + 14 = 16, under the cap.
-    assert power_pl_violations(Power(effects=[effect]), char, data) == []
+    plain = Power(effects=[PowerEffectInstance("damage", rank=14)])
+    assert power_pl_violations(plain, char, data) == []
 
 
 def test_effect_stat_rows_attack_bonus_overrides_the_attack_roll() -> None:
@@ -1060,3 +1090,123 @@ def test_linked_range_check_ignores_non_linked_structures() -> None:
         structure=STRUCTURE_ARRAY,
     )
     assert power_linked_range_violations(power, data) == []
+
+
+# -- cross-power relationships: Linked & Alternate Effect ------------------
+
+
+def test_power_roundtrips_cross_power_fields() -> None:
+    power = Power(
+        name="A",
+        effects=[PowerEffectInstance("damage", rank=5)],
+        linked_with=["other-id"],
+        alternate_of="base-id",
+        array_active=False,
+    )
+    clone = Power.from_dict(power.to_dict())
+    assert clone.id == power.id
+    assert clone.linked_with == ["other-id"]
+    assert clone.alternate_of == "base-id"
+    assert clone.array_active is False
+
+
+def test_legacy_power_without_id_is_migrated() -> None:
+    # A power saved before ids existed still round-trips, minted a fresh id.
+    clone = Power.from_dict({"name": "Old", "effects": []})
+    assert clone.id  # non-empty
+    assert clone.alternate_of == "" and clone.linked_with == []
+
+
+def _character_with_powers(*powers: Power) -> Character:
+    char = Character()
+    char.powers = list(powers)
+    return char
+
+
+def test_alternate_effect_shares_the_point_pool() -> None:
+    data = load_game_data()
+    base = Power(name="Fire Bolt", effects=[PowerEffectInstance("damage", rank=10)])  # 10 PP
+    alt = Power(name="Ice Bolt", effects=[PowerEffectInstance("damage", rank=6)])  # 6 PP
+    char = _character_with_powers(base, alt)
+    alt.alternate_of = base.id
+
+    assert power_display_cost(base, char, data) == 10  # base pays full
+    assert power_display_cost(alt, char, data) == array_alternate_cost(data)  # flat
+    # Total is base full + one flat alternate, not 10 + 6.
+    assert powers_points_spent(char, data) == 10 + array_alternate_cost(data)
+    assert [p.name for p in array_members(char, base)] == ["Fire Bolt", "Ice Bolt"]
+    assert array_base(char, alt) is base
+
+
+def test_linked_powers_do_not_change_cost() -> None:
+    data = load_game_data()
+    a = Power(name="A", effects=[PowerEffectInstance("damage", rank=10)])
+    b = Power(name="B", effects=[PowerEffectInstance("damage", rank=6)])
+    char = _character_with_powers(a, b)
+    a.linked_with = [b.id]  # linking is a +0 bundle
+    assert powers_points_spent(char, data) == 16
+
+
+def test_alternate_costlier_than_base_is_flagged() -> None:
+    data = load_game_data()
+    base = Power(name="Weak", effects=[PowerEffectInstance("damage", rank=5)])  # 5 PP
+    alt = Power(name="Strong", effects=[PowerEffectInstance("damage", rank=9)])  # 9 PP
+    char = _character_with_powers(base, alt)
+    alt.alternate_of = base.id
+    violations = power_array_violations(alt, char, data)
+    assert len(violations) == 1 and "over base" in violations[0]
+    # A cheaper alternate is clean.
+    alt.effects[0].rank = 3
+    assert power_array_violations(alt, char, data) == []
+
+
+def test_alternate_dangling_self_and_chained_bases_are_flagged() -> None:
+    data = load_game_data()
+    base = Power(name="Base", effects=[PowerEffectInstance("damage", rank=8)])
+    mid = Power(name="Mid", effects=[PowerEffectInstance("damage", rank=4)])
+    tail = Power(name="Tail", effects=[PowerEffectInstance("damage", rank=4)])
+    char = _character_with_powers(base, mid, tail)
+
+    lonely = Power(name="Lonely", alternate_of="missing", effects=[])
+    assert "missing" in power_array_violations(lonely, char, data)[0]
+
+    base.alternate_of = base.id  # self-reference
+    assert "itself" in power_array_violations(base, char, data)[0]
+    base.alternate_of = ""
+
+    mid.alternate_of = base.id  # a valid alternate
+    tail.alternate_of = mid.id  # chained onto an alternate — not allowed
+    assert "another alternate" in power_array_violations(tail, char, data)[0]
+
+
+def test_inactive_array_member_drops_its_trait_boost() -> None:
+    data = load_game_data()
+    base = Power(name="Base", effects=[PowerEffectInstance("damage", rank=8)])
+    boost = Power(
+        name="Might",
+        effects=[PowerEffectInstance("enhanced_trait", rank=4, config={"target": "STR"})],
+    )
+    char = _character_with_powers(base, boost)
+    boost.alternate_of = base.id
+
+    # Selected (active) → the +4 Strength boost flows through.
+    boost.array_active = True
+    assert effective_ability(char, data, "STR") == 4
+    # Not the selected member → gated off, boost drops.
+    boost.array_active = False
+    assert effective_ability(char, data, "STR") == 0
+
+
+def test_linked_group_is_the_transitive_closure() -> None:
+    a = Power(name="A")
+    b = Power(name="B")
+    c = Power(name="C")
+    lone = Power(name="Lone")
+    char = _character_with_powers(a, b, c, lone)
+    a.linked_with = [b.id]  # A—B
+    b.linked_with = [c.id]  # B—C (so A—B—C is one group)
+
+    # Reachable from any member, both directions, transitively.
+    assert {p.name for p in linked_group(char, a)} == {"A", "B", "C"}
+    assert {p.name for p in linked_group(char, c)} == {"A", "B", "C"}
+    assert [p.name for p in linked_group(char, lone)] == ["Lone"]

@@ -778,12 +778,12 @@ def power_total_cost(power: Power, game_data: GameData) -> int:
     return sum(effect_total_cost(e, game_data) for e in power.effects)
 
 
-def power_attack_skill_bonus(
-    power: Power, char: Character | None, game_data: GameData
+def effect_attack_skill_bonus(
+    effect: PowerEffectInstance, char: Character | None, game_data: GameData
 ) -> int | None:
-    """The attack-roll bonus a power's linked Close/Ranged Combat focus supplies.
+    """The attack-roll bonus an effect's linked Close/Ranged Combat focus supplies.
 
-    ``None`` when the power has no ``attack_skill`` link (or there is no character),
+    ``None`` when the effect has no ``attack_skill`` link (or there is no character),
     so callers fall back to the wielder's Attack ability. Otherwise the linked focus
     row's :func:`skill_total` — which already folds in the Attack ability, since these
     combat skills derive from ``ATK`` — so it *replaces* the bare Attack rather than
@@ -791,9 +791,25 @@ def power_attack_skill_bonus(
     as 0).
     """
 
-    if not power.attack_skill or char is None:
+    if not effect.attack_skill or char is None:
         return None
-    return skill_total(char, game_data, power.attack_skill)
+    return skill_total(char, game_data, effect.attack_skill)
+
+
+def effect_makes_attack(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether the effect resolves with an **attack roll** (vs. auto-hit / no check).
+
+    True when the base effect's check phrase is an "Attack …" roll and no attached
+    modifier drops it (a Perception-Range extra removes the roll, making the effect
+    auto-hit). This is the same condition :func:`power_pl_violations` uses to pick the
+    attack-plus-rank cap, and what gates the constructor's attack-skill picker.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return False
+    impact = _effective_stats(effect, game_data)[3]
+    return "Attack" in (base.check or "") and not impact.drops_check
 
 
 def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
@@ -806,8 +822,8 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
 
     - An effect that makes an **attack roll** obeys ``max_attack + effect_rank <=
       power_level * 2``. The attack bonus is the character's *effective* Attack
-      ability — or, when the power links a Close/Ranged Combat focus
-      (:func:`power_attack_skill_bonus`), that focus's total instead — plus the
+      ability — or, when the effect links a Close/Ranged Combat focus
+      (:func:`effect_attack_skill_bonus`), that focus's total instead — plus the
       power's own Accurate/Inaccurate; the effect rank is the
       *effective* rank (:func:`effect_effective_rank`), so a Strength-Based Damage
       folds in the wielder's Strength.
@@ -823,20 +839,19 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         return []
     power_level = char.power_level
     limit = cap.limit(power_level)
-    # A power linked to a Close/Ranged Combat focus uses that focus's total as its
-    # attack bonus (replacing the bare Attack ability); otherwise the Attack ability.
-    linked = power_attack_skill_bonus(power, char, game_data)
-    attack_ability = linked if linked is not None else effective_ability(char, game_data, "ATK")
 
     violations: list[str] = []
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None or base.resistance_dc_base is None:
             continue  # not an attack/resisted effect — these caps don't apply
+        # An effect linked to a Close/Ranged Combat focus uses that focus's total as
+        # its attack bonus (replacing the bare Attack ability); otherwise the Attack.
+        linked = effect_attack_skill_bonus(effect, char, game_data)
+        attack_ability = linked if linked is not None else effective_ability(char, game_data, "ATK")
         impact = _effective_stats(effect, game_data)[3]
         rank = effect_effective_rank(effect, game_data, char)
-        makes_attack = "Attack" in (base.check or "") and not impact.drops_check
-        if makes_attack:
+        if effect_makes_attack(effect, game_data):
             attack = attack_ability + impact.check_bonus
             if attack + rank > limit:
                 violations.append(
@@ -1198,8 +1213,8 @@ def effect_stat_rows(
     context-free summary still reads.
 
     ``attack_bonus`` overrides the attacker's base d20 bonus for an "Attack vs. …"
-    phrase — a power linked to a Close/Ranged Combat focus passes that focus's total
-    (:func:`power_attack_skill_bonus`) so the shown roll matches the PL check. ``None``
+    phrase — an effect linked to a Close/Ranged Combat focus passes that focus's total
+    (:func:`effect_attack_skill_bonus`) so the shown roll matches the PL check. ``None``
     keeps the default (the character's Attack ability, or the effect rank without one).
     """
 

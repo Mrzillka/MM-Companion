@@ -48,9 +48,9 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
     debilitated_traits,
+    effect_attack_skill_bonus,
     effect_effective_rank,
     effect_stat_rows,
-    power_attack_skill_bonus,
     power_pl_violations,
     power_runtime_gates,
     power_total_cost,
@@ -375,9 +375,9 @@ class PowersSection(TitledSection):
         """The attack bonus and save DC each effect imposes, read from the same
         game-term rows the constructor shows; effect-prefixed for a multi-effect power."""
         multi = len(power.effects) > 1
-        attack_bonus = power_attack_skill_bonus(power, self._character, self._data)
         parts: list[str] = []
         for effect in power.effects:
+            attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
             rows = {
                 r.key: r
                 for r in effect_stat_rows(effect, self._data, self._character, attack_bonus)
@@ -407,12 +407,12 @@ class PowersSection(TitledSection):
         each modifier-changed value tinted green (better) or red (worse)."""
         if not power.effects:
             return ""
-        attack_bonus = power_attack_skill_bonus(power, self._character, self._data)
         blocks: list[str] = []
         header = self._structure_header(power)
         if header:
             blocks.append(f"<b>{html.escape(header)}</b>")
         for index, effect in enumerate(power.effects):
+            attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
             title = html.escape(self._effect_title(effect))
             note = self._role_note(power, index)
             if note:

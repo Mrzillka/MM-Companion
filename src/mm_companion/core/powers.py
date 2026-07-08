@@ -84,6 +84,12 @@ class PowerEffectInstance:
     and ``suppressed`` is a transient Nullify flag. Both feed
     :func:`mm_companion.core.rules.effect_is_active`; they default to the active
     state so a freshly built or older-format effect reads as on.
+
+    ``attack_skill`` optionally links *this effect's* attack to a Close/Ranged Combat
+    focus row on the wielder (a row id like ``"Close Combat::Blades"``, empty for
+    none). When set, that focus's total *replaces* the character's bare Attack for
+    this effect's attack roll and its Attack PL cap (see
+    :func:`mm_companion.core.rules.effect_attack_skill_bonus`).
     """
 
     effect_id: str
@@ -94,6 +100,7 @@ class PowerEffectInstance:
     descriptors: list[str] = field(default_factory=list)
     toggled_on: bool = True
     suppressed: bool = False
+    attack_skill: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -105,6 +112,7 @@ class PowerEffectInstance:
             "descriptors": list(self.descriptors),
             "toggled_on": self.toggled_on,
             "suppressed": self.suppressed,
+            "attack_skill": self.attack_skill,
         }
 
     @classmethod
@@ -118,6 +126,7 @@ class PowerEffectInstance:
             descriptors=list(raw.get("descriptors", [])),
             toggled_on=bool(raw.get("toggled_on", True)),
             suppressed=bool(raw.get("suppressed", False)),
+            attack_skill=raw.get("attack_skill", ""),
         )
 
 
@@ -135,11 +144,8 @@ class Power:
     while ``item_present``. Both default to the active state (see
     :func:`mm_companion.core.rules.effect_is_active`).
 
-    ``attack_skill`` optionally links the power's attack to a Close/Ranged Combat
-    focus row on the wielder (a row id like ``"Close Combat::Array"``, empty for
-    none). When set, that focus's total *replaces* the character's bare Attack for
-    this power's attack roll and its Attack PL cap (see
-    :func:`mm_companion.core.rules.power_attack_skill_bonus`).
+    An attack-skill link is per-effect now (see
+    :attr:`PowerEffectInstance.attack_skill`), not whole-power.
     """
 
     name: str = ""
@@ -149,7 +155,6 @@ class Power:
     structure: str = STRUCTURE_INDEPENDENT
     activated: bool = True
     item_present: bool = True
-    attack_skill: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -160,19 +165,25 @@ class Power:
             "structure": self.structure,
             "activated": self.activated,
             "item_present": self.item_present,
-            "attack_skill": self.attack_skill,
         }
 
     @classmethod
     def from_dict(cls, raw: dict) -> Power:
         structure = raw.get("structure", STRUCTURE_INDEPENDENT)
+        effects = [PowerEffectInstance.from_dict(e) for e in raw.get("effects", [])]
+        # Migrate a legacy whole-power ``attack_skill`` (from before the link moved
+        # per-effect) onto every effect that doesn't already carry its own.
+        legacy = raw.get("attack_skill", "")
+        if legacy:
+            for effect in effects:
+                if not effect.attack_skill:
+                    effect.attack_skill = legacy
         return cls(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
             descriptors=list(raw.get("descriptors", [])),
-            effects=[PowerEffectInstance.from_dict(e) for e in raw.get("effects", [])],
+            effects=effects,
             structure=structure if structure in STRUCTURES else STRUCTURE_INDEPENDENT,
             activated=bool(raw.get("activated", True)),
             item_present=bool(raw.get("item_present", True)),
-            attack_skill=raw.get("attack_skill", ""),
         )

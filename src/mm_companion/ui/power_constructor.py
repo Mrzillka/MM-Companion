@@ -74,12 +74,13 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
     effect_allocation_used,
+    effect_attack_skill_bonus,
     effect_cost_formula,
     effect_effective_rank,
+    effect_makes_attack,
     effect_stat_rows,
     effect_total_cost,
     power_allocation_violations,
-    power_attack_skill_bonus,
     power_linked_range_violations,
     power_pl_violations,
     power_total_cost,
@@ -87,6 +88,25 @@ from mm_companion.core.rules import (
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
+
+
+def combat_focus_options(character: Character | None, game_data: GameData) -> list[tuple[str, str]]:
+    """``(display, row_id)`` for each Close/Ranged Combat focus the wielder has.
+
+    Combat skills are the focused ones linked to the Attack ability, so they're
+    found data-driven (no hardcoded names); a focus row id matches the skills
+    section's ``"<Skill>::<focus>"`` scheme. Empty without a character.
+    """
+    if character is None:
+        return []
+    options: list[tuple[str, str]] = []
+    for skill in game_data.skills:
+        if skill.ability != "ATK" or not skill.focused:
+            continue
+        for focus in character.focuses.get(skill.name, []):
+            options.append((f"{skill.name}: {focus}", f"{skill.name}::{focus}"))
+    return options
+
 
 # Custom drag payload formats: the record id travels as the mime data.
 EFFECT_MIME = "application/x-mm-effect"
@@ -470,10 +490,17 @@ class EffectCard(QFrame):
     changed = Signal()
     removeRequested = Signal(object)
 
-    def __init__(self, instance: PowerEffectInstance, game_data: GameData) -> None:
+    def __init__(
+        self,
+        instance: PowerEffectInstance,
+        game_data: GameData,
+        focus_options: list[tuple[str, str]] | None = None,
+    ) -> None:
         super().__init__()
         self.instance = instance
         self._data = game_data
+        # Close/Ranged Combat focuses the wielder can link this effect's attack to.
+        self._focus_options = focus_options or []
         self._chips: list[ModifierChip] = []
         # Callables that refresh each Tier-4 allocation field's "used / rank" readout;
         # rebuilt with the config form and fired when the effect's rank changes.
@@ -512,6 +539,14 @@ class EffectCard(QFrame):
         target_picker = self._build_target_picker(effect)
         if target_picker is not None:
             layout.addWidget(target_picker)
+
+        # An optional link from *this effect's* attack to one of the wielder's
+        # Close/Ranged Combat focuses: a "Use attack skill" checkbox reveals the
+        # picker, whose focus total then replaces the bare Attack for this effect's
+        # roll and PL cap. Only built when the character actually has combat focuses.
+        attack_skill_row = self._build_attack_skill_row()
+        if attack_skill_row is not None:
+            layout.addWidget(attack_skill_row)
 
         # The config form is rebuilt on demand: attaching Extra Condition upgrades
         # Affliction's degree pickers from single-select to multiselect.
@@ -559,6 +594,69 @@ class EffectCard(QFrame):
         # them, e.g. an attached Extra Condition, so only the chips need seeding).
         self._seed_modifier_chips()
         self._refresh_cost()
+
+    # -- attack-skill link ------------------------------------------------
+    def _build_attack_skill_row(self) -> QWidget | None:
+        """A "Use attack skill" checkbox plus focus picker, or ``None`` when the
+        wielder has no Close/Ranged Combat focuses to link to.
+
+        The row is only *shown* for an effect that resolves with an attack roll; a
+        Perception-Range flaw (or a base effect that never rolls to hit) hides it via
+        :meth:`_refresh_attack_skill_visibility`, since there's no attack to reskill.
+        """
+        self._attack_skill_row = None
+        if not self._focus_options:
+            self._attack_skill_check = None
+            self._attack_skill = None
+            return None
+
+        self._attack_skill_check = QCheckBox("Use attack skill")
+        self._attack_skill_check.setToolTip(
+            "Link this effect's attack to a Close/Ranged Combat focus — that focus's "
+            "total replaces the character's Attack for this effect's roll and PL cap."
+        )
+        self._attack_skill = QComboBox()
+        for display, row_id in self._focus_options:
+            self._attack_skill.addItem(display, row_id)
+        guard_wheel(self._attack_skill)
+
+        # Seed from the instance: a stored link ticks the box and selects its focus.
+        linked = bool(self.instance.attack_skill)
+        self._attack_skill_check.setChecked(linked)
+        self._attack_skill.setVisible(linked)
+        if linked:
+            index = self._attack_skill.findData(self.instance.attack_skill)
+            self._attack_skill.setCurrentIndex(index if index >= 0 else 0)
+
+        self._attack_skill_check.toggled.connect(self._on_use_attack_skill_toggled)
+        self._attack_skill.currentIndexChanged.connect(self._on_attack_skill_changed)
+
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        row.addWidget(self._attack_skill_check)
+        row.addWidget(self._attack_skill, 1)
+        self._attack_skill_row = host
+        host.setVisible(effect_makes_attack(self.instance, self._data))
+        return host
+
+    def _refresh_attack_skill_visibility(self) -> None:
+        """Show the attack-skill row only while the effect still makes an attack roll
+        (a Perception-Range flaw drops the roll, so the link no longer applies)."""
+        if self._attack_skill_row is not None:
+            self._attack_skill_row.setVisible(effect_makes_attack(self.instance, self._data))
+
+    def _on_use_attack_skill_toggled(self, checked: bool) -> None:
+        self._attack_skill.setVisible(checked)
+        # Checked → link the selected focus; unchecked → drop the link entirely.
+        self.instance.attack_skill = self._attack_skill.currentData() or "" if checked else ""
+        self.changed.emit()
+
+    def _on_attack_skill_changed(self) -> None:
+        if self._attack_skill_check is not None and self._attack_skill_check.isChecked():
+            self.instance.attack_skill = self._attack_skill.currentData() or ""
+            self.changed.emit()
 
     # -- effect-specific qualities (config) -------------------------------
     def _has_extra(self, modifier_id: str) -> bool:
@@ -998,6 +1096,7 @@ class EffectCard(QFrame):
 
         self._build_chip(modifier, selection, is_flaw)
         self._populate_config_form()  # a gating extra may change a field's type
+        self._refresh_attack_skill_visibility()  # Perception Range drops the attack roll
         self._refresh_cost()
         self.changed.emit()
 
@@ -1035,6 +1134,7 @@ class EffectCard(QFrame):
         self._chips.remove(chip)
         self._hint.setVisible(not self._chips)
         self._populate_config_form()  # removing a gating extra may downgrade a field
+        self._refresh_attack_skill_visibility()  # removing Perception Range restores it
         self._refresh_cost()
         self.changed.emit()
 
@@ -1164,10 +1264,17 @@ class PowerCanvas(QFrame):
 
     changed = Signal()
 
-    def __init__(self, power: Power, game_data: GameData) -> None:
+    def __init__(
+        self,
+        power: Power,
+        game_data: GameData,
+        focus_options: list[tuple[str, str]] | None = None,
+    ) -> None:
         super().__init__()
         self._power = power
         self._data = game_data
+        # Combat focuses each effect card can offer as an attack-skill link.
+        self._focus_options = focus_options or []
         self._cards: list[EffectCard] = []
         self.setObjectName("PowerCanvas")
         self.setAcceptDrops(True)
@@ -1224,7 +1331,7 @@ class PowerCanvas(QFrame):
 
     def _build_card(self, instance: PowerEffectInstance) -> EffectCard:
         """Render a card for an effect instance already on the power."""
-        card = EffectCard(instance, self._data)
+        card = EffectCard(instance, self._data, self._focus_options)
         card.changed.connect(self._on_card_changed)
         card.removeRequested.connect(self._remove_card)
         self._cards.append(card)
@@ -1346,8 +1453,8 @@ class PowerTermsView(QWidget):
             label = QLabel(header)
             label.setStyleSheet("font-weight: bold;")
             self._layout.addWidget(label)
-        attack_bonus = power_attack_skill_bonus(power, char, game_data)
         for index, effect in enumerate(power.effects):
+            attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
             self._add_effect_block(effect, index, power, game_data, char, attack_bonus)
 
     def _add_effect_block(
@@ -1458,6 +1565,8 @@ class PowerConstructorWindow(QMainWindow):
         # for Strength-Based Damage, Attack for the PL cap) and to flag cap breaches.
         # None disables the check (a constructor opened without a character context).
         self._character = character
+        # Combat focuses each effect card can offer as an attack-skill link.
+        self._focus_options = combat_focus_options(character, self._data)
         # Editing works on a deep copy so closing the window without saving leaves
         # the character's stored power untouched; the copy is what `powerSaved` hands
         # back, and the host section swaps it in for the original on save.
@@ -1639,14 +1748,6 @@ class PowerConstructorWindow(QMainWindow):
         guard_wheel(self._description)  # don't let the box steal the page wheel
         layout.addWidget(self._description)
 
-        # An optional link to one of the wielder's Close/Ranged Combat focuses. When
-        # set, that focus's total becomes this power's attack bonus (replacing the bare
-        # Attack ability) and drives its Attack PL cap. Only shown when the character
-        # actually has combat focuses to choose from.
-        attack_skill_row = self._build_attack_skill_row()
-        if attack_skill_row is not None:
-            layout.addWidget(attack_skill_row)
-
         # A prominent cost bar sits just above the canvas: the running total on the
         # left, the live Power Level / allocation warning on the right (hidden while
         # the power is within caps, naming the breach on its tooltip when it isn't).
@@ -1661,7 +1762,7 @@ class PowerConstructorWindow(QMainWindow):
         cost_row.addWidget(self._warning)
         layout.addLayout(cost_row)
 
-        self.canvas = PowerCanvas(self.power, self._data)
+        self.canvas = PowerCanvas(self.power, self._data, self._focus_options)
         self.canvas.changed.connect(self._refresh_cost)
         self.canvas.changed.connect(self._refresh_game_terms)
         self.canvas.changed.connect(self._refresh_pl_warning)
@@ -1704,56 +1805,6 @@ class PowerConstructorWindow(QMainWindow):
         guard_wheel(scroll)
         layout.addWidget(scroll, stretch=1)
         return panel
-
-    def _combat_focus_options(self) -> list[tuple[str, str]]:
-        """``(display, row_id)`` for each Close/Ranged Combat focus the wielder has.
-
-        Combat skills are the focused ones linked to the Attack ability, so they're
-        found data-driven (no hardcoded names); a focus row id matches the skills
-        section's ``"<Skill>::<focus>"`` scheme.
-        """
-        if self._character is None:
-            return []
-        options: list[tuple[str, str]] = []
-        for skill in self._data.skills:
-            if skill.ability != "ATK" or not skill.focused:
-                continue
-            for focus in self._character.focuses.get(skill.name, []):
-                options.append((f"{skill.name}: {focus}", f"{skill.name}::{focus}"))
-        return options
-
-    def _build_attack_skill_row(self) -> QWidget | None:
-        """The "Attack skill" picker, or ``None`` when there are no combat focuses."""
-        options = self._combat_focus_options()
-        if not options:
-            self._attack_skill = None
-            return None
-        self._attack_skill = QComboBox()
-        self._attack_skill.addItem("— use Attack ability —", "")
-        for display, row_id in options:
-            self._attack_skill.addItem(display, row_id)
-        index = self._attack_skill.findData(self.power.attack_skill)
-        self._attack_skill.setCurrentIndex(index if index >= 0 else 0)
-        guard_wheel(self._attack_skill)
-        self._attack_skill.currentIndexChanged.connect(self._on_attack_skill_changed)
-
-        host = QWidget()
-        row = QHBoxLayout(host)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        label = QLabel("Attack skill:")
-        label.setToolTip(
-            "Link this power's attack to a Close/Ranged Combat focus — that focus's "
-            "total replaces the character's Attack for this power's roll and PL cap."
-        )
-        row.addWidget(label)
-        row.addWidget(self._attack_skill, 1)
-        return host
-
-    def _on_attack_skill_changed(self) -> None:
-        self.power.attack_skill = self._attack_skill.currentData() or ""
-        self._refresh_game_terms()
-        self._refresh_pl_warning()
 
     def _on_name_changed(self, text: str) -> None:
         self.power.name = text

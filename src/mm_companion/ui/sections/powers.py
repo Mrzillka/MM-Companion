@@ -378,7 +378,7 @@ class PowersSection(TitledSection):
         if power.structure == STRUCTURE_LINKED:
             return "linked"
         if power.structure == STRUCTURE_ARRAY:
-            if index == array_base_index(power, self._data):
+            if index == array_base_index(power, self._data, self._character):
                 return "base"
             return f"alternate ({array_alternate_cost(self._data)} pt)"
         return ""

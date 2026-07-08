@@ -1222,6 +1222,11 @@ def _effective_stats(
     drops_check = False
     check_notes: list[str] = []
     impactful: set[str] = set()  # ids reflected in a stat cell — kept out of Notes
+    # An action step (Increased/Reduced Action) is deferred and applied below, after
+    # the free-action floor a Sustained duration imposes, so it steps from that floor
+    # rather than from a Permanent effect's bare "None".
+    action_step = 0
+    action_step_tint = ""
 
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
@@ -1234,7 +1239,12 @@ def _effective_stats(
                 stats[key] = value
                 change[key] = tint
                 touched = True
-        if modifier.step_field in stats:
+        if modifier.step_field == "action":
+            action_step += modifier.step_by
+            if modifier.step_by:
+                action_step_tint = tint
+            touched = True
+        elif modifier.step_field in stats:
             stepped = _step_along(
                 ladders.get(modifier.step_field, ()), stats[modifier.step_field], modifier.step_by
             )
@@ -1265,6 +1275,28 @@ def _effective_stats(
             if value:
                 stats[field.overrides] = _config_display(field, value)
                 change[field.overrides] = ""
+
+    # A Sustained effect must be toggled on and maintained with at least a free
+    # action, so its action is floored by the one its (possibly modified) duration
+    # implies — a Permanent effect made toggleable by the Sustained extra comes with
+    # action "None". The floor is the baseline an Increased/Reduced Action step then
+    # moves from, and a hard minimum afterwards (a step can't push below it). The
+    # floor itself is a rule consequence, not a modifier win, so it carries no tint.
+    action_ladder = ladders.get("action", ())
+    floor = game_data.duration_action_floor.get(stats["duration"])
+
+    def _floor_action() -> None:
+        if floor in action_ladder and stats["action"] in action_ladder:
+            if action_ladder.index(stats["action"]) < action_ladder.index(floor):
+                stats["action"] = floor
+
+    _floor_action()  # baseline the action step moves from
+    if action_step:
+        stepped = _step_along(action_ladder, stats["action"], action_step)
+        if stepped != stats["action"]:
+            stats["action"] = stepped
+            change["action"] = action_step_tint
+        _floor_action()  # hard minimum: a step can't drop below the free-action floor
 
     # A modifier that lands the value back on its base isn't really a change.
     for key in change:

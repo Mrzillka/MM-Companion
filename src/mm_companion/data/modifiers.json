@@ -15,6 +15,10 @@
     "duration": ["Instant", "Concentration", "Sustained", "Continuous", "Permanent"],
     "action": ["None", "Reaction", "Free", "Simple", "Move", "Standard", "Full round"]
   },
+  "durationActionFloorNote": "durationActionFloor maps a resulting duration to the minimum action its effect must take: a Sustained effect has to be toggled on and maintained with at least a free action, so an effect whose action is below this floor (a Permanent effect made toggleable by the Sustained extra carries action 'None') is raised to it in the game-terms summary. Read by core.rules against the gameTermLadders 'action' order.",
+  "durationActionFloor": {
+    "Sustained": "Free"
+  },
   "modifiers": [
     {
       "id": "accurate",

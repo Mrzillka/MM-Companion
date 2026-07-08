@@ -545,6 +545,48 @@ def test_effect_stat_rows_increased_action_steps_to_a_slower_action() -> None:
     assert action.change == "worse"
 
 
+def test_sustained_extra_raises_a_sub_free_action_to_free() -> None:
+    data = load_game_data()
+    # Enhanced Senses is Permanent with action "None"; the Sustained extra makes it
+    # toggleable, and toggling on / maintaining it takes at least a free action.
+    effect = PowerEffectInstance(
+        "enhanced_senses", rank=2, extras=[ModifierSelection("sustained_extra")]
+    )
+    action = next(r for r in effect_stat_rows(effect, data) if r.key == "action")
+    assert action.base == "None"
+    assert action.value == "Free"
+    assert action.change == ""  # a rule consequence, not a modifier win — no tint
+    assert "Free action" in effect_game_terms(effect, data)
+
+
+def test_action_floor_never_lowers_a_slower_activation_action() -> None:
+    data = load_game_data()
+    # Create is a Standard action, Sustained duration — the free-action floor must
+    # only raise a sub-free action, never pull a slower one down to Free.
+    action = next(
+        r
+        for r in effect_stat_rows(PowerEffectInstance("create", rank=3), data)
+        if r.key == "action"
+    )
+    assert action.value == "Standard"
+
+
+def test_increased_action_steps_from_the_sustained_free_floor() -> None:
+    data = load_game_data()
+    # Immunity is Permanent/None; the Sustained extra floors its action at Free, and
+    # Increased Action must step from that floor (Free -> Simple), not be absorbed by
+    # it. Without the floor, the raw None -> Reaction step would be re-floored to Free.
+    effect = PowerEffectInstance(
+        "immunity",
+        rank=10,
+        extras=[ModifierSelection("sustained_immunity")],
+        flaws=[ModifierSelection("increased_action")],
+    )
+    action = next(r for r in effect_stat_rows(effect, data) if r.key == "action")
+    assert action.value == "Simple"
+    assert action.change == "worse"
+
+
 def test_effect_stat_rows_gather_impactless_modifiers_into_a_notes_row() -> None:
     data = load_game_data()
     # Penetrating and Multiattack change combat resolution the table doesn't model,

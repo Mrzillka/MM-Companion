@@ -605,6 +605,11 @@ class GameData:
     its ordered values from least to most, so a stepping modifier (Increased
     Duration, Increased Action) can move a value along it without hardcoding the
     order in code.
+
+    ``duration_action_floor`` maps a resulting duration to the minimum action its
+    effect must take (a Sustained effect needs at least a free action to toggle on
+    and maintain), so :mod:`mm_companion.core.rules` can raise a below-floor action
+    in the game-terms summary without hardcoding the rule.
     """
 
     profile_fields: list[Field]
@@ -620,6 +625,7 @@ class GameData:
     costs: Costs
     measurements: Measurements
     game_term_ladders: dict[str, tuple[str, ...]]
+    duration_action_floor: dict[str, str] = field(default_factory=dict)
     effect_readouts: dict[str, tuple[Readout, ...]] = field(default_factory=dict)
 
     def modifier_catalog(self) -> dict[str, Modifier]:
@@ -909,6 +915,12 @@ def _parse_ladders(raw: dict) -> dict[str, tuple[str, ...]]:
     return {field: tuple(values) for field, values in raw.get("gameTermLadders", {}).items()}
 
 
+def _parse_duration_action_floor(raw: dict) -> dict[str, str]:
+    """Read ``durationActionFloor`` (duration -> minimum action) from ``modifiers.json``."""
+
+    return {str(k): str(v) for k, v in raw.get("durationActionFloor", {}).items()}
+
+
 def _parse_effect_modifiers(raw: dict) -> dict[str, list[Modifier]]:
     """Parse ``effect_modifiers.json`` into ``effect id -> [Modifier, ...]``.
 
@@ -1029,5 +1041,6 @@ def load_game_data() -> GameData:
         costs=_parse_costs(costs_raw),
         measurements=_parse_measurements(measurements_raw),
         game_term_ladders=_parse_ladders(modifiers_raw),
+        duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
     )

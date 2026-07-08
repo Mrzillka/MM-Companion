@@ -1227,8 +1227,8 @@ class EffectCard(QFrame):
         self.changed.emit()
 
     def _refresh_cost(self) -> None:
-        formula = effect_cost_formula(self.instance, self._data)
-        total = effect_total_cost(self.instance, self._data)
+        formula = effect_cost_formula(self.instance, self._data, self._character)
+        total = effect_total_cost(self.instance, self._data, self._character)
         self._cost.setText(f"{formula} = {total} PP" if formula else f"{total} PP")
 
     # -- structure role (driven by the canvas) ----------------------------
@@ -1454,7 +1454,7 @@ class PowerCanvas(QFrame):
         """Badge each card with its part in the current structure (§4)."""
         multi = len(self._cards) >= 2
         if multi and self._power.structure == STRUCTURE_ARRAY:
-            base = array_base_index(self._power, self._data)
+            base = array_base_index(self._power, self._data, self._character)
             note = f"{array_alternate_cost(self._data)} PP"
             for index, card in enumerate(self._cards):
                 if index == base:
@@ -1543,7 +1543,7 @@ class PowerTermsView(QWidget):
         name = QLabel(title)
         name.setStyleSheet("font-weight: bold;")
         header.addWidget(name)
-        note = self._role_note(power, index, game_data)
+        note = self._role_note(power, index, game_data, char)
         if note:
             role = QLabel(note)
             role.setStyleSheet("color: gray; font-style: italic;")
@@ -1588,10 +1588,12 @@ class PowerTermsView(QWidget):
         return ""
 
     @staticmethod
-    def _role_note(power: Power, index: int, game_data: GameData) -> str:
+    def _role_note(
+        power: Power, index: int, game_data: GameData, char: Character | None = None
+    ) -> str:
         if len(power.effects) < 2 or power.structure != STRUCTURE_ARRAY:
             return ""
-        if index == array_base_index(power, game_data):
+        if index == array_base_index(power, game_data, char):
             return "base"
         return f"Alternate Effect, {array_alternate_cost(game_data)} pt"
 
@@ -2043,7 +2045,7 @@ class PowerConstructorWindow(QMainWindow):
     def _refresh_cost(self) -> None:
         # Always show the power's own full assembled cost; when it's an Alternate
         # Effect of an existing base, note the flat point it actually contributes.
-        text = f"Total cost: {power_total_cost(self.power, self._data)} PP"
+        text = f"Total cost: {power_total_cost(self.power, self._data, self._character)} PP"
         if self.power.alternate_of and self._character is not None:
             base = next(
                 (p for p in self._character.powers if p.id == self.power.alternate_of), None

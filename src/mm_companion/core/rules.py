@@ -606,13 +606,13 @@ def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: b
     return total
 
 
-def _per_rank_cost(effect: PowerEffectInstance, base_cost_value: int, game_data: GameData) -> int:
-    """Net per-rank cost of an effect: ``base + Σ per-rank extras − Σ per-rank flaws``."""
+def _net_per_rank_modifiers(effect: PowerEffectInstance, game_data: GameData) -> int:
+    """Net per-rank extra/flaw cost of an effect (base cost excluded):
+    ``Σ per-rank extras − Σ per-rank flaws``."""
 
-    net = base_cost_value
-    net += _signed_modifier_cost(effect.extras, +1, game_data, flat=False)
-    net += _signed_modifier_cost(effect.flaws, -1, game_data, flat=False)
-    return net
+    return _signed_modifier_cost(effect.extras, +1, game_data, flat=False) + _signed_modifier_cost(
+        effect.flaws, -1, game_data, flat=False
+    )
 
 
 def _ranked_cost(net_per_rank: int, rank: int) -> int:
@@ -628,19 +628,30 @@ def _ranked_cost(net_per_rank: int, rank: int) -> int:
     return math.ceil(rank / (2 - net_per_rank))
 
 
-def effect_total_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
+def effect_total_cost(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
     """Power-point cost of one assembled effect (``mm-powers-architecture.md`` §2).
 
     ``ranked = ceil`` of the per-rank cost times rank (see :func:`_ranked_cost` for
     the sub-1 PP/rank fraction rule), then ``total = ranked + Σ flat extras − Σ flat
     flaws``. An unknown effect id contributes nothing.
+
+    When an ability a modifier folds in raises the effect's rank (Strength-Based
+    Damage picking up the wielder's Strength), the per-rank extras and flaws apply
+    to those folded-in ranks too — the ranks come free of *base* cost, but each
+    per-rank modifier still costs against them, so the total is
+    ``rank × (base + net mods) + strength × net mods + flat``. This needs ``char``
+    to know how much ability is folded in; without one, only the bought ranks count.
     """
 
     base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base is None:
         return 0
 
-    ranked = _ranked_cost(_per_rank_cost(effect, base.base_cost_value, game_data), effect.rank)
+    net_mods = _net_per_rank_modifiers(effect, game_data)
+    ranked = _ranked_cost(base.base_cost_value + net_mods, effect.rank)
+    ranked += effect_rank_trait_bonus(effect, game_data, char) * net_mods
 
     flat = _signed_modifier_cost(effect.extras, +1, game_data, flat=True)
     flat += _signed_modifier_cost(effect.flaws, -1, game_data, flat=True)
@@ -708,7 +719,9 @@ def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -
     return terms
 
 
-def effect_cost_formula(effect: PowerEffectInstance, game_data: GameData) -> str:
+def effect_cost_formula(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> str:
     """Human-readable cost breakdown for one effect, e.g. ``3 × (2 + 1 − 1) + 1``.
 
     Mirrors :func:`effect_total_cost`: the parenthesised group is the per-rank cost
@@ -716,7 +729,9 @@ def effect_cost_formula(effect: PowerEffectInstance, game_data: GameData) -> str
     extras/flaws added outside. The raw terms are always shown — when flaws push the
     group below 1 PP/rank it is annotated with the resulting fraction (e.g.
     ``4 × (1 − 1 − 1 = 1/3)``), since the total is then a ceil, not that arithmetic.
-    Returns ``""`` for an unknown effect.
+    When an ability folds ranks in (Strength-Based Damage), a ``+ strength × (mods)``
+    term is appended for the per-rank modifiers those ranks also pay. Returns ``""``
+    for an unknown effect.
     """
 
     base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -724,8 +739,9 @@ def effect_cost_formula(effect: PowerEffectInstance, game_data: GameData) -> str
         return ""
 
     per_rank_terms = [base.base_cost_value]
-    per_rank_terms += _modifier_terms(effect.extras, +1, game_data, flat=False)
-    per_rank_terms += _modifier_terms(effect.flaws, -1, game_data, flat=False)
+    mod_terms = _modifier_terms(effect.extras, +1, game_data, flat=False)
+    mod_terms += _modifier_terms(effect.flaws, -1, game_data, flat=False)
+    per_rank_terms += mod_terms
     net = sum(per_rank_terms)
 
     per_rank_str = _join_terms(per_rank_terms)
@@ -735,6 +751,13 @@ def effect_cost_formula(effect: PowerEffectInstance, game_data: GameData) -> str
         per_rank_str = f"({per_rank_str})"
 
     formula = f"{effect.rank} × {per_rank_str}"
+
+    # Ranks folded in from an ability (Strength-Based Damage) pay the per-rank
+    # modifiers, but not the base cost — a separate ``strength × (mods)`` term.
+    strength = effect_rank_trait_bonus(effect, game_data, char)
+    if strength and sum(mod_terms) != 0:
+        mods_str = _join_terms(mod_terms)
+        formula += f" + {strength} × {f'({mods_str})' if len(mod_terms) > 1 else mods_str}"
 
     flat_terms = _modifier_terms(effect.extras, +1, game_data, flat=True)
     flat_terms += _modifier_terms(effect.flaws, -1, game_data, flat=True)
@@ -765,7 +788,7 @@ def array_alternate_cost(game_data: GameData) -> int:
     return modifier.cost_value if modifier else 1
 
 
-def array_base_index(power: Power, game_data: GameData) -> int:
+def array_base_index(power: Power, game_data: GameData, char: Character | None = None) -> int:
     """Index of an array's *base* effect — the costliest one (ties break to the first).
 
     The base is paid for in full; every other effect is a flat-cost alternate.
@@ -775,23 +798,24 @@ def array_base_index(power: Power, game_data: GameData) -> int:
 
     if not power.effects:
         return -1
-    full = [effect_total_cost(e, game_data) for e in power.effects]
+    full = [effect_total_cost(e, game_data, char) for e in power.effects]
     return full.index(max(full))
 
 
-def power_total_cost(power: Power, game_data: GameData) -> int:
+def power_total_cost(power: Power, game_data: GameData, char: Character | None = None) -> int:
     """Total power-point cost of a power (``mm-powers-architecture.md`` §4).
 
     ``independent`` and ``linked`` powers cost the sum of their effects (linking
     is a +0 bundle). An ``array`` instead pays the costliest effect in full and a
     flat :func:`array_alternate_cost` for each remaining effect, since only one is
-    active at a time.
+    active at a time. ``char`` is threaded to :func:`effect_total_cost` so a
+    Strength-Based effect's folded-in ranks are priced against the wielder.
     """
 
     if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
-        full = [effect_total_cost(e, game_data) for e in power.effects]
+        full = [effect_total_cost(e, game_data, char) for e in power.effects]
         return max(full) + (len(full) - 1) * array_alternate_cost(game_data)
-    return sum(effect_total_cost(e, game_data) for e in power.effects)
+    return sum(effect_total_cost(e, game_data, char) for e in power.effects)
 
 
 def array_base(char: Character, power: Power) -> Power | None:
@@ -861,7 +885,7 @@ def power_display_cost(power: Power, char: Character, game_data: GameData) -> in
 
     if array_base(char, power) is not None:
         return array_alternate_cost(game_data)
-    return power_total_cost(power, game_data)
+    return power_total_cost(power, game_data, char)
 
 
 def effect_attack_skill_bonus(
@@ -1064,8 +1088,8 @@ def power_array_violations(power: Power, char: Character, game_data: GameData) -
             f"'{base.name or 'the base power'}' is itself an alternate — "
             "point an Alternate Effect at a base power, not another alternate."
         ]
-    this_cost = power_total_cost(power, game_data)
-    base_cost = power_total_cost(base, game_data)
+    this_cost = power_total_cost(power, game_data, char)
+    base_cost = power_total_cost(base, game_data, char)
     if this_cost > base_cost:
         return [
             f"This alternate costs {this_cost} PP, over base "
@@ -1582,12 +1606,14 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
     return line
 
 
-def power_game_terms(power: Power, game_data: GameData) -> str:
+def power_game_terms(power: Power, game_data: GameData, char: Character | None = None) -> str:
     """The power's game-term summary: one :func:`effect_game_terms` line per effect.
 
     A ``linked`` or ``array`` power (with two or more effects) prefixes a header and
     tags each line with its role — the array marks its base and notes the flat cost
-    of each alternate — so the composite structure reads at a glance.
+    of each alternate — so the composite structure reads at a glance. ``char`` is
+    threaded to :func:`array_base_index` so the base badge tracks the same
+    Strength-adjusted costs the cards show.
     """
 
     lines = [effect_game_terms(e, game_data) for e in power.effects]
@@ -1595,7 +1621,7 @@ def power_game_terms(power: Power, game_data: GameData) -> str:
         body = "\n".join(f"• {line}" for line in lines)
         return "Linked (all effects activate together):\n" + body
     if len(power.effects) > 1 and power.structure == STRUCTURE_ARRAY:
-        base = array_base_index(power, game_data)
+        base = array_base_index(power, game_data, char)
         alt = array_alternate_cost(game_data)
         tagged = [
             f"• {line}" + (" [base]" if i == base else f" (Alternate Effect, {alt} pt)")

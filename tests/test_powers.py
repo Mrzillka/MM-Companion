@@ -239,6 +239,35 @@ def test_effect_specific_modifier_counts_toward_cost() -> None:
     assert effect_total_cost(effect, data) == 16
 
 
+def test_strength_based_folds_ability_into_per_rank_modifier_cost() -> None:
+    data = load_game_data()
+    char = Character()
+    char.abilities["STR"] = 4
+    # Damage 5 + Strength-Based (folds in STR 4) + Ranged (+1/rank). The bought ranks
+    # pay base + mods; the folded-in Strength ranks pay the mods but not the base:
+    # 5 × (1 + 1) + 4 × 1 = 14.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=5,
+        extras=[ModifierSelection("strength_based"), ModifierSelection("ranged")],
+    )
+    assert effect_total_cost(effect, data, char) == 14
+    assert effect_cost_formula(effect, data, char) == "5 × (1 + 0 + 1) + 4 × (0 + 1)"
+    # Without a character (or Strength) the folded ranks are unknown, so only the
+    # bought ranks are priced.
+    assert effect_total_cost(effect, data) == 10
+
+
+def test_plain_strength_based_damage_leaves_folded_ranks_free() -> None:
+    data = load_game_data()
+    char = Character()
+    char.abilities["STR"] = 4
+    # No other per-rank modifier, so the Strength ranks add no cost — only rank.
+    effect = PowerEffectInstance("damage", rank=5, extras=[ModifierSelection("strength_based")])
+    assert effect_total_cost(effect, data, char) == 5
+    assert effect_cost_formula(effect, data, char) == "5 × (1 + 0)"
+
+
 def test_effect_specific_ranked_flat_modifier_scales_with_its_own_rank() -> None:
     data = load_game_data()
     # Teleport 10 (2/rank) + the Teleport-specific Increased Mass (flat per rank) at rank 3.

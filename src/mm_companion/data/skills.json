@@ -105,11 +105,10 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": true,
-      "specializedCost": true,
       "focuses": [
         "Chosen freely per field of study, e.g. Science, Law, History, Streetwise"
       ],
-      "description": "Deep, formal knowledge in a specific academic, professional, or scholarly field — each field you study is its own focus. Because a focus is mandatory, Expertise ranks cost 1 PP per 4 ranks (the specialized rate)."
+      "description": "Deep, formal knowledge in a specific academic, professional, or scholarly field — each field you study is its own focus. Expertise ranks cost 1 PP per 2 ranks (the normal skill rate)."
     },
     {
       "id": "insight",

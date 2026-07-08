@@ -99,13 +99,13 @@ def test_focused_skill_costs_the_normal_rate() -> None:
     assert skill_points_spent(char, data) == 3  # ceil(6 / 2)
 
 
-def test_expertise_is_priced_at_the_specialized_rate() -> None:
+def test_expertise_is_priced_at_the_normal_rate() -> None:
     data = load_game_data()
     char = Character.new_default(data)
-    # Expertise's mandatory focus makes its ranks 4/PP (unlike other focused skills).
+    # Expertise's focuses pool at the normal 2 ranks/PP like any other focused skill.
     char.focuses["Expertise"] = ["Science"]
     char.skill_ranks["Expertise::Science"] = 8
-    assert skill_points_spent(char, data) == 2  # ceil(8 / 4), not ceil(8 / 2)
+    assert skill_points_spent(char, data) == 4  # ceil(8 / 2)
 
 
 def test_specialized_pool_costs_half_and_pools_separately() -> None:

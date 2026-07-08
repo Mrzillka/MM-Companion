@@ -18,6 +18,7 @@ from mm_companion.core.rules import (
     effect_allocation_used,
     effect_attack_skill_bonus,
     effect_cost_formula,
+    effect_effective_rank,
     effect_game_terms,
     effect_is_active,
     effect_readout_rows,
@@ -781,6 +782,28 @@ def test_pl_violations_fold_strength_into_a_strength_based_damage() -> None:
     assert power_pl_violations(Power(effects=[effect]), _pl_char(data, strength=8), data) == []
     over = power_pl_violations(Power(effects=[effect]), _pl_char(data, strength=11), data)
     assert over and "rank 21" in over[0]
+
+
+def test_strength_based_amount_caps_the_folded_in_strength() -> None:
+    data = load_game_data()
+    char = _pl_char(data, strength=8)
+    # No amount stored → full Strength folds in: rank 10 + 8 = 18.
+    full = PowerEffectInstance("damage", rank=10, extras=[ModifierSelection("strength_based")])
+    assert effect_effective_rank(full, data, char) == 18
+    # amount=3 uses only 3 of the 8 Strength: rank 10 + 3 = 13.
+    capped = PowerEffectInstance(
+        "damage",
+        rank=10,
+        extras=[ModifierSelection("strength_based", config={"amount": 3})],
+    )
+    assert effect_effective_rank(capped, data, char) == 13
+    # A stored amount above the wielder's actual Strength never folds in more than it.
+    greedy = PowerEffectInstance(
+        "damage",
+        rank=10,
+        extras=[ModifierSelection("strength_based", config={"amount": 20})],
+    )
+    assert effect_effective_rank(greedy, data, char) == 18
 
 
 def test_pl_violations_ignore_non_attack_effects() -> None:

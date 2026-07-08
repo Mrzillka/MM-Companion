@@ -649,6 +649,11 @@ def effect_rank_trait_bonus(
     Strength-Based Damage picks up the wielder's Strength (Enhanced Trait boosts to
     that ability included). Zero without a character or when no such modifier is
     attached. The bought point cost is unaffected — the folded-in rank is free.
+
+    A selection may cap how much of the ability it uses via ``config["amount"]`` (the
+    Strength-Based chip's spin box): when set, no more than that many ranks are folded
+    in (and never more than the wielder actually has). Absent, the full ability is
+    used and tracks it dynamically.
     """
 
     if char is None:
@@ -658,7 +663,9 @@ def effect_rank_trait_bonus(
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier and modifier.adds_ability:
-            bonus += effective_ability(char, game_data, modifier.adds_ability)
+            ability = effective_ability(char, game_data, modifier.adds_ability)
+            amount = selection.config.get("amount")
+            bonus += ability if amount is None else min(int(amount), ability)
     return bonus
 
 

@@ -80,6 +80,7 @@ from mm_companion.core.rules import (
     effect_makes_attack,
     effect_stat_rows,
     effect_total_cost,
+    effective_ability,
     power_allocation_violations,
     power_linked_range_violations,
     power_pl_violations,
@@ -265,15 +266,27 @@ class ModifierChip(QFrame):
     A ``ranked`` modifier (bought in its own ranks, e.g. Accurate) also carries a
     rank spin box; changing it writes back to the :class:`ModifierSelection` and
     emits :attr:`changed` so the card can recompute its cost.
+
+    A modifier that folds an ability into the effect (``adds_ability``, e.g.
+    Strength-Based) carries an "amount used" spin box so the player can use only
+    part of that ability. It is bounded by the wielder's effective ability and,
+    when left at full, stores nothing so it keeps tracking the ability dynamically.
     """
 
     removeRequested = Signal(object)
     changed = Signal()
 
-    def __init__(self, modifier: Modifier, selection: ModifierSelection, game_data=None) -> None:
+    def __init__(
+        self,
+        modifier: Modifier,
+        selection: ModifierSelection,
+        game_data=None,
+        character: Character | None = None,
+    ) -> None:
         super().__init__()
         self.selection = selection
         self._data = game_data
+        self._character = character
         self._press_pos = None
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
@@ -305,6 +318,50 @@ class ModifierChip(QFrame):
         # engine straight from the selection's config.
         if modifier.config_fields:
             outer.addLayout(self._build_config(modifier))
+
+        # A "how much of the ability to use" spin box for an ability-folding modifier
+        # (Strength-Based). Bounded by the wielder's effective ability; full = tracks it.
+        if modifier.adds_ability:
+            outer.addLayout(self._build_amount(modifier.adds_ability))
+
+    def _ability_cap(self, ability_key: str) -> int:
+        """The wielder's effective ability rank — the most this modifier can fold in.
+
+        Falls back to :data:`RANK_MAX` without a character (a constructor opened
+        outside a character context), so the spin box stays usable but unbounded.
+        """
+        if self._character is None:
+            return RANK_MAX
+        return max(0, effective_ability(self._character, self._data, ability_key))
+
+    def _build_amount(self, ability_key: str) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        abbr = next(
+            (a.abbr for a in getattr(self._data, "abilities", []) if a.key == ability_key),
+            ability_key,
+        )
+        row.addWidget(QLabel(f"{abbr} used"))
+        cap = self._ability_cap(ability_key)
+        # No stored amount means "use it all" — seed the spin box at the cap.
+        current = self.selection.config.get("amount")
+        value = cap if current is None else max(0, min(int(current), cap))
+        spin = make_spin_box(0, cap, value=value, buttons=False, max_width=48)
+        spin.setToolTip(f"How many ranks of your {abbr} this effect uses (max {cap}).")
+        spin.valueChanged.connect(lambda v, c=cap: self._on_amount_changed(v, c))
+        row.addWidget(spin)
+        row.addStretch()
+        return row
+
+    def _on_amount_changed(self, value: int, cap: int) -> None:
+        # At full the amount is left unset so it keeps tracking the ability; below
+        # full it's pinned to the chosen ranks.
+        if value >= cap:
+            self.selection.config.pop("amount", None)
+        else:
+            self.selection.config["amount"] = value
+        self.changed.emit()
 
     def _build_config(self, modifier: Modifier) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -495,10 +552,14 @@ class EffectCard(QFrame):
         instance: PowerEffectInstance,
         game_data: GameData,
         focus_options: list[tuple[str, str]] | None = None,
+        character: Character | None = None,
     ) -> None:
         super().__init__()
         self.instance = instance
         self._data = game_data
+        # The wielder, so an ability-folding chip (Strength-Based) can bound its
+        # "amount used" spin box by the character's effective ability.
+        self._character = character
         # Close/Ranged Combat focuses the wielder can link this effect's attack to.
         self._focus_options = focus_options or []
         self._chips: list[ModifierChip] = []
@@ -1106,7 +1167,7 @@ class EffectCard(QFrame):
         Shared by :meth:`attach_modifier` (which first appends the selection) and
         :meth:`_seed_modifier_chips` (which renders ones already present on load).
         """
-        chip = ModifierChip(modifier, selection, self._data)
+        chip = ModifierChip(modifier, selection, self._data, self._character)
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(lambda m=modifier: self._on_chip_changed(m))
         self._chips.append(chip)
@@ -1269,10 +1330,14 @@ class PowerCanvas(QFrame):
         power: Power,
         game_data: GameData,
         focus_options: list[tuple[str, str]] | None = None,
+        character: Character | None = None,
     ) -> None:
         super().__init__()
         self._power = power
         self._data = game_data
+        # The wielder, passed to each card so an ability-folding chip can bound its
+        # "amount used" spin box.
+        self._character = character
         # Combat focuses each effect card can offer as an attack-skill link.
         self._focus_options = focus_options or []
         self._cards: list[EffectCard] = []
@@ -1331,7 +1396,7 @@ class PowerCanvas(QFrame):
 
     def _build_card(self, instance: PowerEffectInstance) -> EffectCard:
         """Render a card for an effect instance already on the power."""
-        card = EffectCard(instance, self._data, self._focus_options)
+        card = EffectCard(instance, self._data, self._focus_options, self._character)
         card.changed.connect(self._on_card_changed)
         card.removeRequested.connect(self._remove_card)
         self._cards.append(card)
@@ -1762,7 +1827,7 @@ class PowerConstructorWindow(QMainWindow):
         cost_row.addWidget(self._warning)
         layout.addLayout(cost_row)
 
-        self.canvas = PowerCanvas(self.power, self._data, self._focus_options)
+        self.canvas = PowerCanvas(self.power, self._data, self._focus_options, self._character)
         self.canvas.changed.connect(self._refresh_cost)
         self.canvas.changed.connect(self._refresh_game_terms)
         self.canvas.changed.connect(self._refresh_pl_warning)

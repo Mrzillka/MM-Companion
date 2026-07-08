@@ -136,6 +136,31 @@ def test_ranked_modifier_chip_has_a_rank_spin_box_that_drives_cost(qapp: QApplic
     assert window._cost.text() == "Total cost: 8 PP"  # 1*5 + 1*3
 
 
+def test_strength_based_chip_has_an_amount_spin_box_bounded_by_strength(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    char = _pl10_character()
+    char.abilities["STR"] = 6
+    window = PowerConstructorWindow(load_game_data(), character=char)
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("strength_based")
+
+    chip = card._chips[0]
+    spin = chip.findChild(QSpinBox)
+    assert spin is not None
+    assert spin.maximum() == 6  # capped at the wielder's Strength
+    assert spin.value() == 6  # seeded at full — nothing stored yet
+    assert "amount" not in window.power.effects[0].extras[0].config
+
+    spin.setValue(2)  # use only part of Strength
+    assert window.power.effects[0].extras[0].config["amount"] == 2
+
+    spin.setValue(6)  # back to full — the stored cap is cleared so it tracks Strength
+    assert "amount" not in window.power.effects[0].extras[0].config
+
+
 def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QSpinBox
 

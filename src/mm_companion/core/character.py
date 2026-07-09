@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .data_loader import GameData
-from .powers import Power
+from .powers import STRUCTURE_ARRAY, STRUCTURE_LINKED, Power, PowerGroup, PowerNode, node_from_dict
 
 
 @dataclass
@@ -96,7 +96,7 @@ class Character:
     specializations: dict[str, list[str]] = field(default_factory=dict)
     advantages: list[AdvantageSelection] = field(default_factory=list)
     conditions: list[AppliedCondition] = field(default_factory=list)
-    powers: list[Power] = field(default_factory=list)
+    powers: list[PowerNode] = field(default_factory=list)
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -171,5 +171,85 @@ class Character:
                 )
                 for c in raw.get("conditions", [])
             ],
-            powers=[Power.from_dict(p) for p in raw.get("powers", [])],
+            powers=_migrate_flat_relations([node_from_dict(p) for p in raw.get("powers", [])]),
         )
+
+
+def _migrate_flat_relations(nodes: list[PowerNode]) -> list[PowerNode]:
+    """Fold legacy flat cross-power relations into :class:`PowerGroup` nodes.
+
+    Before nested groups existed, whole powers related to each other via
+    ``Power.alternate_of`` (an array) and ``Power.linked_with`` (linked). A saved
+    character from that era is a flat list of leaf powers carrying those id-references;
+    this rebuilds the equivalent tree — an ``array`` group per ``alternate_of`` cluster
+    and a ``linked`` group per ``linked_with`` component — clearing the now-dead fields
+    so a re-save writes only the group form. Saves already using groups (no leaf carries
+    a relation) pass through untouched.
+    """
+
+    powers = [n for n in nodes if isinstance(n, Power)]
+    by_id = {p.id: p for p in powers}
+    if not any(p.alternate_of or p.linked_with for p in powers):
+        return nodes
+
+    # Union-Find over powers joined by either relation.
+    parent = {p.id: p.id for p in powers}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        parent[find(a)] = find(b)
+
+    for p in powers:
+        if p.alternate_of and p.alternate_of in by_id:
+            union(p.id, p.alternate_of)
+        for other in p.linked_with:
+            if other in by_id:
+                union(p.id, other)
+
+    # Cluster members in original order; a cluster is an array if any member points at
+    # another via alternate_of, else linked.
+    clusters: dict[str, list[Power]] = {}
+    for p in powers:
+        clusters.setdefault(find(p.id), []).append(p)
+    is_array: dict[str, bool] = {
+        root: any(p.alternate_of in by_id for p in members) for root, members in clusters.items()
+    }
+
+    def clear_relations(p: Power) -> Power:
+        p.alternate_of = ""
+        p.linked_with = []
+        p.array_active = True
+        return p
+
+    emitted: set[str] = set()
+    result: list[PowerNode] = []
+    for node in nodes:
+        if not isinstance(node, Power):
+            result.append(node)
+            continue
+        root = find(node.id)
+        if root in emitted:
+            continue
+        emitted.add(root)
+        members = clusters[root]
+        if len(members) == 1:
+            result.append(clear_relations(members[0]))
+            continue
+        array = is_array[root]
+        # For an array, the base is the power the others point at (else the first).
+        base = next(
+            (m for m in members if any(o.alternate_of == m.id for o in members)), members[0]
+        )
+        result.append(
+            PowerGroup(
+                mode=STRUCTURE_ARRAY if array else STRUCTURE_LINKED,
+                children=[clear_relations(m) for m in members],
+                active_child_id=base.id if array else "",
+            )
+        )
+    return result

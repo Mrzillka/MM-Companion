@@ -14,24 +14,39 @@ dedicated to roll information (attack bonus, save DC). Hovering the card reveals
 full auto-generated game-term breakdown as a tooltip, the same data the Power
 Constructor shows while building. Each card carries an edit button that reopens the
 constructor pre-loaded with that power — editing a deep copy that replaces the
-original in place on save — and a remove button. It follows the standard section
-contract (``data`` + ``character`` constructor, ``changed`` signal, ``set_locked``)
-so it slots into the sheet like the others, and — because saved powers live on the
-model — a loaded character repopulates its list at construction.
+original in place on save — and a remove button.
+
+Powers can be **grouped**. A character's ``powers`` is a tree of
+:data:`~mm_companion.core.powers.PowerNode` — leaf powers and
+:class:`~mm_companion.core.powers.PowerGroup` containers, which can nest arbitrarily.
+Dragging a card into a *gap* reorders (or moves it into/out of a group); dropping it
+*onto* another card, or onto a group's title bar, combines the two into a group with
+a distinct highlight. A group's title bar carries an Independent / Array / Linked
+mode toggle (the same three choices the Constructor offers for a single power's own
+effects) that decides how its members' costs combine.
+
+It follows the standard section contract (``data`` + ``character`` constructor,
+``changed`` signal, ``set_locked``) so it slots into the sheet like the others, and —
+because saved powers live on the model — a loaded character repopulates its list at
+construction.
 """
 
 from __future__ import annotations
 
 import html
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
+from PySide6.QtGui import QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -40,24 +55,23 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
+    STRUCTURE_INDEPENDENT,
     STRUCTURE_LINKED,
     ModifierSelection,
     Power,
     PowerEffectInstance,
+    PowerGroup,
+    PowerNode,
 )
 from mm_companion.core.rules import (
     array_alternate_cost,
-    array_base,
     array_base_index,
-    array_members,
     debilitated_traits,
     effect_attack_skill_bonus,
     effect_effective_rank,
     effect_stat_rows,
-    linked_group,
     modifier_label,
-    power_array_violations,
-    power_display_cost,
+    node_display_cost,
     power_pl_violations,
     power_runtime_gates,
     powers_points_spent,
@@ -73,9 +87,289 @@ _TINT_BETTER = "#2e9e4f"
 _TINT_WORSE = "#d15b5b"
 _TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE}
 
+# A calm blue reused for drag affordances and dice info.
+_ACCENT = "#6a86c0"
+
+# Drag-and-drop payload: the dragged node's stable id (a Power.id or PowerGroup.id).
+# A tree position needs parent context, not a bare index, so drops resolve the id.
+_POWER_MIME = "application/x-mm-power-node"
+
+# What each group mode is called on its title bar.
+_MODE_LABELS = {
+    STRUCTURE_INDEPENDENT: "Group of powers",
+    STRUCTURE_ARRAY: "Group of alternate effects",
+    STRUCTURE_LINKED: "Group of linked powers",
+}
+
+
+class _DragHandle(QLabel):
+    """The ``⠿`` grip at the head of a card; a press-drag on it starts the drag.
+
+    It only *detects* the gesture (a left-press moved past the platform drag
+    threshold) and emits :attr:`dragStarted`; the owning card builds and runs the
+    actual :class:`QDrag`, so the grip stays a dumb, reusable handle.
+    """
+
+    dragStarted = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("⠿", parent)
+        self._press: QPoint | None = None
+        self.setToolTip("Drag to reorder, or drop onto another power to group them")
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setStyleSheet("color: gray;")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = event.position().toPoint()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._press is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        moved = (event.position().toPoint() - self._press).manhattanLength()
+        if moved >= QApplication.startDragDistance():
+            self._press = None
+            self.dragStarted.emit()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: ARG002
+        self._press = None
+
+
+class _ModeToggle(QWidget):
+    """A segmented Independent / Array / Linked switch for a group's title bar.
+
+    Mirrors the Power Constructor's mode bar (the same three choices for how parts
+    combine), but scoped to whole cards in a group rather than one power's effects.
+    Emits :attr:`modeChanged` with a structure id when the user picks a segment.
+    """
+
+    modeChanged = Signal(str)
+
+    _MODES = (
+        (STRUCTURE_INDEPENDENT, "Independent", "Members act on their own; their costs add up."),
+        (
+            STRUCTURE_ARRAY,
+            "Array",
+            "One member active at a time; the costliest is paid in "
+            "full and each other is a flat-cost alternate.",
+        ),
+        (STRUCTURE_LINKED, "Linked", "Members always activate together as one; costs add up."),
+    )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._buttons: dict[str, QPushButton] = {}
+        for mode, label, tip in self._MODES:
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setToolTip(tip)
+            button.setFixedHeight(22)
+            self._group.addButton(button)
+            self._buttons[mode] = button
+            row.addWidget(button)
+        self._group.buttonClicked.connect(self._on_clicked)
+
+    def _on_clicked(self, button: QPushButton) -> None:
+        for mode, candidate in self._buttons.items():
+            if candidate is button:
+                self.modeChanged.emit(mode)
+                return
+
+    def set_mode(self, mode: str) -> None:
+        """Reflect a mode into the buttons without emitting :attr:`modeChanged`."""
+        (self._buttons.get(mode) or self._buttons[STRUCTURE_INDEPENDENT]).setChecked(True)
+
+    def set_toggle_enabled(self, enabled: bool) -> None:
+        for button in self._buttons.values():
+            button.setEnabled(enabled)
+
+
+class _DraggableCard(QFrame):
+    """A stat-block card (leaf power or group) that can be picked up by its grip.
+
+    It carries the id of the tree node it renders; when its grip fires, it launches a
+    :class:`QDrag` carrying that id (with a snapshot of the card as the drag cursor)
+    so the enclosing :class:`_NodeList` — or a group title bar — can drop it.
+    """
+
+    def __init__(self, node_id: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.node_id = node_id
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        # Never shrink below the height its content needs — a card always shows all of
+        # its rows (the block, not the card, grows and the page scrolls).
+        policy = self.sizePolicy()
+        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def start_drag(self) -> None:
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_POWER_MIME, self.node_id.encode("ascii"))
+        drag.setMimeData(mime)
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(QPoint(pixmap.width() // 2, 12))
+        drag.exec(Qt.DropAction.MoveAction)
+
+
+class _GroupHeader(QWidget):
+    """A group's title bar, which also acts as a drop target that *wraps* the group.
+
+    Dropping a card onto a group's bar groups the whole group with the dragged node
+    into a new parent group (the way to nest a group beside a peer). Joining a group
+    as another member is done by dropping into its body instead (handled by the
+    group's inner :class:`_NodeList`).
+    """
+
+    powerDropped = Signal(str)  # the dropped node's id
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasFormat(_POWER_MIME):
+            event.acceptProposedAction()
+            self.setStyleSheet("background: rgba(106, 134, 192, 0.25); border-radius: 4px;")
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if event.mimeData().hasFormat(_POWER_MIME):
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event: object) -> None:  # noqa: ARG002
+        self.setStyleSheet("")
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self.setStyleSheet("")
+        if not event.mimeData().hasFormat(_POWER_MIME):
+            return
+        source = bytes(event.mimeData().data(_POWER_MIME)).decode("ascii")
+        event.acceptProposedAction()
+        self.powerDropped.emit(source)
+
+
+class _NodeList(QWidget):
+    """A vertical stack of cards for one level of the tree; a drop target for both.
+
+    Renders the ordered nodes of one list — the character's top-level ``powers``
+    (``parent_id`` empty) or a group's children (``parent_id`` = the group id). A drag
+    over a card's *body* offers to **combine** (the target card is highlighted); a drag
+    near a gap offers to **reorder/move** (a thin insertion line). Dropping emits the
+    matching request for the section to apply against the model.
+    """
+
+    combineRequested = Signal(str, str)  # source id, target (drop-on) id
+    moveRequested = Signal(str, str, int)  # source id, parent id (""=top), gap index
+
+    def __init__(self, parent_id: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.parent_id = parent_id
+        self.setAcceptDrops(True)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._entries: list[tuple[str, QWidget]] = []
+        self._indicator = QFrame(self)
+        self._indicator.setFrameShape(QFrame.Shape.HLine)
+        self._indicator.setFixedHeight(2)
+        self._indicator.setStyleSheet(f"background: {_ACCENT}; border: none;")
+        self._indicator.hide()
+        # A translucent outline laid over a card to mark it as the combine target.
+        self._highlight = QFrame(self)
+        self._highlight.setStyleSheet(
+            f"border: 2px solid {_ACCENT}; border-radius: 6px; "
+            "background: rgba(106, 134, 192, 0.15);"
+        )
+        self._highlight.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._highlight.hide()
+
+    def clear(self) -> None:
+        """Remove every card (keeping the reusable indicator/highlight overlays)."""
+        for index in reversed(range(self._layout.count())):
+            widget = self._layout.itemAt(index).widget()
+            if widget is not None and widget is not self._indicator:
+                self._layout.takeAt(index)
+                widget.setParent(None)
+                widget.deleteLater()
+        self._entries = []
+        self._clear_hints()
+
+    def add_entry(self, node_id: str, widget: QWidget) -> None:
+        self._entries.append((node_id, widget))
+        self._layout.addWidget(widget)
+
+    # -- drop handling ----------------------------------------------------
+    def _target(self, y: int) -> tuple[str, int, str, QWidget | None]:
+        """Resolve a drop at vertical position *y* to a combine or reorder target.
+
+        Returns ``("combine", pos, node_id, widget)`` for the body of an entry, or
+        ``("reorder", gap_index, "", None)`` near a boundary / below all entries.
+        """
+        for pos, (node_id, widget) in enumerate(self._entries):
+            top = widget.y()
+            height = widget.height()
+            if y < top + height * 0.25:
+                return ("reorder", pos, "", None)
+            if y < top + height * 0.75:
+                return ("combine", pos, node_id, widget)
+        return ("reorder", len(self._entries), "", None)
+
+    def _show_reorder(self, index: int) -> None:
+        self._highlight.hide()
+        self._layout.removeWidget(self._indicator)
+        self._layout.insertWidget(index, self._indicator)
+        self._indicator.show()
+
+    def _show_combine(self, widget: QWidget) -> None:
+        self._indicator.hide()
+        self._layout.removeWidget(self._indicator)
+        self._highlight.setGeometry(widget.geometry())
+        self._highlight.show()
+        self._highlight.raise_()
+
+    def _clear_hints(self) -> None:
+        self._indicator.hide()
+        self._layout.removeWidget(self._indicator)
+        self._highlight.hide()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasFormat(_POWER_MIME):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if not event.mimeData().hasFormat(_POWER_MIME):
+            return
+        event.acceptProposedAction()
+        kind, index, _node_id, widget = self._target(event.position().toPoint().y())
+        if kind == "combine" and widget is not None:
+            self._show_combine(widget)
+        else:
+            self._show_reorder(index)
+
+    def dragLeaveEvent(self, event: object) -> None:  # noqa: ARG002
+        self._clear_hints()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if not event.mimeData().hasFormat(_POWER_MIME):
+            return
+        source = bytes(event.mimeData().data(_POWER_MIME)).decode("ascii")
+        kind, index, node_id, _widget = self._target(event.position().toPoint().y())
+        self._clear_hints()
+        event.acceptProposedAction()
+        if kind == "combine":
+            self.combineRequested.emit(source, node_id)
+        else:
+            self.moveRequested.emit(source, self.parent_id, index)
+
 
 class PowersSection(TitledSection):
-    """Powers section: launches the Power Constructor and lists saved powers."""
+    """Powers section: launches the Power Constructor and lists saved powers as a tree."""
 
     changed = Signal()
 
@@ -89,8 +383,8 @@ class PowersSection(TitledSection):
         self._data = data
         self._character = character
         self._locked = False
-        # Keep constructor windows referenced so Qt doesn't garbage-collect them
-        # the moment the click handler returns.
+        # Keep constructor windows referenced so Qt doesn't garbage-collect them the
+        # moment the click handler returns.
         self._windows: list[PowerConstructorWindow] = []
 
         layout = QVBoxLayout(self)
@@ -98,10 +392,11 @@ class PowersSection(TitledSection):
         self._empty.setEnabled(False)
         layout.addWidget(self._empty)
 
-        # The saved powers stack above the Add button, one removable row each.
-        self._list_host = QWidget()
-        self._list_layout = QVBoxLayout(self._list_host)
-        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        # The saved powers stack above the Add button, one card each; the top-level
+        # list is the root of the drag-and-drop tree.
+        self._list_host = _NodeList("")
+        self._list_host.combineRequested.connect(self._on_combine)
+        self._list_host.moveRequested.connect(self._on_move)
         layout.addWidget(self._list_host)
 
         self._add_button = QPushButton("Add Power")
@@ -140,10 +435,10 @@ class PowersSection(TitledSection):
         window.show()
 
     def _on_power_edited(self, original: Power, edited: Power) -> None:
-        for index, existing in enumerate(self._character.powers):
-            if existing is original:  # identity, not value — powers can be equal
-                self._character.powers[index] = edited
-                break
+        located = self._locate(original.id)
+        if located is not None:
+            _node, siblings, index, _parent = located
+            siblings[index] = edited
         else:  # the original was removed while the editor was open — treat as an add
             self._character.powers.append(edited)
         self._rebuild_list()
@@ -153,68 +448,289 @@ class PowersSection(TitledSection):
         if window in self._windows:
             self._windows.remove(window)
 
-    # -- power list -------------------------------------------------------
+    # -- tree lookup / mutation seams (headless-testable) -----------------
+    def _locate(
+        self,
+        node_id: str,
+        nodes: list[PowerNode] | None = None,
+        parent: PowerGroup | None = None,
+    ) -> tuple[PowerNode, list[PowerNode], int, PowerGroup | None] | None:
+        """Find a node by id, returning ``(node, its list, index, parent group)``.
+
+        The list is the actual mutable container (top-level ``powers`` or a group's
+        ``children``), so callers can splice in place. ``None`` when the id is absent.
+        """
+        nodes = self._character.powers if nodes is None else nodes
+        for index, node in enumerate(nodes):
+            if node.id == node_id:
+                return node, nodes, index, parent
+            if isinstance(node, PowerGroup):
+                found = self._locate(node_id, node.children, node)
+                if found is not None:
+                    return found
+        return None
+
+    @staticmethod
+    def _subtree_ids(node: PowerNode) -> set[str]:
+        ids = {node.id}
+        if isinstance(node, PowerGroup):
+            for child in node.children:
+                ids |= PowersSection._subtree_ids(child)
+        return ids
+
+    def _on_combine(self, source_id: str, target_id: str) -> None:
+        """Group the dragged node with a drop target into a new Independent group.
+
+        Wraps the target (a card, or a whole group when dropped on its title bar) and
+        the source into a fresh :class:`PowerGroup`, replacing the target in place —
+        nesting naturally when the target already sits inside a group. Rejected when
+        the two are the same node or the target lives inside the source's own subtree.
+        """
+        if source_id == target_id:
+            return
+        source = self._locate(source_id)
+        target = self._locate(target_id)
+        if source is None or target is None:
+            return
+        source_node, _src_list, _src_index, _src_parent = source
+        if target_id in self._subtree_ids(source_node):
+            return  # can't group a node with its own descendant
+        # Remove the source, then re-find the target (its index may have shifted).
+        source_node, src_list, src_index, _ = source
+        src_list.pop(src_index)
+        target = self._locate(target_id)
+        if target is None:  # source and target were the same list and collapsed away
+            src_list.append(source_node)  # put it back; nothing to do
+            return
+        target_node, tgt_list, tgt_index, _ = target
+        group = PowerGroup(
+            mode=STRUCTURE_INDEPENDENT,
+            children=[target_node, source_node],
+            active_child_id=target_node.id,
+        )
+        tgt_list[tgt_index] = group
+        self._after_structural_change()
+
+    def _on_move(self, source_id: str, parent_id: str, index: int) -> None:
+        """Move the dragged node into a list (top-level or a group) at *index*.
+
+        This is how a card is reordered, pulled out of a group (dropped in a higher
+        list), or added to a group as another member (dropped in the group's body).
+        Rejected when the destination lives inside the moved node's own subtree.
+        """
+        source = self._locate(source_id)
+        if source is None:
+            return
+        source_node, src_list, src_index, _ = source
+        if parent_id == "":
+            dest_list: list[PowerNode] = self._character.powers
+        else:
+            if parent_id in self._subtree_ids(source_node):
+                return  # can't move a node into itself
+            dest = self._locate(parent_id)
+            if dest is None or not isinstance(dest[0], PowerGroup):
+                return
+            dest_list = dest[0].children
+        src_list.pop(src_index)
+        if dest_list is src_list and src_index < index:
+            index -= 1  # the pop shifted everything after the source down one
+        index = max(0, min(index, len(dest_list)))
+        dest_list.insert(index, source_node)
+        self._after_structural_change()
+
+    def _after_structural_change(self) -> None:
+        """Tidy the tree after a combine/move, then rebuild and signal the change."""
+        self._collapse_singletons()
+        self._normalize_arrays()
+        self._rebuild_list()
+        self.changed.emit()
+
+    def _collapse_singletons(self) -> None:
+        """Dissolve groups left trivial by a move: one child unwraps, zero drops out."""
+
+        def collapse(nodes: list[PowerNode]) -> list[PowerNode]:
+            result: list[PowerNode] = []
+            for node in nodes:
+                if isinstance(node, PowerGroup):
+                    node.children[:] = collapse(node.children)
+                    if len(node.children) == 1:
+                        result.append(node.children[0])
+                    elif node.children:
+                        result.append(node)
+                    # an emptied group is dropped
+                else:
+                    result.append(node)
+            return result
+
+        self._character.powers[:] = collapse(self._character.powers)
+
+    def _normalize_arrays(self) -> None:
+        """Point every array group's ``active_child_id`` at a real child (else the first)."""
+
+        def normalize(nodes: list[PowerNode]) -> None:
+            for node in nodes:
+                if isinstance(node, PowerGroup):
+                    if node.mode == STRUCTURE_ARRAY and node.children:
+                        ids = {child.id for child in node.children}
+                        if node.active_child_id not in ids:
+                            node.active_child_id = node.children[0].id
+                    normalize(node.children)
+
+        normalize(self._character.powers)
+
+    # -- rendering --------------------------------------------------------
     def refresh(self) -> None:
         """Rebuild the cards from the current character state.
 
         The public seam the sheet calls when a fact *outside* this section changes a
         power's displayed numbers — an ability (a Strength-Based Damage folds in
         Strength; an attack power's PL cap tracks Attack) or the character's Power
-        Level (which sets every attack cap). Re-derives cost, effective ranks, roll
-        values, the PL-breach warning, and the tooltip. It only reads the model, so it
-        never emits :attr:`changed` (no signal loop back to the triggering section).
+        Level (which sets every attack cap). It only reads the model, so it never
+        emits :attr:`changed` (no signal loop back to the triggering section).
         """
         self._rebuild_list()
 
     def _rebuild_list(self) -> None:
-        """Rebuild the row per power from the model, toggling the empty label."""
-        self._normalize_arrays()  # exactly one active member per array before drawing
-        while self._list_layout.count():
-            widget = self._list_layout.takeAt(0).widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
-        for power in self._character.powers:
-            self._list_layout.addWidget(self._make_card(power))
+        """Rebuild the whole card tree from the model, toggling the empty label."""
+        self._normalize_arrays()  # a valid active member per array before drawing
+        self._list_host.clear()
+        for node in self._character.powers:
+            self._list_host.add_entry(node.id, self._render_node(node, None))
         self._empty.setVisible(not self._character.powers)
-        # Keep the section title's running point cost current.
         self.set_block_title(
             title_with_cost("Powers", powers_points_spent(self._character, self._data))
         )
 
-    def _make_card(self, power: Power) -> QFrame:
+    def _render_node(self, node: PowerNode, parent: PowerGroup | None) -> QWidget:
+        """A widget for one tree node — a group container or a leaf power card."""
+        if isinstance(node, PowerGroup):
+            return self._make_group_card(node, parent)
+        return self._make_card(node, parent)
+
+    # -- group card -------------------------------------------------------
+    def _make_group_card(self, group: PowerGroup, parent: PowerGroup | None) -> QWidget:
+        """A framed container: a mode title bar over its members, rendered indented."""
+        card = _DraggableCard(group.id)
+        card.setObjectName("groupCard")
+        card.setStyleSheet("#groupCard { border: 1px solid #8894b0; border-radius: 6px; }")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(6, 4, 6, 6)
+        layout.setSpacing(4)
+        layout.addWidget(self._group_header(group, card, parent))
+
+        inner = _NodeList(group.id)
+        inner.combineRequested.connect(self._on_combine)
+        inner.moveRequested.connect(self._on_move)
+        for child in group.children:
+            inner.add_entry(child.id, self._render_node(child, group))
+        indent = QWidget()
+        indent_layout = QHBoxLayout(indent)
+        indent_layout.setContentsMargins(14, 0, 0, 0)
+        indent_layout.addWidget(inner)
+        layout.addWidget(indent)
+        return card
+
+    def _group_header(
+        self, group: PowerGroup, card: _DraggableCard, parent: PowerGroup | None
+    ) -> QWidget:
+        """The group's title bar: grip, name, mode toggle, active picker, cost, ungroup."""
+        header = _GroupHeader()
+        header.powerDropped.connect(lambda src, gid=group.id: self._on_combine(src, gid))
+        row = QHBoxLayout(header)
+        row.setContentsMargins(0, 0, 0, 0)
+
+        grip = _DragHandle()
+        grip.setToolTip("Drag to move this group, or drop a power here to group it with this one")
+        grip.dragStarted.connect(card.start_drag)
+        row.addWidget(grip)
+        grip.setVisible(not self._locked)
+
+        label = QLabel(_MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT]))
+        label.setStyleSheet("font-weight: bold;")
+        row.addWidget(label)
+
+        toggle = _ModeToggle()
+        toggle.set_mode(group.mode)
+        toggle.modeChanged.connect(lambda mode, g=group: self._set_group_mode(g, mode))
+        toggle.set_toggle_enabled(not self._locked)
+        row.addWidget(toggle)
+
+        if group.mode == STRUCTURE_ARRAY and len(group.children) >= 2:
+            row.addWidget(QLabel("Active:"))
+            combo = QComboBox()
+            for child in group.children:
+                combo.addItem(self._node_label(child), child.id)
+            active_index = combo.findData(group.active_child_id)
+            combo.setCurrentIndex(active_index if active_index >= 0 else 0)
+            combo.setToolTip("Only one array member runs at a time — pick the active one.")
+            combo.setEnabled(not self._locked)
+            guard_wheel(combo)
+            combo.currentIndexChanged.connect(
+                lambda _i, g=group, c=combo: self._set_array_active(g, c.currentData())
+            )
+            row.addWidget(combo)
+
+        row.addStretch()
+
+        cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
+        cost.setEnabled(False)
+        row.addWidget(cost)
+
+        ungroup = QPushButton("✕")
+        ungroup.setFixedWidth(24)
+        ungroup.setToolTip("Ungroup — dissolve this group, keeping its powers")
+        ungroup.clicked.connect(lambda _checked=False, g=group: self._ungroup(g))
+        row.addWidget(ungroup)
+        ungroup.setVisible(not self._locked)
+        return header
+
+    def _node_label(self, node: PowerNode) -> str:
+        """A short name for a node in a picker — a power's name or a group's kind."""
+        if isinstance(node, PowerGroup):
+            return _MODE_LABELS.get(node.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
+        return node.name or "Unnamed Power"
+
+    def _set_group_mode(self, group: PowerGroup, mode: str) -> None:
+        group.mode = mode
+        self._normalize_arrays()
+        self._rebuild_list()
+        self.changed.emit()
+
+    def _set_array_active(self, group: PowerGroup, child_id: str) -> None:
+        group.active_child_id = child_id
+        self._rebuild_list()
+        self.changed.emit()
+
+    def _ungroup(self, group: PowerGroup) -> None:
+        """Dissolve a group, splicing its members back into the group's own slot."""
+        located = self._locate(group.id)
+        if located is None:
+            return
+        _node, siblings, index, _parent = located
+        siblings[index : index + 1] = group.children
+        self._after_structural_change()
+
+    # -- leaf power card --------------------------------------------------
+    def _make_card(self, power: Power, parent: PowerGroup | None) -> QWidget:
         """A stat-block card for one power: header, description, effects, roll line.
 
         The whole card carries the full game-term breakdown on its tooltip (the same
         data the Power Constructor shows while building), so hovering reveals every
         derived system value.
         """
-        card = QFrame()
-        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card = _DraggableCard(power.id)
         card.setToolTip(self._system_tooltip(power))
         layout = QVBoxLayout(card)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(4)
 
-        layout.addWidget(self._header_row(power))
+        layout.addWidget(self._header_row(power, card, parent))
 
         if power.description:
             desc = QLabel(power.description)
             desc.setWordWrap(True)
             desc.setStyleSheet("color: gray; font-style: italic;")
             layout.addWidget(desc)
-
-        # A cross-power relationship note (Alternate Effect of / Linked with), and —
-        # on an array's base — a picker for which member is currently active.
-        note = self._relationship_note(power)
-        if note:
-            label = QLabel(note)
-            label.setWordWrap(True)
-            label.setStyleSheet("color: #6a86c0; font-style: italic;")
-            layout.addWidget(label)
-        selector = self._array_selector(power)
-        if selector is not None:
-            layout.addWidget(selector)
 
         effects = self._effects_block(power)
         if effects is not None:
@@ -226,9 +742,9 @@ class PowersSection(TitledSection):
         layout.addWidget(self._rolls_label(power))
         return card
 
-    def _header_row(self, power: Power) -> QWidget:
+    def _header_row(self, power: Power, card: _DraggableCard, parent: PowerGroup | None) -> QWidget:
         """Name + PL warning on the left; the on/off switch, cost, and edit/remove
-        chrome on the right.
+        chrome on the right, led by a drag grip (hidden when locked).
 
         Returns a host widget (not a bare layout) so every child has a parent the
         moment it is created. Calling ``setVisible(True)`` on a *parentless* widget
@@ -239,6 +755,11 @@ class PowersSection(TitledSection):
         host = QWidget()
         layout = QHBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        grip = _DragHandle()
+        grip.dragStarted.connect(card.start_drag)
+        layout.addWidget(grip)
+        grip.setVisible(not self._locked)
 
         name = QLabel(power.name or "Unnamed Power")
         # A Debilitated condition naming this power loses it — strike the header through
@@ -253,12 +774,9 @@ class PowersSection(TitledSection):
             name.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(name)
 
-        # A power that breaks a PL cap — or is an invalid Alternate Effect (costs more
-        # than its base) — carries a warning marker naming the breach; enforcement is a
-        # warning for now (see storage.pl_enforcement).
-        violations = power_pl_violations(
-            power, self._character, self._data
-        ) + power_array_violations(power, self._character, self._data)
+        # A power that breaks a PL cap carries a warning marker naming the breach;
+        # enforcement is a warning for now (see storage.pl_enforcement).
+        violations = power_pl_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
@@ -276,29 +794,27 @@ class PowersSection(TitledSection):
             active.toggled.connect(lambda on, p=power: self._set_power_active(p, on))
             layout.addWidget(active)
 
-        # An Alternate Effect contributes only its flat pooled cost; every other power
-        # shows its full assembled cost (power_display_cost handles the distinction).
-        cost = QLabel(f"{power_display_cost(power, self._character, self._data)} PP")
+        # Inside an array group a non-base member contributes only its flat pooled cost;
+        # every other card shows its full assembled cost (node_display_cost decides).
+        cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
         layout.addWidget(cost)
 
         # Add each button to the (host-owned) layout *before* setting visibility:
         # addWidget reparents it to `host`, so setVisible acts on a parented child.
-        # Calling setVisible on a still-parentless widget shows it as a momentary
-        # top-level window (the Windows flash / lag this method's docstring warns of).
         edit = QPushButton("✎")
         edit.setFixedWidth(24)
         edit.setToolTip("Edit this power")
         edit.clicked.connect(lambda _checked=False, p=power: self._edit_power(p))
         layout.addWidget(edit)
-        edit.setVisible(not self._locked)  # editing chrome hidden in view mode
+        edit.setVisible(not self._locked)
 
         remove = QPushButton("✕")
         remove.setFixedWidth(24)
         remove.setToolTip("Remove this power")
         remove.clicked.connect(lambda _checked=False, p=power: self._remove_power(p))
         layout.addWidget(remove)
-        remove.setVisible(not self._locked)  # editing chrome hidden in view mode
+        remove.setVisible(not self._locked)
         return host
 
     # -- effect summary (name + extras/flaws) -----------------------------
@@ -389,7 +905,7 @@ class PowersSection(TitledSection):
         label = QLabel(f"🎲 {text}" if text else "No attack or resistance roll")
         label.setWordWrap(True)
         if text:
-            label.setStyleSheet("color: #6a86c0;")  # a calm blue reserved for dice info
+            label.setStyleSheet(f"color: {_ACCENT};")  # a calm blue reserved for dice info
         else:
             label.setEnabled(False)
         return label
@@ -462,88 +978,12 @@ class PowersSection(TitledSection):
         return ""
 
     def _remove_power(self, power: Power) -> None:
-        if power in self._character.powers:
-            self._character.powers.remove(power)
-            self._rebuild_list()
-            self.changed.emit()
-
-    # -- cross-power relationships ----------------------------------------
-    def _relationship_note(self, power: Power) -> str:
-        """A muted note naming this power's cross-power ties, or empty for none.
-
-        Reports an Alternate Effect's resolved base and the (transitively closed)
-        set of powers it switches on/off with."""
-        parts: list[str] = []
-        base = array_base(self._character, power)
-        if base is not None:
-            parts.append(f"Alternate Effect of {base.name or 'Unnamed Power'}")
-        linked = [p for p in linked_group(self._character, power) if p is not power]
-        if linked:
-            names = ", ".join(p.name or "Unnamed Power" for p in linked)
-            parts.append(f"Linked with {names}")
-        return " · ".join(parts)
-
-    def _array_selector(self, power: Power) -> QWidget | None:
-        """On an array's base card, a picker for which member is currently active.
-
-        Only the base carries it (an alternate points *at* the base), and only when
-        the array actually has alternates. Choosing a member activates it and gates
-        the others off (via ``array_active`` → ``rules.effect_is_active``)."""
-        if power.alternate_of:
-            return None  # an alternate — the selector lives on its base
-        members = array_members(self._character, power)
-        if len(members) < 2:
-            return None
-        host = QWidget()
-        row = QHBoxLayout(host)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel("Active:"))
-        combo = QComboBox()
-        for member in members:
-            combo.addItem(member.name or "Unnamed Power", member.id)
-        active = next((m for m in members if m.array_active), members[0])
-        index = combo.findData(active.id)
-        combo.setCurrentIndex(index if index >= 0 else 0)
-        combo.setToolTip("Only one array member runs at a time — pick the active one.")
-        combo.setEnabled(not self._locked)
-        guard_wheel(combo)
-        combo.currentIndexChanged.connect(
-            lambda _i, ms=members, c=combo: self._set_array_active(ms, c.currentData())
-        )
-        row.addWidget(combo)
-        row.addStretch()
-        return host
-
-    def _normalize_arrays(self) -> None:
-        """Keep exactly one active member per cross-power array before rendering.
-
-        Each fresh alternate defaults ``array_active=True`` like the base, so an array
-        can transiently have several 'active' members; this collapses each array to a
-        single active one (keeping the current choice when there is exactly one, else
-        defaulting to the base). Any power not in a multi-member array is forced active
-        so a former alternate is never left permanently gated off. Pure runtime
-        housekeeping — it doesn't emit :attr:`changed`."""
-        handled: set[str] = set()
-        for power in self._character.powers:
-            base = array_base(self._character, power) or power
-            if base.id in handled:
-                continue
-            handled.add(base.id)
-            members = array_members(self._character, base)
-            if len(members) < 2:
-                base.array_active = True
-                continue
-            active = [m for m in members if m.array_active]
-            chosen = active[0] if len(active) == 1 else members[0]
-            for member in members:
-                member.array_active = member is chosen
-
-    def _set_array_active(self, members: list[Power], member_id: str) -> None:
-        """Make one array member the active one and gate the rest off, then re-derive."""
-        for member in members:
-            member.array_active = member.id == member_id
-        self._rebuild_list()
-        self.changed.emit()
+        located = self._locate(power.id)
+        if located is None:
+            return
+        _node, siblings, index, _parent = located
+        siblings.pop(index)
+        self._after_structural_change()
 
     # -- runtime on/off ---------------------------------------------------
     @staticmethod
@@ -556,16 +996,12 @@ class PowersSection(TitledSection):
 
         A single "Active" control drives whichever gate the power carries (Activation,
         Removable, or a Sustained toggle); ``rules.effect_is_active`` reads only the
-        flags the power's gates make relevant. Linked powers switch on/off as one, so
-        every member of :func:`~mm_companion.core.rules.linked_group` is flipped too.
-        The ``changed`` signal is already wired to refresh the stats/skills sections,
-        so the boosted totals update live.
-
-        The cards are rebuilt too: switching off a power that boosts an ability
-        (Enhanced Trait) lowers the *effective* ability another power reads — a
-        Strength-Based Damage's rank, PL cap, and save DC all move with it.
+        flags the power's gates make relevant. Members of a Linked group switch on/off
+        as one, so if this power sits directly in a Linked group every leaf under that
+        group is flipped too. The ``changed`` signal is already wired to refresh the
+        stats/skills sections, so the boosted totals update live.
         """
-        for member in linked_group(self._character, power):
+        for member in self._linked_activation_set(power):
             member.activated = active
             member.item_present = active
             for effect in member.effects:
@@ -573,8 +1009,30 @@ class PowersSection(TitledSection):
         self._rebuild_list()
         self.changed.emit()
 
+    def _linked_activation_set(self, power: Power) -> list[Power]:
+        """Every leaf power that switches on/off together with *power*.
+
+        Just ``[power]`` unless it sits directly inside a Linked group, in which case
+        all leaf powers under that group activate as one.
+        """
+        located = self._locate(power.id)
+        if located is not None:
+            parent = located[3]
+            if isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
+                return self._leaf_powers(parent)
+        return [power]
+
+    @staticmethod
+    def _leaf_powers(node: PowerNode) -> list[Power]:
+        if isinstance(node, PowerGroup):
+            leaves: list[Power] = []
+            for child in node.children:
+                leaves.extend(PowersSection._leaf_powers(child))
+            return leaves
+        return [node]
+
     def set_locked(self, locked: bool) -> None:
-        """In read-only view mode, hide the editing entry points (Add / Remove)."""
+        """In read-only view mode, hide the editing entry points (Add / Remove / group chrome)."""
         self._locked = locked
         self._add_button.setVisible(not locked)
         self._rebuild_list()

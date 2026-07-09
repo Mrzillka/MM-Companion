@@ -36,6 +36,8 @@ from .powers import (
     STRUCTURE_LINKED,
     Power,
     PowerEffectInstance,
+    PowerGroup,
+    PowerNode,
 )
 
 
@@ -193,7 +195,7 @@ def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[
 
     result: dict[str, dict[str, TraitBonus]] = {"ability": {}, "resistance": {}, "skill": {}}
 
-    for power in char.powers:
+    for power in live_powers(char.powers):
         for effect in power.effects:
             base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
             if base is None:
@@ -488,14 +490,15 @@ def advantage_violations(char: Character, game_data: GameData) -> list[str]:
 
 
 def powers_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on powers: each saved power's :func:`power_display_cost`.
+    """Power points spent on powers: the cost of every top-level node in the tree.
 
-    Cross-power arrays share a point pool, so an Alternate Effect contributes only the
-    flat alternate cost while its base pays full (see :func:`power_display_cost`);
-    standalone and linked powers cost their full assembled total.
+    A character's powers form a tree of :data:`~mm_companion.core.powers.PowerNode`
+    (leaf powers and :class:`~mm_companion.core.powers.PowerGroup` containers); each
+    top-level node is priced by :func:`node_cost`, which folds in array pooling (a
+    group's alternates contribute only a flat point) recursively through any nesting.
     """
 
-    return sum(power_display_cost(power, char, game_data) for power in char.powers)
+    return sum(node_cost(node, game_data, char) for node in char.powers)
 
 
 def power_points_spent(char: Character, game_data: GameData) -> int:
@@ -818,74 +821,101 @@ def power_total_cost(power: Power, game_data: GameData, char: Character | None =
     return sum(effect_total_cost(e, game_data, char) for e in power.effects)
 
 
-def array_base(char: Character, power: Power) -> Power | None:
-    """The base power of a power's cross-power array, or ``None`` when it's standalone.
+def node_cost(node: PowerNode, game_data: GameData, char: Character | None = None) -> int:
+    """Total point cost of a powers-tree node — a leaf power or a nested group.
 
-    A power with an ``alternate_of`` reference is an Alternate Effect of another power;
-    this resolves that id against ``char.powers``. Returns ``None`` when the power is
-    not an alternate, or when its referenced base is missing (a dangling reference —
-    :func:`power_array_violations` reports that separately).
+    A leaf :class:`~mm_companion.core.powers.Power` costs its :func:`power_total_cost`.
+    A :class:`~mm_companion.core.powers.PowerGroup` recurses: ``independent`` and
+    ``linked`` groups sum their children (linking is a +0 bundle), while an ``array``
+    group pays its costliest child in full plus a flat :func:`array_alternate_cost` for
+    each other child (only one is active at a time). Nesting is handled by the
+    recursion — a child that is itself a group is priced the same way.
     """
 
-    if not power.alternate_of:
+    if isinstance(node, PowerGroup):
+        costs = [node_cost(child, game_data, char) for child in node.children]
+        if not costs:
+            return 0
+        if node.mode == STRUCTURE_ARRAY and len(costs) > 1:
+            return max(costs) + (len(costs) - 1) * array_alternate_cost(game_data)
+        return sum(costs)
+    return power_total_cost(node, game_data, char)
+
+
+def group_array_base_index(
+    group: PowerGroup, game_data: GameData, char: Character | None = None
+) -> int:
+    """Index of an ``array`` group's *base* child — the costliest (ties → first).
+
+    The base is paid in full; every other child is a flat-cost alternate. Returns
+    ``-1`` for an empty group. Computed purely from :func:`node_cost` so callers can
+    badge children uniformly regardless of the group's mode.
+    """
+
+    if not group.children:
+        return -1
+    costs = [node_cost(c, game_data, char) for c in group.children]
+    return costs.index(max(costs))
+
+
+def node_display_cost(
+    node: PowerNode,
+    parent: PowerGroup | None,
+    game_data: GameData,
+    char: Character | None = None,
+) -> int:
+    """The point cost a node contributes *within its parent group*.
+
+    Inside an ``array`` parent every child except the costliest (the base) contributes
+    only the flat :func:`array_alternate_cost`, since they share one pool. A base child,
+    or any node under a non-array parent (or at top level, ``parent=None``), contributes
+    its full :func:`node_cost`.
+    """
+
+    if parent is not None and parent.mode == STRUCTURE_ARRAY and len(parent.children) > 1:
+        base = group_array_base_index(parent, game_data, char)
+        if parent.children[base] is not node:
+            return array_alternate_cost(game_data)
+    return node_cost(node, game_data, char)
+
+
+def active_array_child(group: PowerGroup) -> PowerNode | None:
+    """An ``array`` group's currently-selected live child (``active_child_id``, else first).
+
+    Returns ``None`` for an empty group. Meaningful only for arrays; other modes keep
+    every child live (see :func:`live_powers`).
+    """
+
+    if not group.children:
         return None
-    return next((p for p in char.powers if p.id == power.alternate_of), None)
+    for child in group.children:
+        if child.id == group.active_child_id:
+            return child
+    return group.children[0]
 
 
-def array_members(char: Character, base_power: Power) -> list[Power]:
-    """``base_power`` plus every power that is an Alternate Effect of it.
+def live_powers(nodes: list[PowerNode]) -> list[Power]:
+    """Every leaf power currently contributing to the sheet, honouring array selection.
 
-    The members of a cross-power array share one point pool. Order is the base first,
-    then the alternates in ``char.powers`` order. A power that isn't anyone's base
-    still returns just ``[base_power]``.
+    Descends the powers tree: an ``array`` group contributes only its
+    :func:`active_array_child` (so an unselected alternate's bonuses drop off), while
+    ``independent`` and ``linked`` groups contribute all their children. Leaf powers
+    pass straight through. Whether a *live* power's bonus actually applies is then a
+    per-power/effect runtime question left to :func:`effect_is_active`.
     """
 
-    members = [base_power]
-    members.extend(
-        p for p in char.powers if p.alternate_of == base_power.id and p is not base_power
-    )
-    return members
-
-
-def linked_group(char: Character, power: Power) -> list[Power]:
-    """Every power that switches on/off together with ``power`` (including itself).
-
-    ``linked_with`` is an **undirected** relationship — storing it on one side links
-    both — so this walks the connected component over the union of both directions.
-    Dangling ids are ignored. Order follows ``char.powers``; the result always
-    contains ``power``.
-    """
-
-    by_id = {p.id: p for p in char.powers}
-    seen: set[str] = set()
-    stack = [power]
-    while stack:
-        current = stack.pop()
-        if current.id in seen:
-            continue
-        seen.add(current.id)
-        # Outgoing links, plus any power that names this one (the other direction).
-        neighbours = list(current.linked_with)
-        neighbours.extend(p.id for p in char.powers if current.id in p.linked_with)
-        for neighbour_id in neighbours:
-            neighbour = by_id.get(neighbour_id)
-            if neighbour is not None and neighbour.id not in seen:
-                stack.append(neighbour)
-    return [p for p in char.powers if p.id in seen] or [power]
-
-
-def power_display_cost(power: Power, char: Character, game_data: GameData) -> int:
-    """The point cost a power contributes to the build, accounting for arrays.
-
-    A power that is a valid Alternate Effect of another (its ``alternate_of`` resolves
-    to a base in ``char.powers``) costs only the flat :func:`array_alternate_cost`,
-    since it shares the base's point pool. Every other power — a base, a standalone, or
-    a linked one (linking is a +0 bundle) — costs its full :func:`power_total_cost`.
-    """
-
-    if array_base(char, power) is not None:
-        return array_alternate_cost(game_data)
-    return power_total_cost(power, game_data, char)
+    result: list[Power] = []
+    for node in nodes:
+        if isinstance(node, PowerGroup):
+            if node.mode == STRUCTURE_ARRAY and node.children:
+                child = active_array_child(node)
+                if child is not None:
+                    result.extend(live_powers([child]))
+            else:
+                result.extend(live_powers(node.children))
+        else:
+            result.append(node)
+    return result
 
 
 def effect_attack_skill_bonus(
@@ -1057,46 +1087,6 @@ def power_linked_range_violations(power: Power, game_data: GameData) -> list[str
                 f"'{first}' — linked effects must share the same Range."
             )
     return violations
-
-
-def power_array_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
-    """Cross-power Alternate Effect problems (``mm-powers-architecture.md`` §4).
-
-    An Alternate Effect shares its base power's point pool, so its own full cost must
-    not exceed the base's — otherwise the base is mis-chosen and the array is
-    under-paid. This reports, for a power whose ``alternate_of`` is set:
-
-    - a **dangling** reference (the named base is no longer on the character),
-    - a **self**-reference,
-    - a **chained** array (the base is itself an alternate — arrays are one level),
-    - the key case: this alternate's :func:`power_total_cost` **exceeds** the base's.
-
-    Warnings only (like :func:`power_pl_violations`); enforcement is the app-wide
-    :func:`mm_companion.core.storage.pl_enforcement` seam. Empty for a standalone power
-    or a valid, no-costlier alternate.
-    """
-
-    if not power.alternate_of:
-        return []
-    if power.alternate_of == power.id:
-        return ["This power can't be an Alternate Effect of itself."]
-    base = next((p for p in char.powers if p.id == power.alternate_of), None)
-    if base is None:
-        return ["Alternate Effect base is missing — it was removed or never saved."]
-    if base.alternate_of:
-        return [
-            f"'{base.name or 'the base power'}' is itself an alternate — "
-            "point an Alternate Effect at a base power, not another alternate."
-        ]
-    this_cost = power_total_cost(power, game_data, char)
-    base_cost = power_total_cost(base, game_data, char)
-    if this_cost > base_cost:
-        return [
-            f"This alternate costs {this_cost} PP, over base "
-            f"'{base.name or 'the base power'}' ({base_cost} PP) — raise the base or "
-            "trim this alternate so the base is the costliest member."
-        ]
-    return []
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:

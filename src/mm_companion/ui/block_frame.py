@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -203,6 +204,12 @@ class BlockWindow(QWidget):
     flagged as a tool window. Its title bar reuses the same drag gesture, so the
     user can drag it back onto the sheet to re-dock. Closing it via the window
     chrome hides the block rather than losing it.
+
+    The frame lives inside a :class:`QScrollArea` so a tall block (e.g. Powers)
+    that doesn't fit the screen scrolls *within its window* — unlike when it is
+    docked, where the whole sheet scrolls as one page and each block shows all
+    of its content. The scroll area only ever scrolls vertically; the frame's
+    width tracks the window.
     """
 
     def __init__(self, key: str, host: DragHost, parent: QWidget | None = None) -> None:
@@ -215,15 +222,22 @@ class BlockWindow(QWidget):
         layout.setSpacing(0)
         self._layout = layout
 
+        self._scroll = QScrollArea(self)
+        self._scroll.setObjectName("blockWindowScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        layout.addWidget(self._scroll)
+
     def set_frame(self, frame: BlockFrame) -> None:
         """Host *frame*, giving the window the frame's title as its window title."""
         self.setWindowTitle(frame.title)
-        self._layout.addWidget(frame)
+        self._scroll.setWidget(frame)
 
     def take_frame(self) -> QWidget | None:
         """Detach and return the hosted frame (before re-docking it)."""
-        item = self._layout.takeAt(0)
-        return item.widget() if item else None
+        return self._scroll.takeWidget()
 
     def closeEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
         """Closing the window hides the block instead of destroying it."""

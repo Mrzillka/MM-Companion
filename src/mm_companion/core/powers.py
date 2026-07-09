@@ -214,3 +214,68 @@ class Power:
             item_present=bool(raw.get("item_present", True)),
             array_active=bool(raw.get("array_active", True)),
         )
+
+
+@dataclass
+class PowerGroup:
+    """A group node bundling whole powers (or nested sub-groups) on the sheet.
+
+    Unlike :attr:`Power.structure` (which governs how a *single* power's own effects
+    combine), a group relates *whole cards* to one another and can nest arbitrarily
+    (a group inside a group), so a character's ``powers`` is a tree of
+    :data:`PowerNode` — leaf :class:`Power` cards and :class:`PowerGroup` containers.
+    It supersedes the flat cross-power ``alternate_of`` / ``linked_with`` references
+    (which are migrated into groups on load; see
+    :func:`mm_companion.core.character._migrate_flat_relations`).
+
+    ``mode`` is one of :data:`STRUCTURES`: ``independent`` and ``linked`` sum their
+    children's costs; ``array`` pays the costliest child in full plus a flat point per
+    other child (only one active at a time). Cost recursion lives in
+    :func:`mm_companion.core.rules.node_cost`.
+
+    ``active_child_id`` is *runtime* state (like :attr:`Power.array_active`): for an
+    ``array`` group it names the currently-selected live child; empty means the first
+    child. :func:`mm_companion.core.rules.power_trait_bonuses` descends only into the
+    active branch so an inactive array member's bonuses drop off the sheet.
+    """
+
+    mode: str = STRUCTURE_INDEPENDENT
+    children: list[PowerNode] = field(default_factory=list)
+    id: str = field(default_factory=lambda: uuid4().hex)
+    active_child_id: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "group",
+            "mode": self.mode,
+            "children": [c.to_dict() for c in self.children],
+            "id": self.id,
+            "active_child_id": self.active_child_id,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> PowerGroup:
+        mode = raw.get("mode", STRUCTURE_INDEPENDENT)
+        return cls(
+            mode=mode if mode in STRUCTURES else STRUCTURE_INDEPENDENT,
+            children=[node_from_dict(c) for c in raw.get("children", [])],
+            id=raw.get("id") or uuid4().hex,
+            active_child_id=raw.get("active_child_id", ""),
+        )
+
+
+# A node in the character's powers tree: a leaf power card or a nested group.
+PowerNode = Power | PowerGroup
+
+
+def node_from_dict(raw: dict) -> PowerNode:
+    """Deserialize one powers-tree node, dispatching group vs leaf power.
+
+    A group dict carries ``"kind": "group"`` (or, for forward tolerance, a
+    ``"children"`` list); anything else is a leaf :class:`Power`. Bare power dicts
+    from before groups existed have neither key and load as leaves unchanged.
+    """
+
+    if raw.get("kind") == "group" or "children" in raw:
+        return PowerGroup.from_dict(raw)
+    return Power.from_dict(raw)

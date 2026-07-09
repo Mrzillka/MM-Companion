@@ -529,7 +529,6 @@ def test_saved_power_lands_on_the_sheet_and_reports_change(qapp: QApplication) -
 
 def test_loaded_powers_repopulate_the_section(qapp: QApplication) -> None:
     from mm_companion.core.character import Character
-    from mm_companion.core.powers import Power, PowerEffectInstance
 
     data = load_game_data()
     character = Character.new_default(data)
@@ -593,7 +592,6 @@ def test_block_enforcement_refuses_an_over_cap_power(qapp: QApplication, monkeyp
 
 
 def test_section_row_marks_a_power_that_breaks_the_cap(qapp: QApplication) -> None:
-    from mm_companion.core.powers import Power, PowerEffectInstance
 
     data = load_game_data()
     character = Character.new_default(data)  # PL 10, cap 20
@@ -608,7 +606,7 @@ def test_section_row_marks_a_power_that_breaks_the_cap(qapp: QApplication) -> No
 
 
 def test_strength_based_damage_uses_strength_in_the_pl_check(qapp: QApplication) -> None:
-    from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+    from mm_companion.core.powers import ModifierSelection
 
     data = load_game_data()
     character = Character.new_default(data)
@@ -711,7 +709,6 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
 
 def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) -> None:
     from mm_companion.core.character import Character
-    from mm_companion.core.powers import Power, PowerEffectInstance
 
     data = load_game_data()
     character = Character.new_default(data)
@@ -731,7 +728,7 @@ def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) ->
 
 
 def test_editing_seeds_the_window_from_the_existing_power(qapp: QApplication) -> None:
-    from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+    from mm_companion.core.powers import ModifierSelection
 
     effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")])
     power = Power(name="Fire Blast", description="whoosh", effects=[effect])
@@ -751,7 +748,6 @@ def test_editing_seeds_the_window_from_the_existing_power(qapp: QApplication) ->
 
 
 def test_editing_works_on_a_copy_until_saved(qapp: QApplication) -> None:
-    from mm_companion.core.powers import Power, PowerEffectInstance
 
     power = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=8)])
     window = PowerConstructorWindow(load_game_data(), power=power)
@@ -766,7 +762,7 @@ def test_editing_works_on_a_copy_until_saved(qapp: QApplication) -> None:
 
 
 def test_editing_a_multi_effect_power_restores_its_structure(qapp: QApplication) -> None:
-    from mm_companion.core.powers import STRUCTURE_ARRAY, Power, PowerEffectInstance
+    from mm_companion.core.powers import STRUCTURE_ARRAY
 
     power = Power(
         name="Elements",
@@ -788,7 +784,6 @@ def test_editing_a_multi_effect_power_restores_its_structure(qapp: QApplication)
 
 
 def test_editing_from_the_section_replaces_the_power_in_place(qapp: QApplication) -> None:
-    from mm_companion.core.powers import Power, PowerEffectInstance
 
     data = load_game_data()
     character = Character.new_default(data)
@@ -818,7 +813,6 @@ def test_editing_from_the_section_replaces_the_power_in_place(qapp: QApplication
 
 
 def test_closing_the_editor_without_saving_leaves_the_power_unchanged(qapp: QApplication) -> None:
-    from mm_companion.core.powers import Power, PowerEffectInstance
 
     data = load_game_data()
     character = Character.new_default(data)
@@ -842,8 +836,6 @@ def test_closing_the_editor_without_saving_leaves_the_power_unchanged(qapp: QApp
 def test_edit_button_hidden_in_locked_view(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QPushButton
 
-    from mm_companion.core.powers import Power, PowerEffectInstance
-
     data = load_game_data()
     character = Character.new_default(data)
     character.powers.append(
@@ -860,7 +852,6 @@ def test_edit_button_hidden_in_locked_view(qapp: QApplication) -> None:
 
 
 def test_reordering_a_card_moves_the_power_in_the_model(qapp: QApplication) -> None:
-    from mm_companion.core.powers import Power, PowerEffectInstance
 
     data = load_game_data()
     character = Character.new_default(data)
@@ -871,19 +862,19 @@ def test_reordering_a_card_moves_the_power_in_the_model(qapp: QApplication) -> N
     changes: list[int] = []
     sheet.powers.changed.connect(lambda: changes.append(1))
 
-    # Drop the first card into the gap after the last one (gap index 3, dragged still
-    # in place). It lands at the end; the section emits `changed`.
-    sheet.powers._reorder_power(0, 3)
+    alpha = character.powers[0]
+    # Drop the first card into the gap after the last one (top-level gap index 3, dragged
+    # still in place). It lands at the end; the section emits `changed`.
+    sheet.powers._on_move(alpha.id, "", 3)
     assert [p.name for p in character.powers] == ["Beta", "Gamma", "Alpha"]
     assert changes
 
     # Move it back up to the top (gap index 0).
-    sheet.powers._reorder_power(2, 0)
+    sheet.powers._on_move(alpha.id, "", 0)
     assert [p.name for p in character.powers] == ["Alpha", "Beta", "Gamma"]
 
 
 def test_reorder_grip_hidden_in_locked_view(qapp: QApplication) -> None:
-    from mm_companion.core.powers import Power, PowerEffectInstance
     from mm_companion.ui.sections.powers import _DragHandle
 
     data = load_game_data()
@@ -1066,54 +1057,7 @@ def test_reduced_trait_offers_a_data_driven_trait_picker(qapp: QApplication) -> 
     assert card.instance.flaws[0].config["reduced_target"] == "STR"
 
 
-def test_relationship_chip_combo_writes_alternate_and_linked(qapp: QApplication) -> None:
-    # A Linked / Alternate Effect chip carries a combo that names the target power, and
-    # choosing there writes back to the power being built.
-    char = _pl10_character()
-    other = Power(name="Base Power", effects=[PowerEffectInstance("damage", rank=8)])
-    char.powers.append(other)
-    window = PowerConstructorWindow(load_game_data(), character=char)
-
-    # Add an Alternate Effect chip; its combo picks the base power.
-    alt_chip = window._add_relationship_chip("alternate")
-    index = alt_chip._combo.findData(other.id)
-    assert index >= 0
-    alt_chip._combo.setCurrentIndex(index)
-    assert window.power.alternate_of == other.id
-    # Only one Alternate Effect base makes sense — the add button is now disabled.
-    assert not window._add_alt_button.isEnabled()
-
-    # Add a Linked chip pointing at the same power.
-    linked_chip = window._add_relationship_chip("linked")
-    linked_chip._combo.setCurrentIndex(linked_chip._combo.findData(other.id))
-    assert other.id in window.power.linked_with
-
-    # Removing the alternate chip clears the reference and re-enables the button.
-    window._remove_relationship_chip(alt_chip)
-    assert window.power.alternate_of == ""
-    assert window._add_alt_button.isEnabled()
-
-
-def test_relationship_chips_seed_from_an_edited_power(qapp: QApplication) -> None:
-    # Editing a power that already relates to others seeds a chip per relationship.
-    char = _pl10_character()
-    base = Power(name="Base", effects=[PowerEffectInstance("damage", rank=8)])
-    partner = Power(name="Partner", effects=[PowerEffectInstance("damage", rank=4)])
-    char.powers.extend([base, partner])
-    editing = Power(
-        name="Alt",
-        effects=[PowerEffectInstance("damage", rank=3)],
-        alternate_of=base.id,
-        linked_with=[partner.id],
-    )
-    char.powers.append(editing)
-    window = PowerConstructorWindow(load_game_data(), character=char, power=editing)
-
-    kinds = sorted(c.kind for c in window._rel_chips)
-    assert kinds == ["alternate", "linked"]
-
-
-def test_relationships_area_absent_without_other_powers(qapp: QApplication) -> None:
-    # A first power (nothing else saved) has nothing to relate to — no chips area built.
-    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
-    assert not hasattr(window, "_rel_chips")
+# Cross-power relationships (Independent / Array / Linked between whole powers) are no
+# longer set in the constructor — they're built on the character sheet by dragging one
+# power card onto another (see tests/test_powers_section.py). The constructor's own mode
+# bar (structure of a single power's effects) is covered elsewhere in this module.

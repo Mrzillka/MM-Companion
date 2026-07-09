@@ -90,26 +90,35 @@ Power (array example: "elemental control")
  └─ alternate: Move Object 8, Ranged, Limited to metal   (+1 pt flat)
 ```
 
-### Two ways to build these in this app
+### Two levels: effects within a power, and a tree of powers
 
-Linked and Array come in a **within-power** form and a **cross-power** form, and both
-are supported side by side:
+Linked and Array exist at **two levels**, both supported side by side:
 
 - **Within a power** — a multi-effect `Power` carries a `structure`
   (`independent`/`linked`/`array`) governing how *its own effects* combine. This is the
-  in-constructor mode bar (see `mm-powers-ui-design.md`).
-- **Between whole powers** — each `Power` also relates to other saved powers:
-  `linked_with` names powers it switches on/off together with, and `alternate_of` makes
-  it an Alternate Effect of another power (referenced by the target's stable `Power.id`).
-  A cross-power array shares one point pool the same way: the base pays its full
-  `power_total_cost`, each alternate contributes only the flat `array_alternate_cost`
-  (`rules.power_display_cost` / `powers_points_spent`). The base is the power the
-  alternate *points at* — not auto-chosen — so if an alternate's own full cost exceeds
-  its base, `rules.power_array_violations` warns (like a PL-cap breach) rather than
-  reshuffling; it also flags dangling, self-, and chained references. Runtime:
-  `linked_group` (transitive closure over `linked_with`) toggles together, and one array
-  member is active at a time via the per-power `array_active` runtime flag, which
-  `rules.effect_is_active` reads so an inactive member's bonuses drop off the sheet.
+  in-constructor mode bar (see `mm-powers-ui-design.md`), unchanged.
+- **Between whole powers** — a character's `powers` is a **tree** of `PowerNode`: leaf
+  `Power` cards and `PowerGroup` containers, which can **nest arbitrarily** (a group
+  inside a group). A `PowerGroup` has a `mode` (`independent`/`linked`/`array`) and an
+  ordered `children` list. The player builds the tree on the character sheet by dragging
+  one card onto another (or onto a group's title bar) to combine them, and into a gap to
+  reorder or move between groups — see `ui/sections/powers.py`.
+
+  Cost recurses over the tree (`rules.node_cost`): an `independent`/`linked` group sums
+  its children (linking is a +0 bundle); an `array` group pays its costliest child in
+  full plus the flat `array_alternate_cost` per other child, so `powers_points_spent`
+  folds in array pooling at any depth. `rules.node_display_cost` gives the per-card
+  figure (a non-base array member shows only the flat point). Runtime: an `array` group's
+  `active_child_id` names the one live member, and `rules.live_powers` walks the tree
+  descending only into the active array branch so an unselected member's bonuses drop off
+  the sheet (feeding `power_trait_bonuses`); the per-power on/off switch still drives
+  `effect_is_active`, and a Linked group's members toggle together.
+
+  This tree **supersedes** the older flat cross-power references (`Power.alternate_of` /
+  `Power.linked_with`). Those fields remain only so a pre-tree save still loads:
+  `character._migrate_flat_relations` folds each `alternate_of` cluster into an `array`
+  group and each `linked_with` component into a `linked` group on load, then clears the
+  dead fields so a re-save is group-only.
 
 ---
 

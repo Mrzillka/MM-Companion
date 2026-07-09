@@ -8,7 +8,7 @@ and assert on the resulting ``Character.powers`` tree.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -19,6 +19,7 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
     PowerGroup,
 )
+from mm_companion.core.rules import power_trait_bonuses
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
@@ -120,3 +121,85 @@ def test_array_group_active_member_normalizes(qapp: QApplication) -> None:
     assert group.active_child_id in {a.id, b.id}
     sheet.powers._set_array_active(group, b.id)
     assert group.active_child_id == b.id
+
+
+def _sheet_for(char: Character) -> CharacterSheet:
+    return CharacterSheet(load_game_data(), char)
+
+
+def test_all_instant_array_shows_no_member_control(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    a = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=6)])
+    b = Power(name="Beam", effects=[PowerEffectInstance("damage", rank=4)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[a, b])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    # Nothing in the array stands on the sheet, so neither member gets a control.
+    assert sec._array_member_control(a, group) is None
+    assert sec._array_member_control(b, group) is None
+
+
+def test_mixed_array_gives_continuous_active_and_instant_use(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    field = Power(name="Field", effects=[PowerEffectInstance("protection", rank=6)])
+    bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=8)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[field, bolt])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    # The continuous member keeps a persistent "Active" radio; the instant one gets a
+    # momentary "Use" (it isn't kept active — using it just drops the field).
+    assert isinstance(sec._array_member_control(field, group), QCheckBox)
+    assert isinstance(sec._array_member_control(bolt, group), QPushButton)
+
+
+def test_linked_group_one_toggle_drops_a_permanent_member(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    might = Power(  # permanent, ungated Enhanced Trait
+        name="Might",
+        effects=[PowerEffectInstance("enhanced_trait", rank=3, config={"target": "STR"})],
+    )
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=2)])  # sustained
+    group = PowerGroup(mode=STRUCTURE_LINKED, children=[might, flight])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+
+    assert sec._node_is_gateable(group) is True  # the sustained member can be turned off
+    assert sec._node_has_standing(group) is True
+    assert sec._group_is_active(group) is True
+    assert power_trait_bonuses(char, data)["ability"]["STR"].amount == 3
+
+    sec._set_group_active(group, False)  # the one group toggle turns everything off
+    assert sec._group_is_active(group) is False
+    # Even the permanent member's boost drops when the linked group is switched off.
+    assert power_trait_bonuses(char, data)["ability"].get("STR") is None
+
+    sec._set_group_active(group, True)
+    assert power_trait_bonuses(char, data)["ability"]["STR"].amount == 3
+
+
+def test_inactive_linked_group_disables_nested_member_controls(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A linked group holding a mixed array (so a nested "Use" control exists) plus a
+    # sustained power that makes the group gateable.
+    field = Power(name="Field", effects=[PowerEffectInstance("protection", rank=6)])
+    bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=8)])
+    arr = PowerGroup(mode=STRUCTURE_ARRAY, children=[field, bolt])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=2)])
+    linked = PowerGroup(mode=STRUCTURE_LINKED, children=[arr, flight])
+    char.powers.append(linked)
+    sec = _sheet_for(char).powers
+
+    def nested_use_button(card: object) -> QPushButton:
+        buttons = [b for b in card.findChildren(QPushButton) if b.text() in ("Use", "In use")]
+        assert len(buttons) == 1  # only the array's instant member has a Use control
+        return buttons[0]
+
+    on_card = sec._render_node(linked, None)  # kept referenced so Qt doesn't free it
+    assert nested_use_button(on_card).isEnabled() is True  # linked group is active
+
+    sec._set_group_active(linked, False)
+    off_card = sec._render_node(linked, None)
+    # With the group switched off the nested member can no longer be re-activated.
+    assert nested_use_button(off_card).isEnabled() is False

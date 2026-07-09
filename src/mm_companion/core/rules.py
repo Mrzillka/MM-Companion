@@ -18,13 +18,13 @@ from fractions import Fraction
 
 from .character import AppliedCondition, Character
 from .components import (
-    GATE_ACTIVATION,
     GATE_REMOVABLE,
     GATE_TOGGLE,
     INSTANT_ACTION,
     MECH_CHECK_PENALTY,
     MECH_DEBILITATE_TRAIT,
     MECH_MOVEMENT_MOD,
+    PASSIVE_PERMANENT,
     PASSIVE_TOGGLE,
     RESOURCE_POOL,
 )
@@ -135,13 +135,18 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
 
     Instant-action and resource-pool effects are never standing contributors. An
     otherwise-passive effect is on unless a gate switches it off: a runtime Nullify
-    (``effect.suppressed``); an array member the player hasn't currently selected
-    (``power.array_active`` — only one member of an array is active at a time); a
-    Sustained/Continuous toggle the player has turned off
-    (``effect.toggled_on``, for a ``passive_toggle`` pattern or a toggle-gated
-    effect); an Activation gate on an un-activated power (``power.activated``); or a
-    Removable gate whose item is absent (``power.item_present``). The Limited gate is
-    informational — the player self-applies it — and never gates here.
+    (``effect.suppressed``); the power's master on/off switch (``power.activated``);
+    an array member the player hasn't currently selected (``power.array_active`` —
+    only one member of an array is active at a time); a Sustained/Continuous toggle
+    the player has turned off (``effect.toggled_on``, for a ``passive_toggle``
+    pattern or a toggle-gated effect); or a Removable gate whose item is absent
+    (``power.item_present``). The Limited gate is informational — the player
+    self-applies it — and never gates here.
+
+    ``power.activated`` is a master switch, not only the Activation gate's flag: a
+    linked group turning off (see the section's ``_set_group_active``) clears it on
+    every member — including a permanent, ungated one — so the whole bundle drops
+    together. It defaults on, so an untouched power is unaffected.
     """
 
     pattern = base.integration.pattern if base.integration else ""
@@ -149,11 +154,11 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
         return False
     if effect.suppressed:
         return False
+    if not power.activated:  # master on/off (also the Activation gate)
+        return False
     if not power.array_active:  # an array member not currently selected as active
         return False
     gates = _effect_gates(effect, game_data)
-    if GATE_ACTIVATION in gates and not power.activated:
-        return False
     if GATE_REMOVABLE in gates and not power.item_present:
         return False
     if (pattern == PASSIVE_TOGGLE or GATE_TOGGLE in gates) and not effect.toggled_on:
@@ -177,6 +182,31 @@ def power_runtime_gates(power: Power, game_data: GameData) -> set[str]:
             gates.add(GATE_TOGGLE)
         gates |= _effect_gates(effect, game_data)
     return gates
+
+
+def power_has_standing_effect(power: Power, game_data: GameData) -> bool:
+    """Whether the power contributes a *standing* bonus that can sit on the sheet.
+
+    True when any effect is passive (``passive_permanent`` or ``passive_toggle``) —
+    the patterns :func:`effect_is_active` can report as on. Instant-action and
+    resource-pool effects never stand on the sheet, so an all-instant power (a plain
+    attack) is ``False``. The UI uses this to decide whether an "Active" control is
+    meaningful: an instant effect is *used*, not toggled on/off.
+    """
+
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if (
+            base
+            and base.integration
+            and base.integration.pattern
+            in (
+                PASSIVE_PERMANENT,
+                PASSIVE_TOGGLE,
+            )
+        ):
+            return True
+    return False
 
 
 def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:

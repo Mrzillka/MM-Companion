@@ -74,6 +74,7 @@ from mm_companion.core.rules import (
     effect_stat_rows,
     modifier_label,
     node_display_cost,
+    power_has_standing_effect,
     power_pl_violations,
     power_runtime_gates,
     powers_points_spent,
@@ -602,14 +603,24 @@ class PowersSection(TitledSection):
             title_with_cost("Powers", powers_points_spent(self._character, self._data))
         )
 
-    def _render_node(self, node: PowerNode, parent: PowerGroup | None) -> QWidget:
-        """A widget for one tree node — a group container or a leaf power card."""
+    def _render_node(
+        self, node: PowerNode, parent: PowerGroup | None, interactive: bool = True
+    ) -> QWidget:
+        """A widget for one tree node — a group container or a leaf power card.
+
+        ``interactive`` is ``False`` when an enclosing group is currently switched off
+        (a Linked group's one toggle turns its whole subtree off); it greys out the
+        node's runtime-activation controls so a member can't be re-activated while its
+        group is inactive. Structural chrome (drag/edit/remove) is unaffected.
+        """
         if isinstance(node, PowerGroup):
-            return self._make_group_card(node, parent)
-        return self._make_card(node, parent)
+            return self._make_group_card(node, parent, interactive)
+        return self._make_card(node, parent, interactive)
 
     # -- group card -------------------------------------------------------
-    def _make_group_card(self, group: PowerGroup, parent: PowerGroup | None) -> QWidget:
+    def _make_group_card(
+        self, group: PowerGroup, parent: PowerGroup | None, interactive: bool = True
+    ) -> QWidget:
         """A framed container: a mode title bar over its members, rendered indented."""
         card = _DraggableCard(group.id)
         card.setObjectName("groupCard")
@@ -617,13 +628,18 @@ class PowersSection(TitledSection):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(6, 4, 6, 6)
         layout.setSpacing(4)
-        layout.addWidget(self._group_header(group, card, parent))
+        layout.addWidget(self._group_header(group, card, parent, interactive))
 
+        # A Linked group that is off forces its whole subtree off, so its members'
+        # activation controls are disabled; other modes just pass interactivity down.
+        child_interactive = interactive and (
+            self._group_is_active(group) if group.mode == STRUCTURE_LINKED else True
+        )
         inner = _NodeList(group.id)
         inner.combineRequested.connect(self._on_combine)
         inner.moveRequested.connect(self._on_move)
         for child in group.children:
-            inner.add_entry(child.id, self._render_node(child, group))
+            inner.add_entry(child.id, self._render_node(child, group, child_interactive))
         indent = QWidget()
         indent_layout = QHBoxLayout(indent)
         indent_layout.setContentsMargins(14, 0, 0, 0)
@@ -632,7 +648,11 @@ class PowersSection(TitledSection):
         return card
 
     def _group_header(
-        self, group: PowerGroup, card: _DraggableCard, parent: PowerGroup | None
+        self,
+        group: PowerGroup,
+        card: _DraggableCard,
+        parent: PowerGroup | None,
+        interactive: bool = True,
     ) -> QWidget:
         """The group's title bar: grip, name + rename, mode toggle, cost, ungroup —
         plus an Active checkbox when this group is itself a member of an array."""
@@ -668,10 +688,25 @@ class PowersSection(TitledSection):
         row.addStretch()
 
         # When this whole group is a member of an *array* parent, it gets the same
-        # Active switch a leaf member gets: checking it makes it the live alternate.
-        array_box = self._array_active_checkbox(group, parent)
-        if array_box is not None:
-            row.addWidget(array_box)
+        # select control a leaf member gets. Otherwise a Linked group that can be
+        # turned off (some member is gateable) and carries a standing bonus gets one
+        # Active toggle for the whole group — every member switches together.
+        control = self._array_member_control(group, parent, interactive)
+        if control is not None:
+            row.addWidget(control)
+        elif (
+            group.mode == STRUCTURE_LINKED
+            and self._node_is_gateable(group)
+            and self._node_has_standing(group)
+        ):
+            toggle = QCheckBox("Active")
+            toggle.setChecked(self._group_is_active(group))
+            toggle.setToolTip(
+                "Switch this linked group on/off — every power in it toggles together."
+            )
+            toggle.setEnabled(interactive and not self._locked)
+            toggle.toggled.connect(lambda on, g=group: self._set_group_active(g, on))
+            row.addWidget(toggle)
 
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
@@ -707,8 +742,60 @@ class PowersSection(TitledSection):
         self._rebuild_list()
         self.changed.emit()
 
+    def _node_has_standing(self, node: PowerNode) -> bool:
+        """Whether any leaf under *node* contributes a standing (non-instant) bonus."""
+        return any(power_has_standing_effect(p, self._data) for p in self._leaf_powers(node))
+
+    def _node_is_gateable(self, node: PowerNode) -> bool:
+        """Whether any leaf under *node* carries a runtime gate (so it can be turned off)."""
+        return any(power_runtime_gates(p, self._data) for p in self._leaf_powers(node))
+
+    def _array_member_control(
+        self, node: PowerNode, parent: PowerGroup | None, interactive: bool = True
+    ) -> QWidget | None:
+        """The select control a node gets by virtue of being an *array* member.
+
+        A standing member (one with a bonus that stays on the sheet) gets the "Active"
+        radio; an instant member of an otherwise-mixed array gets a momentary "Use"
+        button (an attack isn't kept "active" — using it just drops the continuous
+        sibling). An all-instant array has nothing to keep active, so no control is
+        shown. ``None`` when the node isn't a member of a multi-member array.
+        """
+        if (
+            not isinstance(parent, PowerGroup)
+            or parent.mode != STRUCTURE_ARRAY
+            or len(parent.children) < 2
+        ):
+            return None
+        if not any(self._node_has_standing(child) for child in parent.children):
+            return None  # all-instant array — nothing stands to be switched off
+        if self._node_has_standing(node):
+            return self._array_active_checkbox(node, parent, interactive)
+        return self._array_use_button(node, parent, interactive)
+
+    def _array_use_button(
+        self, node: PowerNode, parent: PowerGroup, interactive: bool = True
+    ) -> QPushButton:
+        """A momentary "Use" for an instant member of a mixed array.
+
+        An instant effect has no standing bonus to keep "Active"; using it just makes
+        it the array's live alternate, which drops the continuous sibling. Disabled and
+        labelled "In use" while it is the current selection.
+        """
+        in_use = active_array_child(parent) is node
+        button = QPushButton("In use" if in_use else "Use")
+        button.setToolTip(
+            "Use this alternate — it becomes the array's live member, dropping any "
+            "continuous sibling. An instant effect isn't kept 'active'."
+        )
+        button.setEnabled(interactive and not self._locked and not in_use)
+        button.clicked.connect(
+            lambda _checked=False, g=parent, nid=node.id: self._set_array_active(g, nid)
+        )
+        return button
+
     def _array_active_checkbox(
-        self, node: PowerNode, parent: PowerGroup | None
+        self, node: PowerNode, parent: PowerGroup | None, interactive: bool = True
     ) -> QCheckBox | None:
         """An "Active" switch for a node that is a member of an *array* parent.
 
@@ -724,7 +811,7 @@ class PowersSection(TitledSection):
             "Only one array member is active at a time — check to make this the "
             "active one; its siblings switch off."
         )
-        box.setEnabled(not self._locked)
+        box.setEnabled(interactive and not self._locked)
         box.clicked.connect(
             lambda checked, g=parent, nid=node.id, cb=box: self._on_array_active_clicked(
                 g, nid, cb, checked
@@ -773,7 +860,9 @@ class PowersSection(TitledSection):
         self._after_structural_change()
 
     # -- leaf power card --------------------------------------------------
-    def _make_card(self, power: Power, parent: PowerGroup | None) -> QWidget:
+    def _make_card(
+        self, power: Power, parent: PowerGroup | None, interactive: bool = True
+    ) -> QWidget:
         """A stat-block card for one power: header, description, effects, roll line.
 
         The whole card carries the full game-term breakdown on its tooltip (the same
@@ -786,7 +875,7 @@ class PowersSection(TitledSection):
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(4)
 
-        layout.addWidget(self._header_row(power, card, parent))
+        layout.addWidget(self._header_row(power, card, parent, interactive))
 
         if power.description:
             desc = QLabel(power.description)
@@ -804,7 +893,13 @@ class PowersSection(TitledSection):
         layout.addWidget(self._rolls_label(power))
         return card
 
-    def _header_row(self, power: Power, card: _DraggableCard, parent: PowerGroup | None) -> QWidget:
+    def _header_row(
+        self,
+        power: Power,
+        card: _DraggableCard,
+        parent: PowerGroup | None,
+        interactive: bool = True,
+    ) -> QWidget:
         """Name + PL warning on the left; the on/off switch, cost, and edit/remove
         chrome on the right, led by a drag grip (hidden when locked).
 
@@ -846,18 +941,23 @@ class PowersSection(TitledSection):
             layout.addWidget(warning)
         layout.addStretch()
 
-        # An array member gets an Active switch that selects it as the array's live
-        # alternate (checking one turns the siblings off). Otherwise a power with a
-        # runtime gate (Activation / Removable / a Sustained toggle) gets an on/off
-        # switch; while off its standing bonuses drop off the sheet.
-        array_box = self._array_active_checkbox(power, parent)
-        if array_box is not None:
-            layout.addWidget(array_box)
-        elif power_runtime_gates(power, self._data):
+        # An array member gets a select control (an "Active" radio for a standing
+        # member, a momentary "Use" for an instant one, nothing for an all-instant
+        # array). A member of a Linked group has no per-card switch — the group's
+        # single toggle drives it. Otherwise a standalone power that carries a runtime
+        # gate *and* a standing bonus gets its own on/off switch.
+        control = self._array_member_control(power, parent, interactive)
+        if control is not None:
+            layout.addWidget(control)
+        elif isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
+            pass  # the linked group's one Active toggle lives on the group header
+        elif power_runtime_gates(power, self._data) and power_has_standing_effect(
+            power, self._data
+        ):
             active = QCheckBox("Active")
             active.setChecked(self._power_is_active(power))
             active.setToolTip("Switch this power on/off — its bonuses apply only while active.")
-            active.setEnabled(not self._locked)
+            active.setEnabled(interactive and not self._locked)
             active.toggled.connect(lambda on, p=power: self._set_power_active(p, on))
             layout.addWidget(active)
 
@@ -1069,6 +1169,25 @@ class PowersSection(TitledSection):
         stats/skills sections, so the boosted totals update live.
         """
         for member in self._linked_activation_set(power):
+            member.activated = active
+            member.item_present = active
+            for effect in member.effects:
+                effect.toggled_on = active
+        self._rebuild_list()
+        self.changed.emit()
+
+    def _group_is_active(self, group: PowerGroup) -> bool:
+        """Whether every leaf power under a linked group is currently switched on."""
+        return all(self._power_is_active(p) for p in self._leaf_powers(group))
+
+    def _set_group_active(self, group: PowerGroup, active: bool) -> None:
+        """Flip every power under a linked group on/off as one (Decision 3).
+
+        A Linked group presents a single Active toggle rather than a per-card switch,
+        so a permanent member drops off with its sustained sibling. Mirrors
+        :meth:`_set_power_active` but spans the whole group's leaves.
+        """
+        for member in self._leaf_powers(group):
             member.activated = active
             member.item_present = active
             for effect in member.effects:

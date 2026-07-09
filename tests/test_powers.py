@@ -34,6 +34,7 @@ from mm_companion.core.rules import (
     node_display_cost,
     power_allocation_violations,
     power_game_terms,
+    power_has_standing_effect,
     power_linked_range_violations,
     power_pl_violations,
     power_runtime_gates,
@@ -1071,6 +1072,29 @@ def test_instant_effect_is_never_a_standing_contributor() -> None:
     base = {e.id: e for e in data.effects}["damage"]
     dmg = PowerEffectInstance("damage", rank=5)
     assert effect_is_active(Power(effects=[dmg]), dmg, base, data) is False
+
+
+def test_power_has_standing_effect_distinguishes_instant_from_passive() -> None:
+    data = load_game_data()
+    # A plain attack (instant) contributes nothing standing.
+    assert (
+        power_has_standing_effect(Power(effects=[PowerEffectInstance("damage", rank=5)]), data)
+        is False
+    )
+    # Protection (passive_permanent) and Flight (passive_toggle) both stand on the sheet.
+    assert (
+        power_has_standing_effect(Power(effects=[PowerEffectInstance("protection", rank=4)]), data)
+        is True
+    )
+    assert (
+        power_has_standing_effect(Power(effects=[PowerEffectInstance("flight", rank=2)]), data)
+        is True
+    )
+    # A mixed power counts as standing if any one effect is.
+    mixed = Power(
+        effects=[PowerEffectInstance("damage", rank=5), PowerEffectInstance("protection", rank=2)]
+    )
+    assert power_has_standing_effect(mixed, data) is True
 
 
 def test_limited_gate_is_informational_and_never_gates() -> None:

@@ -859,6 +859,48 @@ def test_edit_button_hidden_in_locked_view(qapp: QApplication) -> None:
     assert all(not b.isVisibleTo(sheet.powers) for b in edit_buttons())
 
 
+def test_reordering_a_card_moves_the_power_in_the_model(qapp: QApplication) -> None:
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    for name in ("Alpha", "Beta", "Gamma"):
+        character.powers.append(Power(name=name, effects=[PowerEffectInstance("damage", rank=1)]))
+    sheet = CharacterSheet(data, character)
+
+    changes: list[int] = []
+    sheet.powers.changed.connect(lambda: changes.append(1))
+
+    # Drop the first card into the gap after the last one (gap index 3, dragged still
+    # in place). It lands at the end; the section emits `changed`.
+    sheet.powers._reorder_power(0, 3)
+    assert [p.name for p in character.powers] == ["Beta", "Gamma", "Alpha"]
+    assert changes
+
+    # Move it back up to the top (gap index 0).
+    sheet.powers._reorder_power(2, 0)
+    assert [p.name for p in character.powers] == ["Alpha", "Beta", "Gamma"]
+
+
+def test_reorder_grip_hidden_in_locked_view(qapp: QApplication) -> None:
+    from mm_companion.core.powers import Power, PowerEffectInstance
+    from mm_companion.ui.sections.powers import _DragHandle
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=8)])
+    )
+    sheet = CharacterSheet(data, character)
+
+    def grips() -> list[_DragHandle]:
+        return sheet.powers._list_host.findChildren(_DragHandle)
+
+    assert grips() and all(g.isVisibleTo(sheet.powers) for g in grips())
+    sheet.set_locked(True)
+    assert all(not g.isVisibleTo(sheet.powers) for g in grips())
+
+
 def test_damage_strength_based_checkbox_toggles_the_extra(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QCheckBox
 

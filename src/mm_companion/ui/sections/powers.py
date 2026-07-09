@@ -24,14 +24,17 @@ from __future__ import annotations
 
 import html
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
+from PySide6.QtGui import QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -73,6 +76,158 @@ _TINT_BETTER = "#2e9e4f"
 _TINT_WORSE = "#d15b5b"
 _TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE}
 
+# Drag-and-drop reorder wiring: the mime payload is just the dragged card's index
+# in the character's power list, so the drop target can ask the section to move it.
+_POWER_MIME = "application/x-mm-power-index"
+
+
+class _DragHandle(QLabel):
+    """The ``⠿`` grip at the head of a card; a press-drag on it starts the reorder.
+
+    It only *detects* the gesture (a left-press moved past the platform drag
+    threshold) and emits :attr:`dragStarted`; the owning :class:`_PowerCard` builds
+    and runs the actual :class:`QDrag`, so the grip stays a dumb, reusable handle.
+    """
+
+    dragStarted = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("⠿", parent)
+        self._press: QPoint | None = None
+        self.setToolTip("Drag to reorder")
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setStyleSheet("color: gray;")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = event.position().toPoint()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._press is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        moved = (event.position().toPoint() - self._press).manhattanLength()
+        if moved >= QApplication.startDragDistance():
+            self._press = None
+            self.dragStarted.emit()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: ARG002
+        self._press = None
+
+
+class _PowerCard(QFrame):
+    """A power's stat-block card that can be picked up by its grip and reordered.
+
+    The card knows its own :attr:`index` in the character's power list; when its
+    grip fires, it launches a :class:`QDrag` carrying that index (with a snapshot of
+    the card as the drag cursor) so the enclosing :class:`_PowerList` can drop it at
+    a new position.
+    """
+
+    def __init__(self, index: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.index = index
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        # Never shrink below the height its content needs — a card always shows all
+        # of its rows (the block, not the card, grows and the page scrolls).
+        policy = self.sizePolicy()
+        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def start_drag(self) -> None:
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_POWER_MIME, str(self.index).encode("ascii"))
+        drag.setMimeData(mime)
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(QPoint(pixmap.width() // 2, 12))
+        drag.exec(Qt.DropAction.MoveAction)
+
+
+class _PowerList(QWidget):
+    """The vertical stack of power cards; accepts card drops to reorder them.
+
+    Cards are added top-to-bottom; a drag over the list shows a thin insertion line
+    at the nearest gap, and dropping emits :attr:`reorderRequested(from, to)` for the
+    section to apply against the model. ``to`` is the gap index *before* the dragged
+    card is removed — the section reconciles the off-by-one.
+    """
+
+    reorderRequested = Signal(int, int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._indicator = QFrame(self)
+        self._indicator.setFrameShape(QFrame.Shape.HLine)
+        self._indicator.setFixedHeight(2)
+        self._indicator.setStyleSheet("background: #6a86c0; border: none;")
+        self._indicator.hide()
+
+    def clear(self) -> None:
+        """Remove every card (but keep the reusable insertion indicator)."""
+        for index in reversed(range(self._layout.count())):
+            widget = self._layout.itemAt(index).widget()
+            if widget is not None and widget is not self._indicator:
+                self._layout.takeAt(index)
+                widget.setParent(None)
+                widget.deleteLater()
+        self._hide_indicator()
+
+    def add_card(self, card: _PowerCard) -> None:
+        self._layout.addWidget(card)
+
+    # -- drop handling ----------------------------------------------------
+    def _cards(self) -> list[_PowerCard]:
+        cards: list[_PowerCard] = []
+        for index in range(self._layout.count()):
+            widget = self._layout.itemAt(index).widget()
+            if isinstance(widget, _PowerCard):
+                cards.append(widget)
+        return cards
+
+    def _target_index(self, y: int) -> int:
+        """The gap the cards would split at for a drop at vertical position *y*."""
+        cards = self._cards()
+        for position, card in enumerate(cards):
+            if y < card.y() + card.height() / 2:
+                return position
+        return len(cards)
+
+    def _show_indicator(self, target: int) -> None:
+        self._layout.removeWidget(self._indicator)
+        self._layout.insertWidget(target, self._indicator)
+        self._indicator.show()
+
+    def _hide_indicator(self) -> None:
+        self._layout.removeWidget(self._indicator)
+        self._indicator.hide()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasFormat(_POWER_MIME):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if not event.mimeData().hasFormat(_POWER_MIME):
+            return
+        event.acceptProposedAction()
+        self._show_indicator(self._target_index(event.position().toPoint().y()))
+
+    def dragLeaveEvent(self, event: object) -> None:  # noqa: ARG002
+        self._hide_indicator()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if not event.mimeData().hasFormat(_POWER_MIME):
+            return
+        source = int(bytes(event.mimeData().data(_POWER_MIME)).decode("ascii"))
+        target = self._target_index(event.position().toPoint().y())
+        self._hide_indicator()
+        event.acceptProposedAction()
+        self.reorderRequested.emit(source, target)
+
 
 class PowersSection(TitledSection):
     """Powers section: launches the Power Constructor and lists saved powers."""
@@ -98,10 +253,10 @@ class PowersSection(TitledSection):
         self._empty.setEnabled(False)
         layout.addWidget(self._empty)
 
-        # The saved powers stack above the Add button, one removable row each.
-        self._list_host = QWidget()
-        self._list_layout = QVBoxLayout(self._list_host)
-        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        # The saved powers stack above the Add button, one card each — draggable by
+        # their grip to reorder (drops route back through _reorder_power).
+        self._list_host = _PowerList()
+        self._list_host.reorderRequested.connect(self._reorder_power)
         layout.addWidget(self._list_host)
 
         self._add_button = QPushButton("Add Power")
@@ -166,37 +321,49 @@ class PowersSection(TitledSection):
         """
         self._rebuild_list()
 
+    def _reorder_power(self, source: int, target: int) -> None:
+        """Move the power at index *source* to the *target* gap and re-derive.
+
+        *target* is the gap index computed with the dragged power still in place, so
+        a downward move shifts by one once the power is popped out."""
+        powers = self._character.powers
+        if not 0 <= source < len(powers):
+            return
+        power = powers.pop(source)
+        if target > source:
+            target -= 1
+        target = max(0, min(target, len(powers)))
+        powers.insert(target, power)
+        self._rebuild_list()
+        self.changed.emit()
+
     def _rebuild_list(self) -> None:
-        """Rebuild the row per power from the model, toggling the empty label."""
+        """Rebuild the card per power from the model, toggling the empty label."""
         self._normalize_arrays()  # exactly one active member per array before drawing
-        while self._list_layout.count():
-            widget = self._list_layout.takeAt(0).widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
-        for power in self._character.powers:
-            self._list_layout.addWidget(self._make_card(power))
+        self._list_host.clear()
+        for index, power in enumerate(self._character.powers):
+            self._list_host.add_card(self._make_card(power, index))
         self._empty.setVisible(not self._character.powers)
         # Keep the section title's running point cost current.
         self.set_block_title(
             title_with_cost("Powers", powers_points_spent(self._character, self._data))
         )
 
-    def _make_card(self, power: Power) -> QFrame:
+    def _make_card(self, power: Power, index: int) -> _PowerCard:
         """A stat-block card for one power: header, description, effects, roll line.
 
         The whole card carries the full game-term breakdown on its tooltip (the same
         data the Power Constructor shows while building), so hovering reveals every
-        derived system value.
+        derived system value. It knows its *index* in the power list so its grip can
+        start a reorder drag.
         """
-        card = QFrame()
-        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card = _PowerCard(index)
         card.setToolTip(self._system_tooltip(power))
         layout = QVBoxLayout(card)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(4)
 
-        layout.addWidget(self._header_row(power))
+        layout.addWidget(self._header_row(power, card))
 
         if power.description:
             desc = QLabel(power.description)
@@ -226,9 +393,9 @@ class PowersSection(TitledSection):
         layout.addWidget(self._rolls_label(power))
         return card
 
-    def _header_row(self, power: Power) -> QWidget:
+    def _header_row(self, power: Power, card: _PowerCard) -> QWidget:
         """Name + PL warning on the left; the on/off switch, cost, and edit/remove
-        chrome on the right.
+        chrome on the right, led by a drag grip (hidden when locked).
 
         Returns a host widget (not a bare layout) so every child has a parent the
         moment it is created. Calling ``setVisible(True)`` on a *parentless* widget
@@ -239,6 +406,13 @@ class PowersSection(TitledSection):
         host = QWidget()
         layout = QHBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # The reorder grip leads the row; editing chrome (including reorder) is
+        # hidden in read-only view mode.
+        grip = _DragHandle()
+        grip.dragStarted.connect(card.start_drag)
+        layout.addWidget(grip)
+        grip.setVisible(not self._locked)
 
         name = QLabel(power.name or "Unnamed Power")
         # A Debilitated condition naming this power loses it — strike the header through

@@ -197,7 +197,7 @@ class SkillsSection(TitledSection):
                 for focus in self._focuses[skill.name]:
                     display = f"{skill.name}: {focus}"
                     row_id = f"{skill.name}::{focus}"
-                    specs.append(("focus", skill, display, row_id))
+                    specs.append(("focus", skill, display, row_id, focus))
             else:
                 specs.append(("skill", skill, skill.name, skill.name))
             for spec in self._specializations.get(skill.name, []):
@@ -216,17 +216,14 @@ class SkillsSection(TitledSection):
                 self._render_skill_row(
                     table, row, skill, display, row_id, indent=True, spec_name=spec_name
                 )
+            elif kind == "focus":
+                _, skill, display, row_id, focus_name = spec
+                self._render_skill_row(
+                    table, row, skill, display, row_id, indent=True, focus_name=focus_name
+                )
             else:
                 _, skill, display, row_id = spec
-                self._render_skill_row(
-                    table,
-                    row,
-                    skill,
-                    display,
-                    row_id,
-                    indent=(kind == "focus"),
-                    can_specialize=(kind == "skill"),
-                )
+                self._render_skill_row(table, row, skill, display, row_id, can_specialize=True)
 
     def _render_group_header(self, table: QTableWidget, row: int, skill: Skill) -> None:
         """Header cell block with 'Add focus' / 'Add specialization' for a focused skill."""
@@ -264,9 +261,10 @@ class SkillsSection(TitledSection):
         indent: bool = False,
         can_specialize: bool = False,
         spec_name: str | None = None,
+        focus_name: str | None = None,
     ) -> None:
         name_item = self._render_name_cell(
-            table, row, skill, display, indent, can_specialize, spec_name
+            table, row, skill, display, indent, can_specialize, spec_name, focus_name
         )
 
         abbr = self._ability_abbrs.get(skill.ability, skill.ability)
@@ -306,18 +304,19 @@ class SkillsSection(TitledSection):
         indent: bool,
         can_specialize: bool,
         spec_name: str | None,
+        focus_name: str | None = None,
     ) -> QTableWidgetItem | None:
         """The skill's name cell, optionally with an inline add/remove control.
 
         A plain read-only label unless (and only while unlocked) the row needs a
         control: a ``＋`` to add a specialized pool on a non-focused skill's main row,
-        or a ``✕`` to drop a specialization row. Returns the name :class:`QTableWidgetItem`
-        for a plain cell (so a condition can strike it through) or ``None`` for a widget
-        cell.
+        or a ``✕`` to drop a focus or specialization row. Returns the name
+        :class:`QTableWidgetItem` for a plain cell (so a condition can strike it through)
+        or ``None`` for a widget cell.
         """
 
         name = ("    " if indent else "") + display
-        if self._locked or (not can_specialize and spec_name is None):
+        if self._locked or (not can_specialize and spec_name is None and focus_name is None):
             item = readonly_item(name)
             table.setItem(row, COL_NAME, item)
             return item
@@ -336,6 +335,13 @@ class SkillsSection(TitledSection):
             remove.clicked.connect(
                 lambda _=False, s=skill, n=spec_name: self._remove_specialization(s, n)
             )
+            hbox.addWidget(remove)
+        elif focus_name is not None:
+            remove = QPushButton("✕")
+            remove.setFlat(True)
+            remove.setFixedWidth(20)
+            remove.setToolTip("Remove this focus")
+            remove.clicked.connect(lambda _=False, s=skill, n=focus_name: self._remove_focus(s, n))
             hbox.addWidget(remove)
         else:  # can_specialize
             add = QPushButton("＋")
@@ -356,6 +362,17 @@ class SkillsSection(TitledSection):
             self._focuses[skill.name].append(focus)
             self._rebuild()
             self.changed.emit()
+
+    def _remove_focus(self, skill: Skill, focus: str) -> None:
+        focuses = self._focuses.get(skill.name, [])
+        if focus not in focuses:
+            return
+        focuses.remove(focus)
+        row_id = f"{skill.name}::{focus}"
+        self._ranks.pop(row_id, None)
+        self._mods.pop(row_id, None)
+        self._rebuild()
+        self.changed.emit()
 
     def _add_specialization(self, skill: Skill) -> None:
         name, ok = QInputDialog.getText(self, f"Add {skill.name} specialization", "Specialization:")

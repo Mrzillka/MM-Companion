@@ -237,12 +237,16 @@ class PowerGroup:
     ``array`` group it names the currently-selected live child; empty means the first
     child. :func:`mm_companion.core.rules.power_trait_bonuses` descends only into the
     active branch so an inactive array member's bonuses drop off the sheet.
+
+    ``name`` is an optional player-given title for the group; when empty the UI falls
+    back to a label derived from the :attr:`mode`.
     """
 
     mode: str = STRUCTURE_INDEPENDENT
     children: list[PowerNode] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid4().hex)
     active_child_id: str = ""
+    name: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -251,6 +255,7 @@ class PowerGroup:
             "children": [c.to_dict() for c in self.children],
             "id": self.id,
             "active_child_id": self.active_child_id,
+            "name": self.name,
         }
 
     @classmethod
@@ -261,6 +266,7 @@ class PowerGroup:
             children=[node_from_dict(c) for c in raw.get("children", [])],
             id=raw.get("id") or uuid4().hex,
             active_child_id=raw.get("active_child_id", ""),
+            name=raw.get("name", ""),
         )
 
 

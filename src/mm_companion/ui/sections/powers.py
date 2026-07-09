@@ -41,10 +41,11 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QCheckBox,
-    QComboBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -64,6 +65,7 @@ from mm_companion.core.powers import (
     PowerNode,
 )
 from mm_companion.core.rules import (
+    active_array_child,
     array_alternate_cost,
     array_base_index,
     debilitated_traits,
@@ -78,7 +80,6 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.titled_section import TitledSection
-from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, title_with_cost
 
 # Tints for a stat a modifier changed, matching the Power Constructor's
@@ -633,7 +634,8 @@ class PowersSection(TitledSection):
     def _group_header(
         self, group: PowerGroup, card: _DraggableCard, parent: PowerGroup | None
     ) -> QWidget:
-        """The group's title bar: grip, name, mode toggle, active picker, cost, ungroup."""
+        """The group's title bar: grip, name + rename, mode toggle, cost, ungroup —
+        plus an Active checkbox when this group is itself a member of an array."""
         header = _GroupHeader()
         header.powerDropped.connect(lambda src, gid=group.id: self._on_combine(src, gid))
         row = QHBoxLayout(header)
@@ -645,9 +647,17 @@ class PowersSection(TitledSection):
         row.addWidget(grip)
         grip.setVisible(not self._locked)
 
-        label = QLabel(_MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT]))
+        mode_label = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
+        label = QLabel(group.name or mode_label)
         label.setStyleSheet("font-weight: bold;")
         row.addWidget(label)
+
+        rename = QPushButton("✎")
+        rename.setFixedWidth(24)
+        rename.setToolTip("Rename this group")
+        rename.clicked.connect(lambda _checked=False, g=group: self._rename_group(g))
+        row.addWidget(rename)
+        rename.setVisible(not self._locked)
 
         toggle = _ModeToggle()
         toggle.set_mode(group.mode)
@@ -655,22 +665,13 @@ class PowersSection(TitledSection):
         toggle.set_toggle_enabled(not self._locked)
         row.addWidget(toggle)
 
-        if group.mode == STRUCTURE_ARRAY and len(group.children) >= 2:
-            row.addWidget(QLabel("Active:"))
-            combo = QComboBox()
-            for child in group.children:
-                combo.addItem(self._node_label(child), child.id)
-            active_index = combo.findData(group.active_child_id)
-            combo.setCurrentIndex(active_index if active_index >= 0 else 0)
-            combo.setToolTip("Only one array member runs at a time — pick the active one.")
-            combo.setEnabled(not self._locked)
-            guard_wheel(combo)
-            combo.currentIndexChanged.connect(
-                lambda _i, g=group, c=combo: self._set_array_active(g, c.currentData())
-            )
-            row.addWidget(combo)
-
         row.addStretch()
+
+        # When this whole group is a member of an *array* parent, it gets the same
+        # Active switch a leaf member gets: checking it makes it the live alternate.
+        array_box = self._array_active_checkbox(group, parent)
+        if array_box is not None:
+            row.addWidget(array_box)
 
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
@@ -684,11 +685,21 @@ class PowersSection(TitledSection):
         ungroup.setVisible(not self._locked)
         return header
 
-    def _node_label(self, node: PowerNode) -> str:
-        """A short name for a node in a picker — a power's name or a group's kind."""
-        if isinstance(node, PowerGroup):
-            return _MODE_LABELS.get(node.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
-        return node.name or "Unnamed Power"
+    def _rename_group(self, group: PowerGroup) -> None:
+        """Prompt for a new group name; blank clears it back to the mode label."""
+        placeholder = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
+        name, ok = QInputDialog.getText(
+            self,
+            "Rename group",
+            "Group name:",
+            QLineEdit.EchoMode.Normal,
+            group.name or placeholder,
+        )
+        if not ok:
+            return
+        group.name = name.strip()
+        self._rebuild_list()
+        self.changed.emit()
 
     def _set_group_mode(self, group: PowerGroup, mode: str) -> None:
         group.mode = mode
@@ -696,8 +707,59 @@ class PowersSection(TitledSection):
         self._rebuild_list()
         self.changed.emit()
 
+    def _array_active_checkbox(
+        self, node: PowerNode, parent: PowerGroup | None
+    ) -> QCheckBox | None:
+        """An "Active" switch for a node that is a member of an *array* parent.
+
+        Replaces the group's old active-member combo box: each array member carries its
+        own checkbox, and checking one selects it as the live alternate (its siblings
+        switch off). ``None`` when the node isn't inside a multi-member array.
+        """
+        if parent is None or parent.mode != STRUCTURE_ARRAY or len(parent.children) < 2:
+            return None
+        box = QCheckBox("Active")
+        box.setChecked(active_array_child(parent) is node)
+        box.setToolTip(
+            "Only one array member is active at a time — check to make this the "
+            "active one; its siblings switch off."
+        )
+        box.setEnabled(not self._locked)
+        box.clicked.connect(
+            lambda checked, g=parent, nid=node.id, cb=box: self._on_array_active_clicked(
+                g, nid, cb, checked
+            )
+        )
+        return box
+
+    def _on_array_active_clicked(
+        self, group: PowerGroup, child_id: str, checkbox: QCheckBox, checked: bool
+    ) -> None:
+        """Handle a click on an array member's Active switch.
+
+        Checking a member selects it; an array always keeps exactly one live member, so
+        un-checking the current one is refused (it just snaps back on).
+        """
+        if not checked:
+            checkbox.setChecked(True)
+            return
+        self._set_array_active(group, child_id)
+
     def _set_array_active(self, group: PowerGroup, child_id: str) -> None:
+        """Select an array member as the live alternate and switch it on.
+
+        Only the selected member contributes to the sheet (:func:`live_powers` descends
+        into it alone), so its siblings' bonuses drop off automatically. The newly-live
+        member also has its runtime gates flipped on so its effect actually applies.
+        """
         group.active_child_id = child_id
+        located = self._locate(child_id)
+        if located is not None:
+            for member in self._leaf_powers(located[0]):
+                member.activated = True
+                member.item_present = True
+                for effect in member.effects:
+                    effect.toggled_on = True
         self._rebuild_list()
         self.changed.emit()
 
@@ -784,9 +846,14 @@ class PowersSection(TitledSection):
             layout.addWidget(warning)
         layout.addStretch()
 
-        # A power with a runtime gate (Activation / Removable / a Sustained toggle)
-        # gets an on/off switch; while off its standing bonuses drop off the sheet.
-        if power_runtime_gates(power, self._data):
+        # An array member gets an Active switch that selects it as the array's live
+        # alternate (checking one turns the siblings off). Otherwise a power with a
+        # runtime gate (Activation / Removable / a Sustained toggle) gets an on/off
+        # switch; while off its standing bonuses drop off the sheet.
+        array_box = self._array_active_checkbox(power, parent)
+        if array_box is not None:
+            layout.addWidget(array_box)
+        elif power_runtime_gates(power, self._data):
             active = QCheckBox("Active")
             active.setChecked(self._power_is_active(power))
             active.setToolTip("Switch this power on/off — its bonuses apply only while active.")

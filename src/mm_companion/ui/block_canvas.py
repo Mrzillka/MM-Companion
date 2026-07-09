@@ -353,6 +353,10 @@ class BlockCanvas(QWidget):
         frame.show()
         width = max(old_size.width(), frame.sizeHint().width(), frame.minimumWidth())
         height = max(old_size.height(), frame.sizeHint().height(), frame.minimumHeight())
+        # A block taller than the screen (e.g. a full Powers list) would open past
+        # the bottom of the display with no way to see the rest; cap the window to
+        # the available height so its scroll area takes over instead.
+        height = min(height, self._available_height(window))
         if pos is None:
             pos = QPoint(old_global.x() + 24, old_global.y() + 24)
         window.setGeometry(pos.x(), pos.y(), width, height)
@@ -361,6 +365,15 @@ class BlockCanvas(QWidget):
 
         self._relayout()
         self.arrangement_changed.emit()
+
+    @staticmethod
+    def _available_height(window: BlockWindow) -> int:
+        """The usable screen height for a floated window (falls back generously
+        when no screen is resolvable, e.g. headless tests)."""
+        screen = window.screen()
+        if screen is None:
+            return UNBOUNDED
+        return screen.availableGeometry().height()
 
     def _make_floating(self, key: str, geom: dict) -> None:
         """Restore *key* as a floating window at *geom* (used by apply_arrangement)."""

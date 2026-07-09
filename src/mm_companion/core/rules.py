@@ -1166,6 +1166,41 @@ def _step_along(ladder: tuple[str, ...], value: str, step: int) -> str:
     return ladder[max(0, min(len(ladder) - 1, index))]
 
 
+def modifier_detail(modifier: Modifier, selection) -> str:
+    """The free-text detail a player typed into a modifier's text config field.
+
+    A modifier like Limited or Quirk carries a single ``"text"`` config field for
+    the player to describe *how* it applies. Returns the first non-empty such value
+    (e.g. ``"only at night"``), or ``""`` if none was entered. Used to qualify a
+    modifier's displayed name as ``"Limited (only at night)"`` wherever it is
+    listed, so a bare ``"Limited"`` never hides the circumstance the player chose.
+    """
+
+    for cfg in modifier.config_fields:
+        if cfg.type == "text":
+            value = str(selection.config.get(cfg.key, "")).strip()
+            if value:
+                return value
+    return ""
+
+
+def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str:
+    """A modifier's display name, qualified with its rank and free-text detail.
+
+    A ranked modifier above rank 1 gains its rank (``"Penetrating 3"``); a modifier
+    with a typed text detail gains it in parentheses (``"Limited (only at night)"``).
+    ``rank_sep`` separates the name from the rank (the card uses ``" ×"``).
+    """
+
+    label = modifier.name
+    if modifier.ranked and selection.rank > 1:
+        label = f"{modifier.name}{rank_sep}{selection.rank}"
+    detail = modifier_detail(modifier, selection)
+    if detail:
+        label = f"{label} ({detail})"
+    return label
+
+
 def _modifier_notes(
     effect: PowerEffectInstance, catalog: dict, impactful: set[str]
 ) -> tuple[str, ...]:
@@ -1173,7 +1208,8 @@ def _modifier_notes(
 
     Skips the ids in ``impactful`` (those already reflected in a stat cell) so the
     Notes row lists only what would otherwise be invisible; a ranked modifier taken
-    above rank 1 carries its rank (e.g. ``"Penetrating 3"``).
+    above rank 1 carries its rank (e.g. ``"Penetrating 3"``), and one with a typed
+    detail carries it (``"Limited (only at night)"``).
     """
 
     notes: list[str] = []
@@ -1181,10 +1217,7 @@ def _modifier_notes(
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or selection.modifier_id in impactful:
             continue
-        label = modifier.name
-        if modifier.ranked and selection.rank > 1:
-            label = f"{modifier.name} {selection.rank}"
-        notes.append(label)
+        notes.append(modifier_label(modifier, selection))
     return tuple(notes)
 
 

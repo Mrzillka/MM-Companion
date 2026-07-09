@@ -329,5 +329,9 @@ with editable widgets should expose `set_locked` and be wired into
 
 - Branches off `main`: `feature/…`, `fix/…`, `docs/…`. Commit messages in
   imperative mood.
+- **Do not open pull requests.** When starting work, automatically switch to an
+  appropriate existing branch or create a new one (named per the convention
+  above) rather than committing on `main`/`develop`. Integrate by merging
+  locally, not through a PR.
 - `.idea/` (PyCharm) is intentionally not committed. In PyCharm, mark `src/` as
   Sources Root so `import mm_companion` resolves.

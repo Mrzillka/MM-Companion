@@ -122,6 +122,9 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
+      "config": [
+        { "key": "detail", "label": "Feature", "type": "text", "hint": "The minor capability this adds (e.g. 'always lands on your feet')." }
+      ],
       "description": "Bolts a minor extra capability onto another effect."
     },
     {
@@ -540,10 +543,12 @@
       "id": "quirk",
       "name": "Quirk",
       "category": "flaw",
-      "costFormula": "-1 point per rank flat",
+      "costFormula": "-1 point flat",
       "costValue": 1,
       "flat": true,
-      "ranked": true,
+      "config": [
+        { "key": "detail", "label": "Quirk", "type": "text", "hint": "The minor nuisance or drawback (e.g. 'always speaks in rhyme')." }
+      ],
       "description": "A minor, mostly cosmetic nuisance attached to the effect."
     },
     {

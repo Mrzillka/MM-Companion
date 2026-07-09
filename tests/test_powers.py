@@ -600,6 +600,24 @@ def test_effect_stat_rows_gather_impactless_modifiers_into_a_notes_row() -> None
     assert notes.value == "Penetrating, Multiattack"
 
 
+def test_notes_row_qualifies_a_modifier_with_its_typed_detail() -> None:
+    data = load_game_data()
+    # A Limited flaw with a typed circumstance reads "Limited (only at night)" in the
+    # Notes row, never a bare "Limited" that hides the restriction the player chose.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=8,
+        flaws=[ModifierSelection("limited", config={"condition": "only at night"})],
+    )
+    notes = next(r for r in effect_stat_rows(effect, data) if r.key == "notes")
+    assert notes.value == "Limited (only at night)"
+
+    # Without a typed detail it stays the bare name.
+    bare = PowerEffectInstance("damage", rank=8, flaws=[ModifierSelection("limited")])
+    notes = next(r for r in effect_stat_rows(bare, data) if r.key == "notes")
+    assert notes.value == "Limited"
+
+
 def test_effect_stat_rows_impactful_modifiers_stay_out_of_the_notes_row() -> None:
     data = load_game_data()
     # Ranged shows in the Range cell, so it is not repeated in Notes; Penetrating is.

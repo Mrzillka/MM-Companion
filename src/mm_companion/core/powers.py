@@ -83,8 +83,9 @@ class PowerEffectInstance:
     ``mm-powers-architecture.md`` §5-7), separate from the point build: a
     Sustained/Continuous effect the player has switched off is ``toggled_on=False``,
     and ``suppressed`` is a transient Nullify flag. Both feed
-    :func:`mm_companion.core.rules.effect_is_active`; they default to the active
-    state so a freshly built or older-format effect reads as on.
+    :func:`mm_companion.core.rules.effect_is_active`. Runtime state is **not
+    persisted** — it is deliberately left out of :meth:`to_dict`, so a loaded
+    character always comes up in its default all-active state.
 
     ``attack_skill`` optionally links *this effect's* attack to a Close/Ranged Combat
     focus row on the wielder (a row id like ``"Close Combat::Blades"``, empty for
@@ -111,8 +112,6 @@ class PowerEffectInstance:
             "flaws": [m.to_dict() for m in self.flaws],
             "config": dict(self.config),
             "descriptors": list(self.descriptors),
-            "toggled_on": self.toggled_on,
-            "suppressed": self.suppressed,
             "attack_skill": self.attack_skill,
         }
 
@@ -125,8 +124,6 @@ class PowerEffectInstance:
             flaws=[ModifierSelection.from_dict(m) for m in raw.get("flaws", [])],
             config=dict(raw.get("config", {})),
             descriptors=list(raw.get("descriptors", [])),
-            toggled_on=bool(raw.get("toggled_on", True)),
-            suppressed=bool(raw.get("suppressed", False)),
             attack_skill=raw.get("attack_skill", ""),
         )
 
@@ -153,7 +150,9 @@ class Power:
     whether it is the currently-selected active one (only one member of an array is
     active at a time). All three default to the active state (see
     :func:`mm_companion.core.rules.effect_is_active`), so a standalone power and an
-    array's base are unaffected.
+    array's base are unaffected. Like the per-effect runtime flags, none of these are
+    **persisted** — they are left out of :meth:`to_dict`, so a loaded character comes
+    up in its default all-active state.
 
     An attack-skill link is per-effect now (see
     :attr:`PowerEffectInstance.attack_skill`), not whole-power.
@@ -181,9 +180,6 @@ class Power:
             "id": self.id,
             "linked_with": list(self.linked_with),
             "alternate_of": self.alternate_of,
-            "activated": self.activated,
-            "item_present": self.item_present,
-            "array_active": self.array_active,
         }
 
     @classmethod
@@ -210,9 +206,6 @@ class Power:
             id=power_id,
             linked_with=list(raw.get("linked_with", [])),
             alternate_of=raw.get("alternate_of", ""),
-            activated=bool(raw.get("activated", True)),
-            item_present=bool(raw.get("item_present", True)),
-            array_active=bool(raw.get("array_active", True)),
         )
 
 
@@ -236,7 +229,9 @@ class PowerGroup:
     ``active_child_id`` is *runtime* state (like :attr:`Power.array_active`): for an
     ``array`` group it names the currently-selected live child; empty means the first
     child. :func:`mm_companion.core.rules.power_trait_bonuses` descends only into the
-    active branch so an inactive array member's bonuses drop off the sheet.
+    active branch so an inactive array member's bonuses drop off the sheet. Being
+    runtime, it is **not persisted** — it is left out of :meth:`to_dict`, so a loaded
+    array defaults to its first child.
 
     ``name`` is an optional player-given title for the group; when empty the UI falls
     back to a label derived from the :attr:`mode`.
@@ -254,7 +249,6 @@ class PowerGroup:
             "mode": self.mode,
             "children": [c.to_dict() for c in self.children],
             "id": self.id,
-            "active_child_id": self.active_child_id,
             "name": self.name,
         }
 
@@ -265,7 +259,6 @@ class PowerGroup:
             mode=mode if mode in STRUCTURES else STRUCTURE_INDEPENDENT,
             children=[node_from_dict(c) for c in raw.get("children", [])],
             id=raw.get("id") or uuid4().hex,
-            active_child_id=raw.get("active_child_id", ""),
             name=raw.get("name", ""),
         )
 

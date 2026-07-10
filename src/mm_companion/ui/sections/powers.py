@@ -373,7 +373,13 @@ class _NodeList(QWidget):
 class PowersSection(TitledSection):
     """Powers section: launches the Power Constructor and lists saved powers as a tree."""
 
+    # A build change (add/remove/edit a power, group, re-cost) — marks the sheet dirty.
     changed = Signal()
+    # A runtime on/off toggle. It updates the live sheet numbers (a trait boost drops
+    # in or out) but is *not* part of the point build and is not persisted, so it must
+    # not mark the character dirty — the sheet wires this to the same refreshes as
+    # ``changed`` minus the unsaved-changes flag.
+    runtimeChanged = Signal()
 
     def __init__(
         self,
@@ -704,7 +710,9 @@ class PowersSection(TitledSection):
             toggle.setToolTip(
                 "Switch this linked group on/off — every power in it toggles together."
             )
-            toggle.setEnabled(interactive and not self._locked)
+            # Runtime activation stays usable in the locked read-only view — turning a
+            # power on/off is a mid-play action, not an edit to the build.
+            toggle.setEnabled(interactive)
             toggle.toggled.connect(lambda on, g=group: self._set_group_active(g, on))
             row.addWidget(toggle)
 
@@ -788,7 +796,8 @@ class PowersSection(TitledSection):
             "Use this alternate — it becomes the array's live member, dropping any "
             "continuous sibling. An instant effect isn't kept 'active'."
         )
-        button.setEnabled(interactive and not self._locked and not in_use)
+        # Usable while locked — using an alternate is a mid-play action, not an edit.
+        button.setEnabled(interactive and not in_use)
         button.clicked.connect(
             lambda _checked=False, g=parent, nid=node.id: self._set_array_active(g, nid)
         )
@@ -811,7 +820,8 @@ class PowersSection(TitledSection):
             "Only one array member is active at a time — check to make this the "
             "active one; its siblings switch off."
         )
-        box.setEnabled(interactive and not self._locked)
+        # Usable while locked — selecting the live alternate is a mid-play action.
+        box.setEnabled(interactive)
         box.clicked.connect(
             lambda checked, g=parent, nid=node.id, cb=box: self._on_array_active_clicked(
                 g, nid, cb, checked
@@ -848,7 +858,7 @@ class PowersSection(TitledSection):
                 for effect in member.effects:
                     effect.toggled_on = True
         self._rebuild_list()
-        self.changed.emit()
+        self.runtimeChanged.emit()
 
     def _ungroup(self, group: PowerGroup) -> None:
         """Dissolve a group, splicing its members back into the group's own slot."""
@@ -957,7 +967,8 @@ class PowersSection(TitledSection):
             active = QCheckBox("Active")
             active.setChecked(self._power_is_active(power))
             active.setToolTip("Switch this power on/off — its bonuses apply only while active.")
-            active.setEnabled(interactive and not self._locked)
+            # Usable while locked — turning a power on/off is a mid-play action.
+            active.setEnabled(interactive)
             active.toggled.connect(lambda on, p=power: self._set_power_active(p, on))
             layout.addWidget(active)
 
@@ -1174,7 +1185,7 @@ class PowersSection(TitledSection):
             for effect in member.effects:
                 effect.toggled_on = active
         self._rebuild_list()
-        self.changed.emit()
+        self.runtimeChanged.emit()
 
     def _group_is_active(self, group: PowerGroup) -> bool:
         """Whether every leaf power under a linked group is currently switched on."""
@@ -1193,7 +1204,7 @@ class PowersSection(TitledSection):
             for effect in member.effects:
                 effect.toggled_on = active
         self._rebuild_list()
-        self.changed.emit()
+        self.runtimeChanged.emit()
 
     def _linked_activation_set(self, power: Power) -> list[Power]:
         """Every leaf power that switches on/off together with *power*.

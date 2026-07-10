@@ -59,6 +59,22 @@ def test_advantages_carry_type_tags() -> None:
             assert advantage.max_rank is not None
 
 
+def test_movement_and_measurement_conversions_load() -> None:
+    data = load_game_data()
+    assert data.movement.base_ground_speed_rank == 1
+    assert data.movement.round_seconds == 6
+    # The numeric metric distance backs the km/h conversion (distance rank 2 = 8 m).
+    assert data.measurements.distance_m(2) == 8.0
+    assert data.measurements.size_rank_for_category("Medium") == 0
+
+
+def test_initiative_advantages_carry_their_mechanics() -> None:
+    data = load_game_data()
+    by_name = {a.name: a for a in data.advantages}
+    assert by_name["Improved Initiative"].initiative_bonus_per_rank == 4
+    assert by_name["Alternate Initiative"].initiative_ability_choice == ("INT", "AWE", "PRE")
+
+
 def test_condition_graph_references_known_ids() -> None:
     data = load_game_data()
     condition_ids = {c.id for c in data.conditions}

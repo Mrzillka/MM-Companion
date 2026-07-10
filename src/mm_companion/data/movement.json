@@ -1,0 +1,8 @@
+{
+  "_comment": "Ground-movement and turn-timing constants for Mutants & Masterminds 4e (Open Game Content). Numeric game-mechanical facts only. Consumed by mm_companion.core.data_loader; core reads these rather than hardcoding movement rules in Python. A character's walking / dashing / running speeds are the measurements-table distance at speed rank + [walkRankStep, dashRankStep, runRankStep]; roundSeconds converts a per-round distance to km/h.",
+  "baseGroundSpeedRank": 1,
+  "walkRankStep": 0,
+  "dashRankStep": 1,
+  "runRankStep": 2,
+  "roundSeconds": 6
+}

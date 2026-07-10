@@ -13,6 +13,7 @@
     },
     "rankedNote": "When 'ranked' is true, buy multiple ranks for a bigger effect. 'maxRank' gives a hard cap when the rulebook specifies one (e.g. 'Ranked 2'); null means no fixed cap beyond normal Power Level limits.",
     "focusedNote": "When 'focused' is true, each selection applies to one specific focus (a skill, environment, effect, etc.) and must be bought again separately for another focus.",
+    "initiativeNote": "Optional initiative mechanics read by the derived-stat layer: 'initiativeBonusPerRank' adds that many points to the initiative modifier per rank (Improved Initiative = 4); 'initiativeAbilityChoice' lists the abilities this advantage may switch initiative to (Alternate Initiative), the chosen one stored as the selection's parameter.",
     "maxRankKindKey": {
       "fixed": "A specific numeric cap from the rules, independent of Power Level (e.g. Improved Critical 4). 'maxRank' holds the number.",
       "power_level": "Capped only by the Power Level limit of the trait it modifies (shared with base rank and other bonuses), not a standalone number.",
@@ -24,7 +25,7 @@
   "advantages": [
     {"id": "agile_grab", "name": "Agile Grab", "types": ["Combat"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "No penalty for grappling a foe."},
     {"id": "alternate_feint", "name": "Alternate Feint", "types": ["Combat"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": true, "description": "Feint using a different trait."},
-    {"id": "alternate_initiative", "name": "Alternate Initiative", "types": ["Combat"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "Initiative uses a mental ability instead."},
+    {"id": "alternate_initiative", "name": "Alternate Initiative", "types": ["Combat"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "initiativeAbilityChoice": ["INT", "AWE", "PRE"], "description": "Initiative uses a mental ability instead."},
     {"id": "animal_empathy", "name": "Animal Empathy", "types": ["Skill"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "Interact with animals like they're people."},
     {"id": "assessment", "name": "Assessment", "types": ["General"], "ranked": true, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "Size up a foe's combat stats."},
     {"id": "beginners_luck", "name": "Beginner's Luck", "types": ["Fortune"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "Spend a Hero Point for a skill boost."},
@@ -75,7 +76,7 @@
     {"id": "improved_disarm", "name": "Improved Disarm", "types": ["Combat"], "ranked": true, "maxRank": 2, "maxRankKind": "fixed", "focused": false, "description": "Better at disarming opponents."},
     {"id": "improved_grab", "name": "Improved Grab", "types": ["Combat"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "Grab someone one-handed."},
     {"id": "improved_hold", "name": "Improved Hold", "types": ["Combat"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "Harder for foes to escape your grab."},
-    {"id": "improved_initiative", "name": "Improved Initiative", "types": ["Combat"], "ranked": true, "maxRank": null, "maxRankKind": "power_level_half", "focused": false, "description": "Act sooner in combat."},
+    {"id": "improved_initiative", "name": "Improved Initiative", "types": ["Combat"], "ranked": true, "maxRank": null, "maxRankKind": "power_level_half", "focused": false, "initiativeBonusPerRank": 4, "description": "Act sooner in combat."},
     {"id": "improved_smash", "name": "Improved Smash", "types": ["Combat"], "ranked": false, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "No penalty when smashing objects."},
     {"id": "improved_strike", "name": "Improved Strike", "types": ["Combat"], "ranked": true, "maxRank": null, "maxRankKind": "power_level", "focused": false, "description": "Extra punch behind your close attacks."},
     {"id": "improved_team_attack", "name": "Improved Team Attack", "types": ["Combat"], "ranked": true, "maxRank": null, "maxRankKind": "none", "focused": false, "description": "Join team attacks from farther away."},

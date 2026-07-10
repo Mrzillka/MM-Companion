@@ -88,14 +88,6 @@
       "default": "Medium"
     },
     {
-      "key": "speed",
-      "label": "Speed"
-    },
-    {
-      "key": "initiative",
-      "label": "Initiative"
-    },
-    {
       "key": "hero_points",
       "label": "Hero Points",
       "kind": "number",

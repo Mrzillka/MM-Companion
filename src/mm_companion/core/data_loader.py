@@ -141,6 +141,8 @@ class Advantage:
     max_rank: int | None = None
     max_rank_kind: str = "none"
     focused: bool = False
+    initiative_bonus_per_rank: int = 0
+    initiative_ability_choice: tuple[str, ...] = ()
 
     @property
     def type(self) -> str:
@@ -558,13 +560,22 @@ class Measurements:
     ``"60 feet"``), or ``""`` when the rank is outside the tabulated −5…30 range.
     ``size_row`` returns the :class:`SizeRow` for a size rank (clamped to the table's
     range), driving Growth/Shrinking's derived combat modifiers.
+
+    ``distance_m`` returns the normalized numeric metric distance (metres) for a rank —
+    the numeric sibling of the ``distance`` label — so a per-round distance can be
+    converted to km/h; ``0.0`` when the rank is off-table.
     """
 
     by_rank: dict[int, dict[str, dict[str, str]]]  # rank -> system -> column -> label
     size_by_rank: dict[int, SizeRow] = field(default_factory=dict)
+    distance_m_by_rank: dict[int, float] = field(default_factory=dict)
 
     def label(self, column: str, rank: int, system: str = "imperial") -> str:
         return self.by_rank.get(rank, {}).get(system, {}).get(column, "")
+
+    def distance_m(self, rank: int) -> float:
+        """The numeric metric distance (metres) for a rank, or ``0.0`` if off-table."""
+        return self.distance_m_by_rank.get(rank, 0.0)
 
     def size_row(self, size_rank: int) -> SizeRow | None:
         """The size-table row for ``size_rank``, clamped to the tabulated range."""
@@ -573,6 +584,30 @@ class Measurements:
         lo = min(self.size_by_rank)
         hi = max(self.size_by_rank)
         return self.size_by_rank.get(max(lo, min(hi, size_rank)))
+
+    def size_rank_for_category(self, category: str) -> int | None:
+        """The size rank of a named size category (``"Medium"`` → 0), or ``None``."""
+        for rank, row in self.size_by_rank.items():
+            if row.size_category == category:
+                return rank
+        return None
+
+
+@dataclass(frozen=True)
+class Movement:
+    """Ground-movement and turn-timing constants (from ``movement.json``).
+
+    ``base_ground_speed_rank`` is a character's default walking speed rank; the
+    walking / dashing / running columns are the measurements-table distance at that
+    rank plus ``walk_rank_step`` / ``dash_rank_step`` / ``run_rank_step``.
+    ``round_seconds`` (6) converts a per-round distance into km/h.
+    """
+
+    base_ground_speed_rank: int = 1
+    walk_rank_step: int = 0
+    dash_rank_step: int = 1
+    run_rank_step: int = 2
+    round_seconds: int = 6
 
 
 @dataclass(frozen=True)
@@ -627,6 +662,7 @@ class GameData:
     game_term_ladders: dict[str, tuple[str, ...]]
     duration_action_floor: dict[str, str] = field(default_factory=dict)
     effect_readouts: dict[str, tuple[Readout, ...]] = field(default_factory=dict)
+    movement: Movement = field(default_factory=Movement)
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -689,6 +725,8 @@ def _parse_advantage(a: dict) -> Advantage:
         max_rank=a.get("maxRank"),
         max_rank_kind=a.get("maxRankKind", "none"),
         focused=bool(a.get("focused", False)),
+        initiative_bonus_per_rank=int(a.get("initiativeBonusPerRank", 0)),
+        initiative_ability_choice=tuple(a.get("initiativeAbilityChoice", ())),
     )
 
 
@@ -943,6 +981,7 @@ def _parse_measurements(raw: dict) -> Measurements:
     """
 
     by_rank: dict[int, dict[str, dict[str, str]]] = {}
+    distance_m_by_rank: dict[int, float] = {}
     for row in raw.get("rankMeasures", []):
         rank = int(row["rank"])
         time_label = row.get("time", {}).get("label", "")
@@ -955,6 +994,9 @@ def _parse_measurements(raw: dict) -> Measurements:
             labels["time"] = time_label
             systems[system] = labels
         by_rank[rank] = systems
+        metric_distance = row.get("metric", {}).get("distance", {}).get("m")
+        if metric_distance is not None:
+            distance_m_by_rank[rank] = float(metric_distance)
 
     size_by_rank: dict[int, SizeRow] = {}
     for row in raw.get("sizeTable", []):
@@ -971,7 +1013,19 @@ def _parse_measurements(raw: dict) -> Measurements:
             intimidation_mod=int(row["intimidationMod"]),
             stealth_mod=int(row["stealthMod"]),
         )
-    return Measurements(by_rank=by_rank, size_by_rank=size_by_rank)
+    return Measurements(
+        by_rank=by_rank, size_by_rank=size_by_rank, distance_m_by_rank=distance_m_by_rank
+    )
+
+
+def _parse_movement(raw: dict) -> Movement:
+    return Movement(
+        base_ground_speed_rank=int(raw.get("baseGroundSpeedRank", 1)),
+        walk_rank_step=int(raw.get("walkRankStep", 0)),
+        dash_rank_step=int(raw.get("dashRankStep", 1)),
+        run_rank_step=int(raw.get("runRankStep", 2)),
+        round_seconds=int(raw.get("roundSeconds", 6)),
+    )
 
 
 def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
@@ -1026,6 +1080,7 @@ def load_game_data() -> GameData:
     effect_readouts_raw = _read_json("effect_readouts.json")
     costs_raw = _read_json("costs.json")
     measurements_raw = _read_json("measurements.json")
+    movement_raw = _read_json("movement.json")
 
     return GameData(
         profile_fields=[Field(**f) for f in base["profile_fields"]],
@@ -1043,4 +1098,5 @@ def load_game_data() -> GameData:
         game_term_ladders=_parse_ladders(modifiers_raw),
         duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
+        movement=_parse_movement(movement_raw),
     )

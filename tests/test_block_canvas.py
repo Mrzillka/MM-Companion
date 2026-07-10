@@ -100,8 +100,13 @@ def test_apply_arrangement_transitions_dont_destroy_frames(qapp: QApplication) -
 
     sheet = _shown_sheet()
     model = {
-        "version": 4,
-        "rows": [["base_info"], ["abilities", "resistances"], ["conditions"], ["powers"]],
+        "version": 5,
+        "rows": [
+            ["base_info", "system_info", "character_image"],
+            ["abilities", "resistances"],
+            ["conditions"],
+            ["powers"],
+        ],
         "floating": {"skills": {"x": 50, "y": 50, "w": 400, "h": 400}},
         "hidden": ["advantages"],
     }

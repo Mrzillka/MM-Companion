@@ -45,7 +45,7 @@ def test_spent_power_points_reflected_in_pool_label(qapp: QApplication) -> None:
 
     spent = power_points_spent(sheet.character, data)
     assert spent == 8
-    assert sheet.base_info._pool_current["power_points"].text() == "8"
+    assert sheet.system_info._pool_current.text() == "8"
 
 
 def test_raising_power_level_raises_the_budget_to_its_minimum(qapp: QApplication) -> None:
@@ -53,11 +53,11 @@ def test_raising_power_level_raises_the_budget_to_its_minimum(qapp: QApplication
     sheet = CharacterSheet(data)  # PL 10, 150 PP
     per_level = data.costs.power_level.pp_per_level
 
-    sheet.base_info._characteristics["power_level"].setValue(12)
+    sheet.system_info._power_level.setValue(12)
 
     assert sheet.character.power_level == 12
     assert sheet.character.power_points_total == 12 * per_level
-    assert sheet.base_info._characteristics["power_points"].value() == 12 * per_level
+    assert sheet.system_info._power_points.value() == 12 * per_level
 
 
 def test_raising_the_budget_past_a_border_raises_power_level(qapp: QApplication) -> None:
@@ -65,10 +65,10 @@ def test_raising_the_budget_past_a_border_raises_power_level(qapp: QApplication)
     sheet = CharacterSheet(data)  # PL 10, 150 PP
     per_level = data.costs.power_level.pp_per_level
 
-    sheet.base_info._characteristics["power_points"].setValue(11 * per_level)
+    sheet.system_info._power_points.setValue(11 * per_level)
 
     assert sheet.character.power_level == 11
-    assert sheet.base_info._characteristics["power_level"].value() == 11
+    assert sheet.system_info._power_level.value() == 11
 
 
 def test_budget_within_a_band_leaves_power_level_alone(qapp: QApplication) -> None:
@@ -76,7 +76,7 @@ def test_budget_within_a_band_leaves_power_level_alone(qapp: QApplication) -> No
     sheet = CharacterSheet(data)  # PL 10, 150 PP
     per_level = data.costs.power_level.pp_per_level
 
-    sheet.base_info._characteristics["power_points"].setValue(10 * per_level + 5)
+    sheet.system_info._power_points.setValue(10 * per_level + 5)
 
     assert sheet.character.power_level == 10
     assert sheet.character.power_points_total == 10 * per_level + 5
@@ -148,7 +148,7 @@ def test_raising_power_level_clears_a_power_cards_warning(qapp: QApplication) ->
     sheet = CharacterSheet(data, char)
     assert _pl_warning_shown(sheet)  # rank 21 over the PL 10 cap
 
-    sheet.base_info._characteristics["power_level"].setValue(11)  # cap rises to 22
+    sheet.system_info._power_level.setValue(11)  # cap rises to 22
     assert not _pl_warning_shown(sheet)  # the card re-derived against the new cap
 
 
@@ -198,11 +198,13 @@ def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
     assert sheet.abilities._abilities["INT"].value() == 5
 
 
-def test_sheet_exposes_seven_blocks(qapp: QApplication) -> None:
+def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
 
     assert set(sheet.block_keys()) == {
         "base_info",
+        "system_info",
+        "character_image",
         "abilities",
         "resistances",
         "conditions",
@@ -241,3 +243,44 @@ def test_floating_a_block_keeps_cross_block_wiring_live(qapp: QApplication) -> N
 
     stealth_row = next(row for row in sheet.skills._rows if row[1] == "Stealth")
     assert stealth_row[3].text() == "5"  # AGL 3 + 2 ranks
+
+
+def test_hero_points_circles_spend_and_gain(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    hero = sheet.system_info._hero_points
+
+    hero._on_click(2)  # click the 3rd circle → 3 hero points
+    assert hero.value() == 3
+    assert sheet.character.characteristics["hero_points"] == 3
+
+    hero._on_click(2)  # click the last filled circle again → empties it to 2
+    assert hero.value() == 2
+    assert sheet.character.characteristics["hero_points"] == 2
+
+
+def test_initiative_readout_follows_agility_and_advantages(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+
+    sheet.abilities._abilities["AGL"].setValue(4)
+    assert sheet.system_info._initiative.text() == "+4 (AGL)"
+
+
+def test_active_growth_shows_the_effective_size(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.powers.append(Power(name="Big", effects=[PowerEffectInstance("growth", rank=2)]))
+    sheet = CharacterSheet(data, char)
+
+    # Base size stays Medium; the readout shows the Growth-shifted effective size.
+    assert sheet.system_info._size_combo.currentText() == "Medium"
+    assert sheet.system_info._size_effective.text() == "→ Huge"
+
+
+def test_speed_unit_toggle_switches_to_km_per_hour(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    speed = sheet.system_info._speed
+
+    assert "ft" in speed._lines_label.text()
+    speed._toggle_unit()
+    assert "km/h" in speed._lines_label.text()

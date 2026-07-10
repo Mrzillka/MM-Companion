@@ -20,10 +20,15 @@ from .powers import STRUCTURE_ARRAY, STRUCTURE_LINKED, Power, PowerGroup, PowerN
 
 @dataclass
 class AdvantageSelection:
-    """A chosen advantage, with a rank for rankable advantages (1 otherwise)."""
+    """A chosen advantage, with a rank for rankable advantages (1 otherwise).
+
+    ``parameter`` carries a per-selection choice an advantage needs (e.g. Alternate
+    Initiative's mental ability key); ``""`` for advantages that take no parameter.
+    """
 
     name: str
     rank: int = 1
+    parameter: str = ""
 
 
 @dataclass
@@ -137,7 +142,14 @@ class Character:
             "skill_mods": dict(self.skill_mods),
             "focuses": {k: list(v) for k, v in self.focuses.items()},
             "specializations": {k: list(v) for k, v in self.specializations.items()},
-            "advantages": [{"name": a.name, "rank": a.rank} for a in self.advantages],
+            "advantages": [
+                {
+                    "name": a.name,
+                    "rank": a.rank,
+                    **({"parameter": a.parameter} if a.parameter else {}),
+                }
+                for a in self.advantages
+            ],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
         }
@@ -159,7 +171,9 @@ class Character:
             focuses={k: list(v) for k, v in raw.get("focuses", {}).items()},
             specializations={k: list(v) for k, v in raw.get("specializations", {}).items()},
             advantages=[
-                AdvantageSelection(name=a["name"], rank=int(a.get("rank", 1)))
+                AdvantageSelection(
+                    name=a["name"], rank=int(a.get("rank", 1)), parameter=a.get("parameter", "")
+                )
                 for a in raw.get("advantages", [])
             ],
             conditions=[

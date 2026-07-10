@@ -100,10 +100,13 @@ def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
     assert checkbox is not None and checkbox.isChecked()
 
     fired: list[int] = []
-    sheet.powers.changed.connect(lambda: fired.append(1))
+    dirtied: list[int] = []
+    sheet.powers.runtimeChanged.connect(lambda: fired.append(1))
+    sheet.edited.connect(lambda: dirtied.append(1))
     checkbox.setChecked(False)
 
-    assert fired  # the section signals a change so the sheet re-derives
+    assert fired  # the section signals a runtime change so the sheet re-derives
+    assert not dirtied  # ...but a runtime toggle is not persisted, so it isn't an edit
     assert char.powers[0].item_present is False
     assert resistance_total(char, data, "TOUGHNESS") == 0
 

@@ -226,6 +226,16 @@ class CharacterSheet(QWidget):
         self.skills.changed.connect(self.edited)
         self.powers.changed.connect(self.edited)
 
+        # Toggling a power on/off is runtime state, not part of the point build, and is
+        # not persisted — so it drives the same live-refresh fan-out as `powers.changed`
+        # above (a trait boost drops in or out of the sheet) but deliberately does *not*
+        # connect to `edited`, so it never marks the character dirty.
+        self.powers.runtimeChanged.connect(self._recompute_derived)
+        self.powers.runtimeChanged.connect(self.abilities.refresh_enhancements)
+        self.powers.runtimeChanged.connect(self.resistances.refresh_enhancements)
+        self.powers.runtimeChanged.connect(self.skills.refresh_totals)
+        self.powers.runtimeChanged.connect(self.system_info.refresh_derived)
+
     def _sections(self) -> tuple:
         return (
             self.base_info,

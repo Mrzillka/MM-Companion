@@ -543,11 +543,12 @@ def test_debilitated_advantage_row_struck_through(qapp2: QApplication) -> None:
     char = sheet.character
     advantage = data.advantages[0]
     char.advantages.append(AdvantageSelection(advantage.name))
-    sheet.advantages._append_advantage_row(advantage.name, 1, advantage)
+    sheet.advantages._rebuild()
 
     apply_condition(char, "debilitated", data, parameter=advantage.name)
     sheet.advantages.refresh_conditions()
-    item = sheet.advantages._advantage_table.item(0, 0)
+    table, row, _ = sheet.advantages._row_refs[0]
+    item = table.item(row, 0)
     assert item.font().strikeOut() is True
     assert item.foreground().color().name() == "#d15b5b"
 

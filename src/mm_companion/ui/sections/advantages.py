@@ -13,8 +13,8 @@ also draw from a shared per-character budget
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -44,6 +45,46 @@ from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, title_with_cost
 
 RANK_MIN, RANK_MAX = 1, 20
+
+
+class _AutoHeightTable(QTableWidget):
+    """A table that reports its full content height so it never scrolls itself.
+
+    The advantages block grows in height to fit every row instead of the table
+    scrolling internally: the table's own vertical scrollbar is off and its size
+    hint is the header plus the summed row heights, so the enclosing block (which
+    is sized to its content) grows as advantages are added. Word-wrapped rows are
+    re-measured on resize, since their height depends on the stretched column's
+    width.
+    """
+
+    def __init__(self, rows: int, columns: int, parent: QWidget | None = None) -> None:
+        super().__init__(rows, columns, parent)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _content_height(self) -> int:
+        height = 2 * self.frameWidth()
+        header = self.horizontalHeader()
+        if header.isVisible():
+            height += header.height()
+        for row in range(self.rowCount()):
+            height += self.rowHeight(row)
+        return height
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(super().sizeHint().width(), self._content_height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(super().minimumSizeHint().width(), self._content_height())
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        # A wider/narrower table re-wraps the description column, changing row
+        # heights, so re-measure and let the block resize to the new content.
+        for row in range(self.rowCount()):
+            self.resizeRowToContents(row)
+        self.updateGeometry()
 
 
 class AdvantagesSection(TitledSection):
@@ -95,7 +136,7 @@ class AdvantagesSection(TitledSection):
         self._heroic_label = QLabel()
         outer.addWidget(self._heroic_label)
 
-        self._advantage_table = QTableWidget(0, 3)
+        self._advantage_table = _AutoHeightTable(0, 3)
         self._advantage_table.setHorizontalHeaderLabels(["Advantage", "Type", "Description"])
         self._advantage_table.verticalHeader().setVisible(False)
         self._advantage_table.setWordWrap(True)
@@ -167,6 +208,7 @@ class AdvantagesSection(TitledSection):
         self._advantage_table.setItem(row, 1, QTableWidgetItem(types))
         self._advantage_table.setItem(row, 2, QTableWidgetItem(description))
         self._advantage_table.resizeRowToContents(row)
+        self._advantage_table.updateGeometry()
 
     def _rank_ceiling(self, advantage: Advantage) -> int:
         """The highest rank the picker may offer for *advantage* right now.
@@ -244,6 +286,7 @@ class AdvantagesSection(TitledSection):
             if 0 <= row < len(self._character.advantages):
                 del self._character.advantages[row]
         if rows:
+            self._advantage_table.updateGeometry()
             self._refresh_cost()
             self.refresh_limits()
             self.refresh_conditions()

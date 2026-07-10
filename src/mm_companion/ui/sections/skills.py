@@ -8,26 +8,29 @@ own — the character instead adds focused instances, each of which becomes its
 own rankable row. Any skill can also carry *specialized* rows: narrow, half-cost
 rank pools rendered as extra indented rows under the skill.
 
-To save vertical space the skills are laid out across two side-by-side tables:
-the left flow fills the first table and the right flow fills the second. Neither
-table scrolls — each is sized to show all of its rows and grows as focuses are
-added, so the whole section scrolls with the page. The split is dynamic: skills
-are grouped into blocks (a plain skill is one block; a focused skill with its
-focus rows, plus any skill's specialization rows, form a single block), and the
-blocks are divided between the two tables so their heights are as even as
-possible without ever splitting a block.
+To save vertical space the skills are laid out across several side-by-side
+tables. The number of panels adapts to the block's width (see
+:mod:`mm_companion.ui.sections.column_flow`): a wide block shows more columns, a
+narrow one fewer, and a long skill/focus name raises the minimum panel width so
+the count drops before anything clips. Neither table scrolls — each is sized to
+show all of its rows and grows as focuses are added, so the whole section scrolls
+with the page. The split is dynamic: skills are grouped into blocks (a plain
+skill is one block; a focused skill with its focus rows, plus any skill's
+specialization rows, form a single block), and the blocks are divided across the
+panels so their heights are as even as possible without ever splitting a block.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -44,6 +47,7 @@ from mm_companion.core.rules import (
     skill_total,
 )
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.sections.column_flow import column_count, even_split
 from mm_companion.ui.sections.stat_grid import CONDITION_TINT, STRIKETHROUGH_CONDITIONS
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -55,6 +59,15 @@ COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
 # Keep the numeric spin-box columns narrow so they don't hog horizontal space.
 SPIN_WIDTH = 56
+# Spacing between the side-by-side skill panels.
+TABLE_SPACING = 6
+# Rough widths used to decide how many panels fit without clipping a name.
+# The numeric columns are near-fixed; the name column needs room for the widest
+# skill/focus/specialization label. These are UI heuristics, easy to retune.
+NAME_MIN_WIDTH = 120
+NAME_PADDING = 28
+NUMERIC_WIDTH = 40 + 2 * SPIN_WIDTH + 48  # ABL + two spins + Total
+FRAME_PADDING = 24
 
 
 class SkillsSection(TitledSection):
@@ -98,33 +111,51 @@ class SkillsSection(TitledSection):
         self._locked = False
 
         layout = QVBoxLayout(self)
-        tables = QHBoxLayout()
-        self.table_left = self._make_table()
-        self.table_right = self._make_table()
-        tables.addWidget(self.table_left)
-        tables.addWidget(self.table_right)
-        layout.addLayout(tables)
-
-        guard_wheel(self.table_left, self.table_right)
-        # The tables fit their content and never scroll, so keep them out of the
-        # focus chain; the wheel then always falls through to the page scroll.
-        for table in (self.table_left, self.table_right):
-            table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # The skills fan out across a variable number of side-by-side panels; the
+        # count adapts to the block's width (see resizeEvent / _rebuild). The
+        # tables live in a container whose horizontal layout is rebuilt when the
+        # count changes.
+        self._tables_container = QWidget()
+        self._tables_layout = QHBoxLayout(self._tables_container)
+        self._tables_layout.setContentsMargins(0, 0, 0, 0)
+        self._tables_layout.setSpacing(TABLE_SPACING)
+        self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self._tables_container)
+        self._tables: list[QTableWidget] = []
+        self._column_count = 0
         self._rebuild()
 
-    @staticmethod
-    def _make_table() -> QTableWidget:
+    def _make_table(self) -> QTableWidget:
         table = QTableWidget(0, len(HEADERS))
         table.setHorizontalHeaderLabels(HEADERS)
         table.verticalHeader().setVisible(False)
         # The table never scrolls itself; it is resized to fit all its rows.
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Share width equally with sibling panels; keep the fitted height fixed so
+        # panels of different heights top-align rather than stretch.
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header = table.horizontalHeader()
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         for col in (COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        # The panels fit their content and never scroll, so keep them out of the
+        # focus chain; the wheel then always falls through to the page scroll.
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        guard_wheel(table)
         return table
+
+    def _ensure_tables(self, count: int) -> None:
+        """Grow or shrink the pool of side-by-side panels to *count*."""
+
+        while len(self._tables) < count:
+            table = self._make_table()
+            self._tables_layout.addWidget(table, stretch=1)
+            self._tables.append(table)
+        while len(self._tables) > count:
+            table = self._tables.pop()
+            self._tables_layout.removeWidget(table)
+            table.deleteLater()
 
     @staticmethod
     def _fit_table_height(table: QTableWidget) -> None:
@@ -141,29 +172,28 @@ class SkillsSection(TitledSection):
     def _rebuild(self) -> None:
         self._rows.clear()
         self._editable_spins.clear()
-        left, right = self._split_blocks()
-        left_specs = self._expand(left)
-        right_specs = self._expand(right)
-
-        # Match row counts so the two tables stay the same height and their rows
-        # line up side by side.
-        row_count = max(len(left_specs), len(right_specs))
-        for table, specs in ((self.table_left, left_specs), (self.table_right, right_specs)):
+        count = column_count(
+            self._available_width(), self._min_col_width(), TABLE_SPACING, len(self._skills)
+        )
+        self._column_count = count
+        self._ensure_tables(count)
+        for table, skills in zip(self._tables, self._split_blocks(count), strict=True):
+            specs = self._expand(skills)
             table.setRowCount(0)
             table.clearSpans()
-            table.setRowCount(row_count)
+            table.setRowCount(len(specs))
             self._render_side(table, specs)
             self._fit_table_height(table)
 
         self._apply_lock()
         self._refresh_totals()
 
-    def _split_blocks(self) -> tuple[list[Skill], list[Skill]]:
-        """Divide the skills into two ordered groups of near-equal height.
+    def _split_blocks(self, count: int) -> list[list[Skill]]:
+        """Divide the skills into *count* ordered groups of near-equal height.
 
         Each skill is a block whose height is one row, plus one row per focus for
-        focused skills and one per specialization for any skill; blocks are never split
-        across the two groups.
+        focused skills and one per specialization for any skill; blocks are never
+        split across groups.
         """
 
         sizes = []
@@ -171,16 +201,43 @@ class SkillsSection(TitledSection):
             size = 1 + len(self._focuses[skill.name]) if skill.focused else 1
             size += len(self._specializations.get(skill.name, []))
             sizes.append(size)
-        total = sum(sizes)
+        return [[self._skills[i] for i in bucket] for bucket in even_split(sizes, count)]
 
-        best_split, best_diff = 0, None
-        for split in range(len(self._skills) + 1):
-            left = sum(sizes[:split])
-            diff = abs(left - (total - left))
-            if best_diff is None or diff < best_diff:
-                best_split, best_diff = split, diff
+    # -- responsive panel count ---------------------------------------------
 
-        return self._skills[:best_split], self._skills[best_split:]
+    def _available_width(self) -> int:
+        """The width the panels have to share, net of the section's margins."""
+
+        margins = self.layout().contentsMargins()
+        return self.width() - margins.left() - margins.right()
+
+    def _min_col_width(self) -> int:
+        """Narrowest a panel may get before a skill name would clip.
+
+        Driven by the widest label actually present (a long focus or
+        specialization name raises it, forcing fewer panels), plus the near-fixed
+        numeric columns.
+        """
+
+        fm = self.fontMetrics()
+        longest = 0
+        for skill in self._skills:
+            longest = max(longest, fm.horizontalAdvance(skill.name))
+            for focus in self._focuses.get(skill.name, []):
+                longest = max(longest, fm.horizontalAdvance(f"    {skill.name}: {focus}"))
+            for spec in self._specializations.get(skill.name, []):
+                label = f"    {skill.name}: {spec} (specialized)"
+                longest = max(longest, fm.horizontalAdvance(label))
+        name_width = max(NAME_MIN_WIDTH, longest + NAME_PADDING)
+        return name_width + NUMERIC_WIDTH + FRAME_PADDING
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        count = column_count(
+            self._available_width(), self._min_col_width(), TABLE_SPACING, len(self._skills)
+        )
+        if count != self._column_count:
+            self._rebuild()
 
     def _expand(self, skills: list[Skill]) -> list[tuple]:
         """Flatten skills into per-row specs.

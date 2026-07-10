@@ -144,13 +144,14 @@ clean (see Licensing below).
   through unchanged). So a saved character keeps its picture even if the original
   file moves or is deleted.
 - Unsaved-change tracking: `CharacterSheet` emits `edited` on any user edit
-  (`BaseInfoSection.edited` covers name/image and `ConditionsSection.edited` covers
-  conditions, neither of which affects the point build; stats/skills reuse their
-  `changed` signal). `MainWindow` flags the title with `*` while dirty, clears it on
-  save, and prompts Save/Discard/Cancel from `closeEvent` — a cancelled Save (or Save
-  As dialog) leaves the window open. Seeding a loaded character does **not** mark it
-  dirty (a `_loading` guard in `BaseInfoSection`/`ConditionsSection`, plus the fact
-  that section signals connect after construction).
+  (`BaseInfoSection.edited` covers the profile fields, `CharacterImageSection.edited`
+  the portrait, `SystemInfoSection.edited` size/hero-points/PL/PP, and
+  `ConditionsSection.edited` conditions; stats/skills reuse their `changed` signal).
+  `MainWindow` flags the title with `*` while dirty, clears it on save, and prompts
+  Save/Discard/Cancel from `closeEvent` — a cancelled Save (or Save As dialog) leaves
+  the window open. Seeding a loaded character does **not** mark it dirty (a `_loading`
+  guard in the sections, plus the fact that section signals connect after
+  construction).
 - The whole sheet scrolls as **one page**, and the blocks are rearranged on a
   **custom scrollable canvas** (not Qt docking). A `QMainWindow` dock host can't
   live inside a `QScrollArea` — its drag-drop and layout break — so scroll +
@@ -158,15 +159,29 @@ clean (see Licensing below).
   its content and never scrolls on its own; the page scrolls vertically when the
   blocks don't all fit. `MainWindow` opens at 1000×860.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
-  `QScrollArea` → `BlockCanvas`) → seven blocks, each a section `QGroupBox` wrapped
-  in a `BlockFrame`: `BaseInfoSection`, `AbilitiesSection`, `ResistancesSection`,
-  `ConditionsSection`, `AdvantagesSection`, `SkillsSection`, `PowersSection`.
-  `CharacterSheet` is the
-  central widget directly (no outer wrapper — the sheet's own `QScrollArea` is the
-  page the wheel guard targets). Abilities/Resistances/Advantages were split out of
-  the former `StatsSection`; Abilities and Resistances share the grid helpers in
+  `QScrollArea` → `BlockCanvas`) → nine blocks, each a section `QGroupBox` wrapped
+  in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
+  `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
+  `SkillsSection`, `PowersSection`. `CharacterSheet` is the central widget directly
+  (no outer wrapper — the sheet's own `QScrollArea` is the page the wheel guard
+  targets). The former single base-info block was split three ways: `BaseInfoSection`
+  keeps the descriptive **profile** fields (name & details), `CharacterImageSection`
+  holds the portrait, and `SystemInfoSection` holds the non-purchasable
+  characteristics — Power Level, the power-point pool, size, speed, initiative, and
+  hero points. Abilities/Resistances/Advantages were split out of the former
+  `StatsSection`; Abilities and Resistances share the grid helpers in
   `ui/sections/stat_grid.py`. The data-driven blocks take the `GameData` and build
   widgets by iterating over the data lists — no hardcoded ability/skill names.
+- `SystemInfoSection` shows several **derived** readouts computed in `core.rules`, never
+  in the widget: `speed_lines`/`speed_columns` (a base ground line plus one per active
+  movement power — Flight, Speed, … — each rank expanded to walk/dash/run distances,
+  with a ft-per-round ↔ km/h toggle), `initiative_modifier` (effective initiative
+  ability + Improved Initiative's +4/rank; Alternate Initiative swaps the ability via a
+  per-selection `AdvantageSelection.parameter`), and `effective_size` (the bought size
+  shifted by an active Growth/Shrinking). It exposes `refresh_derived()` for the sheet to
+  call when abilities/advantages/powers/conditions change. Movement constants live in
+  `data/movement.json`; the km/h conversion reads `Measurements.distance_m`. Hero points
+  render as five clickable circles.
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus float `↗` and close `✕` buttons) above the section, no inner scroll
   area, sized to its content. A floated block moves into a `BlockWindow` (a
@@ -181,8 +196,9 @@ clean (see Licensing below).
   or leave-floating), plus edge auto-scroll. Structural ops `float_block`,
   `dock_block`, `show_block`/`hide_block`, `arrangement`, `apply_arrangement`,
   `default_arrangement` are the headless-testable seams (drag outcomes without
-  synthetic mouse events). The default arrangement is `DEFAULT_ROWS` (Base Info
-  full width, the Abilities | Resistances pair, then Conditions, Advantages, Skills,
+  synthetic mouse events). The default arrangement is `DEFAULT_ROWS` (the Name &
+  Details block beside the Character Image, then the System / Power Level block full
+  width, the Abilities | Resistances pair, then Conditions, Advantages, Skills,
   Powers).
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
@@ -215,7 +231,7 @@ clean (see Licensing below).
   ability). Each block also emits a generic `changed` signal; `CharacterSheet`
   connects them to recompute build-wide derived values (currently
   `rules.power_points_spent`, pushed into the power-points pool label via
-  `BaseInfoSection.set_pool_current`). Follow this pattern — write to the model
+  `SystemInfoSection.set_pool_current`). Follow this pattern — write to the model
   and emit a signal — rather than sections reaching into each other.
 - Powers participate in the same web both ways. A `PowersSection.changed`
   re-runs the enhancement refresh on Abilities/Resistances/Skills (an active

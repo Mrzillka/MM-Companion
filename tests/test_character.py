@@ -43,6 +43,7 @@ def test_to_dict_from_dict_round_trip() -> None:
     char.specializations["Stealth"] = ["Urban"]
     char.skill_ranks["Stealth::spec::Urban"] = 4
     char.advantages.append(AdvantageSelection("Close Attack", 2))
+    char.advantages.append(AdvantageSelection("Alternate Initiative", parameter="AWE"))
     char.conditions.append(AppliedCondition("dazed"))
     char.powers.append(
         Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])

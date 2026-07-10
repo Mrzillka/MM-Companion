@@ -36,12 +36,14 @@ from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
 
 # Bumped whenever the persisted arrangement schema changes, so a layout saved by
 # an older version is rejected and the default applies.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
-# The default arrangement: Base Info full width, the compact Abilities|Resistances
-# pair, then Conditions, Advantages, Skills, and Powers each full width.
+# The default arrangement: the Name & Details block beside the portrait, the System /
+# Power Level block, the compact Abilities|Resistances pair, then Conditions,
+# Advantages, Skills, and Powers each full width.
 DEFAULT_ROWS: list[list[str]] = [
-    ["base_info"],
+    ["base_info", "character_image"],
+    ["system_info"],
     ["abilities", "resistances"],
     ["conditions"],
     ["advantages"],

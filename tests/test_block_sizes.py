@@ -20,6 +20,8 @@ def test_block_sizes_load_for_every_block() -> None:
 
     assert set(sizes) == {
         "base_info",
+        "system_info",
+        "character_image",
         "abilities",
         "resistances",
         "conditions",

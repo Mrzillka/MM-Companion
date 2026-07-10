@@ -33,10 +33,12 @@ from mm_companion.ui.sections import (
     AbilitiesSection,
     AdvantagesSection,
     BaseInfoSection,
+    CharacterImageSection,
     ConditionsSection,
     PowersSection,
     ResistancesSection,
     SkillsSection,
+    SystemInfoSection,
 )
 
 
@@ -56,6 +58,8 @@ class CharacterSheet(QWidget):
         self.character = character or Character.new_default(self._data)
 
         self.base_info = BaseInfoSection(self._data, self.character)
+        self.system_info = SystemInfoSection(self._data, self.character)
+        self.character_image = CharacterImageSection(self._data, self.character)
         self.abilities = AbilitiesSection(self._data, self.character)
         self.resistances = ResistancesSection(self._data, self.character)
         self.conditions = ConditionsSection(self._data, self.character)
@@ -66,7 +70,9 @@ class CharacterSheet(QWidget):
         # (block key, dock title, section). The key names the block for the layout
         # model and looks up its size constraints in block_sizes.json.
         panels = [
-            ("base_info", "Base Information", self.base_info),
+            ("base_info", "Name & Details", self.base_info),
+            ("system_info", "Power Level & System", self.system_info),
+            ("character_image", "Character Image", self.character_image),
             ("abilities", "Abilities", self.abilities),
             ("resistances", "Resistances", self.resistances),
             ("conditions", "Conditions", self.conditions),
@@ -160,9 +166,12 @@ class CharacterSheet(QWidget):
         # A moved ability re-seeds the resistances derived from it.
         self.abilities.abilityChanged.connect(lambda *_: self.resistances.follow_ability_change())
 
-        # Recompute derived values whenever any block reports a build change.
+        # Recompute derived values whenever any block reports a build change. The
+        # name/details and image blocks don't touch the build, so they carry no
+        # `changed` signal.
         for section in self._sections():
-            section.changed.connect(self._recompute_derived)
+            if hasattr(section, "changed"):
+                section.changed.connect(self._recompute_derived)
         self._recompute_derived()
 
         # A power change can add or drop a trait boost, so refresh the enhanced
@@ -187,18 +196,29 @@ class CharacterSheet(QWidget):
         self.abilities.changed.connect(self.powers.refresh)
         self.resistances.changed.connect(self.powers.refresh)
         self.advantages.changed.connect(self.powers.refresh)
-        self.base_info.changed.connect(self.powers.refresh)
+        self.system_info.changed.connect(self.powers.refresh)
         # A power can link a Close/Ranged Combat focus as its attack skill, so a skill
         # rank/mod edit re-derives that power's attack bonus and PL check.
         self.skills.changed.connect(self.powers.refresh)
         # The Heroic-advantage budget is floor(PL/2), so a Power Level edit reshapes
         # the advantage rank caps and the budget display.
-        self.base_info.changed.connect(self.advantages.refresh_limits)
+        self.system_info.changed.connect(self.advantages.refresh_limits)
+
+        # The system block's derived readouts (speed, initiative, effective size) read
+        # abilities, advantages, and active powers, so re-derive them when any change.
+        self.abilities.abilityChanged.connect(lambda *_: self.system_info.refresh_derived())
+        self.abilities.changed.connect(self.system_info.refresh_derived)
+        self.advantages.changed.connect(self.system_info.refresh_derived)
+        self.powers.changed.connect(self.system_info.refresh_derived)
+        self.conditions.conditionsChanged.connect(self.system_info.refresh_derived)
 
         # Surface any user edit for unsaved-change tracking. The stats/skills
-        # `changed` signals already fire on every edit; base_info (name, image) and
-        # conditions have edits that don't affect the build, so they carry `edited`.
+        # `changed` signals already fire on every edit; base_info (name), the image,
+        # system fields, and conditions have edits that don't affect the build, so they
+        # carry `edited`.
         self.base_info.edited.connect(self.edited)
+        self.character_image.edited.connect(self.edited)
+        self.system_info.edited.connect(self.edited)
         self.conditions.edited.connect(self.edited)
         self.abilities.changed.connect(self.edited)
         self.resistances.changed.connect(self.edited)
@@ -209,6 +229,8 @@ class CharacterSheet(QWidget):
     def _sections(self) -> tuple:
         return (
             self.base_info,
+            self.system_info,
+            self.character_image,
             self.abilities,
             self.resistances,
             self.conditions,
@@ -220,7 +242,7 @@ class CharacterSheet(QWidget):
     def _recompute_derived(self) -> None:
         """Refresh values the model derives from the build (spent power points)."""
         spent = power_points_spent(self.character, self._data)
-        self.base_info.set_pool_current("power_points", spent)
+        self.system_info.set_pool_current("power_points", spent)
 
     def set_locked(self, locked: bool) -> None:
         """Toggle read-only view mode across every block (incl. floated ones)."""

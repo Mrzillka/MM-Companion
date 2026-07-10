@@ -61,6 +61,7 @@ class AdvantagesSection(TitledSection):
         self._data = data
         self._character = character
         self._advantages_by_name = {a.name: a for a in data.advantages}
+        self._ability_names = {a.key: a.name for a in data.abilities}
 
         outer = QVBoxLayout(self)
 
@@ -70,6 +71,12 @@ class AdvantagesSection(TitledSection):
             label = f"{advantage.name} ({', '.join(advantage.types)})"
             self._advantage_combo.addItem(label, advantage)
         picker.addWidget(self._advantage_combo, stretch=1)
+
+        # A parameter combo shown only for an advantage that needs one (Alternate
+        # Initiative's mental ability). Its choices are refreshed per advantage.
+        self._advantage_param = QComboBox()
+        self._advantage_param.setVisible(False)
+        picker.addWidget(self._advantage_param)
 
         self._advantage_rank = make_spin_box(RANK_MIN, RANK_MAX, guarded=False)
         picker.addWidget(self._advantage_rank)
@@ -102,12 +109,19 @@ class AdvantagesSection(TitledSection):
 
         self._advantage_combo.currentIndexChanged.connect(self._sync_rank_enabled)
         self._sync_rank_enabled()
-        guard_wheel(self._advantage_combo, self._advantage_rank, self._advantage_table)
+        guard_wheel(
+            self._advantage_combo,
+            self._advantage_param,
+            self._advantage_rank,
+            self._advantage_table,
+        )
 
         # Render any advantages a loaded character already carries.
         for selection in self._character.advantages:
             advantage = self._advantages_by_name.get(selection.name)
-            self._append_advantage_row(selection.name, selection.rank, advantage)
+            self._append_advantage_row(
+                selection.name, selection.rank, advantage, selection.parameter
+            )
 
         self._refresh_cost()
         self.refresh_limits()
@@ -137,10 +151,14 @@ class AdvantagesSection(TitledSection):
                 item.setData(Qt.ItemDataRole.ForegroundRole, None)
                 item.setToolTip("")
 
-    def _append_advantage_row(self, name: str, rank: int, advantage: Advantage | None) -> None:
+    def _append_advantage_row(
+        self, name: str, rank: int, advantage: Advantage | None, parameter: str = ""
+    ) -> None:
         """Add one row to the advantage table (kept 1:1 with the model list)."""
         ranked = bool(advantage and advantage.ranked)
         text = f"{name} {rank}" if ranked else name
+        if parameter:
+            text = f"{text} ({self._ability_names.get(parameter, parameter)})"
         types = ", ".join(advantage.types) if advantage else ""
         description = advantage.description if advantage else ""
         row = self._advantage_table.rowCount()
@@ -172,6 +190,7 @@ class AdvantagesSection(TitledSection):
         advantage = self._advantage_combo.currentData()
         ranked = bool(advantage and advantage.ranked)
         self._advantage_rank.setEnabled(ranked)
+        self._sync_parameter(advantage)
         if advantage is None:
             return
         if ranked:
@@ -180,11 +199,28 @@ class AdvantagesSection(TitledSection):
             self._advantage_rank.setMaximum(RANK_MAX)
             self._advantage_rank.setValue(RANK_MIN)
 
+    def _sync_parameter(self, advantage: Advantage | None) -> None:
+        """Show and populate the parameter combo for an advantage that needs one.
+
+        Currently only Alternate Initiative, whose ``initiative_ability_choice`` names
+        the mental abilities it can switch initiative to. Other advantages hide it.
+        """
+        choices = tuple(advantage.initiative_ability_choice) if advantage else ()
+        self._advantage_param.clear()
+        for key in choices:
+            self._advantage_param.addItem(self._ability_names.get(key, key), key)
+        self._advantage_param.setVisible(bool(choices))
+
     def _add_advantage(self) -> None:
         advantage = self._advantage_combo.currentData()
         if advantage is None:
             return
         rank = self._advantage_rank.value() if advantage.ranked else 1
+        parameter = (
+            self._advantage_param.currentData()
+            if advantage.initiative_ability_choice and self._advantage_param.currentData()
+            else ""
+        )
         # Enforce the shared Heroic-advantage budget as a hard limit on the add.
         if HEROIC_TYPE in advantage.types:
             budget = heroic_advantage_budget(self._character.power_level)
@@ -193,8 +229,8 @@ class AdvantagesSection(TitledSection):
                 self._show_heroic_budget(prospective - rank, budget, blocked=True)
                 return
         # The table rows stay 1:1 (and in order) with the model's advantage list.
-        self._character.advantages.append(AdvantageSelection(advantage.name, rank))
-        self._append_advantage_row(advantage.name, rank, advantage)
+        self._character.advantages.append(AdvantageSelection(advantage.name, rank, parameter))
+        self._append_advantage_row(advantage.name, rank, advantage, parameter)
         self._refresh_cost()
         self.refresh_limits()
         self.refresh_conditions()
@@ -248,3 +284,5 @@ class AdvantagesSection(TitledSection):
             self._advantage_remove_button,
         ):
             widget.setVisible(not locked)
+        # Keep the parameter combo hidden unless the current advantage needs it.
+        self._advantage_param.setVisible(not locked and self._advantage_param.count() > 0)

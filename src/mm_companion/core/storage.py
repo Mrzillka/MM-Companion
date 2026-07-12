@@ -26,6 +26,7 @@ SETTINGS_FILENAME = "settings.json"
 CHARACTERS_DIRNAME = "characters"
 GM_CHARACTERS_DIRNAME = "gm_characters"
 IMAGES_DIRNAME = "images"
+MODS_DIRNAME = "mods"
 
 # How the builder reacts to a power that breaks a Power Level cap. ``warn`` flags
 # it but still lets it through; ``block`` refuses the save. There is no settings UI
@@ -39,6 +40,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "theme": "system",
     "ruleset": "4e",
     "pl_enforcement": PL_ENFORCE_WARN,
+    # Ids of workspace mods to layer on top of the base ruleset, in the order they
+    # should apply (later entries win). Empty by default, so a fresh install runs
+    # the base ruleset only. See :mod:`mm_companion.core.mods`.
+    "enabled_mods": [],
 }
 
 
@@ -63,6 +68,10 @@ class Workspace:
     @property
     def images_dir(self) -> Path:
         return self.root / IMAGES_DIRNAME
+
+    @property
+    def mods_dir(self) -> Path:
+        return self.root / MODS_DIRNAME
 
 
 def _platform_data_root() -> Path:
@@ -97,6 +106,7 @@ def ensure_workspace() -> Workspace:
     workspace.characters_dir.mkdir(parents=True, exist_ok=True)
     workspace.gm_characters_dir.mkdir(parents=True, exist_ok=True)
     workspace.images_dir.mkdir(parents=True, exist_ok=True)
+    workspace.mods_dir.mkdir(parents=True, exist_ok=True)
     if not workspace.settings_file.exists():
         workspace.settings_file.write_text(
             json.dumps(DEFAULT_SETTINGS, indent=2) + "\n", encoding="utf-8"

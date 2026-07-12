@@ -15,11 +15,9 @@ files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field, fields
-from functools import lru_cache
-from importlib import resources
 
+from . import mods as mods_module
 from .components import Integration, TraitBoost
 
 DATA_PACKAGE = "mm_companion"
@@ -1139,40 +1137,109 @@ def _parse_costs(raw: dict) -> Costs:
     )
 
 
-def _read_json(filename: str) -> dict:
-    source = resources.files(DATA_PACKAGE).joinpath("data", filename)
-    return json.loads(source.read_text(encoding="utf-8"))
+# Candidate id fields for record lists, tried in order. Whichever a list's dict
+# elements all carry identifies records for the by-id merge; a list whose elements
+# share none (e.g. an ``options`` list of strings) is replaced wholesale by a mod.
+_MERGE_ID_KEYS = ("id", "key", "name", "effect_id", "rank", "sizeRank")
 
 
-@lru_cache(maxsize=1)
-def load_game_data() -> GameData:
-    """Parse and return the bundled game data (cached after first call)."""
+def _list_id_key(items: list) -> str | None:
+    """The id field shared by every dict element of *items*, or ``None``."""
+    if not items or not all(isinstance(x, dict) for x in items):
+        return None
+    for key in _MERGE_ID_KEYS:
+        if all(key in x for x in items):
+            return key
+    return None
 
-    profile_raw = _read_json("profile.json")
-    characteristics_raw = _read_json("characteristics.json")
-    abilities_raw = _read_json("abilities.json")
-    resistances_raw = _read_json("resistances.json")
-    skills_raw = _read_json("skills.json")
-    advantages_raw = _read_json("advantages.json")
-    conditions_raw = _read_json("conditions.json")
-    effects_raw = _read_json("effects.json")
-    modifiers_raw = _read_json("modifiers.json")
-    effect_modifiers_raw = _read_json("effect_modifiers.json")
-    effect_readouts_raw = _read_json("effect_readouts.json")
-    costs_raw = _read_json("costs.json")
-    measurements_raw = _read_json("measurements.json")
-    movement_raw = _read_json("movement.json")
+
+def _merge_lists(base: list, override: list) -> list:
+    base_key = _list_id_key(base)
+    if base_key is None or base_key != _list_id_key(override):
+        # Not record lists (or keyed differently): the mod replaces it wholesale.
+        return list(override)
+    result: list = []
+    index: dict = {}
+    for item in base:
+        index[item[base_key]] = len(result)
+        result.append(item)
+    for item in override:
+        ident = item[base_key]
+        if ident in index:
+            result[index[ident]] = _deep_merge(result[index[ident]], item)
+        else:
+            index[ident] = len(result)
+            result.append(item)
+    return result
+
+
+def _deep_merge(base, override):
+    """Recursively merge *override* onto *base* (later source wins).
+
+    Dicts merge key-by-key; record lists (whose elements share an id field —
+    see :data:`_MERGE_ID_KEYS`) merge by id, later records overriding earlier ones
+    of the same id and new ids appended; anything else is replaced by *override*.
+    This is how a mod overrides one record (supply just its id + changed fields) or
+    adds new ones without restating the base content.
+    """
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[key] = _deep_merge(merged[key], value) if key in merged else value
+        return merged
+    if isinstance(base, list) and isinstance(override, list):
+        return _merge_lists(base, override)
+    return override
+
+
+def _merge_content(mods: list[mods_module.Mod]) -> dict[str, dict]:
+    """Deep-merge every content file across *mods* (base first) into ``name -> raw``."""
+    filenames: list[str] = []
+    for mod in mods:
+        for filename in mod.files:
+            if filename not in filenames:
+                filenames.append(filename)
+    merged: dict[str, dict] = {}
+    for filename in filenames:
+        acc: dict | None = None
+        for mod in mods:
+            raw = mod.read(filename)
+            if raw is None:
+                continue
+            acc = raw if acc is None else _deep_merge(acc, raw)
+        merged[filename] = acc if acc is not None else {}
+    return merged
+
+
+def _build_game_data(content: dict[str, dict]) -> GameData:
+    """Parse already-merged raw content into the typed :class:`GameData` record."""
+    profile_raw = content.get("profile.json", {})
+    characteristics_raw = content.get("characteristics.json", {})
+    abilities_raw = content.get("abilities.json", {})
+    resistances_raw = content.get("resistances.json", {})
+    skills_raw = content.get("skills.json", {})
+    advantages_raw = content.get("advantages.json", {})
+    conditions_raw = content.get("conditions.json", {})
+    effects_raw = content.get("effects.json", {})
+    modifiers_raw = content.get("modifiers.json", {})
+    effect_modifiers_raw = content.get("effect_modifiers.json", {})
+    effect_readouts_raw = content.get("effect_readouts.json", {})
+    costs_raw = content.get("costs.json", {})
+    measurements_raw = content.get("measurements.json", {})
+    movement_raw = content.get("movement.json", {})
 
     return GameData(
-        profile_fields=[_parse_field(f) for f in profile_raw["profile_fields"]],
-        characteristics=[_parse_characteristic(c) for c in characteristics_raw["characteristics"]],
-        abilities=[_parse_ability(a) for a in abilities_raw["abilities"]],
-        resistances=[_parse_resistance(r) for r in resistances_raw["resistances"]],
-        skills=[_parse_skill(s) for s in skills_raw["skills"]],
-        advantages=[_parse_advantage(a) for a in advantages_raw["advantages"]],
-        conditions=[_parse_condition(c) for c in conditions_raw["conditions"]],
-        effects=[_parse_effect(e) for e in effects_raw["effects"]],
-        modifiers=[_parse_modifier(m) for m in modifiers_raw["modifiers"]],
+        profile_fields=[_parse_field(f) for f in profile_raw.get("profile_fields", [])],
+        characteristics=[
+            _parse_characteristic(c) for c in characteristics_raw.get("characteristics", [])
+        ],
+        abilities=[_parse_ability(a) for a in abilities_raw.get("abilities", [])],
+        resistances=[_parse_resistance(r) for r in resistances_raw.get("resistances", [])],
+        skills=[_parse_skill(s) for s in skills_raw.get("skills", [])],
+        advantages=[_parse_advantage(a) for a in advantages_raw.get("advantages", [])],
+        conditions=[_parse_condition(c) for c in conditions_raw.get("conditions", [])],
+        effects=[_parse_effect(e) for e in effects_raw.get("effects", [])],
+        modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
         costs=_parse_costs(costs_raw),
         measurements=_parse_measurements(measurements_raw),
@@ -1181,3 +1248,34 @@ def load_game_data() -> GameData:
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
     )
+
+
+# Cache keyed on the active mod stack's fingerprint, so the base ruleset (and each
+# distinct set of enabled mods) is parsed once per process. Replaces the former
+# ``@lru_cache`` — clear it via :func:`clear_game_data_cache` after changing mods.
+_game_data_cache: dict[tuple[str, ...], GameData] = {}
+
+
+def load_game_data() -> GameData:
+    """Parse and return the merged game data for the active mod stack (cached).
+
+    With no mods enabled this is the bundled base ruleset, identical to before the
+    mod pipeline existed. Enabled workspace mods (``enabled_mods`` setting) are
+    deep-merged on top, later/higher-priority mods overriding earlier records.
+    """
+    mods = mods_module.active_mods()
+    key = tuple(mod.fingerprint() for mod in mods)
+    cached = _game_data_cache.get(key)
+    if cached is None:
+        cached = _build_game_data(_merge_content(mods))
+        _game_data_cache[key] = cached
+    return cached
+
+
+def clear_game_data_cache() -> None:
+    """Drop the cached game data; the next :func:`load_game_data` re-parses.
+
+    Call after enabling/disabling a mod or editing a mod's files so the change is
+    picked up (the cache key does not track file contents).
+    """
+    _game_data_cache.clear()

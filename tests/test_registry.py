@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from mm_companion.core.character import Character
 from mm_companion.core.components import (
     GATE_ACTIVATION,
     GATE_LIMITED,
     GATE_REMOVABLE,
     GATE_TOGGLE,
     INSTANT_ACTION,
+    MECH_CHECK_PENALTY,
+    MECH_DEBILITATE_TRAIT,
+    MECH_DEFENSE_MOD,
     PASSIVE_PERMANENT,
     PASSIVE_TOGGLE,
     RESOURCE_POOL,
@@ -17,6 +21,12 @@ from mm_companion.core.components import (
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.registry import Registry
+from mm_companion.core.rules.conditions import (
+    MECHANISM_SCOPES,
+    ScopeContribution,
+    apply_condition,
+    condition_scope_penalty,
+)
 from mm_companion.core.rules.powers_terms import READOUT_KINDS, EffectStat
 from mm_companion.core.rules.runtime import (
     GATE_KINDS,
@@ -119,3 +129,33 @@ def test_mod_can_register_a_new_gate_kind() -> None:
     finally:
         GATE_KINDS.unregister(GATE_LIMITED)
     assert effect_is_active(power, effect, base, data) is True
+
+
+def test_base_mechanism_scopes_are_registered() -> None:
+    # Only the two mechanisms that overlay a displayed stat row carry a scope handler;
+    # a mechanism read by a dedicated accessor (defense_mod) has none here.
+    assert MECH_CHECK_PENALTY in MECHANISM_SCOPES
+    assert MECH_DEBILITATE_TRAIT in MECHANISM_SCOPES
+    assert MECH_DEFENSE_MOD not in MECHANISM_SCOPES
+
+
+def test_mod_can_register_a_new_mechanism_scope() -> None:
+    """A Python mod giving a mechanism a scope handler overlays a stat row through it."""
+
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "defenseless", data)  # carries only defense_mod
+
+    # defense_mod does not overlay a stat row by default — the overlay is inert.
+    assert not condition_scope_penalty(char, data, {"AGL"}).active
+
+    MECHANISM_SCOPES.register(
+        MECH_DEFENSE_MOD, lambda cond, applied, keys: ScopeContribution(delta=-2, label="cursed")
+    )
+    try:
+        overlay = condition_scope_penalty(char, data, {"AGL"})
+        assert overlay.delta == -2
+        assert "defenseless" in overlay.condition_ids
+    finally:
+        MECHANISM_SCOPES.unregister(MECH_DEFENSE_MOD)
+    assert not condition_scope_penalty(char, data, {"AGL"}).active

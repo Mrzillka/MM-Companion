@@ -10,12 +10,14 @@ deliberately not here.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..character import AppliedCondition, Character
 from ..components import MECH_CHECK_PENALTY, MECH_DEBILITATE_TRAIT, MECH_MOVEMENT_MOD
 from ..data_loader import Condition, GameData, RandomActionRow
 from ..dice import roll_d20
+from ..registry import Registry
 
 
 def _param_type(condition: Condition | None) -> str:
@@ -299,18 +301,76 @@ class ConditionEffect:
         return value + self.delta
 
 
+# --- condition mechanism registry (stat-row overlay) ----------------------------------
+# Which condition mechanisms overlay a displayed stat row, and how (§4). Each handler
+# answers, for one applied condition, "what does this mechanism contribute to the row
+# answering to *scope_keys*?" — a flat ``delta``, an override ``op``, and a tooltip
+# ``label`` — or ``None`` when it doesn't apply here. The base registers the two
+# stat-row mechanisms (``check_penalty``, ``debilitate_trait``); a mod's Python module
+# can register another. An unregistered mechanism contributes nothing to the overlay
+# (unchanged behaviour), while still feeding whatever dedicated accessor reads its
+# typed field.
+
+
+@dataclass(frozen=True)
+class ScopeContribution:
+    """One condition mechanism's contribution to a stat-row overlay."""
+
+    delta: int = 0
+    op: str = ""
+    label: str = ""
+
+
+MechanismScope = Callable[[Condition, AppliedCondition, set[str]], "ScopeContribution | None"]
+
+MECHANISM_SCOPES: Registry[MechanismScope] = Registry("condition.mechanism")
+
+
+@MECHANISM_SCOPES.handler(MECH_CHECK_PENALTY)
+def _scope_check_penalty(
+    cond: Condition, applied: AppliedCondition, scope_keys: set[str]
+) -> ScopeContribution | None:
+    """A check-penalty condition (Impaired/Disabled) → a flat ``delta`` on the row.
+
+    Applies when unscoped (``None`` / ``"All checks"``) or when its parameter is one of
+    *scope_keys*; contributes nothing to a row it doesn't scope to.
+    """
+
+    if cond.penalty is None:
+        return None
+    unscoped = applied.parameter in (None, "All checks")
+    if not (unscoped or applied.parameter in scope_keys):
+        return None
+    label = cond.name if unscoped else f"{cond.name} ({applied.parameter})"
+    return ScopeContribution(delta=cond.penalty, label=f"{cond.penalty:+d} {label}")
+
+
+@MECHANISM_SCOPES.handler(MECH_DEBILITATE_TRAIT)
+def _scope_debilitate(
+    cond: Condition, applied: AppliedCondition, scope_keys: set[str]
+) -> ScopeContribution | None:
+    """A debilitated trait (Debilitated) whose parameter matches → the trait is lost.
+
+    An ``op="zero"`` that dominates any delta: skills read as untrained, an ability
+    auto-fails its checks. Contributes nothing to a row it doesn't name.
+    """
+
+    if applied.parameter not in scope_keys:
+        return None
+    return ScopeContribution(op="zero", label=f"lost — {cond.name} ({applied.parameter})")
+
+
 def condition_scope_penalty(
     character: Character, game_data: GameData, scope_keys: set[str]
 ) -> ConditionEffect:
     """The condition overlay for a stat row answering to *scope_keys*.
 
-    Two mechanisms feed a stat row. A ``check_penalty`` condition (Impaired/Disabled)
-    that is unscoped (``None`` / ``"All checks"``) or whose parameter is one of
-    *scope_keys* contributes a flat ``delta``. A ``debilitate_trait`` condition
-    (Debilitated) whose parameter matches *scope_keys* loses the trait outright — an
-    ``op="zero"`` that dominates the delta. Scope keys are an ability row → ``{key,
-    name}`` or a skill row → ``{row_id, base_name}``. Returns the merged penalty, the
-    contributing condition ids (for strikethrough), and a tooltip breakdown.
+    Each applied condition's mechanisms are dispatched through
+    :data:`MECHANISM_SCOPES`; a handler that applies contributes a flat ``delta``, an
+    override ``op`` (``"zero"`` for a lost trait), and a tooltip label. Scope keys are
+    an ability row → ``{key, name}`` or a skill row → ``{row_id, base_name}``. Returns
+    the merged penalty, the contributing condition ids (for strikethrough), and a
+    tooltip breakdown.
     """
 
     catalog = game_data.condition_catalog()
@@ -322,20 +382,18 @@ def condition_scope_penalty(
         cond = catalog.get(applied.condition_id)
         if cond is None:
             continue
-        unscoped = applied.parameter in (None, "All checks")
-        if MECH_CHECK_PENALTY in cond.mechanisms and cond.penalty is not None:
-            if not (unscoped or applied.parameter in scope_keys):
+        for mechanism in cond.mechanisms:
+            handler = MECHANISM_SCOPES.get(mechanism)
+            if handler is None:
                 continue
-            total += cond.penalty
+            contribution = handler(cond, applied, scope_keys)
+            if contribution is None:
+                continue
+            total += contribution.delta
+            if contribution.op:
+                op = contribution.op
             ids.add(cond.id)
-            label = cond.name if unscoped else f"{cond.name} ({applied.parameter})"
-            parts.append(f"{cond.penalty:+d} {label}")
-        elif MECH_DEBILITATE_TRAIT in cond.mechanisms and applied.parameter in scope_keys:
-            # A debilitated trait is effectively lost (skills read as untrained, an
-            # ability auto-fails its checks) — zero the shown number and strike it out.
-            op = "zero"
-            ids.add(cond.id)
-            parts.append(f"lost — {cond.name} ({applied.parameter})")
+            parts.append(contribution.label)
     return ConditionEffect(
         delta=total, op=op, condition_ids=frozenset(ids), tooltip="; ".join(parts)
     )

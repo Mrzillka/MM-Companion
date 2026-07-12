@@ -124,6 +124,8 @@ class Skill:
     focuses: tuple[str, ...] = ()
     description: str = ""
     specialized_cost: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,8 @@ class Advantage:
     focused: bool = False
     initiative_bonus_per_rank: int = 0
     initiative_ability_choice: tuple[str, ...] = ()
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
     @property
     def type(self) -> str:
@@ -755,6 +759,19 @@ def _parse_skill(s: dict) -> Skill:
         focuses=tuple(s.get("focuses", ())),
         description=s.get("description", ""),
         specialized_cost=bool(s.get("specializedCost", False)),
+        extra=_extras(
+            s,
+            "name",
+            "ability",
+            "focused",
+            "id",
+            "trainedOnly",
+            "action",
+            "specializations",
+            "focuses",
+            "description",
+            "specializedCost",
+        ),
     )
 
 
@@ -772,6 +789,20 @@ def _parse_advantage(a: dict) -> Advantage:
         focused=bool(a.get("focused", False)),
         initiative_bonus_per_rank=int(a.get("initiativeBonusPerRank", 0)),
         initiative_ability_choice=tuple(a.get("initiativeAbilityChoice", ())),
+        extra=_extras(
+            a,
+            "name",
+            "ranked",
+            "description",
+            "id",
+            "types",
+            "type",
+            "maxRank",
+            "maxRankKind",
+            "focused",
+            "initiativeBonusPerRank",
+            "initiativeAbilityChoice",
+        ),
     )
 
 

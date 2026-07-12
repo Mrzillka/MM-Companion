@@ -7,7 +7,6 @@ import math
 from ..character import Character
 from ..data_loader import GameData, Modifier
 from ..powers import (
-    ALTERNATE_EFFECT_MODIFIER,
     STRUCTURE_ARRAY,
     Power,
     PowerEffectInstance,
@@ -237,11 +236,12 @@ def array_alternate_cost(game_data: GameData) -> int:
     """The flat point cost of one array alternate, read from the ``Alternate Effect`` extra.
 
     Kept data-driven: the number lives on the ``alternate_effect`` modifier in
-    ``modifiers.json`` (``costValue``), not hardcoded here. Falls back to 1 if the
-    record is missing.
+    ``modifiers.json`` (``costValue``), and *which* modifier id counts as the array
+    alternate comes from ``system.json`` (``alternate_effect_modifier``), not hardcoded
+    here. Falls back to 1 if the record is missing.
     """
 
-    modifier = game_data.modifier_catalog().get(ALTERNATE_EFFECT_MODIFIER)
+    modifier = game_data.modifier_catalog().get(game_data.system.alternate_effect_modifier)
     return modifier.cost_value if modifier else 1
 
 

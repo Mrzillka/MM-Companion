@@ -98,13 +98,17 @@ def resistance_total(char: Character, game_data: GameData, key: str) -> int:
     return base + bought + (bonus.amount if bonus else 0)
 
 
-def defense_class(char: Character, game_data: GameData, key: str = "DEF") -> int:
-    """The DC an attacker must beat: ``10 + defense rank`` (``mm-core-mechanics.md`` §5)."""
+def defense_class(char: Character, game_data: GameData, key: str | None = None) -> int:
+    """The DC an attacker must beat: ``base + defense rank`` (``mm-core-mechanics.md`` §5).
 
-    return 10 + resistance_total(char, game_data, key)
+    The base (10 in the core rules) and the default defence trait key both come from
+    ``system.json`` (``defense_dc_base`` / ``trait_keys.defense``), so a mod can retune
+    either without touching this resolver.
+    """
 
-
-DEFAULT_INITIATIVE_ABILITY = "AGL"
+    if key is None:
+        key = game_data.system.trait_keys.defense
+    return game_data.system.defense_dc_base + resistance_total(char, game_data, key)
 
 
 def initiative_ability(char: Character, game_data: GameData) -> str:
@@ -112,8 +116,8 @@ def initiative_ability(char: Character, game_data: GameData) -> str:
 
     An advantage that offers an ``initiative_ability_choice`` (Alternate Initiative)
     and whose selection stored a valid choice in its ``parameter`` replaces the
-    default Agility with that mental ability. The first such advantage wins; without
-    one, initiative uses :data:`DEFAULT_INITIATIVE_ABILITY`.
+    default with that mental ability. The first such advantage wins; without one,
+    initiative uses ``system.json``'s ``default_initiative_ability`` (Agility).
     """
 
     for selection in char.advantages:
@@ -124,7 +128,7 @@ def initiative_ability(char: Character, game_data: GameData) -> str:
             and selection.parameter in advantage.initiative_ability_choice
         ):
             return selection.parameter
-    return DEFAULT_INITIATIVE_ABILITY
+    return game_data.system.default_initiative_ability
 
 
 def initiative_advantage_bonus(char: Character, game_data: GameData) -> int:

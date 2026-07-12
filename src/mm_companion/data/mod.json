@@ -16,6 +16,7 @@
     "effect_modifiers.json",
     "effect_readouts.json",
     "costs.json",
+    "system.json",
     "measurements.json",
     "movement.json"
   ]

@@ -377,7 +377,7 @@ def effect_stat_rows(
     if attack_bonus is not None:
         attack = attack_bonus
     elif char is not None:
-        attack = effective_ability(char, game_data, "ATK")
+        attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
     else:
         attack = effect.rank
 

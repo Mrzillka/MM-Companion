@@ -43,14 +43,16 @@ def advantage_rank_cap(advantage, power_level: int) -> int | None:
     return None
 
 
-def heroic_advantage_budget(power_level: int) -> int:
-    """Total ranks available across all Heroic-type advantages: ``floor(power_level / 2)``.
+def heroic_advantage_budget(power_level: int, divisor: int = 2) -> int:
+    """Total ranks available across all Heroic-type advantages: ``power_level // divisor``.
 
     One shared pool for every Heroic advantage on the sheet (``mm-advantages-design.md``
-    §3.4), not a per-advantage cap.
+    §3.4), not a per-advantage cap. The divisor (2 in the core rules) comes from
+    ``system.json`` (``heroic_budget_divisor``) at the resolver's call sites; it defaults
+    here so the bare ``heroic_advantage_budget(power_level)`` form keeps working.
     """
 
-    return power_level // 2
+    return power_level // divisor
 
 
 def heroic_advantage_ranks(char: Character, game_data: GameData) -> int:
@@ -89,7 +91,7 @@ def advantage_violations(char: Character, game_data: GameData) -> list[str]:
         if cap is not None and selection.rank > cap:
             violations.append(f"{advantage.name} rank {selection.rank} exceeds its cap of {cap}.")
 
-    budget = heroic_advantage_budget(pl)
+    budget = heroic_advantage_budget(pl, game_data.system.heroic_budget_divisor)
     used = heroic_advantage_ranks(char, game_data)
     if used > budget:
         violations.append(

@@ -80,7 +80,10 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         # An effect linked to a Close/Ranged Combat focus uses that focus's total as
         # its attack bonus (replacing the bare Attack ability); otherwise the Attack.
         linked = effect_attack_skill_bonus(effect, char, game_data)
-        attack_ability = linked if linked is not None else effective_ability(char, game_data, "ATK")
+        attack_key = game_data.system.trait_keys.attack
+        attack_ability = (
+            linked if linked is not None else effective_ability(char, game_data, attack_key)
+        )
         impact = _effective_stats(effect, game_data)[3]
         rank = effect_effective_rank(effect, game_data, char)
         if effect_makes_attack(effect, game_data):
@@ -184,9 +187,10 @@ def power_linked_range_violations(power: Power, game_data: GameData) -> list[str
 def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     """Report Power Level cap breaches (``mm-core-mechanics.md`` §7); empty list = valid.
 
-    Evaluates the character-wide caps: per-skill modifier, Dodge + Toughness, and
-    Fortitude + Will. The attack + effect-rank cap is per-power and checked in
-    :func:`power_pl_violations` instead.
+    Evaluates the character-wide caps: per-skill modifier plus each paired-resistance
+    cap (Dodge + Toughness, Fortitude + Will). The trait pairings and their labels come
+    from ``system.json`` (``paired_caps``), not this resolver. The attack + effect-rank
+    cap is per-power and checked in :func:`power_pl_violations` instead.
     """
 
     caps = game_data.costs.power_level.caps
@@ -201,16 +205,13 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
             if total > limit:
                 violations.append(f"{row_id} modifier {total} exceeds PL cap {limit}.")
 
-    def _pair(cap_name: str, a_key: str, b_key: str, label: str) -> None:
-        cap = caps.get(cap_name)
+    for pair in game_data.system.paired_caps:
+        cap = caps.get(pair.cap)
         if cap is None:
-            return
+            continue
         limit = cap.limit(pl)
-        value = resistance_total(char, game_data, a_key) + resistance_total(char, game_data, b_key)
+        value = sum(resistance_total(char, game_data, key) for key in pair.traits)
         if value > limit:
-            violations.append(f"{label} {value} exceeds PL cap {limit}.")
-
-    _pair("defense_toughness", "DODGE", "TOUGHNESS", "Dodge + Toughness")
-    _pair("fortitude_will", "FORTITUDE", "WILL", "Fortitude + Will")
+            violations.append(f"{pair.label} {value} exceeds PL cap {limit}.")
 
     return violations

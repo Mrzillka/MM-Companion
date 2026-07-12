@@ -19,6 +19,19 @@ from ..data_loader import Condition, GameData, RandomActionRow
 from ..dice import roll_d20
 from ..registry import Registry
 
+# The parameter values that mean "not scoped to a category" — from ``system.json``
+# (``unscoped_scope_values``). ``condition_scope_penalty`` refreshes this from the
+# active ``GameData`` before it dispatches, so the registry mechanism handlers — whose
+# ``(cond, applied, scope_keys)`` signature can't take ``game_data`` — can read the
+# mod-overridable set. Callers that already hold ``game_data`` read it directly.
+_UNSCOPED_SCOPE_VALUES: tuple[str, ...] = ("All checks",)
+
+
+def _is_unscoped(parameter: str | None, unscoped_values: tuple[str, ...]) -> bool:
+    """Whether a chosen scope parameter means "applies to everything"."""
+
+    return parameter is None or parameter in unscoped_values
+
 
 def _param_type(condition: Condition | None) -> str:
     """The parameter input type of a condition (``""`` when it takes no parameter)."""
@@ -182,12 +195,13 @@ def condition_check_penalty(
     """
 
     catalog = game_data.condition_catalog()
+    unscoped_values = game_data.system.unscoped_scope_values
     total = 0
     for applied in character.conditions:
         cond = catalog.get(applied.condition_id)
         if cond is None or cond.penalty is None or MECH_CHECK_PENALTY not in cond.mechanisms:
             continue
-        unscoped = applied.parameter in (None, "All checks")
+        unscoped = _is_unscoped(applied.parameter, unscoped_values)
         if unscoped or (scope is not None and applied.parameter == scope):
             total += cond.penalty
     return total
@@ -338,7 +352,7 @@ def _scope_check_penalty(
 
     if cond.penalty is None:
         return None
-    unscoped = applied.parameter in (None, "All checks")
+    unscoped = _is_unscoped(applied.parameter, _UNSCOPED_SCOPE_VALUES)
     if not (unscoped or applied.parameter in scope_keys):
         return None
     label = cond.name if unscoped else f"{cond.name} ({applied.parameter})"
@@ -373,6 +387,8 @@ def condition_scope_penalty(
     tooltip breakdown.
     """
 
+    global _UNSCOPED_SCOPE_VALUES
+    _UNSCOPED_SCOPE_VALUES = game_data.system.unscoped_scope_values
     catalog = game_data.condition_catalog()
     total = 0
     op = ""
@@ -427,12 +443,13 @@ def resistance_condition_effect(
     """
 
     catalog = game_data.condition_catalog()
+    trait_keys = game_data.system.trait_keys
     delta = 0
     op = ""
     ids: set[str] = set()
     parts: list[str] = []
 
-    if res_key == "TOUGHNESS":
+    if res_key == trait_keys.toughness:
         pen = hit_stack_penalty(character, game_data)
         if pen:
             delta += pen
@@ -442,8 +459,8 @@ def resistance_condition_effect(
                     ids.add(cond.id)
                     parts.append(f"{pen:+d} {cond.name} ×{applied.count}")
 
-    if res_key in ("DODGE", "DEF"):
-        stat = "dodge" if res_key == "DODGE" else "defense"
+    if res_key in (trait_keys.dodge, trait_keys.defense):
+        stat = "dodge" if res_key == trait_keys.dodge else "defense"
         chosen = condition_defense_mods(character, game_data).get(stat, "")
         if chosen:
             op = chosen

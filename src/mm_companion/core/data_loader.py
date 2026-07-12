@@ -540,6 +540,51 @@ class Costs:
 
 
 @dataclass(frozen=True)
+class TraitKeys:
+    """The trait-key strings the resolvers reference, from ``system.json``.
+
+    Keeping them in data means a mod can rename or re-point the combat traits
+    (e.g. an Attack ability, the active-defence resistances) without a code change.
+    """
+
+    attack: str = "ATK"
+    defense: str = "DEF"
+    dodge: str = "DODGE"
+    toughness: str = "TOUGHNESS"
+
+
+@dataclass(frozen=True)
+class PairedCap:
+    """A Power-Level cap that sums two resistance traits (``mm-core-mechanics.md`` §7).
+
+    ``cap`` names the :class:`PowerLevelCap` in ``costs.json``; ``traits`` are the two
+    resistance keys whose totals are summed against it; ``label`` is the message prefix.
+    """
+
+    cap: str
+    traits: tuple[str, ...]
+    label: str
+
+
+@dataclass(frozen=True)
+class SystemRules:
+    """System-level rule references (from ``system.json``).
+
+    The trait keys, formulas, sentinel scope strings, and structural modifier ids the
+    ``core.rules`` resolvers read instead of hardcoding — so a mod can retune them.
+    """
+
+    default_initiative_ability: str = "AGL"
+    defense_dc_base: int = 10
+    heroic_budget_divisor: int = 2
+    trait_keys: TraitKeys = field(default_factory=TraitKeys)
+    paired_caps: tuple[PairedCap, ...] = ()
+    unscoped_scope_values: tuple[str, ...] = ("All checks",)
+    alternate_effect_modifier: str = "alternate_effect"
+    linked_modifier: str = "linked"
+
+
+@dataclass(frozen=True)
 class SizeRow:
     """One row of the Size Table (from ``measurements.json``'s ``sizeTable``).
 
@@ -672,6 +717,7 @@ class GameData:
     duration_action_floor: dict[str, str] = field(default_factory=dict)
     effect_readouts: dict[str, tuple[Readout, ...]] = field(default_factory=dict)
     movement: Movement = field(default_factory=Movement)
+    system: SystemRules = field(default_factory=SystemRules)
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1137,6 +1183,44 @@ def _parse_costs(raw: dict) -> Costs:
     )
 
 
+def _parse_system(raw: dict) -> SystemRules:
+    """Parse ``system.json`` into :class:`SystemRules`, tolerating unknown keys.
+
+    Every field falls back to its dataclass default, so a mod (or a stripped file)
+    can override only the keys it cares about.
+    """
+
+    sys = raw.get("system", raw)
+    defaults = SystemRules()
+    tk_raw = sys.get("trait_keys", {})
+    trait_keys = TraitKeys(
+        attack=tk_raw.get("attack", defaults.trait_keys.attack),
+        defense=tk_raw.get("defense", defaults.trait_keys.defense),
+        dodge=tk_raw.get("dodge", defaults.trait_keys.dodge),
+        toughness=tk_raw.get("toughness", defaults.trait_keys.toughness),
+    )
+    paired_caps = tuple(
+        PairedCap(cap=p["cap"], traits=tuple(p["traits"]), label=p["label"])
+        for p in sys.get("paired_caps", [])
+    )
+    return SystemRules(
+        default_initiative_ability=sys.get(
+            "default_initiative_ability", defaults.default_initiative_ability
+        ),
+        defense_dc_base=int(sys.get("defense_dc_base", defaults.defense_dc_base)),
+        heroic_budget_divisor=int(sys.get("heroic_budget_divisor", defaults.heroic_budget_divisor)),
+        trait_keys=trait_keys,
+        paired_caps=paired_caps,
+        unscoped_scope_values=tuple(
+            sys.get("unscoped_scope_values", defaults.unscoped_scope_values)
+        ),
+        alternate_effect_modifier=sys.get(
+            "alternate_effect_modifier", defaults.alternate_effect_modifier
+        ),
+        linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+    )
+
+
 # Candidate id fields for record lists, tried in order. Whichever a list's dict
 # elements all carry identifies records for the by-id merge; a list whose elements
 # share none (e.g. an ``options`` list of strings) is replaced wholesale by a mod.
@@ -1225,6 +1309,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     effect_modifiers_raw = content.get("effect_modifiers.json", {})
     effect_readouts_raw = content.get("effect_readouts.json", {})
     costs_raw = content.get("costs.json", {})
+    system_raw = content.get("system.json", {})
     measurements_raw = content.get("measurements.json", {})
     movement_raw = content.get("movement.json", {})
 
@@ -1247,6 +1332,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
+        system=_parse_system(system_raw),
     )
 
 

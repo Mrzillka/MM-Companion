@@ -8,6 +8,7 @@ the rules package.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..character import Character
@@ -21,6 +22,7 @@ from ..components import (
 )
 from ..data_loader import GameData
 from ..powers import STRUCTURE_ARRAY, Power, PowerEffectInstance, PowerGroup, PowerNode
+from ..registry import Registry
 
 # The trait categories a ``TraitBoost`` can name that map to a numeric trait bonus on
 # the sheet (``defense`` resistances live in the resistances list).
@@ -38,6 +40,55 @@ class TraitBonus:
 
     amount: int
     sources: tuple[str, ...]
+
+
+# --- statIntegration pattern registry -------------------------------------------------
+# How an effect's contribution reaches the sheet (§5). Each of the base patterns
+# registers a :class:`PatternBehaviour`: ``standing`` — does it sit on the sheet as a
+# live bonus (the passive patterns) rather than an on-demand / resource-pool effect that
+# never stands; ``toggled`` — does it carry an implicit player on/off switch (a
+# Sustained/Continuous ``passive_toggle``). A mod's Python module can register another
+# pattern. An *unregistered* pattern resolves to ``None`` and each call site keeps its
+# pre-registry default (fall through in :func:`effect_is_active`, non-standing in
+# :func:`power_has_standing_effect`, no implied toggle) — behaviour unchanged.
+
+
+@dataclass(frozen=True)
+class PatternBehaviour:
+    """The runtime traits of a statIntegration pattern (§5-6)."""
+
+    standing: bool  # contributes a standing bonus that can sit on the sheet
+    toggled: bool  # carries an implicit player toggle (a passive_toggle effect)
+
+
+PATTERN_BEHAVIOURS: Registry[PatternBehaviour] = Registry("statIntegration.pattern")
+PATTERN_BEHAVIOURS.register(PASSIVE_PERMANENT, PatternBehaviour(standing=True, toggled=False))
+PATTERN_BEHAVIOURS.register(PASSIVE_TOGGLE, PatternBehaviour(standing=True, toggled=True))
+PATTERN_BEHAVIOURS.register(INSTANT_ACTION, PatternBehaviour(standing=False, toggled=False))
+PATTERN_BEHAVIOURS.register(RESOURCE_POOL, PatternBehaviour(standing=False, toggled=False))
+
+
+# --- runtime gate registry ------------------------------------------------------------
+# What can switch an otherwise-active effect off (§7). Each gate kind registers a
+# predicate ``(power, effect) -> bool`` answering "does this gate currently block the
+# effect?". Only the gates that gate *here* register a blocker: the Activation gate is
+# the power's master switch (``power.activated``, checked directly) and the Limited gate
+# is informational, so neither registers and both are ignored in
+# :func:`effect_is_active`. A mod can register a new gate kind.
+GateBlock = Callable[[Power, PowerEffectInstance], bool]
+GATE_KINDS: Registry[GateBlock] = Registry("gate.kind")
+
+
+@GATE_KINDS.handler(GATE_REMOVABLE)
+def _gate_removable(power: Power, effect: PowerEffectInstance) -> bool:
+    """A Removable gate blocks while the associated item is absent."""
+    return not power.item_present
+
+
+@GATE_KINDS.handler(GATE_TOGGLE)
+def _gate_toggle(power: Power, effect: PowerEffectInstance) -> bool:
+    """A toggle gate blocks while the player has switched the effect off."""
+    return not effect.toggled_on
 
 
 def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
@@ -110,7 +161,8 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
     """
 
     pattern = base.integration.pattern if base.integration else ""
-    if pattern in (INSTANT_ACTION, RESOURCE_POOL):
+    behaviour = PATTERN_BEHAVIOURS.get(pattern)
+    if behaviour is not None and not behaviour.standing:  # instant-action / resource-pool
         return False
     if effect.suppressed:
         return False
@@ -119,10 +171,12 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
     if not power.array_active:  # an array member not currently selected as active
         return False
     gates = _effect_gates(effect, game_data)
-    if GATE_REMOVABLE in gates and not power.item_present:
-        return False
-    if (pattern == PASSIVE_TOGGLE or GATE_TOGGLE in gates) and not effect.toggled_on:
-        return False
+    if behaviour is not None and behaviour.toggled:  # passive_toggle implies a toggle gate
+        gates = gates | {GATE_TOGGLE}
+    for gate in gates:
+        blocker = GATE_KINDS.get(gate)
+        if blocker is not None and blocker(power, effect):
+            return False
     return True
 
 
@@ -138,7 +192,8 @@ def power_runtime_gates(power: Power, game_data: GameData) -> set[str]:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None:
             continue
-        if base.integration and base.integration.pattern == PASSIVE_TOGGLE:
+        behaviour = PATTERN_BEHAVIOURS.get(base.integration.pattern) if base.integration else None
+        if behaviour is not None and behaviour.toggled:
             gates.add(GATE_TOGGLE)
         gates |= _effect_gates(effect, game_data)
     return gates
@@ -156,15 +211,10 @@ def power_has_standing_effect(power: Power, game_data: GameData) -> bool:
 
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-        if (
-            base
-            and base.integration
-            and base.integration.pattern
-            in (
-                PASSIVE_PERMANENT,
-                PASSIVE_TOGGLE,
-            )
-        ):
+        if base is None or not base.integration:
+            continue
+        behaviour = PATTERN_BEHAVIOURS.get(base.integration.pattern)
+        if behaviour is not None and behaviour.standing:
             return True
     return False
 

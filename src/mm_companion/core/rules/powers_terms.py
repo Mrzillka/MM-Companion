@@ -547,38 +547,60 @@ def _readout_rows(readout, effect: PowerEffectInstance, game_data: GameData) -> 
     return handler(readout, effect, game_data)
 
 
+# One handler per config-field ``type`` that renders its stored value specially
+# (``mm-powers-architecture.md`` §9). Each takes ``(field, value)`` and returns the
+# display text. Only the types whose stored shape isn't a plain option value need a
+# handler; the base ``allocation``/``repeatable`` renderers are registered below. A
+# mod's Python module can add a type by registering another handler. An unregistered
+# type (``select``/``multiselect``/``text`` and any mod type without a handler) falls
+# through to the generic option-label renderer in :func:`_config_display`.
+ConfigDisplay = Callable[[object, object], str]
+CONFIG_DISPLAY_KINDS: Registry[ConfigDisplay] = Registry("config_field.type")
+
+
+@CONFIG_DISPLAY_KINDS.handler("allocation")
+def _config_display_allocation(field, value) -> str:
+    by_id = {o.id: o for o in field.alloc_options}
+    parts = []
+    for entry in value:
+        option = by_id.get(entry.get("id"))
+        if option is None:
+            continue
+        label = option.label
+        if len(option.tiers) > 1:
+            label += f" {entry.get('tier', 1)}"
+        parts.append(label)
+    return ", ".join(parts)
+
+
+@CONFIG_DISPLAY_KINDS.handler("repeatable")
+def _config_display_repeatable(field, value) -> str:
+    name_key = field.columns[0].key if field.columns else "name"
+    int_key = next((c.key for c in field.columns if c.type == "int"), None)
+    parts = []
+    for row in value:
+        name = str(row.get(name_key, "")).strip()
+        if not name:
+            continue
+        if int_key and row.get(int_key):
+            name += f" ({row[int_key]})"
+        parts.append(name)
+    return ", ".join(parts)
+
+
 def _config_display(field, value) -> str:
     """Display text for a stored config ``value``: an option's label, or, for a
     multiselect list, its labels joined with ``+`` (falls back to the raw value).
 
     ``allocation`` values (a list of ``{"id", "tier"}``) render as their option
     labels (tiered ones carry the chosen tier number); ``repeatable`` values (a list
-    of row dicts) render as their named rows, an Immunity scope carrying its rank."""
+    of row dicts) render as their named rows, an Immunity scope carrying its rank.
+    Dispatches on the field's ``type`` through :data:`CONFIG_DISPLAY_KINDS`; an
+    unregistered type falls back to the generic option-label rendering."""
 
-    if field.type == "allocation":
-        by_id = {o.id: o for o in field.alloc_options}
-        parts = []
-        for entry in value:
-            option = by_id.get(entry.get("id"))
-            if option is None:
-                continue
-            label = option.label
-            if len(option.tiers) > 1:
-                label += f" {entry.get('tier', 1)}"
-            parts.append(label)
-        return ", ".join(parts)
-    if field.type == "repeatable":
-        name_key = field.columns[0].key if field.columns else "name"
-        int_key = next((c.key for c in field.columns if c.type == "int"), None)
-        parts = []
-        for row in value:
-            name = str(row.get(name_key, "")).strip()
-            if not name:
-                continue
-            if int_key and row.get(int_key):
-                name += f" ({row[int_key]})"
-            parts.append(name)
-        return ", ".join(parts)
+    handler = CONFIG_DISPLAY_KINDS.get(field.type)
+    if handler is not None:
+        return handler(field, value)
 
     values = value if isinstance(value, list) else [value]
     labels = (next((o.label for o in field.options if o.value == v), v) for v in values)

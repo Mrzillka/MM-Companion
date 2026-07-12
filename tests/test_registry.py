@@ -27,7 +27,12 @@ from mm_companion.core.rules.conditions import (
     apply_condition,
     condition_scope_penalty,
 )
-from mm_companion.core.rules.powers_terms import READOUT_KINDS, EffectStat
+from mm_companion.core.rules.powers_terms import (
+    CONFIG_DISPLAY_KINDS,
+    READOUT_KINDS,
+    EffectStat,
+    _config_display,
+)
 from mm_companion.core.rules.runtime import (
     GATE_KINDS,
     PATTERN_BEHAVIOURS,
@@ -129,6 +134,45 @@ def test_mod_can_register_a_new_gate_kind() -> None:
     finally:
         GATE_KINDS.unregister(GATE_LIMITED)
     assert effect_is_active(power, effect, base, data) is True
+
+
+def test_base_config_display_kinds_are_registered() -> None:
+    # Only the config-field types whose stored value isn't a plain option value carry
+    # a display handler; select/multiselect/text fall through to the generic renderer.
+    assert "allocation" in CONFIG_DISPLAY_KINDS
+    assert "repeatable" in CONFIG_DISPLAY_KINDS
+    assert "select" not in CONFIG_DISPLAY_KINDS
+
+
+def test_config_display_falls_back_to_option_labels() -> None:
+    """An unregistered field type resolves stored values to their option labels."""
+
+    from mm_companion.core.data_loader import ConfigOption, EffectConfigField
+
+    field = EffectConfigField(
+        key="mode",
+        label="Mode",
+        type="select",
+        options=(ConfigOption("dazed", "Dazed"), ConfigOption("stunned", "Stunned")),
+    )
+    assert _config_display(field, "stunned") == "Stunned"
+    assert _config_display(field, ["dazed", "stunned"]) == "Dazed + Stunned"
+
+
+def test_mod_can_register_a_new_config_display_kind() -> None:
+    """A Python mod registering a field-type handler renders through ``_config_display``."""
+
+    from mm_companion.core.data_loader import EffectConfigField
+
+    field = EffectConfigField(key="shout", label="Shout", type="shout")
+
+    CONFIG_DISPLAY_KINDS.register("shout", lambda f, value: str(value).upper())
+    try:
+        assert _config_display(field, "boom") == "BOOM"
+    finally:
+        CONFIG_DISPLAY_KINDS.unregister("shout")
+    # Unregistered again → falls back to generic rendering (raw value, no options).
+    assert _config_display(field, "boom") == "boom"
 
 
 def test_base_mechanism_scopes_are_registered() -> None:

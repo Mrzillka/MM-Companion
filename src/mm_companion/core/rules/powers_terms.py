@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..character import Character
 from ..data_loader import GameData, Modifier
 from ..powers import STRUCTURE_ARRAY, STRUCTURE_LINKED, Power, PowerEffectInstance
+from ..registry import Registry
 from .derived import effective_ability
 from .powers_cost import array_alternate_cost, array_base_index, effect_effective_rank
 from .runtime import _resolved_trait_target, _trait_category, _trait_name
@@ -450,61 +452,99 @@ def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> lis
     return rows
 
 
-def _readout_rows(readout, effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
-    """Render one :class:`~mm_companion.core.data_loader.Readout` to table rows."""
+# One handler per readout ``kind`` (``mm-powers-ui-design.md`` §2 Tier 5). Each takes
+# ``(readout, effect, game_data)`` and returns the rendered rows. The base kinds are
+# registered below; a mod's Python module can add a kind by registering another handler.
+# An unregistered kind resolves to no rows (see :func:`_readout_rows`).
+ReadoutHandler = Callable[[object, PowerEffectInstance, GameData], "list[EffectStat]"]
+READOUT_KINDS: Registry[ReadoutHandler] = Registry("readout.kind")
 
+
+@READOUT_KINDS.handler("size_table")
+def _readout_size_table(readout, effect: PowerEffectInstance, game_data: GameData):
     rank = effect.rank
     data = readout.data
-    if readout.kind == "size_table":
-        sign = int(data.get("sign", 1))
-        size = game_data.measurements.size_row(sign * rank)
-        if size is None or rank <= 0:
-            return []
-        out = [EffectStat("size", readout.label or "Size", "", size.size_category, "")]
-        for label, mod in (
-            ("Defense", size.defense_mod),
-            ("Damage", size.damage_mod),
-            ("Toughness", size.toughness_mod),
-            ("Speed", size.speed_mod),
-            ("Intimidation", size.intimidation_mod),
-            ("Stealth", size.stealth_mod),
-        ):
-            if mod:
-                change = "better" if mod > 0 else "worse"
-                out.append(EffectStat(f"size_{label.lower()}", label, "", f"{mod:+d}", change))
-        return out
-    if readout.kind == "state":
-        by_rank = {int(k): v for k, v in data.get("byRank", {}).items()}
-        if not by_rank:
-            return []
-        eligible = [k for k in sorted(by_rank) if k <= rank]
-        chosen = by_rank[eligible[-1]] if eligible else by_rank[min(by_rank)]
-        return [EffectStat(readout.label.lower() or "state", readout.label, "", chosen, "")]
-    if readout.kind == "measure_offsets":
-        column = data.get("column", "distance")
-        out = []
-        for row in data.get("rows", []):
-            value = game_data.measurements.label(column, rank + int(row.get("offset", 0)))
-            if not value:
-                continue
-            if row.get("perRound"):
-                value = f"{value}/round"
-            out.append(EffectStat("readout", row.get("label", ""), "", value, ""))
-        return out
-    if readout.kind == "thresholds":
-        return [
-            EffectStat("readout", row.get("label", ""), "", row.get("text", ""), "")
-            for row in data.get("rows", [])
-            if rank >= int(row.get("minRank", 0))
-        ]
-    if readout.kind == "config_flag":
-        on = bool(effect.config.get(data.get("key", "")))
-        text = data.get("trueText", "") if on else data.get("falseText", "")
-        return [EffectStat(readout.label.lower() or "readout", readout.label, "", text, "")]
-    if readout.kind == "points_per_rank":
-        per = int(data.get("perRank", 1))
-        return [EffectStat("pool", readout.label, "", f"{rank * per} points", "")]
-    return []
+    sign = int(data.get("sign", 1))
+    size = game_data.measurements.size_row(sign * rank)
+    if size is None or rank <= 0:
+        return []
+    out = [EffectStat("size", readout.label or "Size", "", size.size_category, "")]
+    for label, mod in (
+        ("Defense", size.defense_mod),
+        ("Damage", size.damage_mod),
+        ("Toughness", size.toughness_mod),
+        ("Speed", size.speed_mod),
+        ("Intimidation", size.intimidation_mod),
+        ("Stealth", size.stealth_mod),
+    ):
+        if mod:
+            change = "better" if mod > 0 else "worse"
+            out.append(EffectStat(f"size_{label.lower()}", label, "", f"{mod:+d}", change))
+    return out
+
+
+@READOUT_KINDS.handler("state")
+def _readout_state(readout, effect: PowerEffectInstance, game_data: GameData):
+    rank = effect.rank
+    by_rank = {int(k): v for k, v in readout.data.get("byRank", {}).items()}
+    if not by_rank:
+        return []
+    eligible = [k for k in sorted(by_rank) if k <= rank]
+    chosen = by_rank[eligible[-1]] if eligible else by_rank[min(by_rank)]
+    return [EffectStat(readout.label.lower() or "state", readout.label, "", chosen, "")]
+
+
+@READOUT_KINDS.handler("measure_offsets")
+def _readout_measure_offsets(readout, effect: PowerEffectInstance, game_data: GameData):
+    rank = effect.rank
+    data = readout.data
+    column = data.get("column", "distance")
+    out = []
+    for row in data.get("rows", []):
+        value = game_data.measurements.label(column, rank + int(row.get("offset", 0)))
+        if not value:
+            continue
+        if row.get("perRound"):
+            value = f"{value}/round"
+        out.append(EffectStat("readout", row.get("label", ""), "", value, ""))
+    return out
+
+
+@READOUT_KINDS.handler("thresholds")
+def _readout_thresholds(readout, effect: PowerEffectInstance, game_data: GameData):
+    rank = effect.rank
+    return [
+        EffectStat("readout", row.get("label", ""), "", row.get("text", ""), "")
+        for row in readout.data.get("rows", [])
+        if rank >= int(row.get("minRank", 0))
+    ]
+
+
+@READOUT_KINDS.handler("config_flag")
+def _readout_config_flag(readout, effect: PowerEffectInstance, game_data: GameData):
+    data = readout.data
+    on = bool(effect.config.get(data.get("key", "")))
+    text = data.get("trueText", "") if on else data.get("falseText", "")
+    return [EffectStat(readout.label.lower() or "readout", readout.label, "", text, "")]
+
+
+@READOUT_KINDS.handler("points_per_rank")
+def _readout_points_per_rank(readout, effect: PowerEffectInstance, game_data: GameData):
+    per = int(readout.data.get("perRank", 1))
+    return [EffectStat("pool", readout.label, "", f"{effect.rank * per} points", "")]
+
+
+def _readout_rows(readout, effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
+    """Render one :class:`~mm_companion.core.data_loader.Readout` to table rows.
+
+    Dispatches on the readout's ``kind`` through :data:`READOUT_KINDS`; an unregistered
+    kind renders nothing.
+    """
+
+    handler = READOUT_KINDS.get(readout.kind)
+    if handler is None:
+        return []
+    return handler(readout, effect, game_data)
 
 
 def _config_display(field, value) -> str:

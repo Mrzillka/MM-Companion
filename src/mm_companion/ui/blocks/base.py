@@ -10,16 +10,18 @@ one more descriptor.
 
 Every block widget already follows a uniform contract — construct with
 ``(data, character, parent=None)`` and expose ``set_locked(bool)`` — captured by
-the :class:`Block` protocol. Cross-block reactivity signals (``changed`` /
-``edited`` / the section-specific ones) are still wired by name in
-:mod:`mm_companion.ui.character_sheet`; a topic signal bus that lets a mod block
-plug into that wiring is a later step.
+the :class:`Block` protocol. Cross-block reactivity flows over a topic signal bus
+(:mod:`mm_companion.ui.blocks.bus`): a descriptor's ``publishes`` maps one of the
+block's Qt signals to the topics it raises, and ``subscribes`` maps a topic to
+the block method that recomputes on it. The sheet wires the whole web from these
+tables, so a mod block joins it without a
+:mod:`mm_companion.ui.character_sheet` edit.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from PySide6.QtWidgets import QWidget
@@ -53,6 +55,12 @@ class BlockDescriptor:
     ``default_row``/``default_col`` place the block in the default arrangement:
     blocks sharing a ``default_row`` sit side by side in that row, ordered by
     ``default_col``; rows stack in ascending ``default_row`` order.
+
+    ``publishes`` and ``subscribes`` describe the block's place on the topic
+    signal bus (:mod:`mm_companion.ui.blocks.bus`). ``publishes`` maps the name of
+    one of the block's Qt signals to the tuple of topics firing it raises;
+    ``subscribes`` maps a topic to the name of the block method that recomputes
+    when it fires. Both default empty (a purely presentational block).
     """
 
     key: str
@@ -61,3 +69,5 @@ class BlockDescriptor:
     size: BlockSize = BlockSize()
     default_row: int = 0
     default_col: int = 0
+    publishes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    subscribes: Mapping[str, str] = field(default_factory=dict)

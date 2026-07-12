@@ -11,9 +11,12 @@ scrolls vertically and each block shows its full content (no per-block scroll).
 It owns the shared :class:`Character` model that the blocks read and write, and
 recomputes derived values (spent power points) whenever a block reports a build
 change. The cross-block wiring (abilities feed skills and resistances, powers
-feed the enhanced totals, the build facts re-derive the power cards) works across
-windows unchanged — Qt signals don't care which window a block lives in. Emits
-:attr:`edited` on any user edit so a host window can track unsaved changes.
+feed the enhanced totals, the build facts re-derive the power cards) runs over a
+topic :class:`~mm_companion.ui.blocks.bus.SignalBus`: each block's descriptor
+declares the topics it publishes and subscribes, and this sheet connects them
+generically, so the wiring keeps working across floated windows and a mod block
+plugs in without editing this module. Emits :attr:`edited` on any user edit so a
+host window can track unsaved changes.
 """
 
 from __future__ import annotations
@@ -28,7 +31,8 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
-from mm_companion.ui.blocks import block_descriptors, default_rows
+from mm_companion.ui.blocks import SignalBus, block_descriptors, default_rows
+from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 
 
 class CharacterSheet(QWidget):
@@ -51,11 +55,11 @@ class CharacterSheet(QWidget):
         # self.skills, …) so the cross-block wiring can reach it by name. The
         # descriptor carries the dock title and size constraints; its default_row/col
         # feed the canvas's default arrangement.
-        descriptors = block_descriptors()
+        self._descriptors = block_descriptors()
         self._sections_by_key: dict[str, QWidget] = {}
         panels = []
         sizes = {}
-        for descriptor in descriptors:
+        for descriptor in self._descriptors:
             section = descriptor.factory(self._data, self.character)
             setattr(self, descriptor.key, section)
             self._sections_by_key[descriptor.key] = section
@@ -115,6 +119,11 @@ class CharacterSheet(QWidget):
     def canvas(self) -> BlockCanvas:
         return self._canvas
 
+    @property
+    def bus(self) -> SignalBus:
+        """The topic bus carrying the cross-block reactivity."""
+        return self._bus
+
     def save_layout(self) -> str:
         """The block arrangement as a JSON string (for settings.json)."""
         return json.dumps(self._canvas.arrangement())
@@ -140,82 +149,37 @@ class CharacterSheet(QWidget):
     # -- signal wiring -------------------------------------------------------
 
     def _wire_sections(self) -> None:
-        """Reproduce the cross-block wiring; see the class docstring for the shape."""
-        # Skill totals follow the ability spin boxes.
-        self.skills.set_ability_values(self.abilities.ability_values())
-        self.abilities.abilityChanged.connect(self.skills.set_ability_value)
-        # A moved ability re-seeds the resistances derived from it.
-        self.abilities.abilityChanged.connect(lambda *_: self.resistances.follow_ability_change())
+        """Wire the cross-block reactivity over the topic signal bus.
 
-        # Recompute derived values whenever any block reports a build change. The
-        # name/details and image blocks don't touch the build, so they carry no
-        # `changed` signal.
-        for section in self._sections():
-            if hasattr(section, "changed"):
-                section.changed.connect(self._recompute_derived)
+        Every block's descriptor declares which of its Qt signals publish which
+        bus topics (``publishes``) and which topics route to which of its methods
+        (``subscribes``); this loop connects the two, so the whole web is data on
+        the descriptors rather than hand-wired here. A mod block joins it just by
+        declaring the same tables — no edit to this method. The sheet subscribes
+        its own two build-wide concerns. See :mod:`mm_companion.ui.blocks.bus` for
+        the topic table and the exact fan-out it reproduces.
+        """
+        self._bus = SignalBus()
+        # Sheet-level subscribers: recompute spent power points on any build change,
+        # and surface any user edit for unsaved-change tracking. (Toggling a power
+        # on/off publishes BUILD_CHANGED but not EDITED, so a runtime toggle
+        # re-derives without marking the character dirty.)
+        self._bus.subscribe(BUILD_CHANGED, self._recompute_derived)
+        self._bus.subscribe(EDITED, self.edited.emit)
+
+        for descriptor in self._descriptors:
+            section = self._sections_by_key[descriptor.key]
+            for signal_name, topics in descriptor.publishes.items():
+                signal = getattr(section, signal_name)
+                for topic in topics:
+                    signal.connect(self._bus.make_publisher(topic))
+            for topic, method_name in descriptor.subscribes.items():
+                self._bus.subscribe(topic, getattr(section, method_name))
+
+        # No block emits at construction (each seeds its own view from the model as
+        # it is built), so seed the one build-wide readout the sheet owns — the
+        # spent-power-points pool label — once now.
         self._recompute_derived()
-
-        # A power change can add or drop a trait boost, so refresh the enhanced
-        # ability/resistance totals and the skill totals that read them.
-        self.powers.changed.connect(self.abilities.refresh_enhancements)
-        self.powers.changed.connect(self.resistances.refresh_enhancements)
-        self.powers.changed.connect(self.skills.refresh_totals)
-
-        # A condition change overlays penalties on the stat rows (a scoped Impaired on
-        # a skill, Hit on Toughness, a halved defense), so refresh the same views. A
-        # Debilitated condition can also name an advantage or a power, which those
-        # sections strike through as effectively lost.
-        self.conditions.conditionsChanged.connect(self.abilities.refresh_enhancements)
-        self.conditions.conditionsChanged.connect(self.resistances.refresh_enhancements)
-        self.conditions.conditionsChanged.connect(self.skills.refresh_totals)
-        self.conditions.conditionsChanged.connect(self.advantages.refresh_conditions)
-        self.conditions.conditionsChanged.connect(self.powers.refresh)
-
-        # And the reverse: a power's displayed numbers derive from character facts,
-        # so editing an ability/resistance/advantage or the Power Level re-derives
-        # the power cards. `refresh` only reads the model, so it never loops back.
-        self.abilities.changed.connect(self.powers.refresh)
-        self.resistances.changed.connect(self.powers.refresh)
-        self.advantages.changed.connect(self.powers.refresh)
-        self.system_info.changed.connect(self.powers.refresh)
-        # A power can link a Close/Ranged Combat focus as its attack skill, so a skill
-        # rank/mod edit re-derives that power's attack bonus and PL check.
-        self.skills.changed.connect(self.powers.refresh)
-        # The Heroic-advantage budget is floor(PL/2), so a Power Level edit reshapes
-        # the advantage rank caps and the budget display.
-        self.system_info.changed.connect(self.advantages.refresh_limits)
-
-        # The system block's derived readouts (speed, initiative, effective size) read
-        # abilities, advantages, and active powers, so re-derive them when any change.
-        self.abilities.abilityChanged.connect(lambda *_: self.system_info.refresh_derived())
-        self.abilities.changed.connect(self.system_info.refresh_derived)
-        self.advantages.changed.connect(self.system_info.refresh_derived)
-        self.powers.changed.connect(self.system_info.refresh_derived)
-        self.conditions.conditionsChanged.connect(self.system_info.refresh_derived)
-
-        # Surface any user edit for unsaved-change tracking. The stats/skills
-        # `changed` signals already fire on every edit; base_info (name), the image,
-        # system fields, and conditions have edits that don't affect the build, so they
-        # carry `edited`.
-        self.base_info.edited.connect(self.edited)
-        self.character_image.edited.connect(self.edited)
-        self.system_info.edited.connect(self.edited)
-        self.conditions.edited.connect(self.edited)
-        self.abilities.changed.connect(self.edited)
-        self.resistances.changed.connect(self.edited)
-        self.advantages.changed.connect(self.edited)
-        self.skills.changed.connect(self.edited)
-        self.powers.changed.connect(self.edited)
-
-        # Toggling a power on/off is runtime state, not part of the point build, and is
-        # not persisted — so it drives the same live-refresh fan-out as `powers.changed`
-        # above (a trait boost drops in or out of the sheet) but deliberately does *not*
-        # connect to `edited`, so it never marks the character dirty.
-        self.powers.runtimeChanged.connect(self._recompute_derived)
-        self.powers.runtimeChanged.connect(self.abilities.refresh_enhancements)
-        self.powers.runtimeChanged.connect(self.resistances.refresh_enhancements)
-        self.powers.runtimeChanged.connect(self.skills.refresh_totals)
-        self.powers.runtimeChanged.connect(self.system_info.refresh_derived)
 
     def _sections(self) -> tuple:
         return tuple(self._sections_by_key.values())

@@ -11,6 +11,7 @@ block by calling :func:`~mm_companion.ui.blocks.registry.register_block`.
 from __future__ import annotations
 
 from mm_companion.ui.blocks.base import Block, BlockDescriptor, BlockFactory
+from mm_companion.ui.blocks.bus import SignalBus
 from mm_companion.ui.blocks.registry import (
     BLOCKS,
     block_descriptors,
@@ -24,6 +25,7 @@ __all__ = [
     "BlockDescriptor",
     "BlockFactory",
     "BLOCKS",
+    "SignalBus",
     "block_descriptors",
     "default_rows",
     "register_block",

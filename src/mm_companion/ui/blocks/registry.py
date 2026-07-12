@@ -21,6 +21,16 @@ from collections import defaultdict
 from mm_companion.core.registry import Registry
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
 from mm_companion.ui.blocks.base import BlockDescriptor
+from mm_companion.ui.blocks.bus import (
+    ABILITY_CHANGED,
+    BUILD_CHANGED,
+    CAPS_CHANGED,
+    CONDITION_CHANGED,
+    DERIVED_CHANGED,
+    EDITED,
+    ENHANCEMENTS_CHANGED,
+    FACTS_CHANGED,
+)
 from mm_companion.ui.sections import (
     AbilitiesSection,
     AdvantagesSection,
@@ -65,28 +75,114 @@ def default_rows() -> list[list[str]]:
     return [[d.key for d in sorted(rows[row], key=lambda d: d.default_col)] for row in sorted(rows)]
 
 
-# (key, dock title, factory, default_row, default_col). Listed in construction
-# order; the row/col fields drive the default layout (see default_rows). Sizes are
-# read from block_sizes.json at registration so that config stays tweakable.
+# One row per base block: (key, dock title, factory, default_row, default_col,
+# publishes, subscribes). Listed in construction order; the row/col fields drive
+# the default layout (see default_rows). Sizes are read from block_sizes.json at
+# registration so that config stays tweakable. `publishes` maps a section Qt
+# signal to the bus topics it raises; `subscribes` maps a topic to the section
+# method that recomputes on it — together they reproduce the old hand-wired
+# cross-block signal web (see mm_companion.ui.blocks.bus for the topic table).
 _BASE_BLOCKS = [
-    ("base_info", "Name & Details", BaseInfoSection, 0, 0),
-    ("system_info", "Power Level & System", SystemInfoSection, 1, 0),
-    ("character_image", "Character Image", CharacterImageSection, 0, 1),
-    ("abilities", "Abilities", AbilitiesSection, 2, 0),
-    ("resistances", "Resistances", ResistancesSection, 2, 1),
-    ("conditions", "Conditions", ConditionsSection, 3, 0),
-    ("advantages", "Advantages", AdvantagesSection, 4, 0),
-    ("skills", "Skills", SkillsSection, 5, 0),
-    ("powers", "Powers", PowersSection, 6, 0),
+    ("base_info", "Name & Details", BaseInfoSection, 0, 0, {"edited": (EDITED,)}, {}),
+    (
+        "system_info",
+        "Power Level & System",
+        SystemInfoSection,
+        1,
+        0,
+        {"changed": (BUILD_CHANGED, FACTS_CHANGED, CAPS_CHANGED), "edited": (EDITED,)},
+        {DERIVED_CHANGED: "refresh_derived"},
+    ),
+    ("character_image", "Character Image", CharacterImageSection, 0, 1, {"edited": (EDITED,)}, {}),
+    (
+        "abilities",
+        "Abilities",
+        AbilitiesSection,
+        2,
+        0,
+        {
+            "abilityChanged": (ABILITY_CHANGED, DERIVED_CHANGED),
+            "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
+        },
+        {ENHANCEMENTS_CHANGED: "refresh_enhancements"},
+    ),
+    (
+        "resistances",
+        "Resistances",
+        ResistancesSection,
+        2,
+        1,
+        {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
+        {ABILITY_CHANGED: "follow_ability_change", ENHANCEMENTS_CHANGED: "refresh_enhancements"},
+    ),
+    (
+        "conditions",
+        "Conditions",
+        ConditionsSection,
+        3,
+        0,
+        {
+            "conditionsChanged": (
+                ENHANCEMENTS_CHANGED,
+                FACTS_CHANGED,
+                DERIVED_CHANGED,
+                CONDITION_CHANGED,
+            ),
+            "changed": (BUILD_CHANGED,),
+            "edited": (EDITED,),
+        },
+        {},
+    ),
+    (
+        "advantages",
+        "Advantages",
+        AdvantagesSection,
+        4,
+        0,
+        {"changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED)},
+        {CAPS_CHANGED: "refresh_limits", CONDITION_CHANGED: "refresh_conditions"},
+    ),
+    (
+        "skills",
+        "Skills",
+        SkillsSection,
+        5,
+        0,
+        {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
+        {ABILITY_CHANGED: "refresh_totals", ENHANCEMENTS_CHANGED: "refresh_totals"},
+    ),
+    (
+        "powers",
+        "Powers",
+        PowersSection,
+        6,
+        0,
+        {
+            "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
+            # A runtime on/off toggle drives the live refresh but is not a persisted
+            # edit, so it omits EDITED (and FACTS_CHANGED, to avoid re-deriving itself).
+            "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED),
+        },
+        {FACTS_CHANGED: "refresh"},
+    ),
 ]
 
 
 def register_base_blocks(*, replace: bool = False) -> None:
     """Register the nine base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
-    for key, title, factory, row, col in _BASE_BLOCKS:
+    for key, title, factory, row, col, publishes, subscribes in _BASE_BLOCKS:
         register_block(
-            BlockDescriptor(key, title, factory, sizes.get(key, BlockSize()), row, col),
+            BlockDescriptor(
+                key,
+                title,
+                factory,
+                sizes.get(key, BlockSize()),
+                row,
+                col,
+                publishes,
+                subscribes,
+            ),
             replace=replace,
         )
 

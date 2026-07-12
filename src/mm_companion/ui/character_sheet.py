@@ -28,18 +28,7 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
-from mm_companion.ui.block_sizes import load_block_sizes
-from mm_companion.ui.sections import (
-    AbilitiesSection,
-    AdvantagesSection,
-    BaseInfoSection,
-    CharacterImageSection,
-    ConditionsSection,
-    PowersSection,
-    ResistancesSection,
-    SkillsSection,
-    SystemInfoSection,
-)
+from mm_companion.ui.blocks import block_descriptors, default_rows
 
 
 class CharacterSheet(QWidget):
@@ -57,30 +46,22 @@ class CharacterSheet(QWidget):
         self._data = data or load_game_data()
         self.character = character or Character.new_default(self._data)
 
-        self.base_info = BaseInfoSection(self._data, self.character)
-        self.system_info = SystemInfoSection(self._data, self.character)
-        self.character_image = CharacterImageSection(self._data, self.character)
-        self.abilities = AbilitiesSection(self._data, self.character)
-        self.resistances = ResistancesSection(self._data, self.character)
-        self.conditions = ConditionsSection(self._data, self.character)
-        self.advantages = AdvantagesSection(self._data, self.character)
-        self.skills = SkillsSection(self._data, self.character)
-        self.powers = PowersSection(self._data, self.character)
-
-        # (block key, dock title, section). The key names the block for the layout
-        # model and looks up its size constraints in block_sizes.json.
-        panels = [
-            ("base_info", "Name & Details", self.base_info),
-            ("system_info", "Power Level & System", self.system_info),
-            ("character_image", "Character Image", self.character_image),
-            ("abilities", "Abilities", self.abilities),
-            ("resistances", "Resistances", self.resistances),
-            ("conditions", "Conditions", self.conditions),
-            ("advantages", "Advantages", self.advantages),
-            ("skills", "Skills", self.skills),
-            ("powers", "Powers", self.powers),
-        ]
-        self._canvas = BlockCanvas(panels, load_block_sizes())
+        # Build every block from the registry (single source of truth for the block
+        # set). Each block is exposed as an attribute under its key (self.abilities,
+        # self.skills, …) so the cross-block wiring can reach it by name. The
+        # descriptor carries the dock title and size constraints; its default_row/col
+        # feed the canvas's default arrangement.
+        descriptors = block_descriptors()
+        self._sections_by_key: dict[str, QWidget] = {}
+        panels = []
+        sizes = {}
+        for descriptor in descriptors:
+            section = descriptor.factory(self._data, self.character)
+            setattr(self, descriptor.key, section)
+            self._sections_by_key[descriptor.key] = section
+            panels.append((descriptor.key, descriptor.title, section))
+            sizes[descriptor.key] = descriptor.size
+        self._canvas = BlockCanvas(panels, sizes, default_rows())
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -237,17 +218,7 @@ class CharacterSheet(QWidget):
         self.powers.runtimeChanged.connect(self.system_info.refresh_derived)
 
     def _sections(self) -> tuple:
-        return (
-            self.base_info,
-            self.system_info,
-            self.character_image,
-            self.abilities,
-            self.resistances,
-            self.conditions,
-            self.advantages,
-            self.skills,
-            self.powers,
-        )
+        return tuple(self._sections_by_key.values())
 
     def _recompute_derived(self) -> None:
         """Refresh values the model derives from the build (spent power points)."""

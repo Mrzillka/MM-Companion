@@ -162,7 +162,15 @@ clean (see Licensing below).
   `QScrollArea` → `BlockCanvas`) → nine blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
-  `SkillsSection`, `PowersSection`. `CharacterSheet` is the central widget directly
+  `SkillsSection`, `PowersSection`. The block set is **not** hardcoded in the sheet:
+  it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
+  block (key, dock title, widget factory, `BlockSize`, default row/col), held in an
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The nine
+  base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
+  to build each section (exposing it as an attribute under its key so the name-based
+  cross-block wiring still reaches it) and passes `default_rows()` to the canvas. A
+  mod's Python module can `register_block(BlockDescriptor)` to add a block without
+  editing the sheet. `CharacterSheet` is the central widget directly
   (no outer wrapper — the sheet's own `QScrollArea` is the page the wheel guard
   targets). The former single base-info block was split three ways: `BaseInfoSection`
   keeps the descriptive **profile** fields (name & details), `CharacterImageSection`
@@ -196,10 +204,11 @@ clean (see Licensing below).
   or leave-floating), plus edge auto-scroll. Structural ops `float_block`,
   `dock_block`, `show_block`/`hide_block`, `arrangement`, `apply_arrangement`,
   `default_arrangement` are the headless-testable seams (drag outcomes without
-  synthetic mouse events). The default arrangement is `DEFAULT_ROWS` (the Name &
-  Details block beside the Character Image, then the System / Power Level block full
-  width, the Abilities | Resistances pair, then Conditions, Advantages, Skills,
-  Powers).
+  synthetic mouse events). The default arrangement is supplied by the sheet from the
+  block registry's `default_rows()` (grouping descriptors by their default row/col):
+  the Name & Details block beside the Character Image, then the System / Power Level
+  block full width, the Abilities | Resistances pair, then Conditions, Advantages,
+  Skills, Powers.
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
   `{version, rows, floating, hidden}`) to the `layout` key in `settings.json` on

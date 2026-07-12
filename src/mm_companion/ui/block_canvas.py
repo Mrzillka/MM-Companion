@@ -38,19 +38,6 @@ from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
 # an older version is rejected and the default applies.
 SCHEMA_VERSION = 5
 
-# The default arrangement: the Name & Details block beside the portrait, the System /
-# Power Level block, the compact Abilities|Resistances pair, then Conditions,
-# Advantages, Skills, and Powers each full width.
-DEFAULT_ROWS: list[list[str]] = [
-    ["base_info", "character_image"],
-    ["system_info"],
-    ["abilities", "resistances"],
-    ["conditions"],
-    ["advantages"],
-    ["skills"],
-    ["powers"],
-]
-
 
 @dataclass(frozen=True)
 class DropSlot:
@@ -112,12 +99,14 @@ class BlockCanvas(QWidget):
         self,
         panels: list[tuple[str, str, QWidget]],
         block_sizes: dict[str, BlockSize],
+        default_rows: list[list[str]],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
 
         self._sizes = block_sizes
+        self._default_rows = default_rows
         # One frame per block, created once and reparented as it moves.
         self._frames: dict[str, BlockFrame] = {}
         for key, title, section in panels:
@@ -213,11 +202,11 @@ class BlockCanvas(QWidget):
     # -- arrangement model ---------------------------------------------------
 
     def default_arrangement(self) -> dict:
-        """The default layout as a persistence model (see ``DEFAULT_ROWS``)."""
+        """The default layout as a persistence model (see the block registry's ``default_rows``)."""
         present = set(self._frames)
         rows: list[list[str]] = []
         used: set[str] = set()
-        for row in DEFAULT_ROWS:
+        for row in self._default_rows:
             keys = [k for k in row if k in present]
             used.update(keys)
             if keys:

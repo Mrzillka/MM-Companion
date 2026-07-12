@@ -12,11 +12,13 @@ from __future__ import annotations
 
 from mm_companion.ui.blocks.base import Block, BlockDescriptor, BlockFactory
 from mm_companion.ui.blocks.bus import SignalBus
+from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.blocks.registry import (
     BLOCKS,
     block_descriptors,
     default_rows,
     register_block,
+    sync_declarative_blocks,
     unregister_block,
 )
 
@@ -25,9 +27,11 @@ __all__ = [
     "BlockDescriptor",
     "BlockFactory",
     "BLOCKS",
+    "DeclarativeBlock",
     "SignalBus",
     "block_descriptors",
     "default_rows",
     "register_block",
+    "sync_declarative_blocks",
     "unregister_block",
 ]

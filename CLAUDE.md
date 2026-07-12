@@ -170,7 +170,16 @@ clean (see Licensing below).
   to build each section (exposing it as an attribute under its key so the name-based
   cross-block wiring still reaches it) and passes `default_rows()` to the canvas. A
   mod's Python module can `register_block(BlockDescriptor)` to add a block without
-  editing the sheet. `CharacterSheet` is the central widget directly
+  editing the sheet. A **data-only** mod can add a block with no Python at all: it
+  ships a `blocks.json` (parsed into `GameData.blocks` as `BlockSpec`/`BlockFieldSpec`
+  records — a titled group of field/label rows), and `CharacterSheet` calls
+  `sync_declarative_blocks(data)` before iterating the registry, turning each spec
+  into a generic `DeclarativeBlock` (`ui/blocks/declarative.py`) descriptor. Editable
+  `"text"` rows are backed by `Character.profile[key]` (the same free-form string
+  store `BaseInfoSection` uses), so they round-trip through save/load. Declarative
+  blocks are strictly additive — a spec whose id collides with an existing block is
+  skipped, never clobbering a base block. The base ruleset ships no `blocks.json`, so
+  `GameData.blocks` is empty and the block set is unchanged. `CharacterSheet` is the central widget directly
   (no outer wrapper — the sheet's own `QScrollArea` is the page the wheel guard
   targets). The former single base-info block was split three ways: `BaseInfoSection`
   keeps the descriptive **profile** fields (name & details), `CharacterImageSection`

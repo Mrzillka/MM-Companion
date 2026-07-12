@@ -18,8 +18,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from mm_companion.core.data_loader import BlockSpec, GameData
 from mm_companion.core.registry import Registry
-from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize, load_block_sizes
 from mm_companion.ui.blocks.base import BlockDescriptor
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
@@ -31,6 +32,7 @@ from mm_companion.ui.blocks.bus import (
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
 )
+from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.sections import (
     AbilitiesSection,
     AdvantagesSection,
@@ -188,3 +190,61 @@ def register_base_blocks(*, replace: bool = False) -> None:
 
 
 register_base_blocks()
+
+
+# Keys of the declarative blocks currently registered from game data, so a re-sync
+# (e.g. after enabling a different mod set) can drop the previous batch first.
+_declarative_keys: set[str] = set()
+
+
+def _declarative_factory(spec: BlockSpec):
+    """A ``(data, character)`` block factory that builds *spec*'s declarative block."""
+
+    def factory(data: GameData, character):
+        return DeclarativeBlock(data, character, spec)
+
+    return factory
+
+
+def _block_size(spec: BlockSpec) -> BlockSize:
+    return BlockSize(
+        min_width=spec.min_width or 0,
+        min_height=spec.min_height or 0,
+        max_width=spec.max_width or UNBOUNDED,
+        max_height=spec.max_height or UNBOUNDED,
+    )
+
+
+def sync_declarative_blocks(data: GameData) -> None:
+    """Register a declarative block for every :class:`BlockSpec` in *data*.
+
+    Data-only mods contribute blocks through ``blocks.json`` (parsed into
+    :attr:`GameData.blocks`); this turns each spec into a
+    :class:`~mm_companion.ui.blocks.declarative.DeclarativeBlock` descriptor so it
+    joins the sheet like a built-in block. Idempotent: the previously-synced
+    declarative blocks are unregistered first, so re-loading with a different mod
+    set replaces them cleanly. Declarative blocks are strictly *additive* — a spec
+    whose id collides with a block the engine already owns (a base block, or a
+    mod's Python-registered one) is skipped rather than clobbering a descriptor a
+    re-sync could not restore. The sheet calls this once it has the active
+    :class:`GameData`, before it reads :func:`block_descriptors`.
+    """
+    for key in _declarative_keys:
+        unregister_block(key)
+    _declarative_keys.clear()
+    for spec in data.blocks:
+        if spec.id in BLOCKS:  # never overwrite a block we can't put back
+            continue
+        register_block(
+            BlockDescriptor(
+                spec.id,
+                spec.title or spec.id,
+                _declarative_factory(spec),
+                _block_size(spec),
+                spec.row,
+                spec.col,
+                {"edited": (EDITED,)},
+                {},
+            )
+        )
+        _declarative_keys.add(spec.id)

@@ -681,6 +681,52 @@ class Readout:
 
 
 @dataclass(frozen=True)
+class BlockFieldSpec:
+    """One row of a data-described (declarative) sheet block.
+
+    ``kind`` selects how the generic declarative block renders the row:
+
+    - ``"text"`` — an editable line backed by ``Character.profile[key]``.
+    - ``"label"`` — a static, read-only line showing ``text``.
+
+    Unknown kinds fall back to a static label so a mod can add new kinds (with a
+    matching UI handler) without the loader rejecting the row.
+    """
+
+    key: str = ""
+    label: str = ""
+    kind: str = "text"
+    text: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class BlockSpec:
+    """A data-described sheet block a mod can add without shipping any Python.
+
+    The UI turns each spec into a generic declarative block (a titled group of
+    field/label rows) and registers it through the same block registry as the
+    built-in blocks, so it appears on the sheet and can be floated / hidden /
+    rearranged like any other. ``row``/``col`` place it in the default
+    arrangement; the ``*_width``/``*_height`` bounds feed its size constraints
+    (``0``/omitted means unconstrained).
+    """
+
+    id: str
+    title: str = ""
+    row: int = 0
+    col: int = 0
+    fields: tuple[BlockFieldSpec, ...] = ()
+    min_width: int = 0
+    min_height: int = 0
+    max_width: int = 0
+    max_height: int = 0
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
 
@@ -718,6 +764,9 @@ class GameData:
     effect_readouts: dict[str, tuple[Readout, ...]] = field(default_factory=dict)
     movement: Movement = field(default_factory=Movement)
     system: SystemRules = field(default_factory=SystemRules)
+    #: Data-described blocks a mod contributes via ``blocks.json`` (empty for the
+    #: base ruleset, whose blocks are built-in Python widgets).
+    blocks: tuple[BlockSpec, ...] = ()
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1221,6 +1270,42 @@ def _parse_system(raw: dict) -> SystemRules:
     )
 
 
+def _parse_block_field(f: dict) -> BlockFieldSpec:
+    return BlockFieldSpec(
+        key=f.get("key", ""),
+        label=f.get("label", ""),
+        kind=f.get("kind", "text"),
+        text=f.get("text", ""),
+        extra=_extras(f, "key", "label", "kind", "text"),
+    )
+
+
+def _parse_block_spec(b: dict) -> BlockSpec:
+    return BlockSpec(
+        id=b["id"],
+        title=b.get("title", ""),
+        row=int(b.get("row", 0)),
+        col=int(b.get("col", 0)),
+        fields=tuple(_parse_block_field(f) for f in b.get("fields", [])),
+        min_width=int(b.get("min_width", 0)),
+        min_height=int(b.get("min_height", 0)),
+        max_width=int(b.get("max_width", 0)),
+        max_height=int(b.get("max_height", 0)),
+        extra=_extras(
+            b,
+            "id",
+            "title",
+            "row",
+            "col",
+            "fields",
+            "min_width",
+            "min_height",
+            "max_width",
+            "max_height",
+        ),
+    )
+
+
 # Candidate id fields for record lists, tried in order. Whichever a list's dict
 # elements all carry identifies records for the by-id merge; a list whose elements
 # share none (e.g. an ``options`` list of strings) is replaced wholesale by a mod.
@@ -1312,6 +1397,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     system_raw = content.get("system.json", {})
     measurements_raw = content.get("measurements.json", {})
     movement_raw = content.get("movement.json", {})
+    blocks_raw = content.get("blocks.json", {})
 
     return GameData(
         profile_fields=[_parse_field(f) for f in profile_raw.get("profile_fields", [])],
@@ -1333,6 +1419,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
         system=_parse_system(system_raw),
+        blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
     )
 
 

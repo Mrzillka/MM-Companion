@@ -31,7 +31,12 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
-from mm_companion.ui.blocks import SignalBus, block_descriptors, default_rows
+from mm_companion.ui.blocks import (
+    SignalBus,
+    block_descriptors,
+    default_rows,
+    sync_declarative_blocks,
+)
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 
 
@@ -49,6 +54,10 @@ class CharacterSheet(QWidget):
         super().__init__(parent)
         self._data = data or load_game_data()
         self.character = character or Character.new_default(self._data)
+
+        # Register any data-described (declarative) blocks the active mods contribute
+        # via blocks.json, so they join the registry before we iterate it below.
+        sync_declarative_blocks(self._data)
 
         # Build every block from the registry (single source of truth for the block
         # set). Each block is exposed as an attribute under its key (self.abilities,

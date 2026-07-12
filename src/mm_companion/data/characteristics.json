@@ -1,0 +1,46 @@
+{
+  "_comment": "Non-purchasable characteristics (Power Level, Power Points, Size, Hero Points) for MM-Companion (Open Game Content). Consumed by mm_companion.core.data_loader.",
+  "characteristics": [
+    {
+      "key": "power_level",
+      "label": "Power Level",
+      "kind": "number",
+      "default": 10,
+      "min": 0,
+      "max": 30
+    },
+    {
+      "key": "power_points",
+      "label": "Power Points",
+      "kind": "pool",
+      "default": 150,
+      "min": 0,
+      "max": 9999
+    },
+    {
+      "key": "size",
+      "label": "Size",
+      "options": [
+        "Fine",
+        "Diminutive",
+        "Tiny",
+        "Small",
+        "Medium",
+        "Large",
+        "Huge",
+        "Gargantuan",
+        "Colossal",
+        "Awesome"
+      ],
+      "default": "Medium"
+    },
+    {
+      "key": "hero_points",
+      "label": "Hero Points",
+      "kind": "number",
+      "default": 1,
+      "min": 0,
+      "max": 99
+    }
+  ]
+}

@@ -6,9 +6,9 @@ Nothing here implements game rules; it only parses the JSON in
 :mod:`mm_companion.data` into typed records so the UI never hardcodes that
 content.
 
-Content is aggregated from several files: the core traits (profile fields,
-characteristics, abilities, resistances) still live in ``placeholder.json``,
-while the richer 4e catalogs come from their own files (``skills.json``,
+Content is aggregated from several files: the core traits live in their own
+files (``profile.json``, ``characteristics.json``, ``abilities.json``,
+``resistances.json``), the richer 4e catalogs come from theirs (``skills.json``,
 ``advantages.json``, ``conditions.json``) and the point-cost constants from
 ``costs.json``.
 """
@@ -16,14 +16,13 @@ while the richer 4e catalogs come from their own files (``skills.json``,
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from functools import lru_cache
 from importlib import resources
 
 from .components import Integration, TraitBoost
 
 DATA_PACKAGE = "mm_companion"
-PLACEHOLDER_FILE = "placeholder.json"
 
 
 @dataclass(frozen=True)
@@ -38,6 +37,8 @@ class Field:
     key: str
     label: str
     primary: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,8 @@ class Characteristic:
     default: str | int | None = None
     minimum: int = 0
     maximum: int = 999
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,8 @@ class Ability:
     name: str
     abbr: str = ""
     derived: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,8 @@ class Resistance:
     ability: str = ""
     abbr: str = ""
     derived: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -683,6 +690,43 @@ class GameData:
         return {c.id: c for c in self.conditions}
 
 
+def _extras(raw: dict, *known: str) -> dict:
+    """Any keys of *raw* the engine doesn't recognise, so a mod's extra JSON
+    fields are retained on the record rather than silently dropped."""
+
+    return {k: v for k, v in raw.items() if k not in known}
+
+
+def _parse_field(f: dict) -> Field:
+    return Field(
+        key=f["key"],
+        label=f["label"],
+        primary=bool(f.get("primary", False)),
+        extra=_extras(f, "key", "label", "primary"),
+    )
+
+
+def _parse_ability(a: dict) -> Ability:
+    return Ability(
+        key=a["key"],
+        name=a["name"],
+        abbr=a.get("abbr", ""),
+        derived=bool(a.get("derived", False)),
+        extra=_extras(a, "key", "name", "abbr", "derived"),
+    )
+
+
+def _parse_resistance(r: dict) -> Resistance:
+    return Resistance(
+        key=r["key"],
+        name=r["name"],
+        ability=r.get("ability", ""),
+        abbr=r.get("abbr", ""),
+        derived=bool(r.get("derived", False)),
+        extra=_extras(r, "key", "name", "ability", "abbr", "derived"),
+    )
+
+
 def _parse_characteristic(c: dict) -> Characteristic:
     options = list(c.get("options", []))
     # Infer a widget kind when not stated: enumerated -> choice, else text.
@@ -695,6 +739,7 @@ def _parse_characteristic(c: dict) -> Characteristic:
         default=c.get("default"),
         minimum=int(c.get("min", 0)),
         maximum=int(c.get("max", 999)),
+        extra=_extras(c, "key", "label", "kind", "options", "default", "min", "max"),
     )
 
 
@@ -1049,7 +1094,9 @@ def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
 
 
 def _parse_costs(raw: dict) -> Costs:
-    traits = TraitCosts(**{k: int(v) for k, v in raw["trait_costs"].items()})
+    # Tolerate unknown keys (e.g. from a mod) so they can't crash the loader.
+    trait_fields = {f.name for f in fields(TraitCosts)}
+    traits = TraitCosts(**{k: int(v) for k, v in raw["trait_costs"].items() if k in trait_fields})
     pl = raw["power_level"]
     caps = {
         name: PowerLevelCap(mult=int(cap["mult"]), add=int(cap["add"]))
@@ -1070,7 +1117,10 @@ def _read_json(filename: str) -> dict:
 def load_game_data() -> GameData:
     """Parse and return the bundled game data (cached after first call)."""
 
-    base = _read_json(PLACEHOLDER_FILE)
+    profile_raw = _read_json("profile.json")
+    characteristics_raw = _read_json("characteristics.json")
+    abilities_raw = _read_json("abilities.json")
+    resistances_raw = _read_json("resistances.json")
     skills_raw = _read_json("skills.json")
     advantages_raw = _read_json("advantages.json")
     conditions_raw = _read_json("conditions.json")
@@ -1083,10 +1133,10 @@ def load_game_data() -> GameData:
     movement_raw = _read_json("movement.json")
 
     return GameData(
-        profile_fields=[Field(**f) for f in base["profile_fields"]],
-        characteristics=[_parse_characteristic(c) for c in base["characteristics"]],
-        abilities=[Ability(**a) for a in base["abilities"]],
-        resistances=[Resistance(**r) for r in base["resistances"]],
+        profile_fields=[_parse_field(f) for f in profile_raw["profile_fields"]],
+        characteristics=[_parse_characteristic(c) for c in characteristics_raw["characteristics"]],
+        abilities=[_parse_ability(a) for a in abilities_raw["abilities"]],
+        resistances=[_parse_resistance(r) for r in resistances_raw["resistances"]],
         skills=[_parse_skill(s) for s in skills_raw["skills"]],
         advantages=[_parse_advantage(a) for a in advantages_raw["advantages"]],
         conditions=[_parse_condition(c) for c in conditions_raw["conditions"]],

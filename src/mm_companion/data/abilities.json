@@ -1,0 +1,41 @@
+{
+  "_comment": "Core abilities and derived Attack for MM-Companion (Mutants & Masterminds, Open Game Content). Consumed by mm_companion.core.data_loader.",
+  "abilities": [
+    {
+      "key": "STR",
+      "name": "Strength",
+      "abbr": "STR"
+    },
+    {
+      "key": "STA",
+      "name": "Stamina",
+      "abbr": "STA"
+    },
+    {
+      "key": "AGL",
+      "name": "Agility",
+      "abbr": "AGL"
+    },
+    {
+      "key": "INT",
+      "name": "Intellect",
+      "abbr": "INT"
+    },
+    {
+      "key": "AWE",
+      "name": "Awareness",
+      "abbr": "AWE"
+    },
+    {
+      "key": "PRE",
+      "name": "Presence",
+      "abbr": "PRE"
+    },
+    {
+      "key": "ATK",
+      "name": "Attack",
+      "abbr": "ATK",
+      "derived": true
+    }
+  ]
+}

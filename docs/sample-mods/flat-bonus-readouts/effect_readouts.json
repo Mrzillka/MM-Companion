@@ -1,0 +1,7 @@
+{
+  "effectReadouts": {
+    "damage": [
+      { "kind": "flat_bonus", "label": "Signature Bonus", "amount": 2 }
+    ]
+  }
+}

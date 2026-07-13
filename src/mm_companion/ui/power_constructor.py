@@ -32,6 +32,8 @@ toggle later without touching this window.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
@@ -69,6 +71,7 @@ from mm_companion.core.powers import (
     Power,
     PowerEffectInstance,
 )
+from mm_companion.core.registry import Registry
 from mm_companion.core.rules import (
     TRAIT_CATEGORIES,
     array_alternate_cost,
@@ -89,6 +92,40 @@ from mm_companion.core.rules import (
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
+
+# -- config-field widget registry ----------------------------------------------
+# Each effect config field declares a ``type``; the constructor builds the matching
+# input widget for it. A builder receives the :class:`EffectCard`, the config field,
+# and its effective type (``select`` upgrades to ``multiselect`` while gated), and
+# returns the widget. The base types register at import; a mod's Python module can
+# ``CONFIG_WIDGET_BUILDERS.register(type, builder)`` to add an input for a config-field
+# ``type`` it also registered core-side (``CONFIG_DISPLAY_KINDS``) without editing this
+# module. An unregistered type falls back to the generic option combo (unchanged).
+ConfigWidgetBuilder = Callable[["EffectCard", object, str], "QWidget"]
+
+CONFIG_WIDGET_BUILDERS: Registry[ConfigWidgetBuilder] = Registry("config-widget")
+
+
+def register_base_config_widgets() -> None:
+    """Register the built-in config-field input builders (idempotent-safe via replace)."""
+    CONFIG_WIDGET_BUILDERS.register(
+        "text", lambda card, field, ft: card._text_widget(field), replace=True
+    )
+    CONFIG_WIDGET_BUILDERS.register(
+        "checkbox", lambda card, field, ft: card._checkbox_widget(field), replace=True
+    )
+    CONFIG_WIDGET_BUILDERS.register(
+        "allocation", lambda card, field, ft: card._allocation_widget(field), replace=True
+    )
+    CONFIG_WIDGET_BUILDERS.register(
+        "repeatable", lambda card, field, ft: card._repeatable_widget(field), replace=True
+    )
+    CONFIG_WIDGET_BUILDERS.register(
+        "multiselect", lambda card, field, ft: card._multiselect_widget(field), replace=True
+    )
+
+
+register_base_config_widgets()
 
 
 def combat_focus_options(character: Character | None, game_data: GameData) -> list[tuple[str, str]]:
@@ -810,18 +847,19 @@ class EffectCard(QFrame):
                 self.instance.config.pop(key, None)
 
     def _config_widget(self, field, field_type: str) -> QWidget:
-        if field_type == "text":
-            edit = QLineEdit(self.instance.config.get(field.key, ""))
-            edit.textChanged.connect(lambda text, k=field.key: self._on_config_changed(k, text))
-            return edit
-        if field_type == "checkbox":
-            return self._checkbox_widget(field)
-        if field_type == "allocation":
-            return self._allocation_widget(field)
-        if field_type == "repeatable":
-            return self._repeatable_widget(field)
-        if field_type == "multiselect":
-            return self._multiselect_widget(field)
+        builder = CONFIG_WIDGET_BUILDERS.get(field_type)
+        if builder is not None:
+            return builder(self, field, field_type)
+        # ``select`` and any mod type without a builder render as the generic combo.
+        return self._select_widget(field)
+
+    def _text_widget(self, field) -> QWidget:
+        edit = QLineEdit(self.instance.config.get(field.key, ""))
+        edit.textChanged.connect(lambda text, k=field.key: self._on_config_changed(k, text))
+        return edit
+
+    def _select_widget(self, field) -> QWidget:
+        """The single-choice option combo (the default renderer for ``select``)."""
         combo = QComboBox()
         combo.addItem("—", "")  # the unset choice
         for option in field.options:

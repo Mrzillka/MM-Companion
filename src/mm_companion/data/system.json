@@ -1,0 +1,29 @@
+{
+  "_comment": "System-level rule references for Mutants & Masterminds 4e (Open Game Content). The trait keys, formulas, sentinel scope strings, and structural modifier ids that core resolvers read instead of hardcoding them in Python (mm-core-mechanics.md §5-8). Consumed by mm_companion.core.data_loader; a mod can override any of these.",
+  "system": {
+    "default_initiative_ability": "AGL",
+    "defense_dc_base": 10,
+    "heroic_budget_divisor": 2,
+    "trait_keys": {
+      "attack": "ATK",
+      "defense": "DEF",
+      "dodge": "DODGE",
+      "toughness": "TOUGHNESS"
+    },
+    "paired_caps": [
+      {
+        "cap": "defense_toughness",
+        "traits": ["DODGE", "TOUGHNESS"],
+        "label": "Dodge + Toughness"
+      },
+      {
+        "cap": "fortitude_will",
+        "traits": ["FORTITUDE", "WILL"],
+        "label": "Fortitude + Will"
+      }
+    ],
+    "unscoped_scope_values": ["All checks"],
+    "alternate_effect_modifier": "alternate_effect",
+    "linked_modifier": "linked"
+  }
+}

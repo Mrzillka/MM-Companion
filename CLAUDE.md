@@ -162,7 +162,24 @@ clean (see Licensing below).
   `QScrollArea` → `BlockCanvas`) → nine blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
-  `SkillsSection`, `PowersSection`. `CharacterSheet` is the central widget directly
+  `SkillsSection`, `PowersSection`. The block set is **not** hardcoded in the sheet:
+  it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
+  block (key, dock title, widget factory, `BlockSize`, default row/col), held in an
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The nine
+  base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
+  to build each section (exposing it as an attribute under its key so the name-based
+  cross-block wiring still reaches it) and passes `default_rows()` to the canvas. A
+  mod's Python module can `register_block(BlockDescriptor)` to add a block without
+  editing the sheet. A **data-only** mod can add a block with no Python at all: it
+  ships a `blocks.json` (parsed into `GameData.blocks` as `BlockSpec`/`BlockFieldSpec`
+  records — a titled group of field/label rows), and `CharacterSheet` calls
+  `sync_declarative_blocks(data)` before iterating the registry, turning each spec
+  into a generic `DeclarativeBlock` (`ui/blocks/declarative.py`) descriptor. Editable
+  `"text"` rows are backed by `Character.profile[key]` (the same free-form string
+  store `BaseInfoSection` uses), so they round-trip through save/load. Declarative
+  blocks are strictly additive — a spec whose id collides with an existing block is
+  skipped, never clobbering a base block. The base ruleset ships no `blocks.json`, so
+  `GameData.blocks` is empty and the block set is unchanged. `CharacterSheet` is the central widget directly
   (no outer wrapper — the sheet's own `QScrollArea` is the page the wheel guard
   targets). The former single base-info block was split three ways: `BaseInfoSection`
   keeps the descriptive **profile** fields (name & details), `CharacterImageSection`
@@ -196,10 +213,11 @@ clean (see Licensing below).
   or leave-floating), plus edge auto-scroll. Structural ops `float_block`,
   `dock_block`, `show_block`/`hide_block`, `arrangement`, `apply_arrangement`,
   `default_arrangement` are the headless-testable seams (drag outcomes without
-  synthetic mouse events). The default arrangement is `DEFAULT_ROWS` (the Name &
-  Details block beside the Character Image, then the System / Power Level block full
-  width, the Abilities | Resistances pair, then Conditions, Advantages, Skills,
-  Powers).
+  synthetic mouse events). The default arrangement is supplied by the sheet from the
+  block registry's `default_rows()` (grouping descriptors by their default row/col):
+  the Name & Details block beside the Character Image, then the System / Power Level
+  block full width, the Abilities | Resistances pair, then Conditions, Advantages,
+  Skills, Powers.
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
   `{version, rows, floating, hidden}`) to the `layout` key in `settings.json` on
@@ -332,6 +350,43 @@ action, `CharacterSheet.set_locked(bool)` fans out to each section's
 The sheet **starts locked** (a read-only viewer, not an editor). Any new section
 with editable widgets should expose `set_locked` and be wired into
 `CharacterSheet.set_locked`.
+
+## The mod pipeline (matters when touching data loading or startup)
+
+The base ruleset is loaded as **the default mod** through the same pipeline that
+loads user mods, so game content is fully data-first and moddable. The full
+authoring guide is `docs/modding.md`; the shape:
+
+- **Discovery/order** (`core/mods.py`, pure Python): a `Mod` is a manifest
+  (`mod.json`: `id`/`name`/`version`/`priority`/`files`/optional `requires` +
+  `python_module`) plus how to read its content. `base_mod()` is the bundled
+  `data/mod.json`; `discover_workspace_mods()` scans the workspace `mods/` dir
+  (malformed manifests skipped, never fatal); `active_mods()` returns base first,
+  then enabled workspace mods by ascending `priority` (higher wins, ties broken by
+  `enabled_mods` order).
+- **Merge loader** (`core/data_loader.py`): `load_game_data()` gathers the active
+  mods' content in load order and **deep-merges by record id** (`_deep_merge` —
+  a later mod overrides only the fields it supplies and appends new ids; plain
+  lists like `options` are replaced wholesale), then parses one `GameData`. Cached
+  by the mod stack's fingerprint; invalidate with `clear_game_data_cache()` after
+  enabling/disabling a mod.
+- **Two mod flavors.** A **data-only** mod is pure JSON (override base files by
+  reusing their names, or add a declarative sheet block via `blocks.json`). A
+  **data+Python** mod also ships one `python_module` whose import-time
+  `register_*` calls extend an engine registry (readout kinds, condition
+  mechanisms, config-field types/widgets, sheet blocks — see the registry table in
+  `docs/modding.md`).
+- **Two settings gates** (`core/storage.DEFAULT_SETTINGS`): `enabled_mods` (ids
+  whose *data* layers on) and `trusted_mods` (ids whose *Python* may be imported —
+  a separate opt-in because importing runs code). `mods.set_mod_enabled` /
+  `set_mod_trusted` are the toggles (disabling revokes trust); a settings UI is
+  still TODO. `mods.initialize_mods()` (called in `__main__.main()` after
+  `ensure_workspace()`, before the first `load_game_data()`) imports the
+  enabled+trusted mods' Python modules so their `register_*` hooks fire first; the
+  base ruleset is implicitly trusted and an import that raises is swallowed.
+- Two living examples ship under `docs/sample-mods/`: `campaign-notes` (data-only)
+  and `flat-bonus-readouts` (data+Python), exercised end-to-end by
+  `tests/test_mod_loading.py`.
 
 ## Licensing boundary (matters when adding game data)
 

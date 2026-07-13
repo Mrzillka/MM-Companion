@@ -1,0 +1,56 @@
+{
+  "_comment": "Descriptive profile fields (character/hero/player name, physical details) for MM-Companion (Mutants & Masterminds, Open Game Content). Consumed by mm_companion.core.data_loader.",
+  "profile_fields": [
+    {
+      "key": "character_name",
+      "label": "Character Name",
+      "primary": true
+    },
+    {
+      "key": "hero_name",
+      "label": "Hero Name",
+      "primary": true
+    },
+    {
+      "key": "player_name",
+      "label": "Player Name",
+      "primary": true
+    },
+    {
+      "key": "identity",
+      "label": "Identity"
+    },
+    {
+      "key": "gender",
+      "label": "Gender"
+    },
+    {
+      "key": "age",
+      "label": "Age"
+    },
+    {
+      "key": "height",
+      "label": "Height"
+    },
+    {
+      "key": "weight",
+      "label": "Weight"
+    },
+    {
+      "key": "eyes",
+      "label": "Eyes"
+    },
+    {
+      "key": "hair",
+      "label": "Hair"
+    },
+    {
+      "key": "group",
+      "label": "Group / Affiliation"
+    },
+    {
+      "key": "base",
+      "label": "Base of Operations"
+    }
+  ]
+}

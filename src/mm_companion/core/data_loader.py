@@ -6,24 +6,21 @@ Nothing here implements game rules; it only parses the JSON in
 :mod:`mm_companion.data` into typed records so the UI never hardcodes that
 content.
 
-Content is aggregated from several files: the core traits (profile fields,
-characteristics, abilities, resistances) still live in ``placeholder.json``,
-while the richer 4e catalogs come from their own files (``skills.json``,
+Content is aggregated from several files: the core traits live in their own
+files (``profile.json``, ``characteristics.json``, ``abilities.json``,
+``resistances.json``), the richer 4e catalogs come from theirs (``skills.json``,
 ``advantages.json``, ``conditions.json``) and the point-cost constants from
 ``costs.json``.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from functools import lru_cache
-from importlib import resources
+from dataclasses import dataclass, field, fields
 
+from . import mods as mods_module
 from .components import Integration, TraitBoost
 
 DATA_PACKAGE = "mm_companion"
-PLACEHOLDER_FILE = "placeholder.json"
 
 
 @dataclass(frozen=True)
@@ -38,6 +35,8 @@ class Field:
     key: str
     label: str
     primary: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -62,6 +61,8 @@ class Characteristic:
     default: str | int | None = None
     minimum: int = 0
     maximum: int = 999
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,8 @@ class Ability:
     name: str
     abbr: str = ""
     derived: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,8 @@ class Resistance:
     ability: str = ""
     abbr: str = ""
     derived: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,8 @@ class Skill:
     focuses: tuple[str, ...] = ()
     description: str = ""
     specialized_cost: bool = False
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -143,6 +150,8 @@ class Advantage:
     focused: bool = False
     initiative_bonus_per_rank: int = 0
     initiative_ability_choice: tuple[str, ...] = ()
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
 
     @property
     def type(self) -> str:
@@ -531,6 +540,51 @@ class Costs:
 
 
 @dataclass(frozen=True)
+class TraitKeys:
+    """The trait-key strings the resolvers reference, from ``system.json``.
+
+    Keeping them in data means a mod can rename or re-point the combat traits
+    (e.g. an Attack ability, the active-defence resistances) without a code change.
+    """
+
+    attack: str = "ATK"
+    defense: str = "DEF"
+    dodge: str = "DODGE"
+    toughness: str = "TOUGHNESS"
+
+
+@dataclass(frozen=True)
+class PairedCap:
+    """A Power-Level cap that sums two resistance traits (``mm-core-mechanics.md`` §7).
+
+    ``cap`` names the :class:`PowerLevelCap` in ``costs.json``; ``traits`` are the two
+    resistance keys whose totals are summed against it; ``label`` is the message prefix.
+    """
+
+    cap: str
+    traits: tuple[str, ...]
+    label: str
+
+
+@dataclass(frozen=True)
+class SystemRules:
+    """System-level rule references (from ``system.json``).
+
+    The trait keys, formulas, sentinel scope strings, and structural modifier ids the
+    ``core.rules`` resolvers read instead of hardcoding — so a mod can retune them.
+    """
+
+    default_initiative_ability: str = "AGL"
+    defense_dc_base: int = 10
+    heroic_budget_divisor: int = 2
+    trait_keys: TraitKeys = field(default_factory=TraitKeys)
+    paired_caps: tuple[PairedCap, ...] = ()
+    unscoped_scope_values: tuple[str, ...] = ("All checks",)
+    alternate_effect_modifier: str = "alternate_effect"
+    linked_modifier: str = "linked"
+
+
+@dataclass(frozen=True)
 class SizeRow:
     """One row of the Size Table (from ``measurements.json``'s ``sizeTable``).
 
@@ -627,6 +681,52 @@ class Readout:
 
 
 @dataclass(frozen=True)
+class BlockFieldSpec:
+    """One row of a data-described (declarative) sheet block.
+
+    ``kind`` selects how the generic declarative block renders the row:
+
+    - ``"text"`` — an editable line backed by ``Character.profile[key]``.
+    - ``"label"`` — a static, read-only line showing ``text``.
+
+    Unknown kinds fall back to a static label so a mod can add new kinds (with a
+    matching UI handler) without the loader rejecting the row.
+    """
+
+    key: str = ""
+    label: str = ""
+    kind: str = "text"
+    text: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class BlockSpec:
+    """A data-described sheet block a mod can add without shipping any Python.
+
+    The UI turns each spec into a generic declarative block (a titled group of
+    field/label rows) and registers it through the same block registry as the
+    built-in blocks, so it appears on the sheet and can be floated / hidden /
+    rearranged like any other. ``row``/``col`` place it in the default
+    arrangement; the ``*_width``/``*_height`` bounds feed its size constraints
+    (``0``/omitted means unconstrained).
+    """
+
+    id: str
+    title: str = ""
+    row: int = 0
+    col: int = 0
+    fields: tuple[BlockFieldSpec, ...] = ()
+    min_width: int = 0
+    min_height: int = 0
+    max_width: int = 0
+    max_height: int = 0
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
 
@@ -663,6 +763,10 @@ class GameData:
     duration_action_floor: dict[str, str] = field(default_factory=dict)
     effect_readouts: dict[str, tuple[Readout, ...]] = field(default_factory=dict)
     movement: Movement = field(default_factory=Movement)
+    system: SystemRules = field(default_factory=SystemRules)
+    #: Data-described blocks a mod contributes via ``blocks.json`` (empty for the
+    #: base ruleset, whose blocks are built-in Python widgets).
+    blocks: tuple[BlockSpec, ...] = ()
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -683,6 +787,43 @@ class GameData:
         return {c.id: c for c in self.conditions}
 
 
+def _extras(raw: dict, *known: str) -> dict:
+    """Any keys of *raw* the engine doesn't recognise, so a mod's extra JSON
+    fields are retained on the record rather than silently dropped."""
+
+    return {k: v for k, v in raw.items() if k not in known}
+
+
+def _parse_field(f: dict) -> Field:
+    return Field(
+        key=f["key"],
+        label=f["label"],
+        primary=bool(f.get("primary", False)),
+        extra=_extras(f, "key", "label", "primary"),
+    )
+
+
+def _parse_ability(a: dict) -> Ability:
+    return Ability(
+        key=a["key"],
+        name=a["name"],
+        abbr=a.get("abbr", ""),
+        derived=bool(a.get("derived", False)),
+        extra=_extras(a, "key", "name", "abbr", "derived"),
+    )
+
+
+def _parse_resistance(r: dict) -> Resistance:
+    return Resistance(
+        key=r["key"],
+        name=r["name"],
+        ability=r.get("ability", ""),
+        abbr=r.get("abbr", ""),
+        derived=bool(r.get("derived", False)),
+        extra=_extras(r, "key", "name", "ability", "abbr", "derived"),
+    )
+
+
 def _parse_characteristic(c: dict) -> Characteristic:
     options = list(c.get("options", []))
     # Infer a widget kind when not stated: enumerated -> choice, else text.
@@ -695,6 +836,7 @@ def _parse_characteristic(c: dict) -> Characteristic:
         default=c.get("default"),
         minimum=int(c.get("min", 0)),
         maximum=int(c.get("max", 999)),
+        extra=_extras(c, "key", "label", "kind", "options", "default", "min", "max"),
     )
 
 
@@ -710,6 +852,19 @@ def _parse_skill(s: dict) -> Skill:
         focuses=tuple(s.get("focuses", ())),
         description=s.get("description", ""),
         specialized_cost=bool(s.get("specializedCost", False)),
+        extra=_extras(
+            s,
+            "name",
+            "ability",
+            "focused",
+            "id",
+            "trainedOnly",
+            "action",
+            "specializations",
+            "focuses",
+            "description",
+            "specializedCost",
+        ),
     )
 
 
@@ -727,6 +882,20 @@ def _parse_advantage(a: dict) -> Advantage:
         focused=bool(a.get("focused", False)),
         initiative_bonus_per_rank=int(a.get("initiativeBonusPerRank", 0)),
         initiative_ability_choice=tuple(a.get("initiativeAbilityChoice", ())),
+        extra=_extras(
+            a,
+            "name",
+            "ranked",
+            "description",
+            "id",
+            "types",
+            "type",
+            "maxRank",
+            "maxRankKind",
+            "focused",
+            "initiativeBonusPerRank",
+            "initiativeAbilityChoice",
+        ),
     )
 
 
@@ -1049,7 +1218,9 @@ def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
 
 
 def _parse_costs(raw: dict) -> Costs:
-    traits = TraitCosts(**{k: int(v) for k, v in raw["trait_costs"].items()})
+    # Tolerate unknown keys (e.g. from a mod) so they can't crash the loader.
+    trait_fields = {f.name for f in fields(TraitCosts)}
+    traits = TraitCosts(**{k: int(v) for k, v in raw["trait_costs"].items() if k in trait_fields})
     pl = raw["power_level"]
     caps = {
         name: PowerLevelCap(mult=int(cap["mult"]), add=int(cap["add"]))
@@ -1061,37 +1232,185 @@ def _parse_costs(raw: dict) -> Costs:
     )
 
 
-def _read_json(filename: str) -> dict:
-    source = resources.files(DATA_PACKAGE).joinpath("data", filename)
-    return json.loads(source.read_text(encoding="utf-8"))
+def _parse_system(raw: dict) -> SystemRules:
+    """Parse ``system.json`` into :class:`SystemRules`, tolerating unknown keys.
+
+    Every field falls back to its dataclass default, so a mod (or a stripped file)
+    can override only the keys it cares about.
+    """
+
+    sys = raw.get("system", raw)
+    defaults = SystemRules()
+    tk_raw = sys.get("trait_keys", {})
+    trait_keys = TraitKeys(
+        attack=tk_raw.get("attack", defaults.trait_keys.attack),
+        defense=tk_raw.get("defense", defaults.trait_keys.defense),
+        dodge=tk_raw.get("dodge", defaults.trait_keys.dodge),
+        toughness=tk_raw.get("toughness", defaults.trait_keys.toughness),
+    )
+    paired_caps = tuple(
+        PairedCap(cap=p["cap"], traits=tuple(p["traits"]), label=p["label"])
+        for p in sys.get("paired_caps", [])
+    )
+    return SystemRules(
+        default_initiative_ability=sys.get(
+            "default_initiative_ability", defaults.default_initiative_ability
+        ),
+        defense_dc_base=int(sys.get("defense_dc_base", defaults.defense_dc_base)),
+        heroic_budget_divisor=int(sys.get("heroic_budget_divisor", defaults.heroic_budget_divisor)),
+        trait_keys=trait_keys,
+        paired_caps=paired_caps,
+        unscoped_scope_values=tuple(
+            sys.get("unscoped_scope_values", defaults.unscoped_scope_values)
+        ),
+        alternate_effect_modifier=sys.get(
+            "alternate_effect_modifier", defaults.alternate_effect_modifier
+        ),
+        linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+    )
 
 
-@lru_cache(maxsize=1)
-def load_game_data() -> GameData:
-    """Parse and return the bundled game data (cached after first call)."""
+def _parse_block_field(f: dict) -> BlockFieldSpec:
+    return BlockFieldSpec(
+        key=f.get("key", ""),
+        label=f.get("label", ""),
+        kind=f.get("kind", "text"),
+        text=f.get("text", ""),
+        extra=_extras(f, "key", "label", "kind", "text"),
+    )
 
-    base = _read_json(PLACEHOLDER_FILE)
-    skills_raw = _read_json("skills.json")
-    advantages_raw = _read_json("advantages.json")
-    conditions_raw = _read_json("conditions.json")
-    effects_raw = _read_json("effects.json")
-    modifiers_raw = _read_json("modifiers.json")
-    effect_modifiers_raw = _read_json("effect_modifiers.json")
-    effect_readouts_raw = _read_json("effect_readouts.json")
-    costs_raw = _read_json("costs.json")
-    measurements_raw = _read_json("measurements.json")
-    movement_raw = _read_json("movement.json")
+
+def _parse_block_spec(b: dict) -> BlockSpec:
+    return BlockSpec(
+        id=b["id"],
+        title=b.get("title", ""),
+        row=int(b.get("row", 0)),
+        col=int(b.get("col", 0)),
+        fields=tuple(_parse_block_field(f) for f in b.get("fields", [])),
+        min_width=int(b.get("min_width", 0)),
+        min_height=int(b.get("min_height", 0)),
+        max_width=int(b.get("max_width", 0)),
+        max_height=int(b.get("max_height", 0)),
+        extra=_extras(
+            b,
+            "id",
+            "title",
+            "row",
+            "col",
+            "fields",
+            "min_width",
+            "min_height",
+            "max_width",
+            "max_height",
+        ),
+    )
+
+
+# Candidate id fields for record lists, tried in order. Whichever a list's dict
+# elements all carry identifies records for the by-id merge; a list whose elements
+# share none (e.g. an ``options`` list of strings) is replaced wholesale by a mod.
+_MERGE_ID_KEYS = ("id", "key", "name", "effect_id", "rank", "sizeRank")
+
+
+def _list_id_key(items: list) -> str | None:
+    """The id field shared by every dict element of *items*, or ``None``."""
+    if not items or not all(isinstance(x, dict) for x in items):
+        return None
+    for key in _MERGE_ID_KEYS:
+        if all(key in x for x in items):
+            return key
+    return None
+
+
+def _merge_lists(base: list, override: list) -> list:
+    base_key = _list_id_key(base)
+    if base_key is None or base_key != _list_id_key(override):
+        # Not record lists (or keyed differently): the mod replaces it wholesale.
+        return list(override)
+    result: list = []
+    index: dict = {}
+    for item in base:
+        index[item[base_key]] = len(result)
+        result.append(item)
+    for item in override:
+        ident = item[base_key]
+        if ident in index:
+            result[index[ident]] = _deep_merge(result[index[ident]], item)
+        else:
+            index[ident] = len(result)
+            result.append(item)
+    return result
+
+
+def _deep_merge(base, override):
+    """Recursively merge *override* onto *base* (later source wins).
+
+    Dicts merge key-by-key; record lists (whose elements share an id field —
+    see :data:`_MERGE_ID_KEYS`) merge by id, later records overriding earlier ones
+    of the same id and new ids appended; anything else is replaced by *override*.
+    This is how a mod overrides one record (supply just its id + changed fields) or
+    adds new ones without restating the base content.
+    """
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[key] = _deep_merge(merged[key], value) if key in merged else value
+        return merged
+    if isinstance(base, list) and isinstance(override, list):
+        return _merge_lists(base, override)
+    return override
+
+
+def _merge_content(mods: list[mods_module.Mod]) -> dict[str, dict]:
+    """Deep-merge every content file across *mods* (base first) into ``name -> raw``."""
+    filenames: list[str] = []
+    for mod in mods:
+        for filename in mod.files:
+            if filename not in filenames:
+                filenames.append(filename)
+    merged: dict[str, dict] = {}
+    for filename in filenames:
+        acc: dict | None = None
+        for mod in mods:
+            raw = mod.read(filename)
+            if raw is None:
+                continue
+            acc = raw if acc is None else _deep_merge(acc, raw)
+        merged[filename] = acc if acc is not None else {}
+    return merged
+
+
+def _build_game_data(content: dict[str, dict]) -> GameData:
+    """Parse already-merged raw content into the typed :class:`GameData` record."""
+    profile_raw = content.get("profile.json", {})
+    characteristics_raw = content.get("characteristics.json", {})
+    abilities_raw = content.get("abilities.json", {})
+    resistances_raw = content.get("resistances.json", {})
+    skills_raw = content.get("skills.json", {})
+    advantages_raw = content.get("advantages.json", {})
+    conditions_raw = content.get("conditions.json", {})
+    effects_raw = content.get("effects.json", {})
+    modifiers_raw = content.get("modifiers.json", {})
+    effect_modifiers_raw = content.get("effect_modifiers.json", {})
+    effect_readouts_raw = content.get("effect_readouts.json", {})
+    costs_raw = content.get("costs.json", {})
+    system_raw = content.get("system.json", {})
+    measurements_raw = content.get("measurements.json", {})
+    movement_raw = content.get("movement.json", {})
+    blocks_raw = content.get("blocks.json", {})
 
     return GameData(
-        profile_fields=[Field(**f) for f in base["profile_fields"]],
-        characteristics=[_parse_characteristic(c) for c in base["characteristics"]],
-        abilities=[Ability(**a) for a in base["abilities"]],
-        resistances=[Resistance(**r) for r in base["resistances"]],
-        skills=[_parse_skill(s) for s in skills_raw["skills"]],
-        advantages=[_parse_advantage(a) for a in advantages_raw["advantages"]],
-        conditions=[_parse_condition(c) for c in conditions_raw["conditions"]],
-        effects=[_parse_effect(e) for e in effects_raw["effects"]],
-        modifiers=[_parse_modifier(m) for m in modifiers_raw["modifiers"]],
+        profile_fields=[_parse_field(f) for f in profile_raw.get("profile_fields", [])],
+        characteristics=[
+            _parse_characteristic(c) for c in characteristics_raw.get("characteristics", [])
+        ],
+        abilities=[_parse_ability(a) for a in abilities_raw.get("abilities", [])],
+        resistances=[_parse_resistance(r) for r in resistances_raw.get("resistances", [])],
+        skills=[_parse_skill(s) for s in skills_raw.get("skills", [])],
+        advantages=[_parse_advantage(a) for a in advantages_raw.get("advantages", [])],
+        conditions=[_parse_condition(c) for c in conditions_raw.get("conditions", [])],
+        effects=[_parse_effect(e) for e in effects_raw.get("effects", [])],
+        modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
         costs=_parse_costs(costs_raw),
         measurements=_parse_measurements(measurements_raw),
@@ -1099,4 +1418,37 @@ def load_game_data() -> GameData:
         duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
+        system=_parse_system(system_raw),
+        blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
     )
+
+
+# Cache keyed on the active mod stack's fingerprint, so the base ruleset (and each
+# distinct set of enabled mods) is parsed once per process. Replaces the former
+# ``@lru_cache`` — clear it via :func:`clear_game_data_cache` after changing mods.
+_game_data_cache: dict[tuple[str, ...], GameData] = {}
+
+
+def load_game_data() -> GameData:
+    """Parse and return the merged game data for the active mod stack (cached).
+
+    With no mods enabled this is the bundled base ruleset, identical to before the
+    mod pipeline existed. Enabled workspace mods (``enabled_mods`` setting) are
+    deep-merged on top, later/higher-priority mods overriding earlier records.
+    """
+    mods = mods_module.active_mods()
+    key = tuple(mod.fingerprint() for mod in mods)
+    cached = _game_data_cache.get(key)
+    if cached is None:
+        cached = _build_game_data(_merge_content(mods))
+        _game_data_cache[key] = cached
+    return cached
+
+
+def clear_game_data_cache() -> None:
+    """Drop the cached game data; the next :func:`load_game_data` re-parses.
+
+    Call after enabling/disabling a mod or editing a mod's files so the change is
+    picked up (the cache key does not track file contents).
+    """
+    _game_data_cache.clear()

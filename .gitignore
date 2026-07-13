@@ -32,3 +32,9 @@ poetry.lock
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# run-mm-companion skill driver screenshots
+_driver_shots/
+
+# Installer build output (PyInstaller build/ & dist/ already covered above)
+installer/output/

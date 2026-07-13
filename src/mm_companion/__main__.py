@@ -5,7 +5,9 @@ Run with ``python -m mm_companion`` (or the ``mm-companion`` console script).
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
@@ -30,7 +32,26 @@ def _make_splash() -> QSplashScreen:
     return splash
 
 
+def _apply_portable_home() -> None:
+    """Point the workspace next to the executable for a portable install.
+
+    Only meaningful in a frozen (PyInstaller) build: if a ``portable.flag`` file
+    sits beside the real executable, the workspace is redirected to a local
+    ``data`` folder instead of ``%APPDATA%\\MM-Companion`` — reusing the existing
+    ``MM_COMPANION_HOME`` support so no ``core`` change is needed. An explicit
+    ``MM_COMPANION_HOME`` in the environment always wins and is left untouched.
+    """
+    if not getattr(sys, "frozen", False) or "MM_COMPANION_HOME" in os.environ:
+        return
+    exe_dir = Path(sys.executable).resolve().parent
+    if (exe_dir / "portable.flag").exists():
+        os.environ["MM_COMPANION_HOME"] = str(exe_dir / "data")
+
+
 def main() -> int:
+    # Redirect the workspace for a portable install before anything reads it.
+    _apply_portable_home()
+
     app = QApplication(sys.argv)
     # The application icon is Qt's default for every top-level window, so no
     # window needs to set it individually.

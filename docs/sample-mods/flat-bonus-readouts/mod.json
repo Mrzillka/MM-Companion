@@ -2,7 +2,17 @@
   "id": "flat-bonus-readouts",
   "name": "Flat-Bonus Readouts (sample data+Python mod)",
   "version": "1.0",
+  "description": "A data+Python mod: registers a new 'flat_bonus' readout kind so every Damage power shows a flat 'Signature Bonus' row. Because it runs code, it must be trusted as well as enabled.",
   "priority": 20,
   "files": ["effect_readouts.json"],
-  "python_module": "flat_bonus_mod"
+  "python_module": "flat_bonus_mod",
+  "options": [
+    {
+      "id": "bonus_amount",
+      "label": "Signature bonus",
+      "type": "number",
+      "default": 2,
+      "description": "How large the flat Signature Bonus row is on every Damage power."
+    }
+  ]
 }

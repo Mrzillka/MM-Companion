@@ -383,3 +383,31 @@ def import_mod_folder(source: Path, workspace: storage.Workspace | None = None) 
 
     shutil.copytree(source, destination)
     return _mod_from_manifest(manifest, is_base=False, root=destination)
+
+
+def remove_mod(mod_id: str, workspace: storage.Workspace | None = None) -> Path | None:
+    """Delete workspace mod *mod_id* from disk and drop it from all settings.
+
+    Removes its ``mods/`` directory (found via discovery, so it works even when the
+    folder name differs from the id) and strips the id from ``enabled_mods``,
+    ``trusted_mods``, ``mod_order`` and ``mod_options``. Returns the deleted path, or
+    ``None`` when no such workspace mod exists. The base ruleset is never a workspace
+    mod, so it cannot be removed this way.
+    """
+    workspace = workspace or storage.get_workspace()
+    mod = next((m for m in discover_workspace_mods(workspace) if m.id == mod_id), None)
+    removed: Path | None = None
+    if mod is not None and mod.root is not None and mod.root.exists():
+        shutil.rmtree(mod.root)
+        removed = mod.root
+
+    settings = storage.load_settings()
+    options = dict(settings.get("mod_options", {}) or {})
+    options.pop(mod_id, None)
+    storage.update_settings(
+        enabled_mods=[i for i in settings.get("enabled_mods", []) if i != mod_id],
+        trusted_mods=[i for i in settings.get("trusted_mods", []) if i != mod_id],
+        mod_order=[i for i in settings.get("mod_order", []) if i != mod_id],
+        mod_options=options,
+    )
+    return removed

@@ -1,0 +1,9 @@
+{
+  "id": "guardian-kit",
+  "name": "Guardian Kit (tutorial reference mod)",
+  "version": "1.0",
+  "description": "The end-to-end tutorial mod (docs/modding-tutorial.md): adds a Guardian's Vow advantage, a Sentinel Field effect, a Guardian's Oath sheet block, and a new 'flat_bonus' readout kind. Ships Python, so it must be trusted as well as enabled.",
+  "priority": 50,
+  "files": ["advantages.json", "effects.json", "blocks.json", "effect_readouts.json"],
+  "python_module": "guardian_kit_mod"
+}

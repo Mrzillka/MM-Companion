@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mm_companion.core import mods, storage
 from mm_companion.ui.mods_window import ModsWindow
@@ -62,9 +62,7 @@ def test_ticking_enables_and_marks_dirty(qapp: QApplication) -> None:
 def test_details_reflect_code_and_options(qapp: QApplication) -> None:
     _write_mod({"id": "plain", "name": "Plain"})
     _write_mod({"id": "coder", "name": "Coder", "python_module": "x"})
-    _write_mod(
-        {"id": "opted", "name": "Opted", "options": [{"id": "o", "type": "bool"}]}
-    )
+    _write_mod({"id": "opted", "name": "Opted", "options": [{"id": "o", "type": "bool"}]})
     window = ModsWindow()
     window.show()  # visibility only resolves once the top-level is shown
 
@@ -79,6 +77,35 @@ def test_details_reflect_code_and_options(qapp: QApplication) -> None:
     window._list.setCurrentItem(_item(window, "plain"))
     assert not window._trust_box.isVisible()
     assert not window._configure_button.isVisible()
+
+
+def test_remove_button_deletes_selected_mod(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_mod({"id": "alpha", "name": "Alpha"})
+    _write_mod({"id": "beta", "name": "Beta"})
+    # Confirm the deletion and swallow the "removed" notice without blocking.
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+
+    window = ModsWindow()
+    window._list.setCurrentItem(_item(window, "alpha"))
+    window._remove_current()
+
+    assert not (storage.get_workspace().mods_dir / "alpha").exists()
+    assert {window._list.item(i).text() for i in range(window._list.count())} == {"Beta"}
+    assert window._dirty is True
+
+
+def test_remove_button_cancelled_keeps_mod(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_mod({"id": "alpha", "name": "Alpha"})
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+    window = ModsWindow()
+    window._list.setCurrentItem(_item(window, "alpha"))
+    window._remove_current()
+    assert (storage.get_workspace().mods_dir / "alpha").exists()
 
 
 def test_reorder_persists_on_close(qapp: QApplication) -> None:

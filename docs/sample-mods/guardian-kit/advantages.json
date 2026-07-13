@@ -1,0 +1,14 @@
+{
+  "advantages": [
+    {
+      "id": "guardians_vow",
+      "name": "Guardian's Vow",
+      "types": ["Heroic"],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "focused": false,
+      "description": "You have sworn to protect a person, place, or ideal. Once per scene, invoke the vow to reroll a failed check made in its defense. (New record added by the guardian-kit tutorial mod.)"
+    }
+  ]
+}

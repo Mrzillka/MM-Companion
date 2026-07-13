@@ -1,0 +1,7 @@
+{
+  "effectReadouts": {
+    "sentinel_field": [
+      { "kind": "flat_bonus", "label": "Sentinel Bonus", "amount": 2 }
+    ]
+  }
+}

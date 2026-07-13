@@ -188,3 +188,31 @@ def test_import_mod_folder_rejects_duplicate(_home: Path, tmp_path: Path) -> Non
     (source / mods.MANIFEST_FILENAME).write_text(json.dumps({"id": "dup"}), encoding="utf-8")
     with pytest.raises(mods.ModImportError):
         mods.import_mod_folder(source)
+
+
+# --- removing a mod ---------------------------------------------------------
+
+
+def test_remove_mod_deletes_folder_and_cleans_settings(_home: Path) -> None:
+    root = _write_mod(_home, {"id": "gone"})
+    mods.set_mod_enabled("gone", True)
+    mods.set_mod_trusted("gone", True)
+    mods.set_mod_order(["gone", "other"])
+    mods.set_mod_options("gone", {"x": 1})
+
+    removed = mods.remove_mod("gone")
+
+    assert removed == root
+    assert not root.exists()
+    settings = storage.load_settings()
+    assert settings["enabled_mods"] == []
+    assert settings["trusted_mods"] == []
+    assert settings["mod_order"] == ["other"]
+    assert "gone" not in settings["mod_options"]
+
+
+def test_remove_mod_absent_is_noop(_home: Path) -> None:
+    # Cleans settings even when the folder was already gone; returns None.
+    mods.set_mod_enabled("ghost", True)
+    assert mods.remove_mod("ghost") is None
+    assert storage.load_settings()["enabled_mods"] == []

@@ -1,0 +1,16 @@
+{
+  "blocks": [
+    {
+      "id": "guardian_oath",
+      "title": "Guardian's Oath",
+      "row": 9,
+      "col": 0,
+      "min_height": 110,
+      "fields": [
+        { "kind": "label", "text": "Record the terms of this character's vow (added by the guardian-kit data layer)." },
+        { "kind": "text", "key": "guardian_ward", "label": "Sworn to protect" },
+        { "kind": "text", "key": "guardian_nemesis", "label": "Nemesis" }
+      ]
+    }
+  ]
+}

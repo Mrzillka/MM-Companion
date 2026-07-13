@@ -203,6 +203,9 @@ class ModsWindow(QMainWindow):
         add_button = QPushButton("Add Mod…")
         add_button.clicked.connect(self._add_mod)
         bar.addWidget(add_button)
+        self._remove_button = QPushButton("Remove Mod")
+        self._remove_button.clicked.connect(self._remove_current)
+        bar.addWidget(self._remove_button)
         bar.addStretch()
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.close)
@@ -247,6 +250,7 @@ class ModsWindow(QMainWindow):
 
     def _refresh_details(self) -> None:
         mod = self._current_mod()
+        self._remove_button.setEnabled(mod is not None)
         if mod is None:
             self._detail_name.setText("No mods installed")
             self._detail_version.clear()
@@ -339,6 +343,26 @@ class ModsWindow(QMainWindow):
         order = list(storage.load_settings().get("mod_order", []))
         if mod.id not in order:
             mods.set_mod_order(order + [mod.id])
+        self._mark_dirty()
+        self._reload_mods()
+
+    def _remove_current(self) -> None:
+        """Confirm, then delete the selected mod's folder and refresh."""
+        mod = self._current_mod()
+        if mod is None:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Remove mod",
+            f"Delete “{mod.name}” from disk?\n\nThis removes its folder from the "
+            "workspace mods directory and cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        mods.remove_mod(mod.id)
+        QMessageBox.information(self, "Mod removed", f"Removed “{mod.name}”.")
         self._mark_dirty()
         self._reload_mods()
 

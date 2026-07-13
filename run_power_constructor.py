@@ -12,11 +12,13 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from mm_companion.ui.app_icon import app_icon
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setWindowIcon(app_icon())
     window = PowerConstructorWindow()  # loads game data itself
     window.show()
     return app.exec()

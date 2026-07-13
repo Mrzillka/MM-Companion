@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QSplashScreen
 
 from mm_companion.core.mods import initialize_mods
 from mm_companion.core.storage import ensure_workspace
+from mm_companion.ui.app_icon import app_icon
 from mm_companion.ui.start_window import StartWindow
 
 
@@ -31,6 +32,9 @@ def _make_splash() -> QSplashScreen:
 
 def main() -> int:
     app = QApplication(sys.argv)
+    # The application icon is Qt's default for every top-level window, so no
+    # window needs to set it individually.
+    app.setWindowIcon(app_icon())
 
     # Hide first-run setup (creating the APPDATA workspace, default settings,
     # character directories) behind a loading screen.

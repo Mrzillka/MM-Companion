@@ -137,10 +137,12 @@ def test_ranked_modifier_chip_has_a_rank_spin_box_that_drives_cost(qapp: QApplic
     assert window._cost.text() == "Total cost: 8 PP"  # 1*5 + 1*3
 
 
-def test_strength_based_chip_has_an_amount_spin_box_bounded_by_strength(
+def test_strength_based_chip_amount_spin_box_is_fixed_and_pinned(
     qapp: QApplication,
 ) -> None:
     from PySide6.QtWidgets import QSpinBox
+
+    from mm_companion.ui.power_constructor import STRENGTH_AMOUNT_MAX
 
     char = _pl10_character()
     char.abilities["STR"] = 6
@@ -151,15 +153,21 @@ def test_strength_based_chip_has_an_amount_spin_box_bounded_by_strength(
     chip = card._chips[0]
     spin = chip.findChild(QSpinBox)
     assert spin is not None
-    assert spin.maximum() == 6  # capped at the wielder's Strength
-    assert spin.value() == 6  # seeded at full — nothing stored yet
-    assert "amount" not in window.power.effects[0].extras[0].config
+    # The ceiling is fixed (well above Strength), not the wielder's Strength.
+    assert spin.maximum() == STRENGTH_AMOUNT_MAX
+    # Seeded at — and stored as — the wielder's current Strength, so it's a fixed cost basis.
+    assert spin.value() == 6
+    assert window.power.effects[0].extras[0].config["amount"] == 6
 
-    spin.setValue(2)  # use only part of Strength
+    spin.setValue(2)  # pay for only part of Strength
     assert window.power.effects[0].extras[0].config["amount"] == 2
 
-    spin.setValue(6)  # back to full — the stored cap is cleared so it tracks Strength
-    assert "amount" not in window.power.effects[0].extras[0].config
+    spin.setValue(6)  # always pinned now — never cleared back to dynamic tracking
+    assert window.power.effects[0].extras[0].config["amount"] == 6
+
+    # The amount may be set above the wielder's actual Strength (up to the ceiling).
+    spin.setValue(20)
+    assert window.power.effects[0].extras[0].config["amount"] == 20
 
 
 def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None:

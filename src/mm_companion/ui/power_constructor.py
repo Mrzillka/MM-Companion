@@ -87,6 +87,7 @@ from mm_companion.core.rules import (
     power_allocation_violations,
     power_linked_range_violations,
     power_pl_violations,
+    power_strength_amount_violations,
     power_total_cost,
 )
 from mm_companion.ui.flow_layout import FlowLayout
@@ -157,6 +158,12 @@ CHIP_MIME = "application/x-mm-chip"
 # past 30 (e.g. all Fortitude + all Will effects), a stacked Enhanced Trait — aren't
 # clipped by the input. It's a UI guard rail, not a rules cap.
 RANK_MAX = 250
+
+# The ceiling for a Strength-Based (ability-folding) modifier's "amount used" spin
+# box. Fixed and independent of the wielder's current ability so the power's point
+# cost stays stable when that ability is enhanced or suppressed; a bought amount above
+# the wielder's actual ability is flagged as a warning, not repriced.
+STRENGTH_AMOUNT_MAX = 50
 
 # The accent used to light up a drop target while a compatible brick hovers over it.
 # Kept semi-transparent and paired with palette() roles so both borders and fills read
@@ -305,9 +312,11 @@ class ModifierChip(QFrame):
     emits :attr:`changed` so the card can recompute its cost.
 
     A modifier that folds an ability into the effect (``adds_ability``, e.g.
-    Strength-Based) carries an "amount used" spin box so the player can use only
-    part of that ability. It is bounded by the wielder's effective ability and,
-    when left at full, stores nothing so it keeps tracking the ability dynamically.
+    Strength-Based) carries an "amount used" spin box: the fixed number of ability
+    ranks the power *pays* for, folded in every rank. Its ceiling is
+    :data:`STRENGTH_AMOUNT_MAX`, independent of the wielder's current ability, so the
+    cost stays stable when that ability changes; buying more than the wielder actually
+    has is flagged as a warning, not repriced.
     """
 
     removeRequested = Signal(object)
@@ -356,19 +365,15 @@ class ModifierChip(QFrame):
         if modifier.config_fields:
             outer.addLayout(self._build_config(modifier))
 
-        # A "how much of the ability to use" spin box for an ability-folding modifier
-        # (Strength-Based). Bounded by the wielder's effective ability; full = tracks it.
+        # A "how much of the ability to pay for" spin box for an ability-folding
+        # modifier (Strength-Based). Fixed ceiling, independent of the wielder's ability.
         if modifier.adds_ability:
             outer.addLayout(self._build_amount(modifier.adds_ability))
 
-    def _ability_cap(self, ability_key: str) -> int:
-        """The wielder's effective ability rank — the most this modifier can fold in.
-
-        Falls back to :data:`RANK_MAX` without a character (a constructor opened
-        outside a character context), so the spin box stays usable but unbounded.
-        """
+    def _current_ability(self, ability_key: str) -> int:
+        """The wielder's current effective ability rank (0 without a character)."""
         if self._character is None:
-            return RANK_MAX
+            return 0
         return max(0, effective_ability(self._character, self._data, ability_key))
 
     def _build_amount(self, ability_key: str) -> QHBoxLayout:
@@ -379,25 +384,26 @@ class ModifierChip(QFrame):
             (a.abbr for a in getattr(self._data, "abilities", []) if a.key == ability_key),
             ability_key,
         )
-        row.addWidget(QLabel(f"{abbr} used"))
-        cap = self._ability_cap(ability_key)
-        # No stored amount means "use it all" — seed the spin box at the cap.
+        row.addWidget(QLabel(f"{abbr} paid for"))
+        # A stored amount is the fixed cost basis; without one (a legacy selection that
+        # tracked the ability) seed the spin box at the wielder's current ability.
         current = self.selection.config.get("amount")
-        value = cap if current is None else max(0, min(int(current), cap))
-        spin = make_spin_box(0, cap, value=value, buttons=False, max_width=48)
-        spin.setToolTip(f"How many ranks of your {abbr} this effect uses (max {cap}).")
-        spin.valueChanged.connect(lambda v, c=cap: self._on_amount_changed(v, c))
+        value = self._current_ability(ability_key) if current is None else max(0, int(current))
+        value = min(value, STRENGTH_AMOUNT_MAX)
+        spin = make_spin_box(0, STRENGTH_AMOUNT_MAX, value=value, buttons=False, max_width=48)
+        spin.setToolTip(
+            f"Ranks of {abbr} this effect pays for (max {STRENGTH_AMOUNT_MAX}). "
+            f"The effect folds in your current {abbr}, capped at this amount."
+        )
+        spin.valueChanged.connect(self._on_amount_changed)
         row.addWidget(spin)
         row.addStretch()
         return row
 
-    def _on_amount_changed(self, value: int, cap: int) -> None:
-        # At full the amount is left unset so it keeps tracking the ability; below
-        # full it's pinned to the chosen ranks.
-        if value >= cap:
-            self.selection.config.pop("amount", None)
-        else:
-            self.selection.config["amount"] = value
+    def _on_amount_changed(self, value: int) -> None:
+        # Always pinned — the amount is the fixed cost basis, so the cost doesn't drift
+        # when the wielder's ability changes.
+        self.selection.config["amount"] = value
         self.changed.emit()
 
     def _build_config(self, modifier: Modifier) -> QHBoxLayout:
@@ -1193,6 +1199,14 @@ class EffectCard(QFrame):
         bucket = self.instance.flaws if is_flaw else self.instance.extras
         bucket.append(selection)
 
+        # An ability-folding modifier (Strength-Based) pays for a fixed amount of that
+        # ability. Seed it to the wielder's current ability so a fresh chip costs what
+        # it would today, then pin it there so the cost is stable as the ability moves.
+        if modifier.adds_ability and self._character is not None:
+            selection.config["amount"] = max(
+                0, effective_ability(self._character, self._data, modifier.adds_ability)
+            )
+
         self._build_chip(modifier, selection, is_flaw)
         self._populate_config_form()  # a gating extra may change a field's type
         self._refresh_attack_skill_visibility()  # Perception Range drops the attack roll
@@ -1946,11 +1960,21 @@ class PowerConstructorWindow(QMainWindow):
         """Linked effects that don't share a common Range (a build error)."""
         return power_linked_range_violations(self.power, self._data)
 
+    def _strength_violations(self) -> list[str]:
+        """Strength-Based amounts paying for more of an ability than the wielder has.
+
+        Constructor-only: the character-sheet card never shows this warning.
+        """
+        if self._character is None:
+            return []
+        return power_strength_amount_violations(self.power, self._character, self._data)
+
     def _refresh_pl_warning(self) -> None:
         """Show or hide the live warning from the current PL, allocation, and link breaches."""
         pl = self._pl_violations()
         alloc = self._alloc_violations()
         linked = self._linked_violations()
+        strength = self._strength_violations()
         headlines = []
         if pl:
             headlines.append("over Power Level")
@@ -1958,10 +1982,12 @@ class PowerConstructorWindow(QMainWindow):
             headlines.append("over-allocated")
         if linked:
             headlines.append("mismatched linked Range")
+        if strength:
+            headlines.append("Strength shortfall")
         headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
-            self._warning.setToolTip("\n".join((*pl, *alloc, *linked)))
+            self._warning.setToolTip("\n".join((*pl, *alloc, *linked, *strength)))
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:

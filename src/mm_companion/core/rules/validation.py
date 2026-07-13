@@ -159,6 +159,45 @@ def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
     return violations
 
 
+def power_strength_amount_violations(
+    power: Power, char: Character, game_data: GameData
+) -> list[str]:
+    """Ability-folding amounts (Strength-Based) that exceed the wielder's current ability.
+
+    A Strength-Based Damage (any modifier with an
+    :attr:`~mm_companion.core.data_loader.Modifier.adds_ability`) pays for a fixed
+    ``config["amount"]`` of that ability every rank, independent of the character's
+    current value (see :func:`~mm_companion.core.rules.effect_rank_trait_bonus_cost`).
+    When the wielder's current ability is *below* that bought amount, the power is
+    paying for more of the ability than it can actually fold into its effect — a
+    house-rule warning (like a PL cap), not a build error. Returns one message per
+    such selection; empty when every folded amount is covered by the wielder's ability.
+
+    This is surfaced only in the Power Constructor; the character-sheet card does not
+    show it.
+    """
+
+    catalog = game_data.modifier_catalog()
+    abbrs = {a.key: a.abbr for a in game_data.abilities}
+    violations: list[str] = []
+    for effect in power.effects:
+        for selection in (*effect.extras, *effect.flaws):
+            modifier = catalog.get(selection.modifier_id)
+            if not (modifier and modifier.adds_ability):
+                continue
+            amount = selection.config.get("amount")
+            if amount is None:
+                continue  # tracks the ability dynamically — never over its value
+            ability = effective_ability(char, game_data, modifier.adds_ability)
+            if int(amount) > ability:
+                abbr = abbrs.get(modifier.adds_ability, modifier.adds_ability)
+                violations.append(
+                    f"{_effect_name(effect, game_data)}: {modifier.name} pays for "
+                    f"{int(amount)} ranks of {abbr} but the wielder has only {ability}."
+                )
+    return violations
+
+
 def power_linked_range_violations(power: Power, game_data: GameData) -> list[str]:
     """Linked-effect Range mismatches (``mm-powers-architecture.md`` §4).
 

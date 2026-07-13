@@ -105,6 +105,8 @@ class StartWindow(QMainWindow):
         # Sheet windows opened from here are kept referenced so they aren't
         # garbage-collected (and thus closed) the moment the handler returns.
         self._child_windows: list[MainWindow] = []
+        # The mod manager window, kept referenced while open for the same reason.
+        self._mods_window: QWidget | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -129,6 +131,10 @@ class StartWindow(QMainWindow):
         gm_button = QPushButton("Open GM Mode")
         gm_button.clicked.connect(self._not_implemented)
         column.addWidget(gm_button)
+
+        mods_button = QPushButton("Manage Mods")
+        mods_button.clicked.connect(self._manage_mods)
+        column.addWidget(mods_button)
 
         exit_button = QPushButton("Exit")
         exit_button.clicked.connect(self.close)
@@ -226,6 +232,14 @@ class StartWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _manage_mods(self) -> None:
+        """Open the Mod Manager window."""
+        from mm_companion.ui.mods_window import ModsWindow
+
+        window = ModsWindow()
+        self._mods_window = window
+        window.show()
 
     def _not_implemented(self) -> None:
         """Placeholder for the not-yet-wired GM mode button."""

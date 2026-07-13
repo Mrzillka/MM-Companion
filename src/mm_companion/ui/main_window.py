@@ -46,6 +46,8 @@ class MainWindow(QMainWindow):
         # Windows opened from this one (via Open) kept referenced so they aren't
         # garbage-collected the moment the handler returns.
         self._child_windows: list[MainWindow] = []
+        # The mod manager window, kept referenced while open for the same reason.
+        self._mods_window: QWidget | None = None
 
         self._sheet = CharacterSheet(character=character)
         self._build_menu_bar(locked)
@@ -94,11 +96,20 @@ class MainWindow(QMainWindow):
 
         settings_menu = menu_bar.addMenu("&Settings")
         self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
+        settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
 
         self._lock_action = settings_menu.addAction("Lock")
         self._lock_action.setCheckable(True)
         self._lock_action.setChecked(locked)
         self._lock_action.toggled.connect(self._sheet.set_locked)
+
+    def _manage_mods(self) -> None:
+        """Open the Mod Manager window."""
+        from mm_companion.ui.mods_window import ModsWindow
+
+        window = ModsWindow()
+        self._mods_window = window
+        window.show()
 
     # -- persistence ---------------------------------------------------------
 

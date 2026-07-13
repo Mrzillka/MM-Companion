@@ -144,6 +144,28 @@ def test_sample_python_mod_registers_readout_kind(_home: Path) -> None:
         sys.modules.pop("flat_bonus_mod", None)
 
 
+def test_sample_python_mod_honors_its_option(_home: Path) -> None:
+    root = _install_sample(_home, "flat-bonus-readouts")
+    mods.set_mod_enabled("flat-bonus-readouts", True)
+    mods.set_mod_trusted("flat-bonus-readouts", True)
+    # Configure the bonus larger than the JSON default of +2.
+    mods.set_mod_options("flat-bonus-readouts", {"bonus_amount": 5})
+    clear_game_data_cache()
+    try:
+        mods.initialize_mods()
+        data = load_game_data()
+        effect = PowerEffectInstance(effect_id="damage", rank=5)
+        rows = effect_readout_rows(effect, data)
+        assert any(r.value == "+5" and r.label == "Signature Bonus" for r in rows)
+    finally:
+        if "flat_bonus" in READOUT_KINDS:
+            READOUT_KINDS.unregister("flat_bonus")
+        import sys
+
+        sys.path[:] = [p for p in sys.path if p != str(root)]
+        sys.modules.pop("flat_bonus_mod", None)
+
+
 def test_untrusted_python_mod_data_loads_but_code_does_not(_home: Path) -> None:
     _install_sample(_home, "flat-bonus-readouts")
     mods.set_mod_enabled("flat-bonus-readouts", True)  # enabled, NOT trusted

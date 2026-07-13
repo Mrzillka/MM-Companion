@@ -1,0 +1,19 @@
+{
+  "effects": [
+    {
+      "id": "sentinel_field",
+      "name": "Sentinel Field",
+      "effectType": "Defense",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "baseCost": "1 per rank",
+      "baseCostValue": 1,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "none"
+      },
+      "description": "A protective aura the guardian-kit tutorial mod adds as a brand-new base effect. It is a passive, always-on effect that also carries a flat_bonus readout registered by this mod's Python module."
+    }
+  ]
+}

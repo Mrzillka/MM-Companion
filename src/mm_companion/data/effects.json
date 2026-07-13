@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "description": "Base power effects for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (effectType, action, range, duration, check, resistance, baseCost, statIntegration, config) reflect game rules/facts, not copyrighted prose. Companion to mm-powers-architecture.md (read first) and modifiers.json.",
-    "configNote": "config is the effect's list of configurable qualities (the per-effect choices mm-powers-architecture.md §9 defers). Each entry is { key, label, type ('select'|'multiselect'|'text'), overrides?, multiselectWith?, options? }. The player's choice is stored under 'key' in the power effect instance's config: a single value for select/text, a list of values for multiselect. 'overrides' names a base game-term field (e.g. 'resistance') the chosen value replaces in the generated summary; without it the choice is appended. 'multiselectWith' names an extra modifier whose presence upgrades a select field to multiselect (e.g. Affliction's degrees become multiselect only once the 'extra_condition' extra is attached). For select/multiselect fields, options are { value, label } pairs (condition options use the condition id as value).",
+    "description": "Base power effects for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (effectType, action, range, duration, check, resistance, baseCost, statIntegration, config) reflect game rules/facts, not copyrighted prose. Companion to docs/mm-powers-architecture.md (read first) and modifiers.json.",
+    "configNote": "config is the effect's list of configurable qualities (the per-effect choices docs/mm-powers-architecture.md §9 defers). Each entry is { key, label, type ('select'|'multiselect'|'text'), overrides?, multiselectWith?, options? }. The player's choice is stored under 'key' in the power effect instance's config: a single value for select/text, a list of values for multiselect. 'overrides' names a base game-term field (e.g. 'resistance') the chosen value replaces in the generated summary; without it the choice is appended. 'multiselectWith' names an extra modifier whose presence upgrades a select field to multiselect (e.g. Affliction's degrees become multiselect only once the 'extra_condition' extra is attached). For select/multiselect fields, options are { value, label } pairs (condition options use the condition id as value).",
     "effectTypeKey": {
       "Attack": "Offensive; requires an attack check; always resistible",
       "Defense": "Personal protection; usually passive",
@@ -12,7 +12,7 @@
       "Alteration": "Transforms the user's body or form"
     },
     "statIntegrationPatternKey": {
-      "passive_permanent": "Always contributes its bonus while the power exists and isn't suppressed (see mm-powers-architecture.md §6-7)",
+      "passive_permanent": "Always contributes its bonus while the power exists and isn't suppressed (see docs/mm-powers-architecture.md §6-7)",
       "passive_toggle": "Contributes its bonus only while actively maintained/toggled on",
       "instant_action": "Not a standing bonus — invoked on demand as an action, resolves immediately",
       "resource_pool": "Grants an allocatable sub-budget rather than a direct stat bonus"

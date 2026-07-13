@@ -87,7 +87,7 @@ def _ranked_cost(net_per_rank: int, rank: int) -> int:
 def effect_total_cost(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> int:
-    """Power-point cost of one assembled effect (``mm-powers-architecture.md`` §2).
+    """Power-point cost of one assembled effect (``docs/mm-powers-architecture.md`` §2).
 
     ``ranked = ceil`` of the per-rank cost times rank (see :func:`_ranked_cost` for
     the sub-1 PP/rank fraction rule), then ``total = ranked + Σ flat extras − Σ flat
@@ -295,7 +295,7 @@ def array_base_index(power: Power, game_data: GameData, char: Character | None =
 
 
 def power_total_cost(power: Power, game_data: GameData, char: Character | None = None) -> int:
-    """Total power-point cost of a power (``mm-powers-architecture.md`` §4).
+    """Total power-point cost of a power (``docs/mm-powers-architecture.md`` §4).
 
     ``independent`` and ``linked`` powers cost the sum of their effects (linking
     is a +0 bundle). An ``array`` instead pays the costliest effect in full and a

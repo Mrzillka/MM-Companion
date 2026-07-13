@@ -437,7 +437,7 @@ def effect_stat_rows(
 
 
 def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
-    """The effect's Tier-5 derived readout rows (``mm-powers-ui-design.md`` §2 Tier 5).
+    """The effect's Tier-5 derived readout rows (``docs/mm-powers-ui-design.md`` §2 Tier 5).
 
     Reads the effect's entries in ``effect_readouts.json`` and renders each by its
     ``kind`` — a Growth/Shrinking size shift into its Size Table modifiers, an
@@ -452,7 +452,7 @@ def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> lis
     return rows
 
 
-# One handler per readout ``kind`` (``mm-powers-ui-design.md`` §2 Tier 5). Each takes
+# One handler per readout ``kind`` (``docs/mm-powers-ui-design.md`` §2 Tier 5). Each takes
 # ``(readout, effect, game_data)`` and returns the rendered rows. The base kinds are
 # registered below; a mod's Python module can add a kind by registering another handler.
 # An unregistered kind resolves to no rows (see :func:`_readout_rows`).
@@ -548,7 +548,7 @@ def _readout_rows(readout, effect: PowerEffectInstance, game_data: GameData) -> 
 
 
 # One handler per config-field ``type`` that renders its stored value specially
-# (``mm-powers-architecture.md`` §9). Each takes ``(field, value)`` and returns the
+# (``docs/mm-powers-architecture.md`` §9). Each takes ``(field, value)`` and returns the
 # display text. Only the types whose stored shape isn't a plain option value need a
 # handler; the base ``allocation``/``repeatable`` renderers are registered below. A
 # mod's Python module can add a type by registering another handler. An unregistered

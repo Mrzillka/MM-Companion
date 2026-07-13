@@ -1,4 +1,4 @@
-"""The power model and its cost math (``mm-powers-architecture.md`` §2)."""
+"""The power model and its cost math (``docs/mm-powers-architecture.md`` §2)."""
 
 from __future__ import annotations
 

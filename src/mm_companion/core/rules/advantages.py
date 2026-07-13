@@ -20,7 +20,7 @@ def advantage_by_name(game_data: GameData, name: str):
 def advantage_rank_cap(advantage, power_level: int) -> int | None:
     """The standalone rank cap for one advantage at a Power Level, or ``None`` if uncapped.
 
-    Reads the advantage's ``max_rank_kind`` (``mm-advantages-design.md`` §3), so the
+    Reads the advantage's ``max_rank_kind`` (``docs/mm-advantages-design.md`` §3), so the
     cap style is data-driven rather than hardcoded:
 
     - ``"fixed"`` — the number the rules give (``max_rank``): Improved Critical 4, etc.
@@ -46,7 +46,7 @@ def advantage_rank_cap(advantage, power_level: int) -> int | None:
 def heroic_advantage_budget(power_level: int, divisor: int = 2) -> int:
     """Total ranks available across all Heroic-type advantages: ``power_level // divisor``.
 
-    One shared pool for every Heroic advantage on the sheet (``mm-advantages-design.md``
+    One shared pool for every Heroic advantage on the sheet (``docs/mm-advantages-design.md``
     §3.4), not a per-advantage cap. The divisor (2 in the core rules) comes from
     ``system.json`` (``heroic_budget_divisor``) at the resolver's call sites; it defaults
     here so the bare ``heroic_advantage_budget(power_level)`` form keeps working.
@@ -73,7 +73,7 @@ def heroic_advantage_ranks(char: Character, game_data: GameData) -> int:
 def advantage_violations(char: Character, game_data: GameData) -> list[str]:
     """Advantage limit breaches in the current build; an empty list means it is valid.
 
-    Two limits (``mm-advantages-design.md`` §3): each ranked advantage against its own
+    Two limits (``docs/mm-advantages-design.md`` §3): each ranked advantage against its own
     cap (:func:`advantage_rank_cap` — the fixed numbers and Improved Initiative's
     ``ceil(PL/2)``), and the shared Heroic-advantage budget
     (:func:`heroic_advantage_budget`). The Power-Level *shared* trait caps for

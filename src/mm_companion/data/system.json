@@ -1,5 +1,5 @@
 {
-  "_comment": "System-level rule references for Mutants & Masterminds 4e (Open Game Content). The trait keys, formulas, sentinel scope strings, and structural modifier ids that core resolvers read instead of hardcoding them in Python (mm-core-mechanics.md §5-8). Consumed by mm_companion.core.data_loader; a mod can override any of these.",
+  "_comment": "System-level rule references for Mutants & Masterminds 4e (Open Game Content). The trait keys, formulas, sentinel scope strings, and structural modifier ids that core resolvers read instead of hardcoding them in Python (docs/mm-core-mechanics.md §5-8). Consumed by mm_companion.core.data_loader; a mod can override any of these.",
   "system": {
     "default_initiative_ability": "AGL",
     "defense_dc_base": 10,

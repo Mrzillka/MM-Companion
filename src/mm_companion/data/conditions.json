@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Consolidated condition catalog for Mutants & Masterminds 4e. Full mechanical specification for every condition plus a short always-visible 'tooltip' line per record. All 'effect'/'recovery'/'tooltip' fields are original paraphrases of the rulebook's functional rules (penalties, superseding logic, recovery checks, action limits) - not copied prose. Companion to mm-conditions-design.md (pattern definitions and resolution rules). Read mm-conditions-design.md first for the mechanism ids referenced in each condition's 'mechanisms' field.",
+    "description": "Consolidated condition catalog for Mutants & Masterminds 4e. Full mechanical specification for every condition plus a short always-visible 'tooltip' line per record. All 'effect'/'recovery'/'tooltip' fields are original paraphrases of the rulebook's functional rules (penalties, superseding logic, recovery checks, action limits) - not copied prose. Companion to docs/mm-conditions-design.md (pattern definitions and resolution rules). Read docs/mm-conditions-design.md first for the mechanism ids referenced in each condition's 'mechanisms' field.",
     "categoryKey": {
       "condition": "A general status effect imposed by an effect, action, or circumstance",
       "damage_condition": "Imposed by failing a Damage resistance check; part of the damage ladder",
@@ -466,7 +466,7 @@
       "parameter": null,
       "debilitates": null,
       "effect": "Incapacitated and near death. On gaining this, immediately make a DC 10 Stamina check: success = nothing happens; 2+ degrees of success = stabilize (become Incapacitated); failure = remain Dying; 3+ total degrees of failure = Dead. Then check at the start of each turn until death or stabilization. A character with no Stamina rank becomes Dead instead of Dying.",
-      "recovery": "Self: DC 10 Stamina check each turn to stabilize. Another character: DC 15 Treatment check. See mm-actions-adventure.md.",
+      "recovery": "Self: DC 10 Stamina check each turn to stabilize. Another character: DC 15 Treatment check. See docs/mm-actions-adventure.md.",
       "recoveryCheck": {
         "trait": "STA",
         "dc": 10,
@@ -781,7 +781,7 @@
       "parameter": null,
       "debilitates": null,
       "effect": "Lying down: -5 on your close attack checks; opponents get +5 on close attacks against you but -5 on ranged attacks against you; ground speed rank 0.",
-      "recovery": "Stand action (see mm-actions-adventure.md).",
+      "recovery": "Stand action (see docs/mm-actions-adventure.md).",
       "attackMods": {
         "ownCloseAttack": -5,
         "incomingCloseAttack": 5,

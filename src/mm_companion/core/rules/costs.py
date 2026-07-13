@@ -12,7 +12,7 @@ from .powers_cost import node_cost
 
 
 def ability_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on abilities and combat stats (``mm-core-mechanics.md`` §7).
+    """Power points spent on abilities and combat stats (``docs/mm-core-mechanics.md`` §7).
 
     Each ability costs per rank; the ``derived`` combat stats (Attack) cost at the
     combat rate. Negative ranks refund points.
@@ -28,7 +28,7 @@ def ability_points_spent(char: Character, game_data: GameData) -> int:
 
 
 def resistance_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on resistances (``mm-core-mechanics.md`` §7).
+    """Power points spent on resistances (``docs/mm-core-mechanics.md`` §7).
 
     Only the ranks *bought above the derived base* cost points (that delta is what
     the model stores); non-derived resistances cost per rank, the ``derived`` combat
@@ -58,7 +58,7 @@ def _specialized_row_ids(char: Character) -> set[str]:
 
 
 def skill_points_spent(char: Character, game_data: GameData) -> int:
-    """Power points spent on skills, pooled across every skill (``mm-skills-design.md`` §4/§7).
+    """Power points spent on skills, pooled across every skill (``docs/mm-skills-design.md`` §4/§7).
 
     All skill ranks share one purchase pool that rounds *once*, so 1 rank in four
     skills costs 2 PP, not 4. Ordinary ranks (most focused skills included) cost
@@ -107,7 +107,7 @@ def powers_points_spent(char: Character, game_data: GameData) -> int:
 
 
 def power_points_spent(char: Character, game_data: GameData) -> int:
-    """Total power points the character's current build costs (``mm-core-mechanics.md`` §7).
+    """Total power points the character's current build costs (``docs/mm-core-mechanics.md`` §7).
 
     The sum of the per-category costs — abilities/combat stats, resistances, skills,
     advantages, and powers — each of which is also available on its own for the
@@ -133,7 +133,7 @@ def min_power_points(power_level: int, game_data: GameData) -> int:
     """The minimum power-point budget a Power Level requires: ``PL × pp_per_level``.
 
     A character's Power Level sets the floor on their point budget — a PL 10 hero is
-    built on at least 150 points at 15 points per level (``mm-core-mechanics.md`` §7).
+    built on at least 150 points at 15 points per level (``docs/mm-core-mechanics.md`` §7).
     Data-driven: the per-level rate comes from ``costs.json``, never hardcoded here.
     """
 

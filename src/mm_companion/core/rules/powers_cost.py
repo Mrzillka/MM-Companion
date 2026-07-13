@@ -107,7 +107,7 @@ def effect_total_cost(
 
     net_mods = _net_per_rank_modifiers(effect, game_data)
     ranked = _ranked_cost(base.base_cost_value + net_mods, effect.rank)
-    ranked += effect_rank_trait_bonus(effect, game_data, char) * net_mods
+    ranked += effect_rank_trait_bonus_cost(effect, game_data, char) * net_mods
 
     flat = _signed_modifier_cost(effect.extras, +1, game_data, flat=True)
     flat += _signed_modifier_cost(effect.flaws, -1, game_data, flat=True)
@@ -118,18 +118,20 @@ def effect_total_cost(
 def effect_rank_trait_bonus(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None
 ) -> int:
-    """Ranks a modifier folds in from a character ability (Strength-Based → Strength).
+    """Ranks a modifier folds in from a character ability *as it resolves in play*.
 
     Sums the *effective* value of each ability an attached modifier's
     :attr:`~mm_companion.core.data_loader.Modifier.adds_ability` names — so a
     Strength-Based Damage picks up the wielder's Strength (Enhanced Trait boosts to
     that ability included). Zero without a character or when no such modifier is
-    attached. The bought point cost is unaffected — the folded-in rank is free.
+    attached. This is the value that sets the effect's DC / effective rank, so it
+    tracks the wielder's *current* ability.
 
-    A selection may cap how much of the ability it uses via ``config["amount"]`` (the
-    Strength-Based chip's spin box): when set, no more than that many ranks are folded
-    in (and never more than the wielder actually has). Absent, the full ability is
-    used and tracks it dynamically.
+    A selection caps how much of the ability it uses via ``config["amount"]`` (the
+    Strength-Based chip's spin box): the folded-in rank is the lesser of that cap and
+    the ability the wielder actually has. Absent, the full ability is used and tracks
+    it dynamically. Point cost is charged separately against the *bought* cap — see
+    :func:`effect_rank_trait_bonus_cost` — so cost stays stable when the ability moves.
     """
 
     if char is None:
@@ -141,7 +143,38 @@ def effect_rank_trait_bonus(
         if modifier and modifier.adds_ability:
             ability = effective_ability(char, game_data, modifier.adds_ability)
             amount = selection.config.get("amount")
-            bonus += ability if amount is None else min(int(amount), ability)
+            bonus += ability if amount is None else max(0, min(int(amount), ability))
+    return bonus
+
+
+def effect_rank_trait_bonus_cost(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> int:
+    """Ability ranks a modifier folds in *for point-cost purposes* (Strength-Based).
+
+    The player buys a fixed amount of the ability to fold in via the Strength-Based
+    chip's spin box (``config["amount"]``); the power pays for that amount every rank
+    regardless of the wielder's *current* ability, so the cost is stable when Strength
+    is enhanced or suppressed. This is deliberately decoupled from
+    :func:`effect_rank_trait_bonus` (which tracks the current ability for the DC): a
+    build that pays for more of the ability than the wielder has is a warning, not a
+    price change (see :func:`~mm_companion.core.rules.power_strength_amount_violations`).
+
+    When no amount is stored (a legacy selection that tracked the ability), it falls
+    back to the wielder's current ability so old builds keep their previous cost.
+    """
+
+    catalog = game_data.modifier_catalog()
+    bonus = 0
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if not (modifier and modifier.adds_ability):
+            continue
+        amount = selection.config.get("amount")
+        if amount is not None:
+            bonus += max(0, int(amount))
+        elif char is not None:
+            bonus += max(0, effective_ability(char, game_data, modifier.adds_ability))
     return bonus
 
 
@@ -209,8 +242,10 @@ def effect_cost_formula(
     formula = f"{effect.rank} × {per_rank_str}"
 
     # Ranks folded in from an ability (Strength-Based Damage) pay the per-rank
-    # modifiers, but not the base cost — a separate ``strength × (mods)`` term.
-    strength = effect_rank_trait_bonus(effect, game_data, char)
+    # modifiers, but not the base cost — a separate ``strength × (mods)`` term. This
+    # is the bought amount (:func:`effect_rank_trait_bonus_cost`), so the breakdown
+    # matches the cost even when the wielder's current ability differs.
+    strength = effect_rank_trait_bonus_cost(effect, game_data, char)
     if strength and sum(mod_terms) != 0:
         mods_str = _join_terms(mod_terms)
         formula += f" + {strength} × {f'({mods_str})' if len(mod_terms) > 1 else mods_str}"

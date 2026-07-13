@@ -38,6 +38,7 @@ from mm_companion.core.rules import (
     power_linked_range_violations,
     power_pl_violations,
     power_runtime_gates,
+    power_strength_amount_violations,
     power_total_cost,
     power_trait_bonuses,
     powers_points_spent,
@@ -917,6 +918,53 @@ def test_strength_based_amount_caps_the_folded_in_strength() -> None:
         extras=[ModifierSelection("strength_based", config={"amount": 20})],
     )
     assert effect_effective_rank(greedy, data, char) == 18
+
+
+def test_strength_based_cost_uses_the_bought_amount_not_current_strength() -> None:
+    data = load_game_data()
+    # Strength-Based (folds STR) + Ranged (+1/rank), amount bought = 4. The cost pays
+    # for those 4 folded ranks regardless of the wielder's current Strength:
+    # 5 × (1 + 1) + 4 × 1 = 14, whether Strength is 4, 8, or 1.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=5,
+        extras=[
+            ModifierSelection("strength_based", config={"amount": 4}),
+            ModifierSelection("ranged"),
+        ],
+    )
+    for strength in (1, 4, 8):
+        char = Character()
+        char.abilities["STR"] = strength
+        assert effect_total_cost(effect, data, char) == 14
+        assert effect_cost_formula(effect, data, char) == "5 × (1 + 0 + 1) + 4 × (0 + 1)"
+    # The effect *value*, by contrast, still tracks the current (capped) Strength.
+    weak = Character()
+    weak.abilities["STR"] = 1
+    assert effect_effective_rank(effect, data, weak) == 6  # 5 + min(4, 1)
+
+
+def test_strength_amount_over_strength_is_a_warning() -> None:
+    data = load_game_data()
+    # amount=8 but the wielder only has Strength 5 → the power pays for 3 ranks it
+    # can't fold in. Flagged as a warning (not repriced).
+    effect = PowerEffectInstance(
+        "damage",
+        rank=10,
+        extras=[ModifierSelection("strength_based", config={"amount": 8})],
+    )
+    power = Power(effects=[effect])
+    over = power_strength_amount_violations(power, _pl_char(data, strength=5), data)
+    assert over and "8 ranks" in over[0]
+    # Enough Strength to cover the bought amount → no warning.
+    assert power_strength_amount_violations(power, _pl_char(data, strength=8), data) == []
+    # A selection that tracks Strength dynamically (no amount stored) never warns.
+    tracking = Power(
+        effects=[
+            PowerEffectInstance("damage", rank=10, extras=[ModifierSelection("strength_based")])
+        ]
+    )
+    assert power_strength_amount_violations(tracking, _pl_char(data, strength=5), data) == []
 
 
 def test_pl_violations_ignore_non_attack_effects() -> None:

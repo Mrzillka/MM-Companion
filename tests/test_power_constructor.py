@@ -1061,3 +1061,37 @@ def test_reduced_trait_offers_a_data_driven_trait_picker(qapp: QApplication) -> 
 # longer set in the constructor — they're built on the character sheet by dragging one
 # power card onto another (see tests/test_powers_section.py). The constructor's own mode
 # bar (structure of a single power's effects) is covered elsewhere in this module.
+
+
+def test_config_widget_registry_has_base_builders(qapp: QApplication) -> None:
+    from mm_companion.ui.power_constructor import CONFIG_WIDGET_BUILDERS
+
+    # Every built-in field type has a builder; ``select`` deliberately does not — it is
+    # the generic fallback rendered when no builder is registered for a type.
+    for field_type in ("text", "checkbox", "allocation", "repeatable", "multiselect"):
+        assert field_type in CONFIG_WIDGET_BUILDERS
+    assert "select" not in CONFIG_WIDGET_BUILDERS
+
+
+def test_mod_registered_config_field_type_renders_via_registry(qapp: QApplication) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QComboBox
+
+    from mm_companion.ui.power_constructor import CONFIG_WIDGET_BUILDERS
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    field = SimpleNamespace(key="mod_field", options=[])
+
+    # An unregistered type falls back to the generic option combo.
+    assert isinstance(card._config_widget(field, "stars"), QComboBox)
+
+    # A mod registering a builder for that type gets its widget used, no constructor edit.
+    marker = QLabel("mod widget")
+    CONFIG_WIDGET_BUILDERS.register("stars", lambda c, f, ft: marker)
+    try:
+        assert card._config_widget(field, "stars") is marker
+    finally:
+        CONFIG_WIDGET_BUILDERS.unregister("stars")
+    assert isinstance(card._config_widget(field, "stars"), QComboBox)

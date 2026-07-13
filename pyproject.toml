@@ -33,6 +33,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
+    "pytest-timeout>=2.3",
     "black>=24.0",
     "ruff>=0.5",
 ]
@@ -66,3 +67,6 @@ select = ["E", "F", "I", "W", "UP", "B"]
 minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-ra"
+# A single hung GUI test (e.g. a stray modal .exec()) would otherwise block the
+# whole session forever; fail it loudly after 60s instead.
+timeout = 60

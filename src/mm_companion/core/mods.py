@@ -17,20 +17,35 @@ Manifest (``mod.json``) schema::
       "id": "my-mod",              # unique id (required)
       "name": "My Mod",            # display name (defaults to id)
       "version": "1.0",            # free-form version string
-      "priority": 10,              # higher applies later / wins (default 0)
+      "description": "…",          # optional prose shown in the mod manager
+      "priority": 10,              # seeds a newly-added mod's initial load slot
       "requires": ["base"],        # optional ids this mod depends on
       "files": ["effects.json"],   # content files this mod ships
-      "python_module": "my_mod"    # optional importable module (Phase 6)
+      "python_module": "my_mod",   # optional importable module (Phase 6)
+      "options": [                 # optional per-mod configurable options
+        {
+          "id": "difficulty",      # unique within the mod (required)
+          "label": "Difficulty",   # shown in the options form (defaults to id)
+          "type": "choice",        # bool | number | text | choice
+          "default": "normal",     # value used until the user overrides it
+          "choices": ["easy", "normal", "hard"],  # for type == "choice"
+          "description": "…"       # optional field help
+        }
+      ]
     }
+
+The user-facing load order lives in settings (``mod_order``), not the manifest —
+the manifest ``priority`` only decides where a *newly added* mod first lands.
 """
 
 from __future__ import annotations
 
 import importlib
 import json
+import shutil
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 
@@ -39,6 +54,29 @@ from . import storage
 DATA_PACKAGE = "mm_companion"
 BASE_MOD_ID = "base"
 MANIFEST_FILENAME = "mod.json"
+
+OPTION_TYPES = ("bool", "number", "text", "choice")
+
+
+class ModImportError(Exception):
+    """Raised by :func:`import_mod_folder` when a folder can't be installed as a mod."""
+
+
+@dataclass(frozen=True)
+class ModOption:
+    """One configurable option a mod declares in its manifest.
+
+    ``type`` is one of :data:`OPTION_TYPES`; ``choices`` is only meaningful for
+    ``"choice"``. ``default`` is the value used until the user overrides it in the
+    mod manager (stored under ``mod_options`` in settings).
+    """
+
+    id: str
+    label: str
+    type: str
+    default: object = None
+    choices: tuple[str, ...] = ()
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,6 +98,8 @@ class Mod:
     root: Path | None = None
     python_module: str | None = None
     requires: tuple[str, ...] = ()
+    description: str = ""
+    options: tuple[ModOption, ...] = field(default_factory=tuple)
 
     def read(self, filename: str) -> dict | None:
         """Parse one of this mod's content files, or ``None`` if absent."""
@@ -80,7 +120,24 @@ class Mod:
         return f"{self.id}@{self.version}#{self.priority}"
 
 
+def _option_from_dict(raw: dict) -> ModOption:
+    opt_type = raw.get("type", "text")
+    return ModOption(
+        id=raw["id"],
+        label=raw.get("label", raw["id"]),
+        type=opt_type if opt_type in OPTION_TYPES else "text",
+        default=raw.get("default"),
+        choices=tuple(raw.get("choices", [])),
+        description=raw.get("description", ""),
+    )
+
+
 def _mod_from_manifest(manifest: dict, *, is_base: bool, root: Path | None) -> Mod:
+    options = tuple(
+        _option_from_dict(opt)
+        for opt in manifest.get("options", [])
+        if isinstance(opt, dict) and "id" in opt
+    )
     return Mod(
         id=manifest["id"],
         name=manifest.get("name", manifest["id"]),
@@ -91,6 +148,8 @@ def _mod_from_manifest(manifest: dict, *, is_base: bool, root: Path | None) -> M
         root=root,
         python_module=manifest.get("python_module"),
         requires=tuple(manifest.get("requires", [])),
+        description=manifest.get("description", ""),
+        options=options,
     )
 
 
@@ -133,22 +192,33 @@ def discover_workspace_mods(workspace: storage.Workspace | None = None) -> list[
 def active_mods(
     enabled: list[str] | None = None,
     workspace: storage.Workspace | None = None,
+    order: list[str] | None = None,
 ) -> list[Mod]:
     """The ordered mod stack to load: base first, then enabled workspace mods.
 
-    *enabled* is the list of workspace-mod ids to apply (defaults to the
-    ``enabled_mods`` setting). Enabled mods are ordered by ``priority`` (higher
-    applies later and therefore wins), ties broken by their order in *enabled*.
-    Unknown ids in *enabled* are ignored.
+    *enabled* is the set of workspace-mod ids to apply (defaults to the
+    ``enabled_mods`` setting). Load order is the user-defined *order* (defaults to
+    the ``mod_order`` setting): enabled mods present in *order* apply in that order
+    (later applies later and therefore wins). Any enabled mod not yet listed in
+    *order* is appended after, seeded by ascending manifest ``priority``. Unknown
+    ids are ignored.
     """
     if enabled is None:
         enabled = list(storage.load_settings().get("enabled_mods", []))
+    if order is None:
+        order = list(storage.load_settings().get("mod_order", []))
     mods = [base_mod()]
-    if enabled:
-        available = {m.id: m for m in discover_workspace_mods(workspace)}
-        chosen = [available[mid] for mid in enabled if mid in available]
-        chosen.sort(key=lambda m: m.priority)  # stable: preserves enabled order on ties
-        mods.extend(chosen)
+    if not enabled:
+        return mods
+
+    available = {m.id: m for m in discover_workspace_mods(workspace)}
+    enabled_set = [mid for mid in enabled if mid in available]
+
+    ordered = [mid for mid in order if mid in enabled_set]
+    remaining = [mid for mid in enabled_set if mid not in ordered]
+    remaining.sort(key=lambda mid: available[mid].priority)  # stable seed for un-ordered mods
+
+    mods.extend(available[mid] for mid in ordered + remaining)
     return mods
 
 
@@ -239,3 +309,77 @@ def set_mod_trusted(mod_id: str, trusted: bool) -> list[str]:
     for a mod that is also enabled.
     """
     return _update_id_list("trusted_mods", mod_id, trusted)
+
+
+def set_mod_order(ids: list[str]) -> list[str]:
+    """Persist the user-defined load order (``mod_order`` setting); returns it.
+
+    *ids* is the full drag order of workspace mods (enabled or not). Later entries
+    apply later and win. See :func:`active_mods`.
+    """
+    order = list(ids)
+    storage.update_settings(mod_order=order)
+    return order
+
+
+# --- per-mod options ----------------------------------------------------------
+
+
+def mod_option_values(mod_id: str, mod: Mod | None = None) -> dict:
+    """The effective option values for *mod_id*: declared defaults + stored overrides.
+
+    *mod* supplies the option declarations (defaults / valid ids); when omitted the
+    result is just the raw stored overrides. Values not declared by the mod are
+    dropped so a stale override can't leak in.
+    """
+    stored = storage.load_settings().get("mod_options", {})
+    overrides = stored.get(mod_id, {}) if isinstance(stored, dict) else {}
+    if mod is None:
+        return dict(overrides)
+    values: dict = {}
+    for option in mod.options:
+        values[option.id] = overrides.get(option.id, option.default)
+    return values
+
+
+def set_mod_options(mod_id: str, values: dict) -> dict:
+    """Persist option overrides for *mod_id*; returns the full ``mod_options`` map."""
+    settings = storage.load_settings()
+    stored = dict(settings.get("mod_options", {}) or {})
+    stored[mod_id] = dict(values)
+    storage.update_settings(mod_options=stored)
+    return stored
+
+
+# --- installing a mod from a folder -------------------------------------------
+
+
+def import_mod_folder(source: Path, workspace: storage.Workspace | None = None) -> Mod:
+    """Copy the mod folder *source* into the workspace ``mods/`` dir; return the mod.
+
+    Validates that *source* holds a parseable ``mod.json`` with an ``id`` that does
+    not collide with the base ruleset or an already-installed mod, then copies the
+    whole tree to ``mods/<id>``. Raises :class:`ModImportError` on any problem.
+    """
+    source = Path(source)
+    manifest_path = source / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        raise ModImportError(f"No {MANIFEST_FILENAME} found in {source}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ModImportError(f"Could not read {manifest_path}: {exc}") from exc
+    mod_id = manifest.get("id")
+    if not mod_id:
+        raise ModImportError(f'{manifest_path} is missing an "id"')
+    if mod_id == BASE_MOD_ID:
+        raise ModImportError(f'"{mod_id}" is reserved for the base ruleset')
+
+    workspace = workspace or storage.get_workspace()
+    workspace.mods_dir.mkdir(parents=True, exist_ok=True)
+    destination = workspace.mods_dir / mod_id
+    if destination.exists():
+        raise ModImportError(f'A mod with id "{mod_id}" is already installed')
+
+    shutil.copytree(source, destination)
+    return _mod_from_manifest(manifest, is_base=False, root=destination)

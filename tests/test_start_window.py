@@ -31,10 +31,16 @@ def test_list_saved_characters_is_empty_when_none_saved() -> None:
     assert list_saved_characters() == []
 
 
-def test_start_window_shows_the_four_actions(qapp: QApplication) -> None:
+def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
     window = StartWindow()
     labels = {b.text() for b in window.findChildren(QPushButton)}
-    assert labels == {"Create New Character", "Open Existing", "Open GM Mode", "Exit"}
+    assert labels == {
+        "Create New Character",
+        "Open Existing",
+        "Open GM Mode",
+        "Manage Mods",
+        "Exit",
+    }
 
 
 def test_empty_store_shows_the_empty_state(qapp: QApplication) -> None:

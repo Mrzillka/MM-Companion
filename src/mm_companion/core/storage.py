@@ -49,6 +49,14 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # lets its Python code run (``register_*`` hooks). A separate, explicit opt-in
     # because importing a mod module executes arbitrary code. Empty by default.
     "trusted_mods": [],
+    # User-defined load order of *all* known workspace mods (drag order in the mod
+    # manager), independent of which are enabled. Later entries apply later and win;
+    # a mod's manifest ``priority`` only seeds where a newly-added mod first lands.
+    "mod_order": [],
+    # Per-mod option overrides: ``{mod_id: {option_id: value}}``. A mod declares its
+    # options in its manifest; only values that differ from the declared defaults are
+    # stored here. See :mod:`mm_companion.core.mods`.
+    "mod_options": {},
 }
 
 

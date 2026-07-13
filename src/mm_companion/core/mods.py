@@ -26,7 +26,10 @@ Manifest (``mod.json``) schema::
 
 from __future__ import annotations
 
+import importlib
 import json
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -147,3 +150,92 @@ def active_mods(
         chosen.sort(key=lambda m: m.priority)  # stable: preserves enabled order on ties
         mods.extend(chosen)
     return mods
+
+
+# --- Python-module loading (the code-executing half of a mod) ----------------
+
+
+def load_mod_python_modules(
+    mods: list[Mod],
+    *,
+    trusted: set[str],
+    importer: Callable[[str], object] = importlib.import_module,
+) -> list[str]:
+    """Import the ``python_module`` of each *trusted* mod so its ``register_*`` runs.
+
+    A mod's data is always safe to merge, but its Python module executes arbitrary
+    code on import — so a module is loaded **only** when the mod's id is in
+    *trusted* (the base ruleset is implicitly trusted). The mod's ``root`` is put on
+    ``sys.path`` first so a workspace module resolves by its declared name. Import
+    failures are swallowed (one broken mod can't stop startup); the ids actually
+    imported are returned, in load order.
+    """
+    loaded: list[str] = []
+    for mod in mods:
+        if not mod.python_module:
+            continue
+        if not mod.is_base and mod.id not in trusted:
+            continue  # data enabled, code not trusted — skip the module
+        root = mod.root
+        if root is not None:
+            root_str = str(root)
+            if root_str not in sys.path:
+                sys.path.insert(0, root_str)
+        try:
+            importer(mod.python_module)
+        except Exception:  # noqa: BLE001 — a bad mod must not crash the app
+            continue
+        loaded.append(mod.id)
+    return loaded
+
+
+def initialize_mods(workspace: storage.Workspace | None = None) -> list[str]:
+    """Startup hook: import trusted enabled mods' Python modules.
+
+    Call once after :func:`mm_companion.core.storage.ensure_workspace` and **before**
+    the first :func:`mm_companion.core.data_loader.load_game_data`, so a mod's
+    ``register_*`` handlers are in place before any content is parsed or rendered.
+    Reads ``enabled_mods`` and ``trusted_mods`` from settings. Returns the mod ids
+    whose modules were imported.
+    """
+    settings = storage.load_settings()
+    enabled = list(settings.get("enabled_mods", []))
+    trusted = set(settings.get("trusted_mods", []))
+    mods = active_mods(enabled, workspace)
+    return load_mod_python_modules(mods, trusted=trusted)
+
+
+# --- settings seams for enabling / trusting mods (UI wires to these later) ----
+
+
+def _update_id_list(key: str, mod_id: str, present: bool) -> list[str]:
+    settings = storage.load_settings()
+    ids = list(settings.get(key, []))
+    if present and mod_id not in ids:
+        ids.append(mod_id)
+    elif not present and mod_id in ids:
+        ids = [i for i in ids if i != mod_id]
+    storage.update_settings(**{key: ids})
+    return ids
+
+
+def set_mod_enabled(mod_id: str, enabled: bool) -> list[str]:
+    """Add/remove *mod_id* from the ``enabled_mods`` setting; returns the new list.
+
+    Disabling a mod also drops it from ``trusted_mods`` (trust without enable is
+    meaningless). Callers should :func:`data_loader.clear_game_data_cache` afterward
+    so the change is picked up.
+    """
+    ids = _update_id_list("enabled_mods", mod_id, enabled)
+    if not enabled:
+        _update_id_list("trusted_mods", mod_id, False)
+    return ids
+
+
+def set_mod_trusted(mod_id: str, trusted: bool) -> list[str]:
+    """Add/remove *mod_id* from the ``trusted_mods`` setting; returns the new list.
+
+    Trusting lets the mod's Python module run at the next startup. Only meaningful
+    for a mod that is also enabled.
+    """
+    return _update_id_list("trusted_mods", mod_id, trusted)

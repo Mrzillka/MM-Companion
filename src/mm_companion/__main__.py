@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
+from mm_companion.core.mods import initialize_mods
 from mm_companion.core.storage import ensure_workspace
 from mm_companion.ui.start_window import StartWindow
 
@@ -38,6 +39,9 @@ def main() -> int:
     app.processEvents()
 
     ensure_workspace()
+    # Import trusted enabled mods' Python modules so their register_* hooks fire
+    # before any game data is parsed or rendered.
+    initialize_mods()
 
     window = StartWindow()
     window.show()

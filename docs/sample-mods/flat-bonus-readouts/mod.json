@@ -1,0 +1,8 @@
+{
+  "id": "flat-bonus-readouts",
+  "name": "Flat-Bonus Readouts (sample data+Python mod)",
+  "version": "1.0",
+  "priority": 20,
+  "files": ["effect_readouts.json"],
+  "python_module": "flat_bonus_mod"
+}

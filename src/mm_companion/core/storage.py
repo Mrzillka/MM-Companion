@@ -44,6 +44,11 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # should apply (later entries win). Empty by default, so a fresh install runs
     # the base ruleset only. See :mod:`mm_companion.core.mods`.
     "enabled_mods": [],
+    # Ids of enabled mods whose declared ``python_module`` may be imported at
+    # startup. Enabling a mod loads only its *data* (safe); trusting it in addition
+    # lets its Python code run (``register_*`` hooks). A separate, explicit opt-in
+    # because importing a mod module executes arbitrary code. Empty by default.
+    "trusted_mods": [],
 }
 
 

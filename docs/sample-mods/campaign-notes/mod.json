@@ -1,0 +1,7 @@
+{
+  "id": "campaign-notes",
+  "name": "Campaign Notes (sample data-only mod)",
+  "version": "1.0",
+  "priority": 10,
+  "files": ["advantages.json", "blocks.json"]
+}

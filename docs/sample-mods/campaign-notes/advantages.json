@@ -1,0 +1,14 @@
+{
+  "advantages": [
+    {
+      "id": "signature_gear",
+      "name": "Signature Gear",
+      "types": ["Fortune"],
+      "ranked": false,
+      "maxRank": null,
+      "maxRankKind": "none",
+      "focused": false,
+      "description": "A campaign-specific perk added by the sample data-only mod. You own an iconic piece of equipment that the GM restores between adventures."
+    }
+  ]
+}

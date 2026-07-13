@@ -351,6 +351,43 @@ The sheet **starts locked** (a read-only viewer, not an editor). Any new section
 with editable widgets should expose `set_locked` and be wired into
 `CharacterSheet.set_locked`.
 
+## The mod pipeline (matters when touching data loading or startup)
+
+The base ruleset is loaded as **the default mod** through the same pipeline that
+loads user mods, so game content is fully data-first and moddable. The full
+authoring guide is `docs/modding.md`; the shape:
+
+- **Discovery/order** (`core/mods.py`, pure Python): a `Mod` is a manifest
+  (`mod.json`: `id`/`name`/`version`/`priority`/`files`/optional `requires` +
+  `python_module`) plus how to read its content. `base_mod()` is the bundled
+  `data/mod.json`; `discover_workspace_mods()` scans the workspace `mods/` dir
+  (malformed manifests skipped, never fatal); `active_mods()` returns base first,
+  then enabled workspace mods by ascending `priority` (higher wins, ties broken by
+  `enabled_mods` order).
+- **Merge loader** (`core/data_loader.py`): `load_game_data()` gathers the active
+  mods' content in load order and **deep-merges by record id** (`_deep_merge` —
+  a later mod overrides only the fields it supplies and appends new ids; plain
+  lists like `options` are replaced wholesale), then parses one `GameData`. Cached
+  by the mod stack's fingerprint; invalidate with `clear_game_data_cache()` after
+  enabling/disabling a mod.
+- **Two mod flavors.** A **data-only** mod is pure JSON (override base files by
+  reusing their names, or add a declarative sheet block via `blocks.json`). A
+  **data+Python** mod also ships one `python_module` whose import-time
+  `register_*` calls extend an engine registry (readout kinds, condition
+  mechanisms, config-field types/widgets, sheet blocks — see the registry table in
+  `docs/modding.md`).
+- **Two settings gates** (`core/storage.DEFAULT_SETTINGS`): `enabled_mods` (ids
+  whose *data* layers on) and `trusted_mods` (ids whose *Python* may be imported —
+  a separate opt-in because importing runs code). `mods.set_mod_enabled` /
+  `set_mod_trusted` are the toggles (disabling revokes trust); a settings UI is
+  still TODO. `mods.initialize_mods()` (called in `__main__.main()` after
+  `ensure_workspace()`, before the first `load_game_data()`) imports the
+  enabled+trusted mods' Python modules so their `register_*` hooks fire first; the
+  base ruleset is implicitly trusted and an import that raises is swallowed.
+- Two living examples ship under `docs/sample-mods/`: `campaign-notes` (data-only)
+  and `flat-bonus-readouts` (data+Python), exercised end-to-end by
+  `tests/test_mod_loading.py`.
+
 ## Licensing boundary (matters when adding game data)
 
 - Source code is MIT. Game data under `src/mm_companion/data/` is Open Game

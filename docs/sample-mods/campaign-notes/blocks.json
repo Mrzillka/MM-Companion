@@ -1,0 +1,17 @@
+{
+  "blocks": [
+    {
+      "id": "campaign_notes",
+      "title": "Campaign Notes",
+      "row": 8,
+      "col": 0,
+      "min_height": 120,
+      "fields": [
+        { "kind": "label", "text": "Notes for this character's campaign (added by a data-only mod)." },
+        { "kind": "text", "key": "campaign_faction", "label": "Faction" },
+        { "kind": "text", "key": "campaign_contact", "label": "Contact" },
+        { "kind": "text", "key": "campaign_hook", "label": "Story Hook" }
+      ]
+    }
+  ]
+}

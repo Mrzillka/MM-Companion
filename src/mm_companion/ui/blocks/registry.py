@@ -90,17 +90,17 @@ _BASE_BLOCKS = [
         "system_info",
         "Power Level & System",
         SystemInfoSection,
-        1,
         0,
+        1,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, CAPS_CHANGED), "edited": (EDITED,)},
         {DERIVED_CHANGED: "refresh_derived"},
     ),
-    ("character_image", "Character Image", CharacterImageSection, 0, 1, {"edited": (EDITED,)}, {}),
+    ("character_image", "Character Image", CharacterImageSection, 0, 2, {"edited": (EDITED,)}, {}),
     (
         "abilities",
         "Abilities",
         AbilitiesSection,
-        2,
+        1,
         0,
         {
             "abilityChanged": (ABILITY_CHANGED, DERIVED_CHANGED),
@@ -112,7 +112,7 @@ _BASE_BLOCKS = [
         "resistances",
         "Resistances",
         ResistancesSection,
-        2,
+        1,
         1,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
         {ABILITY_CHANGED: "follow_ability_change", ENHANCEMENTS_CHANGED: "refresh_enhancements"},
@@ -121,8 +121,8 @@ _BASE_BLOCKS = [
         "conditions",
         "Conditions",
         ConditionsSection,
-        3,
-        0,
+        1,
+        2,
         {
             "conditionsChanged": (
                 ENHANCEMENTS_CHANGED,
@@ -139,7 +139,7 @@ _BASE_BLOCKS = [
         "advantages",
         "Advantages",
         AdvantagesSection,
-        4,
+        2,
         0,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED)},
         {CAPS_CHANGED: "refresh_limits", CONDITION_CHANGED: "refresh_conditions"},
@@ -148,7 +148,7 @@ _BASE_BLOCKS = [
         "skills",
         "Skills",
         SkillsSection,
-        5,
+        3,
         0,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
         {ABILITY_CHANGED: "refresh_totals", ENHANCEMENTS_CHANGED: "refresh_totals"},
@@ -157,7 +157,7 @@ _BASE_BLOCKS = [
         "powers",
         "Powers",
         PowersSection,
-        6,
+        4,
         0,
         {
             "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
@@ -190,7 +190,6 @@ def register_base_blocks(*, replace: bool = False) -> None:
 
 
 register_base_blocks()
-
 
 # Keys of the declarative blocks currently registered from game data, so a re-sync
 # (e.g. after enabling a different mod set) can drop the previous batch first.

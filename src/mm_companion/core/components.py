@@ -12,7 +12,7 @@ are the *components* describing how one effect behaves. They come from two sourc
   switch an otherwise-active effect off.
 
 The *systems* that read these (``effect_is_active``, ``power_trait_bonuses``) live in
-:mod:`mm_companion.core.rules`. See ``mm-powers-architecture.md`` §5-7. This module is
+:mod:`mm_companion.core.rules`. See ``docs/mm-powers-architecture.md`` §5-7. This module is
 pure data and imports nothing from the app.
 """
 
@@ -36,7 +36,7 @@ GATE_TOGGLE = "toggle"  # a Sustained/Continuous switch the player sets
 GATE_LIMITED = "limited"  # a free-text condition the player self-applies (informational)
 
 # Condition mechanism tags — which engine subsystem a condition feeds
-# (``mm-conditions-design.md`` §4). Each names one place in the derived-stats /
+# (``docs/mm-conditions-design.md`` §4). Each names one place in the derived-stats /
 # turn-resolution layer; the condition supplies data, the subsystem does the math.
 # The resolver systems that read these live in :mod:`mm_companion.core.rules`.
 MECH_ACTION_LIMIT = "action_limit"  # caps available actions

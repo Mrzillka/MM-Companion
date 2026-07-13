@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Derived, display-only readouts for Tier-5 power effects (see mm-powers-ui-design.md section 2). These surface rank-dependent behaviour the player does not choose — a Growth character's size modifiers, an Insubstantial state, a Communication range band — as an info readout rather than an editable field. All values are game-functional numbers/labels derived from the rules, not copyrighted prose. Companion to effects.json and measurements.json.",
+    "description": "Derived, display-only readouts for Tier-5 power effects (see docs/mm-powers-ui-design.md section 2). These surface rank-dependent behaviour the player does not choose — a Growth character's size modifiers, an Insubstantial state, a Communication range band — as an info readout rather than an editable field. All values are game-functional numbers/labels derived from the rules, not copyrighted prose. Companion to effects.json and measurements.json.",
     "kindKey": {
       "size_table": "Emit the Size Table modifiers for a size shift of sign * rank (Growth +, Shrinking -); reuses measurements.json's sizeTable.",
       "state": "Pick the byRank entry with the greatest rank key <= the effect's rank; show it as one label/value row.",

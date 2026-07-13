@@ -86,12 +86,12 @@ clean (see Licensing below).
   (the general extra/flaw pool + game-term ladders), `effect_modifiers.json`
   (effect-specific extras/flaws, keyed by effect id), and `effect_readouts.json`
   (per-effect derived Tier-5 readouts). The powers rules and UI are documented in
-  `mm-powers-architecture.md`, `mm-powers-ui-design.md`, and
-  `mm-modifiers-ui-design.md`.
+  `docs/mm-powers-architecture.md`, `docs/mm-powers-ui-design.md`, and
+  `docs/mm-modifiers-ui-design.md`.
 - Conditions are a small state-tracker, not a build cost. `conditions.json` is the
   single consolidated catalog (short `tooltip` copy + `includes`/`supersedes` graph
   + `mechanisms`/`parameter`/`debilitates` and typed penalty/mod fields), documented
-  in `mm-conditions-design.md`. A character's applied conditions live on
+  in `docs/mm-conditions-design.md`. A character's applied conditions live on
   `Character.conditions` as a list of `AppliedCondition` (id + chosen `parameter` +
   stacking `count` + `provenance` — the flattened set with back-refs). The non-roll
   resolver in `core/rules.py` (`apply_condition`/`remove_condition`, `expand_includes`)
@@ -262,7 +262,7 @@ clean (see Licensing below).
 ## The powers layer (matters when touching powers)
 
 Powers are the most complex part, and are split the same core/data/ui way. Read
-`mm-powers-architecture.md` for the full model; the shape:
+`docs/mm-powers-architecture.md` for the full model; the shape:
 
 - There is **no fixed catalog of powers** — a player assembles a
   `core.powers.Power` (a titled, described bundle) out of parts: one or more

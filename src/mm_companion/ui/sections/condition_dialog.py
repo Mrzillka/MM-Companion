@@ -3,7 +3,7 @@
 Some conditions can't be fully applied until the user names *what* they concern —
 which trait (Impaired → "Attack Impaired"), sense (Unaware → "Sight Unaware"),
 descriptor (Susceptible to "Fire Damage"), or controller (Controlled by whom). See
-``mm-conditions-design.md`` §6. This dialog renders the right control for the
+``docs/mm-conditions-design.md`` §6. This dialog renders the right control for the
 condition's :class:`~mm_companion.core.data_loader.ConditionParameter` and gates its
 OK button when the parameter is ``required``.
 

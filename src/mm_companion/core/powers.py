@@ -1,4 +1,4 @@
-"""The assembled-power model (see ``mm-powers-architecture.md``).
+"""The assembled-power model (see ``docs/mm-powers-architecture.md``).
 
 Unlike skills and advantages there is no fixed catalog of powers — a player
 builds a :class:`Power` out of parts: one or more :class:`PowerEffectInstance`
@@ -10,7 +10,7 @@ imports PySide6. The model is JSON-serializable (:meth:`Power.to_dict` /
 :meth:`Power.from_dict`) so it can be persisted onto a character later.
 
 A multi-effect power has a :data:`Power.structure` describing how its effects
-relate (see ``mm-powers-architecture.md`` §4): ``independent`` effects are just
+relate (see ``docs/mm-powers-architecture.md`` §4): ``independent`` effects are just
 grouped, ``linked`` ones always fire together, and an ``array`` shares one point
 pool where only one effect is active at a time. The structure — not per-effect
 modifier chips — is the source of truth; :mod:`.rules` reads it to compute the
@@ -47,7 +47,7 @@ class ModifierSelection:
 
     ``config`` holds a modifier's own choices for the few extras/flaws that need
     them (a Removable tier, a Side Effect's backfire text and always/on-failure
-    toggle, a Triggered/Limited condition — see ``mm-powers-ui-design.md`` §4). It
+    toggle, a Triggered/Limited condition — see ``docs/mm-powers-ui-design.md`` §4). It
     is empty for the plain modifiers, and a modifier that discounts by tier
     (Removable, Side Effect) reads its value here rather than from a fixed cost.
     """
@@ -80,7 +80,7 @@ class PowerEffectInstance:
     unused by cost math this pass.
 
     ``toggled_on`` and ``suppressed`` are the effect's *runtime* state (see
-    ``mm-powers-architecture.md`` §5-7), separate from the point build: a
+    ``docs/mm-powers-architecture.md`` §5-7), separate from the point build: a
     Sustained/Continuous effect the player has switched off is ``toggled_on=False``,
     and ``suppressed`` is a transient Nullify flag. Both feed
     :func:`mm_companion.core.rules.effect_is_active`. Runtime state is **not
@@ -138,7 +138,7 @@ class Power:
     for the costliest effect plus a flat point per alternate.
 
     Separately, whole powers relate to *each other* (see
-    ``mm-powers-architecture.md`` §4): ``linked_with`` names other powers that switch
+    ``docs/mm-powers-architecture.md`` §4): ``linked_with`` names other powers that switch
     on/off together with this one, and ``alternate_of`` makes this power an Alternate
     Effect of another — sharing one point pool, so only its base pays full and each
     alternate costs a flat point (:func:`mm_companion.core.rules.power_display_cost`).

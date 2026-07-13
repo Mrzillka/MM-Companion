@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "General power modifiers (extras and flaws) for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (category, costFormula, flat) reflect game rules/facts, not copyrighted prose. Companion to mm-powers-architecture.md (read first) and effects.json. A handful of effects also define their own effect-specific extras/flaws not listed here (e.g. Enhanced Trait's 'Reduced Trait' flaw) — treat this file as the general-purpose modifier pool that applies broadly across effects.",
+    "description": "General power modifiers (extras and flaws) for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (category, costFormula, flat) reflect game rules/facts, not copyrighted prose. Companion to docs/mm-powers-architecture.md (read first) and effects.json. A handful of effects also define their own effect-specific extras/flaws not listed here (e.g. Enhanced Trait's 'Reduced Trait' flaw) — treat this file as the general-purpose modifier pool that applies broadly across effects.",
     "categoryKey": {
       "extra": "Increases an effect's cost and adds a benefit",
       "flaw": "Decreases an effect's cost and adds a restriction"

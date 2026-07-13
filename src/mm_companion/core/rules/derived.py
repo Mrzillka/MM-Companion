@@ -99,7 +99,7 @@ def resistance_total(char: Character, game_data: GameData, key: str) -> int:
 
 
 def defense_class(char: Character, game_data: GameData, key: str | None = None) -> int:
-    """The DC an attacker must beat: ``base + defense rank`` (``mm-core-mechanics.md`` §5).
+    """The DC an attacker must beat: ``base + defense rank`` (``docs/mm-core-mechanics.md`` §5).
 
     The base (10 in the core rules) and the default defence trait key both come from
     ``system.json`` (``defense_dc_base`` / ``trait_keys.defense``), so a mod can retune
@@ -148,7 +148,7 @@ def initiative_advantage_bonus(char: Character, game_data: GameData) -> int:
 
 
 def initiative_modifier(char: Character, game_data: GameData) -> int:
-    """Initiative modifier (``mm-core-mechanics.md`` §8): ability + advantage bonuses.
+    """Initiative modifier (``docs/mm-core-mechanics.md`` §8): ability + advantage bonuses.
 
     The ability is the *effective* value (bought plus any Enhanced-Trait boost) of
     :func:`initiative_ability` — Agility, or the mental ability an Alternate Initiative

@@ -36,7 +36,7 @@ class AppliedCondition:
     """One condition currently on a character — an entity in the condition tracker.
 
     The character's condition state is the *flattened* effect set with provenance
-    (``mm-conditions-design.md`` §3): an umbrella like Incapacitated is stored as the
+    (``docs/mm-conditions-design.md`` §3): an umbrella like Incapacitated is stored as the
     umbrella itself plus a member row per bundled condition, each member carrying
     ``provenance`` = the umbrella's id so removing the umbrella removes its members.
 

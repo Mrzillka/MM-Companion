@@ -49,7 +49,7 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
 
     Checks each offensive effect (one with a
     :attr:`~mm_companion.core.data_loader.Effect.resistance_dc_base`) against the
-    Power Level caps in ``mm-core-mechanics.md`` §7, reading the character so the
+    Power Level caps in ``docs/mm-core-mechanics.md`` §7, reading the character so the
     real inputs apply:
 
     - An effect that makes an **attack roll** obeys ``max_attack + effect_rank <=
@@ -199,7 +199,7 @@ def power_strength_amount_violations(
 
 
 def power_linked_range_violations(power: Power, game_data: GameData) -> list[str]:
-    """Linked-effect Range mismatches (``mm-powers-architecture.md`` §4).
+    """Linked-effect Range mismatches (``docs/mm-powers-architecture.md`` §4).
 
     Linked effects fire together as one, so they must share the same Range. Reads
     each effect's *effective* Range (base range with any modifier overrides applied,
@@ -224,7 +224,7 @@ def power_linked_range_violations(power: Power, game_data: GameData) -> list[str
 
 
 def power_level_violations(char: Character, game_data: GameData) -> list[str]:
-    """Report Power Level cap breaches (``mm-core-mechanics.md`` §7); empty list = valid.
+    """Report Power Level cap breaches (``docs/mm-core-mechanics.md`` §7); empty list = valid.
 
     Evaluates the character-wide caps: per-skill modifier plus each paired-resistance
     cap (Dodge + Toughness, Fortitude + Will). The trait pairings and their labels come

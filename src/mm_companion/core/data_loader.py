@@ -167,7 +167,7 @@ class ConditionParameter:
     ``type`` is one of ``trait_select`` / ``sense_select`` / ``descriptor_text`` /
     ``character_ref`` and drives the UI control; ``options`` populates a combobox
     (empty ⇒ free text). ``required`` gates whether the condition can be applied
-    before the subject is named — see ``mm-conditions-design.md`` §6.
+    before the subject is named — see ``docs/mm-conditions-design.md`` §6.
     """
 
     type: str
@@ -257,7 +257,7 @@ class Condition:
     ladders. ``includes`` lists ids of sub-conditions this one bundles in, and
     ``supersedes`` lists ids a more severe condition replaces — together these
     form the condition graph the combat state machine walks (see
-    ``mm-conditions-design.md`` §3). ``mechanisms`` names which engine subsystems
+    ``docs/mm-conditions-design.md`` §3). ``mechanisms`` names which engine subsystems
     the condition feeds (§4); the typed effect fields (``penalty``,
     ``speed_rank_mod``, ``defense_mod``, …) carry the data those subsystems read so
     the engine never parses ``effect`` prose. ``tooltip`` is a short always-visible
@@ -295,7 +295,7 @@ class ConfigOption:
     what the UI shows (e.g. value ``"dazed"`` shown as ``"Dazed"``). ``cost_value``,
     when set on a *modifier's* config option, overrides that modifier's cost
     magnitude while the option is chosen — so a Side Effect's always/on-failure
-    toggle or a Removable tier changes the discount (see ``mm-powers-ui-design.md``
+    toggle or a Removable tier changes the discount (see ``docs/mm-powers-ui-design.md``
     §4). ``None`` leaves the modifier's own ``cost_value`` in force.
     """
 
@@ -336,7 +336,7 @@ class RepeatableColumn:
 
 @dataclass(frozen=True)
 class EffectConfigField:
-    """One configurable *quality* of an effect (see ``mm-powers-architecture.md`` §9).
+    """One configurable *quality* of an effect (see ``docs/mm-powers-architecture.md`` §9).
 
     Effects like Affliction require player choices — which resistance it targets,
     which condition each degree inflicts. Each field is stored under ``key`` in the
@@ -404,7 +404,7 @@ class Measure:
 
 @dataclass(frozen=True)
 class Effect:
-    """A base power effect from ``effects.json`` (see ``mm-powers-architecture.md``).
+    """A base power effect from ``effects.json`` (see ``docs/mm-powers-architecture.md``).
 
     A power is assembled from one or more of these, each carrying its own extras
     and flaws. ``base_cost`` is the human-readable prose (e.g. ``"1 per rank"``);
@@ -442,7 +442,7 @@ class Effect:
 
 @dataclass(frozen=True)
 class Modifier:
-    """An extra or flaw from ``modifiers.json`` (see ``mm-powers-architecture.md``).
+    """An extra or flaw from ``modifiers.json`` (see ``docs/mm-powers-architecture.md``).
 
     ``category`` is ``"extra"`` (adds cost/benefit) or ``"flaw"`` (subtracts
     cost/adds a restriction). ``cost_formula`` is the prose; ``cost_value`` is the
@@ -502,7 +502,7 @@ class Modifier:
 
 @dataclass(frozen=True)
 class TraitCosts:
-    """Power-point cost constants for the point-bought traits (``mm-core-mechanics.md`` §7)."""
+    """Power-point cost constants for the point-bought traits (``docs/mm-core-mechanics.md`` §7)."""
 
     ability_per_rank: int
     combat_per_rank: int
@@ -514,7 +514,7 @@ class TraitCosts:
 
 @dataclass(frozen=True)
 class PowerLevelCap:
-    """A Power Level cap expressed as ``power_level * mult + add`` (``mm-core-mechanics.md`` §7)."""
+    """A Power Level cap expressed as ``power_level * mult + add`` (``docs/mm-core-mechanics.md`` §7)."""
 
     mult: int
     add: int
@@ -555,7 +555,7 @@ class TraitKeys:
 
 @dataclass(frozen=True)
 class PairedCap:
-    """A Power-Level cap that sums two resistance traits (``mm-core-mechanics.md`` §7).
+    """A Power-Level cap that sums two resistance traits (``docs/mm-core-mechanics.md`` §7).
 
     ``cap`` names the :class:`PowerLevelCap` in ``costs.json``; ``traits`` are the two
     resistance keys whose totals are summed against it; ``label`` is the message prefix.
@@ -672,7 +672,7 @@ class Readout:
     (``"size_table"``, ``"state"``, ``"measure_offsets"``, ``"thresholds"``,
     ``"config_flag"``, ``"points_per_rank"``); ``label`` is the row label; ``data``
     holds the kind-specific parameters (the byRank map, the offset rows, ...). These
-    are computed information, never editable — see ``mm-powers-ui-design.md`` §2 Tier 5.
+    are computed information, never editable — see ``docs/mm-powers-ui-design.md`` §2 Tier 5.
     """
 
     kind: str

@@ -359,7 +359,7 @@ class ModifierChip(QFrame):
         outer.addLayout(header)
 
         # A few modifiers carry their own choices (Removable tier, Side Effect
-        # backfire, a Triggered/Limited condition — see mm-powers-ui-design.md §4).
+        # backfire, a Triggered/Limited condition — see docs/mm-powers-ui-design.md §4).
         # A choice with a cost (the tier, the always/on-failure toggle) feeds the cost
         # engine straight from the selection's config.
         if modifier.config_fields:

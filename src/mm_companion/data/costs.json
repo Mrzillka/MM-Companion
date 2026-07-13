@@ -1,5 +1,5 @@
 {
-  "_comment": "Point-cost constants and Power Level caps for Mutants & Masterminds 4e (Open Game Content). Numeric game-mechanical facts only, per mm-core-mechanics.md §7 — no rulebook prose. Consumed by mm_companion.core.data_loader; core reads these rather than hardcoding costs in Python.",
+  "_comment": "Point-cost constants and Power Level caps for Mutants & Masterminds 4e (Open Game Content). Numeric game-mechanical facts only, per docs/mm-core-mechanics.md §7 — no rulebook prose. Consumed by mm_companion.core.data_loader; core reads these rather than hardcoding costs in Python.",
   "trait_costs": {
     "ability_per_rank": 2,
     "combat_per_rank": 2,

@@ -1,7 +1,7 @@
 """Dice and check resolution for Mutants & Masterminds 4e.
 
 Pure Python — no PySide6, no game *content*. This implements the single core
-resolution mechanic described in ``mm-core-mechanics.md`` §1-2, §10: roll a d20,
+resolution mechanic described in ``docs/mm-core-mechanics.md`` §1-2, §10: roll a d20,
 add a modifier, compare to a difficulty class, and grade the outcome in degrees
 of success/failure.
 
@@ -50,7 +50,7 @@ def degrees(margin: int) -> int:
     """Convert a ``check_total - dc`` margin into a signed degree count.
 
     +1 at margin 0-4, +2 at 5-9, ...; -1 at -1..-5, -2 at -6..-10, ...
-    (``mm-core-mechanics.md`` §2). Does not apply the natural 1/20 adjustment;
+    (``docs/mm-core-mechanics.md`` §2). Does not apply the natural 1/20 adjustment;
     :func:`resolve_check` layers that on top.
     """
 

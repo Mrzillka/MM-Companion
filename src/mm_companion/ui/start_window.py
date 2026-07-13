@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion import __version__
 from mm_companion.core import library, storage
 from mm_companion.core.library import CharacterSummary, list_saved_characters
 from mm_companion.ui.flow_layout import FlowLayout
@@ -100,7 +101,7 @@ class StartWindow(QMainWindow):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("MM-Companion")
+        self.setWindowTitle(f"MM-Companion {__version__}")
         self.resize(720, 480)
         # Sheet windows opened from here are kept referenced so they aren't
         # garbage-collected (and thus closed) the moment the handler returns.

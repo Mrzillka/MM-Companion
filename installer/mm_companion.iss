@@ -34,8 +34,8 @@ VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-; Per-user install so no admin rights are needed — easy to share.
-PrivilegesRequired=lowest
+; Machine-wide install into C:\Program Files — requires (and prompts for) admin.
+PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2/max
 SolidCompression=yes
@@ -114,13 +114,19 @@ function InitializeSetup(): Boolean;
 begin
   Result := True;
   PrevInstalled := False;
-  if RegQueryStringValue(HKCU, UninstallKey(), 'DisplayVersion', PrevVersion) then
+  { Admin install records the uninstall key under HKLM (64-bit view in 64-bit
+    install mode); fall back to HKCU so an older per-user install is still
+    detected for upgrade. }
+  if RegQueryStringValue(HKLM64, UninstallKey(), 'DisplayVersion', PrevVersion) or
+     RegQueryStringValue(HKCU, UninstallKey(), 'DisplayVersion', PrevVersion) then
   begin
     PrevInstalled := True;
-    if not RegQueryStringValue(HKCU, UninstallKey(), 'InstallLocation', PrevLocation) then
-      PrevLocation := '';
-    if not RegQueryStringValue(HKCU, UninstallKey(), 'UninstallString', PrevUninstaller) then
-      PrevUninstaller := '';
+    if not RegQueryStringValue(HKLM64, UninstallKey(), 'InstallLocation', PrevLocation) then
+      if not RegQueryStringValue(HKCU, UninstallKey(), 'InstallLocation', PrevLocation) then
+        PrevLocation := '';
+    if not RegQueryStringValue(HKLM64, UninstallKey(), 'UninstallString', PrevUninstaller) then
+      if not RegQueryStringValue(HKCU, UninstallKey(), 'UninstallString', PrevUninstaller) then
+        PrevUninstaller := '';
   end;
 end;
 

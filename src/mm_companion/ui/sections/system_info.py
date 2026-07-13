@@ -50,6 +50,8 @@ class HeroPointsWidget(QWidget):
     Clicking a circle sets the count to that circle's position, except clicking the
     last filled circle empties it (so the count can be lowered back to zero). Filled
     circles are ``●``, empty ones ``○``. Emits :attr:`valueChanged` on a user click.
+    Hero points stay clickable even when the sheet is locked — they are spent during
+    play, not a build value — so this widget has no locked state.
     """
 
     valueChanged = Signal(int)
@@ -57,7 +59,6 @@ class HeroPointsWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._value = 0
-        self._locked = False
         self._buttons: list[QPushButton] = []
 
         row = QHBoxLayout(self)
@@ -82,8 +83,6 @@ class HeroPointsWidget(QWidget):
         self._render()
 
     def _on_click(self, index: int) -> None:
-        if self._locked:
-            return
         # Clicking the last filled circle empties it; otherwise fill up to the click.
         new_value = index if self._value == index + 1 else index + 1
         if new_value == self._value:
@@ -95,13 +94,6 @@ class HeroPointsWidget(QWidget):
     def _render(self) -> None:
         for i, button in enumerate(self._buttons):
             button.setText("●" if i < self._value else "○")
-
-    def set_locked(self, locked: bool) -> None:
-        self._locked = locked
-        for button in self._buttons:
-            button.setCursor(
-                Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor
-            )
 
 
 class SpeedWidget(QWidget):
@@ -354,4 +346,3 @@ class SystemInfoSection(QGroupBox):
         self._locked = locked
         for widget in self._editable:
             set_widget_locked(widget, locked)
-        self._hero_points.set_locked(locked)

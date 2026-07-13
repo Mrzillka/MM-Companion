@@ -25,12 +25,10 @@ BASE_KEYS = {
     "powers",
 }
 
-# The default arrangement the registry must reproduce (the historical DEFAULT_ROWS).
+# The default arrangement the registry must reproduce.
 EXPECTED_DEFAULT_ROWS = [
-    ["base_info", "character_image"],
-    ["system_info"],
-    ["abilities", "resistances"],
-    ["conditions"],
+    ["base_info", "system_info", "character_image"],
+    ["abilities", "resistances", "conditions"],
     ["advantages"],
     ["skills"],
     ["powers"],

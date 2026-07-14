@@ -47,10 +47,39 @@
         {
           "id": "empowering",
           "name": "Empowering",
-          "costFormula": "included in base rank pricing",
-          "costValue": 0,
-          "flat": true,
-          "description": "The major condition transforms the target into a form with bonus power points."
+          "costFormula": "+2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "noteTemplate": "Empowering: transformed form gains {n} power points",
+          "notePerRank": 15,
+          "description": "The major (3rd degree) Transformed condition remakes the target into a new form built on bonus power points equal to 15 per rank."
+        },
+        {
+          "id": "extra_condition",
+          "name": "Extra Condition",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "description": "Also inflicts a second condition of the same degree at each degree of failure."
+        },
+        {
+          "id": "fatal",
+          "name": "Fatal",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "noteTemplate": "Fatal: a target reduced to the 3rd degree is also Dying",
+          "description": "The Affliction can kill — a target overcome to the third degree also gains the Dying condition."
+        },
+        {
+          "id": "increasing_difficulty",
+          "name": "Increasing Difficulty",
+          "costFormula": "+1 point per rank",
+          "costValue": 1,
+          "flat": false,
+          "requiresAny": ["cumulative", "progressive"],
+          "noteTemplate": "Increasing Difficulty: each failed resistance raises the ongoing DC by +1",
+          "description": "Requires Cumulative or Progressive — each time the target fails an ongoing resistance check, that check's DC rises by +1 (the initial resistance DC is unchanged)."
         },
         {
           "id": "progressive",
@@ -74,7 +103,19 @@
           "costFormula": "+1 or +2 points flat",
           "costValue": 1,
           "flat": true,
-          "description": "You can remove the conditions you imposed at will."
+          "config": [
+            {
+              "key": "reach",
+              "label": "Reverse from",
+              "type": "select",
+              "hint": "How far away you can still call off the conditions you imposed.",
+              "options": [
+                { "value": "range", "label": "Within the effect's range", "costValue": 1 },
+                { "value": "any", "label": "Any distance", "costValue": 2 }
+              ]
+            }
+          ],
+          "description": "You can call off the conditions you imposed at will — within the effect's range for +1, or regardless of distance for +2."
         },
         {
           "id": "sustained_affliction",
@@ -93,7 +134,30 @@
           "costFormula": "+1 or +2 points per rank",
           "costValue": 1,
           "flat": false,
-          "description": "Choose which conditions to impose at the moment of use instead of locking them in."
+          "config": [
+            {
+              "key": "points",
+              "label": "Variable degrees",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 2,
+              "hint": "1 point/rank: one chosen degree is picked at use-time; 2 points/rank: all three are."
+            },
+            {
+              "key": "degree",
+              "label": "Which degree",
+              "type": "select",
+              "showWhenPoints": 1,
+              "hint": "Which single degree's condition is chosen when the effect is used.",
+              "options": [
+                { "value": "degree1", "label": "1st degree (Mild)" },
+                { "value": "degree2", "label": "2nd degree (Moderate)" },
+                { "value": "degree3", "label": "3rd degree (Major)" }
+              ]
+            }
+          ],
+          "description": "Choose the imposed conditions at the moment of use instead of locking them in — one degree variable for +1/rank, or all three for +2/rank."
         }
       ],
       "flaws": [
@@ -150,7 +214,19 @@
           "costFormula": "-1 point flat or per rank",
           "costValue": 1,
           "flat": true,
-          "description": "Conditions don't take hold immediately — they kick in after a delay."
+          "config": [
+            {
+              "key": "delay",
+              "label": "Conditions land after",
+              "type": "select",
+              "hint": "A longer delay before the conditions take hold is a bigger drawback.",
+              "options": [
+                { "value": "round", "label": "One round", "flat": true },
+                { "value": "scene", "label": "One scene", "flat": false }
+              ]
+            }
+          ],
+          "description": "The conditions don't take hold immediately — they kick in after a delay: one round for a flat -1, or one scene for -1 per rank."
         }
       ]
     },

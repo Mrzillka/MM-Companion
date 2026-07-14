@@ -107,15 +107,6 @@
       "description": "Increases how far a ranged effect can reach."
     },
     {
-      "id": "extra_condition",
-      "name": "Extra Condition",
-      "category": "extra",
-      "costFormula": "+1 point per rank",
-      "costValue": 1,
-      "flat": false,
-      "description": "Affliction only: also inflicts a second condition of the same degree at each degree of failure."
-    },
-    {
       "id": "feature_extra",
       "name": "Feature (as extra)",
       "category": "extra",

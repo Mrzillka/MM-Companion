@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
+from mm_companion.core.rules import effect_total_cost
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 
@@ -258,9 +259,9 @@ def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> 
     assert card.findChildren(QCheckBox) == []
 
     card.attach_modifier("extra_condition")  # the Affliction-only gating extra
-    assert card.findChildren(QCheckBox)  # 1st/2nd degrees are now multiselect
-    # resistance, overcomeBy, and the 3rd degree stay single-select combos
-    assert len(card.findChildren(QComboBox)) == 3
+    assert card.findChildren(QCheckBox)  # all three degrees are now multiselect
+    # only resistance and overcomeBy stay single-select combos
+    assert len(card.findChildren(QComboBox)) == 2
 
 
 def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -> None:
@@ -1009,17 +1010,41 @@ def test_reordering_a_chip_in_place_is_a_no_op(qapp: QApplication) -> None:
     assert changes == []  # settling in place fires nothing
 
 
-def test_variable_conditions_hides_the_degree_pickers(qapp: QApplication) -> None:
+def test_variable_conditions_full_scope_hides_all_degree_pickers(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QComboBox, QLabel
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("affliction")
     assert len(card.findChildren(QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
 
-    card.attach_modifier("variable_conditions")  # defers the choices to use-time
-    assert len(card.findChildren(QComboBox)) == 2  # only resistance + overcomeBy remain
+    card.attach_modifier("variable_conditions")  # defaults to the 2-point (all) scope
     notes = [lbl.text() for lbl in card.findChildren(QLabel)]
-    assert notes.count("chosen when used") == 3  # one per hidden degree
+    assert notes.count("chosen when used") == 3  # every degree deferred to use-time
+    # Only resistance + overcomeBy remain as *visible* combos; the chip's own "which
+    # degree" picker exists but is hidden at full scope, so it doesn't count.
+    visible = [c for c in card.findChildren(QComboBox) if c.isVisibleTo(card)]
+    assert len(visible) == 2
+
+
+def test_variable_conditions_partial_scope_defers_one_degree(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox, QLabel, QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    card.attach_modifier("variable_conditions")
+    chip = card._chips[0]
+
+    # Dial the scope down to 1 point/rank — now only one chosen degree is deferred.
+    spin = next(s for s in chip.findChildren(QSpinBox) if s.suffix() == " pt")
+    spin.setValue(1)
+    degree_combo = next(c for c in chip.findChildren(QComboBox))
+    degree_combo.setCurrentIndex(degree_combo.findData("degree2"))
+
+    notes = [lbl.text() for lbl in card.findChildren(QLabel)]
+    assert notes.count("chosen when used") == 1  # only the 2nd degree is deferred
+    assert card.instance.extras[0].config["degree"] == "degree2"
+    # Cost drops from the +2/rank full scope to +1/rank.
+    assert effect_total_cost(card.instance, load_game_data()) == card.instance.rank * 2
 
 
 def test_limited_degree_hides_the_chosen_degree_picker(qapp: QApplication) -> None:

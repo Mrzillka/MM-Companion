@@ -324,11 +324,18 @@ class ConfigOption:
     magnitude while the option is chosen — so a Side Effect's always/on-failure
     toggle or a Removable tier changes the discount (see ``docs/mm-powers-ui-design.md``
     §4). ``None`` leaves the modifier's own ``cost_value`` in force.
+
+    ``flat``, likewise on a *modifier's* config option, overrides whether the
+    modifier is charged once (``True``) or per rank (``False``) while the option is
+    chosen — Affliction's Onset is a flat ``-1`` when its conditions land after a
+    round but a per-rank ``-1`` when they land after a scene. ``None`` leaves the
+    modifier's own ``flat`` in force.
     """
 
     value: str
     label: str
     cost_value: int | None = None
+    flat: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -399,7 +406,11 @@ class EffectConfigField:
     config fields to hide — Affliction's Limited Degree flaw picks a degree tier
     (``degree1``/``degree2``/``degree3``) whose condition picker then disappears.
     ``hint`` is helper text shown under an ``allocation``/``repeatable`` field
-    (e.g. Immunity's suggested-rank tiers).
+    (e.g. Immunity's suggested-rank tiers). ``show_when_points``, on a *modifier's*
+    config field, gates its visibility on a sibling ``points`` field's value — the
+    field appears only when that spin box reads exactly this number (Affliction's
+    Variable Conditions reveals its "which degree" picker only at the 1-point tier).
+    Zero (the default) means always shown.
     """
 
     key: str
@@ -415,6 +426,7 @@ class EffectConfigField:
     min_value: int = 0
     max_value: int = 0
     default_value: int = 0
+    show_when_points: int = 0
     options: tuple[ConfigOption, ...] = ()
     alloc_options: tuple[AllocationOption, ...] = ()
     columns: tuple[RepeatableColumn, ...] = ()
@@ -520,6 +532,18 @@ class Modifier:
     modifier catalog for cost/lookup use — the structural ``linked`` / ``alternate_effect``
     modifiers are applied automatically from a power's structure (and the array flat cost
     is read from the record), so they should not be draggable as ordinary extras.
+
+    ``note_template`` is a descriptive line the modifier contributes to its effect's
+    generated Notes row instead of its bare name — a ``{n}`` placeholder is replaced
+    by the effect's rank times ``note_per_rank`` (or the bare rank when that is zero),
+    so Affliction's Empowering reads "transformed form gains 60 power points" at rank 4.
+    Empty leaves the modifier listed by name.
+
+    ``requires_any`` lists modifier ids of which at least one must also be attached to
+    the same effect for this modifier to be valid — Affliction's Increasing Difficulty
+    needs Cumulative or Progressive to have repeated checks to escalate. Empty imposes
+    no requirement; a breach is a warning (see
+    :func:`mm_companion.core.rules.power_modifier_requirement_violations`).
     """
 
     id: str
@@ -540,6 +564,9 @@ class Modifier:
     gate: str = ""
     requires_effect_id: str = ""
     hidden: bool = False
+    note_template: str = ""
+    note_per_rank: int = 0
+    requires_any: tuple[str, ...] = ()
     config_fields: tuple[EffectConfigField, ...] = ()
 
 
@@ -1091,11 +1118,13 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         min_value=int(c.get("min", 0)),
         max_value=int(c.get("max", 0)),
         default_value=int(c.get("default", 0)),
+        show_when_points=int(c.get("showWhenPoints", 0)),
         options=tuple(
             ConfigOption(
                 value=o["value"],
                 label=o.get("label", o["value"]),
                 cost_value=o.get("costValue"),
+                flat=o.get("flat"),
             )
             for o in c.get("options", [])
         ),
@@ -1187,6 +1216,9 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
         hidden=bool(m.get("hidden", False)),
+        note_template=m.get("noteTemplate", ""),
+        note_per_rank=int(m.get("notePerRank", 0)),
+        requires_any=tuple(m.get("requiresAny", ())),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         description=m.get("description", ""),
     )

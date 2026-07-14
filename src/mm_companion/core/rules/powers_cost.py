@@ -38,6 +38,23 @@ def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
     return None
 
 
+def _effective_flat(modifier: Modifier, selection) -> bool:
+    """Whether this selection is charged once (flat) or per effect rank.
+
+    Defaults to the modifier's own ``flat``, but the first chosen config option that
+    carries a ``flat`` override wins — Affliction's Onset flips between a flat ``-1``
+    (conditions land after a round) and a per-rank ``-1`` (after a scene) purely from
+    the option selected.
+    """
+
+    for cfg in modifier.config_fields:
+        chosen = selection.config.get(cfg.key)
+        option = next((o for o in cfg.options if o.value == chosen and o.flat is not None), None)
+        if option is not None:
+            return option.flat
+    return modifier.flat
+
+
 def _modifier_magnitude(modifier: Modifier, selection) -> int:
     """One modifier's cost magnitude: ``cost_value`` (or a config override), times its
     rank when ``ranked``."""
@@ -60,7 +77,7 @@ def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: b
     total = 0
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or modifier.flat != flat:
+        if modifier is None or _effective_flat(modifier, selection) != flat:
             continue
         total += sign * _modifier_magnitude(modifier, selection)
     return total
@@ -206,7 +223,7 @@ def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -
     terms: list[int] = []
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or modifier.flat != flat:
+        if modifier is None or _effective_flat(modifier, selection) != flat:
             continue
         terms.append(sign * _modifier_magnitude(modifier, selection))
     return terms

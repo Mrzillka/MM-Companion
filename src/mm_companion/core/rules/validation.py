@@ -198,6 +198,32 @@ def power_strength_amount_violations(
     return violations
 
 
+def power_modifier_requirement_violations(power: Power, game_data: GameData) -> list[str]:
+    """Modifiers attached without a prerequisite they depend on (a warning).
+
+    A modifier can declare :attr:`~mm_companion.core.data_loader.Modifier.requires_any`
+    — modifier ids of which at least one must also sit on the same effect. Affliction's
+    Increasing Difficulty needs Cumulative or Progressive to have repeated resistance
+    checks to escalate, so attaching it alone is flagged. Returns one message per
+    unmet requirement; empty when every dependency is satisfied.
+    """
+
+    catalog = game_data.modifier_catalog()
+    violations: list[str] = []
+    for effect in power.effects:
+        attached = {sel.modifier_id for sel in (*effect.extras, *effect.flaws)}
+        for modifier_id in attached:
+            modifier = catalog.get(modifier_id)
+            if modifier is None or not modifier.requires_any:
+                continue
+            if attached.isdisjoint(modifier.requires_any):
+                needed = " or ".join(catalog[m].name for m in modifier.requires_any if m in catalog)
+                violations.append(
+                    f"{_effect_name(effect, game_data)}: {modifier.name} requires " f"{needed}."
+                )
+    return violations
+
+
 def power_linked_range_violations(power: Power, game_data: GameData) -> list[str]:
     """Linked-effect Range mismatches (``docs/mm-powers-architecture.md`` §4).
 

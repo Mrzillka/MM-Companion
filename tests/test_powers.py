@@ -37,6 +37,7 @@ from mm_companion.core.rules import (
     power_game_terms,
     power_has_standing_effect,
     power_linked_range_violations,
+    power_modifier_requirement_violations,
     power_pl_violations,
     power_runtime_gates,
     power_strength_amount_violations,
@@ -1449,3 +1450,69 @@ def test_legacy_flat_relations_migrate_into_groups() -> None:
     for group in restored.powers:
         for child in getattr(group, "children", []):
             assert child.alternate_of == "" and child.linked_with == []
+
+
+# -- Affliction modifier tuning (extra condition, fatal, onset, empowering, ...) --
+
+
+def _affliction(rank: int, *mods: tuple[str, dict]) -> PowerEffectInstance:
+    """A rank-``rank`` Affliction carrying the given ``(modifier_id, config)`` mods,
+    routed into extras/flaws by the modifier's category in the loaded catalog."""
+    data = load_game_data()
+    catalog = data.modifier_catalog()
+    effect = PowerEffectInstance("affliction", rank=rank)
+    for modifier_id, config in mods:
+        selection = ModifierSelection(modifier_id=modifier_id, config=dict(config))
+        bucket = effect.flaws if catalog[modifier_id].category == "flaw" else effect.extras
+        bucket.append(selection)
+    return effect
+
+
+def test_onset_switches_between_flat_and_per_rank_by_choice() -> None:
+    data = load_game_data()
+    base = effect_total_cost(_affliction(4), data)  # 4
+    # "One round": a flat -1 point.
+    assert effect_total_cost(_affliction(4, ("onset", {"delay": "round"})), data) == base - 1
+    # "One scene": -1 per rank — the sub-1 PP/rank rule makes 4 ranks cost ceil(4/2) = 2.
+    assert effect_total_cost(_affliction(4, ("onset", {"delay": "scene"})), data) == 2
+
+
+def test_empowering_costs_two_per_rank_and_notes_the_bonus_points() -> None:
+    data = load_game_data()
+    effect = _affliction(4, ("empowering", {}))
+    assert effect_total_cost(effect, data) == 4 * 3  # base 1 + Empowering 2, per rank
+    notes = next(r.value for r in effect_stat_rows(effect, data) if r.label == "Notes")
+    assert "60 power points" in notes  # rank 4 × 15
+
+
+def test_reversible_flat_cost_tracks_the_chosen_reach() -> None:
+    data = load_game_data()
+    base = effect_total_cost(_affliction(4), data)
+    within = _affliction(4, ("reversible_affliction", {"reach": "range"}))
+    anywhere = _affliction(4, ("reversible_affliction", {"reach": "any"}))
+    assert effect_total_cost(within, data) == base + 1
+    assert effect_total_cost(anywhere, data) == base + 2
+
+
+def test_variable_conditions_scope_sets_the_per_rank_cost() -> None:
+    data = load_game_data()
+    full = _affliction(4, ("variable_conditions", {}))  # default 2 points/rank
+    one = _affliction(4, ("variable_conditions", {"points": 1}))
+    assert effect_total_cost(full, data) == 4 * 3  # base 1 + 2 per rank
+    assert effect_total_cost(one, data) == 4 * 2  # base 1 + 1 per rank
+
+
+def test_fatal_costs_one_per_rank_and_notes_the_dying_condition() -> None:
+    data = load_game_data()
+    effect = _affliction(4, ("fatal", {}))
+    assert effect_total_cost(effect, data) == 4 * 2
+    notes = next(r.value for r in effect_stat_rows(effect, data) if r.label == "Notes")
+    assert "Dying" in notes
+
+
+def test_increasing_difficulty_requires_cumulative_or_progressive() -> None:
+    data = load_game_data()
+    alone = Power(effects=[_affliction(4, ("increasing_difficulty", {}))])
+    assert power_modifier_requirement_violations(alone, data)  # unmet dependency
+    paired = Power(effects=[_affliction(4, ("increasing_difficulty", {}), ("cumulative", {}))])
+    assert power_modifier_requirement_violations(paired, data) == []

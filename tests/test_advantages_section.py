@@ -160,6 +160,15 @@ def test_alternate_initiative_display_uses_the_ability_name(qapp: QApplication) 
     assert section._parameter_display(added) == section._ability_names["INT"]
 
 
+def test_alternate_initiative_offers_only_the_mental_abilities(qapp: QApplication) -> None:
+    # A dynamic ``abilities`` source restricted by ``options`` must list only that
+    # subset (INT/AWE/PRE), not every ability on the sheet.
+    section = _section([])
+    advantage = next(a for a in section._data.advantages if a.name == "Alternate Initiative")
+    options = section._parameter_options(advantage.parameter)
+    assert [value for value, _label in options] == ["INT", "AWE", "PRE"]
+
+
 def test_parameter_survives_save_and_load(qapp: QApplication) -> None:
     section = _section([])
     _pick(section, "Benefit")

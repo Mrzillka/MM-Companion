@@ -506,19 +506,26 @@ class AdvantagesSection(TitledSection):
     def _parameter_options(self, spec: ParameterSpec) -> list[tuple[str, str]]:
         """Resolve a choice spec to ``(stored value, display label)`` pairs.
 
-        A fixed ``options`` list maps each value to itself; a dynamic ``options_from``
-        source draws from the live build — ``"skills"``/``"abilities"`` from the game
-        data (abilities store their key but display their name), ``"powers"`` from the
-        character's own powers.
+        A dynamic ``options_from`` source draws from the live build —
+        ``"skills"``/``"abilities"`` from the game data (abilities store their key but
+        display their name), ``"powers"`` from the character's own powers. When the
+        spec *also* lists ``options``, those restrict the source to that subset in the
+        given order (e.g. Alternate Initiative offers only INT/AWE/PRE, not every
+        ability). Without a source, a fixed ``options`` list maps each value to itself.
         """
 
         if spec.options_from == "skills":
-            return [(s.name, s.name) for s in self._data.skills]
-        if spec.options_from == "abilities":
-            return [(a.key, a.name) for a in self._data.abilities]
-        if spec.options_from == "powers":
-            return [(name, name) for name in self._power_names()]
-        return [(option, option) for option in spec.options]
+            source = [(s.name, s.name) for s in self._data.skills]
+        elif spec.options_from == "abilities":
+            source = [(a.key, a.name) for a in self._data.abilities]
+        elif spec.options_from == "powers":
+            source = [(name, name) for name in self._power_names()]
+        else:
+            return [(option, option) for option in spec.options]
+        if spec.options:
+            labels = dict(source)
+            return [(value, labels.get(value, value)) for value in spec.options]
+        return source
 
     def _power_names(self) -> list[str]:
         """Every named leaf power on the character, descending array/linked groups."""

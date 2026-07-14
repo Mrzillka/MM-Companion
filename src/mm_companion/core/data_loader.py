@@ -127,6 +127,31 @@ class Skill:
 
 
 @dataclass(frozen=True)
+class ParameterSpec:
+    """Describes the per-selection subject an advantage asks the player to choose.
+
+    Advantages like Skill Mastery (a skill), Improved Critical (an attack), or
+    Benefit (a free-form description) attach to a chosen subject, stored on the
+    character as ``AdvantageSelection.parameter``. This record — parsed from an
+    advantage's ``parameter`` JSON object — tells the UI *what* to ask for:
+
+    - ``label`` — the prompt shown beside the picker (e.g. ``"Skill"``).
+    - ``kind`` — ``"text"`` for a free-text field, ``"choice"`` for a dropdown.
+    - ``options`` — a fixed choice list (e.g. the interaction skills), when the
+      choice is a small enumerated set baked into the data.
+    - ``options_from`` — a *dynamic* choice source resolved by the UI against the
+      live build instead of a fixed list: ``"skills"``/``"abilities"`` (from
+      :class:`GameData`) or ``"powers"`` (the character's own powers). Empty when
+      ``options`` supplies the list (or ``kind == "text"``).
+    """
+
+    label: str
+    kind: str = "text"
+    options: tuple[str, ...] = ()
+    options_from: str = ""
+
+
+@dataclass(frozen=True)
 class Advantage:
     """An advantage. ``ranked`` advantages can be taken at more than one rank.
 
@@ -137,7 +162,8 @@ class Advantage:
     draws from the shared Heroic pool, ``"power_level"``/``"none"`` impose no
     standalone number — see ``advantages.json``'s ``maxRankKindKey``);
     ``focused`` advantages apply to one chosen focus and are bought again per
-    focus. ``description`` is short summary text the UI shows.
+    focus. ``parameter`` (when set) is the subject the UI prompts for — see
+    :class:`ParameterSpec`. ``description`` is short summary text the UI shows.
     """
 
     name: str
@@ -150,6 +176,7 @@ class Advantage:
     focused: bool = False
     initiative_bonus_per_rank: int = 0
     initiative_ability_choice: tuple[str, ...] = ()
+    parameter: ParameterSpec | None = None
     #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
     extra: dict = field(default_factory=dict, compare=False)
 
@@ -514,7 +541,7 @@ class TraitCosts:
 
 @dataclass(frozen=True)
 class PowerLevelCap:
-    """A Power Level cap expressed as ``power_level * mult + add`` (``docs/mm-core-mechanics.md`` §7)."""
+    """A Power Level cap as ``power_level * mult + add`` (``docs/mm-core-mechanics.md`` §7)."""
 
     mult: int
     add: int
@@ -868,9 +895,35 @@ def _parse_skill(s: dict) -> Skill:
     )
 
 
+def _parse_parameter(raw: dict | None, initiative_choice: tuple[str, ...]) -> ParameterSpec | None:
+    """Build the advantage's :class:`ParameterSpec`, or ``None`` if it takes no subject.
+
+    An explicit ``parameter`` object wins; otherwise Alternate Initiative's
+    ``initiativeAbilityChoice`` is synthesised into an ability-choice spec so the
+    one legacy field keeps driving both the picker and the initiative math.
+    """
+
+    if raw is not None:
+        return ParameterSpec(
+            label=raw.get("label", ""),
+            kind=raw.get("kind", "text"),
+            options=tuple(raw.get("options", ())),
+            options_from=raw.get("optionsFrom", ""),
+        )
+    if initiative_choice:
+        return ParameterSpec(
+            label="Initiative",
+            kind="choice",
+            options=initiative_choice,
+            options_from="abilities",
+        )
+    return None
+
+
 def _parse_advantage(a: dict) -> Advantage:
     # Accept the rich ``types`` list, falling back to a legacy singular ``type``.
     types = tuple(a["types"]) if "types" in a else tuple(t for t in (a.get("type"),) if t)
+    initiative_choice = tuple(a.get("initiativeAbilityChoice", ()))
     return Advantage(
         name=a["name"],
         ranked=bool(a["ranked"]),
@@ -881,7 +934,8 @@ def _parse_advantage(a: dict) -> Advantage:
         max_rank_kind=a.get("maxRankKind", "none"),
         focused=bool(a.get("focused", False)),
         initiative_bonus_per_rank=int(a.get("initiativeBonusPerRank", 0)),
-        initiative_ability_choice=tuple(a.get("initiativeAbilityChoice", ())),
+        initiative_ability_choice=initiative_choice,
+        parameter=_parse_parameter(a.get("parameter"), initiative_choice),
         extra=_extras(
             a,
             "name",
@@ -895,6 +949,7 @@ def _parse_advantage(a: dict) -> Advantage:
             "focused",
             "initiativeBonusPerRank",
             "initiativeAbilityChoice",
+            "parameter",
         ),
     )
 

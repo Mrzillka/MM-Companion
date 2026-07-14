@@ -86,6 +86,7 @@ from mm_companion.core.rules import (
     effective_ability,
     power_allocation_violations,
     power_linked_range_violations,
+    power_modifier_requirement_violations,
     power_pl_violations,
     power_strength_amount_violations,
     power_total_cost,
@@ -410,8 +411,26 @@ class ModifierChip(QFrame):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
+        points_spin = None  # the single points spin, if any, that gates other fields
+        gated: list[tuple[QWidget, int]] = []  # (widget, show_when_points value)
         for cfg in modifier.config_fields:
-            if cfg.type == "select":
+            if cfg.type == "points":
+                # A small spin box whose value *is* the modifier's flat cost (Subtle's
+                # 1 or 2 points). Seed and persist the default so the cost is right
+                # before the player touches it.
+                stored = self.selection.config.get(cfg.key)
+                value = cfg.default_value if stored is None else int(stored)
+                self.selection.config[cfg.key] = value
+                spin = make_spin_box(
+                    cfg.min_value, cfg.max_value, value=value, buttons=False, max_width=44
+                )
+                spin.setSuffix(" pt")
+                if cfg.hint:
+                    spin.setToolTip(cfg.hint)
+                spin.valueChanged.connect(lambda v, k=cfg.key: self._on_config(k, v))
+                points_spin = spin
+                row.addWidget(spin)
+            elif cfg.type == "select":
                 combo = QComboBox()
                 if cfg.source == "traits" and self._data is not None:
                     # Data-driven trait list (Reduced Trait's "which trait goes down").
@@ -431,6 +450,8 @@ class ModifierChip(QFrame):
                 combo.currentIndexChanged.connect(
                     lambda _i, c=combo, k=cfg.key: self._on_config(k, c.currentData())
                 )
+                if cfg.show_when_points:
+                    gated.append((combo, cfg.show_when_points))
                 row.addWidget(combo)
             else:  # text
                 edit = QLineEdit(self.selection.config.get(cfg.key, ""))
@@ -439,6 +460,17 @@ class ModifierChip(QFrame):
                     edit.setToolTip(cfg.hint)
                 edit.textChanged.connect(lambda text, k=cfg.key: self._on_config(k, text))
                 row.addWidget(edit)
+
+        # A field gated on the points spin (Variable Conditions' "which degree") shows
+        # only when the spin reads its trigger value; keep it in sync as the spin moves.
+        if gated and points_spin is not None:
+
+            def _sync_gated(value: int) -> None:
+                for widget, when in gated:
+                    widget.setVisible(value == when)
+
+            _sync_gated(points_spin.value())
+            points_spin.valueChanged.connect(_sync_gated)
         return row
 
     def _on_config(self, key: str, value) -> None:
@@ -773,6 +805,52 @@ class EffectCard(QFrame):
             return "multiselect"
         return field.type
 
+    def _hidden_by_gate(self, field) -> bool:
+        """Whether a base config field is deferred by its ``hidden_with`` gating extra.
+
+        A plain gating extra hides the field whenever it is attached (the historical
+        behaviour). A gating extra that carries a ``points`` scope — Variable Conditions
+        — hides selectively: at its top tier (``points`` == the spin's max) every gated
+        field is deferred to use-time, but at a lower tier only the one degree its own
+        picker names is, leaving the others editable.
+        """
+        ext_id = field.hidden_with
+        if not ext_id:
+            return False
+        selection = next((s for s in self.instance.extras if s.modifier_id == ext_id), None)
+        if selection is None:
+            return False
+        modifier = self._modifier(ext_id)
+        if modifier is None:
+            return True
+        points_field = next((c for c in modifier.config_fields if c.type == "points"), None)
+        if points_field is None:
+            return True  # plain gate: attached means every gated field is deferred
+        points = int(selection.config.get(points_field.key, points_field.default_value))
+        if points >= points_field.max_value:
+            return True  # full scope: every gated field deferred
+        picker = next(
+            (c for c in modifier.config_fields if c.type == "select" and c.show_when_points),
+            None,
+        )
+        chosen = selection.config.get(picker.key) if picker else None
+        return field.key == chosen
+
+    def _is_form_gate(self, modifier_id: str) -> bool:
+        """Whether the modifier's presence or config decides which base config fields
+        show — some base field defers to it via ``hidden_with`` or ``multiselect_with``.
+
+        A change to such a modifier's own config (Variable Conditions' scope spin) must
+        rebuild the effect's config form so the affected pickers appear or disappear.
+        """
+        effect = self._effect()
+        if effect is None:
+            return False
+        return any(
+            f.hidden_with == modifier_id or f.multiselect_with == modifier_id
+            for f in effect.config_fields
+        )
+
     def _hidden_config_keys(self) -> set[str]:
         """Effect config-field keys suppressed by an attached modifier whose own config
         declares ``hides_field`` — the modifier's chosen value names the effect field to
@@ -818,9 +896,11 @@ class EffectCard(QFrame):
                 note.setEnabled(False)
                 form.addRow(field.label, note)
                 continue
-            if field.hidden_with and self._has_extra(field.hidden_with):
+            if self._hidden_by_gate(field):
                 # A gating extra (e.g. Variable Conditions) defers this choice to
-                # use-time — show a note in place of the input instead of the widget.
+                # use-time — drop any stored value and show a note in its place. A
+                # partial scope leaves the other degrees below still editable.
+                self.instance.config.pop(field.key, None)
                 note = QLabel("chosen when used")
                 note.setEnabled(False)
                 form.addRow(field.label, note)
@@ -1270,9 +1350,13 @@ class EffectCard(QFrame):
         self.changed.emit()
 
     def _on_chip_changed(self, modifier: Modifier | None = None) -> None:
-        # A modifier whose config hides one of this effect's fields (Limited Degree
-        # choosing a degree) must rebuild the form so the picker appears/disappears.
-        if modifier is not None and any(f.hides_field for f in modifier.config_fields):
+        # A modifier whose config decides which of this effect's fields show must
+        # rebuild the form so pickers appear/disappear — Limited Degree choosing a
+        # degree (its own hides_field), or Variable Conditions' scope spin (a base
+        # field defers to it via hidden_with).
+        if modifier is not None and (
+            any(f.hides_field for f in modifier.config_fields) or self._is_form_gate(modifier.id)
+        ):
             self._populate_config_form()
         self._refresh_cost()
         self.changed.emit()
@@ -1740,20 +1824,25 @@ class PowerConstructorWindow(QMainWindow):
         from PySide6.QtWidgets import QTabWidget  # local: only used here
 
         tabs = QTabWidget()
+        # ``hidden`` modifiers (the structural Linked / Alternate Effect records) are
+        # applied automatically from a power's structure, so they never appear as
+        # draggable palette bricks — they stay in the catalog only for cost lookups.
         extras = [
             BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
-            if m.category == "extra"
+            if m.category == "extra" and not m.hidden
         ]
         flaws = [
             BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
-            if m.category == "flaw"
+            if m.category == "flaw" and not m.hidden
         ]
         # Keep each tab's search box + bricks addressable (also the test seam).
         self._search_tabs: dict[str, tuple[QLineEdit, list[BrickWidget]]] = {}
         tabs.addTab(
-            self._build_search_tab("effects", "Search effects", groups=self._effect_groups()),
+            self._build_search_tab(
+                "effects", "Search effects", groups=self._effect_groups(), sortable=True
+            ),
             "Effects",
         )
         tabs.addTab(self._build_search_tab("extras", "Search extras", bricks=extras), "Extras")
@@ -1777,6 +1866,7 @@ class PowerConstructorWindow(QMainWindow):
         *,
         bricks: list[BrickWidget] | None = None,
         groups: list[tuple[str, list[BrickWidget]]] | None = None,
+        sortable: bool = False,
     ) -> QWidget:
         """A scrollable brick list with a live search box pinned above it.
 
@@ -1785,6 +1875,10 @@ class PowerConstructorWindow(QMainWindow):
         filters the bricks instantly to those whose name contains the query
         (case-insensitive substring), hiding any section left with no matches;
         clearing shows them all.
+
+        A ``sortable`` grouped tab also gets a "Sort A–Z (no groups)" check box: when
+        ticked it drops the section headers and lays every brick out in one flat,
+        alphabetically-sorted list; unticking restores the grouped view.
         """
         tab = QWidget()
         outer = QVBoxLayout(tab)
@@ -1795,6 +1889,14 @@ class PowerConstructorWindow(QMainWindow):
         search.setPlaceholderText(placeholder)
         search.setClearButtonEnabled(True)  # a one-click reset
         outer.addWidget(search)
+
+        sort_check = None
+        if sortable and groups:
+            sort_check = QCheckBox("Sort A–Z (no groups)")
+            sort_check.setToolTip(
+                "List every effect in one alphabetical list, ignoring type groups."
+            )
+            outer.addWidget(sort_check)
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -1827,11 +1929,60 @@ class PowerConstructorWindow(QMainWindow):
         scroll.setWidget(container)
         outer.addWidget(scroll, stretch=1)
 
+        def alpha_now() -> bool:
+            return bool(sort_check and sort_check.isChecked())
+
         search.textChanged.connect(
-            lambda text, s=sections, bs=all_bricks, e=empty: self._filter_bricks(text, s, bs, e)
+            lambda text: self._filter_bricks(text, sections, all_bricks, empty, alpha_now())
         )
+        if sort_check is not None:
+            sort_check.toggled.connect(
+                lambda alpha: self._apply_sort(
+                    layout, sections, all_bricks, empty, search.text(), alpha
+                )
+            )
         self._search_tabs[key] = (search, all_bricks)
         return tab
+
+    def _apply_sort(
+        self,
+        layout: QVBoxLayout,
+        sections: list[tuple[QLabel | None, list[BrickWidget]]],
+        bricks: list[BrickWidget],
+        empty: QLabel,
+        search_text: str,
+        alpha: bool,
+    ) -> None:
+        """Re-lay-out the effect bricks grouped (default) or in one flat A–Z list.
+
+        The headers and bricks are detached and re-inserted in the new order (the
+        ``empty`` note and trailing stretch stay put at the end); the current search
+        filter is then re-applied so a query survives the toggle.
+        """
+        for header, group in sections:
+            if header is not None:
+                layout.removeWidget(header)
+            for brick in group:
+                layout.removeWidget(brick)
+
+        at = 0
+        if alpha:
+            for header, _group in sections:
+                if header is not None:
+                    header.setVisible(False)
+            for brick in sorted(bricks, key=lambda b: b.search_key):
+                layout.insertWidget(at, brick)
+                at += 1
+        else:
+            for header, group in sections:
+                if header is not None:
+                    header.setVisible(True)
+                    layout.insertWidget(at, header)
+                    at += 1
+                for brick in group:
+                    layout.insertWidget(at, brick)
+                    at += 1
+        self._filter_bricks(search_text, sections, bricks, empty, alpha)
 
     @staticmethod
     def _filter_bricks(
@@ -1839,13 +1990,15 @@ class PowerConstructorWindow(QMainWindow):
         sections: list[tuple[QLabel | None, list[BrickWidget]]],
         bricks: list[BrickWidget],
         empty: QLabel,
+        alpha: bool = False,
     ) -> None:
         needle = text.strip().lower()
         for brick in bricks:
             brick.setVisible(needle in brick.search_key)
+        # In the flat A–Z view the section headers stay hidden regardless of matches.
         for header, group in sections:  # hide a section header with no visible bricks
             if header is not None:
-                header.setVisible(any(not b.isHidden() for b in group))
+                header.setVisible(not alpha and any(not b.isHidden() for b in group))
         empty.setVisible(all(b.isHidden() for b in bricks))
 
     # -- centre: the power being built ------------------------------------
@@ -1969,12 +2122,18 @@ class PowerConstructorWindow(QMainWindow):
             return []
         return power_strength_amount_violations(self.power, self._character, self._data)
 
+    def _requirement_violations(self) -> list[str]:
+        """Modifiers attached without a prerequisite they depend on (Increasing
+        Difficulty without Cumulative/Progressive) — a house-rule warning."""
+        return power_modifier_requirement_violations(self.power, self._data)
+
     def _refresh_pl_warning(self) -> None:
         """Show or hide the live warning from the current PL, allocation, and link breaches."""
         pl = self._pl_violations()
         alloc = self._alloc_violations()
         linked = self._linked_violations()
         strength = self._strength_violations()
+        requirement = self._requirement_violations()
         headlines = []
         if pl:
             headlines.append("over Power Level")
@@ -1984,10 +2143,12 @@ class PowerConstructorWindow(QMainWindow):
             headlines.append("mismatched linked Range")
         if strength:
             headlines.append("Strength shortfall")
+        if requirement:
+            headlines.append("missing required modifier")
         headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
-            self._warning.setToolTip("\n".join((*pl, *alloc, *linked, *strength)))
+            self._warning.setToolTip("\n".join((*pl, *alloc, *linked, *strength, *requirement)))
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:

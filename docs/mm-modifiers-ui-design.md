@@ -61,8 +61,12 @@ picker (checkbox/rank-stepper, auto-computed cost, auto-generated notes clause) 
 | **Linked** | General | Multi-select of other effect instances to bundle with — see §3 |
 | **Alternate Effect** | General | Combo box picking the base power + cost-ceiling warning — see §3 |
 | **Limited Degree** | Affliction | Combo box picking which degree tier to disable, removes that tier's condition picker — see §4 |
-| **Variable Conditions** | Affliction | Removes all three condition pickers, replaces with "chosen at use-time" note |
-| **Extra Condition** | Affliction | Adds a second condition dropdown next to the 1st/2nd-degree pickers |
+| **Variable Conditions** | Affliction | A points spin (1 or 2 /rank). At 2 it defers all three condition pickers to a "chosen at use-time" note; at 1 it shows a "which degree" combo and defers only that one, leaving the other two editable |
+| **Extra Condition** | Affliction | Upgrades all three degree pickers to multi-select (a second same-degree condition each) |
+| **Onset** | Affliction | Combo picking when the conditions land — one round (flat −1) or one scene (−1 per rank); the choice flips the modifier between the flat and per-rank cost buckets |
+| **Empowering** | Affliction | +2/rank; adds a Notes line tallying the transformed form's bonus power points (rank × 15) |
+| **Reversible** (Affliction) | Affliction | Combo picking the reversal reach — within the effect's range (+1 flat) or any distance (+2 flat) |
+| **Increasing Difficulty** | Affliction | +1/rank; warns unless Cumulative or Progressive is also attached (needs repeated checks to escalate) |
 | **Removable** | General | Tier selector (equipment / easily-removable / etc.), changes both discount and the "how do you lose it" condition text |
 | **Variable Descriptor** | General | Free-text/tag field for the descriptor pool, or "any" |
 | **Triggered** | General | Free-text trigger-condition field |

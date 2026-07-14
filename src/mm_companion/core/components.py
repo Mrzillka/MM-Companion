@@ -34,6 +34,7 @@ GATE_ACTIVATION = "activation"  # the whole power must be switched on first
 GATE_REMOVABLE = "removable"  # only while the associated item is present
 GATE_TOGGLE = "toggle"  # a Sustained/Continuous switch the player sets
 GATE_LIMITED = "limited"  # a free-text condition the player self-applies (informational)
+GATE_REQUIRES_EFFECT = "requires_effect"  # only while another named effect is active
 
 # Condition mechanism tags — which engine subsystem a condition feeds
 # (``docs/mm-conditions-design.md`` §4). Each names one place in the derived-stats /

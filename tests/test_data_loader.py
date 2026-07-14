@@ -126,7 +126,7 @@ def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
     data = load_game_data()
     assert len(data.effect_modifiers) == 36  # effects with their own extras/flaws
     total = sum(len(mods) for mods in data.effect_modifiers.values())
-    assert total == 228
+    assert total == 231
     for mods in data.effect_modifiers.values():
         for modifier in mods:
             # Category is injected from the extras/flaws array, not stored per entry.
@@ -160,7 +160,7 @@ def test_effect_specific_modifiers_retain_mechanical_fields() -> None:
 def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
     data = load_game_data()
     catalog = data.modifier_catalog()
-    assert len(catalog) == 62 + 228  # ids are globally unique, so no collisions
+    assert len(catalog) == 62 + 231  # ids are globally unique, so no collisions
     assert catalog["ranged"].category == "extra"  # general pool
     assert catalog["strength_based"].category == "extra"  # effect-specific pool
 

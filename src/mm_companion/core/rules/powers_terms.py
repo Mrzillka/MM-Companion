@@ -117,15 +117,29 @@ def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str
     return label
 
 
+def _render_note(modifier: Modifier, rank: int) -> str:
+    """A modifier's :attr:`note_template` with its ``{n}`` placeholder resolved.
+
+    ``{n}`` becomes the effect's ``rank`` times the modifier's ``note_per_rank`` (or the
+    bare rank when that is zero) — Empowering's ``notePerRank`` of 15 turns a rank-4
+    Affliction's note into "transformed form gains 60 power points".
+    """
+
+    value = rank * modifier.note_per_rank if modifier.note_per_rank else rank
+    return modifier.note_template.replace("{n}", str(value))
+
+
 def _modifier_notes(
     effect: PowerEffectInstance, catalog: dict, impactful: set[str]
 ) -> tuple[str, ...]:
-    """Names of the effect's attached modifiers that produced no visible stat change.
+    """Notes for the effect's attached modifiers that produced no visible stat change.
 
     Skips the ids in ``impactful`` (those already reflected in a stat cell) so the
-    Notes row lists only what would otherwise be invisible; a ranked modifier taken
-    above rank 1 carries its rank (e.g. ``"Penetrating 3"``), and one with a typed
-    detail carries it (``"Limited (only at night)"``).
+    Notes row lists only what would otherwise be invisible. A modifier with a
+    ``note_template`` contributes that rendered line (Empowering's bonus-point tally);
+    otherwise it is listed by name — a ranked modifier taken above rank 1 carries its
+    rank (e.g. ``"Penetrating 3"``), and one with a typed detail carries it
+    (``"Limited (only at night)"``).
     """
 
     notes: list[str] = []
@@ -133,7 +147,10 @@ def _modifier_notes(
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or selection.modifier_id in impactful:
             continue
-        notes.append(modifier_label(modifier, selection))
+        if modifier.note_template:
+            notes.append(_render_note(modifier, effect.rank))
+        else:
+            notes.append(modifier_label(modifier, selection))
     return tuple(notes)
 
 

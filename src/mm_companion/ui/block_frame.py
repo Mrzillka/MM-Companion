@@ -239,6 +239,10 @@ class BlockWindow(QWidget):
         """Detach and return the hosted frame (before re-docking it)."""
         return self._scroll.takeWidget()
 
+    def verticalScrollBar_extent(self) -> int:  # noqa: N802 - matches Qt naming style
+        """Width the vertical scrollbar occupies, to leave room for it in the min width."""
+        return self._scroll.verticalScrollBar().sizeHint().width()
+
     def closeEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
         """Closing the window hides the block instead of destroying it."""
         self._host.request_hide(self._key)

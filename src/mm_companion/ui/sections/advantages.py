@@ -62,6 +62,12 @@ SORT_MANUAL, SORT_NAME, SORT_RANK, SORT_TYPE = "manual", "name", "rank", "type"
 
 # Spacing between the side-by-side advantage panels.
 TABLE_SPACING = 6
+# Dead-band (px) that stops the panel count from flipping when the page's vertical
+# scrollbar appears/disappears (which nudges the width by its own extent).
+COLUMN_HYSTERESIS = 24
+# Below this much room left for the combo box beside the picker controls, the
+# controls wrap onto their own row so the combo keeps enough width to read.
+PICKER_COMBO_MIN = 180
 # Rough widths used to decide how many panels fit without clipping a row. The
 # Name and Type columns size to content; the Description wraps but still wants a
 # readable minimum. These are UI heuristics, easy to retune.
@@ -130,12 +136,14 @@ class AdvantagesSection(TitledSection):
 
         outer = QVBoxLayout(self)
 
-        picker = QHBoxLayout()
         self._advantage_combo = QComboBox()
         for advantage in data.advantages:
             label = f"{advantage.name} ({', '.join(advantage.types)})"
             self._advantage_combo.addItem(label, advantage)
-        picker.addWidget(self._advantage_combo, stretch=1)
+        # Let the combo shrink and stretch so it uses whatever width its row has,
+        # rather than pinning the row wide to its longest advantage name.
+        self._advantage_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._advantage_combo.setMinimumWidth(0)
 
         # The subject input for an advantage that needs one (a skill, an attack, a
         # foe type, ...). Its shape is data-driven per advantage (see ParameterSpec):
@@ -143,23 +151,43 @@ class AdvantagesSection(TitledSection):
         # created once and shown/populated per advantage by _sync_parameter.
         self._advantage_param = QComboBox()
         self._advantage_param.setVisible(False)
-        picker.addWidget(self._advantage_param)
         self._advantage_param_text = QLineEdit()
         self._advantage_param_text.setVisible(False)
-        picker.addWidget(self._advantage_param_text)
-
         self._advantage_rank = make_spin_box(RANK_MIN, RANK_MAX, guarded=False)
-        picker.addWidget(self._advantage_rank)
-
         self._advantage_add_button = QPushButton("Add")
         self._advantage_add_button.clicked.connect(self._add_advantage)
-        picker.addWidget(self._advantage_add_button)
-
         self._advantage_remove_button = QPushButton("Remove")
         self._advantage_remove_button.clicked.connect(self._remove_advantage)
-        picker.addWidget(self._advantage_remove_button)
-        self._advantage_picker = picker
-        outer.addLayout(picker)
+
+        # The subject/rank/Add/Remove controls travel together as one widget so they
+        # can move between the picker's two rows in one step (see _apply_picker_mode).
+        self._advantage_controls = QWidget()
+        controls_row = QHBoxLayout(self._advantage_controls)
+        controls_row.setContentsMargins(0, 0, 0, 0)
+        for widget in (
+            self._advantage_param,
+            self._advantage_param_text,
+            self._advantage_rank,
+            self._advantage_add_button,
+            self._advantage_remove_button,
+        ):
+            controls_row.addWidget(widget)
+
+        # The picker is one row when there's room and wraps the controls onto a
+        # second row when the block is too narrow, so the combo always has space to
+        # show the advantage name (see resizeEvent / _apply_picker_mode).
+        self._picker_widget = QWidget()
+        picker_vbox = QVBoxLayout(self._picker_widget)
+        picker_vbox.setContentsMargins(0, 0, 0, 0)
+        picker_vbox.setSpacing(4)
+        self._picker_row1 = QHBoxLayout()
+        self._picker_row1.addWidget(self._advantage_combo, stretch=1)
+        self._picker_row2 = QHBoxLayout()
+        picker_vbox.addLayout(self._picker_row1)
+        picker_vbox.addLayout(self._picker_row2)
+        self._picker_narrow: bool | None = None
+        self._apply_picker_mode(False)
+        outer.addWidget(self._picker_widget)
 
         # The shared Heroic-advantage budget, refreshed on every change and PL edit.
         self._heroic_label = QLabel()
@@ -204,6 +232,10 @@ class AdvantagesSection(TitledSection):
         self._tables_layout.setSpacing(TABLE_SPACING)
         self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         outer.addWidget(self._tables_container)
+        # Keep the content packed at the top: when this block is stretched taller than
+        # its content (e.g. sharing a row with the much taller Skills block) the extra
+        # height goes to this stretch instead of being spread between the rows above.
+        outer.addStretch(1)
 
         self._advantage_combo.currentIndexChanged.connect(self._sync_rank_enabled)
         self._sync_rank_enabled()
@@ -282,7 +314,12 @@ class AdvantagesSection(TitledSection):
         self._row_refs.clear()
         selections = self._character.advantages
         count = column_count(
-            self._available_width(), self._min_col_width(), TABLE_SPACING, len(selections)
+            self._available_width(),
+            self._min_col_width(),
+            TABLE_SPACING,
+            len(selections),
+            self._column_count,
+            COLUMN_HYSTERESIS,
         )
         self._column_count = count
         self._ensure_tables(count)
@@ -436,16 +473,57 @@ class AdvantagesSection(TitledSection):
             name_width + NAME_PADDING + type_width + TYPE_PADDING + MIN_DESC_WIDTH + FRAME_PADDING
         )
 
+    def _apply_picker_mode(self, narrow: bool) -> None:
+        """Lay the picker out on one or two rows.
+
+        Wide: the subject/rank/Add/Remove controls sit to the right of the combo on a
+        single row. Narrow: they drop to a second row so the combo box spans the full
+        block width and can show the advantage name. A no-op when the mode is unchanged.
+        """
+        if narrow == self._picker_narrow:
+            return
+        self._picker_narrow = narrow
+        self._picker_row1.removeWidget(self._advantage_controls)
+        while self._picker_row2.count():
+            self._picker_row2.takeAt(0)
+        if narrow:
+            self._picker_row2.addStretch(1)
+            self._picker_row2.addWidget(self._advantage_controls)
+        else:
+            self._picker_row1.addWidget(self._advantage_controls)
+
+    def _picker_prefers_narrow(self) -> bool:
+        """Whether the combo would be squeezed below :data:`PICKER_COMBO_MIN` on one row."""
+        return (
+            self._available_width() - self._advantage_controls.sizeHint().width() < PICKER_COMBO_MIN
+        )
+
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
+        self._apply_picker_mode(self._picker_prefers_narrow())
         count = column_count(
             self._available_width(),
             self._min_col_width(),
             TABLE_SPACING,
             len(self._character.advantages),
+            self._column_count,
+            COLUMN_HYSTERESIS,
         )
         if count != self._column_count:
             self._rebuild()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Report a *single-column* minimum so the block can shrink to one panel.
+
+        When the block is wide it fans the advantages across several side-by-side
+        tables; left alone, that inflates the section's minimum to the full
+        multi-column width, which then pins the whole page (and window) wide and
+        clips the trailing panels. Capping the reported minimum at one column's
+        width lets the block — and the window — narrow, at which point
+        :meth:`resizeEvent` rebuilds to fewer columns and everything reconciles.
+        """
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self._min_col_width()), hint.height())
 
     def _rank_ceiling(self, advantage: Advantage) -> int:
         """The highest rank the picker may offer for *advantage* right now.

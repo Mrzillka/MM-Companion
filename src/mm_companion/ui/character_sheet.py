@@ -87,7 +87,19 @@ class CharacterSheet(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._scroll)
 
+        # Pin the page's minimum width to the widest docked row so it can never
+        # shrink narrow enough to clip a block (the fixed-width Abilities /
+        # Resistances grids can't compress). Recomputed whenever the arrangement
+        # changes — floating or hiding a block frees up the constraint.
+        self._canvas.arrangement_changed.connect(self._update_min_width)
+        self._update_min_width()
+
         self._wire_sections()
+
+    def _update_min_width(self) -> None:
+        """Track the widest docked row as the page's minimum width."""
+        extent = self._scroll.verticalScrollBar().sizeHint().width()
+        self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extent + 2)
 
     # -- layout model / persistence -----------------------------------------
 

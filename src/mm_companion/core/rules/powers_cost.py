@@ -19,13 +19,17 @@ from .derived import effective_ability
 def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
     """A cost magnitude a chosen config option overrides the modifier's with, if any.
 
-    The first of the modifier's config fields whose selected option carries a
-    ``cost_value`` (a Side Effect always/on-failure toggle, a Removable tier) wins;
-    ``None`` when no such choice is set, leaving the modifier's own ``cost_value``.
+    A ``points`` field's stored integer *is* the magnitude (a Subtle extra the player
+    dials to 1 or 2), falling back to the field's ``default_value`` when unset. Otherwise
+    the first config field whose selected option carries a ``cost_value`` (a Side Effect
+    always/on-failure toggle, a Removable tier) wins. ``None`` when no such choice is
+    set, leaving the modifier's own ``cost_value``.
     """
 
     for cfg in modifier.config_fields:
         chosen = selection.config.get(cfg.key)
+        if cfg.type == "points":
+            return int(chosen) if chosen is not None else cfg.default_value
         option = next(
             (o for o in cfg.options if o.value == chosen and o.cost_value is not None), None
         )

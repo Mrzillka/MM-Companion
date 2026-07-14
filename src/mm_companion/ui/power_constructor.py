@@ -411,7 +411,22 @@ class ModifierChip(QFrame):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
         for cfg in modifier.config_fields:
-            if cfg.type == "select":
+            if cfg.type == "points":
+                # A small spin box whose value *is* the modifier's flat cost (Subtle's
+                # 1 or 2 points). Seed and persist the default so the cost is right
+                # before the player touches it.
+                stored = self.selection.config.get(cfg.key)
+                value = cfg.default_value if stored is None else int(stored)
+                self.selection.config[cfg.key] = value
+                spin = make_spin_box(
+                    cfg.min_value, cfg.max_value, value=value, buttons=False, max_width=44
+                )
+                spin.setSuffix(" pt")
+                if cfg.hint:
+                    spin.setToolTip(cfg.hint)
+                spin.valueChanged.connect(lambda v, k=cfg.key: self._on_config(k, v))
+                row.addWidget(spin)
+            elif cfg.type == "select":
                 combo = QComboBox()
                 if cfg.source == "traits" and self._data is not None:
                     # Data-driven trait list (Reduced Trait's "which trait goes down").
@@ -1740,20 +1755,25 @@ class PowerConstructorWindow(QMainWindow):
         from PySide6.QtWidgets import QTabWidget  # local: only used here
 
         tabs = QTabWidget()
+        # ``hidden`` modifiers (the structural Linked / Alternate Effect records) are
+        # applied automatically from a power's structure, so they never appear as
+        # draggable palette bricks — they stay in the catalog only for cost lookups.
         extras = [
             BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
-            if m.category == "extra"
+            if m.category == "extra" and not m.hidden
         ]
         flaws = [
             BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
-            if m.category == "flaw"
+            if m.category == "flaw" and not m.hidden
         ]
         # Keep each tab's search box + bricks addressable (also the test seam).
         self._search_tabs: dict[str, tuple[QLineEdit, list[BrickWidget]]] = {}
         tabs.addTab(
-            self._build_search_tab("effects", "Search effects", groups=self._effect_groups()),
+            self._build_search_tab(
+                "effects", "Search effects", groups=self._effect_groups(), sortable=True
+            ),
             "Effects",
         )
         tabs.addTab(self._build_search_tab("extras", "Search extras", bricks=extras), "Extras")
@@ -1777,6 +1797,7 @@ class PowerConstructorWindow(QMainWindow):
         *,
         bricks: list[BrickWidget] | None = None,
         groups: list[tuple[str, list[BrickWidget]]] | None = None,
+        sortable: bool = False,
     ) -> QWidget:
         """A scrollable brick list with a live search box pinned above it.
 
@@ -1785,6 +1806,10 @@ class PowerConstructorWindow(QMainWindow):
         filters the bricks instantly to those whose name contains the query
         (case-insensitive substring), hiding any section left with no matches;
         clearing shows them all.
+
+        A ``sortable`` grouped tab also gets a "Sort A–Z (no groups)" check box: when
+        ticked it drops the section headers and lays every brick out in one flat,
+        alphabetically-sorted list; unticking restores the grouped view.
         """
         tab = QWidget()
         outer = QVBoxLayout(tab)
@@ -1795,6 +1820,14 @@ class PowerConstructorWindow(QMainWindow):
         search.setPlaceholderText(placeholder)
         search.setClearButtonEnabled(True)  # a one-click reset
         outer.addWidget(search)
+
+        sort_check = None
+        if sortable and groups:
+            sort_check = QCheckBox("Sort A–Z (no groups)")
+            sort_check.setToolTip(
+                "List every effect in one alphabetical list, ignoring type groups."
+            )
+            outer.addWidget(sort_check)
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -1827,11 +1860,60 @@ class PowerConstructorWindow(QMainWindow):
         scroll.setWidget(container)
         outer.addWidget(scroll, stretch=1)
 
+        def alpha_now() -> bool:
+            return bool(sort_check and sort_check.isChecked())
+
         search.textChanged.connect(
-            lambda text, s=sections, bs=all_bricks, e=empty: self._filter_bricks(text, s, bs, e)
+            lambda text: self._filter_bricks(text, sections, all_bricks, empty, alpha_now())
         )
+        if sort_check is not None:
+            sort_check.toggled.connect(
+                lambda alpha: self._apply_sort(
+                    layout, sections, all_bricks, empty, search.text(), alpha
+                )
+            )
         self._search_tabs[key] = (search, all_bricks)
         return tab
+
+    def _apply_sort(
+        self,
+        layout: QVBoxLayout,
+        sections: list[tuple[QLabel | None, list[BrickWidget]]],
+        bricks: list[BrickWidget],
+        empty: QLabel,
+        search_text: str,
+        alpha: bool,
+    ) -> None:
+        """Re-lay-out the effect bricks grouped (default) or in one flat A–Z list.
+
+        The headers and bricks are detached and re-inserted in the new order (the
+        ``empty`` note and trailing stretch stay put at the end); the current search
+        filter is then re-applied so a query survives the toggle.
+        """
+        for header, group in sections:
+            if header is not None:
+                layout.removeWidget(header)
+            for brick in group:
+                layout.removeWidget(brick)
+
+        at = 0
+        if alpha:
+            for header, _group in sections:
+                if header is not None:
+                    header.setVisible(False)
+            for brick in sorted(bricks, key=lambda b: b.search_key):
+                layout.insertWidget(at, brick)
+                at += 1
+        else:
+            for header, group in sections:
+                if header is not None:
+                    header.setVisible(True)
+                    layout.insertWidget(at, header)
+                    at += 1
+                for brick in group:
+                    layout.insertWidget(at, brick)
+                    at += 1
+        self._filter_bricks(search_text, sections, bricks, empty, alpha)
 
     @staticmethod
     def _filter_bricks(
@@ -1839,13 +1921,15 @@ class PowerConstructorWindow(QMainWindow):
         sections: list[tuple[QLabel | None, list[BrickWidget]]],
         bricks: list[BrickWidget],
         empty: QLabel,
+        alpha: bool = False,
     ) -> None:
         needle = text.strip().lower()
         for brick in bricks:
             brick.setVisible(needle in brick.search_key)
+        # In the flat A–Z view the section headers stay hidden regardless of matches.
         for header, group in sections:  # hide a section header with no visible bricks
             if header is not None:
-                header.setVisible(any(not b.isHidden() for b in group))
+                header.setVisible(not alpha and any(not b.isHidden() for b in group))
         empty.setVisible(all(b.isHidden() for b in bricks))
 
     # -- centre: the power being built ------------------------------------

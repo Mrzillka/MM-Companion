@@ -33,6 +33,7 @@ from mm_companion.core.rules import (
     node_cost,
     node_display_cost,
     power_allocation_violations,
+    power_display_name,
     power_game_terms,
     power_has_standing_effect,
     power_linked_range_violations,
@@ -163,6 +164,57 @@ def test_removable_tier_changes_the_flat_discount() -> None:
     )
     assert effect_total_cost(default, data) == 9
     assert effect_total_cost(easily, data) == 8
+
+
+def test_subtle_points_config_sets_the_flat_cost() -> None:
+    data = load_game_data()
+    # Subtle is a flat extra worth 1 or 2 points, dialed on a points spin box.
+    # Damage 8 (8 PP) + Subtle defaults to +1 flat, and +2 when set to 2.
+    default = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("subtle")])
+    two = PowerEffectInstance(
+        "damage", rank=8, extras=[ModifierSelection("subtle", config={"points": 2})]
+    )
+    assert effect_total_cost(default, data) == 9
+    assert effect_total_cost(two, data) == 10
+
+
+def test_power_display_name_falls_back_to_effect_names() -> None:
+    data = load_game_data()
+    named = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_display_name(named, data) == "Fire Blast"
+    unnamed = Power(
+        effects=[PowerEffectInstance("damage", rank=8), PowerEffectInstance("flight", rank=2)]
+    )
+    assert power_display_name(unnamed, data) == "Damage / Flight"
+    assert power_display_name(Power(), data) == "Unnamed Power"
+
+
+def test_limited_while_insubstantial_gates_on_an_active_insubstantial_power() -> None:
+    data = load_game_data()
+    boost = PowerEffectInstance(
+        "enhanced_trait",
+        rank=3,
+        config={"target": "STR"},
+        flaws=[ModifierSelection("limited_while_insubstantial")],
+    )
+    boost_power = Power(name="Ghostly Might", effects=[boost])
+    char = _char_with(boost_power)
+
+    base = {e.id: e for e in data.effects}["enhanced_trait"]
+    # No Insubstantial power on the sheet: the gate blocks the bonus.
+    assert effect_is_active(boost_power, boost, base, data, char) is False
+    assert "STR" not in power_trait_bonuses(char, data)["ability"]
+
+    ghost = Power(name="Ghost Form", effects=[PowerEffectInstance("insubstantial", rank=1)])
+    char.powers.append(ghost)
+    # An active Insubstantial power satisfies the gate.
+    assert effect_is_active(boost_power, boost, base, data, char) is True
+    assert power_trait_bonuses(char, data)["ability"]["STR"].amount == 3
+
+    # Turning the Insubstantial effect off drops the bonus again.
+    ghost.effects[0].toggled_on = False
+    assert effect_is_active(boost_power, boost, base, data, char) is False
+    assert "STR" not in power_trait_bonuses(char, data)["ability"]
 
 
 def test_modifier_config_round_trips_through_json() -> None:

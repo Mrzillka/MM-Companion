@@ -380,6 +380,9 @@ class EffectConfigField:
       list of ``{"id", "tier"}`` dicts;
     - ``"repeatable"`` — a variable-length list of rows shaped by ``columns``
       (Immunity scopes, Features); stored as a list of row dicts.
+    - ``"points"`` — an integer spin box bounded by ``min_value``/``max_value`` whose
+      stored value *is* the modifier's flat cost magnitude (a Subtle extra worth 1 or
+      2 points); ``default_value`` is the value a fresh selection starts at.
 
     ``overrides``, if set, names a base game-term field (e.g. ``"resistance"``) that
     the chosen value replaces in the generated summary; otherwise the choice is
@@ -409,6 +412,9 @@ class EffectConfigField:
     source: str | None = None
     hides_field: bool = False
     hint: str = ""
+    min_value: int = 0
+    max_value: int = 0
+    default_value: int = 0
     options: tuple[ConfigOption, ...] = ()
     alloc_options: tuple[AllocationOption, ...] = ()
     columns: tuple[RepeatableColumn, ...] = ()
@@ -503,9 +509,17 @@ class Modifier:
 
     ``gate`` marks a flaw that can switch an effect's standing bonus off at runtime
     (one of :mod:`mm_companion.core.components`'s ``GATE_*`` kinds): Activation
-    (``"activation"``), Removable (``"removable"``), Limited (``"limited"``). Empty
-    for modifiers with no runtime gate. Consulted by
-    :func:`mm_companion.core.rules.effect_is_active`.
+    (``"activation"``), Removable (``"removable"``), Limited (``"limited"``),
+    Requires-Effect (``"requires_effect"``). Empty for modifiers with no runtime gate.
+    Consulted by :func:`mm_companion.core.rules.effect_is_active`.
+    ``requires_effect_id`` pairs with a ``"requires_effect"`` gate: it names the base
+    effect id that must be currently active on the wielder for this effect's bonus to
+    apply (e.g. ``"insubstantial"`` for the *Limited to While Insubstantial* flaw).
+
+    ``hidden`` keeps a record out of the constructor's palette while leaving it in the
+    modifier catalog for cost/lookup use — the structural ``linked`` / ``alternate_effect``
+    modifiers are applied automatically from a power's structure (and the array flat cost
+    is read from the record), so they should not be draggable as ordinary extras.
     """
 
     id: str
@@ -524,6 +538,8 @@ class Modifier:
     step_by: int = 0
     adds_ability: str = ""
     gate: str = ""
+    requires_effect_id: str = ""
+    hidden: bool = False
     config_fields: tuple[EffectConfigField, ...] = ()
 
 
@@ -1072,6 +1088,9 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         source=c.get("source"),
         hides_field=bool(c.get("hidesField", False)),
         hint=c.get("hint", ""),
+        min_value=int(c.get("min", 0)),
+        max_value=int(c.get("max", 0)),
+        default_value=int(c.get("default", 0)),
         options=tuple(
             ConfigOption(
                 value=o["value"],
@@ -1166,6 +1185,8 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_by=int(m.get("stepBy", 0)),
         adds_ability=m.get("addsAbility", ""),
         gate=m.get("gate", ""),
+        requires_effect_id=m.get("requiresEffect", ""),
+        hidden=bool(m.get("hidden", False)),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         description=m.get("description", ""),
     )

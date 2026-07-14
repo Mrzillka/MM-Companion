@@ -1103,3 +1103,49 @@ def test_mod_registered_config_field_type_renders_via_registry(qapp: QApplicatio
     finally:
         CONFIG_WIDGET_BUILDERS.unregister("stars")
     assert isinstance(card._config_widget(field, "stars"), QComboBox)
+
+
+def test_structural_modifiers_are_absent_from_the_palette(qapp: QApplication) -> None:
+    # Linked and Alternate Effect are applied from a power/group's structure now, so
+    # they are hidden from the draggable extras palette (a normal extra still shows).
+    window = PowerConstructorWindow(load_game_data())
+    _, extra_bricks = window._search_tabs["extras"]
+    names = {b.search_key for b in extra_bricks}
+    assert "linked" not in names
+    assert "alternate effect" not in names
+    assert "ranged" in names
+
+
+def test_subtle_points_spin_box_drives_the_cost(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    card.attach_modifier("subtle")  # flat extra, defaults to +1 point
+
+    assert window._cost.text() == "Total cost: 9 PP"
+    chip = card._chips[0]
+    spin = chip.findChild(QSpinBox)
+    assert spin is not None  # Subtle exposes a points spin box
+    spin.setValue(2)
+
+    assert window.power.effects[0].extras[0].config["points"] == 2
+    assert window._cost.text() == "Total cost: 10 PP"
+
+
+def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox, QLabel
+
+    window = PowerConstructorWindow(load_game_data())
+    types = {"Attack", "Defense", "Control", "Alteration", "Movement", "Sensory", "General"}
+    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.text() in types]
+    assert headers  # grouped by effect type by default
+    assert all(not h.isHidden() for h in headers)
+
+    check = next(c for c in window.findChildren(QCheckBox) if "Sort A" in c.text())
+    check.setChecked(True)  # flat alphabetical view drops the headers
+    assert all(h.isHidden() for h in headers)
+
+    check.setChecked(False)  # back to grouped
+    assert all(not h.isHidden() for h in headers)

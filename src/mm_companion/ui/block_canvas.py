@@ -66,11 +66,13 @@ class RowWidget(QWidget):
     stretch so its blocks left-align and the leftover width stays empty.
     """
 
+    SPACING = 6  # px between side-by-side blocks in a row
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(6)
+        self._layout.setSpacing(self.SPACING)
         self._frames: list[BlockFrame] = []
         self._has_growable = False
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -151,6 +153,28 @@ class BlockCanvas(QWidget):
 
     def block_frame(self, key: str) -> BlockFrame:
         return self._frames[key]
+
+    def content_minimum_width(self) -> int:
+        """The widest docked row's minimum width, including the canvas margins.
+
+        The page must never shrink narrow enough to clip a row's blocks (the
+        fixed-width Abilities/Resistances grids can't compress), so the sheet
+        uses this to pin its own minimum width. Only docked rows constrain it —
+        a floated or hidden block has its own window and doesn't hold the page
+        open. Each block contributes its :meth:`BlockFrame.minimumSizeHint`
+        width (a column-flow block reports a single column), summed with the
+        inter-block spacing :class:`RowWidget` uses.
+        """
+        best = 0
+        for row in self._rows:
+            keys = [k for k in row if k in self._frames and k not in self._windows]
+            if not keys:
+                continue
+            total = sum(self._frames[k].minimumSizeHint().width() for k in keys)
+            total += RowWidget.SPACING * (len(keys) - 1)
+            best = max(best, total)
+        margins = self._layout.contentsMargins()
+        return best + margins.left() + margins.right()
 
     # -- rendering -----------------------------------------------------------
 
@@ -342,6 +366,7 @@ class BlockCanvas(QWidget):
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
         frame.show()
+        self._apply_window_min_width(window, frame)
         width = max(old_size.width(), frame.sizeHint().width(), frame.minimumWidth())
         height = max(old_size.height(), frame.sizeHint().height(), frame.minimumHeight())
         # A block taller than the screen (e.g. a full Powers list) would open past
@@ -358,6 +383,18 @@ class BlockCanvas(QWidget):
         self.arrangement_changed.emit()
 
     @staticmethod
+    def _apply_window_min_width(window: BlockWindow, frame: BlockFrame) -> None:
+        """Stop a floated block's window from shrinking narrow enough to clip it.
+
+        The window's scroll area never scrolls horizontally, so without a minimum a
+        narrow window would cut off the frame's right edge. Pin the window to the
+        frame's own minimum plus room for the vertical scrollbar the tall content
+        may show.
+        """
+        extent = window.verticalScrollBar_extent()
+        window.setMinimumWidth(frame.minimumSizeHint().width() + extent + 4)
+
+    @staticmethod
     def _available_height(window: BlockWindow) -> int:
         """The usable screen height for a floated window (falls back generously
         when no screen is resolvable, e.g. headless tests)."""
@@ -372,6 +409,7 @@ class BlockCanvas(QWidget):
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
         frame.show()
+        self._apply_window_min_width(window, frame)
         window.setGeometry(geom["x"], geom["y"], geom["w"], geom["h"])
         self._windows[key] = window
         window.show()

@@ -22,7 +22,7 @@ panels so their heights are as even as possible without ever splitting a block.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -61,13 +61,18 @@ HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
 SPIN_WIDTH = 56
 # Spacing between the side-by-side skill panels.
 TABLE_SPACING = 6
+# Dead-band (px) that stops the panel count from flipping when the page's vertical
+# scrollbar appears/disappears (which nudges the width by its own extent).
+COLUMN_HYSTERESIS = 24
 # Rough widths used to decide how many panels fit without clipping a name.
 # The numeric columns are near-fixed; the name column needs room for the widest
-# skill/focus/specialization label. These are UI heuristics, easy to retune.
-NAME_MIN_WIDTH = 120
-NAME_PADDING = 28
-NUMERIC_WIDTH = 40 + 2 * SPIN_WIDTH + 48  # ABL + two spins + Total
-FRAME_PADDING = 24
+# skill/focus/specialization label. Kept lean so a second column appears before a
+# lone one stretches wide and leaves a big gap between names and their numbers —
+# these are UI heuristics, easy to retune.
+NAME_MIN_WIDTH = 100
+NAME_PADDING = 16
+NUMERIC_WIDTH = 40 + 2 * SPIN_WIDTH + 24  # ABL + two spins + Total
+FRAME_PADDING = 16
 
 
 class SkillsSection(TitledSection):
@@ -173,7 +178,12 @@ class SkillsSection(TitledSection):
         self._rows.clear()
         self._editable_spins.clear()
         count = column_count(
-            self._available_width(), self._min_col_width(), TABLE_SPACING, len(self._skills)
+            self._available_width(),
+            self._min_col_width(),
+            TABLE_SPACING,
+            len(self._skills),
+            self._column_count,
+            COLUMN_HYSTERESIS,
         )
         self._column_count = count
         self._ensure_tables(count)
@@ -234,10 +244,27 @@ class SkillsSection(TitledSection):
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
         count = column_count(
-            self._available_width(), self._min_col_width(), TABLE_SPACING, len(self._skills)
+            self._available_width(),
+            self._min_col_width(),
+            TABLE_SPACING,
+            len(self._skills),
+            self._column_count,
+            COLUMN_HYSTERESIS,
         )
         if count != self._column_count:
             self._rebuild()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Report a *single-column* minimum so the block can shrink to one panel.
+
+        The side-by-side skill tables would otherwise inflate the section's
+        minimum to the full multi-column width, pinning the whole page wide and
+        forcing at least two columns. Capping the reported minimum at one
+        column's width lets the block narrow to a single column; the resize then
+        rebuilds to as many columns as fit (see :meth:`resizeEvent`).
+        """
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self._min_col_width()), hint.height())
 
     def _expand(self, skills: list[Skill]) -> list[tuple]:
         """Flatten skills into per-row specs.

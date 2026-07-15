@@ -1,8 +1,10 @@
 """Section 3: the skills table.
 
 Each skill row lays out its bonus as a sum of columns: the linked ability's
-short code and current rank, the skill's own ranks, and a free modifier. The
-total bonus is the sum of the ability rank, the skill ranks, and the modifier.
+short code and current rank, the skill's own ranks, and the outside bonuses
+granted by powers and advantages. The total bonus is their sum. Only the ranks
+are bought: the "+" column is a derived read-out (:func:`skill_bonus`), never an
+input, and the whole column hides while nothing grants a bonus.
 Focused skills (Close Combat, Expertise, Ranged Combat) have no ranks of their
 own — the character instead adds focused instances, each of which becomes its
 own rankable row. Any skill can also carry *specialized* rows: narrow, half-cost
@@ -21,6 +23,8 @@ panels so their heights are as even as possible without ever splitting a block.
 """
 
 from __future__ import annotations
+
+from typing import NamedTuple
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QResizeEvent
@@ -43,18 +47,22 @@ from mm_companion.core.data_loader import GameData, Skill
 from mm_companion.core.rules import (
     condition_scope_penalty,
     effective_ability,
+    skill_bonus,
     skill_points_spent,
     skill_total,
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.column_flow import column_count, even_split
-from mm_companion.ui.sections.stat_grid import CONDITION_TINT, STRIKETHROUGH_CONDITIONS
+from mm_companion.ui.sections.stat_grid import (
+    CONDITION_TINT,
+    ENHANCED_TINT,
+    STRIKETHROUGH_CONDITIONS,
+)
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item, title_with_cost
 
 RANK_MIN, RANK_MAX = 0, 20
-MOD_MIN, MOD_MAX = -20, 20
 COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
 # Keep the numeric spin-box columns narrow so they don't hog horizontal space.
@@ -71,17 +79,34 @@ COLUMN_HYSTERESIS = 24
 # these are UI heuristics, easy to retune.
 NAME_MIN_WIDTH = 100
 NAME_PADDING = 16
-NUMERIC_WIDTH = 40 + 2 * SPIN_WIDTH + 24  # ABL + two spins + Total
+NUMERIC_WIDTH = 40 + SPIN_WIDTH + 24  # ABL + rank spin + Total
+# The derived "+" column's share, added only while it is shown.
+MOD_WIDTH = 36
 FRAME_PADDING = 16
+
+
+class SkillRow(NamedTuple):
+    """The cells of one rendered skill row that the refresh pass writes into.
+
+    ``name_item`` is ``None`` when the name cell is a widget rather than a plain item
+    (a row carrying an inline add/remove button), so nothing there can be restyled.
+    """
+
+    ability_key: str
+    row_id: str
+    ability_item: QTableWidgetItem
+    mod_item: QTableWidgetItem
+    total_item: QTableWidgetItem
+    name_item: QTableWidgetItem | None
 
 
 class SkillsSection(TitledSection):
     """A table of skills whose total bonuses track the shared character model.
 
-    Ranks, modifiers, and focuses are read from and written to the
-    :class:`Character`; totals are computed by :func:`skill_total` rather than in
-    the view. Emits :attr:`changed` when the build changes so the sheet can
-    recompute spent power points.
+    Ranks and focuses are read from and written to the :class:`Character`; the "+"
+    and total columns are computed by :func:`skill_bonus` / :func:`skill_total`
+    rather than in the view. Emits :attr:`changed` when the build changes so the
+    sheet can recompute spent power points.
     """
 
     changed = Signal()
@@ -93,10 +118,9 @@ class SkillsSection(TitledSection):
         self._character = character
         self._skills = data.skills
         self._ability_abbrs: dict[str, str] = {a.key: a.abbr or a.key for a in data.abilities}
-        # Ranks, modifiers, and focuses all live on the model; ensure every
-        # focused skill has a (possibly empty) focus list to render from.
+        # Ranks and focuses live on the model; ensure every focused skill has a
+        # (possibly empty) focus list to render from.
         self._ranks = character.skill_ranks
-        self._mods = character.skill_mods
         self._focuses = character.focuses
         # Specializations (narrow, half-cost pools) can hang off any skill; the model
         # only carries non-empty entries, so read with .get rather than seeding all.
@@ -104,16 +128,16 @@ class SkillsSection(TitledSection):
         for skill in data.skills:
             if skill.focused:
                 self._focuses.setdefault(skill.name, [])
-        # (ability_key, row_id, ability_rank_item, total_item, name_item) for every
-        # rankable row, so the ability-rank and total cells can be recomputed when
-        # abilities change and a condition overlay can restyle the total/name.
-        self._rows: list[
-            tuple[str, str, QTableWidgetItem, QTableWidgetItem, QTableWidgetItem | None]
-        ] = []
-        # Rank/modifier spin boxes rebuilt on every layout pass, tracked so the
-        # lock state can be re-applied to them.
+        # One SkillRow per rankable row, so the derived cells can be recomputed when
+        # abilities or powers change and a condition overlay can restyle the total/name.
+        self._rows: list[SkillRow] = []
+        # Rank spin boxes rebuilt on every layout pass, tracked so the lock state can
+        # be re-applied to them.
         self._editable_spins: list[QSpinBox] = []
         self._locked = False
+        # Whether any row currently carries an outside bonus; drives the "+" column's
+        # visibility (and, through _min_col_width, how many panels fit).
+        self._show_mods = False
 
         layout = QVBoxLayout(self)
         # The skills fan out across a variable number of side-by-side panels; the
@@ -193,6 +217,7 @@ class SkillsSection(TitledSection):
             table.clearSpans()
             table.setRowCount(len(specs))
             self._render_side(table, specs)
+            table.setColumnHidden(COL_MODS, not self._show_mods)
             self._fit_table_height(table)
 
         self._apply_lock()
@@ -239,7 +264,8 @@ class SkillsSection(TitledSection):
                 label = f"    {skill.name}: {spec} (specialized)"
                 longest = max(longest, fm.horizontalAdvance(label))
         name_width = max(NAME_MIN_WIDTH, longest + NAME_PADDING)
-        return name_width + NUMERIC_WIDTH + FRAME_PADDING
+        mod_width = MOD_WIDTH if self._show_mods else 0
+        return name_width + NUMERIC_WIDTH + mod_width + FRAME_PADDING
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
@@ -366,18 +392,19 @@ class SkillsSection(TitledSection):
         )
         ranks_spin.valueChanged.connect(lambda value, rid=row_id: self._on_rank_changed(rid, value))
         table.setCellWidget(row, COL_RANKS, ranks_spin)
+        self._editable_spins.append(ranks_spin)
 
-        mods_spin = make_spin_box(
-            MOD_MIN, MOD_MAX, value=self._mods.get(row_id, 0), buttons=False, max_width=SPIN_WIDTH
-        )
-        mods_spin.valueChanged.connect(lambda value, rid=row_id: self._on_mod_changed(rid, value))
-        table.setCellWidget(row, COL_MODS, mods_spin)
-
-        self._editable_spins.extend((ranks_spin, mods_spin))
+        # Granted by powers/advantages, never typed in — a read-only cell filled by
+        # _refresh_totals, tinted green like the stat grids' enhancement labels.
+        mod_item = readonly_item("", center=True)
+        mod_item.setForeground(QBrush(QColor(ENHANCED_TINT)))
+        table.setItem(row, COL_MODS, mod_item)
 
         total_item = readonly_item("", center=True)
         table.setItem(row, COL_TOTAL, total_item)
-        self._rows.append((skill.ability, row_id, ability_rank_item, total_item, name_item))
+        self._rows.append(
+            SkillRow(skill.ability, row_id, ability_rank_item, mod_item, total_item, name_item)
+        )
 
     def _render_name_cell(
         self,
@@ -452,9 +479,7 @@ class SkillsSection(TitledSection):
         if focus not in focuses:
             return
         focuses.remove(focus)
-        row_id = f"{skill.name}::{focus}"
-        self._ranks.pop(row_id, None)
-        self._mods.pop(row_id, None)
+        self._ranks.pop(f"{skill.name}::{focus}", None)
         self._rebuild()
         self.changed.emit()
 
@@ -474,15 +499,13 @@ class SkillsSection(TitledSection):
         specs.remove(spec_name)
         if not specs:  # keep the model tidy — drop the now-empty entry
             self._specializations.pop(skill.name, None)
-        row_id = f"{skill.name}::spec::{spec_name}"
-        self._ranks.pop(row_id, None)
-        self._mods.pop(row_id, None)
+        self._ranks.pop(f"{skill.name}::spec::{spec_name}", None)
         self._rebuild()
         self.changed.emit()
 
     def set_locked(self, locked: bool) -> None:
-        """Make the rank/modifier spin boxes read-only labels and drop the
-        'Add focus' buttons while locked.
+        """Make the rank spin boxes read-only labels and drop the 'Add focus'
+        buttons while locked.
 
         Rebuilds the tables so the focus buttons are omitted entirely: they live
         in table cells, where toggling visibility isn't reliable.
@@ -498,11 +521,6 @@ class SkillsSection(TitledSection):
 
     def _on_rank_changed(self, row_id: str, value: int) -> None:
         self._ranks[row_id] = value
-        self._refresh_totals()
-        self.changed.emit()
-
-    def _on_mod_changed(self, row_id: str, value: int) -> None:
-        self._mods[row_id] = value
         self._refresh_totals()
         self.changed.emit()
 
@@ -526,23 +544,50 @@ class SkillsSection(TitledSection):
         self._refresh_totals()
 
     def _refresh_totals(self) -> None:
-        for ability_key, row_id, ability_rank_item, total_item, name_item in self._rows:
+        bonuses = {
+            row.row_id: skill_bonus(self._character, self._data, row.row_id) for row in self._rows
+        }
+        if any(bonuses.values()) != self._show_mods:
+            # The "+" column just appeared or emptied out. It changes how wide a panel
+            # needs to be, so rebuild rather than only toggling the column; the rebuild
+            # ends by calling back here, now with the two in agreement.
+            self._show_mods = not self._show_mods
+            self._rebuild()
+            return
+
+        for row in self._rows:
             # The ABL column shows the *effective* ability (with any power boost) so
             # the row's columns still sum to the total.
-            ability = effective_ability(self._character, self._data, ability_key)
-            total = skill_total(self._character, self._data, row_id)
-            ability_rank_item.setText(str(ability))
+            ability = effective_ability(self._character, self._data, row.ability_key)
+            total = skill_total(self._character, self._data, row.row_id)
+            row.ability_item.setText(str(ability))
+            self._fill_bonus_cell(row.mod_item, bonuses[row.row_id])
             # A scoped Impaired/Disabled (or a global one) overlays the total in red,
             # struck through for a lost-trait condition. This is display-only — the
             # build math above (skill_total) is untouched.
-            base_name = row_id.split(":", 1)[0].strip()
-            effect = condition_scope_penalty(self._character, self._data, {row_id, base_name})
-            total_item.setText(str(effect.apply(total) if effect.active else total))
-            self._style_condition(total_item, name_item, effect, total)
+            base_name = row.row_id.split(":", 1)[0].strip()
+            effect = condition_scope_penalty(self._character, self._data, {row.row_id, base_name})
+            row.total_item.setText(str(effect.apply(total) if effect.active else total))
+            self._style_condition(row.total_item, row.name_item, effect, total)
         # Keep the section title's running point cost current.
         self.set_block_title(
             title_with_cost("Skills", skill_points_spent(self._character, self._data))
         )
+
+    @staticmethod
+    def _fill_bonus_cell(mod_item: QTableWidgetItem, bonus) -> None:
+        """Show a row's granted bonus as a signed number naming its sources on hover.
+
+        Blank for a row nothing boosts — the column as a whole is hidden only when
+        *every* row is blank, so a shown column still has empty cells.
+        """
+
+        if bonus is None:
+            mod_item.setText("")
+            mod_item.setToolTip("")
+            return
+        mod_item.setText(f"{bonus.amount:+d}")
+        mod_item.setToolTip(f"{bonus.amount:+d} from {', '.join(bonus.sources)}")
 
     @staticmethod
     def _style_condition(total_item, name_item, effect, base_total: int) -> None:

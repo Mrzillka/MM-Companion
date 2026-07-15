@@ -434,8 +434,7 @@ def test_scoped_impaired_reddens_skill_total_disabled_strikes(qapp2: QApplicatio
     sheet = CharacterSheet(data)
     char = sheet.character
     sheet.skills._ranks["Stealth"] = 6
-    row = next(r for r in sheet.skills._rows if r[1] == "Stealth")
-    total_item = row[3]
+    total_item = next(r for r in sheet.skills._rows if r.row_id == "Stealth").total_item
 
     apply_condition(char, "impaired", data, parameter="Stealth")
     sheet.skills.refresh_totals()

@@ -45,6 +45,7 @@ from mm_companion.core.rules import (
     power_trait_bonuses,
     powers_points_spent,
     resistance_total,
+    skill_bonus,
     skill_total,
 )
 
@@ -1242,6 +1243,22 @@ def test_enhanced_trait_can_boost_a_skill_directly() -> None:
     )
     # No ranks bought, no linked-ability value: the whole total is the power boost.
     assert skill_total(char, data, "Acrobatics") == 6
+
+
+def test_skill_bonus_reports_the_boosting_power_as_its_source() -> None:
+    data = load_game_data()
+    char = _char_with(
+        Power(
+            name="Cat's Grace",
+            effects=[
+                PowerEffectInstance("enhanced_trait", rank=6, config={"target": "Acrobatics"})
+            ],
+        )
+    )
+    bonus = skill_bonus(char, data, "Acrobatics")
+    assert bonus is not None
+    assert (bonus.amount, bonus.sources) == (6, ("Cat's Grace",))
+    assert skill_bonus(char, data, "Stealth") is None
 
 
 def test_trait_boosts_from_several_powers_stack() -> None:

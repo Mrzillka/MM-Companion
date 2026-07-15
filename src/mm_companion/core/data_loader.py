@@ -164,6 +164,10 @@ class Advantage:
     ``focused`` advantages apply to one chosen focus and are bought again per
     focus. ``parameter`` (when set) is the subject the UI prompts for — see
     :class:`ParameterSpec`. ``description`` is short summary text the UI shows.
+
+    ``skill_bonus_per_rank`` makes the advantage a standing source of skill bonus:
+    that many points per bought rank land on the skill named by ``skill_bonus_target``,
+    or — when that is empty — on the skill the selection's ``parameter`` chose.
     """
 
     name: str
@@ -176,6 +180,8 @@ class Advantage:
     focused: bool = False
     initiative_bonus_per_rank: int = 0
     initiative_ability_choice: tuple[str, ...] = ()
+    skill_bonus_per_rank: int = 0
+    skill_bonus_target: str = ""
     parameter: ParameterSpec | None = None
     #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
     extra: dict = field(default_factory=dict, compare=False)
@@ -978,6 +984,8 @@ def _parse_advantage(a: dict) -> Advantage:
         focused=bool(a.get("focused", False)),
         initiative_bonus_per_rank=int(a.get("initiativeBonusPerRank", 0)),
         initiative_ability_choice=initiative_choice,
+        skill_bonus_per_rank=int(a.get("skillBonusPerRank", 0)),
+        skill_bonus_target=a.get("skillBonusTarget", ""),
         parameter=_parse_parameter(a.get("parameter"), initiative_choice),
         extra=_extras(
             a,
@@ -992,6 +1000,8 @@ def _parse_advantage(a: dict) -> Advantage:
             "focused",
             "initiativeBonusPerRank",
             "initiativeAbilityChoice",
+            "skillBonusPerRank",
+            "skillBonusTarget",
             "parameter",
         ),
     )

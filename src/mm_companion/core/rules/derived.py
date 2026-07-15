@@ -5,7 +5,7 @@ from __future__ import annotations
 from ..character import Character
 from ..data_loader import GameData, Resistance, Skill
 from .advantages import advantage_by_name
-from .runtime import _trait_bonus
+from .runtime import TraitBonus, _trait_bonus
 
 
 def _skill_for_row(game_data: GameData, row_id: str) -> Skill | None:
@@ -42,23 +42,61 @@ def effective_ability(char: Character, game_data: GameData, key: str) -> int:
     return char.abilities.get(key, 0) + (bonus.amount if bonus else 0)
 
 
-def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
-    """``ability value + skill ranks + situational modifier`` for one skill row.
+def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus | None:
+    """Every *outside* bonus standing on one skill row, or ``None`` when there is none.
 
-    The ability value is the *effective* one (:func:`effective_ability`), and a skill
-    a power enhances also adds that power bonus, so an Enhanced-Trait boost to either
-    the linked ability or the skill itself shows up in the total.
+    A skill row's bonus is never bought or typed in — it is granted by something else
+    on the sheet, and the sources are summed here so the view can show one number and
+    name what produced it:
+
+    * powers — an active Enhanced-Trait-style boost naming the skill
+      (:func:`~.runtime.power_trait_bonuses`), which applies to the skill's every row
+      (each focus and specialized pool included);
+    * advantages — any advantage carrying a ``skill_bonus_per_rank``, times its bought
+      rank, on the skill its ``skill_bonus_target`` names (or, lacking one, the skill
+      the selection's ``parameter`` chose).
+
+    Both are data-driven, so a mod adds a new granting advantage or effect without
+    touching this resolver. Conditions are deliberately *not* folded in: they are a
+    display-only overlay on the total (see :func:`condition_scope_penalty`), not part
+    of the build.
+    """
+
+    skill = _skill_for_row(game_data, row_id)
+    if skill is None:
+        return None
+
+    amount = 0
+    sources: tuple[str, ...] = ()
+    power = _trait_bonus(char, game_data, "skill", skill.name)
+    if power:
+        amount += power.amount
+        sources += power.sources
+    for selection in char.advantages:
+        advantage = advantage_by_name(game_data, selection.name)
+        if advantage is None or not advantage.skill_bonus_per_rank:
+            continue
+        target = advantage.skill_bonus_target or selection.parameter
+        if target not in (skill.name, row_id):
+            continue
+        amount += advantage.skill_bonus_per_rank * selection.rank
+        sources += (advantage.name,)
+    return TraitBonus(amount, sources) if sources else None
+
+
+def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
+    """``ability value + skill ranks + outside bonuses`` for one skill row.
+
+    The ability value is the *effective* one (:func:`effective_ability`), and the
+    bonuses are the granted ones (:func:`skill_bonus`), so an Enhanced-Trait boost to
+    either the linked ability or the skill itself shows up in the total.
     """
 
     skill = _skill_for_row(game_data, row_id)
     ability_key = skill.ability if skill else ""
-    ability_value = effective_ability(char, game_data, ability_key)
-    total = ability_value + char.skill_ranks.get(row_id, 0) + char.skill_mods.get(row_id, 0)
-    if skill:
-        bonus = _trait_bonus(char, game_data, "skill", skill.name)
-        if bonus:
-            total += bonus.amount
-    return total
+    total = effective_ability(char, game_data, ability_key) + char.skill_ranks.get(row_id, 0)
+    bonus = skill_bonus(char, game_data, row_id)
+    return total + (bonus.amount if bonus else 0)
 
 
 def resistance_base(char: Character, game_data: GameData, key: str) -> int:

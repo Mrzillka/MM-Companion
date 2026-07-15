@@ -54,16 +54,21 @@ class EffectStat:
 class EffectImpact:
     """Modifier-derived game-term adjustments that aren't a plain field override.
 
-    Gathered alongside the stat dicts by :func:`_effective_stats`. ``check_bonus``
-    is the net signed number modifiers add to the effect's attack roll (Accurate
-    ``+2``/rank, Inaccurate ``-2``/rank); ``drops_check`` is set when a modifier
-    removes the attack roll entirely (Perception Range); ``check_notes`` are
+    Gathered alongside the stat dicts by :func:`_effective_stats`. ``grants_attack``
+    is set when a modifier gives the effect its attack roll — an attacking effect's
+    implicit ``attack`` extra, or one taken explicitly on any other effect — and is
+    what :func:`~mm_companion.core.rules.effect_makes_attack` reads rather than
+    sniffing the check prose; ``check_bonus`` is the net signed number modifiers add
+    to the effect's attack roll (Accurate ``+2``/rank, Inaccurate ``-2``/rank);
+    ``drops_check`` is set when a modifier removes the attack roll entirely
+    (Perception Range), and cancels ``grants_attack``; ``check_notes`` are
     parentheticals a modifier appends to the check row (Area's Dodge-for-half); and
     ``notes`` names every attached modifier with no other visible game-term impact,
     so the table can list them and nothing an effect carries goes unseen.
     """
 
     check_bonus: int = 0
+    grants_attack: bool = False
     drops_check: bool = False
     check_notes: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
@@ -166,6 +171,14 @@ def _effective_stats(
     config choice). ``impact`` collects the modifier effects that aren't a field
     replacement (attack-roll bonus, dropped/noted check, plus the Notes list). Empty
     dicts and a blank :class:`EffectImpact` for an unknown effect id.
+
+    The base effect's own
+    :attr:`~mm_companion.core.data_loader.Effect.implicit_modifiers` are folded into
+    ``base`` itself — they are part of the effect's definition, not a player's choice,
+    so a Damage reads exactly as if its "Attack vs. Defense" check were still written
+    on the record: no tint, no note, no chip, no cost. Only their ``overrides`` and
+    ``grants_attack`` apply; stepping, check bonuses and check notes are for attached
+    modifiers, whose ordering and action-floor interplay the loop below handles.
     """
 
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -179,10 +192,21 @@ def _effective_stats(
         "check": base_effect.check or "",
         "resistance": base_effect.resistance or "",
     }
-    stats = dict(base)
-    change = dict.fromkeys(base, "")
     ladders = game_data.game_term_ladders
     catalog = game_data.modifier_catalog()
+
+    grants_attack = False
+    for modifier_id in base_effect.implicit_modifiers:
+        modifier = catalog.get(modifier_id)
+        if modifier is None:
+            continue
+        for key, value in modifier.overrides.items():
+            if key in base:
+                base[key] = value
+        grants_attack = grants_attack or modifier.grants_attack
+
+    stats = dict(base)
+    change = dict.fromkeys(base, "")
 
     check_bonus = 0
     drops_check = False
@@ -222,6 +246,9 @@ def _effective_stats(
             check_bonus += modifier.check_bonus * (
                 selection.rank if modifier.ranked else effect.rank
             )
+            touched = True
+        if modifier.grants_attack:
+            grants_attack = True
             touched = True
         if modifier.drops_check:
             drops_check = True
@@ -271,6 +298,7 @@ def _effective_stats(
 
     impact = EffectImpact(
         check_bonus=check_bonus,
+        grants_attack=grants_attack,
         drops_check=drops_check,
         check_notes=tuple(check_notes),
         notes=_modifier_notes(effect, catalog, impactful),

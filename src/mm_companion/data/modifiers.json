@@ -7,9 +7,9 @@
     },
     "flatNote": "flat: true means the cost is a one-time addition/reduction to the effect's total, not multiplied by rank. flat: false means the cost applies per rank of the effect.",
     "rankedNote": "ranked: true means the modifier is bought in its own ranks (chosen independently of the effect's rank), so its total contribution is costValue x its rank. These are the flat modifiers whose costFormula reads 'per rank'. Absent/false means it is applied once (rank 1).",
-    "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary (not the point cost). Later modifiers win. Example: Ranged sets range to 'Ranged', replacing a Close or Perception base.",
+    "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary (not the point cost). Later modifiers win. Example: Ranged sets range to 'Ranged', replacing a Close or Perception base. Keys are camelCase here; the loader normalizes effectType to the effect_type the stat rows use. Overriding effectType changes only this instance's Type row — the effect's own effectType stays its catalog taxonomy and still groups the constructor's palette.",
     "costValueNote": "costValue is the canonical numeric cost magnitude used for automatic point-cost calculation; its sign is implied by category (extra adds, flaw subtracts) and flat decides whether it applies once or per rank. The costFormula string carries the full nuance (ranges, tiers) for cases costValue simplifies.",
-    "impactNote": "Beyond 'overrides' (a literal field replacement), a modifier may declare other game-term impacts read by core.rules.effect_stat_rows for the summary (never the point cost): 'checkBonus' is a SIGNED adjustment to the effect's attack-roll number, multiplied by the modifier's rank (Accurate +2, Inaccurate -2); 'dropsCheck' removes the attack roll entirely (Perception Range); 'checkNote' is a parenthetical appended to the check row (Area keeps its attack roll but notes Dodge-for-half); 'stepField'+'stepBy' move a field that many steps along its gameTermLadders ordering (Increased Duration steps duration +1, Increased Action steps action +1 toward slower)."
+    "impactNote": "Beyond 'overrides' (a literal field replacement), a modifier may declare other game-term impacts read by core.rules.effect_stat_rows for the summary (never the point cost): 'grantsAttack' marks the modifier that GIVES the effect its attack roll — it is what core.rules.effect_makes_attack reads, rather than sniffing the check prose, and 'dropsCheck' cancels it (the 'attack' extra carries it; an attacking effect lists that extra in its implicitModifiers); 'checkBonus' is a SIGNED adjustment to the effect's attack-roll number, multiplied by the modifier's rank (Accurate +2, Inaccurate -2); 'dropsCheck' removes the attack roll entirely (Perception Range); 'checkNote' is a parenthetical appended to the check row (Area keeps its attack roll but notes Dodge-for-half); 'stepField'+'stepBy' move a field that many steps along its gameTermLadders ordering (Increased Duration steps duration +1, Increased Action steps action +1 toward slower)."
   },
   "gameTermLadders": {
     "duration": ["Instant", "Concentration", "Sustained", "Continuous", "Permanent"],
@@ -68,6 +68,20 @@
       "flat": false,
       "checkNote": "area; Dodge for half",
       "description": "Expands the effect to hit an area instead of a single target."
+    },
+    {
+      "id": "attack",
+      "name": "Attack",
+      "category": "extra",
+      "costFormula": "+0 points",
+      "costValue": 0,
+      "flat": true,
+      "grantsAttack": true,
+      "overrides": {
+        "effectType": "Attack",
+        "check": "Attack vs. Defense"
+      },
+      "description": "The effect is delivered with an attack roll against the target's Defense. Attacking effects (Damage, Affliction, and the offensive Control effects) carry this implicitly; any other effect can take it to become deliverable as an attack."
     },
     {
       "id": "aura",

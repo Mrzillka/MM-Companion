@@ -23,6 +23,7 @@ from mm_companion.core.rules import (
     effect_effective_rank,
     effect_game_terms,
     effect_is_active,
+    effect_makes_attack,
     effect_readout_rows,
     effect_stat_rows,
     effect_total_cost,
@@ -573,6 +574,64 @@ def test_effect_stat_rows_perception_range_drops_the_attack_roll() -> None:
     assert rows["resistance"].value == "Toughness vs. 18"  # target still resists
 
 
+def test_implicit_attack_modifier_renders_damage_untinted() -> None:
+    data = load_game_data()
+    # Damage's attack roll comes from the implicit "attack" extra rather than a check
+    # written on the record — but that is an invisible refactor: the rows must read
+    # exactly as if it were, with no tint marking a modifier win.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("damage", rank=8), data)}
+    assert rows["check"].value == rows["check"].base == "8 vs. Defense"
+    assert rows["check"].change == ""
+    assert rows["effect_type"].value == rows["effect_type"].base == "Attack"
+    assert rows["effect_type"].change == ""
+
+
+def test_implicit_attack_modifier_is_not_costed_or_noted() -> None:
+    data = load_game_data()
+    # The implicit extra never sits on the instance, so it costs nothing and is not
+    # listed among the effect's modifiers.
+    effect = PowerEffectInstance("damage", rank=8)
+    assert effect_total_cost(effect, data) == 8  # 1/rank, unchanged by the implicit extra
+    assert "notes" not in {r.key for r in effect_stat_rows(effect, data)}
+    assert "Attack" not in effect_cost_formula(effect, data)
+
+
+def test_attack_extra_grants_an_attack_roll_to_a_non_attacking_effect() -> None:
+    data = load_game_data()
+    # The point of making Attack a modifier: any effect can take it. Flight normally
+    # makes no attack roll; the +0 extra gives it one, tinted as the extra's win.
+    effect = PowerEffectInstance("flight", rank=8, extras=[ModifierSelection("attack")])
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["check"].value == "8 vs. Defense"
+    assert rows["check"].base == ""  # bare Flight has no check at all
+    assert rows["check"].change == "better"
+    assert rows["effect_type"].value == "Attack" and rows["effect_type"].change == "better"
+    assert effect_makes_attack(effect, data) is True
+    # +0 points: taking Attack costs the same as the bare effect.
+    assert effect_total_cost(effect, data) == effect_total_cost(
+        PowerEffectInstance("flight", rank=8), data
+    )
+
+
+def test_deflect_does_not_make_an_attack_roll() -> None:
+    data = load_game_data()
+    # Regression guard: "Deflect vs. Attack" used to satisfy a substring test for
+    # "Attack", wrongly marking Deflect an attack. It rolls against an attack, not one.
+    effect = PowerEffectInstance("deflect", rank=8)
+    assert effect_makes_attack(effect, data) is False
+    check = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert check.value == "8 vs. Attack"  # still displayed, still off the effect's rank
+
+
+def test_offensive_control_effects_read_as_attack_type() -> None:
+    data = load_game_data()
+    # Create is filed under Control as a catalog taxonomy, but it does roll to hit, so
+    # its implicit Attack extra sets the effective Type row — untinted, it's the base.
+    line = effect_game_terms(PowerEffectInstance("create", rank=4), data)
+    assert line.startswith("Create 4: Attack,")
+    assert effect_makes_attack(PowerEffectInstance("move_object", rank=4), data) is True
+
+
 def test_effect_stat_rows_area_keeps_the_attack_roll_with_a_note() -> None:
     data = load_game_data()
     effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("area_effect")])
@@ -708,6 +767,9 @@ def test_effect_stat_rows_effect_specific_flaw_adds_an_attack_check() -> None:
     rows = {r.key: r for r in effect_stat_rows(effect, data)}
     assert rows["range"].value == "Ranged" and rows["range"].change == "worse"
     assert rows["check"].value == "5 vs. Defense" and rows["check"].change == "worse"
+    # The flaw grants a real attack, not just a check row: it used to show the row
+    # while the rules layer still read the base's null check and called it auto-hit.
+    assert effect_makes_attack(effect, data) is True
 
 
 def test_effect_stat_rows_effect_specific_area_notes_the_check() -> None:

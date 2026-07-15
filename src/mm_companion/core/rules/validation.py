@@ -31,17 +31,18 @@ def effect_attack_skill_bonus(
 def effect_makes_attack(effect: PowerEffectInstance, game_data: GameData) -> bool:
     """Whether the effect resolves with an **attack roll** (vs. auto-hit / no check).
 
-    True when the base effect's check phrase is an "Attack …" roll and no attached
-    modifier drops it (a Perception-Range extra removes the roll, making the effect
-    auto-hit). This is the same condition :func:`power_pl_violations` uses to pick the
-    attack-plus-rank cap, and what gates the constructor's attack-skill picker.
+    True when a modifier grants the attack roll — an attacking effect's implicit
+    ``attack`` extra, or one taken explicitly on any other effect — and none drops it
+    (a Perception-Range extra removes the roll, making the effect auto-hit). Reads the
+    resolved :class:`~mm_companion.core.rules.EffectImpact` rather than the base
+    effect's check prose, so Deflect's "Deflect vs. Attack" is correctly *not* an
+    attack roll and an effect given the Attack extra correctly is one. This is the same
+    condition :func:`power_pl_violations` uses to pick the attack-plus-rank cap, and
+    what gates the constructor's attack-skill picker.
     """
 
-    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-    if base is None:
-        return False
     impact = _effective_stats(effect, game_data)[3]
-    return "Attack" in (base.check or "") and not impact.drops_check
+    return impact.grants_attack and not impact.drops_check
 
 
 def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:

@@ -11,8 +11,8 @@
     "costValueNote": "costValue is the canonical numeric magnitude of the modifier (always non-negative; the sign comes from whether it is an extra or a flaw). For 'or'/'up to' formulas it is the lowest positive value; referential costs (e.g. Reduced Trait) are 0 and handled specially.",
     "rankedNote": "ranked: true means the modifier is bought in its own ranks, independent of the effect's rank, so its contribution is costValue x its rank. These are the flat modifiers whose costFormula reads 'flat per rank'.",
     "categoryNote": "category (extra/flaw) is not stored per entry; it is implied by whether the modifier sits in an 'extras' or 'flaws' array and is injected by the loader.",
-    "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary only (not the point cost).",
-    "impactNote": "Effect-specific modifiers support the same non-cost game-term impact fields as the general pool (see modifiers.json's impactNote): 'checkBonus' (signed attack-roll adjustment, x rank), 'dropsCheck' (removes the attack roll), 'checkNote' (parenthetical appended to the check row), and 'stepField'+'stepBy' (move a field along its gameTermLadders ordering, which live in modifiers.json). Any attached modifier with no such impact is listed by name in the effect's Notes row automatically, so narrative extras/flaws here need no extra fields."
+    "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary only (not the point cost). Keys are camelCase here; the loader normalizes effectType to the effect_type the stat rows use. Overriding effectType changes only this instance's Type row — the effect's own effectType stays its catalog taxonomy and still groups the constructor's palette.",
+    "impactNote": "Effect-specific modifiers support the same non-cost game-term impact fields as the general pool (see modifiers.json's impactNote): 'grantsAttack' (marks the modifier that gives the effect its attack roll — what core.rules.effect_makes_attack reads, cancelled by 'dropsCheck'), 'checkBonus' (signed attack-roll adjustment, x rank), 'dropsCheck' (removes the attack roll), 'checkNote' (parenthetical appended to the check row), and 'stepField'+'stepBy' (move a field along its gameTermLadders ordering, which live in modifiers.json). Any attached modifier with no such impact is listed by name in the effect's Notes row automatically, so narrative extras/flaws here need no extra fields."
   },
   "effectModifiers": {
     "affliction": {
@@ -946,7 +946,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "grantsAttack": true,
           "overrides": {
+            "effectType": "Attack",
             "range": "Ranged",
             "check": "Attack vs. Defense"
           },

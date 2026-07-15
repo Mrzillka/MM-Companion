@@ -93,7 +93,7 @@ def test_costs_are_loaded() -> None:
 def test_effects_and_modifiers_are_loaded() -> None:
     data = load_game_data()
     assert len(data.effects) == 42
-    assert len(data.modifiers) == 62
+    assert len(data.modifiers) == 63
 
 
 def test_effect_carries_numeric_base_cost_and_integration() -> None:
@@ -160,9 +160,36 @@ def test_effect_specific_modifiers_retain_mechanical_fields() -> None:
 def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
     data = load_game_data()
     catalog = data.modifier_catalog()
-    assert len(catalog) == 62 + 231  # ids are globally unique, so no collisions
+    assert len(catalog) == 63 + 231  # ids are globally unique, so no collisions
     assert catalog["ranged"].category == "extra"  # general pool
     assert catalog["strength_based"].category == "extra"  # effect-specific pool
+
+
+def test_effect_implicit_modifiers_resolve_in_the_catalog() -> None:
+    data = load_game_data()
+    catalog = data.modifier_catalog()
+    # An implicit id that resolves to nothing would silently drop an effect's attack
+    # roll, so every one an effect declares must exist.
+    for effect in data.effects:
+        for modifier_id in effect.implicit_modifiers:
+            assert modifier_id in catalog, f"{effect.id} declares unknown '{modifier_id}'"
+    # The attacking effects carry the +0 Attack extra that supplies their check.
+    damage = next(e for e in data.effects if e.id == "damage")
+    assert damage.implicit_modifiers == ("attack",)
+    assert catalog["attack"].grants_attack is True
+    assert catalog["attack"].cost_value == 0
+    # It stays draggable, so any other effect can take it.
+    assert catalog["attack"].hidden is False
+
+
+def test_modifier_overrides_normalize_camelcase_keys() -> None:
+    data = load_game_data()
+    # overrides keys are camelCase in the JSON like every other key there; the loader
+    # maps effectType onto the effect_type the stat dicts use, or it would no-op.
+    assert data.modifier_catalog()["attack"].overrides == {
+        "effect_type": "Attack",
+        "check": "Attack vs. Defense",
+    }
 
 
 def test_load_game_data_is_cached() -> None:

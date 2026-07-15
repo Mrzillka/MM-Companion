@@ -84,6 +84,59 @@ def test_attack_skill_row_hidden_for_a_non_attack_effect(qapp: QApplication) -> 
     assert card._attack_skill_row.isHidden()
 
 
+def test_attack_extra_shows_the_attack_skill_row_on_a_non_attacking_effect(
+    qapp: QApplication,
+) -> None:
+    # Flight makes no attack roll, so there is nothing to reskill — until the Attack
+    # extra gives it one. Removing the extra takes the row away again.
+    window = PowerConstructorWindow(load_game_data(), character=_char_with_focus())
+    card = window.canvas.add_effect("flight")
+    assert card._attack_skill_row.isHidden()
+
+    card.attach_modifier("attack")
+    assert not card._attack_skill_row.isHidden()
+
+    card._remove_chip(card._chips[-1])
+    assert card._attack_skill_row.isHidden()
+
+
+def test_attaching_an_already_implicit_modifier_is_a_no_op(qapp: QApplication) -> None:
+    # Damage already carries the Attack extra implicitly, so dropping a second copy on
+    # it must change nothing — no chip, no selection, no extra cost.
+    data = load_game_data()
+    window = PowerConstructorWindow(data, character=_char_with_focus())
+    card = window.canvas.add_effect("damage")
+    before = effect_total_cost(card.instance, data)
+
+    card.attach_modifier("attack")
+
+    assert card._chips == []
+    assert card.instance.extras == []
+    assert effect_total_cost(card.instance, data) == before
+
+
+def test_duplicate_attach_is_a_no_op_only_when_the_copies_are_indistinguishable(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data, character=_char_with_focus())
+    card = window.canvas.add_effect("damage")
+
+    # Ranged carries no config, so a second copy would change no game term and only
+    # double-charge the power.
+    card.attach_modifier("ranged")
+    cost = effect_total_cost(card.instance, data)
+    card.attach_modifier("ranged")
+    assert [s.modifier_id for s in card.instance.extras] == ["ranged"]
+    assert effect_total_cost(card.instance, data) == cost
+
+    # Limited carries a free-text circumstance, so each copy means something different
+    # and taking it twice is legitimate.
+    card.attach_modifier("limited")
+    card.attach_modifier("limited")
+    assert [s.modifier_id for s in card.instance.flaws] == ["limited", "limited"]
+
+
 def test_perception_range_hides_the_attack_skill_row(qapp: QApplication) -> None:
     # Damage rolls to hit, so the row shows; a Perception-Range extra makes it auto-hit,
     # so the row hides — and removing the extra restores it.
@@ -1139,6 +1192,8 @@ def test_structural_modifiers_are_absent_from_the_palette(qapp: QApplication) ->
     assert "linked" not in names
     assert "alternate effect" not in names
     assert "ranged" in names
+    # Attack is implicit on attacking effects but still draggable onto any other one.
+    assert "attack" in names
 
 
 def test_subtle_points_spin_box_drives_the_cost(qapp: QApplication) -> None:
@@ -1162,9 +1217,12 @@ def test_subtle_points_spin_box_drives_the_cost(qapp: QApplication) -> None:
 def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QCheckBox, QLabel
 
+    from mm_companion.ui.power_constructor import _GROUP_HEADER
+
     window = PowerConstructorWindow(load_game_data())
-    types = {"Attack", "Defense", "Control", "Alteration", "Movement", "Sensory", "General"}
-    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.text() in types]
+    # Select headers by their object name, not their text — a brick can share a group's
+    # name (the Attack extra vs. the Attack effect group).
+    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.objectName() == _GROUP_HEADER]
     assert headers  # grouped by effect type by default
     assert all(not h.isHidden() for h in headers)
 

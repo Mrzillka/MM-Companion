@@ -472,6 +472,20 @@ class Effect:
     an attack imposes — the resistance DC is ``resistance_dc_base + rank`` (10 for
     most resistible effects, 0 for the opposed ones like Move Object) — left
     ``None`` for effects that impose no save DC.
+
+    ``implicit_modifiers`` names modifier ids the effect carries as part of its own
+    definition rather than as a player's choice — an attacking effect (Damage,
+    Affliction, …) implicitly has the ``attack`` extra, which is what supplies its
+    "Attack vs. Defense" check. :func:`mm_companion.core.rules.effect_stat_rows`
+    folds them into the effect's *base* stats untinted, so they read as part of the
+    record; only their ``overrides`` and ``grants_attack`` apply. They never sit on
+    the instance, so they cost nothing and render no chip.
+
+    ``effect_type`` is the **catalog taxonomy** — it groups the constructor's effect
+    palette and seeds the Type game-term row. A modifier may override the *effective*
+    Type of an instance (the ``attack`` extra sets it to ``"Attack"``), so a Control
+    effect that implicitly attacks reads as Type "Attack" on its card while still
+    filing under Control in the palette.
     """
 
     id: str
@@ -489,6 +503,7 @@ class Effect:
     config_fields: tuple[EffectConfigField, ...] = ()
     measure: Measure | None = None
     resistance_dc_base: int | None = None
+    implicit_modifiers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -507,12 +522,17 @@ class Modifier:
     ``duration``, ``resistance``, ``check``, ``effect_type``) to the value this
     modifier forces it to — e.g. Ranged sets ``range`` to ``"Ranged"``, replacing
     a Close or Perception base. It drives the generated game-terms summary only,
-    not the point cost.
+    not the point cost. The JSON spells its keys in camelCase like every other key
+    in these files, so ``_parse_modifier`` normalizes ``effectType`` to the
+    ``effect_type`` the stat dicts use (see :data:`_OVERRIDE_KEYS`).
 
     The remaining fields describe a modifier's other game-term impacts (see
     :func:`mm_companion.core.rules.effect_stat_rows`), again for the summary, not
     the cost: ``check_bonus`` is a signed adjustment to the effect's attack-roll
     number, per the modifier's rank (Accurate ``+2``, Inaccurate ``-2``);
+    ``grants_attack`` marks the modifier that *gives* the effect its attack roll —
+    it is what :func:`mm_companion.core.rules.effect_makes_attack` reads, rather
+    than sniffing the check prose, and ``drops_check`` cancels it;
     ``drops_check`` removes the attack roll entirely (Perception Range);
     ``check_note`` is a parenthetical appended to the check row (Area's
     Dodge-for-half); and ``step_field``/``step_by`` shift a field one or more steps
@@ -562,6 +582,7 @@ class Modifier:
     description: str = ""
     overrides: dict[str, str] = field(default_factory=dict)
     check_bonus: int = 0
+    grants_attack: bool = False
     drops_check: bool = False
     check_note: str = ""
     step_field: str = ""
@@ -1202,7 +1223,13 @@ def _parse_effect(e: dict) -> Effect:
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
         measure=_parse_measure(e.get("measure")),
         resistance_dc_base=e.get("resistanceDcBase"),
+        implicit_modifiers=tuple(e.get("implicitModifiers", ())),
     )
+
+
+# ``overrides`` keys are camelCase in the JSON like every other key there, but the
+# stat dicts :func:`mm_companion.core.rules.effect_stat_rows` builds are snake_case.
+_OVERRIDE_KEYS = {"effectType": "effect_type"}
 
 
 def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
@@ -1216,8 +1243,9 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         cost_value=int(m.get("costValue", 0)),
         flat=bool(m.get("flat", False)),
         ranked=bool(m.get("ranked", False)),
-        overrides=dict(m.get("overrides", {})),
+        overrides={_OVERRIDE_KEYS.get(k, k): v for k, v in m.get("overrides", {}).items()},
         check_bonus=int(m.get("checkBonus", 0)),
+        grants_attack=bool(m.get("grantsAttack", False)),
         drops_check=bool(m.get("dropsCheck", False)),
         check_note=m.get("checkNote", ""),
         step_field=m.get("stepField", ""),

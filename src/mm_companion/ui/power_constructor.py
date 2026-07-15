@@ -154,6 +154,10 @@ MODIFIER_MIME = "application/x-mm-modifier"
 # A chip carries its own index when dragged to reorder within its group.
 CHIP_MIME = "application/x-mm-chip"
 
+# Object name marking a palette section header, so headers can be addressed as such
+# rather than by their text (a brick may share a group's name).
+_GROUP_HEADER = "palette_group_header"
+
 # The rank ceiling for effect and modifier spin boxes. Kept well above the usual
 # PL-bound ranks so allocation-heavy effects — an Immunity whose named scopes sum
 # past 30 (e.g. all Fortitude + all Will effects), a stacked Enhanced Trait — aren't
@@ -1270,9 +1274,23 @@ class EffectCard(QFrame):
 
     # -- mutations (also the seam headless tests drive) -------------------
     def attach_modifier(self, modifier_id: str) -> None:
-        """Attach an extra/flaw to this effect (routed by the modifier's category)."""
+        """Attach an extra/flaw to this effect (routed by the modifier's category).
+
+        Ignores an attach that could not change anything: one the effect already
+        carries implicitly as part of its own definition (Damage's ``attack``), or a
+        second copy of a modifier with no config to tell the copies apart — that would
+        only double-charge the power. A modifier that *does* carry config can be taken
+        more than once, since each selection means something different (Limited "only
+        at night" alongside Limited "only vs. robots").
+        """
         modifier = self._modifier(modifier_id)
         if modifier is None:
+            return
+        base = self._effect()
+        if base is not None and modifier_id in base.implicit_modifiers:
+            return
+        attached = {sel.modifier_id for sel in (*self.instance.extras, *self.instance.flaws)}
+        if modifier_id in attached and not modifier.config_fields:
             return
         selection = ModifierSelection(modifier_id=modifier_id)
         is_flaw = modifier.category == "flaw"
@@ -1910,6 +1928,10 @@ class PowerConstructorWindow(QMainWindow):
             header = None
             if title is not None:
                 header = QLabel(title)
+                # Named so a header is addressable as one: a brick can share a group's
+                # name (the Attack extra vs. the Attack effect group), so selecting
+                # headers by their text alone would sweep bricks up too.
+                header.setObjectName(_GROUP_HEADER)
                 header.setStyleSheet("font-weight: bold; color: palette(mid); padding-top: 4px;")
                 layout.addWidget(header)
             for brick in group:

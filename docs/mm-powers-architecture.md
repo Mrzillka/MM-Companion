@@ -55,15 +55,44 @@ Every effect in `effects.json` has an `effectType`. Knowing the type tells you t
 action/duration pattern before any modifiers are applied — useful for validating a
 user-configured effect or pre-filling sensible defaults in a builder UI.
 
+`effectType` is a **catalog taxonomy**: it groups the Power Constructor's effect palette
+and seeds the Type game-term row. It is *not* what makes an effect an attack — the
+`attack` modifier is (see below), and that modifier overrides the effective Type row. So
+an offensive Control effect (Create, Move Object, Nullify, Transmute) files under Control
+in the palette while its card reads Type "Attack".
+
 | Effect Type | Typical action | Typical duration | Typical role |
 |---|---|---|---|
-| Attack | Standard | Instant | Offensive, requires an attack check, always resistible |
+| Attack | Standard | Instant | Offensive, carries the `attack` modifier implicitly, always resistible |
 | Defense | None (or Free if toggleable) | Permanent (or Sustained) | Personal protection, usually passive |
 | Control | Standard | Sustained | Manipulating the environment/objects/others, requires upkeep |
 | General | Varies per effect | Varies per effect | Doesn't fit the other categories |
 | Movement | Free (to activate) | Sustained | Grants/improves a movement mode; still needs a Move action to actually move |
 | Sensory | Free or None | Sustained or Permanent | Enhances, grants, or fools senses |
 | Alteration | Free | Sustained (or Permanent) | Transforms the user's body/form |
+
+### Attacking is a modifier, not a type
+
+"This effect resolves with an attack roll" is a **modifier**, not a property of the base
+record. The `attack` extra (`modifiers.json`, +0 points) carries `grantsAttack: true` and
+overrides `check` to `"Attack vs. Defense"` and `effectType` to `"Attack"`.
+
+An attacking effect lists it in `implicitModifiers`, so it is part of the effect's own
+definition rather than a player's choice: `core.rules` folds implicit modifiers into the
+effect's **base** game terms, untinted, before any attached modifier. A Damage therefore
+reads exactly as if the check were written on the record — no tint, no note, no chip, and
+no cost, since an implicit modifier never sits on the instance. Only `overrides` and
+`grantsAttack` apply; stepping, check bonuses and check notes are for attached modifiers.
+
+The payoff is modularity: any other effect can take the same extra from the palette and
+become deliverable as an attack, gaining the Check row, the attack-skill picker, and the
+attack-plus-rank PL cap. `core.rules.effect_makes_attack` reads the resolved
+`EffectImpact.grants_attack` rather than sniffing the check prose — so Deflect's
+"Deflect vs. Attack" is correctly *not* an attack, and `dropsCheck` (Perception Range)
+still cancels the roll.
+
+Note the PL caps remain gated on `resistanceDcBase`: an attack with no save DC has no
+resisted rank to cap, so a Flight + Attack stays out of PL scope.
 
 ---
 
@@ -244,12 +273,19 @@ apply, regardless of which effect it is:
 Effect (from effects.json)
 ├── id, name, effectType, action, range, duration, check, resistance, baseCost
 ├── configurableTarget: null | "trait"   // true for Enhanced Trait-style effects
+├── implicitModifiers: []                // modifier ids the effect carries by definition;
+│                                        // an attacking effect has ["attack"], which is what
+│                                        // supplies its check (so its own `check` is null)
 └── statIntegration: { pattern: "passive_permanent"|"passive_toggle"|"instant_action"|"resource_pool",
                         affects: "ability"|"skill"|"defense"|"resistance"|"movement"|"senses"|
                                  "none"|"special" }
 
 Modifier (from modifiers.json)
-├── id, name, category ("extra"|"flaw"), costFormula, flat (bool), appliesTo
+├── id, name, category ("extra"|"flaw"), costFormula, costValue, flat (bool), ranked (bool)
+├── overrides: { range?, action?, duration?, check?, resistance?, effectType? }
+├── grantsAttack (bool)                  // gives the effect its attack roll
+├── dropsCheck (bool)                    // removes it again (Perception Range)
+├── checkBonus, checkNote, stepField/stepBy, addsAbility, gate, hidden
 └── description
 
 PowerEffectInstance  (part of a character's Power)

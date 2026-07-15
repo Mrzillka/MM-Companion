@@ -15,7 +15,14 @@ they are unit-testable:
 from __future__ import annotations
 
 
-def column_count(available_width: int, min_col_width: int, spacing: int, item_count: int) -> int:
+def column_count(
+    available_width: int,
+    min_col_width: int,
+    spacing: int,
+    item_count: int,
+    current: int = 0,
+    hysteresis: int = 0,
+) -> int:
     """How many panels of at least *min_col_width* fit into *available_width*.
 
     ``n`` panels laid side by side with *spacing* between them occupy
@@ -25,12 +32,29 @@ def column_count(available_width: int, min_col_width: int, spacing: int, item_co
     empty list still yields one panel). A zero/negative width or min width falls
     back to a single panel, so the first paint — before any real geometry — is
     safe; the true value lands on the first ``resizeEvent``.
+
+    When *current* (the count in effect now) and *hysteresis* (a px dead-band) are
+    given, the count only changes once the width is past the boundary by that band.
+    This breaks the feedback loop where changing the count changes a block's height,
+    which toggles the page's vertical scrollbar, which changes the width back across
+    the boundary — an infinite relayout. The band should be at least the scrollbar's
+    width so its appearing/disappearing can't flip the count.
     """
 
     if item_count <= 1 or available_width <= 0 or min_col_width <= 0:
         return 1
     fit = (available_width + spacing) // (min_col_width + spacing)
-    return max(1, min(item_count, int(fit)))
+    n = max(1, min(item_count, int(fit)))
+    if current <= 0 or hysteresis <= 0 or n == current:
+        return n
+
+    def width_for(columns: int) -> int:
+        return columns * min_col_width + (columns - 1) * spacing
+
+    if n > current:  # only grow once there's room for the extra column *plus* the band
+        return n if available_width >= width_for(n) + hysteresis else current
+    # only shrink once the width is a band below what the current count needs
+    return n if available_width <= width_for(current) - hysteresis else current
 
 
 def even_split(weights: list[int], groups: int) -> list[list[int]]:

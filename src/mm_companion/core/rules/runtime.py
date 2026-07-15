@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from ..character import Character
 from ..components import (
     GATE_REMOVABLE,
+    GATE_REQUIRES_EFFECT,
     GATE_TOGGLE,
     INSTANT_ACTION,
     PASSIVE_PERMANENT,
@@ -141,7 +142,15 @@ def _effect_gates(effect: PowerEffectInstance, game_data: GameData) -> set[str]:
     return gates
 
 
-def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data: GameData) -> bool:
+def effect_is_active(
+    power: Power,
+    effect: PowerEffectInstance,
+    base,
+    game_data: GameData,
+    char: Character | None = None,
+    *,
+    _skip_requires: bool = False,
+) -> bool:
     """Whether a passive effect's standing bonus currently applies (§6).
 
     Instant-action and resource-pool effects are never standing contributors. An
@@ -153,6 +162,14 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
     pattern or a toggle-gated effect); or a Removable gate whose item is absent
     (``power.item_present``). The Limited gate is informational — the player
     self-applies it — and never gates here.
+
+    A Requires-Effect gate (the *Limited to While Insubstantial* flaw) instead reaches
+    across the character: the effect's bonus applies only while some *other* live power
+    has the named base effect (e.g. Insubstantial) currently active. This needs
+    ``char`` to scan the wielder's other powers; without one the cross-effect gate is
+    left un-enforced (the effect stays on). ``_skip_requires`` short-circuits that scan
+    to bound the recursion when this function is itself asked whether the required
+    effect is active.
 
     ``power.activated`` is a master switch, not only the Activation gate's flag: a
     linked group turning off (see the section's ``_set_group_active``) clears it on
@@ -177,7 +194,66 @@ def effect_is_active(power: Power, effect: PowerEffectInstance, base, game_data:
         blocker = GATE_KINDS.get(gate)
         if blocker is not None and blocker(power, effect):
             return False
+    if not _skip_requires and char is not None and GATE_REQUIRES_EFFECT in gates:
+        if not _requires_effect_met(effect, game_data, char):
+            return False
     return True
+
+
+def _requires_effect_met(effect: PowerEffectInstance, game_data: GameData, char: Character) -> bool:
+    """Whether every Requires-Effect gate on ``effect`` is currently satisfied.
+
+    Each such flaw names a base effect id (``requires_effect_id``) that must be active
+    on the wielder — the effect's bonus only stands while that effect stands.
+    """
+
+    catalog = game_data.modifier_catalog()
+    for sel in list(effect.extras) + list(effect.flaws):
+        mod = catalog.get(sel.modifier_id)
+        if mod and mod.gate == GATE_REQUIRES_EFFECT and mod.requires_effect_id:
+            if not _has_active_effect(char, game_data, mod.requires_effect_id):
+                return False
+    return True
+
+
+def _has_active_effect(char: Character, game_data: GameData, effect_id: str) -> bool:
+    """Whether any live power on ``char`` has an active effect with base id ``effect_id``.
+
+    Used by the Requires-Effect gate (Limited to While Insubstantial). The activity
+    check reuses :func:`effect_is_active` with ``_skip_requires`` set so a required
+    effect that itself carries a Requires-Effect gate can't recurse indefinitely.
+    """
+
+    for power in live_powers(char.powers):
+        for effect in power.effects:
+            if effect.effect_id != effect_id:
+                continue
+            base = next((e for e in game_data.effects if e.id == effect_id), None)
+            if base is None:
+                continue
+            if effect_is_active(power, effect, base, game_data, char, _skip_requires=True):
+                return True
+    return False
+
+
+def power_display_name(power: Power, game_data: GameData) -> str:
+    """A power's shown name: its player-given title, or one derived from its effects.
+
+    When a power is left unnamed, fall back to the names of its base effects joined
+    with ``" / "`` (e.g. ``"Damage / Flight"``), rather than a bare "Unnamed Power".
+    Duplicate effect names collapse. A power with no resolvable effects still yields
+    ``"Unnamed Power"`` as a last resort.
+    """
+
+    if power.name:
+        return power.name
+    names: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        label = base.name if base else effect.effect_id
+        if label and label not in names:
+            names.append(label)
+    return " / ".join(names) if names else "Unnamed Power"
 
 
 def power_runtime_gates(power: Power, game_data: GameData) -> set[str]:
@@ -246,7 +322,7 @@ def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[
             category = _trait_category(game_data, target)
             if not category:
                 continue  # target isn't a trait we track
-            if not effect_is_active(power, effect, base, game_data):
+            if not effect_is_active(power, effect, base, game_data, char):
                 continue  # switched off, suppressed, or not a standing bonus
             source = power.name or base.name
             bucket = result[category]

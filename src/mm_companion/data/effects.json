@@ -116,6 +116,7 @@
           "key": "degree3",
           "label": "3rd degree",
           "type": "select",
+          "multiselectWith": "extra_condition",
           "hiddenWith": "variable_conditions",
           "options": [
             { "value": "asleep", "label": "Asleep" },

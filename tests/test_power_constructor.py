@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
+from mm_companion.core.rules import effect_total_cost
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 
@@ -258,9 +259,9 @@ def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> 
     assert card.findChildren(QCheckBox) == []
 
     card.attach_modifier("extra_condition")  # the Affliction-only gating extra
-    assert card.findChildren(QCheckBox)  # 1st/2nd degrees are now multiselect
-    # resistance, overcomeBy, and the 3rd degree stay single-select combos
-    assert len(card.findChildren(QComboBox)) == 3
+    assert card.findChildren(QCheckBox)  # all three degrees are now multiselect
+    # only resistance and overcomeBy stay single-select combos
+    assert len(card.findChildren(QComboBox)) == 2
 
 
 def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -> None:
@@ -711,8 +712,8 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
     # A Strength-linked skill total reflects the boosted ability.
     sheet.character.skill_ranks["Athletics"] = 1
     sheet.skills.refresh_totals()
-    athletics = next(r for r in sheet.skills._rows if r[1] == "Athletics")
-    assert athletics[3].text() == "6"  # effective STR 5 + 1 rank
+    athletics = next(r for r in sheet.skills._rows if r.row_id == "Athletics")
+    assert athletics.total_item.text() == "6"  # effective STR 5 + 1 rank
 
 
 def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) -> None:
@@ -1009,17 +1010,41 @@ def test_reordering_a_chip_in_place_is_a_no_op(qapp: QApplication) -> None:
     assert changes == []  # settling in place fires nothing
 
 
-def test_variable_conditions_hides_the_degree_pickers(qapp: QApplication) -> None:
+def test_variable_conditions_full_scope_hides_all_degree_pickers(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QComboBox, QLabel
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("affliction")
     assert len(card.findChildren(QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
 
-    card.attach_modifier("variable_conditions")  # defers the choices to use-time
-    assert len(card.findChildren(QComboBox)) == 2  # only resistance + overcomeBy remain
+    card.attach_modifier("variable_conditions")  # defaults to the 2-point (all) scope
     notes = [lbl.text() for lbl in card.findChildren(QLabel)]
-    assert notes.count("chosen when used") == 3  # one per hidden degree
+    assert notes.count("chosen when used") == 3  # every degree deferred to use-time
+    # Only resistance + overcomeBy remain as *visible* combos; the chip's own "which
+    # degree" picker exists but is hidden at full scope, so it doesn't count.
+    visible = [c for c in card.findChildren(QComboBox) if c.isVisibleTo(card)]
+    assert len(visible) == 2
+
+
+def test_variable_conditions_partial_scope_defers_one_degree(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox, QLabel, QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    card.attach_modifier("variable_conditions")
+    chip = card._chips[0]
+
+    # Dial the scope down to 1 point/rank — now only one chosen degree is deferred.
+    spin = next(s for s in chip.findChildren(QSpinBox) if s.suffix() == " pt")
+    spin.setValue(1)
+    degree_combo = next(c for c in chip.findChildren(QComboBox))
+    degree_combo.setCurrentIndex(degree_combo.findData("degree2"))
+
+    notes = [lbl.text() for lbl in card.findChildren(QLabel)]
+    assert notes.count("chosen when used") == 1  # only the 2nd degree is deferred
+    assert card.instance.extras[0].config["degree"] == "degree2"
+    # Cost drops from the +2/rank full scope to +1/rank.
+    assert effect_total_cost(card.instance, load_game_data()) == card.instance.rank * 2
 
 
 def test_limited_degree_hides_the_chosen_degree_picker(qapp: QApplication) -> None:
@@ -1103,3 +1128,49 @@ def test_mod_registered_config_field_type_renders_via_registry(qapp: QApplicatio
     finally:
         CONFIG_WIDGET_BUILDERS.unregister("stars")
     assert isinstance(card._config_widget(field, "stars"), QComboBox)
+
+
+def test_structural_modifiers_are_absent_from_the_palette(qapp: QApplication) -> None:
+    # Linked and Alternate Effect are applied from a power/group's structure now, so
+    # they are hidden from the draggable extras palette (a normal extra still shows).
+    window = PowerConstructorWindow(load_game_data())
+    _, extra_bricks = window._search_tabs["extras"]
+    names = {b.search_key for b in extra_bricks}
+    assert "linked" not in names
+    assert "alternate effect" not in names
+    assert "ranged" in names
+
+
+def test_subtle_points_spin_box_drives_the_cost(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    card.attach_modifier("subtle")  # flat extra, defaults to +1 point
+
+    assert window._cost.text() == "Total cost: 9 PP"
+    chip = card._chips[0]
+    spin = chip.findChild(QSpinBox)
+    assert spin is not None  # Subtle exposes a points spin box
+    spin.setValue(2)
+
+    assert window.power.effects[0].extras[0].config["points"] == 2
+    assert window._cost.text() == "Total cost: 10 PP"
+
+
+def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox, QLabel
+
+    window = PowerConstructorWindow(load_game_data())
+    types = {"Attack", "Defense", "Control", "Alteration", "Movement", "Sensory", "General"}
+    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.text() in types]
+    assert headers  # grouped by effect type by default
+    assert all(not h.isHidden() for h in headers)
+
+    check = next(c for c in window.findChildren(QCheckBox) if "Sort A" in c.text())
+    check.setChecked(True)  # flat alphabetical view drops the headers
+    assert all(h.isHidden() for h in headers)
+
+    check.setChecked(False)  # back to grouped
+    assert all(not h.isHidden() for h in headers)

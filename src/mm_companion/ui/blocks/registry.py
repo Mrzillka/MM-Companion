@@ -142,7 +142,11 @@ _BASE_BLOCKS = [
         2,
         0,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED)},
-        {CAPS_CHANGED: "refresh_limits", CONDITION_CHANGED: "refresh_conditions"},
+        {
+            CAPS_CHANGED: "refresh_limits",
+            CONDITION_CHANGED: "refresh_conditions",
+            FACTS_CHANGED: "refresh_power_options",
+        },
     ),
     (
         "skills",

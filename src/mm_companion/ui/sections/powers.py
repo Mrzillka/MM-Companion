@@ -74,6 +74,7 @@ from mm_companion.core.rules import (
     effect_stat_rows,
     modifier_label,
     node_display_cost,
+    power_display_name,
     power_has_standing_effect,
     power_pl_violations,
     power_runtime_gates,
@@ -928,7 +929,7 @@ class PowersSection(TitledSection):
         layout.addWidget(grip)
         grip.setVisible(not self._locked)
 
-        name = QLabel(power.name or "Unnamed Power")
+        name = QLabel(power_display_name(power, self._data))
         # A Debilitated condition naming this power loses it — strike the header through
         # and redden it (display-only; the power's point cost is untouched).
         if power.name and power.name in debilitated_traits(self._character, self._data):

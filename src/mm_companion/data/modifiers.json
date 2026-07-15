@@ -56,7 +56,8 @@
       "costFormula": "1 or 2 points flat (per alternate)",
       "costValue": 1,
       "flat": true,
-      "description": "Adds another interchangeable configuration to a power array."
+      "hidden": true,
+      "description": "Adds another interchangeable configuration to a power array. Applied automatically by a power/group's Array structure, not dragged onto an effect."
     },
     {
       "id": "area_effect",
@@ -104,15 +105,6 @@
       "flat": true,
       "ranked": true,
       "description": "Increases how far a ranged effect can reach."
-    },
-    {
-      "id": "extra_condition",
-      "name": "Extra Condition",
-      "category": "extra",
-      "costFormula": "+1 point per rank",
-      "costValue": 1,
-      "flat": false,
-      "description": "Affliction only: also inflicts a second condition of the same degree at each degree of failure."
     },
     {
       "id": "feature_extra",
@@ -219,7 +211,8 @@
       "costFormula": "+0 points",
       "costValue": 0,
       "flat": true,
-      "description": "Bundles two or more effects to always activate together as one."
+      "hidden": true,
+      "description": "Bundles two or more effects to always activate together as one. Applied automatically by a power/group's Linked structure, not dragged onto an effect."
     },
     {
       "id": "multiattack",
@@ -342,6 +335,17 @@
       "costFormula": "1-2 points flat",
       "costValue": 1,
       "flat": true,
+      "config": [
+        {
+          "key": "points",
+          "label": "Points",
+          "type": "points",
+          "min": 1,
+          "max": 2,
+          "default": 1,
+          "hint": "1 point: noticeable with an effort (a check); 2 points: undetectable."
+        }
+      ],
       "description": "Makes the effect itself hard or impossible to notice being used."
     },
     {
@@ -519,6 +523,17 @@
         { "key": "condition", "label": "Limited to", "type": "text", "hint": "The circumstance or target it is restricted to (e.g. 'only at night')." }
       ],
       "description": "Only works in specific circumstances or on specific targets."
+    },
+    {
+      "id": "limited_while_insubstantial",
+      "name": "Limited to While Insubstantial",
+      "category": "flaw",
+      "costFormula": "-1 point per rank",
+      "costValue": 1,
+      "flat": false,
+      "gate": "requires_effect",
+      "requiresEffect": "insubstantial",
+      "description": "The effect only works while one of your Insubstantial powers is currently active."
     },
     {
       "id": "noticeable",

@@ -23,9 +23,13 @@ from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QTableWidget,
@@ -35,7 +39,8 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import Advantage, GameData
+from mm_companion.core.data_loader import Advantage, GameData, ParameterSpec
+from mm_companion.core.powers import PowerGroup
 from mm_companion.core.rules import (
     HEROIC_TYPE,
     advantage_points_spent,
@@ -57,6 +62,12 @@ SORT_MANUAL, SORT_NAME, SORT_RANK, SORT_TYPE = "manual", "name", "rank", "type"
 
 # Spacing between the side-by-side advantage panels.
 TABLE_SPACING = 6
+# Dead-band (px) that stops the panel count from flipping when the page's vertical
+# scrollbar appears/disappears (which nudges the width by its own extent).
+COLUMN_HYSTERESIS = 24
+# Below this much room left for the combo box beside the picker controls, the
+# controls wrap onto their own row so the combo keeps enough width to read.
+PICKER_COMBO_MIN = 180
 # Rough widths used to decide how many panels fit without clipping a row. The
 # Name and Type columns size to content; the Description wraps but still wants a
 # readable minimum. These are UI heuristics, easy to retune.
@@ -125,31 +136,58 @@ class AdvantagesSection(TitledSection):
 
         outer = QVBoxLayout(self)
 
-        picker = QHBoxLayout()
         self._advantage_combo = QComboBox()
         for advantage in data.advantages:
             label = f"{advantage.name} ({', '.join(advantage.types)})"
             self._advantage_combo.addItem(label, advantage)
-        picker.addWidget(self._advantage_combo, stretch=1)
+        # Let the combo shrink and stretch so it uses whatever width its row has,
+        # rather than pinning the row wide to its longest advantage name.
+        self._advantage_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._advantage_combo.setMinimumWidth(0)
 
-        # A parameter combo shown only for an advantage that needs one (Alternate
-        # Initiative's mental ability). Its choices are refreshed per advantage.
+        # The subject input for an advantage that needs one (a skill, an attack, a
+        # foe type, ...). Its shape is data-driven per advantage (see ParameterSpec):
+        # a combo for a "choice" parameter, a line edit for a free-text one. Both are
+        # created once and shown/populated per advantage by _sync_parameter.
         self._advantage_param = QComboBox()
         self._advantage_param.setVisible(False)
-        picker.addWidget(self._advantage_param)
-
+        self._advantage_param_text = QLineEdit()
+        self._advantage_param_text.setVisible(False)
         self._advantage_rank = make_spin_box(RANK_MIN, RANK_MAX, guarded=False)
-        picker.addWidget(self._advantage_rank)
-
         self._advantage_add_button = QPushButton("Add")
         self._advantage_add_button.clicked.connect(self._add_advantage)
-        picker.addWidget(self._advantage_add_button)
-
         self._advantage_remove_button = QPushButton("Remove")
         self._advantage_remove_button.clicked.connect(self._remove_advantage)
-        picker.addWidget(self._advantage_remove_button)
-        self._advantage_picker = picker
-        outer.addLayout(picker)
+
+        # The subject/rank/Add/Remove controls travel together as one widget so they
+        # can move between the picker's two rows in one step (see _apply_picker_mode).
+        self._advantage_controls = QWidget()
+        controls_row = QHBoxLayout(self._advantage_controls)
+        controls_row.setContentsMargins(0, 0, 0, 0)
+        for widget in (
+            self._advantage_param,
+            self._advantage_param_text,
+            self._advantage_rank,
+            self._advantage_add_button,
+            self._advantage_remove_button,
+        ):
+            controls_row.addWidget(widget)
+
+        # The picker is one row when there's room and wraps the controls onto a
+        # second row when the block is too narrow, so the combo always has space to
+        # show the advantage name (see resizeEvent / _apply_picker_mode).
+        self._picker_widget = QWidget()
+        picker_vbox = QVBoxLayout(self._picker_widget)
+        picker_vbox.setContentsMargins(0, 0, 0, 0)
+        picker_vbox.setSpacing(4)
+        self._picker_row1 = QHBoxLayout()
+        self._picker_row1.addWidget(self._advantage_combo, stretch=1)
+        self._picker_row2 = QHBoxLayout()
+        picker_vbox.addLayout(self._picker_row1)
+        picker_vbox.addLayout(self._picker_row2)
+        self._picker_narrow: bool | None = None
+        self._apply_picker_mode(False)
+        outer.addWidget(self._picker_widget)
 
         # The shared Heroic-advantage budget, refreshed on every change and PL edit.
         self._heroic_label = QLabel()
@@ -182,6 +220,7 @@ class AdvantagesSection(TitledSection):
         # model mapping is no longer positional, so each rendered row keeps a
         # reference back to its backing AdvantageSelection.
         self._sort_mode = SORT_MANUAL
+        self._locked = False
         self._selected: AdvantageSelection | None = None
         self._syncing_selection = False
         self._row_refs: list[tuple[_AutoHeightTable, int, AdvantageSelection]] = []
@@ -193,6 +232,10 @@ class AdvantagesSection(TitledSection):
         self._tables_layout.setSpacing(TABLE_SPACING)
         self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         outer.addWidget(self._tables_container)
+        # Keep the content packed at the top: when this block is stretched taller than
+        # its content (e.g. sharing a row with the much taller Skills block) the extra
+        # height goes to this stretch instead of being spread between the rows above.
+        outer.addStretch(1)
 
         self._advantage_combo.currentIndexChanged.connect(self._sync_rank_enabled)
         self._sync_rank_enabled()
@@ -245,6 +288,7 @@ class AdvantagesSection(TitledSection):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table.itemSelectionChanged.connect(lambda t=table: self._on_selection_changed(t))
+        table.cellDoubleClicked.connect(lambda row, _col, t=table: self._edit_row(t, row))
         guard_wheel(table)
         return table
 
@@ -270,7 +314,12 @@ class AdvantagesSection(TitledSection):
         self._row_refs.clear()
         selections = self._character.advantages
         count = column_count(
-            self._available_width(), self._min_col_width(), TABLE_SPACING, len(selections)
+            self._available_width(),
+            self._min_col_width(),
+            TABLE_SPACING,
+            len(selections),
+            self._column_count,
+            COLUMN_HYSTERESIS,
         )
         self._column_count = count
         self._ensure_tables(count)
@@ -289,8 +338,9 @@ class AdvantagesSection(TitledSection):
         advantage = self._advantages_by_name.get(selection.name)
         ranked = bool(advantage and advantage.ranked)
         text = f"{selection.name} {selection.rank}" if ranked else selection.name
-        if selection.parameter:
-            text = f"{text} ({self._ability_names.get(selection.parameter, selection.parameter)})"
+        subject = self._parameter_display(selection)
+        if subject:
+            text = f"{text} ({subject})"
         types = ", ".join(advantage.types) if advantage else ""
         description = advantage.description if advantage else ""
         row = table.rowCount()
@@ -413,9 +463,9 @@ class AdvantagesSection(TitledSection):
             advantage = self._advantages_by_name.get(selection.name)
             ranked = bool(advantage and advantage.ranked)
             text = f"{selection.name} {selection.rank}" if ranked else selection.name
-            if selection.parameter:
-                name = self._ability_names.get(selection.parameter, selection.parameter)
-                text = f"{text} ({name})"
+            subject = self._parameter_display(selection)
+            if subject:
+                text = f"{text} ({subject})"
             name_width = max(name_width, fm.horizontalAdvance(text))
             types = ", ".join(advantage.types) if advantage else ""
             type_width = max(type_width, fm.horizontalAdvance(types))
@@ -423,16 +473,57 @@ class AdvantagesSection(TitledSection):
             name_width + NAME_PADDING + type_width + TYPE_PADDING + MIN_DESC_WIDTH + FRAME_PADDING
         )
 
+    def _apply_picker_mode(self, narrow: bool) -> None:
+        """Lay the picker out on one or two rows.
+
+        Wide: the subject/rank/Add/Remove controls sit to the right of the combo on a
+        single row. Narrow: they drop to a second row so the combo box spans the full
+        block width and can show the advantage name. A no-op when the mode is unchanged.
+        """
+        if narrow == self._picker_narrow:
+            return
+        self._picker_narrow = narrow
+        self._picker_row1.removeWidget(self._advantage_controls)
+        while self._picker_row2.count():
+            self._picker_row2.takeAt(0)
+        if narrow:
+            self._picker_row2.addStretch(1)
+            self._picker_row2.addWidget(self._advantage_controls)
+        else:
+            self._picker_row1.addWidget(self._advantage_controls)
+
+    def _picker_prefers_narrow(self) -> bool:
+        """Whether the combo would be squeezed below :data:`PICKER_COMBO_MIN` on one row."""
+        return (
+            self._available_width() - self._advantage_controls.sizeHint().width() < PICKER_COMBO_MIN
+        )
+
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
+        self._apply_picker_mode(self._picker_prefers_narrow())
         count = column_count(
             self._available_width(),
             self._min_col_width(),
             TABLE_SPACING,
             len(self._character.advantages),
+            self._column_count,
+            COLUMN_HYSTERESIS,
         )
         if count != self._column_count:
             self._rebuild()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Report a *single-column* minimum so the block can shrink to one panel.
+
+        When the block is wide it fans the advantages across several side-by-side
+        tables; left alone, that inflates the section's minimum to the full
+        multi-column width, which then pins the whole page (and window) wide and
+        clips the trailing panels. Capping the reported minimum at one column's
+        width lets the block — and the window — narrow, at which point
+        :meth:`resizeEvent` rebuilds to fewer columns and everything reconciles.
+        """
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self._min_col_width()), hint.height())
 
     def _rank_ceiling(self, advantage: Advantage) -> int:
         """The highest rank the picker may offer for *advantage* right now.
@@ -466,25 +557,199 @@ class AdvantagesSection(TitledSection):
             self._advantage_rank.setValue(RANK_MIN)
 
     def _sync_parameter(self, advantage: Advantage | None) -> None:
-        """Show and populate the parameter combo for an advantage that needs one.
+        """Show and populate the subject input for the picker's current advantage.
 
-        Currently only Alternate Initiative, whose ``initiative_ability_choice`` names
-        the mental abilities it can switch initiative to. Other advantages hide it.
+        Data-driven from the advantage's :class:`ParameterSpec`: a ``"choice"`` shows
+        the combo (populated from the spec's options), a ``"text"`` shows the line
+        edit, and an advantage that takes no subject hides both. No-op while locked —
+        :meth:`set_locked` owns visibility then.
         """
-        choices = tuple(advantage.initiative_ability_choice) if advantage else ()
-        self._advantage_param.clear()
-        for key in choices:
-            self._advantage_param.addItem(self._ability_names.get(key, key), key)
-        self._advantage_param.setVisible(bool(choices))
+
+        if self._locked:
+            return
+        spec = advantage.parameter if advantage else None
+        if spec is None:
+            self._advantage_param.setVisible(False)
+            self._advantage_param_text.setVisible(False)
+            return
+        if spec.kind == "choice":
+            self._populate_choice_combo(self._advantage_param, spec)
+            self._advantage_param.setVisible(True)
+            self._advantage_param_text.setVisible(False)
+        else:
+            self._advantage_param_text.setPlaceholderText(spec.label)
+            self._advantage_param_text.setVisible(True)
+            self._advantage_param.setVisible(False)
+
+    def _parameter_options(self, spec: ParameterSpec) -> list[tuple[str, str]]:
+        """Resolve a choice spec to ``(stored value, display label)`` pairs.
+
+        A dynamic ``options_from`` source draws from the live build —
+        ``"skills"``/``"abilities"`` from the game data (abilities store their key but
+        display their name), ``"powers"`` from the character's own powers. When the
+        spec *also* lists ``options``, those restrict the source to that subset in the
+        given order (e.g. Alternate Initiative offers only INT/AWE/PRE, not every
+        ability). Without a source, a fixed ``options`` list maps each value to itself.
+        """
+
+        if spec.options_from == "skills":
+            source = [(s.name, s.name) for s in self._data.skills]
+        elif spec.options_from == "abilities":
+            source = [(a.key, a.name) for a in self._data.abilities]
+        elif spec.options_from == "powers":
+            source = [(name, name) for name in self._power_names()]
+        else:
+            return [(option, option) for option in spec.options]
+        if spec.options:
+            labels = dict(source)
+            return [(value, labels.get(value, value)) for value in spec.options]
+        return source
+
+    def _power_names(self) -> list[str]:
+        """Every named leaf power on the character, descending array/linked groups."""
+
+        names: list[str] = []
+
+        def walk(nodes) -> None:
+            for node in nodes:
+                if isinstance(node, PowerGroup):
+                    walk(node.children)
+                elif node.name:
+                    names.append(node.name)
+
+        walk(self._character.powers)
+        return names
+
+    def _populate_choice_combo(self, combo: QComboBox, spec: ParameterSpec) -> None:
+        combo.clear()
+        for value, label in self._parameter_options(spec):
+            combo.addItem(label, value)
+
+    def _read_parameter_value(
+        self, spec: ParameterSpec, combo: QComboBox | None, line: QLineEdit | None
+    ) -> str:
+        """The chosen subject from whichever widget the spec uses (``""`` if none)."""
+
+        if spec.kind == "choice" and combo is not None:
+            data = combo.currentData()
+            return data if data is not None else ""
+        if line is not None:
+            return line.text().strip()
+        return ""
+
+    def _apply_parameter_value(
+        self, spec: ParameterSpec, combo: QComboBox | None, line: QLineEdit | None, value: str
+    ) -> None:
+        """Preselect *value* in the spec's widget (for the edit dialog's initial state)."""
+
+        if spec.kind == "choice" and combo is not None:
+            index = combo.findData(value)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+        elif line is not None:
+            line.setText(value)
+
+    def _parameter_display(self, selection: AdvantageSelection) -> str:
+        """The subject as shown in a row — an ability key resolves to its name."""
+
+        advantage = self._advantages_by_name.get(selection.name)
+        spec = advantage.parameter if advantage else None
+        if spec is not None and spec.options_from == "abilities":
+            return self._ability_names.get(selection.parameter, selection.parameter)
+        return selection.parameter
+
+    def refresh_power_options(self) -> None:
+        """Re-populate the picker combo when it lists the character's powers.
+
+        Subscribed to the powers block's change topic so a newly built (or removed)
+        power shows up in a ``optionsFrom: "powers"`` advantage's dropdown. A no-op
+        for any other advantage or while locked.
+        """
+
+        if self._locked:
+            return
+        advantage = self._advantage_combo.currentData()
+        spec = advantage.parameter if advantage else None
+        if spec is None or spec.kind != "choice" or spec.options_from != "powers":
+            return
+        current = self._advantage_param.currentData()
+        self._populate_choice_combo(self._advantage_param, spec)
+        index = self._advantage_param.findData(current)
+        if index >= 0:
+            self._advantage_param.setCurrentIndex(index)
+
+    def _edit_row(self, table: _AutoHeightTable, row: int) -> None:
+        """Open the edit dialog for the double-clicked row's advantage."""
+
+        selection = self._selection_at(table, row)
+        if selection is not None:
+            self._edit_advantage(selection)
+
+    def _edit_advantage(self, selection: AdvantageSelection) -> None:
+        """Edit an existing advantage's rank and/or subject in place via a small dialog.
+
+        Reuses the same parameter widgets as the picker (built fresh for the dialog).
+        Disabled while locked. On accept, writes back to the ``AdvantageSelection`` and
+        refreshes the panels, cost, and limits.
+        """
+
+        if self._locked:
+            return
+        advantage = self._advantages_by_name.get(selection.name)
+        if advantage is None:
+            return
+        spec = advantage.parameter
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit {selection.name}")
+        form = QFormLayout(dialog)
+
+        rank_spin = None
+        if advantage.ranked:
+            ceiling = max(self._rank_ceiling(advantage), selection.rank)
+            rank_spin = make_spin_box(RANK_MIN, ceiling, guarded=False)
+            rank_spin.setValue(selection.rank)
+            form.addRow("Rank", rank_spin)
+
+        param_combo: QComboBox | None = None
+        param_line: QLineEdit | None = None
+        if spec is not None:
+            if spec.kind == "choice":
+                param_combo = QComboBox()
+                guard_wheel(param_combo)
+                self._populate_choice_combo(param_combo, spec)
+                self._apply_parameter_value(spec, param_combo, None, selection.parameter)
+                form.addRow(spec.label or "Subject", param_combo)
+            else:
+                param_line = QLineEdit(selection.parameter)
+                form.addRow(spec.label or "Subject", param_line)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if rank_spin is not None:
+            selection.rank = rank_spin.value()
+        if spec is not None:
+            selection.parameter = self._read_parameter_value(spec, param_combo, param_line)
+        self._rebuild()
+        self._refresh_cost()
+        self.refresh_limits()
+        self.changed.emit()
 
     def _add_advantage(self) -> None:
         advantage = self._advantage_combo.currentData()
         if advantage is None:
             return
         rank = self._advantage_rank.value() if advantage.ranked else 1
+        spec = advantage.parameter
         parameter = (
-            self._advantage_param.currentData()
-            if advantage.initiative_ability_choice and self._advantage_param.currentData()
+            self._read_parameter_value(spec, self._advantage_param, self._advantage_param_text)
+            if spec is not None
             else ""
         )
         # Enforce the shared Heroic-advantage budget as a hard limit on the add.
@@ -550,7 +815,8 @@ class AdvantagesSection(TitledSection):
 
     def set_locked(self, locked: bool) -> None:
         """Hide the advantage picker and sort/move controls while locked; the
-        panels are already read-only."""
+        panels are already read-only (and double-click editing is gated)."""
+        self._locked = locked
         for widget in (
             self._advantage_combo,
             self._advantage_rank,
@@ -562,5 +828,9 @@ class AdvantagesSection(TitledSection):
             self._move_down_button,
         ):
             widget.setVisible(not locked)
-        # Keep the parameter combo hidden unless the current advantage needs it.
-        self._advantage_param.setVisible(not locked and self._advantage_param.count() > 0)
+        if locked:
+            self._advantage_param.setVisible(False)
+            self._advantage_param_text.setVisible(False)
+        else:
+            # Restore the right subject input for the current advantage.
+            self._sync_parameter(self._advantage_combo.currentData())

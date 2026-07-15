@@ -19,19 +19,40 @@ from .derived import effective_ability
 def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
     """A cost magnitude a chosen config option overrides the modifier's with, if any.
 
-    The first of the modifier's config fields whose selected option carries a
-    ``cost_value`` (a Side Effect always/on-failure toggle, a Removable tier) wins;
-    ``None`` when no such choice is set, leaving the modifier's own ``cost_value``.
+    A ``points`` field's stored integer *is* the magnitude (a Subtle extra the player
+    dials to 1 or 2), falling back to the field's ``default_value`` when unset. Otherwise
+    the first config field whose selected option carries a ``cost_value`` (a Side Effect
+    always/on-failure toggle, a Removable tier) wins. ``None`` when no such choice is
+    set, leaving the modifier's own ``cost_value``.
     """
 
     for cfg in modifier.config_fields:
         chosen = selection.config.get(cfg.key)
+        if cfg.type == "points":
+            return int(chosen) if chosen is not None else cfg.default_value
         option = next(
             (o for o in cfg.options if o.value == chosen and o.cost_value is not None), None
         )
         if option is not None:
             return option.cost_value
     return None
+
+
+def _effective_flat(modifier: Modifier, selection) -> bool:
+    """Whether this selection is charged once (flat) or per effect rank.
+
+    Defaults to the modifier's own ``flat``, but the first chosen config option that
+    carries a ``flat`` override wins — Affliction's Onset flips between a flat ``-1``
+    (conditions land after a round) and a per-rank ``-1`` (after a scene) purely from
+    the option selected.
+    """
+
+    for cfg in modifier.config_fields:
+        chosen = selection.config.get(cfg.key)
+        option = next((o for o in cfg.options if o.value == chosen and o.flat is not None), None)
+        if option is not None:
+            return option.flat
+    return modifier.flat
 
 
 def _modifier_magnitude(modifier: Modifier, selection) -> int:
@@ -56,7 +77,7 @@ def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: b
     total = 0
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or modifier.flat != flat:
+        if modifier is None or _effective_flat(modifier, selection) != flat:
             continue
         total += sign * _modifier_magnitude(modifier, selection)
     return total
@@ -202,7 +223,7 @@ def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -
     terms: list[int] = []
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or modifier.flat != flat:
+        if modifier is None or _effective_flat(modifier, selection) != flat:
             continue
         terms.append(sign * _modifier_magnitude(modifier, selection))
     return terms

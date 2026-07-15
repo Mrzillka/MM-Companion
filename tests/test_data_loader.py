@@ -126,7 +126,7 @@ def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
     data = load_game_data()
     assert len(data.effect_modifiers) == 36  # effects with their own extras/flaws
     total = sum(len(mods) for mods in data.effect_modifiers.values())
-    assert total == 228
+    assert total == 231
     for mods in data.effect_modifiers.values():
         for modifier in mods:
             # Category is injected from the extras/flaws array, not stored per entry.
@@ -160,10 +160,56 @@ def test_effect_specific_modifiers_retain_mechanical_fields() -> None:
 def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
     data = load_game_data()
     catalog = data.modifier_catalog()
-    assert len(catalog) == 62 + 228  # ids are globally unique, so no collisions
+    assert len(catalog) == 62 + 231  # ids are globally unique, so no collisions
     assert catalog["ranged"].category == "extra"  # general pool
     assert catalog["strength_based"].category == "extra"  # effect-specific pool
 
 
 def test_load_game_data_is_cached() -> None:
     assert load_game_data() is load_game_data()
+
+
+def _advantage(data: GameData, name: str):
+    return next(a for a in data.advantages if a.name == name)
+
+
+def test_advantage_parameter_is_parsed() -> None:
+    data = load_game_data()
+    skill_mastery = _advantage(data, "Skill Mastery")
+    assert skill_mastery.parameter is not None
+    assert skill_mastery.parameter.kind == "choice"
+    assert skill_mastery.parameter.options_from == "skills"
+
+    benefit = _advantage(data, "Benefit")
+    assert benefit.parameter is not None
+    assert benefit.parameter.kind == "text"
+
+    dazing = _advantage(data, "Dazing Interaction")
+    assert dazing.parameter is not None
+    assert dazing.parameter.options == ("Deception", "Intimidation", "Persuasion")
+
+
+def test_alternate_initiative_parameter_is_synthesised() -> None:
+    # Alternate Initiative carries no explicit ``parameter`` block; the loader
+    # synthesises one from its legacy ``initiativeAbilityChoice`` so the same field
+    # keeps driving both the picker and the initiative math.
+    data = load_game_data()
+    alt = _advantage(data, "Alternate Initiative")
+    assert alt.parameter is not None
+    assert alt.parameter.kind == "choice"
+    assert alt.parameter.options_from == "abilities"
+    assert alt.parameter.options == ("INT", "AWE", "PRE")
+
+
+def test_every_subject_taking_advantage_has_a_parameter() -> None:
+    # focused advantages (plus the free-form Equipment/Sidekick) each attach to a
+    # chosen subject, so the UI must have a spec describing what to ask for.
+    data = load_game_data()
+    for advantage in data.advantages:
+        if advantage.focused or advantage.name in {"Equipment", "Sidekick"}:
+            assert advantage.parameter is not None, advantage.name
+
+
+def test_plain_advantage_has_no_parameter() -> None:
+    data = load_game_data()
+    assert _advantage(data, "Agile Grab").parameter is None

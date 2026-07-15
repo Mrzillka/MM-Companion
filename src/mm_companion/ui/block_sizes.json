@@ -30,15 +30,15 @@
     "min_height": 150
   },
   "advantages": {
-    "min_width": 340,
+    "min_width": 300,
     "min_height": 150
   },
   "skills": {
-    "min_width": 440,
+    "min_width": 300,
     "min_height": 180
   },
   "powers": {
-    "min_width": 320,
+    "min_width": 240,
     "min_height": 180
   }
 }

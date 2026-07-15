@@ -259,6 +259,32 @@ and costed — exactly like Focused skills in `skills.json`. A character with Fa
 Ninjas and Favored Foe: Demons has two separate advantage instances, not one Favored Foe
 advantage with two "sub-targets."
 
+### 5.1 The `parameter` schema (what subject to prompt for)
+
+The chosen subject is stored on the character as `AdvantageSelection.parameter` (a plain
+string). *What* to ask for is data, not code: an advantage in `advantages.json` may carry a
+`parameter` object that the loader parses into a `ParameterSpec` (`core/data_loader.py`) and the
+Advantages block renders as either a dropdown or a free-text field:
+
+```json
+"parameter": { "label": "Skill", "kind": "choice", "optionsFrom": "skills" }
+"parameter": { "label": "Skill", "kind": "choice",
+               "options": ["Deception", "Intimidation", "Persuasion"] }
+"parameter": { "label": "Attack", "kind": "choice", "optionsFrom": "powers" }
+"parameter": { "label": "Benefit", "kind": "text" }
+```
+
+- `kind` — `"text"` (free-text description) or `"choice"` (a dropdown).
+- `options` — a fixed choice list baked into the data (the interaction skills).
+- `optionsFrom` — a *dynamic* choice source resolved against the live build instead of a fixed
+  list: `"skills"` / `"abilities"` (from `GameData`; an ability stores its key but displays its
+  name) or `"powers"` (the character's own powers, refreshed as powers are built).
+
+The subject is **optional** — an advantage can be added with it left blank. Alternate Initiative
+needs no `parameter` block: the loader synthesises an ability-choice spec from its existing
+`initiativeAbilityChoice`, which still drives the initiative math in `rules/derived.py`. Rows are
+editable in place (double-click) to change the rank and/or subject.
+
 ---
 
 ## 6. Out of scope for this file

@@ -64,7 +64,7 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
                 continue
             if base.measure.column != "distance" or not base.measure.per_round:
                 continue
-            if not effect_is_active(power, effect, base, game_data):
+            if not effect_is_active(power, effect, base, game_data, char):
                 continue
             rank = effect_effective_rank(effect, game_data, char)
             lines.append(SpeedLine(f"{base.name} {rank}", rank))
@@ -121,7 +121,7 @@ def size_shift(char: Character, game_data: GameData) -> int:
             for readout in game_data.effect_readouts.get(effect.effect_id, ()):
                 if readout.kind != "size_table":
                     continue
-                if not effect_is_active(power, effect, base, game_data):
+                if not effect_is_active(power, effect, base, game_data, char):
                     continue
                 sign = int(readout.data.get("sign", 1))
                 shift += sign * effect_effective_rank(effect, game_data, char)

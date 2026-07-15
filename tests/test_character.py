@@ -10,6 +10,7 @@ from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
     advantage_rank_cap,
     advantage_violations,
+    apply_condition,
     defense_class,
     heroic_advantage_budget,
     heroic_advantage_ranks,
@@ -21,6 +22,7 @@ from mm_companion.core.rules import (
     reconcile_points_to_level,
     resistance_total,
     skill_bonus,
+    skill_modifiers,
     skill_points_spent,
     skill_total,
 )
@@ -211,6 +213,39 @@ def test_skill_bonus_targets_the_skill_the_selection_chose() -> None:
 
     assert skill_bonus(char, data, "Stealth").amount == 3
     assert skill_bonus(char, data, "Acrobatics") is None
+
+
+def test_skill_modifiers_net_a_condition_penalty_against_the_grants() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 4
+    apply_condition(char, "impaired", data, parameter="Stealth")
+
+    mods = skill_modifiers(char, data, "Stealth")
+    assert mods.has_flat_modifier
+    assert mods.amount == -2  # nothing granted, so just the penalty
+    assert mods.condition.condition_ids == frozenset({"impaired"})
+    # The penalty is display-only: the build value keeps the bought ranks whole, and
+    # the sheet's number is the overlay on top of it.
+    assert skill_total(char, data, "Stealth") == 6
+    assert mods.condition.apply(skill_total(char, data, "Stealth")) == 4
+    # Scoped, so a row the condition doesn't name carries nothing.
+    assert skill_modifiers(char, data, "Acrobatics").has_flat_modifier is False
+
+
+def test_skill_modifiers_ignore_an_override_that_is_not_a_flat_modifier() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.skill_ranks["Stealth"] = 6
+    # Debilitated zeroes the trait outright rather than shifting it by an amount, so
+    # there is no number for the "+" column — the override lands on the total instead.
+    apply_condition(char, "debilitated", data, parameter="Stealth")
+
+    mods = skill_modifiers(char, data, "Stealth")
+    assert mods.condition.active
+    assert mods.has_flat_modifier is False
+    assert mods.condition.apply(skill_total(char, data, "Stealth")) == 0
 
 
 def test_focused_skill_row_resolves_parent_ability() -> None:

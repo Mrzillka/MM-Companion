@@ -434,18 +434,22 @@ def test_scoped_impaired_reddens_skill_total_disabled_strikes(qapp2: QApplicatio
     sheet = CharacterSheet(data)
     char = sheet.character
     sheet.skills._ranks["Stealth"] = 6
-    total_item = next(r for r in sheet.skills._rows if r.row_id == "Stealth").total_item
+
+    # Re-read the row after each refresh: the first penalty reveals the "+" column,
+    # which rebuilds the panels and replaces the cells.
+    def stealth():
+        return next(r for r in sheet.skills._rows if r.row_id == "Stealth")
 
     apply_condition(char, "impaired", data, parameter="Stealth")
     sheet.skills.refresh_totals()
-    assert total_item.text() == "4"  # 6 - 2, display only
-    assert total_item.foreground().color().name() == "#d15b5b"
-    assert total_item.font().strikeOut() is False
+    assert stealth().total_item.text() == "4"  # 6 - 2, display only
+    assert stealth().total_item.foreground().color().name() == "#d15b5b"
+    assert stealth().total_item.font().strikeOut() is False
 
     apply_condition(char, "disabled", data, parameter="Stealth")  # supersedes impaired
     sheet.skills.refresh_totals()
-    assert total_item.text() == "1"  # 6 - 5
-    assert total_item.font().strikeOut() is True
+    assert stealth().total_item.text() == "1"  # 6 - 5
+    assert stealth().total_item.font().strikeOut() is True
 
 
 def test_hit_on_toughness_shows_a_red_effective_label(qapp2: QApplication) -> None:

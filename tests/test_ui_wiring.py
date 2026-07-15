@@ -247,12 +247,12 @@ def test_floating_a_block_keeps_cross_block_wiring_live(qapp: QApplication) -> N
     assert stealth_row.total_item.text() == "5"  # AGL 3 + 2 ranks
 
 
-def test_skill_bonus_column_hides_until_something_grants_a_bonus(qapp: QApplication) -> None:
+def test_skill_modifier_column_hides_until_something_modifies_a_row(qapp: QApplication) -> None:
     from mm_companion.ui.sections.skills import COL_MODS
 
     data = load_game_data()
     sheet = CharacterSheet(data)
-    # Nothing boosts a skill on a blank character, so the whole "+" column is hidden.
+    # Nothing modifies a skill on a blank character, so the whole "+" column is hidden.
     assert all(t.isColumnHidden(COL_MODS) for t in sheet.skills._tables)
 
     sheet.character.powers.append(
@@ -273,6 +273,46 @@ def test_skill_bonus_column_hides_until_something_grants_a_bonus(qapp: QApplicat
     sheet.character.powers.clear()
     sheet.skills.refresh_totals()
     assert all(t.isColumnHidden(COL_MODS) for t in sheet.skills._tables)
+
+
+def test_skill_modifier_column_nets_a_condition_penalty_against_a_boost(
+    qapp: QApplication,
+) -> None:
+    from mm_companion.core.rules import apply_condition
+    from mm_companion.ui.sections.skills import COL_MODS
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.skills._ranks["Stealth"] = 5
+    sheet.skills._ranks["Acrobatics"] = 5
+
+    # A condition alone reveals the column — no power or advantage involved.
+    apply_condition(sheet.character, "impaired", data, parameter="Stealth")
+    sheet.skills.refresh_totals()
+    assert all(not t.isColumnHidden(COL_MODS) for t in sheet.skills._tables)
+
+    stealth = next(r for r in sheet.skills._rows if r.row_id == "Stealth")
+    assert stealth.mod_item.text() == "-2"
+    assert stealth.mod_item.foreground().color().name() == "#d15b5b"  # a penalty reads red
+    assert "Impaired" in stealth.mod_item.toolTip()
+    assert stealth.total_item.text() == "3"  # 5 ranks - 2
+    # The condition is scoped, so a different skill is untouched.
+    assert next(r for r in sheet.skills._rows if r.row_id == "Acrobatics").mod_item.text() == ""
+
+    # A boost on the same row nets against the penalty, and both are named on hover.
+    sheet.character.powers.append(
+        Power(
+            name="Cat's Grace",
+            effects=[PowerEffectInstance("enhanced_trait", rank=6, config={"target": "Stealth"})],
+        )
+    )
+    sheet.skills.refresh_totals()
+    stealth = next(r for r in sheet.skills._rows if r.row_id == "Stealth")
+    assert stealth.mod_item.text() == "+4"  # +6 boost - 2 impaired
+    assert stealth.mod_item.foreground().color().name() == "#d15b5b"  # still penalised
+    tip = stealth.mod_item.toolTip()
+    assert "Cat's Grace" in tip and "Impaired" in tip
+    assert stealth.total_item.text() == "9"  # 5 ranks + 6 boost - 2
 
 
 def test_hero_points_circles_spend_and_gain(qapp: QApplication) -> None:

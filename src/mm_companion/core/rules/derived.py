@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from ..character import Character
 from ..data_loader import GameData, Resistance, Skill
 from .advantages import advantage_by_name
+from .conditions import ConditionEffect, condition_scope_penalty
 from .runtime import TraitBonus, _trait_bonus
 
 
@@ -57,9 +60,9 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
       the selection's ``parameter`` chose).
 
     Both are data-driven, so a mod adds a new granting advantage or effect without
-    touching this resolver. Conditions are deliberately *not* folded in: they are a
-    display-only overlay on the total (see :func:`condition_scope_penalty`), not part
-    of the build.
+    touching this resolver. Conditions are deliberately *not* folded in here: they are
+    display-only, never part of the build. The sheet's "+" column shows both kinds
+    netted together — see :func:`skill_modifiers`.
     """
 
     skill = _skill_for_row(game_data, row_id)
@@ -84,12 +87,77 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
     return TraitBonus(amount, sources) if sources else None
 
 
+def _skill_scope_keys(row_id: str) -> set[str]:
+    """The keys a condition may name to reach one skill row.
+
+    Either the row itself (a focus or specialized pool) or its base skill — an Impaired
+    (Stealth) hits every Stealth row.
+    """
+
+    return {row_id, row_id.split(":", 1)[0].strip()}
+
+
+@dataclass(frozen=True)
+class SkillModifiers:
+    """Every flat modifier standing on one skill row — what the sheet's "+" column shows.
+
+    ``amount`` is their net signed sum: the granted bonuses (:func:`skill_bonus` — part
+    of the build, so already inside :func:`skill_total`) plus the conditions' flat
+    penalty (display-only, never in the build). Today those are the only two kinds;
+    another source folds in here, and the column shows the net without the view
+    learning where any of it came from.
+
+    ``grants`` and ``condition`` stay whole so the view can tint and explain the cell:
+    a row carrying only grants reads as a boost, any condition marks it a penalty, and
+    ``condition`` also holds the *override* half of the overlay (halve/zero — not a flat
+    modifier, so it lands on the total instead) and the ids that decide strikethrough.
+    """
+
+    amount: int = 0
+    grants: TraitBonus | None = None
+    condition: ConditionEffect = field(default_factory=ConditionEffect)
+
+    @property
+    def has_flat_modifier(self) -> bool:
+        """Whether anything shifts this row by a flat amount, so the column has a
+        number to show.
+
+        ``False`` for a row modified only by an override (a Debilitated row reads 0
+        however many ranks were bought): that is not a modifier, and showing it as one
+        would misreport it.
+        """
+
+        return self.grants is not None or bool(self.condition.delta)
+
+
+def skill_modifiers(char: Character, game_data: GameData, row_id: str) -> SkillModifiers:
+    """The net of every flat modifier on one skill row (:class:`SkillModifiers`).
+
+    The sheet's "+" column is a read-out of this: a player never types a skill modifier
+    in, it is granted or imposed by something else on the sheet — a power or advantage
+    (:func:`skill_bonus`) or a condition scoped to the skill
+    (:func:`condition_scope_penalty`).
+    """
+
+    grants = skill_bonus(char, game_data, row_id)
+    condition = condition_scope_penalty(char, game_data, _skill_scope_keys(row_id))
+    return SkillModifiers(
+        amount=(grants.amount if grants else 0) + condition.delta,
+        grants=grants,
+        condition=condition,
+    )
+
+
 def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
     """``ability value + skill ranks + outside bonuses`` for one skill row.
 
     The ability value is the *effective* one (:func:`effective_ability`), and the
     bonuses are the granted ones (:func:`skill_bonus`), so an Enhanced-Trait boost to
     either the linked ability or the skill itself shows up in the total.
+
+    This is the *build* value. A condition scoped to the skill does not move it — the
+    view overlays that on top (:func:`skill_modifiers`), so a penalised roll never
+    rewrites what the character bought.
     """
 
     skill = _skill_for_row(game_data, row_id)

@@ -78,10 +78,13 @@ class Character:
     """All per-character state for one character sheet.
 
     Trait dicts are keyed by the content keys from :class:`GameData`
-    (``abilities``/``resistances`` by their ``key``; ``skill_ranks``/``skill_mods``
-    by a *row id* — the skill name, ``"<Skill>::<focus>"`` for a focused instance, or
+    (``abilities``/``resistances`` by their ``key``; ``skill_ranks`` by a *row id* —
+    the skill name, ``"<Skill>::<focus>"`` for a focused instance, or
     ``"<Skill>::spec::<name>"`` for a specialized (half-cost) rank pool). Missing keys
     read as ``0``, so the dicts only carry non-default values.
+
+    Only *bought* ranks are stored. A skill's outside bonuses (from powers and
+    advantages) are derived, not state — see :func:`~..rules.skill_bonus`.
 
     ``focuses`` maps a focused skill's name to its chosen focuses; ``specializations``
     maps *any* skill's name to its narrow specialized pools. Both drive which extra
@@ -96,7 +99,6 @@ class Character:
     abilities: dict[str, int] = field(default_factory=dict)
     resistances: dict[str, int] = field(default_factory=dict)
     skill_ranks: dict[str, int] = field(default_factory=dict)
-    skill_mods: dict[str, int] = field(default_factory=dict)
     focuses: dict[str, list[str]] = field(default_factory=dict)
     specializations: dict[str, list[str]] = field(default_factory=dict)
     advantages: list[AdvantageSelection] = field(default_factory=list)
@@ -139,7 +141,6 @@ class Character:
             "abilities": dict(self.abilities),
             "resistances": dict(self.resistances),
             "skill_ranks": dict(self.skill_ranks),
-            "skill_mods": dict(self.skill_mods),
             "focuses": {k: list(v) for k, v in self.focuses.items()},
             "specializations": {k: list(v) for k, v in self.specializations.items()},
             "advantages": [
@@ -167,7 +168,6 @@ class Character:
             abilities=dict(raw.get("abilities", {})),
             resistances=dict(raw.get("resistances", {})),
             skill_ranks=dict(raw.get("skill_ranks", {})),
-            skill_mods=dict(raw.get("skill_mods", {})),
             focuses={k: list(v) for k, v in raw.get("focuses", {}).items()},
             specializations={k: list(v) for k, v in raw.get("specializations", {}).items()},
             advantages=[

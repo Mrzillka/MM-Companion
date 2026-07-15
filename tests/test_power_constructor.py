@@ -712,8 +712,8 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
     # A Strength-linked skill total reflects the boosted ability.
     sheet.character.skill_ranks["Athletics"] = 1
     sheet.skills.refresh_totals()
-    athletics = next(r for r in sheet.skills._rows if r[1] == "Athletics")
-    assert athletics[3].text() == "6"  # effective STR 5 + 1 rank
+    athletics = next(r for r in sheet.skills._rows if r.row_id == "Athletics")
+    assert athletics.total_item.text() == "6"  # effective STR 5 + 1 rank
 
 
 def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) -> None:

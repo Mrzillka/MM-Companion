@@ -48,7 +48,7 @@ def read_version(init_file: Path) -> tuple[str, tuple[int, int, int]]:
     text = init_file.read_text(encoding="utf-8")
     m = VERSION_RE.search(text)
     if not m:
-        raise SystemExit(f"No 3-part __version__ = \"X.Y.Z\" found in {init_file}.")
+        raise SystemExit(f'No 3-part __version__ = "X.Y.Z" found in {init_file}.')
     major, minor, patch = int(m.group(2)), int(m.group(3)), int(m.group(4))
     return f"{major}.{minor}.{patch}", (major, minor, patch)
 
@@ -75,13 +75,24 @@ def run_build(repo_root: Path) -> None:
     # Prefer PowerShell 7 (pwsh) but fall back to Windows PowerShell.
     shell = "pwsh"
     try:
-        subprocess.run([shell, "-NoLogo", "-Command", "$PSVersionTable.PSVersion"],
-                       check=True, capture_output=True)
+        subprocess.run(
+            [shell, "-NoLogo", "-Command", "$PSVersionTable.PSVersion"],
+            check=True,
+            capture_output=True,
+        )
     except (FileNotFoundError, subprocess.CalledProcessError):
         shell = "powershell"
     subprocess.run(
-        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(build_ps1),
-         "-PythonExe", sys.executable],
+        [
+            shell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(build_ps1),
+            "-PythonExe",
+            sys.executable,
+        ],
         cwd=str(repo_root),
         check=True,
     )
@@ -89,10 +100,16 @@ def run_build(repo_root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bump the version and build a new installer.")
-    parser.add_argument("level", choices=["minor", "major"],
-                        help="minor = +1 last digit (0.1.2->0.1.3); major = +1 second digit (0.1.2->0.2.0)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print the version change without editing files or building.")
+    parser.add_argument(
+        "level",
+        choices=["minor", "major"],
+        help="minor = +1 last digit (0.1.2->0.1.3); major = +1 second digit (0.1.2->0.2.0)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the version change without editing files or building.",
+    )
     args = parser.parse_args()
 
     repo_root = find_repo_root(Path(__file__).resolve())
@@ -114,8 +131,10 @@ def main() -> int:
         run_build(repo_root)
     except subprocess.CalledProcessError as exc:
         init_file.write_text(original_text, encoding="utf-8")  # roll back the bump
-        print(f"\n!! Build failed (exit {exc.returncode}); version restored to {old_version}.",
-              file=sys.stderr)
+        print(
+            f"\n!! Build failed (exit {exc.returncode}); version restored to {old_version}.",
+            file=sys.stderr,
+        )
         return exc.returncode
 
     installer = repo_root / "installer" / "output" / f"MM-Companion-Setup-{new_version}.exe"

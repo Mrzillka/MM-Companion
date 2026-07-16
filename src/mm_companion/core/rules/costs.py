@@ -7,9 +7,14 @@ from dataclasses import fields, replace
 from fractions import Fraction
 
 from ..character import Character
-from ..data_loader import GameData, TraitCosts
+from ..data_loader import Ability, GameData, Resistance, Skill, TraitCosts
 from .derived import _skill_for_row
 from .powers_cost import node_cost
+
+#: The three per-item override categories keyed on ``Character.item_cost_overrides``.
+ABILITIES_CATEGORY = "abilities"
+RESISTANCES_CATEGORY = "resistances"
+SKILLS_CATEGORY = "skills"
 
 
 def effective_trait_costs(char: Character, game_data: GameData) -> TraitCosts:
@@ -34,12 +39,80 @@ def effective_pp_per_level(char: Character, game_data: GameData) -> int:
     return int(char.cost_overrides.get("pp_per_level", game_data.costs.power_level.pp_per_level))
 
 
+def ability_category_key(ability: Ability) -> str:
+    """The ``TraitCosts`` rate field an ability's cost draws from (combat vs. core)."""
+
+    return "combat_per_rank" if ability.derived else "ability_per_rank"
+
+
+def resistance_category_key(resistance: Resistance) -> str:
+    """The ``TraitCosts`` rate field a resistance's cost draws from (combat vs. core)."""
+
+    return "combat_per_rank" if resistance.derived else "resistance_per_rank"
+
+
+def skill_category_key(skill: Skill) -> str:
+    """The ``TraitCosts`` ranks-per-PP field a skill's cost draws from (specialized vs. normal)."""
+
+    return "skill_specialized_ranks_per_pp" if skill.specialized_cost else "skill_ranks_per_pp"
+
+
+def ability_cost_rate(char: Character, game_data: GameData, ability: Ability) -> int:
+    """The PP-per-rank an ability costs: a per-item homebrew override, else the category rate."""
+
+    override = char.item_cost_overrides.get(ABILITIES_CATEGORY, {}).get(ability.key)
+    if override is not None:
+        return int(override)
+    return getattr(effective_trait_costs(char, game_data), ability_category_key(ability))
+
+
+def resistance_cost_rate(char: Character, game_data: GameData, resistance: Resistance) -> int:
+    """The PP-per-rank a resistance costs: a per-item homebrew override, else the category rate."""
+
+    override = char.item_cost_overrides.get(RESISTANCES_CATEGORY, {}).get(resistance.key)
+    if override is not None:
+        return int(override)
+    return getattr(effective_trait_costs(char, game_data), resistance_category_key(resistance))
+
+
+def skill_cost_rate(char: Character, game_data: GameData, skill: Skill) -> int:
+    """The ranks-per-PP a skill costs: a per-item homebrew override, else the category rate."""
+
+    override = char.item_cost_overrides.get(SKILLS_CATEGORY, {}).get(skill.name)
+    if override is not None:
+        return int(override)
+    return getattr(effective_trait_costs(char, game_data), skill_category_key(skill))
+
+
+def _item_overrides_differ(char: Character, game_data: GameData) -> bool:
+    """True when any stored per-item rate differs from its ruleset category default."""
+
+    traits = game_data.costs.traits
+    abilities = char.item_cost_overrides.get(ABILITIES_CATEGORY, {})
+    for ability in game_data.abilities:
+        value = abilities.get(ability.key)
+        if value is not None and int(value) != getattr(traits, ability_category_key(ability)):
+            return True
+    resistances = char.item_cost_overrides.get(RESISTANCES_CATEGORY, {})
+    for resistance in game_data.resistances:
+        value = resistances.get(resistance.key)
+        if value is not None and int(value) != getattr(traits, resistance_category_key(resistance)):
+            return True
+    skills = char.item_cost_overrides.get(SKILLS_CATEGORY, {})
+    for skill in game_data.skills:
+        value = skills.get(skill.name)
+        if value is not None and int(value) != getattr(traits, skill_category_key(skill)):
+            return True
+    return False
+
+
 def has_cost_overrides(char: Character, game_data: GameData) -> bool:
     """True when the character homebrews any non-power PP-cost rate away from default.
 
     The single derived predicate the sheet's "homebrew PP cost" notice reads (mirrors
-    :func:`~mm_companion.core.rules.power_is_homerule`). Compares each stored override
-    to its ruleset default, so a rate stored but equal to default reads as no override.
+    :func:`~mm_companion.core.rules.power_is_homerule`). Compares each stored override —
+    both the global category rates and any per-item rate — to its ruleset default, so a
+    rate stored but equal to default reads as no override.
     """
 
     traits = game_data.costs.traits
@@ -50,7 +123,7 @@ def has_cost_overrides(char: Character, game_data: GameData) -> bool:
             default = getattr(traits, key, None)
         if default is not None and int(value) != default:
             return True
-    return False
+    return _item_overrides_differ(char, game_data)
 
 
 def ability_points_spent(char: Character, game_data: GameData) -> int:
@@ -60,12 +133,10 @@ def ability_points_spent(char: Character, game_data: GameData) -> int:
     combat rate. Negative ranks refund points.
     """
 
-    costs = effective_trait_costs(char, game_data)
     total = 0
     for ability in game_data.abilities:
         rank = char.abilities.get(ability.key, 0)
-        rate = costs.combat_per_rank if ability.derived else costs.ability_per_rank
-        total += rank * rate
+        total += rank * ability_cost_rate(char, game_data, ability)
     return total
 
 
@@ -77,12 +148,10 @@ def resistance_points_spent(char: Character, game_data: GameData) -> int:
     Defense at the combat rate. Ranks bought below the base refund points.
     """
 
-    costs = effective_trait_costs(char, game_data)
     total = 0
     for res in game_data.resistances:
         bought = char.resistances.get(res.key, 0)
-        rate = costs.combat_per_rank if res.derived else costs.resistance_per_rank
-        total += bought * rate
+        total += bought * resistance_cost_rate(char, game_data, res)
     return total
 
 
@@ -112,20 +181,21 @@ def skill_points_spent(char: Character, game_data: GameData) -> int:
     """
 
     costs = effective_trait_costs(char, game_data)
+    overrides = char.item_cost_overrides.get(SKILLS_CATEGORY, {})
     specialized = _specialized_row_ids(char)
-    normal_ranks = 0
-    specialized_ranks = 0
+    total = Fraction(0)
     for row_id, ranks in char.skill_ranks.items():
         if ranks <= 0:
             continue
         skill = _skill_for_row(game_data, row_id)
-        if row_id in specialized or (skill is not None and skill.specialized_cost):
-            specialized_ranks += ranks
+        if skill is not None and skill.name in overrides:
+            # A per-skill homebrew rate prices every rank of that skill, spec pools included.
+            rate = int(overrides[skill.name])
+        elif row_id in specialized or (skill is not None and skill.specialized_cost):
+            rate = costs.skill_specialized_ranks_per_pp
         else:
-            normal_ranks += ranks
-    total = Fraction(normal_ranks, costs.skill_ranks_per_pp) + Fraction(
-        specialized_ranks, costs.skill_specialized_ranks_per_pp
-    )
+            rate = costs.skill_ranks_per_pp
+        total += Fraction(ranks, rate)
     return math.ceil(total)
 
 

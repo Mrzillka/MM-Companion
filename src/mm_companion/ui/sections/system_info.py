@@ -225,17 +225,11 @@ class SystemInfoSection(QGroupBox):
         row.addWidget(QLabel("/"))
         row.addWidget(self._power_points)
 
-        self._cost_config_button = QPushButton("Cost config…")
-        self._cost_config_button.setToolTip(
-            "Homebrew the power-point cost of the non-power traits."
-        )
-        self._cost_config_button.clicked.connect(self._open_cost_config)
-        row.addWidget(self._cost_config_button)
-
         self._cost_notice = QLabel("⌂ Homebrew PP costs")
         self._cost_notice.setStyleSheet("color: #4a90d9; font-weight: bold;")
         self._cost_notice.setToolTip(
-            "Homebrew PP cost changed — this character uses non-default point costs (Cost config)."
+            "Homebrew PP cost changed — this character uses non-default point costs "
+            "(Settings ▸ Cost config)."
         )
         self._cost_notice.setVisible(False)
         row.addWidget(self._cost_notice)
@@ -306,8 +300,12 @@ class SystemInfoSection(QGroupBox):
         self._character.characteristics["hero_points"] = value
         self._emit_edited()
 
-    def _open_cost_config(self) -> None:
-        """Open the homebrew cost-rate editor; a saved change refreshes the whole build."""
+    def open_cost_config(self) -> None:
+        """Open the homebrew cost-rate editor; a saved change refreshes the whole build.
+
+        Called from the window's ``Settings ▸ Cost config…`` action (the block itself no
+        longer carries the button, only the homebrew notice).
+        """
         dialog = CostConfigDialog(self._character, self._data, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -390,5 +388,3 @@ class SystemInfoSection(QGroupBox):
         self._locked = locked
         for widget in self._editable:
             set_widget_locked(widget, locked)
-        # A button can't shed input chrome like a field; disable it in the read-only view.
-        self._cost_config_button.setEnabled(not locked)

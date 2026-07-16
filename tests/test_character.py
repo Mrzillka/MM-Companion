@@ -8,6 +8,7 @@ from mm_companion.core.character import AdvantageSelection, AppliedCondition, Ch
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    ability_cost_rate,
     ability_points_spent,
     advantage_points_spent,
     advantage_rank_cap,
@@ -25,8 +26,11 @@ from mm_companion.core.rules import (
     power_points_remaining,
     power_points_spent,
     reconcile_points_to_level,
+    resistance_cost_rate,
+    resistance_points_spent,
     resistance_total,
     skill_bonus,
+    skill_cost_rate,
     skill_modifiers,
     skill_points_spent,
     skill_total,
@@ -257,6 +261,75 @@ def test_skill_default_rate_matches_before_and_after_no_override() -> None:
     char.cost_overrides["skill_ranks_per_pp"] = 4  # homebrew: 4 ranks per point
     assert skill_points_spent(char, data) == 2  # ceil(8 / 4)
     assert base == 4
+
+
+# -- per-item homebrew cost overrides ------------------------------------------
+
+
+def test_per_ability_override_reprices_only_that_ability() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    first, second = data.abilities[0], data.abilities[1]
+    char.abilities[first.key] = 4
+    char.abilities[second.key] = 4
+    base = ability_points_spent(char, data)  # both at the default rate
+
+    char.item_cost_overrides["abilities"] = {first.key: 5}
+    assert ability_cost_rate(char, data, first) == 5
+    assert ability_cost_rate(char, data, second) == data.costs.traits.ability_per_rank
+    # Only the first ability's ranks are repriced (4 * (5 - default)).
+    assert ability_points_spent(char, data) == base + 4 * (5 - data.costs.traits.ability_per_rank)
+
+
+def test_per_resistance_override_reprices_only_that_resistance() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    res = next(r for r in data.resistances if not r.derived)
+    char.resistances[res.key] = 3
+    base = resistance_points_spent(char, data)
+
+    res_rate = 4
+    char.item_cost_overrides["resistances"] = {res.key: res_rate}
+    assert resistance_cost_rate(char, data, res) == res_rate
+    assert resistance_points_spent(char, data) == base + 3 * (
+        res_rate - data.costs.traits.resistance_per_rank
+    )
+
+
+def test_per_skill_override_prices_that_skill_alone() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    skill = next(s for s in data.skills if not s.focused and not s.specialized_cost)
+    char.skill_ranks[skill.name] = 8
+    assert skill_points_spent(char, data) == 4  # ceil(8 / 2)
+
+    char.item_cost_overrides["skills"] = {skill.name: 1}  # 1 rank / PP
+    assert skill_cost_rate(char, data, skill) == 1
+    assert skill_points_spent(char, data) == 8  # ceil(8 / 1)
+
+
+def test_item_override_follows_a_changed_category_rate_for_has_overrides() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    first = data.abilities[0]
+    # A per-item value equal to the ruleset category default is not a homebrew.
+    char.item_cost_overrides["abilities"] = {first.key: data.costs.traits.ability_per_rank}
+    assert has_cost_overrides(char, data) is False
+    char.item_cost_overrides["abilities"][first.key] = data.costs.traits.ability_per_rank + 1
+    assert has_cost_overrides(char, data) is True
+
+
+def test_item_cost_overrides_round_trip_and_omit_when_empty() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert "item_cost_overrides" not in char.to_dict()
+    # An empty category dict still serializes to nothing.
+    char.item_cost_overrides["skills"] = {}
+    assert "item_cost_overrides" not in char.to_dict()
+
+    char.item_cost_overrides["abilities"] = {"STR": 5}
+    restored = Character.from_dict(char.to_dict())
+    assert restored.item_cost_overrides == {"abilities": {"STR": 5}}
 
 
 def test_skill_total_is_ability_plus_ranks() -> None:

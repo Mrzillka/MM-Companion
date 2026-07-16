@@ -1595,3 +1595,116 @@ def test_increasing_difficulty_requires_cumulative_or_progressive() -> None:
     assert power_modifier_requirement_violations(alone, data)  # unmet dependency
     paired = Power(effects=[_affliction(4, ("increasing_difficulty", {}), ("cumulative", {}))])
     assert power_modifier_requirement_violations(paired, data) == []
+
+
+# -- Dev-mode homerule overrides ----------------------------------------------
+
+
+def _damage_with_override(key, value, order="after", **extra):
+    effect = PowerEffectInstance("damage", rank=8)
+    entry = {"value": value, "order": order}
+    entry.update(extra)
+    effect.overrides[key] = entry
+    return effect
+
+
+def test_after_override_wins_over_a_modifier() -> None:
+    data = load_game_data()
+    # The Ranged extra would set range to "Ranged"; an "after" override beats it.
+    effect = _damage_with_override("range", "Planetary")
+    effect.extras.append(ModifierSelection("ranged"))
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "range")
+    assert row.value == "Planetary"
+    assert row.change == "homerule"
+
+
+def test_before_override_is_still_overridden_by_a_modifier() -> None:
+    data = load_game_data()
+    # A "before" override sets the base the Ranged extra then replaces.
+    effect = _damage_with_override("range", "Planetary", order="before")
+    effect.extras.append(ModifierSelection("ranged"))
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "range")
+    assert row.value == "Ranged"  # the modifier wins over a "before" override
+
+
+def test_before_override_untouched_by_modifiers_reads_homerule() -> None:
+    data = load_game_data()
+    effect = _damage_with_override("effect_type", "Utility", order="before")
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "effect_type")
+    assert row.value == "Utility"
+    assert row.change == "homerule"
+
+
+def test_after_override_of_check_is_verbatim_not_numeric() -> None:
+    data = load_game_data()
+    # A base "Attack vs. Defense" check would resolve to "<n> vs. Defense"; an "after"
+    # override is kept exactly as typed.
+    effect = _damage_with_override("check", "roll a d6")
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert row.value == "roll a d6"
+    assert row.change == "homerule"
+
+
+def test_custom_override_row_is_appended() -> None:
+    data = load_game_data()
+    effect = _damage_with_override("custom_1", "42", label="Ammo")
+    rows = effect_stat_rows(effect, data)
+    row = next(r for r in rows if r.key == "custom_1")
+    assert row.label == "Ammo"
+    assert row.value == "42"
+    assert row.change == "homerule"
+
+
+def test_cost_override_replaces_the_power_total() -> None:
+    data = load_game_data()
+    power = Power(effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_total_cost(power, data) == 8
+    power.cost_override = 3
+    assert power_total_cost(power, data) == 3
+
+
+def test_cost_override_flows_into_points_spent() -> None:
+    data = load_game_data()
+    char = Character()
+    power = Power(name="Homebrew", effects=[PowerEffectInstance("damage", rank=8)])
+    power.cost_override = 25
+    char.powers.append(power)
+    assert powers_points_spent(char, data) == 25
+
+
+def test_power_is_homerule_only_with_an_override() -> None:
+    from mm_companion.core.powers import power_is_homerule
+
+    plain = Power(effects=[PowerEffectInstance("damage", rank=8)])
+    assert not power_is_homerule(plain)
+    with_cost = Power(effects=[PowerEffectInstance("damage", rank=8)], cost_override=5)
+    assert power_is_homerule(with_cost)
+    with_term = Power(effects=[_damage_with_override("range", "Planetary")])
+    assert power_is_homerule(with_term)
+
+
+def test_overrides_round_trip_through_serialization() -> None:
+    effect = _damage_with_override("range", "Planetary", order="before")
+    effect.overrides["custom_1"] = {"value": "9", "order": "after", "label": "Ammo"}
+    power = Power(name="HR", effects=[effect], cost_override=17)
+    restored = Power.from_dict(power.to_dict())
+    assert restored.cost_override == 17
+    assert restored.effects[0].overrides == effect.overrides
+
+
+def test_old_power_dict_loads_without_override_keys() -> None:
+    restored = Power.from_dict({"name": "x", "effects": [{"effect_id": "damage", "rank": 3}]})
+    assert restored.effects[0].overrides == {}
+    assert restored.cost_override is None
+
+
+def test_resolve_stat_display_fills_in_the_numbers() -> None:
+    from mm_companion.core.rules import resolve_stat_display
+
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8)  # save DC base 10 + rank 8 = 18
+    assert resolve_stat_display(effect, data, "resistance", "Will vs. Effect") == "Will vs. 18"
+    assert resolve_stat_display(effect, data, "range", "Rank") == "1,800 feet"
+    # Fields without a numeric form come back unchanged.
+    assert resolve_stat_display(effect, data, "effect_type", "Attack") == "Attack"
+    assert resolve_stat_display(effect, data, "action", "Standard") == "Standard"

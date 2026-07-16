@@ -1232,3 +1232,88 @@ def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
 
     check.setChecked(False)  # back to grouped
     assert all(not h.isHidden() for h in headers)
+
+
+def _editable_combos(widget):
+    """The editable comboboxes under ``widget``, in child order (the std-field value
+    combos of an override group; order combos are non-editable and excluded)."""
+    from PySide6.QtWidgets import QComboBox
+
+    return [c for c in widget.findChildren(QComboBox) if c.isEditable()]
+
+
+def test_dev_mode_makes_the_terms_panel_editable_and_cost_flows(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+
+    # Off: the game-terms panel is the read-only summary (no editable combos).
+    assert not window._terms._editable
+    assert not _editable_combos(window._terms)
+
+    window._dev_mode.setChecked(True)
+    assert window._terms._editable
+    assert _editable_combos(window._terms)  # the panel is now the override editor
+
+    window._terms._cost_override_check.setChecked(True)
+    window._terms._cost_override_spin.setValue(30)
+    assert window.power.cost_override == 30
+    assert "30 PP" in window._cost.text()
+    assert "homerule" in window._cost.text()
+
+    window._terms._cost_override_check.setChecked(False)
+    assert window.power.cost_override is None
+
+
+def test_dev_mode_term_override_flows_to_the_read_only_summary(qapp: QApplication) -> None:
+    from mm_companion.core.powers import power_is_homerule
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    window._dev_mode.setChecked(True)
+
+    combos = _editable_combos(window._terms)
+    # _OVERRIDE_STD_FIELDS order: effect_type, range, action, ... — index 1 is Range.
+    combos[1].setCurrentText("Planetary")
+    assert card.instance.overrides["range"]["value"] == "Planetary"
+    assert power_is_homerule(window.power)
+
+    # Turning Dev mode off re-renders the read-only summary, which shows the override.
+    window._dev_mode.setChecked(False)
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["range"].value == "Planetary"
+    assert rows["range"].change == "homerule"
+
+
+def test_dev_mode_seeds_auto_values_and_resolves_option_numbers(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    window._dev_mode.setChecked(True)
+
+    # _OVERRIDE_STD_FIELDS order: effect_type, range, action, duration, check, resistance.
+    resistance = _editable_combos(window._terms)[5]
+    # The field starts pre-filled at its resolved auto value (DC filled in), no override.
+    assert resistance.currentText() == "Toughness vs. 18"
+    assert "resistance" not in card.instance.overrides
+    # The dropdown offers resolved numbers, not the raw "vs. Effect" templates.
+    items = [resistance.itemText(i) for i in range(resistance.count())]
+    assert "Will vs. 18" in items
+    assert all("vs. Effect" not in it for it in items)
+
+    # Picking a resolved alternative stores it verbatim.
+    resistance.setCurrentText("Will vs. 18")
+    assert card.instance.overrides["resistance"]["value"] == "Will vs. 18"
+    # Re-selecting the auto value clears the override again.
+    resistance.setCurrentText("Toughness vs. 18")
+    assert "resistance" not in card.instance.overrides
+
+
+def test_edited_homerule_power_reopens_with_dev_mode_on(qapp: QApplication) -> None:
+    effect = PowerEffectInstance("damage", rank=8)
+    effect.overrides["range"] = {"value": "Planetary", "order": "after"}
+    power = Power(name="Homebrew", effects=[effect])
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character(), power=power)
+    assert window._dev_mode.isChecked()
+    assert window._terms._editable

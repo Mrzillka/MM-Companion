@@ -295,6 +295,24 @@ def power_has_standing_effect(power: Power, game_data: GameData) -> bool:
     return False
 
 
+def power_has_custom_modifier(power: Power, game_data: GameData) -> bool:
+    """Whether any of the power's effects carries a blank homebrew (Custom) modifier.
+
+    A Custom Extra / Custom Flaw is player-defined (name and cost typed by hand) and
+    marked ``custom`` on its :class:`~mm_companion.core.data_loader.Modifier` record, so
+    it makes the power homerule the same way a Dev-mode override does. The UI badges such
+    a power with the ``⌂`` marker (alongside :func:`mm_companion.core.powers.power_is_homerule`).
+    """
+
+    catalog = game_data.modifier_catalog()
+    for effect in power.effects:
+        for selection in (*effect.extras, *effect.flaws):
+            modifier = catalog.get(selection.modifier_id)
+            if modifier is not None and modifier.custom:
+                return True
+    return False
+
+
 def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:
     """Trait bonuses every saved power grants, grouped ``category -> {key: TraitBonus}``.
 

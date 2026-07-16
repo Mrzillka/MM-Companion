@@ -77,6 +77,7 @@ from mm_companion.core.rules import (
     modifier_label,
     node_display_cost,
     power_display_name,
+    power_has_custom_modifier,
     power_has_standing_effect,
     power_pl_violations,
     power_runtime_gates,
@@ -955,12 +956,14 @@ class PowersSection(TitledSection):
             warning.setToolTip("\n".join(violations))
             layout.addWidget(warning)
 
-        # A homerule power (one carrying any Dev-mode override) is badged so a bent
-        # value on the sheet is never mistaken for a by-the-book one.
-        if power_is_homerule(power):
+        # A homerule power (one carrying a Dev-mode override or a blank Custom modifier)
+        # is badged so a bent value on the sheet is never mistaken for a by-the-book one.
+        if power_is_homerule(power) or power_has_custom_modifier(power, self._data):
             homerule = QLabel("⌂")
             homerule.setStyleSheet(f"color: {_TINT_HOMERULE}; font-weight: bold;")
-            homerule.setToolTip("Homerule power — carries manual (Dev-mode) overrides.")
+            homerule.setToolTip(
+                "Homerule power — carries manual (Dev-mode) overrides or a custom modifier."
+            )
             layout.addWidget(homerule)
         layout.addStretch()
 

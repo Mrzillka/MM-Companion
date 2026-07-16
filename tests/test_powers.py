@@ -31,11 +31,13 @@ from mm_companion.core.rules import (
     effective_effect_stats,
     group_array_base_index,
     live_powers,
+    modifier_label,
     node_cost,
     node_display_cost,
     power_allocation_violations,
     power_display_name,
     power_game_terms,
+    power_has_custom_modifier,
     power_has_standing_effect,
     power_linked_range_violations,
     power_modifier_requirement_violations,
@@ -179,6 +181,86 @@ def test_subtle_points_config_sets_the_flat_cost() -> None:
     )
     assert effect_total_cost(default, data) == 9
     assert effect_total_cost(two, data) == 10
+
+
+def test_custom_extra_per_rank_scales_with_effect_rank_only() -> None:
+    data = load_game_data()
+    # Custom Extra in per-rank mode charges its points per rank of the effect; its own
+    # rank spin is ignored (it already scales with the effect). Damage 5 (5) + 2/rank = 15.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=5,
+        extras=[
+            ModifierSelection("custom_extra", rank=3, config={"points": 2, "mode": "per_rank"})
+        ],
+    )
+    assert effect_total_cost(effect, data) == 15
+
+
+def test_custom_extra_flat_multiplies_by_its_own_rank() -> None:
+    data = load_game_data()
+    # In flat mode the points are charged once, times the modifier's own rank.
+    # Damage 5 (5) + 2 points x rank 3 = 6 flat -> 11.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=5,
+        extras=[ModifierSelection("custom_extra", rank=3, config={"points": 2, "mode": "flat"})],
+    )
+    assert effect_total_cost(effect, data) == 11
+
+
+def test_custom_flaw_subtracts_points() -> None:
+    data = load_game_data()
+    # A flat Custom Flaw subtracts its points x its rank. Damage 8 (8) - 2 x 2 = 4.
+    flat = PowerEffectInstance(
+        "damage",
+        rank=8,
+        flaws=[ModifierSelection("custom_flaw", rank=2, config={"points": 2, "mode": "flat"})],
+    )
+    assert effect_total_cost(flat, data) == 4
+    # A per-rank Custom Flaw of 1 halves the per-rank cost (Damage's 1/rank net 0 -> ceil).
+    per_rank = PowerEffectInstance(
+        "damage",
+        rank=8,
+        flaws=[ModifierSelection("custom_flaw", config={"points": 1, "mode": "per_rank"})],
+    )
+    assert effect_total_cost(per_rank, data) == 4
+
+
+def test_custom_modifier_leaves_game_terms_unchanged() -> None:
+    data = load_game_data()
+    plain = PowerEffectInstance("damage", rank=5)
+    with_custom = PowerEffectInstance(
+        "damage",
+        rank=5,
+        extras=[ModifierSelection("custom_extra", config={"name": "Warp", "points": 1})],
+    )
+    # A custom modifier only moves points — the effect's derived game terms are identical.
+    assert effect_game_terms(with_custom, data) == effect_game_terms(plain, data)
+
+
+def test_custom_modifier_label_leads_with_typed_name() -> None:
+    data = load_game_data()
+    modifier = data.modifier_catalog()["custom_extra"]
+    named = ModifierSelection("custom_extra", rank=2, config={"name": "Warp Field"})
+    assert modifier_label(modifier, named) == "Warp Field 2"
+    # Falls back to the record name until the player types one.
+    assert modifier_label(modifier, ModifierSelection("custom_extra")) == "Custom Extra"
+
+
+def test_power_has_custom_modifier_detects_homebrew() -> None:
+    data = load_game_data()
+    custom = Power(
+        name="Homebrew",
+        effects=[
+            PowerEffectInstance(
+                "damage", rank=5, extras=[ModifierSelection("custom_extra", config={"points": 1})]
+            )
+        ],
+    )
+    plain = Power(name="Vanilla", effects=[PowerEffectInstance("damage", rank=5)])
+    assert power_has_custom_modifier(custom, data) is True
+    assert power_has_custom_modifier(plain, data) is False
 
 
 def test_power_display_name_falls_back_to_effect_names() -> None:

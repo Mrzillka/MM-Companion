@@ -134,13 +134,18 @@ def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str
     A ranked modifier above rank 1 gains its rank (``"Penetrating 3"``); a modifier
     with a typed text detail gains it in parentheses (``"Limited (only at night)"``).
     ``rank_sep`` separates the name from the rank (the card uses ``" ×"``).
+
+    A blank Custom modifier leads with the player's typed name instead of the generic
+    record name (``"Custom Extra"``), so the homebrew shows up under the name the player
+    gave it; it falls back to the record name until one is typed.
     """
 
-    label = modifier.name
-    if modifier.ranked and selection.rank > 1:
-        label = f"{modifier.name}{rank_sep}{selection.rank}"
     detail = modifier_detail(modifier, selection)
-    if detail:
+    base = detail if modifier.custom and detail else modifier.name
+    label = base
+    if modifier.ranked and selection.rank > 1:
+        label = f"{base}{rank_sep}{selection.rank}"
+    if detail and not (modifier.custom and detail):
         label = f"{label} ({detail})"
     return label
 

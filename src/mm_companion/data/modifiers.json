@@ -21,6 +21,44 @@
   },
   "modifiers": [
     {
+      "id": "custom_extra",
+      "name": "Custom Extra",
+      "category": "extra",
+      "costFormula": "you set the cost",
+      "costValue": 0,
+      "ranked": true,
+      "flat": false,
+      "custom": true,
+      "config": [
+        { "key": "name", "label": "Name", "type": "text", "hint": "What this homebrew extra is called." },
+        { "key": "points", "label": "Cost", "type": "points", "min": 1, "max": 20, "default": 1, "hint": "Points, before the per-rank/flat and rank choices." },
+        { "key": "mode", "label": "Cost type", "type": "select", "options": [
+          { "value": "per_rank", "label": "Per rank", "flat": false, "ranked": false },
+          { "value": "flat", "label": "Flat", "flat": true, "ranked": true }
+        ] }
+      ],
+      "description": "A blank homebrew extra: you set its name, rank and point cost. It adds only power points, nothing to the game terms."
+    },
+    {
+      "id": "custom_flaw",
+      "name": "Custom Flaw",
+      "category": "flaw",
+      "costFormula": "you set the cost",
+      "costValue": 0,
+      "ranked": true,
+      "flat": false,
+      "custom": true,
+      "config": [
+        { "key": "name", "label": "Name", "type": "text", "hint": "What this homebrew flaw is called." },
+        { "key": "points", "label": "Cost", "type": "points", "min": 1, "max": 20, "default": 1, "hint": "Points, before the per-rank/flat and rank choices." },
+        { "key": "mode", "label": "Cost type", "type": "select", "options": [
+          { "value": "per_rank", "label": "Per rank", "flat": false, "ranked": false },
+          { "value": "flat", "label": "Flat", "flat": true, "ranked": true }
+        ] }
+      ],
+      "description": "A blank homebrew flaw: you set its name, rank and point cost. It subtracts only power points, nothing from the game terms."
+    },
+    {
       "id": "accurate",
       "name": "Accurate",
       "category": "extra",

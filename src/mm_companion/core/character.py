@@ -104,6 +104,13 @@ class Character:
     advantages: list[AdvantageSelection] = field(default_factory=list)
     conditions: list[AppliedCondition] = field(default_factory=list)
     powers: list[PowerNode] = field(default_factory=list)
+    #: Homebrew point-cost overrides for the non-power trait rates, keyed by the
+    #: ``TraitCosts`` field names plus ``"pp_per_level"``. Only rates the player has
+    #: changed from the ruleset default are stored, so a stock build carries an empty
+    #: dict. Applied by :func:`~..rules.effective_trait_costs` /
+    #: :func:`~..rules.effective_pp_per_level`; a non-default rate marks the character
+    #: homebrew (see :func:`~..rules.has_cost_overrides`).
+    cost_overrides: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -153,6 +160,7 @@ class Character:
             ],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
+            **({"cost_overrides": dict(self.cost_overrides)} if self.cost_overrides else {}),
         }
 
     @classmethod
@@ -186,6 +194,7 @@ class Character:
                 for c in raw.get("conditions", [])
             ],
             powers=_migrate_flat_relations([node_from_dict(p) for p in raw.get("powers", [])]),
+            cost_overrides={k: int(v) for k, v in raw.get("cost_overrides", {}).items()},
         )
 
 

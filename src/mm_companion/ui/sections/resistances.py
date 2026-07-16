@@ -65,7 +65,7 @@ class ResistancesSection(TitledSection):
         # top of the stored delta now that the grid exists.
         self.refresh_bases()
         self.refresh_enhancements()
-        self._refresh_cost()
+        self.refresh_cost()
 
     def _on_resistance_changed(self, key: str, value: int) -> None:
         # The spin box holds the total; only the difference from the derived base is
@@ -76,7 +76,7 @@ class ResistancesSection(TitledSection):
         # another; re-seed them all (guarded, so this doesn't re-enter).
         self.refresh_bases()
         self.refresh_enhancements()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def follow_ability_change(self) -> None:
@@ -120,7 +120,9 @@ class ResistancesSection(TitledSection):
             self._resistances, self._resistance_enh, bonuses["resistance"], cond_effects
         )
 
-    def _refresh_cost(self) -> None:
+    def refresh_cost(self) -> None:
+        """Re-title the block with its current PP subtotal (also driven by a homebrew
+        cost-rate change, via ``cost-rates-changed``)."""
         self.set_block_title(
             title_with_cost("Resistances", resistance_points_spent(self._character, self._data))
         )

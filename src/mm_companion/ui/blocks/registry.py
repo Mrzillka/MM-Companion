@@ -27,6 +27,7 @@ from mm_companion.ui.blocks.bus import (
     BUILD_CHANGED,
     CAPS_CHANGED,
     CONDITION_CHANGED,
+    COST_RATES_CHANGED,
     DERIVED_CHANGED,
     EDITED,
     ENHANCEMENTS_CHANGED,
@@ -92,7 +93,11 @@ _BASE_BLOCKS = [
         SystemInfoSection,
         0,
         1,
-        {"changed": (BUILD_CHANGED, FACTS_CHANGED, CAPS_CHANGED), "edited": (EDITED,)},
+        {
+            "changed": (BUILD_CHANGED, FACTS_CHANGED, CAPS_CHANGED),
+            "costRatesChanged": (COST_RATES_CHANGED,),
+            "edited": (EDITED,),
+        },
         {DERIVED_CHANGED: "refresh_derived"},
     ),
     ("character_image", "Character Image", CharacterImageSection, 0, 2, {"edited": (EDITED,)}, {}),
@@ -106,7 +111,7 @@ _BASE_BLOCKS = [
             "abilityChanged": (ABILITY_CHANGED, DERIVED_CHANGED),
             "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
-        {ENHANCEMENTS_CHANGED: "refresh_enhancements"},
+        {ENHANCEMENTS_CHANGED: "refresh_enhancements", COST_RATES_CHANGED: "refresh_cost"},
     ),
     (
         "resistances",
@@ -115,7 +120,11 @@ _BASE_BLOCKS = [
         1,
         1,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
-        {ABILITY_CHANGED: "follow_ability_change", ENHANCEMENTS_CHANGED: "refresh_enhancements"},
+        {
+            ABILITY_CHANGED: "follow_ability_change",
+            ENHANCEMENTS_CHANGED: "refresh_enhancements",
+            COST_RATES_CHANGED: "refresh_cost",
+        },
     ),
     (
         "conditions",
@@ -146,6 +155,7 @@ _BASE_BLOCKS = [
             CAPS_CHANGED: "refresh_limits",
             CONDITION_CHANGED: "refresh_conditions",
             FACTS_CHANGED: "refresh_power_options",
+            COST_RATES_CHANGED: "refresh_cost",
         },
     ),
     (
@@ -155,7 +165,11 @@ _BASE_BLOCKS = [
         3,
         0,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
-        {ABILITY_CHANGED: "refresh_totals", ENHANCEMENTS_CHANGED: "refresh_totals"},
+        {
+            ABILITY_CHANGED: "refresh_totals",
+            ENHANCEMENTS_CHANGED: "refresh_totals",
+            COST_RATES_CHANGED: "refresh_totals",
+        },
     ),
     (
         "powers",
@@ -169,7 +183,7 @@ _BASE_BLOCKS = [
             # edit, so it omits EDITED (and FACTS_CHANGED, to avoid re-deriving itself).
             "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED),
         },
-        {FACTS_CHANGED: "refresh"},
+        {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
     ),
 ]
 

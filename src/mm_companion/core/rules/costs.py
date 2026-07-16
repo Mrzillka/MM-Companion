@@ -3,12 +3,54 @@
 from __future__ import annotations
 
 import math
+from dataclasses import fields, replace
 from fractions import Fraction
 
 from ..character import Character
-from ..data_loader import GameData
+from ..data_loader import GameData, TraitCosts
 from .derived import _skill_for_row
 from .powers_cost import node_cost
+
+
+def effective_trait_costs(char: Character, game_data: GameData) -> TraitCosts:
+    """The trait-cost rates for a character, with any homebrew overrides applied.
+
+    Reads ``char.cost_overrides`` (see :attr:`Character.cost_overrides`) and layers the
+    per-rank / ranks-per-point rates the player has changed over the ruleset defaults
+    from ``costs.json``. Overrides for non-``TraitCosts`` keys (e.g. ``pp_per_level``)
+    are ignored here — see :func:`effective_pp_per_level`.
+    """
+
+    names = {f.name for f in fields(TraitCosts)}
+    changes = {k: int(v) for k, v in char.cost_overrides.items() if k in names}
+    if not changes:
+        return game_data.costs.traits
+    return replace(game_data.costs.traits, **changes)
+
+
+def effective_pp_per_level(char: Character, game_data: GameData) -> int:
+    """The power-points-per-Power-Level budget rate, with any homebrew override applied."""
+
+    return int(char.cost_overrides.get("pp_per_level", game_data.costs.power_level.pp_per_level))
+
+
+def has_cost_overrides(char: Character, game_data: GameData) -> bool:
+    """True when the character homebrews any non-power PP-cost rate away from default.
+
+    The single derived predicate the sheet's "homebrew PP cost" notice reads (mirrors
+    :func:`~mm_companion.core.rules.power_is_homerule`). Compares each stored override
+    to its ruleset default, so a rate stored but equal to default reads as no override.
+    """
+
+    traits = game_data.costs.traits
+    for key, value in char.cost_overrides.items():
+        if key == "pp_per_level":
+            default: int = game_data.costs.power_level.pp_per_level
+        else:
+            default = getattr(traits, key, None)
+        if default is not None and int(value) != default:
+            return True
+    return False
 
 
 def ability_points_spent(char: Character, game_data: GameData) -> int:
@@ -18,7 +60,7 @@ def ability_points_spent(char: Character, game_data: GameData) -> int:
     combat rate. Negative ranks refund points.
     """
 
-    costs = game_data.costs.traits
+    costs = effective_trait_costs(char, game_data)
     total = 0
     for ability in game_data.abilities:
         rank = char.abilities.get(ability.key, 0)
@@ -35,7 +77,7 @@ def resistance_points_spent(char: Character, game_data: GameData) -> int:
     Defense at the combat rate. Ranks bought below the base refund points.
     """
 
-    costs = game_data.costs.traits
+    costs = effective_trait_costs(char, game_data)
     total = 0
     for res in game_data.resistances:
         bought = char.resistances.get(res.key, 0)
@@ -69,7 +111,7 @@ def skill_points_spent(char: Character, game_data: GameData) -> int:
     rather than per row.
     """
 
-    costs = game_data.costs.traits
+    costs = effective_trait_costs(char, game_data)
     specialized = _specialized_row_ids(char)
     normal_ranks = 0
     specialized_ranks = 0
@@ -90,7 +132,7 @@ def skill_points_spent(char: Character, game_data: GameData) -> int:
 def advantage_points_spent(char: Character, game_data: GameData) -> int:
     """Power points spent on advantages: the advantage rate per rank."""
 
-    rate = game_data.costs.traits.advantage_per_rank
+    rate = effective_trait_costs(char, game_data).advantage_per_rank
     return sum(adv.rank * rate for adv in char.advantages)
 
 
@@ -129,40 +171,56 @@ def power_points_remaining(char: Character, game_data: GameData) -> int:
     return char.power_points_total - power_points_spent(char, game_data)
 
 
-def min_power_points(power_level: int, game_data: GameData) -> int:
+def min_power_points(power_level: int, game_data: GameData, char: Character | None = None) -> int:
     """The minimum power-point budget a Power Level requires: ``PL × pp_per_level``.
 
     A character's Power Level sets the floor on their point budget — a PL 10 hero is
     built on at least 150 points at 15 points per level (``docs/mm-core-mechanics.md`` §7).
-    Data-driven: the per-level rate comes from ``costs.json``, never hardcoded here.
+    Data-driven: the per-level rate comes from ``costs.json`` (or the character's
+    homebrew override when ``char`` is given), never hardcoded here.
     """
 
-    return power_level * game_data.costs.power_level.pp_per_level
+    per_level = (
+        effective_pp_per_level(char, game_data)
+        if char is not None
+        else game_data.costs.power_level.pp_per_level
+    )
+    return power_level * per_level
 
 
-def power_level_for_points(power_points: int, game_data: GameData) -> int:
+def power_level_for_points(
+    power_points: int, game_data: GameData, char: Character | None = None
+) -> int:
     """The Power Level a point budget affords: ``floor(power_points / pp_per_level)``.
 
     Every further ``pp_per_level`` points crosses into the next Power Level band, so a
-    budget raised past a level's border raises the Power Level to match. Guards a
-    non-positive ``pp_per_level`` by returning 0.
+    budget raised past a level's border raises the Power Level to match. Uses the
+    character's homebrew per-level rate when ``char`` is given. Guards a non-positive
+    ``pp_per_level`` by returning 0.
     """
 
-    per_level = game_data.costs.power_level.pp_per_level
+    per_level = (
+        effective_pp_per_level(char, game_data)
+        if char is not None
+        else game_data.costs.power_level.pp_per_level
+    )
     if per_level <= 0:
         return 0
     return power_points // per_level
 
 
-def reconcile_points_to_level(power_level: int, power_points: int, game_data: GameData) -> int:
+def reconcile_points_to_level(
+    power_level: int, power_points: int, game_data: GameData, char: Character | None = None
+) -> int:
     """Point budget after a Power Level change: snap it to the level's band minimum.
 
     Keeps the two linked so :func:`power_level_for_points` of the result equals
     ``power_level``. A budget already inside the level's band is left untouched (so a
     character can carry extra points within a level); one below the minimum, or up in
-    a higher band, snaps to :func:`min_power_points`.
+    a higher band, snaps to :func:`min_power_points`. Honours the character's homebrew
+    per-level rate when ``char`` is given.
     """
 
-    if power_level_for_points(power_points, game_data) != power_level:
-        return min_power_points(power_level, game_data)
+    if power_level_for_points(power_points, game_data, char) != power_level:
+        return min_power_points(power_level, game_data, char)
     return power_points

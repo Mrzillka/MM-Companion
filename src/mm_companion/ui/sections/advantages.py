@@ -247,7 +247,7 @@ class AdvantagesSection(TitledSection):
         )
 
         self._rebuild()
-        self._refresh_cost()
+        self.refresh_cost()
         self.refresh_limits()
 
     def refresh_conditions(self) -> None:
@@ -737,7 +737,7 @@ class AdvantagesSection(TitledSection):
         if spec is not None:
             selection.parameter = self._read_parameter_value(spec, param_combo, param_line)
         self._rebuild()
-        self._refresh_cost()
+        self.refresh_cost()
         self.refresh_limits()
         self.changed.emit()
 
@@ -761,7 +761,7 @@ class AdvantagesSection(TitledSection):
                 return
         self._character.advantages.append(AdvantageSelection(advantage.name, rank, parameter))
         self._rebuild()
-        self._refresh_cost()
+        self.refresh_cost()
         self.refresh_limits()
         self._sync_rank_enabled()
         self.changed.emit()
@@ -783,12 +783,14 @@ class AdvantagesSection(TitledSection):
         if any(self._selected is s for s in selected):
             self._selected = None
         self._rebuild()
-        self._refresh_cost()
+        self.refresh_cost()
         self.refresh_limits()
         self._sync_rank_enabled()
         self.changed.emit()
 
-    def _refresh_cost(self) -> None:
+    def refresh_cost(self) -> None:
+        """Re-title the block with its current PP subtotal (also driven by a homebrew
+        cost-rate change, via ``cost-rates-changed``)."""
         self.set_block_title(
             title_with_cost("Advantages", advantage_points_spent(self._character, self._data))
         )

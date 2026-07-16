@@ -63,8 +63,10 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
     PowerGroup,
     PowerNode,
+    power_is_homerule,
 )
 from mm_companion.core.rules import (
+    HOMERULE_TINT,
     active_array_child,
     array_alternate_cost,
     array_base_index,
@@ -88,7 +90,9 @@ from mm_companion.ui.widgets import hline_separator, title_with_cost
 # PowerTermsView: an extra improved it (green), a flaw limited it (red).
 _TINT_BETTER = "#2e9e4f"
 _TINT_WORSE = "#d15b5b"
-_TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE}
+# A homerule (Dev-mode) override reads in a distinct blue, apart from better/worse.
+_TINT_HOMERULE = "#4a90d9"
+_TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE, HOMERULE_TINT: _TINT_HOMERULE}
 
 # A calm blue reused for drag affordances and dice info.
 _ACCENT = "#6a86c0"
@@ -950,6 +954,14 @@ class PowersSection(TitledSection):
             warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
             warning.setToolTip("\n".join(violations))
             layout.addWidget(warning)
+
+        # A homerule power (one carrying any Dev-mode override) is badged so a bent
+        # value on the sheet is never mistaken for a by-the-book one.
+        if power_is_homerule(power):
+            homerule = QLabel("⌂")
+            homerule.setStyleSheet(f"color: {_TINT_HOMERULE}; font-weight: bold;")
+            homerule.setToolTip("Homerule power — carries manual (Dev-mode) overrides.")
+            layout.addWidget(homerule)
         layout.addStretch()
 
         # An array member gets a select control (an "Active" radio for a standing

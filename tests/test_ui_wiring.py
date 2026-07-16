@@ -59,6 +59,28 @@ def test_raising_power_level_raises_the_budget_to_its_minimum(qapp: QApplication
     assert sheet.system_info._power_points.value() == 12 * per_level
 
 
+def test_cost_config_change_reprices_every_block_and_shows_the_notice(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.abilities._abilities["STR"].setValue(5)  # 5 ranks
+    assert sheet.abilities.block_title() == "Abilities — 10 PP"  # default 2/rank
+    assert sheet.system_info._cost_notice.isHidden()
+
+    # Homebrew the ability rate to 3/rank the way the dialog's Save does, then fire
+    # the section's signals as _open_cost_config would after an accepted dialog.
+    sheet.character.cost_overrides["ability_per_rank"] = 3
+    sheet.system_info._refresh_cost_notice()
+    sheet.system_info.costRatesChanged.emit()
+    sheet.system_info.changed.emit()
+
+    # The per-block subtotal, the pool total, and the homebrew notice all update.
+    assert sheet.abilities.block_title() == "Abilities — 15 PP"  # 5 * 3
+    assert sheet.system_info._pool_current.text() == "15"
+    assert not sheet.system_info._cost_notice.isHidden()
+
+
 def test_raising_the_budget_past_a_border_raises_power_level(qapp: QApplication) -> None:
     data = load_game_data()
     sheet = CharacterSheet(data)  # PL 10, 150 PP

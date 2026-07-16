@@ -97,11 +97,23 @@ class MainWindow(QMainWindow):
         settings_menu = menu_bar.addMenu("&Settings")
         self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
         settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
+        # Homebrew the non-power PP-cost rates for this character. Editing the build,
+        # it is disabled while the sheet is a read-only (locked) view.
+        self._cost_config_action = settings_menu.addAction("Cost config...")
+        self._cost_config_action.triggered.connect(self._open_cost_config)
+        self._cost_config_action.setEnabled(not locked)
 
         self._lock_action = settings_menu.addAction("Lock")
         self._lock_action.setCheckable(True)
         self._lock_action.setChecked(locked)
         self._lock_action.toggled.connect(self._sheet.set_locked)
+        self._lock_action.toggled.connect(
+            lambda locked: self._cost_config_action.setEnabled(not locked)
+        )
+
+    def _open_cost_config(self) -> None:
+        """Open the per-character homebrew cost-config editor (Settings ▸ Cost config)."""
+        self._sheet.system_info.open_cost_config()
 
     def _manage_mods(self) -> None:
         """Open the Mod Manager window."""

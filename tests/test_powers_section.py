@@ -203,3 +203,21 @@ def test_inactive_linked_group_disables_nested_member_controls(qapp: QApplicatio
     off_card = sec._render_node(linked, None)
     # With the group switched off the nested member can no longer be re-activated.
     assert nested_use_button(off_card).isEnabled() is False
+
+
+def test_homerule_power_shows_the_badge(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    plain = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=4)])
+    effect = PowerEffectInstance("damage", rank=4)
+    effect.overrides["range"] = {"value": "Planetary", "order": "after"}
+    homebrew = Power(name="Homebrew", effects=[effect])
+    char.powers.extend([plain, homebrew])
+
+    sheet = CharacterSheet(data, char)
+    badges = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⌂"]
+    # Exactly one card (the homerule one) carries the badge.
+    assert len(badges) == 1
+    assert "homerule" in badges[0].toolTip().lower()

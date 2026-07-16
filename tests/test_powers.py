@@ -23,6 +23,7 @@ from mm_companion.core.rules import (
     effect_effective_rank,
     effect_game_terms,
     effect_is_active,
+    effect_makes_attack,
     effect_readout_rows,
     effect_stat_rows,
     effect_total_cost,
@@ -573,6 +574,64 @@ def test_effect_stat_rows_perception_range_drops_the_attack_roll() -> None:
     assert rows["resistance"].value == "Toughness vs. 18"  # target still resists
 
 
+def test_implicit_attack_modifier_renders_damage_untinted() -> None:
+    data = load_game_data()
+    # Damage's attack roll comes from the implicit "attack" extra rather than a check
+    # written on the record — but that is an invisible refactor: the rows must read
+    # exactly as if it were, with no tint marking a modifier win.
+    rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("damage", rank=8), data)}
+    assert rows["check"].value == rows["check"].base == "8 vs. Defense"
+    assert rows["check"].change == ""
+    assert rows["effect_type"].value == rows["effect_type"].base == "Attack"
+    assert rows["effect_type"].change == ""
+
+
+def test_implicit_attack_modifier_is_not_costed_or_noted() -> None:
+    data = load_game_data()
+    # The implicit extra never sits on the instance, so it costs nothing and is not
+    # listed among the effect's modifiers.
+    effect = PowerEffectInstance("damage", rank=8)
+    assert effect_total_cost(effect, data) == 8  # 1/rank, unchanged by the implicit extra
+    assert "notes" not in {r.key for r in effect_stat_rows(effect, data)}
+    assert "Attack" not in effect_cost_formula(effect, data)
+
+
+def test_attack_extra_grants_an_attack_roll_to_a_non_attacking_effect() -> None:
+    data = load_game_data()
+    # The point of making Attack a modifier: any effect can take it. Flight normally
+    # makes no attack roll; the +0 extra gives it one, tinted as the extra's win.
+    effect = PowerEffectInstance("flight", rank=8, extras=[ModifierSelection("attack")])
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["check"].value == "8 vs. Defense"
+    assert rows["check"].base == ""  # bare Flight has no check at all
+    assert rows["check"].change == "better"
+    assert rows["effect_type"].value == "Attack" and rows["effect_type"].change == "better"
+    assert effect_makes_attack(effect, data) is True
+    # +0 points: taking Attack costs the same as the bare effect.
+    assert effect_total_cost(effect, data) == effect_total_cost(
+        PowerEffectInstance("flight", rank=8), data
+    )
+
+
+def test_deflect_does_not_make_an_attack_roll() -> None:
+    data = load_game_data()
+    # Regression guard: "Deflect vs. Attack" used to satisfy a substring test for
+    # "Attack", wrongly marking Deflect an attack. It rolls against an attack, not one.
+    effect = PowerEffectInstance("deflect", rank=8)
+    assert effect_makes_attack(effect, data) is False
+    check = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert check.value == "8 vs. Attack"  # still displayed, still off the effect's rank
+
+
+def test_offensive_control_effects_read_as_attack_type() -> None:
+    data = load_game_data()
+    # Create is filed under Control as a catalog taxonomy, but it does roll to hit, so
+    # its implicit Attack extra sets the effective Type row — untinted, it's the base.
+    line = effect_game_terms(PowerEffectInstance("create", rank=4), data)
+    assert line.startswith("Create 4: Attack,")
+    assert effect_makes_attack(PowerEffectInstance("move_object", rank=4), data) is True
+
+
 def test_effect_stat_rows_area_keeps_the_attack_roll_with_a_note() -> None:
     data = load_game_data()
     effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("area_effect")])
@@ -708,6 +767,9 @@ def test_effect_stat_rows_effect_specific_flaw_adds_an_attack_check() -> None:
     rows = {r.key: r for r in effect_stat_rows(effect, data)}
     assert rows["range"].value == "Ranged" and rows["range"].change == "worse"
     assert rows["check"].value == "5 vs. Defense" and rows["check"].change == "worse"
+    # The flaw grants a real attack, not just a check row: it used to show the row
+    # while the rules layer still read the base's null check and called it auto-hit.
+    assert effect_makes_attack(effect, data) is True
 
 
 def test_effect_stat_rows_effect_specific_area_notes_the_check() -> None:
@@ -1533,3 +1595,116 @@ def test_increasing_difficulty_requires_cumulative_or_progressive() -> None:
     assert power_modifier_requirement_violations(alone, data)  # unmet dependency
     paired = Power(effects=[_affliction(4, ("increasing_difficulty", {}), ("cumulative", {}))])
     assert power_modifier_requirement_violations(paired, data) == []
+
+
+# -- Dev-mode homerule overrides ----------------------------------------------
+
+
+def _damage_with_override(key, value, order="after", **extra):
+    effect = PowerEffectInstance("damage", rank=8)
+    entry = {"value": value, "order": order}
+    entry.update(extra)
+    effect.overrides[key] = entry
+    return effect
+
+
+def test_after_override_wins_over_a_modifier() -> None:
+    data = load_game_data()
+    # The Ranged extra would set range to "Ranged"; an "after" override beats it.
+    effect = _damage_with_override("range", "Planetary")
+    effect.extras.append(ModifierSelection("ranged"))
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "range")
+    assert row.value == "Planetary"
+    assert row.change == "homerule"
+
+
+def test_before_override_is_still_overridden_by_a_modifier() -> None:
+    data = load_game_data()
+    # A "before" override sets the base the Ranged extra then replaces.
+    effect = _damage_with_override("range", "Planetary", order="before")
+    effect.extras.append(ModifierSelection("ranged"))
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "range")
+    assert row.value == "Ranged"  # the modifier wins over a "before" override
+
+
+def test_before_override_untouched_by_modifiers_reads_homerule() -> None:
+    data = load_game_data()
+    effect = _damage_with_override("effect_type", "Utility", order="before")
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "effect_type")
+    assert row.value == "Utility"
+    assert row.change == "homerule"
+
+
+def test_after_override_of_check_is_verbatim_not_numeric() -> None:
+    data = load_game_data()
+    # A base "Attack vs. Defense" check would resolve to "<n> vs. Defense"; an "after"
+    # override is kept exactly as typed.
+    effect = _damage_with_override("check", "roll a d6")
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
+    assert row.value == "roll a d6"
+    assert row.change == "homerule"
+
+
+def test_custom_override_row_is_appended() -> None:
+    data = load_game_data()
+    effect = _damage_with_override("custom_1", "42", label="Ammo")
+    rows = effect_stat_rows(effect, data)
+    row = next(r for r in rows if r.key == "custom_1")
+    assert row.label == "Ammo"
+    assert row.value == "42"
+    assert row.change == "homerule"
+
+
+def test_cost_override_replaces_the_power_total() -> None:
+    data = load_game_data()
+    power = Power(effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_total_cost(power, data) == 8
+    power.cost_override = 3
+    assert power_total_cost(power, data) == 3
+
+
+def test_cost_override_flows_into_points_spent() -> None:
+    data = load_game_data()
+    char = Character()
+    power = Power(name="Homebrew", effects=[PowerEffectInstance("damage", rank=8)])
+    power.cost_override = 25
+    char.powers.append(power)
+    assert powers_points_spent(char, data) == 25
+
+
+def test_power_is_homerule_only_with_an_override() -> None:
+    from mm_companion.core.powers import power_is_homerule
+
+    plain = Power(effects=[PowerEffectInstance("damage", rank=8)])
+    assert not power_is_homerule(plain)
+    with_cost = Power(effects=[PowerEffectInstance("damage", rank=8)], cost_override=5)
+    assert power_is_homerule(with_cost)
+    with_term = Power(effects=[_damage_with_override("range", "Planetary")])
+    assert power_is_homerule(with_term)
+
+
+def test_overrides_round_trip_through_serialization() -> None:
+    effect = _damage_with_override("range", "Planetary", order="before")
+    effect.overrides["custom_1"] = {"value": "9", "order": "after", "label": "Ammo"}
+    power = Power(name="HR", effects=[effect], cost_override=17)
+    restored = Power.from_dict(power.to_dict())
+    assert restored.cost_override == 17
+    assert restored.effects[0].overrides == effect.overrides
+
+
+def test_old_power_dict_loads_without_override_keys() -> None:
+    restored = Power.from_dict({"name": "x", "effects": [{"effect_id": "damage", "rank": 3}]})
+    assert restored.effects[0].overrides == {}
+    assert restored.cost_override is None
+
+
+def test_resolve_stat_display_fills_in_the_numbers() -> None:
+    from mm_companion.core.rules import resolve_stat_display
+
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8)  # save DC base 10 + rank 8 = 18
+    assert resolve_stat_display(effect, data, "resistance", "Will vs. Effect") == "Will vs. 18"
+    assert resolve_stat_display(effect, data, "range", "Rank") == "1,800 feet"
+    # Fields without a numeric form come back unchanged.
+    assert resolve_stat_display(effect, data, "effect_type", "Attack") == "Attack"
+    assert resolve_stat_display(effect, data, "action", "Standard") == "Standard"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import GameData, Modifier
@@ -32,6 +32,29 @@ _STAT_FIELDS = (
     ("resistance", "Resistance"),
 )
 
+# The six standard game-term keys a Dev-mode override targets directly on the stats
+# dict (all others are row-level overrides applied to the assembled table rows).
+_STANDARD_STAT_KEYS = tuple(key for key, _ in _STAT_FIELDS)
+
+# The ``change`` tag a homerule override carries, so the UI can tint an overridden
+# cell distinctly from a modifier's "better"/"worse".
+HOMERULE_TINT = "homerule"
+
+
+def _override_value(effect: PowerEffectInstance, key: str, order: str) -> str | None:
+    """The Dev-mode override string for ``key`` when it is set with ``order``.
+
+    ``order`` is ``"before"`` (folded into the base the modifiers build on) or
+    ``"after"`` (applied last, winning over every modifier); a stored override with
+    no explicit order is treated as ``"after"``. Returns ``None`` when there is no
+    matching override.
+    """
+
+    entry = (effect.overrides or {}).get(key)
+    if entry and entry.get("order", "after") == order:
+        return str(entry.get("value", ""))
+    return None
+
 
 @dataclass(frozen=True)
 class EffectStat:
@@ -54,16 +77,21 @@ class EffectStat:
 class EffectImpact:
     """Modifier-derived game-term adjustments that aren't a plain field override.
 
-    Gathered alongside the stat dicts by :func:`_effective_stats`. ``check_bonus``
-    is the net signed number modifiers add to the effect's attack roll (Accurate
-    ``+2``/rank, Inaccurate ``-2``/rank); ``drops_check`` is set when a modifier
-    removes the attack roll entirely (Perception Range); ``check_notes`` are
+    Gathered alongside the stat dicts by :func:`_effective_stats`. ``grants_attack``
+    is set when a modifier gives the effect its attack roll — an attacking effect's
+    implicit ``attack`` extra, or one taken explicitly on any other effect — and is
+    what :func:`~mm_companion.core.rules.effect_makes_attack` reads rather than
+    sniffing the check prose; ``check_bonus`` is the net signed number modifiers add
+    to the effect's attack roll (Accurate ``+2``/rank, Inaccurate ``-2``/rank);
+    ``drops_check`` is set when a modifier removes the attack roll entirely
+    (Perception Range), and cancels ``grants_attack``; ``check_notes`` are
     parentheticals a modifier appends to the check row (Area's Dodge-for-half); and
     ``notes`` names every attached modifier with no other visible game-term impact,
     so the table can list them and nothing an effect carries goes unseen.
     """
 
     check_bonus: int = 0
+    grants_attack: bool = False
     drops_check: bool = False
     check_notes: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
@@ -166,6 +194,14 @@ def _effective_stats(
     config choice). ``impact`` collects the modifier effects that aren't a field
     replacement (attack-roll bonus, dropped/noted check, plus the Notes list). Empty
     dicts and a blank :class:`EffectImpact` for an unknown effect id.
+
+    The base effect's own
+    :attr:`~mm_companion.core.data_loader.Effect.implicit_modifiers` are folded into
+    ``base`` itself — they are part of the effect's definition, not a player's choice,
+    so a Damage reads exactly as if its "Attack vs. Defense" check were still written
+    on the record: no tint, no note, no chip, no cost. Only their ``overrides`` and
+    ``grants_attack`` apply; stepping, check bonuses and check notes are for attached
+    modifiers, whose ordering and action-floor interplay the loop below handles.
     """
 
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -179,10 +215,29 @@ def _effective_stats(
         "check": base_effect.check or "",
         "resistance": base_effect.resistance or "",
     }
-    stats = dict(base)
-    change = dict.fromkeys(base, "")
     ladders = game_data.game_term_ladders
     catalog = game_data.modifier_catalog()
+
+    grants_attack = False
+    for modifier_id in base_effect.implicit_modifiers:
+        modifier = catalog.get(modifier_id)
+        if modifier is None:
+            continue
+        for key, value in modifier.overrides.items():
+            if key in base:
+                base[key] = value
+        grants_attack = grants_attack or modifier.grants_attack
+
+    # Dev-mode "before" overrides replace the base value the modifiers then build on,
+    # so an extra/flaw can still step or re-override it (standard game-term fields
+    # only — other override keys are row-level, handled in ``effect_stat_rows``).
+    for key in _STANDARD_STAT_KEYS:
+        before = _override_value(effect, key, "before")
+        if before is not None:
+            base[key] = before
+
+    stats = dict(base)
+    change = dict.fromkeys(base, "")
 
     check_bonus = 0
     drops_check = False
@@ -222,6 +277,9 @@ def _effective_stats(
             check_bonus += modifier.check_bonus * (
                 selection.rank if modifier.ranked else effect.rank
             )
+            touched = True
+        if modifier.grants_attack:
+            grants_attack = True
             touched = True
         if modifier.drops_check:
             drops_check = True
@@ -269,8 +327,20 @@ def _effective_stats(
         if stats[key] == base[key]:
             change[key] = ""
 
+    # Dev-mode overrides. An "after" override wins over every modifier; a "before"
+    # override that no modifier ended up moving still reads as a homerule edit, so
+    # both carry the homerule tint unless a modifier already tinted the field.
+    for key in _STANDARD_STAT_KEYS:
+        after = _override_value(effect, key, "after")
+        if after is not None:
+            stats[key] = after
+            change[key] = HOMERULE_TINT
+        elif _override_value(effect, key, "before") is not None and not change[key]:
+            change[key] = HOMERULE_TINT
+
     impact = EffectImpact(
         check_bonus=check_bonus,
+        grants_attack=grants_attack,
         drops_check=drops_check,
         check_notes=tuple(check_notes),
         notes=_modifier_notes(effect, catalog, impactful),
@@ -331,6 +401,52 @@ def _measure_value(measure, rank: int, game_data: GameData) -> str:
     if not label:
         return ""
     return f"{label}/round" if measure.per_round else label
+
+
+def resolve_stat_display(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    field_key: str,
+    raw_value: str,
+    char: Character | None = None,
+    attack_bonus: int | None = None,
+) -> str:
+    """Resolve one raw game-term value to the concrete form the table would show.
+
+    The same numeric substitution :func:`effect_stat_rows` applies, for a single
+    field and a candidate value: a ``"Rank"`` range becomes its measured distance, a
+    check/resistance phrase gets the effect's save DC (``resistance_dc_base`` plus the
+    effective rank) and — for an attack check — the wielder's Attack filled in. Fields
+    without a numeric form (Type/Action/Duration) come back unchanged, as does a value
+    the effect can't resolve. This lets the Dev-mode dropdowns offer real numbers
+    (``"Will vs. 18"``) rather than bare templates (``"Will vs. Effect"``).
+    """
+
+    if not raw_value:
+        return raw_value
+    base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None:
+        return raw_value
+    if field_key == "range" and raw_value == "Rank":
+        return game_data.measurements.label("distance", effect.rank) or "Rank"
+    effective_rank = effect_effective_rank(effect, game_data, char)
+    dc = (
+        None
+        if base_effect.resistance_dc_base is None
+        else base_effect.resistance_dc_base + effective_rank
+    )
+    if field_key == "check":
+        if attack_bonus is not None:
+            attack = attack_bonus
+        elif char is not None:
+            attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
+        else:
+            attack = effect.rank
+        actor = attack if raw_value.startswith("Attack") else effect.rank
+        return _numeric_roll(raw_value, actor, dc, resistance=False)
+    if field_key == "resistance":
+        return _numeric_roll(raw_value, effect.rank, dc, resistance=True)
+    return raw_value
 
 
 def effect_stat_rows(
@@ -402,20 +518,26 @@ def effect_stat_rows(
         roll = attack if phrase.startswith("Attack") else effect.rank
         return roll + (impact.check_bonus if with_mods else 0)
 
+    # An "after" override of the check/resistance is a verbatim manual value — keep
+    # it out of the numeric substitution (and the Accurate/Inaccurate re-tint) below.
+    check_overridden = _override_value(effect, "check", "after") is not None
+    resistance_overridden = _override_value(effect, "resistance", "after") is not None
     base["check"] = _numeric_roll(
         base["check"], _actor(base["check"], with_mods=False), dc, resistance=False
     )
     base["resistance"] = _numeric_roll(base["resistance"], effect.rank, dc, resistance=True)
-    stats["check"] = _numeric_roll(
-        stats["check"], _actor(stats["check"], with_mods=True), dc, resistance=False
-    )
-    stats["resistance"] = _numeric_roll(stats["resistance"], effect.rank, dc, resistance=True)
+    if not check_overridden:
+        stats["check"] = _numeric_roll(
+            stats["check"], _actor(stats["check"], with_mods=True), dc, resistance=False
+        )
+    if not resistance_overridden:
+        stats["resistance"] = _numeric_roll(stats["resistance"], effect.rank, dc, resistance=True)
 
     # Accurate/Inaccurate move the attack number — tint the check by the net sign.
-    if stats["check"] and impact.check_bonus:
+    if not check_overridden and stats["check"] and impact.check_bonus:
         change["check"] = "better" if impact.check_bonus > 0 else "worse"
     # Area-style notes ride along on the current check value only (not the base).
-    if stats["check"] and impact.check_notes:
+    if not check_overridden and stats["check"] and impact.check_notes:
         stats["check"] = f"{stats['check']} ({'; '.join(impact.check_notes)})"
 
     rows = []
@@ -450,7 +572,42 @@ def effect_stat_rows(
     rows.extend(effect_readout_rows(effect, game_data))
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
-    return rows
+    return _apply_row_overrides(rows, effect)
+
+
+def _apply_row_overrides(rows: list[EffectStat], effect: PowerEffectInstance) -> list[EffectStat]:
+    """Apply the Dev-mode overrides that aren't one of the six standard stat fields.
+
+    Every other override key is *row-level*: it replaces the value of the assembled
+    row with that key (an ``effect_dc``, a ``measure``, a size/state/pool readout, a
+    config quality) or, when no row carries the key, appends a fresh custom row using
+    the override's stored ``label``. Overridden and added rows are tinted homerule.
+    The six standard fields are handled in :func:`_effective_stats`, so they're skipped
+    here.
+    """
+
+    extra = {
+        key: entry
+        for key, entry in (effect.overrides or {}).items()
+        if key not in _STANDARD_STAT_KEYS
+    }
+    if not extra:
+        return rows
+    seen: set[str] = set()
+    out: list[EffectStat] = []
+    for row in rows:
+        entry = extra.get(row.key)
+        if entry is not None:
+            out.append(replace(row, value=str(entry.get("value", "")), change=HOMERULE_TINT))
+            seen.add(row.key)
+        else:
+            out.append(row)
+    for key, entry in extra.items():
+        if key in seen:
+            continue
+        label = entry.get("label") or key.replace("_", " ").title()
+        out.append(EffectStat(key, label, "", str(entry.get("value", "")), HOMERULE_TINT))
+    return out
 
 
 def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:

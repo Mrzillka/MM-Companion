@@ -8,10 +8,16 @@ from mm_companion.core.character import AdvantageSelection, AppliedCondition, Ch
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    ability_cost_rate,
+    ability_points_spent,
+    advantage_points_spent,
     advantage_rank_cap,
     advantage_violations,
     apply_condition,
     defense_class,
+    effective_pp_per_level,
+    effective_trait_costs,
+    has_cost_overrides,
     heroic_advantage_budget,
     heroic_advantage_ranks,
     min_power_points,
@@ -20,8 +26,11 @@ from mm_companion.core.rules import (
     power_points_remaining,
     power_points_spent,
     reconcile_points_to_level,
+    resistance_cost_rate,
+    resistance_points_spent,
     resistance_total,
     skill_bonus,
+    skill_cost_rate,
     skill_modifiers,
     skill_points_spent,
     skill_total,
@@ -53,9 +62,19 @@ def test_to_dict_from_dict_round_trip() -> None:
     char.powers.append(
         Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
     )
+    char.cost_overrides["ability_per_rank"] = 3
+    char.cost_overrides["pp_per_level"] = 20
 
     restored = Character.from_dict(char.to_dict())
     assert restored == char
+
+
+def test_cost_overrides_are_omitted_when_empty() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A stock build carries no homebrew rates, so the key is left out of the save.
+    assert "cost_overrides" not in char.to_dict()
+    assert Character.from_dict(char.to_dict()).cost_overrides == {}
 
 
 def test_saved_powers_count_toward_points_spent() -> None:
@@ -166,6 +185,151 @@ def test_reconcile_points_lowers_a_budget_from_a_higher_band() -> None:
     per_level = data.costs.power_level.pp_per_level  # 15
     # PL lowered to 9 while the budget is in PL 11's band → snaps down to PL 9's min.
     assert reconcile_points_to_level(9, 11 * per_level, data) == 9 * per_level
+
+
+# -- homebrew cost overrides ---------------------------------------------------
+
+
+def test_effective_trait_costs_layers_overrides_over_defaults() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert effective_trait_costs(char, data) == data.costs.traits  # empty → defaults
+
+    char.cost_overrides["ability_per_rank"] = 3
+    eff = effective_trait_costs(char, data)
+    assert eff.ability_per_rank == 3
+    # Only the overridden field changes; the rest keep their defaults.
+    assert eff.resistance_per_rank == data.costs.traits.resistance_per_rank
+    # A non-TraitCosts key (pp_per_level) is ignored here.
+    char.cost_overrides["pp_per_level"] = 20
+    assert effective_trait_costs(char, data).ability_per_rank == 3
+
+
+def test_effective_pp_per_level_reads_the_override() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert effective_pp_per_level(char, data) == data.costs.power_level.pp_per_level
+    char.cost_overrides["pp_per_level"] = 20
+    assert effective_pp_per_level(char, data) == 20
+
+
+def test_has_cost_overrides_ignores_rates_equal_to_default() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert has_cost_overrides(char, data) is False
+    # A stored value equal to the default is not a homebrew.
+    char.cost_overrides["ability_per_rank"] = data.costs.traits.ability_per_rank
+    assert has_cost_overrides(char, data) is False
+    char.cost_overrides["ability_per_rank"] = data.costs.traits.ability_per_rank + 1
+    assert has_cost_overrides(char, data) is True
+
+
+def test_ability_cost_reflects_a_homebrew_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STR"] = 5
+    base = ability_points_spent(char, data)  # 5 * 2 = 10 at the default rate
+    char.cost_overrides["ability_per_rank"] = 3
+    assert ability_points_spent(char, data) == base + 5  # 5 * 3 = 15
+
+
+def test_advantage_cost_reflects_a_homebrew_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.advantages.append(AdvantageSelection("Close Attack", 4))
+    assert advantage_points_spent(char, data) == 4  # 4 * 1 default
+    char.cost_overrides["advantage_per_rank"] = 2
+    assert advantage_points_spent(char, data) == 8  # 4 * 2 homebrew
+
+
+def test_pp_per_level_override_drives_the_level_math() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.cost_overrides["pp_per_level"] = 20
+    # With char the per-level rate is the homebrew 20; without it the default 15.
+    assert min_power_points(10, data, char) == 200
+    assert min_power_points(10, data) == 10 * data.costs.power_level.pp_per_level
+    assert power_level_for_points(200, data, char) == 10  # 200 / 20
+    assert power_level_for_points(200, data) == 200 // data.costs.power_level.pp_per_level
+
+
+def test_skill_default_rate_matches_before_and_after_no_override() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.skill_ranks["Stealth"] = 8
+    base = skill_points_spent(char, data)  # ceil(8 / 2) = 4
+    char.cost_overrides["skill_ranks_per_pp"] = 4  # homebrew: 4 ranks per point
+    assert skill_points_spent(char, data) == 2  # ceil(8 / 4)
+    assert base == 4
+
+
+# -- per-item homebrew cost overrides ------------------------------------------
+
+
+def test_per_ability_override_reprices_only_that_ability() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    first, second = data.abilities[0], data.abilities[1]
+    char.abilities[first.key] = 4
+    char.abilities[second.key] = 4
+    base = ability_points_spent(char, data)  # both at the default rate
+
+    char.item_cost_overrides["abilities"] = {first.key: 5}
+    assert ability_cost_rate(char, data, first) == 5
+    assert ability_cost_rate(char, data, second) == data.costs.traits.ability_per_rank
+    # Only the first ability's ranks are repriced (4 * (5 - default)).
+    assert ability_points_spent(char, data) == base + 4 * (5 - data.costs.traits.ability_per_rank)
+
+
+def test_per_resistance_override_reprices_only_that_resistance() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    res = next(r for r in data.resistances if not r.derived)
+    char.resistances[res.key] = 3
+    base = resistance_points_spent(char, data)
+
+    res_rate = 4
+    char.item_cost_overrides["resistances"] = {res.key: res_rate}
+    assert resistance_cost_rate(char, data, res) == res_rate
+    assert resistance_points_spent(char, data) == base + 3 * (
+        res_rate - data.costs.traits.resistance_per_rank
+    )
+
+
+def test_per_skill_override_prices_that_skill_alone() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    skill = next(s for s in data.skills if not s.focused and not s.specialized_cost)
+    char.skill_ranks[skill.name] = 8
+    assert skill_points_spent(char, data) == 4  # ceil(8 / 2)
+
+    char.item_cost_overrides["skills"] = {skill.name: 1}  # 1 rank / PP
+    assert skill_cost_rate(char, data, skill) == 1
+    assert skill_points_spent(char, data) == 8  # ceil(8 / 1)
+
+
+def test_item_override_follows_a_changed_category_rate_for_has_overrides() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    first = data.abilities[0]
+    # A per-item value equal to the ruleset category default is not a homebrew.
+    char.item_cost_overrides["abilities"] = {first.key: data.costs.traits.ability_per_rank}
+    assert has_cost_overrides(char, data) is False
+    char.item_cost_overrides["abilities"][first.key] = data.costs.traits.ability_per_rank + 1
+    assert has_cost_overrides(char, data) is True
+
+
+def test_item_cost_overrides_round_trip_and_omit_when_empty() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert "item_cost_overrides" not in char.to_dict()
+    # An empty category dict still serializes to nothing.
+    char.item_cost_overrides["skills"] = {}
+    assert "item_cost_overrides" not in char.to_dict()
+
+    char.item_cost_overrides["abilities"] = {"STR": 5}
+    restored = Character.from_dict(char.to_dict())
+    assert restored.item_cost_overrides == {"abilities": {"STR": 5}}
 
 
 def test_skill_total_is_ability_plus_ranks() -> None:

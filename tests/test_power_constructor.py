@@ -84,6 +84,59 @@ def test_attack_skill_row_hidden_for_a_non_attack_effect(qapp: QApplication) -> 
     assert card._attack_skill_row.isHidden()
 
 
+def test_attack_extra_shows_the_attack_skill_row_on_a_non_attacking_effect(
+    qapp: QApplication,
+) -> None:
+    # Flight makes no attack roll, so there is nothing to reskill — until the Attack
+    # extra gives it one. Removing the extra takes the row away again.
+    window = PowerConstructorWindow(load_game_data(), character=_char_with_focus())
+    card = window.canvas.add_effect("flight")
+    assert card._attack_skill_row.isHidden()
+
+    card.attach_modifier("attack")
+    assert not card._attack_skill_row.isHidden()
+
+    card._remove_chip(card._chips[-1])
+    assert card._attack_skill_row.isHidden()
+
+
+def test_attaching_an_already_implicit_modifier_is_a_no_op(qapp: QApplication) -> None:
+    # Damage already carries the Attack extra implicitly, so dropping a second copy on
+    # it must change nothing — no chip, no selection, no extra cost.
+    data = load_game_data()
+    window = PowerConstructorWindow(data, character=_char_with_focus())
+    card = window.canvas.add_effect("damage")
+    before = effect_total_cost(card.instance, data)
+
+    card.attach_modifier("attack")
+
+    assert card._chips == []
+    assert card.instance.extras == []
+    assert effect_total_cost(card.instance, data) == before
+
+
+def test_duplicate_attach_is_a_no_op_only_when_the_copies_are_indistinguishable(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data, character=_char_with_focus())
+    card = window.canvas.add_effect("damage")
+
+    # Ranged carries no config, so a second copy would change no game term and only
+    # double-charge the power.
+    card.attach_modifier("ranged")
+    cost = effect_total_cost(card.instance, data)
+    card.attach_modifier("ranged")
+    assert [s.modifier_id for s in card.instance.extras] == ["ranged"]
+    assert effect_total_cost(card.instance, data) == cost
+
+    # Limited carries a free-text circumstance, so each copy means something different
+    # and taking it twice is legitimate.
+    card.attach_modifier("limited")
+    card.attach_modifier("limited")
+    assert [s.modifier_id for s in card.instance.flaws] == ["limited", "limited"]
+
+
 def test_perception_range_hides_the_attack_skill_row(qapp: QApplication) -> None:
     # Damage rolls to hit, so the row shows; a Perception-Range extra makes it auto-hit,
     # so the row hides — and removing the extra restores it.
@@ -1139,6 +1192,8 @@ def test_structural_modifiers_are_absent_from_the_palette(qapp: QApplication) ->
     assert "linked" not in names
     assert "alternate effect" not in names
     assert "ranged" in names
+    # Attack is implicit on attacking effects but still draggable onto any other one.
+    assert "attack" in names
 
 
 def test_subtle_points_spin_box_drives_the_cost(qapp: QApplication) -> None:
@@ -1162,9 +1217,12 @@ def test_subtle_points_spin_box_drives_the_cost(qapp: QApplication) -> None:
 def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QCheckBox, QLabel
 
+    from mm_companion.ui.power_constructor import _GROUP_HEADER
+
     window = PowerConstructorWindow(load_game_data())
-    types = {"Attack", "Defense", "Control", "Alteration", "Movement", "Sensory", "General"}
-    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.text() in types]
+    # Select headers by their object name, not their text — a brick can share a group's
+    # name (the Attack extra vs. the Attack effect group).
+    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.objectName() == _GROUP_HEADER]
     assert headers  # grouped by effect type by default
     assert all(not h.isHidden() for h in headers)
 
@@ -1174,3 +1232,88 @@ def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
 
     check.setChecked(False)  # back to grouped
     assert all(not h.isHidden() for h in headers)
+
+
+def _editable_combos(widget):
+    """The editable comboboxes under ``widget``, in child order (the std-field value
+    combos of an override group; order combos are non-editable and excluded)."""
+    from PySide6.QtWidgets import QComboBox
+
+    return [c for c in widget.findChildren(QComboBox) if c.isEditable()]
+
+
+def test_dev_mode_makes_the_terms_panel_editable_and_cost_flows(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+
+    # Off: the game-terms panel is the read-only summary (no editable combos).
+    assert not window._terms._editable
+    assert not _editable_combos(window._terms)
+
+    window._dev_mode.setChecked(True)
+    assert window._terms._editable
+    assert _editable_combos(window._terms)  # the panel is now the override editor
+
+    window._terms._cost_override_check.setChecked(True)
+    window._terms._cost_override_spin.setValue(30)
+    assert window.power.cost_override == 30
+    assert "30 PP" in window._cost.text()
+    assert "homerule" in window._cost.text()
+
+    window._terms._cost_override_check.setChecked(False)
+    assert window.power.cost_override is None
+
+
+def test_dev_mode_term_override_flows_to_the_read_only_summary(qapp: QApplication) -> None:
+    from mm_companion.core.powers import power_is_homerule
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    window._dev_mode.setChecked(True)
+
+    combos = _editable_combos(window._terms)
+    # _OVERRIDE_STD_FIELDS order: effect_type, range, action, ... — index 1 is Range.
+    combos[1].setCurrentText("Planetary")
+    assert card.instance.overrides["range"]["value"] == "Planetary"
+    assert power_is_homerule(window.power)
+
+    # Turning Dev mode off re-renders the read-only summary, which shows the override.
+    window._dev_mode.setChecked(False)
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["range"].value == "Planetary"
+    assert rows["range"].change == "homerule"
+
+
+def test_dev_mode_seeds_auto_values_and_resolves_option_numbers(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    window._dev_mode.setChecked(True)
+
+    # _OVERRIDE_STD_FIELDS order: effect_type, range, action, duration, check, resistance.
+    resistance = _editable_combos(window._terms)[5]
+    # The field starts pre-filled at its resolved auto value (DC filled in), no override.
+    assert resistance.currentText() == "Toughness vs. 18"
+    assert "resistance" not in card.instance.overrides
+    # The dropdown offers resolved numbers, not the raw "vs. Effect" templates.
+    items = [resistance.itemText(i) for i in range(resistance.count())]
+    assert "Will vs. 18" in items
+    assert all("vs. Effect" not in it for it in items)
+
+    # Picking a resolved alternative stores it verbatim.
+    resistance.setCurrentText("Will vs. 18")
+    assert card.instance.overrides["resistance"]["value"] == "Will vs. 18"
+    # Re-selecting the auto value clears the override again.
+    resistance.setCurrentText("Toughness vs. 18")
+    assert "resistance" not in card.instance.overrides
+
+
+def test_edited_homerule_power_reopens_with_dev_mode_on(qapp: QApplication) -> None:
+    effect = PowerEffectInstance("damage", rank=8)
+    effect.overrides["range"] = {"value": "Planetary", "order": "after"}
+    power = Power(name="Homebrew", effects=[effect])
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character(), power=power)
+    assert window._dev_mode.isChecked()
+    assert window._terms._editable

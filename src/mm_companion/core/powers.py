@@ -92,6 +92,15 @@ class PowerEffectInstance:
     none). When set, that focus's total *replaces* the character's bare Attack for
     this effect's attack roll and its Attack PL cap (see
     :func:`mm_companion.core.rules.effect_attack_skill_bonus`).
+
+    ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
+    effect's derived game-terms: a mapping ``field_key -> {"value", "order",
+    "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
+    ``range``, ``action``, ``duration``, ``check``, ``resistance``), an effect
+    readout key, or a fresh ``custom_N`` key for a player-added row; ``order`` is
+    ``"before"`` (applied to the base so modifiers still layer on top) or ``"after"``
+    (applied last, so the manual value wins). ``label`` is stored only for a custom
+    row. Unlike the runtime flags below, this is *build* state, so it is persisted.
     """
 
     effect_id: str
@@ -103,9 +112,10 @@ class PowerEffectInstance:
     toggled_on: bool = True
     suppressed: bool = False
     attack_skill: str = ""
+    overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "effect_id": self.effect_id,
             "rank": self.rank,
             "extras": [m.to_dict() for m in self.extras],
@@ -114,6 +124,9 @@ class PowerEffectInstance:
             "descriptors": list(self.descriptors),
             "attack_skill": self.attack_skill,
         }
+        if self.overrides:
+            data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
+        return data
 
     @classmethod
     def from_dict(cls, raw: dict) -> PowerEffectInstance:
@@ -125,6 +138,7 @@ class PowerEffectInstance:
             config=dict(raw.get("config", {})),
             descriptors=list(raw.get("descriptors", [])),
             attack_skill=raw.get("attack_skill", ""),
+            overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 
 
@@ -156,6 +170,12 @@ class Power:
 
     An attack-skill link is per-effect now (see
     :attr:`PowerEffectInstance.attack_skill`), not whole-power.
+
+    ``cost_override`` is a Dev-mode / homerule edit: when set it *replaces* the
+    power's whole computed point total (see
+    :func:`mm_companion.core.rules.power_total_cost`), so it flows into the
+    character's power-point spend. ``None`` (the default) leaves the cost fully
+    derived. It is *build* state, so it is persisted.
     """
 
     name: str = ""
@@ -169,9 +189,10 @@ class Power:
     activated: bool = True
     item_present: bool = True
     array_active: bool = True
+    cost_override: int | None = None
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "name": self.name,
             "description": self.description,
             "descriptors": list(self.descriptors),
@@ -181,6 +202,9 @@ class Power:
             "linked_with": list(self.linked_with),
             "alternate_of": self.alternate_of,
         }
+        if self.cost_override is not None:
+            data["cost_override"] = self.cost_override
+        return data
 
     @classmethod
     def from_dict(cls, raw: dict) -> Power:
@@ -197,6 +221,7 @@ class Power:
         # so it can still be referenced. Older powers carry no references, so nothing
         # dangles from the fresh id.
         power_id = raw.get("id") or uuid4().hex
+        raw_cost = raw.get("cost_override")
         return cls(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
@@ -206,7 +231,20 @@ class Power:
             id=power_id,
             linked_with=list(raw.get("linked_with", [])),
             alternate_of=raw.get("alternate_of", ""),
+            cost_override=None if raw_cost is None else int(raw_cost),
         )
+
+
+def power_is_homerule(power: Power) -> bool:
+    """Whether a power carries any Dev-mode / homerule override.
+
+    True when the whole-power :attr:`Power.cost_override` is set or any of its
+    effects carry a game-term :attr:`PowerEffectInstance.overrides` entry — the sole
+    signal the UI uses to badge a card as homerule, so there is no separate flag to
+    keep in sync with the overrides themselves.
+    """
+
+    return power.cost_override is not None or any(e.overrides for e in power.effects)
 
 
 @dataclass

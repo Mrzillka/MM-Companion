@@ -59,7 +59,7 @@ class AbilitiesSection(TitledSection):
         layout.addWidget(grid)
 
         self.refresh_enhancements()
-        self._refresh_cost()
+        self.refresh_cost()
 
     def _on_ability_changed(self, key: str, value: int) -> None:
         self._character.abilities[key] = value
@@ -67,11 +67,13 @@ class AbilitiesSection(TitledSection):
         # resistances that derive from this ability are refreshed by the sheet,
         # which listens to abilityChanged.
         self.refresh_enhancements()
-        self._refresh_cost()
+        self.refresh_cost()
         self.abilityChanged.emit(key, value)
         self.changed.emit()
 
-    def _refresh_cost(self) -> None:
+    def refresh_cost(self) -> None:
+        """Re-title the block with its current PP subtotal (also driven by a homebrew
+        cost-rate change, via ``cost-rates-changed``)."""
         self.set_block_title(
             title_with_cost("Abilities", ability_points_spent(self._character, self._data))
         )

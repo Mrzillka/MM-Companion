@@ -15,6 +15,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -29,6 +30,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     effective_size,
+    has_cost_overrides,
     initiative_ability,
     initiative_modifier,
     power_level_for_points,
@@ -37,6 +39,7 @@ from mm_companion.core.rules import (
     speed_lines,
 )
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
@@ -160,6 +163,9 @@ class SystemInfoSection(QGroupBox):
 
     changed = Signal()
     edited = Signal()
+    #: Raised when a homebrew PP-cost rate changes, so every priced block re-titles
+    #: its subtotal (the pool total already recomputes off ``changed``).
+    costRatesChanged = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -218,6 +224,16 @@ class SystemInfoSection(QGroupBox):
         row.addWidget(self._pool_current)
         row.addWidget(QLabel("/"))
         row.addWidget(self._power_points)
+
+        self._cost_notice = QLabel("⌂ Homebrew PP costs")
+        self._cost_notice.setStyleSheet("color: #4a90d9; font-weight: bold;")
+        self._cost_notice.setToolTip(
+            "Homebrew PP cost changed — this character uses non-default point costs "
+            "(Settings ▸ Cost config)."
+        )
+        self._cost_notice.setVisible(False)
+        row.addWidget(self._cost_notice)
+
         row.addStretch()
         self._editable.append(self._power_points)
         return container
@@ -284,6 +300,25 @@ class SystemInfoSection(QGroupBox):
         self._character.characteristics["hero_points"] = value
         self._emit_edited()
 
+    def open_cost_config(self) -> None:
+        """Open the homebrew cost-rate editor; a saved change refreshes the whole build.
+
+        Called from the window's ``Settings ▸ Cost config…`` action (the block itself no
+        longer carries the button, only the homebrew notice).
+        """
+        dialog = CostConfigDialog(self._character, self._data, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._refresh_cost_notice()
+        self._link_pl_pp(edited="power_level")  # a new pp/level rate may shift the budget band
+        self.costRatesChanged.emit()  # re-title every priced block's PP subtotal
+        self.changed.emit()  # fan out so the pool total re-derives
+        self._emit_edited()
+
+    def _refresh_cost_notice(self) -> None:
+        """Show the homebrew-cost notice when any non-power rate differs from default."""
+        self._cost_notice.setVisible(has_cost_overrides(self._character, self._data))
+
     def _link_pl_pp(self, *, edited: str) -> None:
         """Reconcile Power Level and the point budget after one of them changed.
 
@@ -293,14 +328,19 @@ class SystemInfoSection(QGroupBox):
         """
         if edited == "power_level":
             new_pp = reconcile_points_to_level(
-                self._character.power_level, self._character.power_points_total, self._data
+                self._character.power_level,
+                self._character.power_points_total,
+                self._data,
+                self._character,
             )
             if new_pp != self._character.power_points_total:
                 self._character.power_points_total = self._set_spin_silently(
                     self._power_points, "power_points", new_pp
                 )
         else:
-            new_pl = power_level_for_points(self._character.power_points_total, self._data)
+            new_pl = power_level_for_points(
+                self._character.power_points_total, self._data, self._character
+            )
             if new_pl != self._character.power_level:
                 self._character.power_level = self._set_spin_silently(
                     self._power_level, "power_level", new_pl
@@ -340,6 +380,8 @@ class SystemInfoSection(QGroupBox):
         effective = effective_size(self._character, self._data)
         base = str(self._character.characteristics.get("size", "Medium"))
         self._size_effective.setText(f"→ {effective}" if effective != base else "")
+
+        self._refresh_cost_notice()
 
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back."""

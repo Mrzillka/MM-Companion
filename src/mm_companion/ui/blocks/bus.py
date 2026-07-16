@@ -32,6 +32,7 @@ Topic                   Subscribers (what recomputes)
 ``enhancements-changed``  effective ability/resistance/skill totals
 ``caps-changed``        advantage rank caps + heroic budget (Power Level)
 ``condition-changed``   advantages struck through by a Debilitated condition
+``cost-rates-changed``  every priced block re-titles its PP subtotal
 ``edited``              the sheet marks the character dirty (unsaved changes)
 ======================  ====================================================
 
@@ -55,6 +56,7 @@ DERIVED_CHANGED = "derived-changed"
 ENHANCEMENTS_CHANGED = "enhancements-changed"
 CAPS_CHANGED = "caps-changed"
 CONDITION_CHANGED = "condition-changed"
+COST_RATES_CHANGED = "cost-rates-changed"
 EDITED = "edited"
 
 Handler = Callable[[], None]

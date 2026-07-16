@@ -104,6 +104,22 @@ class Character:
     advantages: list[AdvantageSelection] = field(default_factory=list)
     conditions: list[AppliedCondition] = field(default_factory=list)
     powers: list[PowerNode] = field(default_factory=list)
+    #: Homebrew point-cost overrides for the non-power trait rates, keyed by the
+    #: ``TraitCosts`` field names plus ``"pp_per_level"``. Only rates the player has
+    #: changed from the ruleset default are stored, so a stock build carries an empty
+    #: dict. Applied by :func:`~..rules.effective_trait_costs` /
+    #: :func:`~..rules.effective_pp_per_level`; a non-default rate marks the character
+    #: homebrew (see :func:`~..rules.has_cost_overrides`).
+    cost_overrides: dict[str, int] = field(default_factory=dict)
+    #: Per-item homebrew cost rates for individual traits, so one ability / resistance /
+    #: skill can be priced away from its category rate. Nested ``category -> item key ->
+    #: rate`` where category is ``"abilities"`` / ``"resistances"`` / ``"skills"``, the
+    #: item key is the ability/resistance ``key`` (or the skill ``name``), and the rate
+    #: means PP-per-rank for abilities/resistances or ranks-per-PP for skills. Only items
+    #: changed from the applicable category default are stored (see
+    #: :func:`~..rules.ability_cost_rate`, :func:`~..rules.resistance_cost_rate`,
+    #: :func:`~..rules.skill_cost_rate`, :func:`~..rules.has_cost_overrides`).
+    item_cost_overrides: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -153,6 +169,16 @@ class Character:
             ],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
+            **({"cost_overrides": dict(self.cost_overrides)} if self.cost_overrides else {}),
+            **(
+                {
+                    "item_cost_overrides": {
+                        cat: dict(items) for cat, items in self.item_cost_overrides.items() if items
+                    }
+                }
+                if any(self.item_cost_overrides.values())
+                else {}
+            ),
         }
 
     @classmethod
@@ -186,6 +212,11 @@ class Character:
                 for c in raw.get("conditions", [])
             ],
             powers=_migrate_flat_relations([node_from_dict(p) for p in raw.get("powers", [])]),
+            cost_overrides={k: int(v) for k, v in raw.get("cost_overrides", {}).items()},
+            item_cost_overrides={
+                cat: {k: int(v) for k, v in items.items()}
+                for cat, items in raw.get("item_cost_overrides", {}).items()
+            },
         )
 
 

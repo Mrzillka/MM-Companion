@@ -403,6 +403,52 @@ def _measure_value(measure, rank: int, game_data: GameData) -> str:
     return f"{label}/round" if measure.per_round else label
 
 
+def resolve_stat_display(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    field_key: str,
+    raw_value: str,
+    char: Character | None = None,
+    attack_bonus: int | None = None,
+) -> str:
+    """Resolve one raw game-term value to the concrete form the table would show.
+
+    The same numeric substitution :func:`effect_stat_rows` applies, for a single
+    field and a candidate value: a ``"Rank"`` range becomes its measured distance, a
+    check/resistance phrase gets the effect's save DC (``resistance_dc_base`` plus the
+    effective rank) and — for an attack check — the wielder's Attack filled in. Fields
+    without a numeric form (Type/Action/Duration) come back unchanged, as does a value
+    the effect can't resolve. This lets the Dev-mode dropdowns offer real numbers
+    (``"Will vs. 18"``) rather than bare templates (``"Will vs. Effect"``).
+    """
+
+    if not raw_value:
+        return raw_value
+    base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None:
+        return raw_value
+    if field_key == "range" and raw_value == "Rank":
+        return game_data.measurements.label("distance", effect.rank) or "Rank"
+    effective_rank = effect_effective_rank(effect, game_data, char)
+    dc = (
+        None
+        if base_effect.resistance_dc_base is None
+        else base_effect.resistance_dc_base + effective_rank
+    )
+    if field_key == "check":
+        if attack_bonus is not None:
+            attack = attack_bonus
+        elif char is not None:
+            attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
+        else:
+            attack = effect.rank
+        actor = attack if raw_value.startswith("Attack") else effect.rank
+        return _numeric_roll(raw_value, actor, dc, resistance=False)
+    if field_key == "resistance":
+        return _numeric_roll(raw_value, effect.rank, dc, resistance=True)
+    return raw_value
+
+
 def effect_stat_rows(
     effect: PowerEffectInstance,
     game_data: GameData,

@@ -1696,3 +1696,15 @@ def test_old_power_dict_loads_without_override_keys() -> None:
     restored = Power.from_dict({"name": "x", "effects": [{"effect_id": "damage", "rank": 3}]})
     assert restored.effects[0].overrides == {}
     assert restored.cost_override is None
+
+
+def test_resolve_stat_display_fills_in_the_numbers() -> None:
+    from mm_companion.core.rules import resolve_stat_display
+
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8)  # save DC base 10 + rank 8 = 18
+    assert resolve_stat_display(effect, data, "resistance", "Will vs. Effect") == "Will vs. 18"
+    assert resolve_stat_display(effect, data, "range", "Rank") == "1,800 feet"
+    # Fields without a numeric form come back unchanged.
+    assert resolve_stat_display(effect, data, "effect_type", "Attack") == "Attack"
+    assert resolve_stat_display(effect, data, "action", "Standard") == "Standard"

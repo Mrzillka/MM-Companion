@@ -1286,6 +1286,30 @@ def test_dev_mode_term_override_flows_to_the_read_only_summary(qapp: QApplicatio
     assert rows["range"].change == "homerule"
 
 
+def test_dev_mode_seeds_auto_values_and_resolves_option_numbers(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    window._dev_mode.setChecked(True)
+
+    # _OVERRIDE_STD_FIELDS order: effect_type, range, action, duration, check, resistance.
+    resistance = _editable_combos(window._terms)[5]
+    # The field starts pre-filled at its resolved auto value (DC filled in), no override.
+    assert resistance.currentText() == "Toughness vs. 18"
+    assert "resistance" not in card.instance.overrides
+    # The dropdown offers resolved numbers, not the raw "vs. Effect" templates.
+    items = [resistance.itemText(i) for i in range(resistance.count())]
+    assert "Will vs. 18" in items
+    assert all("vs. Effect" not in it for it in items)
+
+    # Picking a resolved alternative stores it verbatim.
+    resistance.setCurrentText("Will vs. 18")
+    assert card.instance.overrides["resistance"]["value"] == "Will vs. 18"
+    # Re-selecting the auto value clears the override again.
+    resistance.setCurrentText("Toughness vs. 18")
+    assert "resistance" not in card.instance.overrides
+
+
 def test_edited_homerule_power_reopens_with_dev_mode_on(qapp: QApplication) -> None:
     effect = PowerEffectInstance("damage", rank=8)
     effect.overrides["range"] = {"value": "Planetary", "order": "after"}

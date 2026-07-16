@@ -33,6 +33,7 @@ toggle later without touching this window.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag
@@ -93,6 +94,7 @@ from mm_companion.core.rules import (
     power_pl_violations,
     power_strength_amount_violations,
     power_total_cost,
+    resolve_stat_display,
 )
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -1836,7 +1838,12 @@ class PowerTermsView(QWidget):
         box = QGroupBox(f"{ordinal}. {name}" if multi else name)
         outer = QVBoxLayout(box)
         outer.setContentsMargins(6, 4, 6, 4)
-        derived = {row.key: row for row in rows}
+
+        # The auto values every field starts at: the resolved rows this effect would
+        # show with *no* overrides at all. A field left at its auto value stores no
+        # override (so it isn't flagged homerule); anything else does.
+        auto_effect = replace(effect, overrides={})
+        auto = {row.key: row.value for row in effect_stat_rows(auto_effect, game_data, char)}
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
@@ -1845,15 +1852,16 @@ class PowerTermsView(QWidget):
         gr = 0
         for key, label, _attr in _OVERRIDE_STD_FIELDS:
             grid.addWidget(QLabel(label), gr, 0)
-            hint = derived[key].value if key in derived else ""
-            combo = self._make_value_combo(effect, key, hint, game_data)
+            auto_value = auto.get(key, "")
+            combo = self._make_value_combo(effect, key, auto_value, game_data, char)
             order = self._make_order_combo(effect, key)
-            self._wire_std_override(effect, key, combo, order)
+            self._wire_std_override(effect, key, combo, order, auto_value)
             grid.addWidget(combo, gr, 1)
             grid.addWidget(order, gr, 2)
             gr += 1
 
-        # Derived readout / DC / measure rows — each a verbatim ("after") replacement.
+        # Derived readout / DC / measure rows — each a verbatim ("after") replacement,
+        # pre-filled with its auto value.
         derived_rows = [
             row
             for row in rows
@@ -1866,9 +1874,10 @@ class PowerTermsView(QWidget):
             gr += 1
             for row in derived_rows:
                 grid.addWidget(QLabel(row.label), gr, 0)
-                edit = QLineEdit(str(effect.overrides.get(row.key, {}).get("value", "")))
-                edit.setPlaceholderText(row.value)
-                self._wire_derived_override(effect, row.key, row.label, edit)
+                auto_value = auto.get(row.key, row.value)
+                entry = effect.overrides.get(row.key)
+                edit = QLineEdit(str(entry.get("value", "")) if entry else auto_value)
+                self._wire_derived_override(effect, row.key, row.label, edit, auto_value)
                 grid.addWidget(edit, gr, 1, 1, 2)
                 gr += 1
         outer.addLayout(grid)
@@ -1889,28 +1898,55 @@ class PowerTermsView(QWidget):
         outer.addWidget(add_button, alignment=Qt.AlignmentFlag.AlignLeft)
         return box
 
-    def _field_options(self, field_key: str, attr: str, game_data: GameData) -> list[str]:
-        """Dropdown choices for a standard field: its ladder first, then any other value
-        that field takes across the effect catalog (all data-driven)."""
-        options = list(game_data.game_term_ladders.get(field_key, ()))
-        for effect in game_data.effects:
-            value = getattr(effect, attr, None)
-            if value and value not in options:
-                options.append(value)
+    def _field_options(
+        self,
+        effect: PowerEffectInstance,
+        field_key: str,
+        attr: str,
+        game_data: GameData,
+        char: Character | None,
+    ) -> list[str]:
+        """Resolved dropdown choices for a standard field.
+
+        Gathers the raw candidates — the field's game-term ladder first, then every
+        other value that field takes across the effect catalog (all data-driven) — and
+        resolves each to this effect's concrete numbers (a resistance's save DC, a
+        ``"Rank"`` range's distance), so the list offers ``"Will vs. 18"`` rather than
+        the bare ``"Will vs. Effect"`` template. Order preserved, duplicates dropped.
+        """
+        raw = list(game_data.game_term_ladders.get(field_key, ()))
+        for candidate in game_data.effects:
+            value = getattr(candidate, attr, None)
+            if value and value not in raw:
+                raw.append(value)
+        options: list[str] = []
+        for value in raw:
+            resolved = resolve_stat_display(effect, game_data, field_key, value, char)
+            if resolved and resolved not in options:
+                options.append(resolved)
         return options
 
     def _make_value_combo(
-        self, effect: PowerEffectInstance, key: str, hint: str, game_data: GameData
+        self,
+        effect: PowerEffectInstance,
+        key: str,
+        auto_value: str,
+        game_data: GameData,
+        char: Character | None,
     ) -> QComboBox:
         attr = next(a for k, _, a in _OVERRIDE_STD_FIELDS if k == key)
         combo = QComboBox()
         combo.setEditable(True)
-        combo.addItem("")  # blank = no override (use the derived value)
-        for option in self._field_options(key, attr, game_data):
+        options = self._field_options(effect, key, attr, game_data, char)
+        # The auto (un-overridden) value is always selectable, so re-picking it clears
+        # the override.
+        if auto_value and auto_value not in options:
+            options.insert(0, auto_value)
+        for option in options:
             combo.addItem(option)
         entry = effect.overrides.get(key)
-        combo.setCurrentText(str(entry.get("value", "")) if entry else "")
-        combo.lineEdit().setPlaceholderText(hint)
+        # Start at the stored override, or the auto value when there's none.
+        combo.setCurrentText(str(entry.get("value", "")) if entry else auto_value)
         # A long option ("Chosen resistance vs. DC 11") must not blow the column out and
         # push the order selector off-screen — let the combo shrink and stretch instead.
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -1936,11 +1972,17 @@ class PowerTermsView(QWidget):
         return combo
 
     def _wire_std_override(
-        self, effect: PowerEffectInstance, key: str, combo: QComboBox, order: QComboBox
+        self,
+        effect: PowerEffectInstance,
+        key: str,
+        combo: QComboBox,
+        order: QComboBox,
+        auto_value: str,
     ) -> None:
         def commit(*_args) -> None:
             value = combo.currentText().strip()
-            if value:
+            # Leaving the field at its auto value (or blank) means "no override".
+            if value and value != auto_value:
                 effect.overrides[key] = {"value": value, "order": order.currentData()}
             else:
                 effect.overrides.pop(key, None)
@@ -1950,11 +1992,16 @@ class PowerTermsView(QWidget):
         order.currentIndexChanged.connect(commit)
 
     def _wire_derived_override(
-        self, effect: PowerEffectInstance, key: str, label: str, edit: QLineEdit
+        self,
+        effect: PowerEffectInstance,
+        key: str,
+        label: str,
+        edit: QLineEdit,
+        auto_value: str,
     ) -> None:
         def commit(text: str) -> None:
             value = text.strip()
-            if value:
+            if value and value != auto_value:
                 effect.overrides[key] = {"value": value, "order": "after", "label": label}
             else:
                 effect.overrides.pop(key, None)

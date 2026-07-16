@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -70,9 +71,11 @@ from mm_companion.core.powers import (
     ModifierSelection,
     Power,
     PowerEffectInstance,
+    power_is_homerule,
 )
 from mm_companion.core.registry import Registry
 from mm_companion.core.rules import (
+    HOMERULE_TINT,
     TRAIT_CATEGORIES,
     array_alternate_cost,
     array_base_index,
@@ -93,7 +96,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import hline_separator, make_spin_box
 
 # -- config-field widget registry ----------------------------------------------
 # Each effect config field declares a ``type``; the constructor builds the matching
@@ -169,6 +172,20 @@ RANK_MAX = 250
 # cost stays stable when that ability is enhanced or suppressed; a bought amount above
 # the wielder's actual ability is flagged as a warning, not repriced.
 STRENGTH_AMOUNT_MAX = 50
+
+# The six standard game-term fields the Dev-mode override table edits directly, with
+# their labels and the matching :class:`~mm_companion.core.data_loader.Effect`
+# attribute (used to seed each field's editable combo with the values that field
+# takes across the effect catalog, on top of its game-term ladder).
+_OVERRIDE_STD_FIELDS = (
+    ("effect_type", "Type", "effect_type"),
+    ("range", "Range", "range_"),
+    ("action", "Action", "action"),
+    ("duration", "Duration", "duration"),
+    ("check", "Check", "check"),
+    ("resistance", "Resistance", "resistance"),
+)
+_OVERRIDE_STD_KEYS = frozenset(key for key, _, _ in _OVERRIDE_STD_FIELDS)
 
 # The accent used to light up a drop target while a compatible brick hovers over it.
 # Kept semi-transparent and paired with palette() roles so both borders and fills read
@@ -1643,10 +1660,15 @@ class PowerTermsView(QWidget):
     """
 
     # Tints for a modified stat's value; readable on both light and dark themes.
-    _TINTS = {"better": "#2e9e4f", "worse": "#d15b5b"}
+    # A homerule override reads in a distinct blue, apart from modifier better/worse.
+    _TINTS = {"better": "#2e9e4f", "worse": "#d15b5b", HOMERULE_TINT: "#4a90d9"}
     # How many label/value pairs sit side by side per grid row, so the short stats
     # pack across the width instead of stacking into a tall, scrolling column.
     _PAIRS_PER_ROW = 2
+
+    # Emitted when a Dev-mode override is edited in the table, so the window can
+    # recompute cost/PL without rebuilding the table (which would drop the live widget).
+    edited = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -1657,9 +1679,28 @@ class PowerTermsView(QWidget):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(6)
+        # Retained so a Dev-mode toggle can re-render the same power in the other mode.
+        self._power: Power | None = None
+        self._game_data: GameData | None = None
+        self._char: Character | None = None
+        self._editable = False
 
     def set_power(self, power: Power, game_data: GameData, char: Character | None = None) -> None:
+        self._power = power
+        self._game_data = game_data
+        self._char = char
+        self._render()
+
+    def set_editable(self, editable: bool) -> None:
+        """Switch the whole table between read-only and the Dev-mode override editor."""
+        self._editable = editable
+        self._render()
+
+    def _render(self) -> None:
         self._clear()
+        power, game_data = self._power, self._game_data
+        if power is None or game_data is None:
+            return
         if not power.effects:
             placeholder = QLabel("Game-term summary appears here as you add effects.")
             placeholder.setStyleSheet("color: gray; font-style: italic;")
@@ -1672,9 +1713,12 @@ class PowerTermsView(QWidget):
             label = QLabel(header)
             label.setStyleSheet("font-weight: bold;")
             self._layout.addWidget(label)
+        if self._editable:
+            self._render_editable(power, game_data, self._char)
+            return
         for index, effect in enumerate(power.effects):
-            attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
-            self._add_effect_block(effect, index, power, game_data, char, attack_bonus)
+            attack_bonus = effect_attack_skill_bonus(effect, self._char, game_data)
+            self._add_effect_block(effect, index, power, game_data, self._char, attack_bonus)
 
     def _add_effect_block(
         self,
@@ -1729,6 +1773,243 @@ class PowerTermsView(QWidget):
         for pair in range(pairs):
             grid.setColumnStretch(pair * 2 + 1, 1)
         self._layout.addLayout(grid)
+
+    # -- Dev-mode editable table ------------------------------------------
+    def _render_editable(self, power: Power, game_data: GameData, char: Character | None) -> None:
+        """Render the whole table as the homerule override editor: a whole-power cost
+        override, then one group per effect (its game-term fields, derived readout rows,
+        and custom rows)."""
+        self.effect_rows = []
+        self._layout.addWidget(self._cost_override_row(power, game_data, char))
+        multi = len(power.effects) > 1
+        for index, effect in enumerate(power.effects, start=1):
+            rows = effect_stat_rows(effect, game_data, char)
+            self.effect_rows.append(rows)
+            self._layout.addWidget(
+                self._effect_edit_group(effect, index, multi, rows, game_data, char)
+            )
+
+    def _cost_override_row(
+        self, power: Power, game_data: GameData, char: Character | None
+    ) -> QWidget:
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        self._cost_override_check = QCheckBox("Override total cost")
+        overridden = power.cost_override is not None
+        self._cost_override_check.setChecked(overridden)
+        current = power.cost_override if overridden else power_total_cost(power, game_data, char)
+        self._cost_override_spin = make_spin_box(
+            0, 9999, value=int(current), buttons=False, max_width=72
+        )
+        self._cost_override_spin.setSuffix(" PP")
+        self._cost_override_spin.setEnabled(overridden)
+        self._cost_override_check.toggled.connect(self._on_cost_override_toggled)
+        self._cost_override_spin.valueChanged.connect(self._on_cost_override_value)
+        row.addWidget(self._cost_override_check)
+        row.addWidget(self._cost_override_spin)
+        row.addStretch()
+        return host
+
+    def _on_cost_override_toggled(self, on: bool) -> None:
+        self._cost_override_spin.setEnabled(on)
+        if self._power is not None:
+            self._power.cost_override = self._cost_override_spin.value() if on else None
+        self.edited.emit()
+
+    def _on_cost_override_value(self, value: int) -> None:
+        if self._power is not None and self._cost_override_check.isChecked():
+            self._power.cost_override = value
+            self.edited.emit()
+
+    def _effect_edit_group(
+        self,
+        effect: PowerEffectInstance,
+        ordinal: int,
+        multi: bool,
+        rows: list,
+        game_data: GameData,
+        char: Character | None,
+    ) -> QWidget:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        name = base.name if base else effect.effect_id
+        box = QGroupBox(f"{ordinal}. {name}" if multi else name)
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(6, 4, 6, 4)
+        derived = {row.key: row for row in rows}
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setColumnStretch(1, 1)
+        gr = 0
+        for key, label, _attr in _OVERRIDE_STD_FIELDS:
+            grid.addWidget(QLabel(label), gr, 0)
+            hint = derived[key].value if key in derived else ""
+            combo = self._make_value_combo(effect, key, hint, game_data)
+            order = self._make_order_combo(effect, key)
+            self._wire_std_override(effect, key, combo, order)
+            grid.addWidget(combo, gr, 1)
+            grid.addWidget(order, gr, 2)
+            gr += 1
+
+        # Derived readout / DC / measure rows — each a verbatim ("after") replacement.
+        derived_rows = [
+            row
+            for row in rows
+            if row.key not in _OVERRIDE_STD_KEYS
+            and row.key != "notes"
+            and not row.key.startswith("custom_")
+        ]
+        if derived_rows:
+            grid.addWidget(hline_separator(), gr, 0, 1, 3)
+            gr += 1
+            for row in derived_rows:
+                grid.addWidget(QLabel(row.label), gr, 0)
+                edit = QLineEdit(str(effect.overrides.get(row.key, {}).get("value", "")))
+                edit.setPlaceholderText(row.value)
+                self._wire_derived_override(effect, row.key, row.label, edit)
+                grid.addWidget(edit, gr, 1, 1, 2)
+                gr += 1
+        outer.addLayout(grid)
+
+        # Custom rows: player-added label/value pairs (always applied after modifiers).
+        custom_host = QWidget()
+        custom_layout = QVBoxLayout(custom_host)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(custom_host)
+        for key in sorted(k for k in effect.overrides if k.startswith("custom_")):
+            self._add_custom_row_widget(effect, custom_layout, key)
+        add_button = QPushButton("＋ Add custom row")
+        add_button.clicked.connect(
+            lambda _=False, e=effect, cl=custom_layout: self._add_custom_row_widget(
+                e, cl, self._next_custom_key(e)
+            )
+        )
+        outer.addWidget(add_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        return box
+
+    def _field_options(self, field_key: str, attr: str, game_data: GameData) -> list[str]:
+        """Dropdown choices for a standard field: its ladder first, then any other value
+        that field takes across the effect catalog (all data-driven)."""
+        options = list(game_data.game_term_ladders.get(field_key, ()))
+        for effect in game_data.effects:
+            value = getattr(effect, attr, None)
+            if value and value not in options:
+                options.append(value)
+        return options
+
+    def _make_value_combo(
+        self, effect: PowerEffectInstance, key: str, hint: str, game_data: GameData
+    ) -> QComboBox:
+        attr = next(a for k, _, a in _OVERRIDE_STD_FIELDS if k == key)
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItem("")  # blank = no override (use the derived value)
+        for option in self._field_options(key, attr, game_data):
+            combo.addItem(option)
+        entry = effect.overrides.get(key)
+        combo.setCurrentText(str(entry.get("value", "")) if entry else "")
+        combo.lineEdit().setPlaceholderText(hint)
+        # A long option ("Chosen resistance vs. DC 11") must not blow the column out and
+        # push the order selector off-screen — let the combo shrink and stretch instead.
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(6)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        combo.setMinimumWidth(80)
+        guard_wheel(combo)
+        return combo
+
+    def _make_order_combo(self, effect: PowerEffectInstance, key: str) -> QComboBox:
+        combo = QComboBox()
+        combo.addItem("after", "after")
+        combo.addItem("before", "before")
+        combo.setToolTip(
+            "After: your value wins over modifiers. "
+            "Before: modifiers still apply on top of your value."
+        )
+        combo.setFixedWidth(72)  # compact so the value combo keeps the width
+        entry = effect.overrides.get(key)
+        order = entry.get("order", "after") if entry else "after"
+        combo.setCurrentIndex(1 if order == "before" else 0)
+        guard_wheel(combo)
+        return combo
+
+    def _wire_std_override(
+        self, effect: PowerEffectInstance, key: str, combo: QComboBox, order: QComboBox
+    ) -> None:
+        def commit(*_args) -> None:
+            value = combo.currentText().strip()
+            if value:
+                effect.overrides[key] = {"value": value, "order": order.currentData()}
+            else:
+                effect.overrides.pop(key, None)
+            self.edited.emit()
+
+        combo.currentTextChanged.connect(commit)
+        order.currentIndexChanged.connect(commit)
+
+    def _wire_derived_override(
+        self, effect: PowerEffectInstance, key: str, label: str, edit: QLineEdit
+    ) -> None:
+        def commit(text: str) -> None:
+            value = text.strip()
+            if value:
+                effect.overrides[key] = {"value": value, "order": "after", "label": label}
+            else:
+                effect.overrides.pop(key, None)
+            self.edited.emit()
+
+        edit.textChanged.connect(commit)
+
+    def _next_custom_key(self, effect: PowerEffectInstance) -> str:
+        used = [
+            int(k.split("_", 1)[1])
+            for k in effect.overrides
+            if k.startswith("custom_") and k.split("_", 1)[1].isdigit()
+        ]
+        return f"custom_{max(used, default=0) + 1}"
+
+    def _add_custom_row_widget(
+        self, effect: PowerEffectInstance, layout: QVBoxLayout, key: str
+    ) -> None:
+        entry = effect.overrides.get(key, {})
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        label_edit = QLineEdit(str(entry.get("label", "")))
+        label_edit.setPlaceholderText("Label")
+        value_edit = QLineEdit(str(entry.get("value", "")))
+        value_edit.setPlaceholderText("Value")
+        remove = QPushButton("✕")
+        remove.setFlat(True)
+        remove.setFixedWidth(22)
+        line.addWidget(label_edit, 1)
+        line.addWidget(value_edit, 1)
+        line.addWidget(remove)
+        layout.addWidget(row)
+
+        def commit(*_args) -> None:
+            value = value_edit.text().strip()
+            if value:
+                effect.overrides[key] = {
+                    "value": value,
+                    "order": "after",
+                    "label": label_edit.text().strip() or key,
+                }
+            else:
+                effect.overrides.pop(key, None)
+            self.edited.emit()
+
+        def do_remove(*_args) -> None:
+            effect.overrides.pop(key, None)
+            row.setParent(None)
+            row.deleteLater()
+            self.edited.emit()
+
+        label_edit.textChanged.connect(commit)
+        value_edit.textChanged.connect(commit)
+        remove.clicked.connect(do_remove)
 
     @staticmethod
     def _structure_header(power: Power) -> str:
@@ -1816,6 +2097,11 @@ class PowerConstructorWindow(QMainWindow):
         self._refresh_cost()
         self._refresh_game_terms()
         self._refresh_pl_warning()
+
+        # An edited power that already carries overrides opens with Dev mode on, so its
+        # homerule edits are visible straight away (this also builds the table).
+        if power_is_homerule(self.power):
+            self._dev_mode.setChecked(True)
 
     def _seed_from_power(self) -> None:
         """Populate the editor from the (copied) power being edited."""
@@ -2080,23 +2366,39 @@ class PowerConstructorWindow(QMainWindow):
         layout.addLayout(actions)
         return panel
 
-    # -- right: the read-only game-term summary ---------------------------
+    # -- right: the game-term summary (editable in Dev mode) --------------
     def _build_summary_panel(self) -> QWidget:
-        """The auto-generated game-terms breakdown, in its own scrolling column.
+        """The game-terms breakdown in its own scrolling column.
 
-        Derived from the effects/modifiers (never editable), it tints each stat a
-        modifier changed (green better, red worse). Housed apart from the canvas so
-        it can grow effect by effect without stealing the construction area's height.
+        Normally read-only, it tints each stat a modifier changed (green better, red
+        worse). A **Dev mode (homerule)** check box pinned at its top turns the whole
+        table editable in place: every game-term row becomes a combo you can pick or
+        type into, with a before/after-modifiers order, plus derived-row and custom-row
+        overrides and a whole-power cost override. Housed apart from the canvas so it
+        can grow effect by effect without stealing the construction area's height.
         """
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(4, 0, 0, 0)
 
+        head_row = QHBoxLayout()
         heading = QLabel("Game terms")
         heading.setStyleSheet("font-weight: bold;")
-        layout.addWidget(heading)
+        head_row.addWidget(heading)
+        head_row.addStretch()
+        self._dev_mode = QCheckBox("Dev mode (homerule)")
+        self._dev_mode.setToolTip(
+            "Edit this power's derived game terms, readouts, and point cost by hand. "
+            "A power with any override is flagged as homerule on its card."
+        )
+        self._dev_mode.toggled.connect(self._on_dev_mode_toggled)
+        head_row.addWidget(self._dev_mode)
+        layout.addLayout(head_row)
 
         self._terms = PowerTermsView()
+        # An in-table override edit recomputes cost / PL warning, but must NOT rebuild
+        # the table (that would destroy the widget being typed into).
+        self._terms.edited.connect(self._on_terms_edited)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2104,6 +2406,18 @@ class PowerConstructorWindow(QMainWindow):
         guard_wheel(scroll)
         layout.addWidget(scroll, stretch=1)
         return panel
+
+    def _on_dev_mode_toggled(self, on: bool) -> None:
+        """Flip the game-terms panel between read-only and the editable override table.
+        Dev mode only changes the editor — stored overrides always apply — so the
+        derived numbers don't shift on toggle."""
+        self._terms.set_editable(on)
+
+    def _on_terms_edited(self) -> None:
+        """An override edit inside the table: recompute cost and warnings, but leave the
+        table itself untouched so the widget the player is editing survives."""
+        self._refresh_cost()
+        self._refresh_pl_warning()
 
     def _on_name_changed(self, text: str) -> None:
         self.power.name = text
@@ -2114,9 +2428,9 @@ class PowerConstructorWindow(QMainWindow):
     def _refresh_cost(self) -> None:
         # The power's own full assembled cost. Whether it contributes only a flat point
         # as an array alternate is decided by its group on the character sheet, not here.
-        self._cost.setText(
-            f"Total cost: {power_total_cost(self.power, self._data, self._character)} PP"
-        )
+        total = power_total_cost(self.power, self._data, self._character)
+        suffix = " (homerule)" if self.power.cost_override is not None else ""
+        self._cost.setText(f"Total cost: {total} PP{suffix}")
 
     def _refresh_game_terms(self) -> None:
         self._terms.set_power(self.power, self._data, self._character)

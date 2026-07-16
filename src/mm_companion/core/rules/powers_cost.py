@@ -323,8 +323,14 @@ def power_total_cost(power: Power, game_data: GameData, char: Character | None =
     flat :func:`array_alternate_cost` for each remaining effect, since only one is
     active at a time. ``char`` is threaded to :func:`effect_total_cost` so a
     Strength-Based effect's folded-in ranks are priced against the wielder.
+
+    A Dev-mode :attr:`~mm_companion.core.powers.Power.cost_override` replaces the
+    whole computed total, so a homerule power spends exactly that many points; it
+    flows through :func:`node_cost` into the character's power-point tally.
     """
 
+    if power.cost_override is not None:
+        return power.cost_override
     if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
         full = [effect_total_cost(e, game_data, char) for e in power.effects]
         return max(full) + (len(full) - 1) * array_alternate_cost(game_data)

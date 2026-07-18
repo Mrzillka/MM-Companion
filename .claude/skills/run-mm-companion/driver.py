@@ -79,6 +79,23 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target in ("dice", "dice-demo"):
+        from mm_companion.ui.dice_roller import DiceRollerWindow
+
+        win = DiceRollerWindow()
+        if target == "dice-demo":
+            # Drive a couple of rolls straight through the resolve path (skipping
+            # the 2s animation) so the readout, a couple of history cards, and a
+            # saved quick roll are all populated in the screenshot.
+            win._bonus_spin.setValue(5)
+            win._penalty_spin.setValue(1)
+            win._dc_check.setChecked(True)
+            win._dc_spin.setValue(15)
+            win._finish_roll()
+            win._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
+            win._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+            win._dc_check.setChecked(False)
+            win._finish_roll()
     else:  # pragma: no cover - guarded by argparse choices
         raise ValueError(target)
 
@@ -90,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "target",
-        choices=["start", "sheet", "sheet-demo", "constructor", "all"],
+        choices=["start", "sheet", "sheet-demo", "constructor", "dice", "dice-demo", "all"],
         help="which UI surface to launch and screenshot",
     )
     parser.add_argument("--out", type=Path, default=Path("_driver_shots"))

@@ -31,7 +31,7 @@ ICON = str(ROOT / "src" / "mm_companion" / "ui" / "assets" / "mm.ico")
 # package-data globs in pyproject.toml) — no tests, no dev tooling, no design.
 datas = collect_data_files(
     "mm_companion",
-    includes=["data/**/*.json", "ui/*.json", "ui/assets/*.ico"],
+    includes=["data/**/*.json", "ui/*.json", "ui/assets/*.ico", "ui/assets/*.png"],
 )
 
 block_cipher = None

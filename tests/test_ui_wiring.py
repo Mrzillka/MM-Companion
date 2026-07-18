@@ -233,6 +233,7 @@ def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
         "resistances",
         "conditions",
         "advantages",
+        "complications",
         "skills",
         "powers",
     }

@@ -9,7 +9,7 @@ be edited.
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject
-from PySide6.QtWidgets import QComboBox, QLineEdit, QSpinBox, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QLineEdit, QSpinBox, QTextEdit, QWidget
 
 _LOCKED_COMBO_STYLE = (
     "QComboBox { border: none; background: transparent; }"
@@ -41,12 +41,14 @@ def set_widget_locked(widget: QWidget, locked: bool) -> None:
     """Lock or unlock a single editable widget in place.
 
     Handles the input widgets the sheet uses (``QSpinBox``, ``QLineEdit``,
-    ``QComboBox``); anything else is left untouched.
+    ``QTextEdit``, ``QComboBox``); anything else is left untouched.
     """
     if isinstance(widget, QSpinBox):
         widget.setReadOnly(locked)
         widget.setFrame(not locked)
         _set_spin_buttons_hidden(widget, locked)
+    elif isinstance(widget, QTextEdit):
+        _set_text_edit_locked(widget, locked)
     elif isinstance(widget, QLineEdit):
         widget.setReadOnly(locked)
         widget.setFrame(not locked)
@@ -64,6 +66,24 @@ def _set_spin_buttons_hidden(spin: QSpinBox, hidden: bool) -> None:
     elif hasattr(spin, "_orig_button_symbols"):
         spin.setButtonSymbols(spin._orig_button_symbols)
         del spin._orig_button_symbols
+
+
+def _set_text_edit_locked(edit: QTextEdit, locked: bool) -> None:
+    """Turn a multiline text box into plain wrapped text while locked.
+
+    Read-only alone still draws the box's frame and input background; dropping the
+    frame and clearing the background makes the description read as a plain label,
+    matching the rest of the locked sheet.
+    """
+    edit.setReadOnly(locked)
+    if locked:
+        edit.setFrameShape(QFrame.Shape.NoFrame)
+        edit.viewport().setAutoFillBackground(False)
+        edit.setStyleSheet("QTextEdit { background: transparent; }")
+    else:
+        edit.setFrameShape(QFrame.Shape.StyledPanel)
+        edit.viewport().setAutoFillBackground(True)
+        edit.setStyleSheet("")
 
 
 def _set_combo_locked(combo: QComboBox, locked: bool) -> None:

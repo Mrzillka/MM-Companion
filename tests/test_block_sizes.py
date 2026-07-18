@@ -26,6 +26,7 @@ def test_block_sizes_load_for_every_block() -> None:
         "resistances",
         "conditions",
         "advantages",
+        "complications",
         "skills",
         "powers",
     }

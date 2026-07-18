@@ -9,7 +9,7 @@ the block set that used to be spelled out in three hardcoded places (the sheet's
 
 The registry reuses the generic :class:`~mm_companion.core.registry.Registry`, so
 it keeps insertion order and rejects a duplicate key unless ``replace=True`` — a
-mod overriding a base block is explicit. The nine base blocks register at import;
+mod overriding a base block is explicit. The ten base blocks register at import;
 a mod's Python module can :func:`register_block` a new one (its size table entry
 travels on the descriptor, so no separate JSON edit is needed).
 """
@@ -39,6 +39,7 @@ from mm_companion.ui.sections import (
     AdvantagesSection,
     BaseInfoSection,
     CharacterImageSection,
+    ComplicationsSection,
     ConditionsSection,
     PowersSection,
     ResistancesSection,
@@ -159,10 +160,19 @@ _BASE_BLOCKS = [
         },
     ),
     (
+        "complications",
+        "Complications",
+        ComplicationsSection,
+        3,
+        0,
+        {"edited": (EDITED,)},
+        {},
+    ),
+    (
         "skills",
         "Skills",
         SkillsSection,
-        3,
+        4,
         0,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
         {
@@ -175,7 +185,7 @@ _BASE_BLOCKS = [
         "powers",
         "Powers",
         PowersSection,
-        4,
+        5,
         0,
         {
             "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
@@ -189,7 +199,7 @@ _BASE_BLOCKS = [
 
 
 def register_base_blocks(*, replace: bool = False) -> None:
-    """Register the nine base M&M blocks (called once at import)."""
+    """Register the ten base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
     for key, title, factory, row, col, publishes, subscribes in _BASE_BLOCKS:
         register_block(

@@ -21,6 +21,7 @@ BASE_KEYS = {
     "resistances",
     "conditions",
     "advantages",
+    "complications",
     "skills",
     "powers",
 }
@@ -30,6 +31,7 @@ EXPECTED_DEFAULT_ROWS = [
     ["base_info", "system_info", "character_image"],
     ["abilities", "resistances", "conditions"],
     ["advantages"],
+    ["complications"],
     ["skills"],
     ["powers"],
 ]

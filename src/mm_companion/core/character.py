@@ -32,6 +32,26 @@ class AdvantageSelection:
 
 
 @dataclass
+class Complication:
+    """One narrative complication — a name plus a free-form multiline description.
+
+    Complications are story hooks (Motivation, enemy, secret, …) that earn hero
+    points in play; they carry no point cost, so they are plain per-character text
+    with no rules math.
+    """
+
+    name: str = ""
+    description: str = ""
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "description": self.description}
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> Complication:
+        return cls(name=raw.get("name", ""), description=raw.get("description", ""))
+
+
+@dataclass
 class AppliedCondition:
     """One condition currently on a character — an entity in the condition tracker.
 
@@ -102,6 +122,7 @@ class Character:
     focuses: dict[str, list[str]] = field(default_factory=dict)
     specializations: dict[str, list[str]] = field(default_factory=dict)
     advantages: list[AdvantageSelection] = field(default_factory=list)
+    complications: list[Complication] = field(default_factory=list)
     conditions: list[AppliedCondition] = field(default_factory=list)
     powers: list[PowerNode] = field(default_factory=list)
     #: Homebrew point-cost overrides for the non-power trait rates, keyed by the
@@ -167,6 +188,7 @@ class Character:
                 }
                 for a in self.advantages
             ],
+            "complications": [c.to_dict() for c in self.complications],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
             **({"cost_overrides": dict(self.cost_overrides)} if self.cost_overrides else {}),
@@ -202,6 +224,7 @@ class Character:
                 )
                 for a in raw.get("advantages", [])
             ],
+            complications=[Complication.from_dict(c) for c in raw.get("complications", [])],
             conditions=[
                 # Back-compat: an older save stored conditions as a bare list of ids.
                 (

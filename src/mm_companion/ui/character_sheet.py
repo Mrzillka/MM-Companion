@@ -1,9 +1,9 @@
-"""The character sheet: seven blocks on a scrollable, free-form canvas.
+"""The character sheet: the registry's blocks on a scrollable, free-form canvas.
 
 The sheet is a scrolling page: a :class:`QScrollArea` hosting a
-:class:`~mm_companion.ui.block_canvas.BlockCanvas` that arranges the seven blocks
-(Base Information, Abilities, Resistances, Conditions, Advantages, Skills, Powers).
-The user
+:class:`~mm_companion.ui.block_canvas.BlockCanvas` that arranges the blocks the
+registry supplies (Base Information, Abilities, Resistances, Conditions,
+Advantages, Complications, Skills, Powers, …). The user
 can drag a block to reorder it, put blocks side by side, tear one out into its
 own window, and drag that window back to re-dock it — all while the whole page
 scrolls vertically and each block shows its full content (no per-block scroll).
@@ -41,7 +41,7 @@ from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 
 
 class CharacterSheet(QWidget):
-    """Scrollable, free-form canvas of the sheet's seven blocks over a shared model."""
+    """Scrollable, free-form canvas of the sheet's blocks over a shared model."""
 
     edited = Signal()
 
@@ -104,7 +104,7 @@ class CharacterSheet(QWidget):
     # -- layout model / persistence -----------------------------------------
 
     def block_keys(self) -> list[str]:
-        """The seven block keys, in construction order."""
+        """Every block key, in construction order."""
         return self._canvas.block_keys()
 
     def block_frame(self, key: str) -> BlockFrame:

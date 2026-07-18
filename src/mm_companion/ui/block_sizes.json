@@ -33,6 +33,10 @@
     "min_width": 300,
     "min_height": 150
   },
+  "complications": {
+    "min_width": 300,
+    "min_height": 120
+  },
   "skills": {
     "min_width": 300,
     "min_height": 180

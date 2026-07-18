@@ -67,6 +67,9 @@ class TitleBar(QFrame):
 
         self._label = QLabel(title)
         self._label.setObjectName("blockTitleLabel")
+        label_font = self._label.font()
+        label_font.setBold(True)
+        self._label.setFont(label_font)
         layout.addWidget(self._label, stretch=1)
 
         self._float_button = QToolButton()

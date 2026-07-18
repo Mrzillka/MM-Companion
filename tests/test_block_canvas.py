@@ -133,6 +133,7 @@ def test_apply_arrangement_transitions_dont_destroy_frames(make_sheet) -> None:
             ["base_info", "system_info", "character_image"],
             ["abilities", "resistances"],
             ["conditions"],
+            ["complications"],
             ["powers"],
         ],
         "floating": {"skills": {"x": 50, "y": 50, "w": 400, "h": 400}},

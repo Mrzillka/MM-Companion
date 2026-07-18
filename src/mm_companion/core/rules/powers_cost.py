@@ -55,13 +55,30 @@ def _effective_flat(modifier: Modifier, selection) -> bool:
     return modifier.flat
 
 
+def _effective_ranked(modifier: Modifier, selection) -> bool:
+    """Whether this selection's cost is multiplied by its own rank.
+
+    Mirrors :func:`_effective_flat`: defaults to the modifier's own ``ranked``, but the
+    first chosen config option carrying a ``ranked`` override wins — a Custom modifier's
+    *flat* mode multiplies by its rank while its *per-rank* mode does not (it already
+    scales with the effect's rank, so multiplying again would double-count).
+    """
+
+    for cfg in modifier.config_fields:
+        chosen = selection.config.get(cfg.key)
+        option = next((o for o in cfg.options if o.value == chosen and o.ranked is not None), None)
+        if option is not None:
+            return option.ranked
+    return modifier.ranked
+
+
 def _modifier_magnitude(modifier: Modifier, selection) -> int:
     """One modifier's cost magnitude: ``cost_value`` (or a config override), times its
     rank when ``ranked``."""
 
     override = _modifier_config_cost(modifier, selection)
     magnitude = modifier.cost_value if override is None else override
-    return magnitude * (selection.rank if modifier.ranked else 1)
+    return magnitude * (selection.rank if _effective_ranked(modifier, selection) else 1)
 
 
 def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: bool) -> int:

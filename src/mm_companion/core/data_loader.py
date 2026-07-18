@@ -336,12 +336,19 @@ class ConfigOption:
     chosen — Affliction's Onset is a flat ``-1`` when its conditions land after a
     round but a per-rank ``-1`` when they land after a scene. ``None`` leaves the
     modifier's own ``flat`` in force.
+
+    ``ranked`` mirrors ``flat``: on a *modifier's* config option it overrides whether
+    the modifier's cost is multiplied by its own rank while the option is chosen — a
+    Custom modifier's *flat* mode is charged ``cost × rank`` while its *per-rank* mode
+    ignores the rank (it already scales with the effect's rank). ``None`` leaves the
+    modifier's own ``ranked`` in force.
     """
 
     value: str
     label: str
     cost_value: int | None = None
     flat: bool | None = None
+    ranked: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -595,6 +602,11 @@ class Modifier:
     note_per_rank: int = 0
     requires_any: tuple[str, ...] = ()
     config_fields: tuple[EffectConfigField, ...] = ()
+    custom: bool = False
+    """A blank, player-defined homebrew modifier (Custom Extra / Custom Flaw): its
+    name and point cost come from the selection's ``config``, not this record, and it
+    has no game-term impact. Marks a power as homerule (see
+    :func:`mm_companion.core.rules.power_has_custom_modifier`)."""
 
 
 @dataclass(frozen=True)
@@ -1156,6 +1168,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 label=o.get("label", o["value"]),
                 cost_value=o.get("costValue"),
                 flat=o.get("flat"),
+                ranked=o.get("ranked"),
             )
             for o in c.get("options", [])
         ),
@@ -1258,6 +1271,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         note_per_rank=int(m.get("notePerRank", 0)),
         requires_any=tuple(m.get("requiresAny", ())),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
+        custom=bool(m.get("custom", False)),
         description=m.get("description", ""),
     )
 

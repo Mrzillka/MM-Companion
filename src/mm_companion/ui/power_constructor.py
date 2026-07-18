@@ -355,6 +355,7 @@ class ModifierChip(QFrame):
     ) -> None:
         super().__init__()
         self.selection = selection
+        self._modifier = modifier
         self._data = game_data
         self._character = character
         self._press_pos = None
@@ -368,7 +369,10 @@ class ModifierChip(QFrame):
         outer.setSpacing(2)
         header = QHBoxLayout()
         header.setSpacing(4)
-        header.addWidget(QLabel(modifier.name))
+        # A blank Custom modifier titles itself with the player's typed name (kept in
+        # sync from its name config field); a normal modifier uses its record name.
+        self._title = QLabel(self._title_text())
+        header.addWidget(self._title)
         if modifier.ranked:
             rank = make_spin_box(1, RANK_MAX, value=selection.rank, buttons=False, max_width=44)
             rank.setPrefix("×")
@@ -496,11 +500,21 @@ class ModifierChip(QFrame):
             points_spin.valueChanged.connect(_sync_gated)
         return row
 
+    def _title_text(self) -> str:
+        """The chip's header label — a Custom modifier's typed name, else its record name."""
+        if self._modifier.custom:
+            name = str(self.selection.config.get("name", "")).strip()
+            if name:
+                return name
+        return self._modifier.name
+
     def _on_config(self, key: str, value) -> None:
         if value:
             self.selection.config[key] = value
         else:
             self.selection.config.pop(key, None)
+        if self._modifier.custom:
+            self._title.setText(self._title_text())
         self.changed.emit()
 
     def _on_rank_changed(self, value: int) -> None:

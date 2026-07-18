@@ -57,6 +57,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # options in its manifest; only values that differ from the declared defaults are
     # stored here. See :mod:`mm_companion.core.mods`.
     "mod_options": {},
+    # Saved dice-roller quick rolls, each a plain dict
+    # ``{"bonus": int, "penalty": int, "dc": int | None}``. Written by the Dice
+    # Roller window; empty by default. See :mod:`mm_companion.ui.dice_roller`.
+    "quick_rolls": [],
 }
 
 

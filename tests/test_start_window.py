@@ -39,6 +39,7 @@ def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
         "Open Existing",
         "Open GM Mode",
         "Manage Mods",
+        "Dice Roller",
         "Exit",
     }
 

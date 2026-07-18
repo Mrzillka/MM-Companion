@@ -77,6 +77,7 @@ from mm_companion.core.rules import (
     modifier_label,
     node_display_cost,
     power_display_name,
+    power_has_custom_modifier,
     power_has_standing_effect,
     power_pl_violations,
     power_runtime_gates,
@@ -124,7 +125,7 @@ class _DragHandle(QLabel):
         self._press: QPoint | None = None
         self.setToolTip("Drag to reorder, or drop onto another power to group them")
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setStyleSheet("color: gray;")
+        self.setStyleSheet("color: palette(placeholder-text);")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -895,7 +896,7 @@ class PowersSection(TitledSection):
         if power.description:
             desc = QLabel(power.description)
             desc.setWordWrap(True)
-            desc.setStyleSheet("color: gray; font-style: italic;")
+            desc.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             layout.addWidget(desc)
 
         effects = self._effects_block(power)
@@ -955,12 +956,14 @@ class PowersSection(TitledSection):
             warning.setToolTip("\n".join(violations))
             layout.addWidget(warning)
 
-        # A homerule power (one carrying any Dev-mode override) is badged so a bent
-        # value on the sheet is never mistaken for a by-the-book one.
-        if power_is_homerule(power):
+        # A homerule power (one carrying a Dev-mode override or a blank Custom modifier)
+        # is badged so a bent value on the sheet is never mistaken for a by-the-book one.
+        if power_is_homerule(power) or power_has_custom_modifier(power, self._data):
             homerule = QLabel("⌂")
             homerule.setStyleSheet(f"color: {_TINT_HOMERULE}; font-weight: bold;")
-            homerule.setToolTip("Homerule power — carries manual (Dev-mode) overrides.")
+            homerule.setToolTip(
+                "Homerule power — carries manual (Dev-mode) overrides or a custom modifier."
+            )
             layout.addWidget(homerule)
         layout.addStretch()
 
@@ -1037,7 +1040,7 @@ class PowersSection(TitledSection):
         note = self._role_note(power, index)
         if note:
             role = QLabel(note)
-            role.setStyleSheet("color: gray; font-style: italic;")
+            role.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             header.addWidget(role)
         header.addStretch()
         layout.addLayout(header)

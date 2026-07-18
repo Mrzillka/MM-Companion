@@ -108,6 +108,8 @@ class StartWindow(QMainWindow):
         self._child_windows: list[MainWindow] = []
         # The mod manager window, kept referenced while open for the same reason.
         self._mods_window: QWidget | None = None
+        # The dice roller window, likewise kept referenced while open.
+        self._dice_window: QWidget | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -136,6 +138,10 @@ class StartWindow(QMainWindow):
         mods_button = QPushButton("Manage Mods")
         mods_button.clicked.connect(self._manage_mods)
         column.addWidget(mods_button)
+
+        dice_button = QPushButton("Dice Roller")
+        dice_button.clicked.connect(self._open_dice_roller)
+        column.addWidget(dice_button)
 
         exit_button = QPushButton("Exit")
         exit_button.clicked.connect(self.close)
@@ -240,6 +246,14 @@ class StartWindow(QMainWindow):
 
         window = ModsWindow()
         self._mods_window = window
+        window.show()
+
+    def _open_dice_roller(self) -> None:
+        """Open the standalone Dice Roller window."""
+        from mm_companion.ui.dice_roller import DiceRollerWindow
+
+        window = DiceRollerWindow()
+        self._dice_window = window
         window.show()
 
     def _not_implemented(self) -> None:

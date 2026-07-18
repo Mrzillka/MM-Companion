@@ -101,7 +101,9 @@ class ConditionsSection(QGroupBox):
         self._category_sections: dict[str, tuple[QLabel, QWidget, QWidget]] = {}
         for category, title in CONDITION_CATEGORY_SECTIONS:
             head = QLabel(title)
-            head.setStyleSheet("font-weight: bold; color: palette(mid); padding-top: 4px;")
+            head.setStyleSheet(
+                "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
+            )
             rule = hline_separator()
             container = FlowContainer()
             container.setMinimumHeight(CONDITIONS_ROW_HEIGHT)

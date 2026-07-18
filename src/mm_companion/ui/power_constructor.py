@@ -355,6 +355,7 @@ class ModifierChip(QFrame):
     ) -> None:
         super().__init__()
         self.selection = selection
+        self._modifier = modifier
         self._data = game_data
         self._character = character
         self._press_pos = None
@@ -368,7 +369,10 @@ class ModifierChip(QFrame):
         outer.setSpacing(2)
         header = QHBoxLayout()
         header.setSpacing(4)
-        header.addWidget(QLabel(modifier.name))
+        # A blank Custom modifier titles itself with the player's typed name (kept in
+        # sync from its name config field); a normal modifier uses its record name.
+        self._title = QLabel(self._title_text())
+        header.addWidget(self._title)
         if modifier.ranked:
             rank = make_spin_box(1, RANK_MAX, value=selection.rank, buttons=False, max_width=44)
             rank.setPrefix("×")
@@ -496,11 +500,21 @@ class ModifierChip(QFrame):
             points_spin.valueChanged.connect(_sync_gated)
         return row
 
+    def _title_text(self) -> str:
+        """The chip's header label — a Custom modifier's typed name, else its record name."""
+        if self._modifier.custom:
+            name = str(self.selection.config.get("name", "")).strip()
+            if name:
+                return name
+        return self._modifier.name
+
     def _on_config(self, key: str, value) -> None:
         if value:
             self.selection.config[key] = value
         else:
             self.selection.config.pop(key, None)
+        if self._modifier.custom:
+            self._title.setText(self._title_text())
         self.changed.emit()
 
     def _on_rank_changed(self, value: int) -> None:
@@ -1705,7 +1719,7 @@ class PowerTermsView(QWidget):
             return
         if not power.effects:
             placeholder = QLabel("Game-term summary appears here as you add effects.")
-            placeholder.setStyleSheet("color: gray; font-style: italic;")
+            placeholder.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             placeholder.setWordWrap(True)
             self._layout.addWidget(placeholder)
             return
@@ -1745,7 +1759,7 @@ class PowerTermsView(QWidget):
         note = self._role_note(power, index, game_data, char)
         if note:
             role = QLabel(note)
-            role.setStyleSheet("color: gray; font-style: italic;")
+            role.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             header.addWidget(role)
         header.addStretch()
         self._layout.addLayout(header)
@@ -1761,7 +1775,7 @@ class PowerTermsView(QWidget):
             grid_row, pair = divmod(index, pairs)
             col = pair * 2
             label = QLabel(f"{stat.label}:")
-            label.setStyleSheet("color: gray;")
+            label.setStyleSheet("color: palette(placeholder-text);")
             value = QLabel(stat.value)
             value.setWordWrap(True)
             tint = self._TINTS.get(stat.change)
@@ -2265,7 +2279,9 @@ class PowerConstructorWindow(QMainWindow):
                 # name (the Attack extra vs. the Attack effect group), so selecting
                 # headers by their text alone would sweep bricks up too.
                 header.setObjectName(_GROUP_HEADER)
-                header.setStyleSheet("font-weight: bold; color: palette(mid); padding-top: 4px;")
+                header.setStyleSheet(
+                    "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
+                )
                 layout.addWidget(header)
             for brick in group:
                 layout.addWidget(brick)

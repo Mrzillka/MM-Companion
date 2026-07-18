@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.data_loader import load_game_data
@@ -15,17 +15,45 @@ def qapp() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
-def _shown_sheet() -> CharacterSheet:
-    sheet = CharacterSheet(load_game_data())
-    sheet.resize(1000, 1000)
-    sheet.show()
-    for _ in range(5):
-        QApplication.processEvents()
-    return sheet
+@pytest.fixture
+def make_sheet(qapp: QApplication):
+    """Build laid-out character sheets without ever creating on-screen windows.
+
+    These tests need real geometry (``_hit_test`` reads ``mapToGlobal`` positions),
+    which requires the sheet to be shown and laid out — but on the native Windows
+    platform, destroying a *real* heavy window at teardown kicks off a re-entrant
+    flow-layout/scrollbar relayout that loops synchronously inside a single event
+    handler and never returns, hanging the shared ``processEvents()`` teardown
+    (a per-event deadline can't interrupt one non-returning handler).
+
+    ``WA_DontShowOnScreen`` gives us the layout and geometry with no native window
+    to tear down — the same headless path CI already exercises under xvfb — so the
+    relayout loop is never triggered. Sheets are also disposed here (which frees
+    their floated ``BlockWindow`` children, parented to the sheet) so the global
+    teardown finds nothing to pump.
+    """
+    sheets: list[CharacterSheet] = []
+
+    def _make() -> CharacterSheet:
+        sheet = CharacterSheet(load_game_data())
+        sheet.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        sheet.resize(1000, 1000)
+        sheet.show()
+        for _ in range(5):
+            QApplication.processEvents()
+        sheets.append(sheet)
+        return sheet
+
+    yield _make
+
+    for sheet in sheets:
+        sheet.hide()
+        sheet.deleteLater()  # also frees its floated BlockWindows (parented to it)
+    QApplication.processEvents()
 
 
-def test_hit_test_targets_the_row_under_the_cursor(qapp: QApplication) -> None:
-    sheet = _shown_sheet()
+def test_hit_test_targets_the_row_under_the_cursor(make_sheet) -> None:
+    sheet = make_sheet()
     canvas = sheet.canvas
     row = canvas._row_widgets[1]  # the Abilities | Resistances row
 
@@ -37,8 +65,8 @@ def test_hit_test_targets_the_row_under_the_cursor(qapp: QApplication) -> None:
     assert slot.row == 1
 
 
-def test_hit_test_in_the_gap_between_rows_makes_a_new_row(qapp: QApplication) -> None:
-    sheet = _shown_sheet()
+def test_hit_test_in_the_gap_between_rows_makes_a_new_row(make_sheet) -> None:
+    sheet = make_sheet()
     canvas = sheet.canvas
     top = canvas._row_widgets[0].geometry()
     below = canvas._row_widgets[1].geometry()
@@ -52,16 +80,16 @@ def test_hit_test_in_the_gap_between_rows_makes_a_new_row(qapp: QApplication) ->
     assert slot.row == 1
 
 
-def test_hit_test_off_the_page_returns_none(qapp: QApplication) -> None:
-    sheet = _shown_sheet()
+def test_hit_test_off_the_page_returns_none(make_sheet) -> None:
+    sheet = make_sheet()
     canvas = sheet.canvas
 
     # A point far outside the viewport is not a drop target.
     assert canvas._hit_test(QPoint(-5000, -5000)) is None
 
 
-def test_save_restore_round_trips_a_floated_block(qapp: QApplication) -> None:
-    sheet = _shown_sheet()
+def test_save_restore_round_trips_a_floated_block(make_sheet) -> None:
+    sheet = make_sheet()
     sheet.float_block("powers")
     sheet.dock_block("skills", 0, 0, new_row=True)
 
@@ -75,11 +103,11 @@ def test_save_restore_round_trips_a_floated_block(qapp: QApplication) -> None:
     assert restored["rows"][0] == ["skills"]
 
 
-def test_hidden_block_survives_relayout_and_reopens(qapp: QApplication) -> None:
+def test_hidden_block_survives_relayout_and_reopens(make_sheet) -> None:
     # Regression: hiding a docked block left its frame parented to a row widget
     # that _relayout then deleted (deleteLater), destroying the frame's C++ object;
     # reopening it later crashed. The frame must survive across event-loop turns.
-    sheet = _shown_sheet()
+    sheet = make_sheet()
 
     sheet.hide_block("advantages")
     for _ in range(5):  # let the deleted old rows' deleteLater actually fire
@@ -93,12 +121,12 @@ def test_hidden_block_survives_relayout_and_reopens(qapp: QApplication) -> None:
     assert sheet.block_frame("advantages").isVisible()
 
 
-def test_apply_arrangement_transitions_dont_destroy_frames(qapp: QApplication) -> None:
+def test_apply_arrangement_transitions_dont_destroy_frames(make_sheet) -> None:
     # A block that goes docked→floating or docked→hidden via apply_arrangement must
     # not be destroyed when its old row is freed.
     import json
 
-    sheet = _shown_sheet()
+    sheet = make_sheet()
     model = {
         "version": 5,
         "rows": [
@@ -124,8 +152,8 @@ def test_apply_arrangement_transitions_dont_destroy_frames(qapp: QApplication) -
     assert sheet.block_frame("advantages").isVisible()
 
 
-def test_restore_layout_rejects_garbage(qapp: QApplication) -> None:
-    sheet = _shown_sheet()
+def test_restore_layout_rejects_garbage(make_sheet) -> None:
+    sheet = make_sheet()
     default_rows = sheet.arrangement()["rows"]
 
     assert sheet.restore_layout("") is False

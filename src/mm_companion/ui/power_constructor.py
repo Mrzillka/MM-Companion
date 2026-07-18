@@ -1705,7 +1705,7 @@ class PowerTermsView(QWidget):
             return
         if not power.effects:
             placeholder = QLabel("Game-term summary appears here as you add effects.")
-            placeholder.setStyleSheet("color: gray; font-style: italic;")
+            placeholder.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             placeholder.setWordWrap(True)
             self._layout.addWidget(placeholder)
             return
@@ -1745,7 +1745,7 @@ class PowerTermsView(QWidget):
         note = self._role_note(power, index, game_data, char)
         if note:
             role = QLabel(note)
-            role.setStyleSheet("color: gray; font-style: italic;")
+            role.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             header.addWidget(role)
         header.addStretch()
         self._layout.addLayout(header)
@@ -1761,7 +1761,7 @@ class PowerTermsView(QWidget):
             grid_row, pair = divmod(index, pairs)
             col = pair * 2
             label = QLabel(f"{stat.label}:")
-            label.setStyleSheet("color: gray;")
+            label.setStyleSheet("color: palette(placeholder-text);")
             value = QLabel(stat.value)
             value.setWordWrap(True)
             tint = self._TINTS.get(stat.change)
@@ -2265,7 +2265,9 @@ class PowerConstructorWindow(QMainWindow):
                 # name (the Attack extra vs. the Attack effect group), so selecting
                 # headers by their text alone would sweep bricks up too.
                 header.setObjectName(_GROUP_HEADER)
-                header.setStyleSheet("font-weight: bold; color: palette(mid); padding-top: 4px;")
+                header.setStyleSheet(
+                    "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
+                )
                 layout.addWidget(header)
             for brick in group:
                 layout.addWidget(brick)

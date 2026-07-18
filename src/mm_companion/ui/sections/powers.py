@@ -124,7 +124,7 @@ class _DragHandle(QLabel):
         self._press: QPoint | None = None
         self.setToolTip("Drag to reorder, or drop onto another power to group them")
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setStyleSheet("color: gray;")
+        self.setStyleSheet("color: palette(placeholder-text);")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -895,7 +895,7 @@ class PowersSection(TitledSection):
         if power.description:
             desc = QLabel(power.description)
             desc.setWordWrap(True)
-            desc.setStyleSheet("color: gray; font-style: italic;")
+            desc.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             layout.addWidget(desc)
 
         effects = self._effects_block(power)
@@ -1037,7 +1037,7 @@ class PowersSection(TitledSection):
         note = self._role_note(power, index)
         if note:
             role = QLabel(note)
-            role.setStyleSheet("color: gray; font-style: italic;")
+            role.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
             header.addWidget(role)
         header.addStretch()
         layout.addLayout(header)

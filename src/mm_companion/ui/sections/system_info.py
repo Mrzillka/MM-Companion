@@ -181,6 +181,7 @@ class SystemInfoSection(QGroupBox):
         form = QFormLayout(self)
         form.addRow("Power Level:", self._build_power_level())
         form.addRow("Power Points:", self._build_power_points())
+        form.addRow(self._build_cost_notice())
         form.addRow("Size:", self._build_size())
         form.addRow("Speed:", self._build_speed())
         form.addRow("Initiative:", self._build_initiative())
@@ -224,7 +225,11 @@ class SystemInfoSection(QGroupBox):
         row.addWidget(self._pool_current)
         row.addWidget(QLabel("/"))
         row.addWidget(self._power_points)
+        row.addStretch()
+        self._editable.append(self._power_points)
+        return container
 
+    def _build_cost_notice(self) -> QWidget:
         self._cost_notice = QLabel("⌂ Homebrew PP costs")
         self._cost_notice.setStyleSheet("color: #4a90d9; font-weight: bold;")
         self._cost_notice.setToolTip(
@@ -232,11 +237,7 @@ class SystemInfoSection(QGroupBox):
             "(Settings ▸ Cost config)."
         )
         self._cost_notice.setVisible(False)
-        row.addWidget(self._cost_notice)
-
-        row.addStretch()
-        self._editable.append(self._power_points)
-        return container
+        return self._cost_notice
 
     def _build_size(self) -> QWidget:
         c = self._by_key.get("size")
@@ -253,7 +254,7 @@ class SystemInfoSection(QGroupBox):
         guard_wheel(self._size_combo)
         # Effective size when an active Growth/Shrinking shifts it away from the base.
         self._size_effective = QLabel()
-        self._size_effective.setStyleSheet("color: palette(mid);")
+        self._size_effective.setStyleSheet("color: palette(placeholder-text);")
         row.addWidget(self._size_combo)
         row.addWidget(self._size_effective)
         row.addStretch()

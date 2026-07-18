@@ -167,6 +167,10 @@ class ComplicationsSection(QGroupBox):
         fields = QVBoxLayout()
         name = QLineEdit(complication.name)
         name.setPlaceholderText("Complication (e.g. Enemy, Motivation, Secret)")
+        # The name reads as each complication's title, so give it bold weight.
+        name_font = name.font()
+        name_font.setBold(True)
+        name.setFont(name_font)
         name.textChanged.connect(lambda text, c=complication: self._on_name_changed(c, text))
         fields.addWidget(name)
 

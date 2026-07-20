@@ -41,6 +41,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
+from mm_companion.ui.theme import ACCENT
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
@@ -231,7 +232,7 @@ class SystemInfoSection(QGroupBox):
 
     def _build_cost_notice(self) -> QWidget:
         self._cost_notice = QLabel("⌂ Homebrew PP costs")
-        self._cost_notice.setStyleSheet("color: #4a90d9; font-weight: bold;")
+        self._cost_notice.setStyleSheet(f"color: {ACCENT}; font-weight: bold;")
         self._cost_notice.setToolTip(
             "Homebrew PP cost changed — this character uses non-default point costs "
             "(Settings ▸ Cost config)."

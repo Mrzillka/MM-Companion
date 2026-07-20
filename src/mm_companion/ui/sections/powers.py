@@ -85,18 +85,19 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.theme import ACCENT, DICE_ACCENT, TINT_BETTER, TINT_WORSE
 from mm_companion.ui.widgets import hline_separator, title_with_cost
 
 # Tints for a stat a modifier changed, matching the Power Constructor's
 # PowerTermsView: an extra improved it (green), a flaw limited it (red).
-_TINT_BETTER = "#2e9e4f"
-_TINT_WORSE = "#d15b5b"
+_TINT_BETTER = TINT_BETTER
+_TINT_WORSE = TINT_WORSE
 # A homerule (Dev-mode) override reads in a distinct blue, apart from better/worse.
-_TINT_HOMERULE = "#4a90d9"
+_TINT_HOMERULE = ACCENT
 _TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE, HOMERULE_TINT: _TINT_HOMERULE}
 
 # A calm blue reused for drag affordances and dice info.
-_ACCENT = "#6a86c0"
+_ACCENT = DICE_ACCENT
 
 # Drag-and-drop payload: the dragged node's stable id (a Power.id or PowerGroup.id).
 # A tree position needs parent context, not a bare index, so drops resolve the id.
@@ -938,7 +939,7 @@ class PowersSection(TitledSection):
         # A Debilitated condition naming this power loses it — strike the header through
         # and redden it (display-only; the power's point cost is untouched).
         if power.name and power.name in debilitated_traits(self._character, self._data):
-            name.setStyleSheet("font-weight: bold; font-size: 14px; color: #d15b5b;")
+            name.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {_TINT_WORSE};")
             font = name.font()
             font.setStrikeOut(True)
             name.setFont(font)

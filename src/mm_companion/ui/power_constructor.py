@@ -97,6 +97,7 @@ from mm_companion.core.rules import (
     resolve_stat_display,
 )
 from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.theme import ACCENT, TINT_BETTER, TINT_WORSE
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, make_spin_box
 
@@ -192,7 +193,7 @@ _OVERRIDE_STD_KEYS = frozenset(key for key, _, _ in _OVERRIDE_STD_FIELDS)
 # The accent used to light up a drop target while a compatible brick hovers over it.
 # Kept semi-transparent and paired with palette() roles so both borders and fills read
 # on light and dark themes alike.
-_ACCENT = "#4a90d9"
+_ACCENT = ACCENT
 
 # Effect card chrome — a rounded, padded panel. The drag state swaps to an accent
 # border + faint fill so a hovering modifier clearly lands "on this card".
@@ -1044,7 +1045,7 @@ class EffectCard(QFrame):
             used = effect_allocation_used(self.instance, self._data)
             rank = self._rank.value()
             total.setText(f"Allocated {used} / {rank} ranks")
-            total.setStyleSheet("color: #d15b5b; font-weight: bold;" if used > rank else "")
+            total.setStyleSheet(f"color: {TINT_WORSE}; font-weight: bold;" if used > rank else "")
 
         def commit() -> None:
             new = []
@@ -1123,7 +1124,7 @@ class EffectCard(QFrame):
             used = effect_allocation_used(self.instance, self._data)
             rank = self._rank.value()
             total.setText(f"Allocated {used} / {rank} ranks")
-            total.setStyleSheet("color: #d15b5b; font-weight: bold;" if used > rank else "")
+            total.setStyleSheet(f"color: {TINT_WORSE}; font-weight: bold;" if used > rank else "")
 
         def commit() -> None:
             rows = []
@@ -1677,7 +1678,7 @@ class PowerTermsView(QWidget):
 
     # Tints for a modified stat's value; readable on both light and dark themes.
     # A homerule override reads in a distinct blue, apart from modifier better/worse.
-    _TINTS = {"better": "#2e9e4f", "worse": "#d15b5b", HOMERULE_TINT: "#4a90d9"}
+    _TINTS = {"better": TINT_BETTER, "worse": TINT_WORSE, HOMERULE_TINT: ACCENT}
     # How many label/value pairs sit side by side per grid row, so the short stats
     # pack across the width instead of stacking into a tall, scrolling column.
     _PAIRS_PER_ROW = 2

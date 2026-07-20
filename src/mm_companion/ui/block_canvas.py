@@ -3,7 +3,8 @@
 `BlockCanvas` is the single source of truth for how the seven blocks are laid out.
 It models the arrangement as an ordered list of *rows*, each an ordered list of
 block keys, plus a set of *floating* blocks (torn out into their own windows) and
-a set of *hidden* blocks (closed, reopenable from the View menu). It renders the
+a set of *hidden* blocks (closed, reopenable from the View menu — each remembers
+an :class:`Anchor` so it comes back where it was). It renders the
 rows top-to-bottom (a `RowWidget` per row) inside the sheet's page scroll area,
 so the whole sheet scrolls as one page while each block shows its full content.
 
@@ -55,6 +56,34 @@ class DropSlot:
     new_row: bool
     row: int
     slot: int
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """Where a closed block should reappear, recorded as *what it sat next to*.
+
+    A raw ``(row, slot)`` index goes stale as soon as anything else moves — hiding
+    a lone block collapses its row, shifting every later row up. Naming the
+    neighbour instead survives that, and degrades cleanly: if the neighbour is no
+    longer docked, the anchor simply doesn't resolve and the caller falls back.
+    """
+
+    neighbour: str | None  # the block it sat beside, or the row above it
+    in_row: bool  # True: same row as the neighbour; False: its own row
+    before: bool  # insert before the neighbour rather than after
+
+    def to_dict(self) -> dict:
+        return {"neighbour": self.neighbour, "in_row": self.in_row, "before": self.before}
+
+    @classmethod
+    def from_dict(cls, value: object) -> Anchor | None:
+        """Parse a persisted anchor, or None when it is missing/malformed."""
+        if not isinstance(value, dict):
+            return None
+        neighbour = value.get("neighbour")
+        if neighbour is not None and not isinstance(neighbour, str):
+            return None
+        return cls(neighbour, bool(value.get("in_row")), bool(value.get("before")))
 
 
 class DropIndicator(QFrame):
@@ -159,6 +188,8 @@ class BlockCanvas(QWidget):
         self._windows: dict[str, BlockWindow] = {}
         self._rows: list[list[str]] = []
         self._hidden: set[str] = set()
+        # Where each hidden block was closed from, so reopening restores it there.
+        self._anchors: dict[str, Anchor] = {}
         self._row_widgets: list[RowWidget] = []
 
         self._layout = QVBoxLayout(self)
@@ -278,12 +309,22 @@ class BlockCanvas(QWidget):
         return {"version": SCHEMA_VERSION, "rows": rows, "floating": {}, "hidden": []}
 
     def arrangement(self) -> dict:
-        """A snapshot of the current arrangement as a persistence model."""
+        """A snapshot of the current arrangement as a persistence model.
+
+        ``hidden_anchors`` is an *optional* addition: it is read tolerantly on the
+        way back in, so it needed no schema bump and a layout saved without it
+        still restores (its blocks just reopen at their default position).
+        """
         return {
             "version": SCHEMA_VERSION,
             "rows": [list(row) for row in self._rows],
             "floating": {key: self._window_geometry(key) for key in self._windows},
             "hidden": sorted(self._hidden),
+            "hidden_anchors": {
+                key: anchor.to_dict()
+                for key, anchor in self._anchors.items()
+                if key in self._hidden
+            },
         }
 
     def _window_geometry(self, key: str) -> dict:
@@ -296,12 +337,13 @@ class BlockCanvas(QWidget):
         parsed = self._validate(model)
         if parsed is None:
             return False
-        rows, floating, hidden = parsed
+        rows, floating, hidden, anchors = parsed
 
         for key in list(self._windows):
             self._destroy_window(key)
         self._rows = rows
         self._hidden = set(hidden)
+        self._anchors = anchors
         self._relayout()
         for key, geom in floating.items():
             self._make_floating(key, geom)
@@ -310,10 +352,13 @@ class BlockCanvas(QWidget):
         return True
 
     def _validate(self, model: object):
-        """Parse/validate a persistence model → (rows, floating, hidden) or None.
+        """Parse/validate a persistence model → (rows, floating, hidden, anchors) or None.
 
         Enforces the invariant that every known block appears exactly once across
-        rows, floating, and hidden.
+        rows, floating, and hidden. The optional ``hidden_anchors`` is parsed
+        leniently — anything unusable is dropped rather than rejecting the whole
+        layout, since a missing anchor only costs a reopened block its remembered
+        spot.
         """
         if not isinstance(model, dict) or model.get("version") != SCHEMA_VERSION:
             return None
@@ -351,7 +396,16 @@ class BlockCanvas(QWidget):
 
         if sorted(seen) != sorted(known):
             return None
-        return clean_rows, floating, list(hidden)
+
+        anchors: dict[str, Anchor] = {}
+        raw_anchors = model.get("hidden_anchors")
+        if isinstance(raw_anchors, dict):
+            for key, value in raw_anchors.items():
+                anchor = Anchor.from_dict(value)
+                if key in known and anchor is not None:
+                    anchors[key] = anchor
+
+        return clean_rows, floating, list(hidden), anchors
 
     @staticmethod
     def _valid_geometry(geom: object) -> bool:
@@ -453,40 +507,96 @@ class BlockCanvas(QWidget):
         self._windows[key] = window
         window.show()
 
+    def _place(self, key: str, slot: DropSlot) -> None:
+        """Insert *key* into ``_rows`` at *slot* (indices clamped). Assumes *key*
+        has already been detached."""
+        row = max(0, min(slot.row, len(self._rows)))
+        if slot.new_row or not self._rows:
+            self._rows.insert(row, [key])
+            return
+        row = min(row, len(self._rows) - 1)
+        target = self._rows[row]
+        index = max(0, min(slot.slot, len(target)))
+        target.insert(index, key)
+
     def dock_block(self, key: str, row: int, slot: int, new_row: bool = False) -> None:
         """Dock *key* into the arrangement at (row, slot), creating a new row when
         *new_row* is set. Detaches it from its current place first."""
         self._hidden.discard(key)
         self._detach(key)
-
-        row = max(0, min(row, len(self._rows)))
-        if new_row or not self._rows:
-            self._rows.insert(row, [key])
-        else:
-            row = min(row, len(self._rows) - 1)
-            target = self._rows[row]
-            slot = max(0, min(slot, len(target)))
-            target.insert(slot, key)
-
+        self._place(key, DropSlot(new_row, row, slot))
         self._relayout()
         self.arrangement_changed.emit()
+
+    # -- remembering where a closed block came from --------------------------
+
+    @staticmethod
+    def _anchor_for(key: str, rows: list[list[str]]) -> Anchor | None:
+        """Derive an anchor for *key* from a rows model, or None if it isn't in one.
+
+        Used both on ``_rows`` when a block is closed and on ``_default_rows`` as
+        the fallback when the remembered anchor no longer resolves.
+        """
+        for r, row in enumerate(rows):
+            if key not in row:
+                continue
+            slot = row.index(key)
+            if len(row) > 1:  # it had a row-mate: come back beside it
+                if slot == 0:
+                    return Anchor(row[1], in_row=True, before=True)
+                return Anchor(row[slot - 1], in_row=True, before=False)
+            if r > 0:  # alone in its row: come back as a row below the one above
+                return Anchor(rows[r - 1][0], in_row=False, before=False)
+            if len(rows) > 1:
+                return Anchor(rows[1][0], in_row=False, before=True)
+            return Anchor(None, in_row=False, before=True)
+        return None
+
+    def _resolve_anchor(self, anchor: Anchor | None) -> DropSlot | None:
+        """Turn an anchor into a drop slot against the *current* rows, or None when
+        its neighbour is no longer docked (floated, hidden, or gone)."""
+        if anchor is None:
+            return None
+        if anchor.neighbour is None:
+            return DropSlot(True, 0, 0)
+        for r, row in enumerate(self._rows):
+            if anchor.neighbour not in row:
+                continue
+            slot = row.index(anchor.neighbour)
+            if anchor.in_row:
+                return DropSlot(False, r, slot if anchor.before else slot + 1)
+            return DropSlot(True, r if anchor.before else r + 1, 0)
+        return None
 
     def hide_block(self, key: str) -> None:
         """Close *key* (removed from the sheet, reopenable from the View menu)."""
         if key in self._hidden:
             return
+        anchor = self._anchor_for(key, self._rows)  # before _detach mutates _rows
         self._detach(key)
         self._hidden.add(key)
+        if anchor is not None:
+            self._anchors[key] = anchor
         self._relayout()
         self.block_visibility_changed.emit(key, False)
         self.arrangement_changed.emit()
 
     def show_block(self, key: str) -> None:
-        """Reopen a hidden block as a new full-width row at the end."""
+        """Reopen a hidden block where it was closed from.
+
+        Falls back to its default position when the remembered anchor no longer
+        resolves (its neighbour has since been floated or hidden), and to a new
+        row at the end when that fails too.
+        """
         if key not in self._hidden:
             return
         self._hidden.discard(key)
-        self._rows.append([key])
+        slot = self._resolve_anchor(self._anchors.pop(key, None))
+        if slot is None:
+            slot = self._resolve_anchor(self._anchor_for(key, self._default_rows))
+        if slot is None:
+            slot = DropSlot(True, len(self._rows), 0)
+        self._place(key, slot)
         self._relayout()
         self._fade_in(self._frames[key])
         self.block_visibility_changed.emit(key, True)

@@ -23,6 +23,15 @@ from .components import Integration, TraitBoost
 DATA_PACKAGE = "mm_companion"
 
 
+# ===========================================================================
+# Records — the typed dataclasses each data file parses into. Grouped below by
+# the content they model; the parsing functions that build them follow further
+# down, then the mod merge loader and cached public entry point at the end.
+# ===========================================================================
+
+
+# --- Core character traits: profile, characteristics, abilities, resistances,
+#     skills, advantages (the point-bought sheet content). --------------------
 @dataclass(frozen=True)
 class Field:
     """A free-text descriptive field (character/hero/player name, hair, ...).
@@ -193,6 +202,8 @@ class Advantage:
         return self.types[0] if self.types else ""
 
 
+# --- Conditions: the status catalog + its mechanical sub-records (parameters,
+#     debilitation, defense/attack/resistance mods, stacking, recovery). -------
 @dataclass(frozen=True)
 class ConditionParameter:
     """The subject a condition must be qualified with when applied (§6).
@@ -320,6 +331,8 @@ class Condition:
     random_table: tuple[RandomActionRow, ...] = ()
 
 
+# --- Powers layer: base effects, modifiers (extras/flaws), and the config
+#     fields / measures that qualify an effect. --------------------------------
 @dataclass(frozen=True)
 class ConfigOption:
     """One selectable value for an :class:`EffectConfigField`.
@@ -609,6 +622,8 @@ class Modifier:
     :func:`mm_companion.core.rules.power_has_custom_modifier`)."""
 
 
+# --- Point costs & Power Level: per-rank trait costs and the PL-derived budget
+#     and caps (from ``costs.json``). ------------------------------------------
 @dataclass(frozen=True)
 class TraitCosts:
     """Power-point cost constants for the point-bought traits (``docs/mm-core-mechanics.md`` §7)."""
@@ -648,6 +663,8 @@ class Costs:
     power_level: PowerLevelRules
 
 
+# --- System rules: the trait-key strings and paired caps the resolvers
+#     reference (from ``system.json``). ----------------------------------------
 @dataclass(frozen=True)
 class TraitKeys:
     """The trait-key strings the resolvers reference, from ``system.json``.
@@ -693,6 +710,8 @@ class SystemRules:
     linked_modifier: str = "linked"
 
 
+# --- Measurements & movement: the rank ↔ real-world conversion tables, the
+#     Size Table, and movement constants. --------------------------------------
 @dataclass(frozen=True)
 class SizeRow:
     """One row of the Size Table (from ``measurements.json``'s ``sizeTable``).
@@ -773,6 +792,8 @@ class Movement:
     round_seconds: int = 6
 
 
+# --- Derived readouts & declarative blocks: per-effect Tier-5 readouts and the
+#     data-described sheet blocks a data-only mod can add. ---------------------
 @dataclass(frozen=True)
 class Readout:
     """A derived, display-only Tier-5 readout for an effect (from ``effect_readouts.json``).
@@ -835,6 +856,8 @@ class BlockSpec:
     extra: dict = field(default_factory=dict, compare=False)
 
 
+# --- Aggregate: the single record bundling every parsed list above, with the
+#     merged-catalog lookups the resolvers walk. -------------------------------
 @dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
@@ -894,6 +917,12 @@ class GameData:
         """A single ``id -> Condition`` lookup, for the condition resolver in ``rules``."""
 
         return {c.id: c for c in self.conditions}
+
+
+# ===========================================================================
+# Parsing — turn each raw JSON dict into the typed records above. One ``_parse_*``
+# per record group; all mechanical (read keys, coerce types), so kept terse.
+# ===========================================================================
 
 
 def _extras(raw: dict, *known: str) -> dict:
@@ -1464,6 +1493,12 @@ def _parse_block_spec(b: dict) -> BlockSpec:
             "max_height",
         ),
     )
+
+
+# ===========================================================================
+# Mod merge loader — gather the active mods' content in load order, deep-merge
+# by record id, parse once, and cache. The public entry point lives at the end.
+# ===========================================================================
 
 
 # Candidate id fields for record lists, tried in order. Whichever a list's dict

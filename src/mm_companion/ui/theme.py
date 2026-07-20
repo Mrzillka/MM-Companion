@@ -40,3 +40,17 @@ ACCENT = "#4488cf"
 #: A muted blue reserved for dice / roll information and the powers-section drag
 #: indicator, kept distinct from the brighter :data:`ACCENT`.
 DICE_ACCENT = "#6784bf"
+
+
+def tint_rgba(hex_color: str, alpha: float) -> str:
+    """A ``rgba(r, g, b, a)`` string for one of the tints above at a given opacity.
+
+    For the translucent *fills* behind a drop target or a highlighted card, which
+    pair a solid accent border with a faint wash of the same hue. Deriving the wash
+    from the tint here (rather than hardcoding its rgb) keeps the fill in step with
+    the border whenever a tint is retuned — otherwise the two drift apart, as they
+    silently did after the contrast pass nudged every accent.
+    """
+    value = hex_color.lstrip("#")
+    r, g, b = (int(value[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"

@@ -97,7 +97,7 @@ from mm_companion.core.rules import (
     resolve_stat_display,
 )
 from mm_companion.ui.flow_layout import FlowLayout
-from mm_companion.ui.theme import ACCENT, TINT_BETTER, TINT_WORSE
+from mm_companion.ui.theme import ACCENT, TINT_BETTER, TINT_WORSE, tint_rgba
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, make_spin_box
 
@@ -200,7 +200,7 @@ _ACCENT = ACCENT
 _CARD_STYLE = "EffectCard { border: 1px solid palette(mid); border-radius: 8px; }"
 _CARD_STYLE_DRAG = (
     f"EffectCard {{ border: 2px solid {_ACCENT}; border-radius: 8px;"
-    f" background: rgba(74, 144, 217, 0.10); }}"
+    f" background: {tint_rgba(_ACCENT, 0.10)}; }}"
 )
 
 # Canvas chrome — dashed while empty (a "drop here" affordance), solid once it holds
@@ -209,7 +209,7 @@ _CANVAS_STYLE_EMPTY = "PowerCanvas { border: 2px dashed palette(mid); border-rad
 _CANVAS_STYLE_FILLED = "PowerCanvas { border: 1px solid palette(mid); border-radius: 8px; }"
 _CANVAS_STYLE_DRAG = (
     f"PowerCanvas {{ border: 2px dashed {_ACCENT}; border-radius: 8px;"
-    f" background: rgba(74, 144, 217, 0.08); }}"
+    f" background: {tint_rgba(_ACCENT, 0.08)}; }}"
 )
 
 
@@ -623,7 +623,7 @@ class ModifierGroup(QWidget):
         # Only accept a chip dragged from this same group — a reorder, never a move
         # between the Extras and Flaws groups (that would change its category).
         if self._accepts(event):
-            self.setStyleSheet("ModifierGroup { background: rgba(74, 144, 217, 0.12); }")
+            self.setStyleSheet(f"ModifierGroup {{ background: {tint_rgba(_ACCENT, 0.12)}; }}")
             event.acceptProposedAction()
         else:
             event.ignore()

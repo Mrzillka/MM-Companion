@@ -16,15 +16,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QSpinBox, QWidget
 
 from mm_companion.core.rules import ConditionEffect
+from mm_companion.ui.theme import TINT_BETTER, TINT_WORSE
 from mm_companion.ui.widgets import hline_separator, make_spin_box
 
 STAT_MIN, STAT_MAX = -5, 30
 STAT_SPIN_WIDTH = 80
 
 # The green a power-boosted trait's "→ total" reads in, matching the summary tints.
-ENHANCED_TINT = "#2e9e4f"
+ENHANCED_TINT = TINT_BETTER
 # The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
-CONDITION_TINT = "#d15b5b"
+CONDITION_TINT = TINT_WORSE
 # Conditions rendered struck through on the stat they hit (a lost/near-lost trait).
 STRIKETHROUGH_CONDITIONS = frozenset({"disabled", "debilitated"})
 

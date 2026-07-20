@@ -18,7 +18,7 @@ import random
 from functools import lru_cache
 from importlib.resources import as_file, files
 
-from PySide6.QtCore import QMimeData, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QMimeData, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -54,10 +54,13 @@ QUICK_ROLLS_KEY = "quick_rolls"
 # The MIME type carrying a chip's index while it is dragged to reorder.
 _DRAG_MIME = "application/x-mm-quick-roll"
 
-# How long the die tumbles before revealing the result, and how often the shown
-# face flickers while it does.
-ROLL_DURATION_MS = 2000
-FLICKER_INTERVAL_MS = 50
+# How long the die tumbles before revealing the result. The shown face flickers
+# fast at first and visibly slows as the roll approaches its end (an ease-out
+# deceleration between these two intervals), so the die reads as tumbling and
+# then coming to rest rather than flashing at a constant rate.
+ROLL_DURATION_MS = 1400
+FLICKER_MIN_MS = 40
+FLICKER_MAX_MS = 220
 
 
 @lru_cache(maxsize=1)
@@ -233,9 +236,8 @@ class DiceRollerWindow(QMainWindow):
         self.resize(880, 520)
 
         self._rolling = False
-        self._flicker_timer = QTimer(self)
-        self._flicker_timer.setInterval(FLICKER_INTERVAL_MS)
-        self._flicker_timer.timeout.connect(self._flicker_face)
+        # Wall-clock for the tumble; drives the flicker's ease-out deceleration.
+        self._roll_clock = QElapsedTimer()
         self._quick_rolls: list[dict] = self._load_quick_rolls()
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -373,22 +375,35 @@ class DiceRollerWindow(QMainWindow):
         ]
 
     def _start_roll(self) -> None:
-        """Begin a roll: lock the inputs, tumble the die, reveal after ~2 s."""
+        """Begin a roll: lock the inputs, tumble the die, then reveal the result."""
         if self._rolling:
             return
         self._rolling = True
         self._die_button.setEnabled(False)
         for widget in self._input_widgets():
             widget.setEnabled(False)
-        self._flicker_timer.start()
-        QTimer.singleShot(ROLL_DURATION_MS, self._finish_roll)
+        self._roll_clock.restart()
+        self._tick_roll()
 
-    def _flicker_face(self) -> None:
+    def _tick_roll(self) -> None:
+        """One flicker frame: show a random face, then reschedule at a widening
+        interval so the tumble decelerates, or finish once the duration elapses."""
+        if not self._rolling:  # a direct _finish_roll() (e.g. in tests) pre-empted us
+            return
+        elapsed = self._roll_clock.elapsed()
+        if elapsed >= ROLL_DURATION_MS:
+            self._finish_roll()
+            return
         self._face.setText(str(random.randint(1, 20)))
+        # Ease-out: interval grows with the square of progress, so frames start
+        # rapid and stretch out as the die settles.
+        progress = elapsed / ROLL_DURATION_MS
+        interval = FLICKER_MIN_MS + (FLICKER_MAX_MS - FLICKER_MIN_MS) * progress**2
+        QTimer.singleShot(round(interval), self._tick_roll)
 
     def _finish_roll(self) -> None:
-        """Stop the animation, resolve the real roll, and record it."""
-        self._flicker_timer.stop()
+        """Resolve the real roll and record it, ending any tumble in progress."""
+        self._rolling = False  # stops the _tick_roll chain from rescheduling
 
         bonus = self._bonus_spin.value()
         penalty = self._penalty_spin.value()
@@ -407,7 +422,6 @@ class DiceRollerWindow(QMainWindow):
         # Newest on top: insert above every existing card (the stretch is last).
         self._history_layout.insertWidget(0, card)
 
-        self._rolling = False
         self._die_button.setEnabled(True)
         for widget in self._input_widgets():
             widget.setEnabled(True)

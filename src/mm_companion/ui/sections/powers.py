@@ -939,13 +939,13 @@ class PowersSection(TitledSection):
         # A Debilitated condition naming this power loses it — strike the header through
         # and redden it (display-only; the power's point cost is untouched).
         if power.name and power.name in debilitated_traits(self._character, self._data):
-            name.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {_TINT_WORSE};")
+            name.setStyleSheet(f"font-weight: bold; font-size: 11pt; color: {_TINT_WORSE};")
             font = name.font()
             font.setStrikeOut(True)
             name.setFont(font)
             name.setToolTip("Debilitated — this power is effectively lost")
         else:
-            name.setStyleSheet("font-weight: bold; font-size: 14px;")
+            name.setStyleSheet("font-weight: bold; font-size: 11pt;")
         layout.addWidget(name)
 
         # A power that breaks a PL cap carries a warning marker naming the breach;

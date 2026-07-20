@@ -2402,7 +2402,7 @@ class PowerConstructorWindow(QMainWindow):
         # the power is within caps, naming the breach on its tooltip when it isn't).
         cost_row = QHBoxLayout()
         self._cost = QLabel()
-        self._cost.setStyleSheet("font-size: 15px; font-weight: bold;")
+        self._cost.setStyleSheet("font-size: 12pt; font-weight: bold;")
         cost_row.addWidget(self._cost)
         cost_row.addStretch()
         self._warning = QLabel()

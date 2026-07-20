@@ -20,11 +20,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPoint, QTimer, Signal
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QSizePolicy,
     QVBoxLayout,
@@ -49,12 +58,42 @@ class DropSlot:
 
 
 class DropIndicator(QFrame):
-    """A thin accent line showing where a dragged block will drop."""
+    """A thin accent line showing where a dragged block will drop.
+
+    It slides between drop slots instead of teleporting: :meth:`move_to` animates
+    the geometry over a short hop when the target stays the same orientation, and
+    snaps instantly on first appearance or when it flips between a row-boundary bar
+    (horizontal) and an in-row bar (vertical), where a slide would just morph oddly.
+    """
+
+    SLIDE_MS = 120
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("dropIndicator")
         self.setStyleSheet("#dropIndicator { background-color: palette(highlight); }")
+        self._slide = QPropertyAnimation(self, b"geometry", self)
+        self._slide.setDuration(self.SLIDE_MS)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.hide()
+
+    def move_to(self, rect: QRect) -> None:
+        """Show the indicator at *rect*, sliding there when it makes sense."""
+        self._slide.stop()
+        current = self.geometry()
+        # Orientation = which dimension is the thin one; only slide within the same.
+        same_axis = (current.width() < current.height()) == (rect.width() < rect.height())
+        if self.isVisible() and same_axis and current != rect:
+            self._slide.setStartValue(current)
+            self._slide.setEndValue(rect)
+            self._slide.start()
+        else:
+            self.setGeometry(rect)
+        self.show()
+        self.raise_()
+
+    def hide_indicator(self) -> None:
+        self._slide.stop()
         self.hide()
 
 
@@ -449,8 +488,29 @@ class BlockCanvas(QWidget):
         self._hidden.discard(key)
         self._rows.append([key])
         self._relayout()
+        self._fade_in(self._frames[key])
         self.block_visibility_changed.emit(key, True)
         self.arrangement_changed.emit()
+
+    @staticmethod
+    def _fade_in(frame: BlockFrame) -> None:
+        """Gently fade a just-reopened block in so it doesn't pop.
+
+        A one-shot opacity effect that is dropped on completion — leaving the
+        effect attached would force the block's heavyweight child widgets (tables,
+        spin boxes) to keep painting through an offscreen buffer. Hiding stays
+        instant on purpose: fading a block out while the row collapses under it
+        reads worse than a clean removal.
+        """
+        effect = QGraphicsOpacityEffect(frame)
+        frame.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", frame)
+        anim.setDuration(160)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(lambda: frame.setGraphicsEffect(None))
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def is_hidden(self, key: str) -> bool:
         return key in self._hidden
@@ -508,7 +568,7 @@ class BlockCanvas(QWidget):
         self._drag_active = False
         self._autoscroll_velocity = 0
         self._autoscroll_timer.stop()
-        self._indicator.hide()
+        self._indicator.hide_indicator()
 
     def update_drag(self, global_pos: QPoint) -> None:
         """Refresh the drop indicator and edge auto-scroll for a cursor position."""
@@ -553,18 +613,17 @@ class BlockCanvas(QWidget):
 
     def _show_indicator(self, slot: DropSlot | None) -> None:
         if slot is None:
-            self._indicator.hide()
+            self._indicator.hide_indicator()
             return
         if slot.new_row:
             y = self._row_boundary_y(slot.row)
-            self._indicator.setGeometry(4, int(y) - 1, self.width() - 8, 3)
+            rect = QRect(4, int(y) - 1, self.width() - 8, 3)
         else:
             row = self._row_widgets[slot.row]
             x = self._row_slot_x(row, slot.slot)
             geo = row.geometry()
-            self._indicator.setGeometry(int(x) - 1, geo.top(), 3, geo.height())
-        self._indicator.show()
-        self._indicator.raise_()
+            rect = QRect(int(x) - 1, geo.top(), 3, geo.height())
+        self._indicator.move_to(rect)
 
     def _row_boundary_y(self, index: int) -> float:
         geoms = [row.geometry() for row in self._row_widgets]

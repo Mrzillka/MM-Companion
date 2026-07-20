@@ -316,10 +316,13 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   a `PowerModeBar` for the structure once ≥2 effects). It hands the finished
   `Power` back via `powerSaved`; the section appends it to the shared `Character`
   and renders a stat-block **card** (header with cost and ⚠ PL-breach marker;
-  description; per-effect extras/flaws *and* that effect's full game-term table,
-  always visible, in small muted type; a roll line). Cards carry edit (reopens the
-  constructor on a deep copy, replaced in place on save) and remove buttons. The
-  constructor always gets costs from `rules`, never inline.
+  description; per effect, its extras/flaws in a column *beside* that effect's
+  full game-term table, always visible, in small muted type; then a dice footer).
+  The footer lists **one roll per line** (`_rolls_lines` — an attack check and the
+  save it forces are separate rolls), and a power that rolls nothing gets no
+  footer and no rule above it rather than a "nothing to roll" placeholder. Cards
+  carry edit (reopens the constructor on a deep copy, replaced in place on save)
+  and remove buttons. The constructor always gets costs from `rules`, never inline.
 - The **card is the on/off switch** — there is no "Active" checkbox. Clicking a
   card's body toggles a runtime-gated power, flips a Linked group (from its group
   card), or picks an array's live alternate; `_activation_role(node, parent)`
@@ -337,7 +340,13 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   progress back per frame so an interrupted flip resumes rather than snaps. Tests
   zero `TRANSITION_MS` via an autouse fixture in `tests/conftest.py`. A clickable
   card also advertises itself — a standing accent left edge, plus an accent border
-  and wash on hover (`_DraggableCard._restyle`); an inert card stays flat. Any
+  on hover (`_DraggableCard._restyle`); an inert card stays flat. Only a **leaf**
+  card adds a background wash: a stylesheet background paints behind every child,
+  so a filled group card would flood its whole subtree. And **exactly one card is
+  lit at a time** — Qt sends no Leave to a widget the pointer merely moved deeper
+  into, so `enterEvent` stands every enclosing card down and `leaveEvent` hands the
+  highlight back to an ancestor still under the cursor (read from `QCursor.pos()`,
+  not `underMouse()`, whose flag is already stale by then). Any
   label with an explicit size must set it on its `QFont`, **not** in a stylesheet:
   a stylesheet `font-size` outranks the card's font and would sit the transition
   out. Runtime toggling stays available in the locked read-only view — it is a

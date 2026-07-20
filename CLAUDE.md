@@ -327,9 +327,21 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   enclosing card", which is how a Linked group's members are driven by their
   group. A switched-off card *shows* it: dimmed (`QGraphicsOpacityEffect`) and a
   notch smaller, never `setEnabled(False)` (which would kill the click and grey
-  the text out). Runtime toggling stays available in the locked read-only view —
-  it is a mid-play action, not a build edit, so it emits `runtimeChanged`, not
-  `changed`.
+  the text out). That look is a **continuous** quantity —
+  `_DraggableCard.set_off_progress(0..1)` interpolates opacity, type size and
+  padding together — so a flip *eases* over `PowersSection.TRANSITION_MS` instead
+  of cutting. Every runtime setter ends in `_rebuild_list()` (flipping one power
+  can restate another card's numbers), so no card survives a toggle: the section
+  instead remembers each node's on-screen progress in `_card_off` and the
+  replacement card eases on from there, the running animation writing that
+  progress back per frame so an interrupted flip resumes rather than snaps. Tests
+  zero `TRANSITION_MS` via an autouse fixture in `tests/conftest.py`. A clickable
+  card also advertises itself — a standing accent left edge, plus an accent border
+  and wash on hover (`_DraggableCard._restyle`); an inert card stays flat. Any
+  label with an explicit size must set it on its `QFont`, **not** in a stylesheet:
+  a stylesheet `font-size` outranks the card's font and would sit the transition
+  out. Runtime toggling stays available in the locked read-only view — it is a
+  mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

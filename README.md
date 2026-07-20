@@ -73,9 +73,11 @@ currently exists for **Windows only**.
 
 ### Windows (installer)
 
-Download and run `MM-Companion-Setup-<version>.exe` (built from `installer/`). No
-Python is required. During setup you can add a desktop shortcut and optionally
-choose a **Portable** install (a single folder that keeps its data beside itself).
+**[⬇ Download the latest installer](https://github.com/Mrzillka/MM-Companion/releases/latest)**
+— grab `MM-Companion-Setup-<version>.exe` from the **Assets** of the newest
+release, then run it. No Python is required. During setup you can add a desktop
+shortcut and optionally choose a **Portable** install (a single folder that keeps
+its data beside itself).
 
 User data — settings, saved characters, and installed mods — lives in the per-user
 workspace at `%APPDATA%\MM-Companion` (or a `data\` folder beside the exe for a

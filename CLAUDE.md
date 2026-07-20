@@ -407,11 +407,14 @@ authoring guide is `docs/modding.md`; the shape:
 
 ## Conventions
 
-- Branches off `main`: `feature/…`, `fix/…`, `docs/…`. Commit messages in
-  imperative mood.
+- Git flow: **always branch off `develop`** — `feature/…`, `fix/…`, `docs/…` —
+  and merge back **into `develop`** with a `--no-ff` merge commit ("Merge
+  feature/X into develop"). `main` is the release branch; only a release merge
+  reaches it. Never branch from or merge into `main` for ordinary work. Commit
+  messages in imperative mood.
 - **Do not open pull requests.** When starting work, automatically switch to an
-  appropriate existing branch or create a new one (named per the convention
-  above) rather than committing on `main`/`develop`. Integrate by merging
-  locally, not through a PR.
+  appropriate existing branch or create a new one off `develop` (named per the
+  convention above) rather than committing on `develop`/`main`. Integrate by
+  merging locally, not through a PR.
 - `.idea/` (PyCharm) is intentionally not committed. In PyCharm, mark `src/` as
   Sources Root so `import mm_companion` resolves.

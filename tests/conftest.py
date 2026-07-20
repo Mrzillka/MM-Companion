@@ -15,6 +15,24 @@ from __future__ import annotations
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from mm_companion.ui.sections.powers import PowersSection
+
+
+@pytest.fixture(autouse=True)
+def _instant_power_card_transitions():
+    """Switch a power card between its live and off looks instantly, not over a timer.
+
+    A card eases into its switched-off look, which means the state a test asserts on
+    right after a toggle is only the *first frame* of that transition — and no frame
+    ever runs, because a test has no event loop turning. Zeroing the duration makes
+    every card land on its resting look synchronously. A test that is specifically
+    about the animation restores a real duration itself.
+    """
+    original = PowersSection.TRANSITION_MS
+    PowersSection.TRANSITION_MS = 0
+    yield
+    PowersSection.TRANSITION_MS = original
+
 
 @pytest.fixture(autouse=True)
 def _close_top_level_widgets():

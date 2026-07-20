@@ -8,7 +8,9 @@ and assert on the resulting ``Character.powers`` tree.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QPointF, QVariantAnimation
+from PySide6.QtGui import QEnterEvent
+from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -22,7 +24,7 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import power_trait_bonuses
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.sections.powers import _DraggableCard
+from mm_companion.ui.sections.powers import PowersSection, _DraggableCard
 
 
 @pytest.fixture(scope="module")
@@ -195,6 +197,119 @@ def test_a_switched_off_card_is_dimmed(qapp: QApplication) -> None:
     assert off_card.graphicsEffect() is not None  # switched off: dimmed, still readable
     assert off_card.is_clickable() is True  # ...and still the way back on
 
+    # Back on again: the effect is dropped rather than left sitting at full opacity, so
+    # a live card never pays for painting its whole subtree through an offscreen buffer.
+    sec._set_power_active(armor, True)
+    assert sec._render_node(armor, None).graphicsEffect() is None
+
+
+def _gated_power_section() -> tuple[CharacterSheet, PowersSection, Power]:
+    """A sheet holding one gated, standing power, with a real transition duration.
+
+    The sheet is returned alongside the section because a section is only a child
+    widget: drop the sheet and Python collects it, taking the cards down with it.
+    """
+    char = Character.new_default(load_game_data())
+    armor = Power(
+        name="Armor",
+        effects=[PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])],
+    )
+    char.powers.append(armor)
+    sheet = _sheet_for(char)
+    sheet.powers.TRANSITION_MS = 400  # the conftest fixture zeroes it for other tests
+    return sheet, sheet.powers, armor
+
+
+def _transition_of(sec: PowersSection) -> QVariantAnimation:
+    """The animation easing the section's one card, driven by hand.
+
+    Stepped with ``setCurrentTime`` rather than by waiting on Qt's animation timer:
+    a wait is both slow and unreliable here — under the full suite the timer can go a
+    whole second without delivering a frame — while stepping is exact and immediate.
+    """
+    animation = sec.findChild(_DraggableCard).findChild(QVariantAnimation)
+    assert animation is not None
+    return animation
+
+
+def test_flipping_a_card_eases_between_the_two_looks(qapp: QApplication) -> None:
+    sheet, sec, armor = _gated_power_section()
+
+    sec._set_power_active(armor, False)
+    card = sec.findChild(_DraggableCard)
+    # The replacement card picks up the live look its predecessor was showing, rather
+    # than cutting straight to dimmed.
+    assert card.off_progress() == pytest.approx(0.0)
+    assert card.graphicsEffect() is None
+
+    ease = _transition_of(sec)
+    assert ease.duration() == 400
+    ease.setCurrentTime(200)
+    # Genuinely part-way: dimmer than live, not yet as dim as off.
+    assert 0.0 < card.off_progress() < 1.0
+    assert 0.5 < card.graphicsEffect().opacity() < 1.0
+
+    ease.setCurrentTime(ease.duration())
+    assert card.off_progress() == pytest.approx(1.0)
+    assert card.graphicsEffect().opacity() == pytest.approx(0.5)
+
+
+def test_a_toggle_mid_transition_resumes_from_what_is_on_screen(qapp: QApplication) -> None:
+    sheet, sec, armor = _gated_power_section()
+
+    sec._set_power_active(armor, False)
+    _transition_of(sec).setCurrentTime(150)  # part-way out
+    partial = sec.findChild(_DraggableCard).off_progress()
+    assert 0.0 < partial < 1.0
+
+    # Clicking again rebuilds the card, which must resume from where the eye left it —
+    # not snap back to the look the interrupted transition was heading for.
+    sec._set_power_active(armor, True)
+    assert sec.findChild(_DraggableCard).off_progress() == pytest.approx(partial)
+
+
+def test_only_a_switchable_card_advertises_itself(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    armor = Power(  # gated + standing: clickable
+        name="Armor",
+        effects=[PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])],
+    )
+    blast = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)])  # instant: inert
+    char.powers.extend([armor, blast])
+    sec = _sheet_for(char).powers
+    cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
+
+    assert "border-left" in cards[armor.id].styleSheet()
+    assert "border-left" not in cards[blast.id].styleSheet()
+
+    # Hovering confirms the target under the pointer — on a switch, and only there.
+    for card in (cards[armor.id], cards[blast.id]):
+        card.enterEvent(QEnterEvent(QPointF(), QPointF(), QPointF()))
+    assert "background" in cards[armor.id].styleSheet()
+    assert "background" not in cards[blast.id].styleSheet()
+
+    cards[armor.id].leaveEvent(QEvent(QEvent.Type.Leave))
+    assert "background" not in cards[armor.id].styleSheet()
+
+
+def test_card_type_sizes_ride_the_transition(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)]))
+    sec = _sheet_for(char).powers
+    card = sec.findChild(_DraggableCard)
+    labels = {label.text(): label for label in card.findChildren(QLabel)}
+
+    # The name and the game-term table carry their size on the QFont, never in the
+    # stylesheet: a stylesheet font-size outranks the card's font and would sit the
+    # switched-off transition out, leaving those two lines at full size.
+    for text in ("Blast", "Type:"):
+        assert "font-size" not in labels[text].styleSheet()
+
+    before = {text: labels[text].font().pointSizeF() for text in ("Blast", "Type:")}
+    card.set_off_progress(1.0)
+    for text, size in before.items():
+        assert labels[text].font().pointSizeF() == pytest.approx(size * 0.9)
+
 
 def test_cards_still_toggle_in_the_locked_view(qapp: QApplication) -> None:
     char = Character.new_default(load_game_data())
@@ -215,8 +330,6 @@ def test_cards_still_toggle_in_the_locked_view(qapp: QApplication) -> None:
 
 
 def test_cards_show_their_game_terms_without_hovering(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QLabel
-
     char = Character.new_default(load_game_data())
     char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)]))
     sheet = CharacterSheet(load_game_data(), char)

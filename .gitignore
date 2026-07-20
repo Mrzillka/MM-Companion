@@ -35,3 +35,8 @@ Thumbs.db
 
 # run-mm-companion skill driver screenshots
 _driver_shots/
+
+# Built installers — publish these as GitHub Release assets, not in git history
+# (each ~80 MB build would otherwise be stored forever). The build scripts and
+# spec under installer/ stay tracked; only the generated output/ is ignored.
+installer/output/

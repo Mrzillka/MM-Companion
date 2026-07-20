@@ -62,6 +62,10 @@ updated in `src/mm_companion/__init__.py`. That version bump is **not committed*
 commit it if the user wants to keep the release; otherwise `git checkout
 src/mm_companion/__init__.py` reverts it (but keep the installer if they want it).
 
+`installer/output/` is **git-ignored** — do not commit the `.exe` (each ~80 MB
+build would bloat history permanently). Publish the built installer as a
+**GitHub Release asset** instead (`gh release create <tag> <path-to-exe>`).
+
 Verified end-to-end this session: `minor` bumped `0.1.0 → 0.1.1`, produced a
 78 MB `MM-Companion-Setup-0.1.1.exe`; a silent install of it
 (`MM-Companion-Setup-0.1.1.exe /VERYSILENT /DIR=<dir>`) placed a runnable app,

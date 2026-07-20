@@ -85,18 +85,24 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.theme import ACCENT, DICE_ACCENT, TINT_BETTER, TINT_WORSE, tint_rgba
 from mm_companion.ui.widgets import hline_separator, title_with_cost
 
 # Tints for a stat a modifier changed, matching the Power Constructor's
 # PowerTermsView: an extra improved it (green), a flaw limited it (red).
-_TINT_BETTER = "#2e9e4f"
-_TINT_WORSE = "#d15b5b"
+_TINT_BETTER = TINT_BETTER
+_TINT_WORSE = TINT_WORSE
 # A homerule (Dev-mode) override reads in a distinct blue, apart from better/worse.
-_TINT_HOMERULE = "#4a90d9"
+_TINT_HOMERULE = ACCENT
 _TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE, HOMERULE_TINT: _TINT_HOMERULE}
 
 # A calm blue reused for drag affordances and dice info.
-_ACCENT = "#6a86c0"
+_ACCENT = DICE_ACCENT
+
+# Repeated inline-style snippets, hoisted so a card's chrome is described once.
+_BOLD = "font-weight: bold;"
+# A muted, italic secondary line (descriptions, role notes) that recedes on both themes.
+_MUTED_ITALIC = "color: palette(placeholder-text); font-style: italic;"
 
 # Drag-and-drop payload: the dragged node's stable id (a Power.id or PowerGroup.id).
 # A tree position needs parent context, not a bare index, so drops resolve the id.
@@ -245,7 +251,7 @@ class _GroupHeader(QWidget):
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(_POWER_MIME):
             event.acceptProposedAction()
-            self.setStyleSheet("background: rgba(106, 134, 192, 0.25); border-radius: 4px;")
+            self.setStyleSheet(f"background: {tint_rgba(_ACCENT, 0.25)}; border-radius: 4px;")
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if event.mimeData().hasFormat(_POWER_MIME):
@@ -292,7 +298,7 @@ class _NodeList(QWidget):
         self._highlight = QFrame(self)
         self._highlight.setStyleSheet(
             f"border: 2px solid {_ACCENT}; border-radius: 6px; "
-            "background: rgba(106, 134, 192, 0.15);"
+            f"background: {tint_rgba(_ACCENT, 0.15)};"
         )
         self._highlight.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._highlight.hide()
@@ -681,7 +687,7 @@ class PowersSection(TitledSection):
 
         mode_label = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
         label = QLabel(group.name or mode_label)
-        label.setStyleSheet("font-weight: bold;")
+        label.setStyleSheet(_BOLD)
         row.addWidget(label)
 
         rename = QPushButton("✎")
@@ -896,7 +902,7 @@ class PowersSection(TitledSection):
         if power.description:
             desc = QLabel(power.description)
             desc.setWordWrap(True)
-            desc.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
+            desc.setStyleSheet(_MUTED_ITALIC)
             layout.addWidget(desc)
 
         effects = self._effects_block(power)
@@ -938,13 +944,13 @@ class PowersSection(TitledSection):
         # A Debilitated condition naming this power loses it — strike the header through
         # and redden it (display-only; the power's point cost is untouched).
         if power.name and power.name in debilitated_traits(self._character, self._data):
-            name.setStyleSheet("font-weight: bold; font-size: 14px; color: #d15b5b;")
+            name.setStyleSheet(f"font-weight: bold; font-size: 11pt; color: {_TINT_WORSE};")
             font = name.font()
             font.setStrikeOut(True)
             name.setFont(font)
             name.setToolTip("Debilitated — this power is effectively lost")
         else:
-            name.setStyleSheet("font-weight: bold; font-size: 14px;")
+            name.setStyleSheet("font-weight: bold; font-size: 11pt;")
         layout.addWidget(name)
 
         # A power that breaks a PL cap carries a warning marker naming the breach;
@@ -1035,12 +1041,12 @@ class PowersSection(TitledSection):
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         title = QLabel(self._effect_title(effect))
-        title.setStyleSheet("font-weight: bold;")
+        title.setStyleSheet(_BOLD)
         header.addWidget(title)
         note = self._role_note(power, index)
         if note:
             role = QLabel(note)
-            role.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
+            role.setStyleSheet(_MUTED_ITALIC)
             header.addWidget(role)
         header.addStretch()
         layout.addLayout(header)

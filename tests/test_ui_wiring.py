@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication, QCheckBox
+from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import power_points_spent, resistance_total, skill_total
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.sections.powers import _DraggableCard
 
 
 @pytest.fixture(scope="module")
@@ -117,14 +118,14 @@ def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
     sheet = CharacterSheet(data, char)
     assert resistance_total(char, data, "TOUGHNESS") == 6  # active by default
 
-    checkbox = sheet.powers.findChild(QCheckBox)  # the row's "Active" switch
-    assert checkbox is not None and checkbox.isChecked()
+    card = sheet.powers.findChild(_DraggableCard)  # the card *is* the on/off switch
+    assert card is not None and card.is_clickable()
 
     fired: list[int] = []
     dirtied: list[int] = []
     sheet.powers.runtimeChanged.connect(lambda: fired.append(1))
     sheet.edited.connect(lambda: dirtied.append(1))
-    checkbox.setChecked(False)
+    card.clicked.emit()
 
     assert fired  # the section signals a runtime change so the sheet re-derives
     assert not dirtied  # ...but a runtime toggle is not persisted, so it isn't an edit
@@ -208,7 +209,7 @@ def test_toggling_an_enhancer_re_derives_a_dependent_power_card(qapp: QApplicati
     # Rage on: effective STR 8 → Damage rank 18 → Toughness DC 28.
     assert "Toughness vs. 28" in sheet.powers._rolls_text(char.powers[1])
 
-    sheet.powers.findChild(QCheckBox).setChecked(False)  # switch Rage off
+    sheet.powers.findChild(_DraggableCard).clicked.emit()  # click Rage's card to switch it off
     # Rage off: effective STR 2 → Damage rank 12 → Toughness DC 22.
     assert "Toughness vs. 22" in sheet.powers._rolls_text(char.powers[1])
 

@@ -315,11 +315,21 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   brick-builder (a palette of Effect/Extra/Flaw bricks → an effect-card canvas,
   a `PowerModeBar` for the structure once ≥2 effects). It hands the finished
   `Power` back via `powerSaved`; the section appends it to the shared `Character`
-  and renders a stat-block **card** (header with cost, ⚠ PL-breach marker, and an
-  on/off switch for a gated power; description; per-effect extras/flaws; a roll
-  line; the full game-term breakdown on hover). Cards carry edit (reopens the
+  and renders a stat-block **card** (header with cost and ⚠ PL-breach marker;
+  description; per-effect extras/flaws *and* that effect's full game-term table,
+  always visible, in small muted type; a roll line). Cards carry edit (reopens the
   constructor on a deep copy, replaced in place on save) and remove buttons. The
   constructor always gets costs from `rules`, never inline.
+- The **card is the on/off switch** — there is no "Active" checkbox. Clicking a
+  card's body toggles a runtime-gated power, flips a Linked group (from its group
+  card), or picks an array's live alternate; `_activation_role(node, parent)`
+  decides which, `""` meaning "not clickable — let the click bubble to the
+  enclosing card", which is how a Linked group's members are driven by their
+  group. A switched-off card *shows* it: dimmed (`QGraphicsOpacityEffect`) and a
+  notch smaller, never `setEnabled(False)` (which would kill the click and grey
+  the text out). Runtime toggling stays available in the locked read-only view —
+  it is a mid-play action, not a build edit, so it emits `runtimeChanged`, not
+  `changed`.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

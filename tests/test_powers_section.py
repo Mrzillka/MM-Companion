@@ -8,19 +8,21 @@ and assert on the resulting ``Character.powers`` tree.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
+from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
     STRUCTURE_LINKED,
+    ModifierSelection,
     Power,
     PowerEffectInstance,
     PowerGroup,
 )
 from mm_companion.core.rules import power_trait_bonuses
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.sections.powers import _DraggableCard
 
 
 @pytest.fixture(scope="module")
@@ -127,29 +129,101 @@ def _sheet_for(char: Character) -> CharacterSheet:
     return CharacterSheet(load_game_data(), char)
 
 
-def test_all_instant_array_shows_no_member_control(qapp: QApplication) -> None:
+def test_all_instant_array_cards_are_not_clickable(qapp: QApplication) -> None:
     char = Character.new_default(load_game_data())
     a = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=6)])
     b = Power(name="Beam", effects=[PowerEffectInstance("damage", rank=4)])
     group = PowerGroup(mode=STRUCTURE_ARRAY, children=[a, b])
     char.powers.append(group)
     sec = _sheet_for(char).powers
-    # Nothing in the array stands on the sheet, so neither member gets a control.
-    assert sec._array_member_control(a, group) is None
-    assert sec._array_member_control(b, group) is None
+    # Nothing in the array stands on the sheet, so there is no live member to pick.
+    assert sec._activation_role(a, group) == ""
+    assert sec._activation_role(b, group) == ""
 
 
-def test_mixed_array_gives_continuous_active_and_instant_use(qapp: QApplication) -> None:
+def test_mixed_array_members_select_the_live_alternate(qapp: QApplication) -> None:
     char = Character.new_default(load_game_data())
     field = Power(name="Field", effects=[PowerEffectInstance("protection", rank=6)])
     bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=8)])
     group = PowerGroup(mode=STRUCTURE_ARRAY, children=[field, bolt])
     char.powers.append(group)
     sec = _sheet_for(char).powers
-    # The continuous member keeps a persistent "Active" radio; the instant one gets a
-    # momentary "Use" (it isn't kept active — using it just drops the field).
-    assert isinstance(sec._array_member_control(field, group), QCheckBox)
-    assert isinstance(sec._array_member_control(bolt, group), QPushButton)
+    # Clicking either member makes it the array's live alternate — the continuous one
+    # to switch it on, the instant one to use it (which drops the field).
+    assert sec._activation_role(field, group) == "select"
+    assert sec._activation_role(bolt, group) == "select"
+
+    sec._on_card_clicked(bolt, group, "select")
+    assert group.active_child_id == bolt.id
+    # Clicking the live member again is a no-op: an array always keeps one member live.
+    sec._on_card_clicked(bolt, group, "select")
+    assert group.active_child_id == bolt.id
+
+
+def test_clicking_a_gated_power_card_round_trips(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    armor = Power(
+        name="Armor",
+        effects=[PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])],
+    )
+    char.powers.append(armor)
+    sec = _sheet_for(char).powers
+    assert sec._activation_role(armor, None) == "toggle"
+    assert sec._power_is_active(armor) is True
+
+    sec._on_card_clicked(armor, None, "toggle")
+    assert sec._power_is_active(armor) is False
+    sec._on_card_clicked(armor, None, "toggle")
+    assert sec._power_is_active(armor) is True
+
+
+def test_a_switched_off_card_is_dimmed(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    armor = Power(
+        name="Armor",
+        effects=[PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])],
+    )
+    char.powers.append(armor)
+    sec = _sheet_for(char).powers
+
+    on_card = sec._render_node(armor, None)  # kept referenced so Qt doesn't free it
+    assert on_card.is_clickable() is True
+    assert on_card.graphicsEffect() is None  # active: full strength
+
+    sec._set_power_active(armor, False)
+    off_card = sec._render_node(armor, None)
+    assert off_card.graphicsEffect() is not None  # switched off: dimmed, still readable
+    assert off_card.is_clickable() is True  # ...and still the way back on
+
+
+def test_cards_still_toggle_in_the_locked_view(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    armor = Power(
+        name="Armor",
+        effects=[PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])],
+    )
+    char.powers.append(armor)
+    sec = _sheet_for(char).powers
+    sec.set_locked(True)
+
+    # Switching a power on/off is a mid-play action, not an edit to the build, so the
+    # read-only sheet keeps it — only the editing chrome goes away.
+    card = sec.findChild(_DraggableCard)
+    assert card is not None and card.is_clickable()
+    card.clicked.emit()
+    assert sec._power_is_active(armor) is False
+
+
+def test_cards_show_their_game_terms_without_hovering(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    char = Character.new_default(load_game_data())
+    char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)]))
+    sheet = CharacterSheet(load_game_data(), char)
+
+    labels = {label.text() for label in sheet.powers.findChildren(QLabel)}
+    # The game-term table is part of the card itself, not a tooltip.
+    assert {"Type:", "Range:", "Action:", "Duration:"} <= labels
 
 
 def test_linked_group_one_toggle_drops_a_permanent_member(qapp: QApplication) -> None:
@@ -178,11 +252,11 @@ def test_linked_group_one_toggle_drops_a_permanent_member(qapp: QApplication) ->
     assert power_trait_bonuses(char, data)["ability"]["STR"].amount == 3
 
 
-def test_inactive_linked_group_disables_nested_member_controls(qapp: QApplication) -> None:
+def test_inactive_linked_group_disables_nested_member_cards(qapp: QApplication) -> None:
     data = load_game_data()
     char = Character.new_default(data)
-    # A linked group holding a mixed array (so a nested "Use" control exists) plus a
-    # sustained power that makes the group gateable.
+    # A linked group holding a mixed array (so its members are clickable selectors) plus
+    # a sustained power that makes the group gateable.
     field = Power(name="Field", effects=[PowerEffectInstance("protection", rank=6)])
     bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=8)])
     arr = PowerGroup(mode=STRUCTURE_ARRAY, children=[field, bolt])
@@ -191,18 +265,18 @@ def test_inactive_linked_group_disables_nested_member_controls(qapp: QApplicatio
     char.powers.append(linked)
     sec = _sheet_for(char).powers
 
-    def nested_use_button(card: object) -> QPushButton:
-        buttons = [b for b in card.findChildren(QPushButton) if b.text() in ("Use", "In use")]
-        assert len(buttons) == 1  # only the array's instant member has a Use control
-        return buttons[0]
+    def nested_member_cards(card: object) -> list[object]:
+        cards = [c for c in card.findChildren(_DraggableCard) if c.node_id in (field.id, bolt.id)]
+        assert len(cards) == 2  # both array members are rendered inside the group
+        return cards
 
     on_card = sec._render_node(linked, None)  # kept referenced so Qt doesn't free it
-    assert nested_use_button(on_card).isEnabled() is True  # linked group is active
+    assert all(c.is_clickable() for c in nested_member_cards(on_card))
 
     sec._set_group_active(linked, False)
     off_card = sec._render_node(linked, None)
-    # With the group switched off the nested member can no longer be re-activated.
-    assert nested_use_button(off_card).isEnabled() is False
+    # With the group switched off the nested members can no longer be re-activated.
+    assert not any(c.is_clickable() for c in nested_member_cards(off_card))
 
 
 def test_homerule_power_shows_the_badge(qapp: QApplication) -> None:

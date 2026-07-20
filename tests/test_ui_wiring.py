@@ -207,11 +207,11 @@ def test_toggling_an_enhancer_re_derives_a_dependent_power_card(qapp: QApplicati
     )
     sheet = CharacterSheet(data, char)
     # Rage on: effective STR 8 → Damage rank 18 → Toughness DC 28.
-    assert "Toughness vs. 28" in sheet.powers._rolls_text(char.powers[1])
+    assert "Toughness vs. 28" in sheet.powers._rolls_lines(char.powers[1])
 
     sheet.powers.findChild(_DraggableCard).clicked.emit()  # click Rage's card to switch it off
     # Rage off: effective STR 2 → Damage rank 12 → Toughness DC 22.
-    assert "Toughness vs. 22" in sheet.powers._rolls_text(char.powers[1])
+    assert "Toughness vs. 22" in sheet.powers._rolls_lines(char.powers[1])
 
 
 def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:

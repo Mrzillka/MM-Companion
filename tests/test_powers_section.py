@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import QEvent, QPointF, QVariantAnimation
 from PySide6.QtGui import QEnterEvent
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QGridLayout, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -290,6 +290,136 @@ def test_only_a_switchable_card_advertises_itself(qapp: QApplication) -> None:
 
     cards[armor.id].leaveEvent(QEvent(QEvent.Type.Leave))
     assert "background" not in cards[armor.id].styleSheet()
+
+
+def _enter(card: _DraggableCard) -> None:
+    card.enterEvent(QEnterEvent(QPointF(), QPointF(), QPointF()))
+
+
+def test_hovering_a_member_stands_its_group_down(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    field = Power(name="Field", effects=[PowerEffectInstance("protection", rank=6)])
+    bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=6)])
+    array = PowerGroup(mode=STRUCTURE_ARRAY, name="Force", children=[field, bolt])
+    linked = PowerGroup(
+        mode=STRUCTURE_LINKED,
+        name="Rig",
+        children=[
+            Power(
+                name="Wings",
+                effects=[
+                    PowerEffectInstance("flight", rank=3, flaws=[ModifierSelection("removable")])
+                ],
+            ),
+            array,
+        ],
+    )
+    char.powers.append(linked)
+    sec = _sheet_for(char).powers
+    cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
+
+    # The Linked group is the switch, so hovering it lights it.
+    _enter(cards[linked.id])
+    assert cards[linked.id]._hovered is True
+    # Qt sends no Leave to a widget the pointer merely moved *deeper* into, so the
+    # member has to stand its ancestors down itself — otherwise the group would stay
+    # lit and, being an ancestor, would light up half the block behind the member.
+    _enter(cards[field.id])
+    assert cards[field.id]._hovered is True
+    assert cards[linked.id]._hovered is False
+
+
+def test_hovering_an_inert_member_keeps_its_group_lit(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    wings = Power(
+        name="Wings",
+        effects=[PowerEffectInstance("flight", rank=3, flaws=[ModifierSelection("removable")])],
+    )
+    group = PowerGroup(mode=STRUCTURE_LINKED, name="Rig", children=[wings])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
+
+    # A Linked group's member has no switch of its own — its press bubbles up to the
+    # group. So the highlight must stay on the group, or it would vanish exactly where
+    # clicking still works.
+    assert cards[wings.id].is_clickable() is False
+    _enter(cards[group.id])
+    _enter(cards[wings.id])
+    assert cards[group.id]._hovered is True
+
+
+def test_a_hovered_group_lights_its_outline_but_does_not_fill(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    group = PowerGroup(
+        mode=STRUCTURE_LINKED,
+        children=[
+            Power(
+                name="Wings",
+                effects=[
+                    PowerEffectInstance("flight", rank=3, flaws=[ModifierSelection("removable")])
+                ],
+            )
+        ],
+    )
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    card = next(c for c in sec.findChildren(_DraggableCard) if c.node_id == group.id)
+
+    _enter(card)
+    # A stylesheet background paints behind every child, so a filled group would wash
+    # its whole subtree. Its outline carries the hover instead.
+    assert "border" in card.styleSheet()
+    assert "background" not in card.styleSheet()
+
+
+def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    armor = Power(name="Armor", effects=[PowerEffectInstance("protection", rank=6)])
+    blast = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)])
+    char.powers.extend([armor, blast])
+    sec = _sheet_for(char).powers
+    cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
+
+    def dice(card: _DraggableCard) -> list[str]:
+        return [lb.text() for lb in card.findChildren(QLabel) if lb.text().startswith("🎲")]
+
+    # Nothing to roll, so nothing is said about it — no placeholder line, and no rule
+    # above the footer that is not there.
+    assert dice(cards[armor.id]) == []
+    assert sec._rolls_lines(armor) == []
+
+    # An attack and the save it forces are two rolls, made by two people: a line each.
+    attack, save = dice(cards[blast.id])
+    assert attack == "🎲 0 vs. Defense"
+    assert save.startswith("🎲 Toughness vs. ")
+
+
+def test_an_effects_terms_sit_beside_its_modifiers(qapp: QApplication) -> None:
+    char = Character.new_default(load_game_data())
+    char.powers.append(
+        Power(
+            name="Armor",
+            effects=[
+                PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])
+            ],
+        )
+    )
+    sec = _sheet_for(char).powers
+    labels = {lb.text().split(":")[0]: lb for lb in sec.findChildren(QLabel)}
+
+    # Side by side, not stacked: the modifiers column and the terms grid are two items
+    # of one horizontal row, the modifiers first. Asserted structurally rather than by
+    # geometry — nothing here is ever shown, so every widget would sit at 0,0.
+    column = labels["Flaws"].parentWidget()
+    effect_box = column.parentWidget()
+    assert labels["Type"].parentWidget() is effect_box
+
+    stack = effect_box.layout()
+    rows = (stack.itemAt(i).layout() for i in range(stack.count()))
+    row = next(r for r in rows if r is not None and r.indexOf(column) >= 0)
+    assert row.indexOf(column) == 0
+    assert any(isinstance(row.itemAt(i).layout(), QGridLayout) for i in range(row.count()))
 
 
 def test_card_type_sizes_ride_the_transition(qapp: QApplication) -> None:

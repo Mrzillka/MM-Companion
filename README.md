@@ -5,7 +5,7 @@ Masterminds* tabletop RPG (3rd / 4th edition), built with Python and PySide6.
 
 ## Status
 
-🚧 **Early development (pre-alpha, `0.1.0`) — but functional.** The character
+🚧 **Early development (pre-alpha, `0.2.2`) — but functional.** The character
 creator is real and usable today: you can build a character point-by-point,
 assemble powers in a drag-and-drop constructor, track conditions, and save/load
 your work. The rules engine, powers layer, conditions, save/load, and mod support

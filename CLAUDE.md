@@ -443,6 +443,15 @@ authoring guide is `docs/modding.md`; the shape:
   feature/X into develop"). `main` is the release branch; only a release merge
   reaches it. Never branch from or merge into `main` for ordinary work. Commit
   messages in imperative mood.
+- **Never commit directly on `main` or `develop`** — both receive merges only.
+  `main` takes a merge from `develop` only on a version bump; `develop` takes
+  merges only from work branches. All work happens on a work branch, over as many
+  commits as it takes, and is merged into `develop` **only when the user says the
+  feature is done** (the branch may then be deleted). In rare cases a branch may
+  come off another work branch rather than `develop`.
+- **One feature, one branch.** Don't spread a single piece of work across several
+  branches — stay in the same branch until the user considers it done. Start an
+  additional branch only when the task genuinely turns into something else.
 - **Do not open pull requests.** When starting work, automatically switch to an
   appropriate existing branch or create a new one off `develop` (named per the
   convention above) rather than committing on `develop`/`main`. Integrate by

@@ -378,3 +378,65 @@ def test_speed_unit_toggle_switches_to_km_per_hour(qapp: QApplication) -> None:
     assert "ft" in speed._lines_label.text()
     speed._toggle_unit()
     assert "km/h" in speed._lines_label.text()
+
+
+def test_disabled_condition_lowers_the_initiative_readout(qapp: QApplication) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.abilities._abilities["AGL"].setValue(4)
+    assert sheet.system_info._initiative.text() == "+4 (AGL)"
+
+    apply_condition(sheet.character, "disabled", data)  # -5 on all checks
+    sheet.system_info.refresh_derived()
+
+    text = sheet.system_info._initiative.text()
+    assert "-1" in text  # +4 AGL - 5 = -1
+    assert "#d15b5b" in text  # the penalised value reads red
+    assert "-5" in sheet.system_info._initiative.toolTip()
+
+
+def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+
+    apply_condition(sheet.character, "hindered", data)  # -1 speed rank
+    sheet.system_info.refresh_derived()
+
+    text = sheet.system_info._speed._lines_label.text()
+    assert "-1 rank" in text
+    assert "#d15b5b" in text
+    assert "slowed" in sheet.system_info._speed.toolTip()
+
+
+def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplication) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+
+    apply_condition(sheet.character, "immobile", data)  # zeroes ground speed
+    sheet.system_info.refresh_derived()
+
+    text = sheet.system_info._speed._lines_label.text()
+    assert "immobilised" in text
+    assert "#d15b5b" in text
+
+
+def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
+    qapp: QApplication,
+) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+
+    # The condition is applied on the model and the section announces it the way the
+    # Conditions block does; the system block's speed readout must catch up via the bus.
+    apply_condition(sheet.character, "immobile", data)
+    sheet.conditions.conditionsChanged.emit()
+
+    assert "immobilised" in sheet.system_info._speed._lines_label.text()

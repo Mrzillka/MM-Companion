@@ -307,3 +307,32 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     session. Also deferred: no keepalive timer drives `Ping` yet (the message and
     `Pong` work, nothing schedules them), and reconnect-on-drop is the UI's job
     in Phase 5.
+
+- **2026-07-22 — Post-review hardening pass** (after Phase 2, before Phase 3). A
+  code review of the branch found four real issues; all fixed, all tested. What
+  changed on the wire and in behavior — later phases must build on this:
+  - **Roster entries no longer carry `character`** (`PlayerSlot.roster_dict()`;
+    `public_dict()` still has it for host-side events). A full table's combined
+    sheets would have outgrown `MAX_MESSAGE_BYTES` and broken every broadcast.
+    Phase 5's GM cards get characters from `EVENT_SNAPSHOT` / `server.state`,
+    **not** from roster payloads; no player client ever sees another's sheet.
+  - **`Welcome.history` is capped** to the last `WELCOME_HISTORY_ROLLS` (200)
+    visible rolls — an uncapped welcome stops encoding at roughly a thousand
+    rolls and the join would be refused. Phase 7's player-side history shows the
+    recent slice; the GM's full log still comes from `server.history()`.
+  - **Token comparison runs over UTF-8 bytes** (`model.tokens_match`) —
+    `secrets.compare_digest` raises `TypeError` on non-ASCII `str`, so a hostile
+    token used to kill the handler thread instead of drawing `ERROR_BAD_TOKEN`.
+  - **Welcomed connections run under `net.IO_TIMEOUT` (15 s)** instead of no
+    timeout. Both read loops treat a timed-out `recv` as idle-and-fine
+    (`except TimeoutError: continue`); a timed-out *send* means a stalled peer —
+    it raises, and the server drops that peer instead of blocking a broadcast
+    (in Phase 4 the blocked thread would have been the GM's UI). An encode
+    failure (`ProtocolError`) in `send_to`/`broadcast` is now *our* error —
+    reported as `EVENT_ERROR {"code": "encode"}`, never a reason to drop a peer.
+  - Minor: `store.load_session` raises `SessionStoreError` on a non-object
+    `session.json`; `_threads` prunes finished handlers; `SessionClient.close()`
+    emits `EVENT_DISCONNECTED` at most once and only if a connection existed —
+    the Phase 4 bridge can call it unconditionally.
+  - Also made `test_a_flood_trips_the_rate_limit` robust to the Windows RST race
+    (the kick can reset the socket before the error message is readable).

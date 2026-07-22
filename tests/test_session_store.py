@@ -95,6 +95,28 @@ def test_the_public_roster_never_carries_a_players_token() -> None:
     assert "token" not in roster[0]
 
 
+def test_the_wire_roster_carries_no_character_snapshot() -> None:
+    # Characters stay on the server; embedding every sheet in every roster
+    # broadcast would eventually outgrow the protocol's message cap.
+    state = new_session()
+    alex = state.add_player("Alex")
+    state.set_snapshot(alex.player_id, {"power_level": 9})
+
+    entry = state.roster()[0]
+
+    assert "character" not in entry
+    assert alex.public_dict()["character"] == {"power_level": 9}  # host-side events keep it
+
+
+def test_a_non_ascii_token_probe_returns_none_not_an_error() -> None:
+    # Tokens arrive off the wire; ``secrets.compare_digest`` raises TypeError on
+    # non-ASCII str, so the comparison runs over UTF-8 bytes instead.
+    state = new_session()
+    state.add_player("Alex")
+
+    assert state.player_by_token("žetón") is None
+
+
 def test_snapshots_land_on_the_slot_and_unknown_ids_are_refused() -> None:
     state = new_session()
     alex = state.add_player("Alex")
@@ -293,6 +315,15 @@ def test_delete_session_removes_the_directory_and_tolerates_a_missing_one() -> N
 def test_loading_a_session_that_is_not_there_raises() -> None:
     with pytest.raises(SessionStoreError):
         load_session("deadbeef")
+
+
+def test_loading_a_session_file_that_is_not_an_object_raises() -> None:
+    state = new_session()
+    directory = save_session(state)
+    (directory / SESSION_FILENAME).write_text("[1, 2, 3]\n", encoding="utf-8")
+
+    with pytest.raises(SessionStoreError):
+        load_session(state.id)
 
 
 @pytest.mark.parametrize("bad_id", ["../escape", "a/b", "", "with space", "x" * 65])

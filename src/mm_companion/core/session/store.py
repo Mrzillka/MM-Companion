@@ -133,6 +133,8 @@ def load_session(session_id: str, workspace: storage.Workspace | None = None) ->
         raise SessionStoreError(f"no session {session_id!r}: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise SessionStoreError(f"session {session_id!r} is corrupt: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise SessionStoreError(f"session {session_id!r} is corrupt: not a JSON object")
 
     state = SessionState.from_dict(raw)
     state.rolls = load_rolls(session_id, workspace)

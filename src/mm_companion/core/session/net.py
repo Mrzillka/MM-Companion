@@ -31,6 +31,15 @@ DEFAULT_PORT = 47331
 #: How long :meth:`Transport.connect` waits for the TCP handshake by default.
 CONNECT_TIMEOUT = 10.0
 
+#: The socket timeout a *welcomed* connection runs under, on both ends. Its real
+#: target is the send side: a peer that stops draining its socket (a suspended
+#: laptop, a frozen process) would otherwise park ``sendall`` — and whoever is
+#: broadcasting, eventually the GM's UI thread — forever; after this long the
+#: send raises and the peer is treated as gone. Reads share the socket timeout,
+#: so both read loops treat a timed-out ``recv`` as "still idle, keep waiting"
+#: rather than a dead peer.
+IO_TIMEOUT = 15.0
+
 #: Bytes pulled from the socket per ``recv``. Large enough that a character
 #: snapshot arrives in a few reads, small enough to stay a cheap allocation.
 READ_CHUNK = 64 * 1024
@@ -69,11 +78,12 @@ class Connection:
         return self._closed
 
     def set_timeout(self, seconds: float | None) -> None:
-        """Bound the next reads, or pass ``None`` to block indefinitely.
+        """Bound the next socket operations, or pass ``None`` to block forever.
 
-        The handshake reads with a timeout so an idle peer cannot pin a thread
-        forever; once a client is welcomed the reader blocks instead, and
-        :meth:`close` is what unblocks it.
+        The handshake reads under :data:`~.server.HANDSHAKE_TIMEOUT` and treats
+        expiry as a dead peer; a welcomed connection runs under
+        :data:`IO_TIMEOUT`, where an expired *send* means a stalled peer (and a
+        raise) while the read loops swallow an expired ``recv`` and keep waiting.
         """
         self._sock.settimeout(seconds)
 

@@ -25,7 +25,6 @@ receives ``(kind, payload)`` pairs where the payload is always a plain dict;
 
 from __future__ import annotations
 
-import secrets
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -35,8 +34,8 @@ from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 
 from . import store
-from .model import PlayerSlot, RollRecord, SessionState, utc_now
-from .net import Connection, TcpTransport, Transport
+from .model import PlayerSlot, RollRecord, SessionState, tokens_match, utc_now
+from .net import IO_TIMEOUT, Connection, TcpTransport, Transport
 from .protocol import (
     ERROR_BAD_TOKEN,
     ERROR_MALFORMED,
@@ -80,6 +79,14 @@ RATE_LIMIT_WINDOW = 5.0
 MAX_ROLL_MODIFIER = 1000
 MAX_LABEL_CHARS = 120
 
+#: How many recent rolls a :class:`~.protocol.Welcome` carries. The full history
+#: keeps growing across evenings (that is the point of persistence), and a roll
+#: dict is ~220 bytes against a :data:`~.protocol.MAX_MESSAGE_BYTES` of 256 KiB —
+#: past roughly a thousand rolls an uncapped welcome would fail to encode and
+#: the join would be refused outright. The full log stays on the server; a
+#: joining client gets the recent slice.
+WELCOME_HISTORY_ROLLS = 200
+
 #: How long :meth:`SessionServer.stop` waits for each worker thread.
 _JOIN_TIMEOUT = 2.0
 
@@ -88,7 +95,7 @@ EVENT_STARTED = "started"  # {"session_id", "host", "port"}
 EVENT_STOPPED = "stopped"  # {"session_id"}
 EVENT_PLAYER_JOINED = "player_joined"  # {"player": public slot dict, "new": bool}
 EVENT_PLAYER_LEFT = "player_left"  # {"player": public slot dict}
-EVENT_ROSTER = "roster"  # {"players": [public slot dicts]}
+EVENT_ROSTER = "roster"  # {"players": [roster dicts — no tokens, no characters]}
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
 EVENT_ROLL = "roll"  # a full roll dict, hidden rolls included
 EVENT_REFUSED = "refused"  # {"code", "message", "address"}
@@ -319,7 +326,12 @@ class SessionServer:
             return False
         try:
             connection.send(message)
-        except (OSError, ProtocolError):
+        except ProtocolError as exc:
+            # Our own message failed to encode (oversized); the peer is fine and
+            # keeps its seat — dropping it would punish the wrong side.
+            self._emit(EVENT_ERROR, {"code": "encode", "message": str(exc)})
+            return False
+        except OSError:
             self._drop(player_id)
             return False
         return True
@@ -336,7 +348,12 @@ class SessionServer:
         for player_id, connection in targets:
             try:
                 connection.send(message)
-            except (OSError, ProtocolError):
+            except ProtocolError as exc:
+                # Encode failure: the same message would fail for every peer, so
+                # report once and stop — nobody's connection is at fault.
+                self._emit(EVENT_ERROR, {"code": "encode", "message": str(exc)})
+                return
+            except OSError:
                 self._drop(player_id)
 
     # -- accepting ---------------------------------------------------------
@@ -355,7 +372,10 @@ class SessionServer:
             thread = threading.Thread(
                 target=self._serve, args=(connection,), name="session-client", daemon=True
             )
-            self._threads.append(thread)
+            # Rebind rather than mutate: ``stop`` may be unpacking the old list
+            # on another thread. Pruning finished threads keeps a long-running
+            # server from accumulating one dead handle per join ever made.
+            self._threads = [t for t in self._threads if t.is_alive()] + [thread]
             thread.start()
 
     def _serve(self, connection: Connection) -> None:
@@ -394,7 +414,7 @@ class SessionServer:
                 f"you speak v{message.protocol_version}",
             )
             return None
-        if not secrets.compare_digest(message.token, self.state.host_token):
+        if not tokens_match(message.token, self.state.host_token):
             self._refuse(connection, ERROR_BAD_TOKEN, "that join code is not for this session")
             return None
 
@@ -423,13 +443,15 @@ class SessionServer:
                 player_id=slot.player_id,
                 player_token=slot.token,
                 roster=self.state.roster(),
-                history=[roll.to_dict() for roll in self.state.visible_rolls()],
+                history=[
+                    roll.to_dict() for roll in self.state.visible_rolls()[-WELCOME_HISTORY_ROLLS:]
+                ],
             )
 
         if replaced is not None and replaced is not connection:
             replaced.close()
 
-        connection.set_timeout(None)
+        connection.set_timeout(IO_TIMEOUT)
         try:
             connection.send(welcome)
         except (OSError, ProtocolError):
@@ -478,6 +500,10 @@ class SessionServer:
         while self._running and not connection.closed:
             try:
                 message = connection.receive()
+            except TimeoutError:
+                # The shared IO_TIMEOUT expired on an idle recv. Only a stalled
+                # *send* means a bad peer; an idle one just has nothing to say.
+                continue
             except ProtocolError as exc:
                 self._send_quietly(connection, ErrorMessage(code=ERROR_MALFORMED, message=str(exc)))
                 return

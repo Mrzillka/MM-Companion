@@ -17,7 +17,14 @@ from collections.abc import Callable
 
 from mm_companion import __version__
 
-from .net import CONNECT_TIMEOUT, Connection, TcpTransport, Transport, TransportError
+from .net import (
+    CONNECT_TIMEOUT,
+    IO_TIMEOUT,
+    Connection,
+    TcpTransport,
+    Transport,
+    TransportError,
+)
 from .protocol import (
     PROTOCOL_VERSION,
     ApplyCondition,
@@ -157,7 +164,7 @@ class SessionClient:
         self.roster = list(message.roster)
         self.history = list(message.history)
 
-        connection.set_timeout(None)
+        connection.set_timeout(IO_TIMEOUT)
         self._connection = connection
         self._emit(EVENT_CONNECTED, message.to_dict())
         self._reader = threading.Thread(target=self._read_loop, name="session-client", daemon=True)
@@ -165,17 +172,23 @@ class SessionClient:
         return message
 
     def close(self, reason: str = "closed") -> None:
-        """Hang up. The reader thread notices and emits :data:`EVENT_DISCONNECTED`."""
+        """Hang up, emitting :data:`EVENT_DISCONNECTED` once.
+
+        Closing a client that is not connected — never was, closed already, or
+        already torn down by the reader after a kick — emits nothing, so the UI
+        can call this unconditionally without seeing phantom disconnects.
+        """
         self._closing = True
         connection = self._connection
+        self._connection = None
         if connection is not None:
             connection.close()
         reader = self._reader
+        self._reader = None
         if reader is not None and reader is not threading.current_thread():
             reader.join(timeout=2.0)
-        self._reader = None
-        self._connection = None
-        self._emit(EVENT_DISCONNECTED, {"reason": reason})
+        if connection is not None:
+            self._emit(EVENT_DISCONNECTED, {"reason": reason})
 
     def __enter__(self) -> SessionClient:
         self.connect()
@@ -230,6 +243,10 @@ class SessionClient:
             while connection is not None and not connection.closed:
                 try:
                     message = connection.receive()
+                except TimeoutError:
+                    # IO_TIMEOUT expired on an idle recv; a quiet table is not a
+                    # dead server. Only a stalled send means trouble.
+                    continue
                 except ProtocolError as exc:
                     self._emit(EVENT_ERROR, {"code": "malformed", "message": str(exc)})
                     reason = "malformed"

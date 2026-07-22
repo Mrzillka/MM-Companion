@@ -32,6 +32,17 @@ def new_token() -> str:
     return secrets.token_urlsafe(16)
 
 
+def tokens_match(presented: str, expected: str) -> bool:
+    """Constant-time bearer-token equality.
+
+    Compared as UTF-8 bytes because :func:`secrets.compare_digest` raises
+    ``TypeError`` for non-ASCII ``str`` — and *presented* arrives off the wire,
+    where a hostile peer may put anything in a token field. A mismatch of any
+    kind must come out as ``False``, never as an exception in the handler thread.
+    """
+    return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+
 @dataclass
 class PlayerSlot:
     """One seat in the session — a connected player, or one who has dropped.
@@ -68,9 +79,23 @@ class PlayerSlot:
         }
 
     def public_dict(self) -> dict:
-        """What goes on the wire: everything except this slot's private token."""
+        """The slot without its secret — event payloads on the host's own side."""
         data = self.to_dict()
         data.pop("token", None)
+        return data
+
+    def roster_dict(self) -> dict:
+        """What a roster entry looks like on the wire: no token, no character.
+
+        The roster is re-broadcast to everyone on every join and every snapshot,
+        so embedding each player's full character would make every broadcast
+        carry the table's combined sheet size — enough, at a full table, to trip
+        :data:`~.protocol.MAX_MESSAGE_BYTES` and break the session. Characters
+        stay on the server; the GM reads them via snapshot events, and no player
+        client needs another player's sheet.
+        """
+        data = self.public_dict()
+        data.pop("character", None)
         return data
 
     @classmethod
@@ -241,13 +266,13 @@ class SessionState:
         if not token:
             return None
         for slot in self.players.values():
-            if secrets.compare_digest(slot.token, token):
+            if slot.token and tokens_match(token, slot.token):
                 return slot
         return None
 
     def roster(self) -> list[dict]:
-        """The public roster as it goes on the wire, in join order."""
-        return [slot.public_dict() for slot in self.players.values()]
+        """The roster as it goes on the wire, in join order — see :meth:`PlayerSlot.roster_dict`."""
+        return [slot.roster_dict() for slot in self.players.values()]
 
     def set_snapshot(self, player_id: str, character: dict) -> bool:
         """Store a player's latest character snapshot; False if the slot is unknown."""

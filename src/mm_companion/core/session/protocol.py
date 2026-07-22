@@ -216,9 +216,11 @@ class Ping(Message):
 class Welcome(Message):
     """The handshake's answer: who you are, plus the current roster and history.
 
-    ``roster`` is a list of public player dicts (never a player's private token)
-    and ``history`` the visible roll log — hidden GM rolls are omitted here as
-    well as from every later broadcast.
+    ``roster`` entries carry neither a player's private token nor their character
+    snapshot (characters stay on the server — see
+    :meth:`~.model.PlayerSlot.roster_dict`). ``history`` is the recent slice of
+    the visible roll log (:data:`~.server.WELCOME_HISTORY_ROLLS`) — hidden GM
+    rolls are omitted here as well as from every later broadcast.
     """
 
     TYPE: ClassVar[str] = "welcome"

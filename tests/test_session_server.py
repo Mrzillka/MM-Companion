@@ -19,6 +19,7 @@ from random import Random
 import pytest
 
 from mm_companion.core import storage
+from mm_companion.core.session import client as client_mod
 from mm_companion.core.session import net, store
 from mm_companion.core.session import server as server_mod
 from mm_companion.core.session.client import (
@@ -313,6 +314,44 @@ def test_a_wrong_token_is_refused(running_server) -> None:
     assert len(srv.state.players) == 1  # only the GM
 
 
+def test_a_non_ascii_token_is_refused_cleanly(running_server, connect) -> None:
+    # ``secrets.compare_digest`` raises TypeError on non-ASCII str; compared
+    # naively, a hostile token would kill the handler thread instead of being
+    # refused. The refusal must look exactly like any other bad token.
+    srv = running_server()
+    host, port = srv.address
+    sneak = SessionClient(host, port, token="žetón", display_name="Sneak")
+    with pytest.raises(SessionClientError) as excinfo:
+        sneak.connect(timeout=TIMEOUT)
+    assert excinfo.value.code == ERROR_BAD_TOKEN
+
+    client, _ = connect(srv, "Volt")  # the server shrugged it off
+    assert client.connected
+
+
+def test_a_non_ascii_player_token_joins_as_a_fresh_seat(running_server, connect) -> None:
+    srv = running_server()
+    client, _ = connect(srv, "Volt", player_token="žetón")
+    assert client.connected
+    assert len(srv.state.players) == 2  # the GM plus one new seat, no crash
+
+
+def test_the_welcome_history_is_capped_to_the_recent_slice(
+    running_server, connect, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The full log keeps growing across evenings; an uncapped welcome would
+    # eventually outgrow MAX_MESSAGE_BYTES and refuse the join outright.
+    monkeypatch.setattr(server_mod, "WELCOME_HISTORY_ROLLS", 5)
+    state = new_session("Long Campaign")
+    for _ in range(8):
+        state.record_roll(player_id="p", player_name="Old Hand", die=12)
+    srv = running_server(state=state)
+
+    client, _ = connect(srv, "Late Joiner")
+
+    assert [roll["seq"] for roll in client.history] == [4, 5, 6, 7, 8]
+
+
 def test_a_protocol_mismatch_is_refused(running_server) -> None:
     srv = running_server()
     connection = raw_connect(srv)
@@ -423,19 +462,27 @@ def test_a_snapshot_reaches_the_server_and_is_sanitized(running_server, connect)
     assert srv.state.players[client.player_id].character["power_level"] == 10
 
 
-def test_a_snapshot_is_broadcast_to_the_other_players(running_server, connect) -> None:
+def test_a_snapshot_refreshes_the_roster_but_never_travels_in_it(running_server, connect) -> None:
+    # The roster broadcast still fans out on a snapshot, but the character itself
+    # stays on the server: a full table's combined sheets would otherwise outgrow
+    # MAX_MESSAGE_BYTES and take every broadcast down with them.
     srv = running_server()
-    _first, first_events = connect(srv, "Volt")
+    first, first_events = connect(srv, "Volt")
     second, _ = connect(srv, "Mesa")
-    first_events.next_of(EVENT_ROSTER)  # the join itself
 
     second.send_snapshot({"name": "Mesa", "power_level": 8})
+
+    # Volt sees exactly three roster refreshes: its own join, Mesa's join, and
+    # Mesa's snapshot. Waiting on the count is what makes this deterministic.
     wait_for(
-        lambda: any(
-            entry["display_name"] == "Mesa" and entry["character"].get("power_level") == 8
-            for entry in _first.roster
-        ),
-        message="Mesa's snapshot reaching Volt",
+        lambda: first_events.kinds().count(EVENT_ROSTER) >= 3,
+        message="the snapshot's roster refresh reaching Volt",
+    )
+    assert any(entry["display_name"] == "Mesa" for entry in first.roster)
+    assert all("character" not in entry for entry in first.roster)
+    wait_for(
+        lambda: srv.state.players[second.player_id].character.get("power_level") == 8,
+        message="the snapshot landing on the server",
     )
 
 
@@ -738,25 +785,36 @@ def test_an_oversized_message_is_refused_before_sending() -> None:
 
 
 def test_a_flood_trips_the_rate_limit(running_server) -> None:
-    srv = running_server()
+    events = Events()
+    srv = running_server(on_event=events)
     connection = raw_connect(srv)
     try:
         connection.send(Hello(token=srv.state.host_token, display_name="Loud"))
         connection.receive()  # welcome
-        codes: list[str] = []
         for _ in range(server_mod.RATE_LIMIT_MESSAGES + 5):
             try:
                 connection.send(Ping(nonce=1))
             except OSError:
                 break
+        codes: list[str] = []
+        dropped = False
         deadline = time.monotonic() + TIMEOUT
         while time.monotonic() < deadline:
-            message = connection.receive()
+            try:
+                message = connection.receive()
+            except ConnectionError:
+                # The server hung up with pings still in flight; on Windows that
+                # can surface as a reset before the error message is readable.
+                # Being cut off *is* the punishment — the message is best-effort.
+                dropped = True
+                break
             if message is None:
+                dropped = True
                 break
             if isinstance(message, ErrorMessage):
                 codes.append(message.code)
-        assert "rate_limit" in codes
+        assert "rate_limit" in codes or dropped
+        events.next_of(server_mod.EVENT_PLAYER_LEFT)  # and the seat was vacated
     finally:
         connection.close()
 
@@ -804,3 +862,57 @@ def test_decode_rejects_a_pickle_looking_payload() -> None:
     """The wire is JSON only — nothing here ever evaluates a payload."""
     with pytest.raises(ProtocolError):
         decode(b"\x80\x04\x95 cos\nsystem\n")
+
+
+def test_an_unencodable_command_does_not_cost_the_player_their_seat(
+    running_server, connect
+) -> None:
+    # An oversized message is *our* failure to encode, not the peer's; dropping
+    # the peer for it would punish the wrong side — repeatedly, for everyone.
+    events = Events()
+    srv = running_server(on_event=events)
+    client, client_events = connect(srv, "Volt")
+
+    sent = srv.apply_condition(client.player_id, "prone", parameter="x" * MAX_MESSAGE_BYTES)
+
+    assert sent is False
+    assert events.next_of(server_mod.EVENT_ERROR)["code"] == "encode"
+    assert client.player_id in srv.connected_player_ids()
+    srv.roll(label="Still here")
+    assert client_events.next_of(EVENT_ROLL)["label"] == "Still here"
+
+
+def test_an_idle_connection_outlives_the_io_timeout(
+    running_server, connect, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The IO timeout exists to unstick *sends* to a stalled peer; a quiet table
+    # must not be mistaken for a dead one. This is the one test that has to let
+    # real time pass — the behavior under test is nothing happening.
+    monkeypatch.setattr(server_mod, "IO_TIMEOUT", 0.2)
+    monkeypatch.setattr(client_mod, "IO_TIMEOUT", 0.2)
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+
+    time.sleep(0.7)  # several timeouts' worth of silence on both ends
+
+    assert client.connected
+    assert client.player_id in srv.connected_player_ids()
+    client.request_roll("After the lull")
+    assert events.next_of(EVENT_ROLL)["label"] == "After the lull"
+
+
+def test_close_emits_disconnected_exactly_once(running_server, connect) -> None:
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+
+    client.close()
+    client.close()
+
+    assert events.kinds().count(EVENT_DISCONNECTED) == 1
+
+
+def test_closing_a_never_connected_client_emits_nothing() -> None:
+    events = Events()
+    client = SessionClient("127.0.0.1", 1, token="x", display_name="Nobody", on_event=events)
+    client.close()
+    assert events.kinds() == []

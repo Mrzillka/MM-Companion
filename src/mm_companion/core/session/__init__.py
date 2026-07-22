@@ -9,13 +9,18 @@ headless-testable and can also run as a standalone server. The pieces:
   in the same plain-data ``to_dict``/``from_dict`` idiom as
   :mod:`mm_companion.core.character`.
 - :mod:`.store` — workspace persistence, so a session survives closing the app.
+- :mod:`.net` — message framing plus the :class:`~.net.Transport` seam (direct
+  TCP now, a relay later).
+- :mod:`.server` — :class:`~.server.SessionServer`, what the GM's app hosts.
+- :mod:`.client` — :class:`~.client.SessionClient`, what a player runs.
 
-Qt-side wiring (turning the callbacks below into signals) lives in
-``ui/session_bridge.py`` and never leaks back into this package.
+Both ends take an ``on_event`` callback and hand it ``(kind, payload)`` pairs
+where the payload is always a plain dict. Qt-side wiring (turning those into
+signals) lives in ``ui/session_bridge.py`` and never leaks back into this package.
 """
 
 from __future__ import annotations
 
-from . import model, protocol, store
+from . import client, model, net, protocol, server, store
 
-__all__ = ["model", "protocol", "store"]
+__all__ = ["client", "model", "net", "protocol", "server", "store"]

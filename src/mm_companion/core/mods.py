@@ -40,6 +40,7 @@ the manifest ``priority`` only decides where a *newly added* mod first lands.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import shutil
@@ -220,6 +221,19 @@ def active_mods(
 
     mods.extend(available[mid] for mid in ordered + remaining)
     return mods
+
+
+def stack_fingerprint(mods: list[Mod] | None = None) -> str:
+    """A short digest of the active mod stack, load order included.
+
+    Two apps that produce the same string load the same content, so an online
+    session's handshake can compare them and warn about *mod skew* — a GM running
+    content a player lacks means condition and effect ids do not line up. It is a
+    comparison key, not a security check, so a short hash is plenty.
+    """
+    stack = active_mods() if mods is None else mods
+    joined = "|".join(mod.fingerprint() for mod in stack)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
 # --- Python-module loading (the code-executing half of a mod) ----------------

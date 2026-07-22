@@ -49,6 +49,10 @@ ERROR_BAD_TOKEN = "bad_token"
 ERROR_SESSION_FULL = "session_full"
 ERROR_MALFORMED = "malformed"
 ERROR_UNKNOWN_PLAYER = "unknown_player"
+ERROR_RATE_LIMIT = "rate_limit"
+#: A warning, not a refusal: the join succeeded but the two ends load different
+#: mods, so condition and effect ids may not line up.
+ERROR_MOD_SKEW = "mod_skew"
 
 
 class ProtocolError(Exception):

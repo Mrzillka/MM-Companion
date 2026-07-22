@@ -121,7 +121,7 @@ This plan file, the `/gm-session` skill, and the `feature/gm-session` branch off
 `tests/test_session_store.py`.
 
 ### Phase 2 — Server and client transport
-**Status: not started**
+**Status: done**
 `core/session/{net,server,client}.py` over loopback TCP: framing, handshake
 (protocol version, token, mod fingerprint), roster, character snapshots,
 **server-side roll resolution**, persistence on every mutation, and a reconnect
@@ -252,3 +252,58 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
   - Pre-existing, untouched: `ruff check .` at the repo root reports 6 errors in
     `.claude/skills/make-release/make_release.py` (committed in `a9e70e8`,
     unrelated to this work). `ruff check src tests` is clean.
+
+- **2026-07-22 — Phase 2 done.** The session layer's live half: a real server and
+  client over loopback TCP, still Qt-free.
+  - **`core/session/net.py`** — `Connection` (framed, buffered newline-delimited
+    reads; `send` is lock-guarded so several threads may write to one peer, reads
+    are single-threaded by convention), `Transport`/`Listener` ABCs, and
+    `TcpTransport`/`TcpListener`. `DEFAULT_PORT = 47331`, `TransportError`
+    subclasses `OSError` so a reader loop catches socket failure and misuse
+    together. Two details worth keeping: `close()` calls `shutdown()` first
+    because closing a socket another thread is parked in `recv` on does not
+    reliably wake it on Windows; and `_read_line` raises rather than buffering
+    once `MAX_MESSAGE_BYTES` arrive with no newline in them. `Listener.accept()`
+    returns `None` when the listener is closed — that is how the accept loop
+    exits.
+  - **`core/session/server.py`** — `SessionServer`: one accept thread, one reader
+    thread per peer, one `RLock` over every state mutation, `store.save_session`
+    on each roster/snapshot change and `store.append_roll` per roll. Handshake
+    order is protocol version → host token → slot claim (`player_token`
+    reconnect) → client limit. **The seating race that cost the most time:** a
+    connection is registered in `_connections` the moment it claims a seat (so
+    the limit counts it) but is held out of `_welcomed` until its `Welcome` has
+    actually gone out — otherwise a concurrent roster broadcast overtakes the
+    handshake answer and the client sees a `Roster` where a `Welcome` belongs.
+    `broadcast`/`send_to` only ever target welcomed ids. Rolls go through the one
+    `_resolve_roll` path (client request and GM alike), clamped to
+    `MAX_ROLL_MODIFIER`/`MAX_LABEL_CHARS`; `hidden` is honoured only for a slot
+    with `is_gm` and a hidden roll is recorded, persisted, emitted to the GM, and
+    never broadcast. Also: per-connection rate limit (120 msgs / 5 s),
+    `HANDSHAKE_TIMEOUT` on the pre-hello read, `on_event(kind, payload)` with the
+    payload **always a plain dict** (see the `EVENT_*` constants), and callbacks
+    wrapped so a bad UI handler cannot kill a worker thread.
+  - **`core/session/client.py`** — `SessionClient.connect()` does the handshake
+    on the *calling* thread and returns the `Welcome` (or raises
+    `SessionClientError` with an `ERROR_*` `code`), then leaves one reader thread
+    emitting `EVENT_*` events. `send_snapshot` sanitizes, so no caller can forget
+    to. Remembers `player_id`/`player_token` for the reconnect.
+  - **`core/session/protocol.py`** — two new codes only: `ERROR_RATE_LIMIT` and
+    `ERROR_MOD_SKEW` (a *warning* sent after a successful `Welcome`, not a
+    refusal). `PROTOCOL_VERSION` is unchanged.
+  - **`core/mods.py`** — new `stack_fingerprint()`: a 16-hex-char sha256 of the
+    active mod stack's `Mod.fingerprint()`s in load order, which is what the
+    handshake compares. Phase 4's UI should pass it into both ends.
+  - **Tests** — `tests/test_session_server.py` (46, real loopback sockets,
+    ephemeral ports, daemon threads, ~2.5 s) plus 3 in `tests/test_mods.py`. The
+    helpers there matter: `Events.next_of(kind)` waits on a queue and `wait_for`
+    polls — nothing sleeps a fixed time, and `read_until(conn, cls)` skips the
+    roster chatter a join stirs up.
+  - Deferred, for the phase that needs it: **a network client cannot be the GM.**
+    The host token is the only secret and every remote peer is seated as a
+    player, so `is_gm` is only ever the in-process host slot; hidden rolls and
+    condition commands from a socket are ignored. Phase 9's headless server needs
+    a GM auth field in `Hello` (or a second token) before a GM can drive a remote
+    session. Also deferred: no keepalive timer drives `Ping` yet (the message and
+    `Pong` work, nothing schedules them), and reconnect-on-drop is the UI's job
+    in Phase 5.

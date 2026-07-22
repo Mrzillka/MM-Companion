@@ -30,6 +30,9 @@ roster and full history, and players reconnect to it.
 | --- | --- |
 | Hosting | The **GM's app hosts** the session server. All state is persisted to the workspace so it resumes on reopen. A headless `python -m mm_companion.server` entrypoint runs the same session on an always-on box for GMs who want 24/7 uptime. |
 | Reach | **Internet from day one**: automatic UPnP/IGD port-mapping + a short join code, with a manual port-forward / tunnel fallback. The transport is a swappable interface with a documented **relay protocol**, so a relay can be dropped in later without reworking the session layer. |
+| Reach, revised (2026-07-22) | **A relay is committed, not optional.** Phase 3's probe against the dev machine found ISP-side NAT and no global IPv6 — no port forward, automatic or manual, can ever make that machine reachable, and a large share of users (mobile broadband, fibre resellers, student housing) are in the same position. Since *outbound* connections work from behind every NAT, the only universal answer is both ends dialling out to a public box. Order of work: the **tunnel path** (GM runs playit.gg/ngrok, players need nothing) is surfaced in the GM window first because it already works; the **relay** is then built as its own phase so the finished app needs no third-party service. Hole punching is **rejected** — it needs a rendezvous server anyway, fails on the symmetric NAT that CGNAT users sit behind, and would require the relay as a fallback regardless. |
+| Relay hosting | Deliberately **deferred**. The relay is written to run on anything with a public IP and ships as `python -m mm_companion.relay`, with the relay URL a setting, so any GM can run their own rather than depending on one blessed box. Where the default instance lives is a deployment question, not a design one, and is answered when real players need to join. |
+| Transport security | **Open.** Session traffic is plaintext JSON today, join token included, which is fine on a LAN and not fine across the internet through someone else's box. Stdlib `ssl` covers it with no new dependency; the choice between relay-terminated TLS (a real cert on the relay, `create_default_context()` on the client, zero player config, relay operator can read traffic) and end-to-end (a key derived from the join token, which the relay never learns) is made **in the relay phase**, before any traffic crosses a third party. |
 | Player sync | **Live push.** The player's client sends a character snapshot on join and on every change; GM cards and sheets update in real time, and GM-applied conditions are pushed back onto the player's live sheet. |
 | NPCs | GM-only, **reusing the `Character` model**, saved in the existing workspace `gm_characters/` dir. The PP pool row is replaced by an estimated PL from `rules.power_level_for_points`. |
 | Roll sources | **Dice Roller only.** Rolling from the character sheet stays out of scope; the protocol carries a free-form `label` so it can be added later without a protocol change. |
@@ -142,35 +145,72 @@ the UI, not only the docs.**
 Copy button, and a status line. The launcher's "Open GM Mode" button
 (`ui/start_window.py`, currently `_not_implemented`) is finally wired.
 
+**The connectivity surface is part of this phase, not a later polish pass.**
+`publish_session()` returns `Reachability.advice` as finished prose — render it
+verbatim under the join code, and make `internet_reachable == False` visibly
+different from success rather than a silent LAN address. Alongside it, an
+explicit **"I'm using a tunnel"** field: the GM pastes the `host:port` their
+tunnel gave them (`parse_address` validates it), it goes to
+`publish_session(manual_host=…)`, and the join code carries that hostname. That
+is the whole tunnel path — it works with the Phase 3 code as it stands, and it
+is what makes the app usable over the internet before the relay exists.
+
 ### Phase 5 — Player join and player cards
 **Status: not started**
 The join dialog, snapshot push from the player's sheet (on `edited` and
 `runtimeChanged`), and GM player cards: portrait placeholder, name, PL, hero
-points, condition chips, and "Open sheet" into a read-only `MainWindow`.
+points, condition chips, and "Open sheet" into a read-only `MainWindow`. The
+client dials through `discovery.transport_for(code.host)`, **not** a directly
+constructed `TcpTransport` — that is what makes a relay join code work later
+without touching this code.
 
-### Phase 6 — GM fast-apply conditions
+### Phase 6 — The relay
+**Status: not started**
+The answer to "players anywhere, nothing to install". Both ends dial **out** to a
+public box, which works from behind every NAT; this is the phase that makes the
+app genuinely internet-wide rather than LAN-plus-a-tunnel.
+
+- `core/session/relay.py` — `RelayTransport` implementing `net.Transport`,
+  registered into `discovery.transports` under the `mmrelay` scheme, so
+  `transport_for()` picks it up from a join code and **`server.py`/`client.py`
+  need no changes at all**.
+- `src/mm_companion/relay/__main__.py` — the relay itself: `python -m
+  mm_companion.relay`, stdlib sockets and threads, no app imports beyond the
+  framing. It parses **only** the envelope (`relay_host` / `relay_join` →
+  `relay_ok` / `relay_error`, the protocol already written down in
+  `discovery.py`'s docstring) and is a dumb byte pipe after that, so it holds no
+  session state and never needs a `PROTOCOL_VERSION` bump.
+- **Decide transport security here** (see the decisions table) before any
+  traffic crosses a third-party box.
+- A relay URL setting with the default instance overridable, so a GM can run
+  their own.
+- Tests: relay envelope handling, a full GM↔player session over a relay running
+  on loopback, and a refused/unknown-session join.
+
+### Phase 7 — GM fast-apply conditions
 **Status: not started**
 The card's "+" menu → an `apply_condition` command → applied on the player's live
 sheet through `rules.apply_condition`, snapshot bounces back, chips update on both
 ends. A GM-applied condition marks the player's sheet dirty, exactly like a local
 one.
 
-### Phase 7 — Roll history sync
+### Phase 8 — Roll history sync
 **Status: not started**
 Extract `DiceRollerPanel`, route rolls through the server, show the shared history
 in the GM window *and* in each player's roller, and add the GM's "Hidden roll"
 checkbox.
 
-### Phase 8 — NPCs
+### Phase 9 — NPCs
 **Status: not started**
 NPC cards and "Create NPC" on the GM window; `NPCWindow` with the simplified sheet
 (PP pool row replaced by the estimated PL); storage in `gm_characters/` through the
 existing `core/library.py` seams.
 
-### Phase 9 — Headless server, docs, polish
+### Phase 10 — Headless server, docs, polish
 **Status: not started**
 `python -m mm_companion.server` (+ a `mm-companion-server` console script),
-`docs/mm-session-architecture.md` and a networking/troubleshooting guide,
+`docs/mm-session-architecture.md` and a networking/troubleshooting guide (the
+tunnel walkthrough and the relay deployment guide land here),
 README/CLAUDE.md updates, full regression, and deletion of this file at the merge.
 
 ## Conventions for this work
@@ -191,8 +231,11 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
 1. **An exposed listening port.** Token in the join code, JSON-only decoding
    (never `pickle`), message size cap, max clients, per-connection rate limit.
    First host pops a Windows Firewall prompt.
-2. **CGNAT** defeats UPnP; the manual forward / Tailscale / Playit fallback has to
-   be reachable from the UI. This is why the relay hook exists from Phase 3.
+2. **Carrier NAT is the normal case, not the edge case** — confirmed on the dev
+   machine itself (ISP-side NAT, no global IPv6), so *nothing* reaches it
+   inbound. The tunnel field in Phase 4 and the relay in Phase 6 are what make
+   the feature real; until the relay ships, "works over the internet" means "the
+   GM set up a tunnel". Do not let a later phase quietly assume a reachable host.
 3. **Mod skew** — a GM running mods a player lacks means condition and effect ids
    do not match. The handshake exchanges a mod fingerprint and warns.
 4. **App-version skew** — a `PROTOCOL_VERSION` mismatch refuses the join with a
@@ -428,3 +471,27 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     none, but a router that forced a finite lease in `add_port_mapping` will drop
     the mapping when it expires. Nothing in `ui/` yet — Phase 4 wires
     `publish_session` and the advice into the GM window.
+
+- **2026-07-22 — Reach decision: the relay is committed.** Not a phase; a
+  decision, recorded so it is not re-argued. Prompted by the Phase 3 probe: the
+  dev machine sits behind ISP-side NAT with no global IPv6, so no port forward
+  can ever reach it, and a large share of users are in the same position.
+  Outbound connections work from behind every NAT, so the only universal answer
+  is both ends dialling out to a public box.
+  - **Rejected: hole punching.** It needs a rendezvous server anyway (so it does
+    not avoid the infrastructure), TCP punching is unreliable, and UDP punching
+    fails on the symmetric NAT that CGNAT users sit behind — meaning the relay
+    would have to exist as the fallback regardless. Build the relay; punching is
+    at most a later bandwidth optimisation.
+  - **Order:** the tunnel path first (Phase 4's manual-host field — it already
+    works with the Phase 3 code and needs nothing from the player), then the
+    relay as **Phase 6**, which pushed conditions/rolls/NPCs/polish to 7–10. The
+    relay is placed right after player join so every later feature is exercised
+    over the real transport rather than only loopback.
+  - **Hosting is deliberately unanswered** — the relay runs anywhere with a
+    public IP, the URL is a setting, and any GM can run their own. Pick a default
+    instance when real players need to join.
+  - **Left open on purpose:** transport security. Traffic is plaintext JSON
+    today, join token included. Stdlib `ssl` covers it; relay-terminated TLS vs.
+    end-to-end keyed off the join token is decided **in Phase 6**, before
+    anything crosses a third-party box.

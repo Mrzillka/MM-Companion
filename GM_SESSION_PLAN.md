@@ -129,7 +129,7 @@ that resumes the full history. Size caps, client limit, JSON-only decoding.
 `tests/test_session_server.py` with ephemeral ports and daemon threads.
 
 ### Phase 3 — Connectivity
-**Status: not started**
+**Status: done**
 `core/session/discovery.py`: join-code encode/decode, UPnP/IGD port mapping and
 external-IP discovery over the stdlib, a manual-address fallback, and the
 `Transport` seam with the relay protocol written down. `tests/test_session_discovery.py`
@@ -336,3 +336,78 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     the Phase 4 bridge can call it unconditionally.
   - Also made `test_a_flood_trips_the_rate_limit` robust to the Windows RST race
     (the kick can reset the socket before the error message is readable).
+
+- **2026-07-22 — Phase 3 done.** `core/session/discovery.py` (one new module, plus
+  its export from `core/session/__init__.py`) — join codes, UPnP, the advice the
+  UI must show, and the relay seam. Still Qt-free, stdlib only.
+  - **Join codes.** `encode_join_code(host, port, token)` / `decode_join_code` /
+    the `JoinCode` record. The packed layout is `version | host-kind | host |
+    port(2) | token-len | token | checksum`, base32'd, `=`-stripped, uppercased
+    and dashed every `CODE_GROUP` (5). An IPv4 literal packs to 4 bytes;
+    **anything else — hostname, IPv6 literal, or a relay URL — rides as UTF-8
+    text**, which is what makes the relay work without a format change. Decoding
+    strips every non-alphanumeric character, uppercases, and maps the two digits
+    base32 does not have (`0→O`, `1→I`); the version byte gives a *named* refusal
+    across versions and the checksum byte turns a typo into "that join code has a
+    typo in it" instead of a connection attempt on a wrong address. Fields are
+    capped (`MAX_HOST_BYTES` / `MAX_TOKEN_BYTES`, 128 each) — a join code is
+    parsed before anything is trusted.
+  - **Manual fallback.** `parse_address("host" | "host:port" | "[v6]:port")` →
+    `(host, port)` with `DEFAULT_PORT` filled in, raising `AddressError`. The
+    join dialog pairs this with a separately pasted token; `publish_session(...,
+    manual_host=...)` is the host-side twin (a tunnel or hand-forwarded address,
+    discovery skipped entirely).
+  - **UPnP/IGD, stdlib only.** `discover_igd()` (SSDP `M-SEARCH` over UDP
+    multicast for four search targets, `LOCATION` → device description → the
+    first `WANIPConnection:1`/`WANPPPConnection:1` service, control URL made
+    absolute), `external_ip()`, `add_port_mapping()` → a `PortMapping` with
+    `release()`, and `delete_port_mapping()`. SOAP faults become `UpnpError` with
+    the IGD **`errorCode`**, so callers branch on 718 (`UPNP_CONFLICT`) / 725
+    (`UPNP_ONLY_PERMANENT_LEASES`) rather than on prose — 725 makes
+    `add_port_mapping` retry once with a permanent lease, which is the one
+    router quirk worth handling in code.
+  - **`publish_session(port, ...) -> Reachability` is the single call the UI
+    wants.** It never raises: every failure still returns the LAN address plus
+    `advice`, a tuple of finished `ADVICE_*` prose. That is the phase's hard
+    requirement discharged — `ADVICE_CGNAT`, `ADVICE_NO_IGD`,
+    `ADVICE_UPNP_REFUSED`, `ADVICE_PORT_TAKEN`, `ADVICE_DOUBLE_NAT`,
+    `ADVICE_NO_EXTERNAL_IP`, `ADVICE_FIREWALL`, `ADVICE_LAN_ONLY`,
+    `ADVICE_MANUAL_ADDRESS`. **Phase 4 must render `Reachability.advice`
+    verbatim in the GM window** (a list under the join code); it is written as
+    player-facing sentences, not log lines. `internet_reachable` is the
+    best-effort green light: a mapping exists *and* the WAN address is neither
+    private (double NAT) nor CGNAT.
+  - **The relay seam is now real, not a stub.** `transports` is a
+    `core.registry.Registry` of `scheme -> factory`, and `transport_for(host)`
+    returns `TcpTransport()` for a plain host or the registered transport for a
+    `scheme://…` host, raising `UnknownTransportError` otherwise. So a relay is
+    (a) a registration and (b) a join code whose host is
+    `mmrelay://relay.example:9000/<session-id>` — no change to `server.py`,
+    `client.py`, or the code format. **The relay protocol is written down in the
+    module docstring**: same newline-JSON framing, one envelope frame
+    (`relay_host` / `relay_join` → `relay_ok` / `relay_error`), then a dumb pipe;
+    the relay holds no session state and never needs a `PROTOCOL_VERSION` bump.
+    Phase 5's client should dial through `transport_for(code.host)` rather than
+    constructing a `TcpTransport` itself.
+  - **Two things to know before touching this again.** (1)
+    `is_private_address` deliberately spells its CIDR list out instead of using
+    `ipaddress.is_private` — that property's membership *changed* across the
+    supported 3.10–3.13 range (CGNAT left it in 3.12), and this classification
+    decides both what address gets published and which URLs UPnP will fetch. (2)
+    The UPnP fetch path is hardened because `LOCATION` arrives from an
+    unauthenticated multicast reply: `_require_local_url` checks the URL scheme
+    and that the host is a private literal, **before the request and again on
+    `response.geturl()`** (so a redirect off-network cannot be followed), and the
+    body is capped at `MAX_DESCRIPTION_BYTES`.
+  - **Tests** — `tests/test_session_discovery.py` (75, ~0.3 s). Fully offline:
+    the `router` fixture monkeypatches `_ssdp_search` / `_http_get` / `_soap_post`
+    into canned XML and a call recorder, so a "router" is a dict. An autouse
+    fixture unregisters anything a test put in the process-wide `transports`
+    registry.
+  - Deferred: no live-network verification (adding a real port mapping edits the
+    user's router configuration, so it was not done unasked) — the SSDP/SOAP path
+    is exercised only against canned data, and the first real host is where a
+    router quirk would show up. No `Reachability` refresh/renewal timer either: a
+    permanent lease needs none, but a router that forced a finite lease in
+    `add_port_mapping` will drop the mapping when it expires. Nothing in `ui/`
+    yet — Phase 4 wires `publish_session` and the advice into the GM window.

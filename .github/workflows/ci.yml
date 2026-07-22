@@ -1,8 +1,11 @@
 name: CI
 
+# This repo integrates by merging locally (no PRs), so pushes are the only
+# signal CI gets — develop must be listed or feature work is never checked
+# before a release reaches main.
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 jobs:

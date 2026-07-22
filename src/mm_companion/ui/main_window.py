@@ -67,6 +67,11 @@ class MainWindow(QMainWindow):
         # Restore the remembered window size and block arrangement, if any.
         self._restore_layout()
 
+    @property
+    def sheet(self) -> CharacterSheet:
+        """The character sheet this window hosts — the seam a session attaches to."""
+        return self._sheet
+
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar."""
         menu_bar = self.menuBar()

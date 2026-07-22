@@ -1,9 +1,10 @@
 """GM Mode: the window that hosts the table's online session.
 
-The shell of the GM's control panel — start and stop hosting, the join code to
-share, and who is connected. Player cards, NPCs and the shared roll history land
-in later phases; what is here is the part everything else needs first, which is
-getting players *connected*.
+The GM's control panel — start and stop hosting, the join code to share, and a
+live card per connected player (name, character, PL, hero points, conditions,
+and their sheet one click away). NPCs and the shared roll history land in later
+phases; what is here first is the part everything else needs, which is getting
+players *connected*.
 
 Most of the surface is about that last problem being genuinely hard. A home
 connection is often not reachable from the internet at all — carrier-grade NAT,
@@ -36,7 +37,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -45,10 +45,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.character import Character
+from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.session import discovery
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.widgets import make_spin_box
 
@@ -58,17 +62,34 @@ BIND_ADDRESS = "0.0.0.0"
 
 TUNNEL_PLACEHOLDER = "e.g. 147.185.221.23:12345 — what your tunnel shows"
 
+NO_PLAYERS = "Nobody has joined yet — send the join code above to your players."
+
 
 class GMWindow(QMainWindow):
     """Host controls, the join code, and the connectivity story around both."""
 
-    def __init__(self, parent: QWidget | None = None, *, bind: str = BIND_ADDRESS) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        bind: str = BIND_ADDRESS,
+        data: GameData | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("GM Mode")
         self.resize(760, 680)
 
         self._bind = bind
+        self._data = data or load_game_data()
         self._bridge = SessionBridge(self)
+        # One card per seat, keyed by player id, and the last snapshot each player
+        # pushed. The roster and the snapshots arrive on separate signals (a roster
+        # entry deliberately carries no character), so both are held here and the
+        # card is fed from whichever lands.
+        self._cards: dict[str, PlayerCard] = {}
+        self._snapshots: dict[str, dict] = {}
+        # Read-only sheets opened from a card, kept referenced while open.
+        self._player_windows: dict[str, QMainWindow] = {}
         set_active_session(self._bridge)
         # Resume the session this app was last in; a fresh one when there is none
         # (or its files have gone), so the window always has a session to host.
@@ -167,8 +188,15 @@ class GMWindow(QMainWindow):
     def _build_players_box(self) -> QGroupBox:
         box = QGroupBox("Players")
         layout = QVBoxLayout(box)
-        self._roster_list = QListWidget()
-        layout.addWidget(self._roster_list)
+
+        self._no_players = _wrapped(NO_PLAYERS)
+        self._no_players.setEnabled(False)
+        layout.addWidget(self._no_players)
+
+        self._cards_container = FlowContainer()
+        self._cards_flow = FlowLayout(self._cards_container)
+        layout.addWidget(self._cards_container)
+        layout.addStretch()
         return box
 
     def _build_notice(self) -> QLabel:
@@ -181,6 +209,7 @@ class GMWindow(QMainWindow):
         self._bridge.stopped.connect(self._on_stopped)
         self._bridge.published.connect(self._on_published)
         self._bridge.rosterChanged.connect(self._show_roster)
+        self._bridge.snapshotReceived.connect(self._on_snapshot)
         self._bridge.playerJoined.connect(self._on_player_joined)
         self._bridge.refused.connect(self._on_refused)
         self._bridge.error.connect(self._on_error)
@@ -209,6 +238,13 @@ class GMWindow(QMainWindow):
                 return
 
         self._rename_session()
+        # A resumed session already carries each seat's last snapshot, so the cards
+        # come up populated rather than blank until everyone reconnects and pushes.
+        self._snapshots = {
+            player_id: dict(slot.character)
+            for player_id, slot in self._state.players.items()
+            if slot.character
+        }
         try:
             self._bridge.host(
                 self._state,
@@ -237,7 +273,7 @@ class GMWindow(QMainWindow):
         self._code_edit.clear()
         self._copy_button.setEnabled(False)
         self._clear_advice()
-        self._roster_list.clear()
+        self._clear_cards()
         self._refresh_idle_status()
 
     def _set_hosting_widgets(self, hosting: bool) -> None:
@@ -251,7 +287,7 @@ class GMWindow(QMainWindow):
     def _new_session(self) -> None:
         self._state = new_session("Session")
         self._name_edit.setText(self._state.name)
-        self._roster_list.clear()
+        self._clear_cards()
         self._refresh_idle_status()
 
     def _rename_session(self) -> None:
@@ -308,15 +344,83 @@ class GMWindow(QMainWindow):
     def _on_error(self, code: str, message: str) -> None:
         self._show_notice(f"{message or code}", theme.TINT_WORSE)
 
+    # -- player cards ------------------------------------------------------
+
     def _show_roster(self, players: list) -> None:
-        self._roster_list.clear()
-        for player in players:
-            name = str(player.get("display_name", "")) or "Player"
-            if player.get("is_gm"):
-                name = f"{name} (you)"
-            elif not player.get("connected"):
-                name = f"{name} — offline"
-            self._roster_list.addItem(name)
+        """Reconcile the card grid against the roster, in place.
+
+        Updated rather than rebuilt: the roster is re-broadcast on every join
+        *and* every snapshot, so tearing every card down each time would make the
+        grid flicker whenever anybody edited their sheet.
+        """
+        seen: set[str] = set()
+        for entry in players:
+            player_id = str(entry.get("player_id", ""))
+            if not player_id:
+                continue
+            seen.add(player_id)
+            card = self._cards.get(player_id)
+            if card is None:
+                card = PlayerCard(self._data)
+                card.openSheetRequested.connect(self._open_player_sheet)
+                self._cards[player_id] = card
+                self._cards_flow.addWidget(card)
+            card.set_roster(entry)
+            snapshot = self._snapshots.get(player_id)
+            if snapshot:
+                card.set_character(snapshot)
+
+        for player_id in [p for p in self._cards if p not in seen]:
+            self._drop_card(player_id)
+        self._no_players.setVisible(not self._cards)
+
+    def _on_snapshot(self, player_id: str, character: object) -> None:
+        """A player pushed their live sheet: remember it and restate their card."""
+        if not isinstance(character, dict) or not character:
+            return
+        self._snapshots[player_id] = character
+        card = self._cards.get(player_id)
+        if card is not None:
+            card.set_character(character)
+
+    def _open_player_sheet(self, player_id: str) -> None:
+        """Show a player's character in a read-only sheet.
+
+        Built fresh from the newest snapshot every time, so clicking again on a
+        card whose player has since changed something re-reads it — the sheet
+        itself is a view of the moment it was opened, while the card stays live.
+        """
+        snapshot = self._snapshots.get(player_id)
+        if not snapshot:
+            return
+        from mm_companion.ui.main_window import MainWindow
+
+        previous = self._player_windows.pop(player_id, None)
+        if previous is not None:
+            previous.close()
+        window = MainWindow(character=Character.from_dict(snapshot), locked=True)
+        self._player_windows[player_id] = window
+        window.show()
+        window.raise_()
+
+    def _drop_card(self, player_id: str) -> None:
+        """Remove one card from the grid (the seat itself is gone, not just offline)."""
+        card = self._cards.pop(player_id, None)
+        if card is None:
+            return
+        for index in range(self._cards_flow.count()):
+            item = self._cards_flow.itemAt(index)
+            if item is not None and item.widget() is card:
+                self._cards_flow.takeAt(index)
+                break
+        card.setParent(None)
+        card.deleteLater()
+
+    def _clear_cards(self) -> None:
+        for player_id in list(self._cards):
+            self._drop_card(player_id)
+        self._snapshots.clear()
+        self._no_players.setVisible(True)
 
     # -- small view helpers ------------------------------------------------
 
@@ -375,6 +479,9 @@ class GMWindow(QMainWindow):
         shows this one again) so the session it was working on — its name, its
         roster, its rolls — is still here rather than replaced by a blank one.
         """
+        for window in self._player_windows.values():
+            window.close()
+        self._player_windows.clear()
         self._stop_hosting()
         set_active_session(None)
         super().closeEvent(event)

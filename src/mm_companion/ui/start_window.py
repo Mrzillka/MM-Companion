@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -31,8 +32,10 @@ from PySide6.QtWidgets import (
 from mm_companion import __version__
 from mm_companion.core import library, storage
 from mm_companion.core.library import CharacterSummary, list_saved_characters
+from mm_companion.core.session.client import SessionClientError
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.main_window import MainWindow
+from mm_companion.ui.session_bridge import SessionBridge
 
 CARD_IMAGE_SIZE = 120
 CHARACTER_FILTER = "Character files (*.json)"
@@ -113,6 +116,10 @@ class StartWindow(QMainWindow):
         # The GM window. Only one may exist — it owns the hosted session — so a
         # second "Open GM Mode" raises this one instead of building another.
         self._gm_window: QWidget | None = None
+        # The session this app has *joined* (as a player), and the pusher keeping
+        # the GM's copy of the sheet current. Both cleared when the sheet closes.
+        self._session_bridge: SessionBridge | None = None
+        self._session_pusher: QObject | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -137,6 +144,10 @@ class StartWindow(QMainWindow):
         gm_button = QPushButton("Open GM Mode")
         gm_button.clicked.connect(self._open_gm_mode)
         column.addWidget(gm_button)
+
+        join_button = QPushButton("Join Session")
+        join_button.clicked.connect(self._join_session)
+        column.addWidget(join_button)
 
         mods_button = QPushButton("Manage Mods")
         mods_button.clicked.connect(self._manage_mods)
@@ -258,6 +269,63 @@ class StartWindow(QMainWindow):
         window = DiceRollerWindow()
         self._dice_window = window
         window.show()
+
+    def _join_session(self) -> None:
+        """Join a GM's session and open the character being brought to it.
+
+        The sheet stays open for as long as the player is in the session, pushing
+        a snapshot on every change (debounced) so the GM's card is live; closing
+        it leaves the session.
+        """
+        from mm_companion.ui.session_bridge import active_session, set_active_session
+        from mm_companion.ui.session_dialogs import JoinSessionDialog
+        from mm_companion.ui.session_player import SnapshotPusher
+
+        if active_session() is not None:
+            QMessageBox.information(
+                self,
+                "Already in a session",
+                "This app is already in a session. Close that window first.",
+            )
+            return
+
+        dialog = JoinSessionDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        bridge = SessionBridge()
+        try:
+            bridge.join(dialog.join_code(), dialog.display_name())
+        except SessionClientError as exc:
+            QMessageBox.warning(self, "Could not join", str(exc))
+            return
+        set_active_session(bridge)
+
+        path = dialog.character_path()
+        character = library.load_character(path) if path is not None else None
+        window = MainWindow(character=character, path=path, locked=True)
+        pusher = SnapshotPusher(window.sheet, bridge, parent=window)
+        self._session_pusher = pusher
+        self._session_bridge = bridge
+
+        def leave() -> None:
+            pusher.detach()
+            bridge.stop()
+            set_active_session(None)
+            self._session_bridge = None
+            self._session_pusher = None
+
+        window.closed.connect(leave)
+        bridge.disconnected.connect(
+            lambda reason: window.statusBar().showMessage(f"Left the session: {reason}", 10000)
+        )
+        bridge.kicked.connect(
+            lambda reason: window.statusBar().showMessage(
+                f"The GM removed you from the session: {reason}", 10000
+            )
+        )
+        window.statusBar().showMessage(f"Joined “{bridge.client.session_name}”.", 10000)
+        self._open_sheet(window)
 
     def _open_gm_mode(self) -> None:
         """Open the GM window, or raise the one already open.

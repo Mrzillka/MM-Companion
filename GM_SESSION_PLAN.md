@@ -33,7 +33,8 @@ roster and full history, and players reconnect to it.
 | Reach, revised (2026-07-22) | **A relay is committed, not optional.** Phase 3's probe against the dev machine found ISP-side NAT and no global IPv6 — no port forward, automatic or manual, can ever make that machine reachable, and a large share of users (mobile broadband, fibre resellers, student housing) are in the same position. Since *outbound* connections work from behind every NAT, the only universal answer is both ends dialling out to a public box. Order of work: the **tunnel path** (GM runs playit.gg/ngrok, players need nothing) is surfaced in the GM window first because it already works; the **relay** is then built as its own phase so the finished app needs no third-party service. Hole punching is **rejected** — it needs a rendezvous server anyway, fails on the symmetric NAT that CGNAT users sit behind, and would require the relay as a fallback regardless. |
 | Relay hosting | Deliberately **deferred**. The relay is written to run on anything with a public IP and ships as `python -m mm_companion.relay`, with the relay URL a setting, so any GM can run their own rather than depending on one blessed box. Where the default instance lives is a deployment question, not a design one, and is answered when real players need to join. |
 | Transport security | **Relay-terminated TLS.** A real certificate on the relay, `ssl.create_default_context()` on both peers: zero configuration for players, stdlib only, Python 3.10+, and complete protection against anyone on the network path. The relay *operator* can in principle read traffic — stated plainly in the docs, with self-hosting as the answer for anyone who minds. Rejected for v1: end-to-end via `cryptography` (breaks no-new-dependencies) and via `ssl` TLS-PSK (needs 3.13, drops 3.10–3.12). The data is character sheets and dice rolls; the join token is per-session and ephemeral. Revisit only if the threat model changes. |
-| Relay cost | **Not a real constraint if the relay stays a dumb pipe.** Estimated ~25 MB per table-hour relayed (dominated by character snapshots, ~40 KB each, GM-ward only; rolls are ~250 B) — against a €4/month 20 TB box that is ~800,000 table-hours, roughly 45,000 groups playing weekly. The binding limit is concurrent sockets, and a `selectors` loop handles ~10k. **What would make it expensive is building it wrong**: parsing messages, persisting state, accounts, or a thread per connection. The ~40 KB snapshot figure is the estimate to *measure* in Phase 5 and correct here. |
+| Relay cost | **Not a real constraint if the relay stays a dumb pipe.** The binding limit is concurrent sockets, and a `selectors` loop handles ~10k, not bandwidth. **What would make it expensive is building it wrong**: parsing messages, persisting state, accounts, or a thread per connection. |
+| Relay cost, measured (2026-07-22) | The ~40 KB snapshot guess was **~10× too high**. Measured with `ui.session_player.snapshot_size` on the real framed message: blank sheet **442 B**, typical PL 10 build (12 skills, 10 advantages, 4 powers) **~3.1–3.8 KB**, heavy PL 12 (25 skills, 20 advantages, 12 powers, long text) **~14 KB**, a 40-power monster **~76 KB** — all inside `MAX_MESSAGE_BYTES` (256 KiB). So a table-hour relays on the order of **2–5 MB**, not 25 MB; a €4/month 20 TB box carries hundreds of thousands of weekly groups. Bandwidth is not a design constraint at any plausible scale, and **deltas are not needed** — the Phase 5 debounce alone is enough. Revisit only if portraits start moving (they would dwarf everything here). |
 | Cost containment | Four levers, in order of effect: (1) **relay last, never first** — the app tries direct (UPnP / manual / tunnel) and only falls back to the relay, so every GM who can be reached directly costs nothing; (2) the relay is stateless with hard caps; (3) **snapshot debounce, later deltas** — built into Phase 5, not bolted on; (4) one-command self-hosting, so the default instance is a convenience and any heavy group can run its own. Explicitly **not** doing accounts, logins, or billing: it multiplies the work, creates a data-protection surface, and buys nothing for ephemeral anonymous sessions. |
 | Player sync | **Live push.** The player's client sends a character snapshot on join and on every change; GM cards and sheets update in real time, and GM-applied conditions are pushed back onto the player's live sheet. |
 | NPCs | GM-only, **reusing the `Character` model**, saved in the existing workspace `gm_characters/` dir. The PP pool row is replaced by an estimated PL from `rules.power_level_for_points`. |
@@ -158,7 +159,7 @@ is the whole tunnel path — it works with the Phase 3 code as it stands, and it
 is what makes the app usable over the internet before the relay exists.
 
 ### Phase 5 — Player join and player cards
-**Status: not started**
+**Status: done**
 The join dialog, snapshot push from the player's sheet (on `edited` and
 `runtimeChanged`), and GM player cards: portrait placeholder, name, PL, hero
 points, condition chips, and "Open sheet" into a read-only `MainWindow`. The
@@ -598,3 +599,65 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     remembering that the real cost of public infrastructure is uptime
     expectation and abuse handling, not the €4 — hence best-effort with no SLA,
     hard caps, and a readable degradation path.
+
+- **2026-07-22 — Phase 5 done.** Players can join, and the GM sees them live.
+  - **`ui/session_dialogs.py`** — `JoinSessionDialog`: join code, display name,
+    and a picker of the saved characters (plus "(no character)"). The code is
+    validated *here* with `decode_join_code`, so a typo draws discovery's own
+    "that join code has a typo in it" instead of a doomed connection attempt;
+    an accepted dialog therefore hands back a real `JoinCode`. Name and code are
+    remembered in `session_player_name` / `session_recent_codes` (newest first,
+    capped at 5) and offered back next time.
+  - **`ui/session_player.py`** — `SnapshotPusher(QObject)` plus the module-level
+    `snapshot_size(character)`. **It listens on the sheet's `SignalBus`, not on
+    named section signals** (`EDITED`, `BUILD_CHANGED`, `CONDITION_CHANGED`), so
+    a mod block that publishes those keeps the GM in sync with no edit here —
+    and `BUILD_CHANGED` is what catches a runtime power toggle, which is
+    deliberately not an `edited`. Constructing one sends the join snapshot at
+    once; everything after only *arms* a single-shot `QTimer`, so a 20-edit
+    burst is one send. `SNAPSHOT_DEBOUNCE_MS = 400`; tests pass `debounce_ms`.
+    The bus has no unsubscribe, so `detach()` gates the handler rather than
+    removing it — a detached pusher stays subscribed but inert.
+  - **`ui/player_card.py`** — `PlayerCard`: portrait placeholder (snapshots
+    carry no `image_path`), display name (`(you)` / red `— offline`), character
+    name, PL, hero-point circles, condition chips, "Open sheet". **Two feeds,
+    deliberately:** `set_roster(entry)` and `set_character(raw)`, because a
+    roster entry carries no character (see the Phase-2 hardening note) and a
+    snapshot carries no name. Reuses `HeroPointsWidget` — made read-only with
+    `WA_TransparentForMouseEvents`, *not* `setEnabled(False)`, which greys the
+    circles out and reads as "this player has no hero points".
+  - **`ui/sections/conditions.py`** — `_condition_display_name` was lifted to a
+    module-level `condition_display_name(applied, record)` so a condition reads
+    identically on a chip and on a GM card; the section now delegates to it.
+  - **`ui/gm_window.py`** — the plain roster list is now a `FlowLayout` grid of
+    cards. `_show_roster` **reconciles in place** rather than rebuilding: the
+    roster is re-broadcast on every join *and* every snapshot, so a rebuild
+    would flicker the whole grid whenever anyone edited their sheet.
+    `_snapshots` is seeded from `SessionState.players` before hosting starts, so
+    a resumed session comes up with populated cards instead of blanks. "Open
+    sheet" builds a read-only `MainWindow` from the newest snapshot, replacing
+    any sheet already open for that player, and the GM window closes them all
+    when it closes.
+  - **`ui/start_window.py`** — a "Join Session" button. It refuses a second
+    join while `active_session()` is set, opens the chosen character in a
+    locked sheet (conditions, hero points and power toggles all stay live while
+    locked — exactly the play-time surface), attaches a `SnapshotPusher`, and
+    leaves the session when that sheet closes. Disconnect/kick land in the
+    sheet's status bar rather than a modal. `MainWindow` gained a public
+    `sheet` property as the attach seam.
+  - **The snapshot size was measured** — see the new "Relay cost, measured" row.
+    Short version: **~3–4 KB for a typical sheet**, not the guessed 40 KB, so
+    relay bandwidth is a non-issue and **deltas are not needed**. The debounce
+    still is; keep it.
+  - **Tests** — `tests/test_session_player.py` (17: real loopback session, the
+    pusher's coalescing, the dialog, and the launcher's join end to end) and 9
+    new ones in `tests/test_gm_window.py` (30 total). Full suite: 860 passed,
+    only the known environmental `test_block_sizes` font failure.
+  - Deferred, and worth knowing: **an opened player sheet does not update
+    itself.** The card is live; the sheet is the snapshot at the moment it was
+    opened, and clicking "Open sheet" again re-reads the latest. Making it live
+    would need a re-seed API on `CharacterSheet` (every section currently seeds
+    only at construction) — a real piece of work, not a line. Also deferred: no
+    reconnect-on-drop (the client remembers `player_id`/`player_token`, but
+    nothing retries), no kick control on the card (`server.kick` exists), and
+    portraits still show a placeholder.

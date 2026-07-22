@@ -49,6 +49,25 @@ CONDITIONS_MIN_HEIGHT = 150
 CONDITION_CATEGORY_SECTIONS = (("condition", "General"), ("damage_condition", "Damage"))
 
 
+def condition_display_name(applied: AppliedCondition, record: Condition | None) -> str:
+    """Fold the chosen parameter and stacking count into the shown name (§6):
+    ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
+
+    Module-level because a condition reads the same wherever it is shown — this
+    block's chips and the GM window's player cards both name them through here.
+    """
+    name = record.name if record else applied.condition_id
+    if applied.parameter:
+        ptype = record.parameter.type if record and record.parameter else ""
+        if ptype in ("trait_select", "sense_select"):
+            name = f"{applied.parameter} {name}"
+        else:
+            name = f"{name} ({applied.parameter})"
+    if applied.count > 1:
+        name = f"{name} ×{applied.count}"
+    return name
+
+
 class ConditionsSection(QGroupBox):
     """The character's applied conditions, added via a "+" button and shown as chips.
 
@@ -246,19 +265,7 @@ class ConditionsSection(QGroupBox):
         self._render_conditions()
 
     def _condition_display_name(self, applied: AppliedCondition, record: Condition | None) -> str:
-        """Fold the chosen parameter and stacking count into the shown name (§6):
-        ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
-        """
-        name = record.name if record else applied.condition_id
-        if applied.parameter:
-            ptype = record.parameter.type if record and record.parameter else ""
-            if ptype in ("trait_select", "sense_select"):
-                name = f"{applied.parameter} {name}"
-            else:
-                name = f"{name} ({applied.parameter})"
-        if applied.count > 1:
-            name = f"{name} ×{applied.count}"
-        return name
+        return condition_display_name(applied, record)
 
     def _condition_tooltip(self, applied: AppliedCondition, record: Condition | None) -> str:
         if record is None:

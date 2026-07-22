@@ -211,7 +211,7 @@ app genuinely internet-wide rather than LAN-plus-a-tunnel.
   on loopback, a refused/unknown-session join, and the caps actually capping.
 
 ### Phase 7 — GM fast-apply conditions
-**Status: not started**
+**Status: done**
 The card's "+" menu → an `apply_condition` command → applied on the player's live
 sheet through `rules.apply_condition`, snapshot bounces back, chips update on both
 ends. A GM-applied condition marks the player's sheet dirty, exactly like a local
@@ -749,3 +749,55 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     the relay, no metrics endpoint, no per-IP (as opposed to per-session) cap, and
     the relay logs to stderr only. The connection ladder does **not** re-probe: a
     session that fell back to the relay stays on it until the GM stops hosting.
+
+- **2026-07-22 — Phase 7 done.** The GM reaches into a player's sheet: a "+" on
+  the card applies a condition, a chip's "×" takes it off, and the change lands
+  on the player's live model.
+  - **The GM never edits the player's character.** The card only *asks*
+    (`applyConditionRequested` / `removeConditionRequested`); the command goes
+    down that player's connection, their app applies it, and the snapshot that
+    comes back is what restates the chips. So a card always shows the player's
+    real state rather than the GM's intent, and a command that failed is visible
+    (`"Aria is not connected, so “Dazed” was not sent."`) instead of assumed. The
+    core half of this needed **no changes at all** — `server.apply_condition` /
+    `remove_condition`, the `ApplyCondition`/`RemoveCondition` messages and the
+    client's `EVENT_APPLY_CONDITION` have been in place since Phase 2, and
+    `SessionBridge.conditionCommand` since Phase 4. Phase 7 is entirely `ui/`.
+  - **`ui/sections/conditions.py`** — two public seams, `apply_condition_by_id`
+    and `remove_condition_by_id`, so a remote GM applies through the *same*
+    `core.rules` resolver the local "+" runs: umbrellas bundle their members,
+    supersession applies, a Hit stacks, and the sheet is marked dirty exactly
+    like a local edit. `remove_condition_by_id` matches on the parameter too
+    (removing "Attack Impaired" leaves "Dodge Impaired") and prefers a directly
+    applied instance over a bundled member. The menu filter moved out to a
+    module-level `addable_conditions(data)` — two menus offer the same list now.
+  - **`ui/sections/condition_dialog.py`** — `prompt_condition_parameter(...)`
+    returns `(go_ahead, parameter)`, so the sheet's "+" and the card's "+" prompt
+    identically. The card passes the *player's* character, so "a specific
+    advantage / power" lists what that player actually has.
+  - **`ui/player_card.py`** — the "+" button, the condition menu, and chips that
+    became a `_ConditionChip` (a label plus an optional "×"). `_targetable` gates
+    both: the GM's own card and an offline player get no "+" and no "×", and
+    `set_roster` re-renders the chips because going offline changes what they can
+    do. A chip keeps a `text()` method so `condition_names()` still reads it.
+  - **`ui/session_player.py`** — `ConditionReceiver(QObject)`, the twin of
+    `SnapshotPusher`: it takes `bridge.conditionCommand` and drives the sheet's
+    conditions block. It reads the block off the sheet with `getattr(...,
+    "conditions", None)`, so a sheet whose conditions block a mod removed simply
+    receives nothing. `start_window._join_session` attaches one beside the pusher
+    and detaches it on leave. The applied edit publishes the bus topics the
+    pusher listens on, so the bounce-back is automatic — no explicit re-push.
+  - **Tests** — 8 in `test_conditions.py` (the by-id seams: bundling, the dirty
+    flag, parameter matching, peeling a Hit, taking a bundled member off), 6 in
+    `test_gm_window.py` (43 total: who may be commanded, the menu contents, the
+    command going out, the "not connected" notice, chip removal, chips losing
+    their "×" when a player drops) and 7 in `test_session_player.py` (24 total —
+    end to end over a real loopback session, including the launcher's own joined
+    sheet). Full suite: 927 passed, only the known environmental
+    `test_block_sizes` font failure.
+  - Deferred, and worth knowing: the GM cannot apply a condition to an **offline**
+    seat (there is no connection to send down and no local model to edit — a
+    queue of pending commands would be a real feature, not a line). The GM's own
+    card is inert; the GM applies conditions to itself on its own sheet. And a
+    read-only sheet the GM opened from a card still does not live-update — that
+    is the same Phase 5 gap, needing a re-seed API on `CharacterSheet`.

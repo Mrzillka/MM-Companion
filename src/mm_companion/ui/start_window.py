@@ -116,10 +116,12 @@ class StartWindow(QMainWindow):
         # The GM window. Only one may exist — it owns the hosted session — so a
         # second "Open GM Mode" raises this one instead of building another.
         self._gm_window: QWidget | None = None
-        # The session this app has *joined* (as a player), and the pusher keeping
-        # the GM's copy of the sheet current. Both cleared when the sheet closes.
+        # The session this app has *joined* (as a player), the pusher keeping the
+        # GM's copy of the sheet current, and the receiver applying the GM's
+        # condition commands to it. All cleared when the sheet closes.
         self._session_bridge: SessionBridge | None = None
         self._session_pusher: QObject | None = None
+        self._session_receiver: QObject | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -279,7 +281,7 @@ class StartWindow(QMainWindow):
         """
         from mm_companion.ui.session_bridge import active_session, set_active_session
         from mm_companion.ui.session_dialogs import JoinSessionDialog
-        from mm_companion.ui.session_player import SnapshotPusher
+        from mm_companion.ui.session_player import ConditionReceiver, SnapshotPusher
 
         if active_session() is not None:
             QMessageBox.information(
@@ -305,15 +307,22 @@ class StartWindow(QMainWindow):
         character = library.load_character(path) if path is not None else None
         window = MainWindow(character=character, path=path, locked=True)
         pusher = SnapshotPusher(window.sheet, bridge, parent=window)
+        # The one thing that comes back down the wire: the GM putting a condition
+        # on this sheet. It applies through the sheet's own conditions block, so
+        # the pusher above bounces the result back to the GM's card.
+        receiver = ConditionReceiver(window.sheet, bridge, parent=window)
         self._session_pusher = pusher
+        self._session_receiver = receiver
         self._session_bridge = bridge
 
         def leave() -> None:
             pusher.detach()
+            receiver.detach()
             bridge.stop()
             set_active_session(None)
             self._session_bridge = None
             self._session_pusher = None
+            self._session_receiver = None
 
         window.closed.connect(leave)
         bridge.disconnected.connect(

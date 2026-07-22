@@ -9,7 +9,10 @@ server really binds on loopback.
 And the **player cards**: they are fed by two independent signals (a roster
 entry carries no character, a snapshot carries no name), so the tests drive
 those separately and in both orders, and check that a repeated roster updates a
-card in place rather than rebuilding the grid.
+card in place rather than rebuilding the grid. The card's fast-apply is tested
+as far as the command going out — the card must not move its own chips, since
+what it shows is the player's state, not the GM's intent. Applying it at the far
+end is covered in ``test_session_player.py``.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import gm_window as gm_window_module
 from mm_companion.ui import player_card
 from mm_companion.ui.gm_window import GMWindow
+from mm_companion.ui.sections.conditions import addable_conditions
 from mm_companion.ui.session_bridge import active_session, set_active_session
 from mm_companion.ui.start_window import StartWindow
 
@@ -551,3 +555,108 @@ def test_hosting_locks_the_relay_controls_too(qapp: QApplication, window: GMWind
     start_hosting(qapp, window, canned())
     assert window._relay_edit.isEnabled() is False
     assert window._relay_check.isEnabled() is False
+
+
+# -- fast-apply conditions -------------------------------------------------
+
+
+def a_condition(condition_id: str):
+    return load_game_data().condition_catalog()[condition_id]
+
+
+def test_only_a_connected_player_can_be_given_a_condition(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(
+        roster(
+            {"display_name": "GM", "is_gm": True},
+            {"display_name": "Aria"},
+            {"display_name": "Bex", "connected": False},
+        )
+    )
+
+    # The GM applies conditions to itself on its own sheet, and an offline player
+    # has no connection for the command to travel down.
+    assert window._cards["p0"]._condition_button.isEnabled() is False
+    assert window._cards["p1"]._condition_button.isEnabled() is True
+    assert window._cards["p2"]._condition_button.isEnabled() is False
+
+
+def test_the_menu_offers_the_same_conditions_the_sheet_does(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    card = window._cards["p0"]
+
+    offered = {c.name for c in card._addable_conditions}
+
+    assert {c.name for c in addable_conditions(load_game_data())} == offered
+    assert "Dazed" in offered
+    # Not the object-damage ladder or the bookkeeping marker.
+    assert "Normal" not in offered
+
+
+def test_picking_a_condition_sends_it_to_that_player(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        window.bridge.server,
+        "apply_condition",
+        lambda *args: sent.append(args) or True,
+    )
+
+    window._cards["p0"]._choose_condition(a_condition("dazed"))
+
+    assert sent == [("p0", "dazed", None)]
+    assert "Dazed" in window._notice.text()
+
+
+def test_a_command_to_a_player_who_is_gone_says_so(qapp: QApplication, window: GMWindow) -> None:
+    """Nothing is applied optimistically — the card only moves on the snapshot back."""
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+
+    window._cards["p0"]._choose_condition(a_condition("dazed"))
+
+    assert "not connected" in window._notice.text()
+    assert window._cards["p0"].condition_names() == []
+
+
+def test_a_chip_can_be_taken_off_again(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._on_snapshot("p0", a_character(conditions=["dazed"]))
+    removed: list[tuple] = []
+    monkeypatch.setattr(
+        window.bridge.server,
+        "remove_condition",
+        lambda *args: removed.append(args) or True,
+    )
+    card = window._cards["p0"]
+    assert card.condition_names() == ["Dazed"]
+
+    card._chip_flow.itemAt(0).widget()._remove.click()
+
+    assert removed == [("p0", "dazed", None)]
+
+
+def test_an_offline_players_chips_lose_their_remove_button(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._on_snapshot("p0", a_character(conditions=["dazed"]))
+    card = window._cards["p0"]
+    assert card._chip_flow.itemAt(0).widget()._remove is not None
+
+    window._show_roster(roster({"display_name": "Aria", "connected": False}))
+
+    assert card.condition_names() == ["Dazed"]  # still shown, just not commandable
+    assert card._chip_flow.itemAt(0).widget()._remove is None

@@ -6,6 +6,12 @@ coalesce into a single snapshot, because a snapshot is the largest message the
 protocol carries and a per-keystroke push is what would make relayed traffic
 expensive. :func:`test_a_realistic_snapshot_is_small_enough_to_relay` is the
 measurement the relay bandwidth estimate rests on.
+
+The other direction is the GM's condition commands: they must land on the live
+sheet through the *same* rules resolver the player's own "+" uses — bundling,
+supersession and the dirty flag included — and the snapshot they trigger must
+bounce back, so the GM's card shows the player's real state rather than what the
+GM assumed.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
 from mm_companion.ui.session_dialogs import NO_CHARACTER, JoinSessionDialog
-from mm_companion.ui.session_player import SnapshotPusher, snapshot_size
+from mm_companion.ui.session_player import ConditionReceiver, SnapshotPusher, snapshot_size
 from mm_companion.ui.start_window import StartWindow
 
 
@@ -370,3 +376,109 @@ def test_the_app_refuses_to_join_two_sessions_at_once(
 
     assert launcher._session_bridge is first
     assert told
+
+
+# -- the GM's condition commands -------------------------------------------
+
+
+def joined_sheet(player: SessionBridge):
+    """A live sheet wired to a session: pushing out, and taking the GM's commands."""
+    sheet = CharacterSheet(load_game_data())
+    pusher = SnapshotPusher(sheet, player, debounce_ms=20)
+    receiver = ConditionReceiver(sheet, player)
+    return sheet, pusher, receiver
+
+
+def test_the_gm_can_put_a_condition_on_a_players_sheet(qapp: QApplication, table) -> None:
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    player_id = player.client.player_id
+
+    host.server.apply_condition(player_id, "dazed")
+
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+    assert [c.condition_id for c in sheet.character.conditions] == ["dazed"]
+    # And it bounces straight back, so the GM's card shows the player's real state.
+    assert wait_for(qapp, lambda: host.state.players[player_id].character.get("conditions"))
+    stored = host.state.players[player_id].character["conditions"]
+    assert [c["id"] for c in stored] == ["dazed"]
+
+
+def test_a_gm_applied_condition_bundles_like_a_local_one(qapp: QApplication, table) -> None:
+    """The command goes through the same resolver, so an umbrella brings its members."""
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+
+    host.server.apply_condition(player.client.player_id, "incapacitated")
+
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+    assert len(sheet.character.conditions) == 4
+
+
+def test_a_gm_applied_condition_marks_the_sheet_dirty(qapp: QApplication, table) -> None:
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    edits: list[int] = []
+    sheet.edited.connect(lambda: edits.append(1))
+
+    host.server.apply_condition(player.client.player_id, "prone")
+
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+    assert edits
+
+
+def test_the_gm_can_take_a_condition_off_again(qapp: QApplication, table) -> None:
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    player_id = player.client.player_id
+    host.server.apply_condition(player_id, "impaired", "Attack")
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+
+    host.server.remove_condition(player_id, "impaired", "Attack")
+
+    assert wait_for(qapp, lambda: receiver.applied == 2)
+    assert sheet.character.conditions == []
+
+
+def test_a_command_naming_somebody_else_is_ignored(qapp: QApplication, table) -> None:
+    _host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+
+    receiver.handle("apply", {"player_id": "someone-else", "condition_id": "dazed"})
+
+    assert receiver.applied == 0
+    assert sheet.character.conditions == []
+
+
+def test_a_detached_receiver_applies_nothing(qapp: QApplication, table) -> None:
+    _host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+
+    receiver.detach()
+    receiver.handle("apply", {"player_id": player.client.player_id, "condition_id": "dazed"})
+
+    assert receiver.applied == 0
+    assert sheet.character.conditions == []
+
+
+def test_the_gm_reaches_a_sheet_the_launcher_opened(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, joined_launcher
+) -> None:
+    """The whole path, as a player actually gets it: join, then the GM's "+".
+
+    ``monkeypatch`` is requested *before* the launcher so its patch outlives the
+    fixture's teardown: a GM-applied condition dirties the sheet exactly like a
+    local one, so closing the window really does ask about unsaved changes.
+    """
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *args, **kw: QMessageBox.StandardButton.Discard
+    )
+    host, launcher = joined_launcher
+    launcher._join_session()
+    player_id = launcher._session_bridge.client.player_id
+    sheet = launcher._child_windows[-1].sheet
+
+    host.server.apply_condition(player_id, "dazed")
+
+    assert wait_for(qapp, lambda: bool(sheet.character.conditions))
+    assert [c.condition_id for c in sheet.character.conditions] == ["dazed"]

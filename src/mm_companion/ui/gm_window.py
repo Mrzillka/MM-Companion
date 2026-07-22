@@ -2,9 +2,10 @@
 
 The GM's control panel — start and stop hosting, the join code to share, and a
 live card per connected player (name, character, PL, hero points, conditions,
-and their sheet one click away). NPCs and the shared roll history land in later
-phases; what is here first is the part everything else needs, which is getting
-players *connected*.
+and their sheet one click away). A card's "+" applies a condition straight onto
+that player's live sheet, and a chip's "×" takes one off again. NPCs and the
+shared roll history land in later phases; what is here first is the part
+everything else needs, which is getting players *connected*.
 
 Most of the surface is about that last problem being genuinely hard. A home
 connection is often not reachable from the internet at all — carrier-grade NAT,
@@ -49,7 +50,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
-from mm_companion.core.character import Character
+from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.session import discovery
 from mm_companion.core.session.model import SessionState, new_session
@@ -57,6 +58,7 @@ from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.player_card import PlayerCard
+from mm_companion.ui.sections.conditions import condition_display_name
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.widgets import make_spin_box
 
@@ -453,6 +455,8 @@ class GMWindow(QMainWindow):
             if card is None:
                 card = PlayerCard(self._data)
                 card.openSheetRequested.connect(self._open_player_sheet)
+                card.applyConditionRequested.connect(self._apply_condition)
+                card.removeConditionRequested.connect(self._remove_condition)
                 self._cards[player_id] = card
                 self._cards_flow.addWidget(card)
             card.set_roster(entry)
@@ -492,6 +496,52 @@ class GMWindow(QMainWindow):
         self._player_windows[player_id] = window
         window.show()
         window.raise_()
+
+    # -- fast-apply conditions ---------------------------------------------
+
+    def _apply_condition(self, player_id: str, condition_id: str, parameter: object) -> None:
+        self._send_condition("apply", player_id, condition_id, parameter)
+
+    def _remove_condition(self, player_id: str, condition_id: str, parameter: object) -> None:
+        self._send_condition("remove", player_id, condition_id, parameter)
+
+    def _send_condition(
+        self, action: str, player_id: str, condition_id: str, parameter: object
+    ) -> None:
+        """Order one condition change on a player's live sheet.
+
+        The GM never edits the player's character here — the command goes down
+        their connection and their app applies it through
+        :func:`~mm_companion.core.rules.apply_condition`, exactly as their own "+"
+        would. The chips on this card only move once the snapshot comes back, so
+        a command that quietly failed is visible rather than assumed.
+        """
+        server = self._bridge.server
+        subject = str(parameter) if parameter else None
+        name = self._condition_name(condition_id, subject)
+        who = self._player_name(player_id)
+        sent = False
+        if server is not None:
+            send = server.apply_condition if action == "apply" else server.remove_condition
+            sent = send(player_id, condition_id, subject)
+        if not sent:
+            self._show_notice(
+                f"{who} is not connected, so “{name}” was not sent.", theme.TINT_WORSE
+            )
+            return
+        verb = "Applied" if action == "apply" else "Removed"
+        self._show_notice(f"{verb} “{name}” on {who}.", theme.ACCENT)
+
+    def _condition_name(self, condition_id: str, parameter: str | None) -> str:
+        """The condition as the GM picked it, named the way a chip names it."""
+        record = next((c for c in self._data.conditions if c.id == condition_id), None)
+        return condition_display_name(
+            AppliedCondition(condition_id=condition_id, parameter=parameter), record
+        )
+
+    def _player_name(self, player_id: str) -> str:
+        slot = self._state.players.get(player_id)
+        return slot.display_name if slot is not None else "That player"
 
     def _drop_card(self, player_id: str) -> None:
         """Remove one card from the grid (the seat itself is gone, not just offline)."""

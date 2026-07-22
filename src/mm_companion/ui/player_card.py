@@ -11,6 +11,13 @@ joined but not yet pushed a sheet).
 
 Snapshots carry no ``image_path`` — resolving a remote peer's path would read the
 *receiver's* files — so the portrait is a placeholder for now.
+
+The card is also where the GM *acts*: its "+" applies a condition straight onto
+that player's live sheet and a chip's "×" takes one off. Neither touches the
+character here — the card only asks, the player's app applies it through the same
+rules resolver its own "+" uses, and the snapshot that comes back is what
+restates these chips. So what the GM sees is always the player's real state, not
+what the GM hoped it would be.
 """
 
 from __future__ import annotations
@@ -20,7 +27,9 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,7 +39,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.sections.conditions import condition_display_name
+from mm_companion.ui.sections.conditions import addable_conditions, condition_display_name
 from mm_companion.ui.sections.system_info import HeroPointsWidget
 
 #: The portrait placeholder's side, in pixels. Matches the launcher's cards.
@@ -46,6 +55,12 @@ class PlayerCard(QFrame):
 
     #: The player's id — the GM asked to see their sheet.
     openSheetRequested = Signal(str)
+    #: ``(player_id, condition_id, parameter)`` — put this condition on that
+    #: player. The parameter rides as ``object`` because it is ``str | None`` and
+    #: a ``Signal(str)`` would flatten ``None`` into an empty string.
+    applyConditionRequested = Signal(str, str, object)
+    #: ``(player_id, condition_id, parameter)`` — take it off again.
+    removeConditionRequested = Signal(str, str, object)
 
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -54,8 +69,13 @@ class PlayerCard(QFrame):
 
         self._data = data
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
+        self._addable_conditions: list[Condition] = addable_conditions(data)
         self.player_id = ""
         self._character: Character | None = None
+        # Whether this seat can be *commanded*: a connected player, not the GM's
+        # own card (the GM applies conditions to itself on its own sheet) and not
+        # someone whose socket has gone.
+        self._targetable = False
 
         layout = QVBoxLayout(self)
 
@@ -92,6 +112,17 @@ class PlayerCard(QFrame):
         hero_row.addStretch()
         layout.addLayout(hero_row)
 
+        condition_row = QHBoxLayout()
+        condition_row.setContentsMargins(0, 0, 0, 0)
+        self._condition_button = QToolButton()
+        self._condition_button.setText("+")
+        self._condition_button.setToolTip("Apply a condition to this player")
+        self._condition_button.setEnabled(False)
+        self._condition_button.clicked.connect(self._show_condition_menu)
+        condition_row.addWidget(self._condition_button)
+        condition_row.addStretch()
+        layout.addLayout(condition_row)
+
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
@@ -121,6 +152,11 @@ class PlayerCard(QFrame):
         else:
             self._name_label.setText(name)
             self._name_label.setStyleSheet("")
+        self._targetable = not entry.get("is_gm") and bool(entry.get("connected"))
+        self._condition_button.setEnabled(self._targetable)
+        # A seat that just went offline (or came back) changes what the chips can
+        # do, so they are restated even though the character has not moved.
+        self._show_conditions()
 
     def set_character(self, raw: dict) -> None:
         """Apply a character snapshot (a sanitized ``Character.to_dict``)."""
@@ -131,22 +167,30 @@ class PlayerCard(QFrame):
         self._character_label.setText(library.display_name(character))
         self._pl_label.setText(f"PL {character.power_level}")
         self._hero_points.set_value(int(character.characteristics.get("hero_points", 0) or 0))
-        self._show_conditions(character)
+        self._show_conditions()
         self._open_button.setEnabled(True)
 
     # -- condition chips ---------------------------------------------------
 
-    def _show_conditions(self, character: Character) -> None:
+    def _show_conditions(self) -> None:
         while self._chip_flow.count():
             item = self._chip_flow.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
-        for applied in character.conditions:
+        conditions = self._character.conditions if self._character is not None else []
+        for applied in conditions:
             record = self._conditions_by_id.get(applied.condition_id)
-            self._chip_flow.addWidget(_chip(condition_display_name(applied, record)))
-        self._chips.setVisible(bool(character.conditions))
+            chip = _ConditionChip(condition_display_name(applied, record))
+            if self._targetable:
+                chip.arm_removal(
+                    lambda cid=applied.condition_id, param=applied.parameter: (
+                        self.removeConditionRequested.emit(self.player_id, cid, param)
+                    )
+                )
+            self._chip_flow.addWidget(chip)
+        self._chips.setVisible(bool(conditions))
 
     def condition_names(self) -> list[str]:
         """The chip captions, in order — the readable form of the card's state."""
@@ -155,13 +199,63 @@ class PlayerCard(QFrame):
             for i in range(self._chip_flow.count())
         ]
 
+    # -- the GM's fast-apply -----------------------------------------------
 
-def _chip(text: str) -> QLabel:
-    """One condition, styled as a compact read-only chip."""
-    label = QLabel(text)
-    label.setStyleSheet(
-        f"border: 1px solid {theme.TINT_WORSE};"
-        f"background: {theme.tint_rgba(theme.TINT_WORSE, 0.12)};"
-        "border-radius: 6px; padding: 1px 5px;"
-    )
-    return label
+    def _show_condition_menu(self) -> None:
+        """The same catalog the sheet's own "+" offers, aimed at this player."""
+        menu = QMenu(self)
+        for condition in sorted(self._addable_conditions, key=lambda c: c.name):
+            menu.addAction(
+                condition.name,
+                lambda checked=False, c=condition: self._choose_condition(c),
+            )
+        button = self._condition_button
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
+    def _choose_condition(self, condition: Condition) -> None:
+        """Ask for the condition's subject if it needs one, then send the command.
+
+        The dialog reads the *player's* character for its "a specific advantage /
+        power" choices, so the GM picks from what that player actually has. A card
+        with no snapshot yet falls back to a blank sheet rather than refusing.
+        """
+        from mm_companion.ui.sections.condition_dialog import prompt_condition_parameter
+
+        subject = self._character or Character.new_default(self._data)
+        go_ahead, parameter = prompt_condition_parameter(condition, self._data, subject, self)
+        if go_ahead:
+            self.applyConditionRequested.emit(self.player_id, condition.id, parameter)
+
+
+class _ConditionChip(QFrame):
+    """One condition, as a compact chip with an optional "×" to take it off."""
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"border: 1px solid {theme.TINT_WORSE};"
+            f"background: {theme.tint_rgba(theme.TINT_WORSE, 0.12)};"
+            "border-radius: 6px;"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 1, 2, 1)
+        layout.setSpacing(2)
+        self._label = QLabel(text)
+        self._label.setStyleSheet("border: none; background: transparent;")
+        layout.addWidget(self._label)
+        self._remove: QToolButton | None = None
+
+    def text(self) -> str:
+        """The chip's caption — what :meth:`PlayerCard.condition_names` reads."""
+        return self._label.text()
+
+    def arm_removal(self, on_remove) -> None:
+        """Add the "×" that asks for this condition to come off."""
+        button = QToolButton()
+        button.setText("×")
+        button.setAutoRaise(True)
+        button.setStyleSheet("border: none; background: transparent;")
+        button.setToolTip(f"Remove {self.text()}")
+        button.clicked.connect(lambda checked=False: on_remove())
+        self.layout().addWidget(button)
+        self._remove = button

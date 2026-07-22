@@ -110,6 +110,9 @@ class StartWindow(QMainWindow):
         self._mods_window: QWidget | None = None
         # The dice roller window, likewise kept referenced while open.
         self._dice_window: QWidget | None = None
+        # The GM window. Only one may exist — it owns the hosted session — so a
+        # second "Open GM Mode" raises this one instead of building another.
+        self._gm_window: QWidget | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -132,7 +135,7 @@ class StartWindow(QMainWindow):
         column.addWidget(open_button)
 
         gm_button = QPushButton("Open GM Mode")
-        gm_button.clicked.connect(self._not_implemented)
+        gm_button.clicked.connect(self._open_gm_mode)
         column.addWidget(gm_button)
 
         mods_button = QPushButton("Manage Mods")
@@ -256,5 +259,18 @@ class StartWindow(QMainWindow):
         self._dice_window = window
         window.show()
 
-    def _not_implemented(self) -> None:
-        """Placeholder for the not-yet-wired GM mode button."""
+    def _open_gm_mode(self) -> None:
+        """Open the GM window, or raise the one already open.
+
+        The launcher stays visible behind it (unlike a character sheet): a GM
+        hosting a session still opens character sheets, and the session has to
+        survive that. Only one GM window ever exists — it owns the hosted
+        session — so a second click raises the first rather than starting over.
+        """
+        from mm_companion.ui.gm_window import GMWindow
+
+        if self._gm_window is None:
+            self._gm_window = GMWindow()
+        self._gm_window.show()
+        self._gm_window.raise_()
+        self._gm_window.activateWindow()

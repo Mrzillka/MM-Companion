@@ -640,9 +640,13 @@ def publish_session(
     """
     lan = internal_ip or local_ip()
     if manual_host:
+        # A tunnel hands back an address *and* a port of its own, which is rarely
+        # the port being listened on locally — so the code carries
+        # ``external_port`` when one was given, and the local port otherwise (a
+        # hand-forwarded router rule, where the two usually match).
         return Reachability(
             host=manual_host,
-            port=int(port),
+            port=int(external_port or port),
             method=METHOD_MANUAL,
             lan_ip=lan,
             advice=(ADVICE_MANUAL_ADDRESS, ADVICE_FIREWALL),

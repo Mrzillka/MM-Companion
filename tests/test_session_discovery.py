@@ -593,6 +593,21 @@ def test_a_manual_host_skips_discovery_entirely(router):
     assert result.release() is True
 
 
+def test_a_manual_host_keeps_the_local_port_when_no_other_is_given(router):
+    result = publish_session(47331, manual_host="session.example.org", timeout=0.01)
+    assert result.port == 47331
+
+
+def test_a_tunnel_can_publish_a_port_of_its_own(router):
+    # A tunnel hands back an address *and* a port, rarely the one being listened
+    # on — the join code has to carry the tunnel's, or nobody reaches the session.
+    result = publish_session(
+        47331, manual_host="1.tcp.eu.ngrok.io", external_port=19274, timeout=0.01
+    )
+    assert (result.host, result.port) == ("1.tcp.eu.ngrok.io", 19274)
+    assert router.calls == []
+
+
 def test_publishing_can_be_told_the_internal_address(router):
     result = publish_session(47331, internal_ip="10.0.0.9", timeout=0.01)
     assert dict(router.action("AddPortMapping")[0])["NewInternalClient"] == "10.0.0.9"

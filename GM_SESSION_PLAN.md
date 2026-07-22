@@ -142,7 +142,7 @@ external-IP discovery over the stdlib, a manual-address fallback, and the
 the UI, not only the docs.**
 
 ### Phase 4 — Qt bridge and GM window shell
-**Status: not started**
+**Status: done**
 `ui/session_bridge.py` and `ui/gm_window.py` with host/stop, the join code and a
 Copy button, and a status line. The launcher's "Open GM Mode" button
 (`ui/start_window.py`, currently `_not_implemented`) is finally wired.
@@ -513,6 +513,67 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
   - **Hosting is deliberately unanswered** — the relay runs anywhere with a
     public IP, the URL is a setting, and any GM can run their own. Pick a default
     instance when real players need to join.
+- **2026-07-22 — Phase 4 done.** The session layer reaches the screen: a Qt
+  bridge, the GM window, and the tunnel path.
+  - **`ui/session_bridge.py`** — `SessionBridge(QObject)`, the *only* place core
+    `on_event` callbacks become signals. It is either hosting (owns a
+    `SessionServer`) or joined (owns a `SessionClient`), never both, and the
+    signals that exist on both sides are the same ones (`rosterChanged`,
+    `rollAdded`, `historyReplaced`, `error`) so a shared widget — the roll
+    history in Phase 8 — can be written once. Host-only: `started`, `stopped`,
+    `published`, `playerJoined`, `playerLeft`, `snapshotReceived`, `refused`.
+    Client-only: `connected`, `disconnected`, `conditionCommand("apply"|"remove",
+    payload)`, `kicked`. **Every payload signal is `Signal(object)`, deliberately
+    not `Signal(dict)`/`Signal(list)`** — those map onto `QVariantMap`/
+    `QVariantList` and would flatten nested values and `None`. Worker threads
+    emit directly: the bridge lives on the GUI thread, so `AutoConnection`
+    queues the call. Also `active_session()`/`set_active_session()` (the
+    process-wide handle Phase 5's sheet and Phase 8's roller attach to) and
+    `last_session()`, which resumes `session_last_id` from settings.
+  - **Publishing runs off the GUI thread.** `bridge.publish()` spawns a thread
+    around `discovery.publish_session` (SSDP + two HTTP round trips: seconds in
+    the bad case) and answers with the `published` signal; `stop()` joins it,
+    then releases any port mapping on *another* thread so a closing window never
+    blocks on the router. The probe is behind `bridge._publish_session`, which is
+    what lets every UI test cann a `Reachability` instead of touching a network.
+  - **`ui/gm_window.py`** — `GMWindow`: session name, port (0 = "automatic"),
+    the tunnel field, Start/Stop hosting, the join code with a Copy button, the
+    advice, and a roster list. `discovery`'s `Reachability.advice` is rendered
+    **verbatim**, one wrapped label per string, and the three outcomes are
+    visibly different: manual/tunnel (accent, names the address), internet-
+    reachable (green), LAN-only (red — *not* a silent LAN address that reads like
+    success). Hosting locks the port and tunnel fields, because they are what the
+    outstanding join code says.
+  - **The tunnel path works end to end.** The GM pastes what playit.gg/ngrok gave
+    them, `parse_address` validates it, and the join code carries that host *and
+    that port*. That last part needed a one-line core fix: `publish_session`'s
+    manual branch ignored `external_port` and put the **local** port in the code,
+    which is wrong for every tunnel (the tunnel's public port is rarely the port
+    being listened on). Covered by two new tests in `test_session_discovery.py`.
+  - **The launcher's "Open GM Mode" is wired** (`_not_implemented` is gone). The
+    launcher stays visible behind it — a GM still opens character sheets — and
+    only one GM window ever exists; a second click raises it.
+  - **The GM window is reusable, not deleted on close.** Closing stops hosting,
+    releases the mapping and clears the active session; `showEvent` re-arms it,
+    and the session state (name, roster, rolls) is still there. The first attempt
+    used `WA_DeleteOnClose` plus `destroyed → launcher._forget_gm_window`, and
+    that **hard-crashed Python** (access violation) when the launcher was
+    garbage-collected and Qt emitted `destroyed` into a bound method on a
+    half-finalized receiver. Do not reintroduce that pattern.
+  - **Tests** — `tests/test_session_bridge.py` (18: real loopback server, queued
+    signals drained with `processEvents`) and `tests/test_gm_window.py` (22,
+    canned reachability, server bound to `127.0.0.1` on port 0 so no test ever
+    pops a firewall prompt or collides). Full suite: 835 passed, only the known
+    environmental `test_block_sizes` font failure.
+  - Deferred: no player cards (Phase 5 — the roster is a plain name list for
+    now), no NPC or roll-history panels, no "which saved session?" picker (the
+    window resumes the last one), and no mapping-renewal timer. `bridge.join()`
+    exists and is tested, but nothing in the UI calls it yet — Phase 5's join
+    dialog is its first caller, and it already dials through
+    `discovery.transport_for(code.host)`, so a relay join code will work there
+    unchanged. One cosmetic nit for Phase 10: `ADVICE_FIREWALL` contains literal
+    `*and*` asterisks, which read as markdown left in a GUI label.
+
 - **2026-07-22 — Sustainability decisions for a public relay.** The open question
   behind the relay was cost: this is an open-source app that should "just work"
   on download, funded out of one person's pocket. Worked through with numbers

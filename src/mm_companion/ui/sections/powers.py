@@ -8,13 +8,24 @@ its own window; saving there hands the finished
 this section appends to the shared :class:`~mm_companion.core.character.Character`
 and shows as a *card*. Each card reads top-to-bottom like a stat-block entry: a
 header (name, assembled point cost, a ⚠ marker when the power breaks a Power Level
-cap, and — for a runtime-gated power — an on/off switch), the free-text description,
-a per-effect summary listing each effect's extras and flaws, and a bottom line
-dedicated to roll information (attack bonus, save DC). Hovering the card reveals the
-full auto-generated game-term breakdown as a tooltip, the same data the Power
-Constructor shows while building. Each card carries an edit button that reopens the
-constructor pre-loaded with that power — editing a deep copy that replaces the
-original in place on save — and a remove button.
+cap), the free-text description, and a per-effect summary pairing each effect's extras
+and flaws with *its full game-term table* alongside them (Type / Range / Action /
+Duration / checks / measures — the same data the Power Constructor shows while
+building, rendered small and muted so it informs without shouting). A power that calls
+for dice closes with a footer listing one roll per line (the attack check, then the
+save it forces); a power that rolls nothing simply ends. Each card carries an edit
+button that reopens the constructor pre-loaded with that power — editing a deep copy
+that replaces the original in place on save — and a remove button.
+
+**The card is the on/off switch.** There is no small "Active" checkbox: clicking a
+card's body toggles a runtime-gated power (or, for a member of an array, makes it the
+live alternate), and the card's own appearance carries the state — a switched-off
+power stays fully readable but recedes, dimmed and a notch smaller, so a glance at the
+block tells you what is running. Flipping one *eases* between those two looks rather
+than cutting, and a card you can click says so before you touch it: an accent edge down
+its left side, and an accent border under the pointer — on exactly one card at a time,
+the innermost one a click would reach. Clicking the grip, ✎ or ✕ never toggles: those
+widgets consume the click themselves.
 
 Powers can be **grouped**. A character's ``powers`` is a tree of
 :data:`~mm_companion.core.powers.PowerNode` — leaf powers and
@@ -33,15 +44,31 @@ construction.
 
 from __future__ import annotations
 
-import html
-
-from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent, QMouseEvent
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QEvent,
+    QMimeData,
+    QPoint,
+    Qt,
+    QVariantAnimation,
+    Signal,
+)
+from PySide6.QtGui import (
+    QCursor,
+    QDrag,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QEnterEvent,
+    QMouseEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
-    QCheckBox,
     QFrame,
+    QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -104,6 +131,41 @@ _BOLD = "font-weight: bold;"
 # A muted, italic secondary line (descriptions, role notes) that recedes on both themes.
 _MUTED_ITALIC = "color: palette(placeholder-text); font-style: italic;"
 
+# How a switched-off card recedes: it stays fully readable, but dimmed and a notch
+# smaller, so the active powers are the ones that catch the eye. Every value below is
+# an *endpoint* — a card's look is interpolated between them (see set_off_progress),
+# so flipping a power eases between the two states instead of cutting.
+_INACTIVE_OPACITY = 0.5
+_INACTIVE_FONT_SCALE = 0.9
+# The name label and the game-term table set their own point sizes rather than
+# inheriting the card's, so they are listed here and scaled explicitly.
+_NAME_POINT_SIZE = 11.0
+# Card padding, normal and switched-off (left, top, right, bottom).
+_CARD_MARGINS = (8, 6, 8, 6)
+_CARD_MARGINS_OFF = (5, 3, 5, 3)
+_GROUP_MARGINS = (6, 4, 6, 6)
+_GROUP_MARGINS_OFF = (4, 2, 4, 3)
+_SPACING = 4
+_SPACING_OFF = 2
+# The neutral outline a group card is drawn with, reused by its hover/clickable states.
+_GROUP_BORDER = "#8894b0"
+
+# The always-visible game-term table: deliberately small type, and short lines — two
+# label/value pairs per row, matching the Power Constructor's PowerTermsView.
+_TERM_POINT_SIZE = 8.0
+_TERM_PAIRS_PER_ROW = 2
+# How an effect's row divides between what was bought (extras/flaws) and what it costs
+# at the table (the game terms).
+_MODIFIER_STRETCH = 1
+_TERMS_STRETCH = 2
+
+# What a click on a card does, by activation role (see _activation_role).
+_CLICK_HINTS = {
+    "toggle": "Click this card to switch the power on or off — its bonuses apply "
+    "only while it is active.",
+    "select": "Click this card to make it the array's live alternate; its siblings switch off.",
+}
+
 # Drag-and-drop payload: the dragged node's stable id (a Power.id or PowerGroup.id).
 # A tree position needs parent context, not a bare index, so drops resolve the id.
 _POWER_MIME = "application/x-mm-power-node"
@@ -114,6 +176,11 @@ _MODE_LABELS = {
     STRUCTURE_ARRAY: "Group of alternate effects",
     STRUCTURE_LINKED: "Group of linked powers",
 }
+
+
+def _lerp(start: float, end: float, progress: float) -> float:
+    """*start* at ``progress`` 0, *end* at 1 — one frame of a card's on/off transition."""
+    return start + (end - start) * progress
 
 
 class _DragHandle(QLabel):
@@ -209,11 +276,35 @@ class _DraggableCard(QFrame):
     It carries the id of the tree node it renders; when its grip fires, it launches a
     :class:`QDrag` carrying that id (with a snapshot of the card as the drag cursor)
     so the enclosing :class:`_NodeList` — or a group title bar — can drop it.
+
+    The card body is also the power's **on/off switch**: a card marked
+    :meth:`set_clickable` emits :attr:`clicked` on a left click that isn't a drag, and
+    *accepts* the press so the click stops there. A card left un-clickable ignores the
+    press instead, letting it bubble up to an enclosing card — which is how clicking a
+    member of a Linked group toggles the whole group. Clicks that land on a real child
+    control (the grip, ✎, ✕, a group's mode buttons) never reach the card at all,
+    because those widgets consume the press themselves.
+
+    It owns both halves of *showing* that switch:
+
+    - :meth:`set_off_progress` is the switched-off look as a continuous quantity
+      (``0.0`` fully on, ``1.0`` fully off), interpolating opacity, type size and
+      padding together, so the section can animate a flip rather than cut to it.
+    - a clickable card advertises itself before it is touched — a standing accent
+      edge down its left side, and an accent border while the pointer is over it
+      (a leaf card also fills faintly; a group only outlines, since a fill would
+      paint behind all of its members). Exactly one card is lit at a time: the
+      innermost clickable one under the pointer, enclosing cards standing down.
+      An inert card stays flat and never lights up.
     """
 
-    def __init__(self, node_id: str, parent: QWidget | None = None) -> None:
+    clicked = Signal()
+
+    def __init__(self, node_id: str, group: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.node_id = node_id
+        self._is_group = group
+        self.setObjectName("groupCard" if group else "powerCard")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         # Never shrink below the height its content needs — a card always shows all of
         # its rows (the block, not the card, grows and the page scrolls).
@@ -221,6 +312,196 @@ class _DraggableCard(QFrame):
         policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
+        self._clickable = False
+        self._hovered = False
+        self._press: QPoint | None = None
+        self._off = 0.0
+        # Base point sizes, captured on the first set_off_progress call (i.e. once the
+        # card is fully built), so scaling is always relative to the built size and
+        # never compounds across frames.
+        self._base_points: list[tuple[QWidget, float]] | None = None
+        self._restyle()
+
+    # -- the switched-off look --------------------------------------------
+    def set_off_progress(self, progress: float) -> None:
+        """Show this card *progress* of the way to its switched-off state.
+
+        ``0.0`` is the live look and ``1.0`` the receded one; anything between is a
+        frame of the transition. All three cues move together — the card dims, its
+        type steps down and its padding tightens — so the whole card reads as one
+        object easing out rather than as three separate changes.
+        """
+        progress = max(0.0, min(1.0, float(progress)))
+        self._off = progress
+        self._apply_opacity(progress)
+        self._apply_fonts(progress)
+        self._apply_metrics(progress)
+
+    def off_progress(self) -> float:
+        return self._off
+
+    def _apply_opacity(self, progress: float) -> None:
+        if progress <= 0.0:
+            # A live card carries no effect at all: a graphics effect forces the card's
+            # whole subtree to paint through an offscreen buffer, which is worth paying
+            # for only while it is actually dimmed (same rule as BlockCanvas._fade_in).
+            if self.graphicsEffect() is not None:
+                self.setGraphicsEffect(None)
+            return
+        effect = self.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(self)
+            self.setGraphicsEffect(effect)
+        effect.setOpacity(_lerp(1.0, _INACTIVE_OPACITY, progress))
+
+    def _apply_fonts(self, progress: float) -> None:
+        if self._base_points is None:
+            self._base_points = [(w, w.font().pointSizeF()) for w in self._own_widgets()]
+        scale = _lerp(1.0, _INACTIVE_FONT_SCALE, progress)
+        for widget, base in self._base_points:
+            font = widget.font()
+            font.setPointSizeF(base * scale)
+            widget.setFont(font)
+
+    def _own_widgets(self) -> list[QWidget]:
+        """This card and the chrome it owns — never a nested card's own widgets.
+
+        A group card contains member cards, and each of those scales itself; walking
+        into them here would have the two fight over the same labels' fonts.
+        """
+        mine = [self]
+        for widget in self.findChildren(QWidget):
+            node = widget.parentWidget()
+            while node is not None and not isinstance(node, _DraggableCard):
+                node = node.parentWidget()
+            if node is self:
+                mine.append(widget)
+        return mine
+
+    def _apply_metrics(self, progress: float) -> None:
+        layout = self.layout()
+        if layout is None:
+            return
+        live, off = (
+            (_GROUP_MARGINS, _GROUP_MARGINS_OFF)
+            if self._is_group
+            else (_CARD_MARGINS, _CARD_MARGINS_OFF)
+        )
+        margins = (round(_lerp(a, b, progress)) for a, b in zip(live, off, strict=True))
+        layout.setContentsMargins(*margins)
+        layout.setSpacing(round(_lerp(_SPACING, _SPACING_OFF, progress)))
+
+    # -- clickability -----------------------------------------------------
+    def set_clickable(self, clickable: bool) -> None:
+        """Arm (or disarm) the whole card as a click target."""
+        self._clickable = clickable
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor if clickable else Qt.CursorShape.ArrowCursor
+        )
+        self._restyle()
+
+    def is_clickable(self) -> bool:
+        return self._clickable
+
+    def _restyle(self) -> None:
+        """Rebuild the card's own frame style from clickability and hover.
+
+        Every rule is scoped to the card's object name so it dresses the frame alone —
+        an unscoped border here would be inherited by every child QFrame (the
+        separators) and every label inside the card.
+        """
+        if self._is_group:
+            rules = [f"border: 1px solid {_GROUP_BORDER};", "border-radius: 6px;"]
+        else:
+            # Spelled out rather than left to the native StyledPanel: once a stylesheet
+            # dresses this frame at all (for the accent edge), it owns every border, so
+            # the plain state has to name the one it replaces.
+            rules = ["border: 1px solid palette(mid);", "border-radius: 4px;"]
+        if self._clickable:
+            # A standing edge says "this one is a switch" without needing a hover, and
+            # the border confirms the one the pointer is actually on.
+            if self._hovered:
+                rules.append(f"border: 1px solid {ACCENT};")
+                # Only a leaf card fills. A stylesheet background paints behind every
+                # child, so washing a *group* would flood its whole subtree — its
+                # outline lights instead, and its members stay as they were.
+                if not self._is_group:
+                    rules.append(f"background: {tint_rgba(ACCENT, 0.10)};")
+            rules.append(f"border-left: 3px solid {ACCENT};")
+        self.setStyleSheet(f"#{self.objectName()} {{ {' '.join(rules)} }}")
+
+    def _set_hovered(self, hovered: bool) -> None:
+        hovered = hovered and self._clickable
+        if hovered != self._hovered:
+            self._hovered = hovered
+            self._restyle()
+
+    def _card_ancestors(self) -> list[_DraggableCard]:
+        """The enclosing cards, innermost first."""
+        cards: list[_DraggableCard] = []
+        node = self.parentWidget()
+        while node is not None:
+            if isinstance(node, _DraggableCard):
+                cards.append(node)
+            node = node.parentWidget()
+        return cards
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        """Light this card — and only this one.
+
+        Qt hands Enter to the widget the pointer moved *into* but sends Leave only as
+        far up as the common ancestor, so crossing from a group card onto one of its
+        members never un-hovers the group. Standing the ancestors down here is what
+        keeps exactly one card lit: the innermost clickable one, which is the one a
+        click would actually reach.
+
+        An *inert* card stands nobody down — its press bubbles up to the enclosing
+        card, so that card is still the switch and has to stay lit. This is the case
+        for a Linked group's members, which are driven by their group.
+        """
+        super().enterEvent(event)
+        self._set_hovered(True)
+        if not self._clickable:
+            return
+        for ancestor in self._card_ancestors():
+            ancestor._set_hovered(False)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        """Unlight this card, handing the highlight back to an enclosing one.
+
+        The ancestor this card muted on the way in gets no Enter of its own when the
+        pointer steps back out onto its body — it was never left — so the hand-back has
+        to happen here. Whether the pointer is still inside it is read from the cursor
+        rather than from ``underMouse()``, whose flag Qt may already have cleared by
+        the time this child's Leave is delivered.
+        """
+        super().leaveEvent(event)
+        self._set_hovered(False)
+        cursor = QCursor.pos()
+        for ancestor in self._card_ancestors():
+            if ancestor.rect().contains(ancestor.mapFromGlobal(cursor)):
+                ancestor._set_hovered(True)
+                break
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not self._clickable or event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()  # let an enclosing card handle it
+            return
+        self._press = event.position().toPoint()
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        press, self._press = self._press, None
+        if press is None or event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        event.accept()
+        released = event.position().toPoint()
+        # A press that wandered (a drag or a mis-click released elsewhere) isn't a click.
+        if (released - press).manhattanLength() >= QApplication.startDragDistance():
+            return
+        if self.rect().contains(released):
+            self.clicked.emit()
 
     def start_drag(self) -> None:
         drag = QDrag(self)
@@ -393,6 +674,11 @@ class PowersSection(TitledSection):
     # ``changed`` minus the unsaved-changes flag.
     runtimeChanged = Signal()
 
+    #: How long a card takes to ease between its live and switched-off looks. A class
+    #: attribute so tests can zero it and assert on the resting state without waiting
+    #: on a timer.
+    TRANSITION_MS = 180
+
     def __init__(
         self,
         data: GameData,
@@ -403,6 +689,11 @@ class PowersSection(TitledSection):
         self._data = data
         self._character = character
         self._locked = False
+        # Per node id, how switched-off that node's card currently *looks* (0 live, 1
+        # fully off). Survives the card teardown a toggle triggers, so the replacement
+        # card can ease on from where its predecessor was — see _show_activation.
+        self._card_off: dict[str, float] = {}
+        self._card_off_prev: dict[str, float] = {}
         # Keep constructor windows referenced so Qt doesn't garbage-collect them the
         # moment the click handler returns.
         self._windows: list[PowerConstructorWindow] = []
@@ -613,6 +904,10 @@ class PowersSection(TitledSection):
     def _rebuild_list(self) -> None:
         """Rebuild the whole card tree from the model, toggling the empty label."""
         self._normalize_arrays()  # a valid active member per array before drawing
+        # Hand the on-screen progress over to the cards about to be built, and start a
+        # fresh map — so a power that was removed or ungrouped leaves nothing behind for
+        # a later node to inherit.
+        self._card_off_prev, self._card_off = self._card_off, {}
         self._list_host.clear()
         for node in self._character.powers:
             self._list_host.add_entry(node.id, self._render_node(node, None))
@@ -639,14 +934,16 @@ class PowersSection(TitledSection):
     def _make_group_card(
         self, group: PowerGroup, parent: PowerGroup | None, interactive: bool = True
     ) -> QWidget:
-        """A framed container: a mode title bar over its members, rendered indented."""
-        card = _DraggableCard(group.id)
-        card.setObjectName("groupCard")
-        card.setStyleSheet("#groupCard { border: 1px solid #8894b0; border-radius: 6px; }")
+        """A framed container: a mode title bar over its members, rendered indented.
+
+        A group that owns a switch (a Linked group, or any group sitting inside an
+        array) is clicked on its title bar the same way a leaf card is clicked on its
+        body — and dims as a whole, members included, when it is switched off.
+        """
+        card = _DraggableCard(group.id, group=True)
+        self._arm_activation(card, group, parent, interactive)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(6, 4, 6, 6)
-        layout.setSpacing(4)
-        layout.addWidget(self._group_header(group, card, parent, interactive))
+        layout.addWidget(self._group_header(group, card, parent))
 
         # A Linked group that is off forces its whole subtree off, so its members'
         # activation controls are disabled; other modes just pass interactivity down.
@@ -663,6 +960,7 @@ class PowersSection(TitledSection):
         indent_layout.setContentsMargins(14, 0, 0, 0)
         indent_layout.addWidget(inner)
         layout.addWidget(indent)
+        self._show_activation(card, group, parent)
         return card
 
     def _group_header(
@@ -670,10 +968,12 @@ class PowersSection(TitledSection):
         group: PowerGroup,
         card: _DraggableCard,
         parent: PowerGroup | None,
-        interactive: bool = True,
     ) -> QWidget:
-        """The group's title bar: grip, name + rename, mode toggle, cost, ungroup —
-        plus an Active checkbox when this group is itself a member of an array."""
+        """The group's title bar: grip, name + rename, mode toggle, cost, ungroup.
+
+        The bar carries no activation control of its own — it is a plain widget, so a
+        click on it falls through to the group card, which is the switch.
+        """
         header = _GroupHeader()
         header.powerDropped.connect(lambda src, gid=group.id: self._on_combine(src, gid))
         row = QHBoxLayout(header)
@@ -704,29 +1004,6 @@ class PowersSection(TitledSection):
         row.addWidget(toggle)
 
         row.addStretch()
-
-        # When this whole group is a member of an *array* parent, it gets the same
-        # select control a leaf member gets. Otherwise a Linked group that can be
-        # turned off (some member is gateable) and carries a standing bonus gets one
-        # Active toggle for the whole group — every member switches together.
-        control = self._array_member_control(group, parent, interactive)
-        if control is not None:
-            row.addWidget(control)
-        elif (
-            group.mode == STRUCTURE_LINKED
-            and self._node_is_gateable(group)
-            and self._node_has_standing(group)
-        ):
-            toggle = QCheckBox("Active")
-            toggle.setChecked(self._group_is_active(group))
-            toggle.setToolTip(
-                "Switch this linked group on/off — every power in it toggles together."
-            )
-            # Runtime activation stays usable in the locked read-only view — turning a
-            # power on/off is a mid-play action, not an edit to the build.
-            toggle.setEnabled(interactive)
-            toggle.toggled.connect(lambda on, g=group: self._set_group_active(g, on))
-            row.addWidget(toggle)
 
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
@@ -770,89 +1047,123 @@ class PowersSection(TitledSection):
         """Whether any leaf under *node* carries a runtime gate (so it can be turned off)."""
         return any(power_runtime_gates(p, self._data) for p in self._leaf_powers(node))
 
-    def _array_member_control(
-        self, node: PowerNode, parent: PowerGroup | None, interactive: bool = True
-    ) -> QWidget | None:
-        """The select control a node gets by virtue of being an *array* member.
+    # -- what a click on a card does --------------------------------------
+    def _activation_role(self, node: PowerNode, parent: PowerGroup | None) -> str:
+        """What clicking this node's card does: ``"select"``, ``"toggle"``, or ``""``.
 
-        A standing member (one with a bonus that stays on the sheet) gets the "Active"
-        radio; an instant member of an otherwise-mixed array gets a momentary "Use"
-        button (an attack isn't kept "active" — using it just drops the continuous
-        sibling). An all-instant array has nothing to keep active, so no control is
-        shown. ``None`` when the node isn't a member of a multi-member array.
+        ``"select"`` — the node is a member of a multi-member *array* in which something
+        stands on the sheet, so clicking it makes it the live alternate (its siblings
+        drop). Both a standing member and an instant one behave this way; an all-instant
+        array has nothing to keep active, so its members aren't clickable.
+
+        ``"toggle"`` — the node carries its own on/off switch: a Linked *group* that is
+        gateable and standing (its members switch as one), or a standalone power that
+        has a runtime gate *and* a standing bonus.
+
+        ``""`` — nothing to switch (a permanent ungated power, a pure-instant attack),
+        or the switch belongs to an ancestor: a member of a Linked group is driven by
+        that group's card, so its own card stays inert and lets the click bubble up.
         """
         if (
-            not isinstance(parent, PowerGroup)
-            or parent.mode != STRUCTURE_ARRAY
-            or len(parent.children) < 2
+            isinstance(parent, PowerGroup)
+            and parent.mode == STRUCTURE_ARRAY
+            and len(parent.children) >= 2
+            and any(self._node_has_standing(child) for child in parent.children)
         ):
-            return None
-        if not any(self._node_has_standing(child) for child in parent.children):
-            return None  # all-instant array — nothing stands to be switched off
-        if self._node_has_standing(node):
-            return self._array_active_checkbox(node, parent, interactive)
-        return self._array_use_button(node, parent, interactive)
+            return "select"
+        if isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
+            return ""
+        if isinstance(node, PowerGroup):
+            if (
+                node.mode == STRUCTURE_LINKED
+                and self._node_is_gateable(node)
+                and self._node_has_standing(node)
+            ):
+                return "toggle"
+            return ""
+        if power_runtime_gates(node, self._data) and power_has_standing_effect(node, self._data):
+            return "toggle"
+        return ""
 
-    def _array_use_button(
-        self, node: PowerNode, parent: PowerGroup, interactive: bool = True
-    ) -> QPushButton:
-        """A momentary "Use" for an instant member of a mixed array.
+    def _node_is_inactive(self, node: PowerNode, parent: PowerGroup | None, role: str) -> bool:
+        """Whether the card should be drawn in its dimmed, switched-off state."""
+        if role == "select":
+            return active_array_child(parent) is not node
+        if role == "toggle":
+            if isinstance(node, PowerGroup):
+                return not self._group_is_active(node)
+            return not self._power_is_active(node)
+        return False
 
-        An instant effect has no standing bonus to keep "Active"; using it just makes
-        it the array's live alternate, which drops the continuous sibling. Disabled and
-        labelled "In use" while it is the current selection.
-        """
-        in_use = active_array_child(parent) is node
-        button = QPushButton("In use" if in_use else "Use")
-        button.setToolTip(
-            "Use this alternate — it becomes the array's live member, dropping any "
-            "continuous sibling. An instant effect isn't kept 'active'."
-        )
-        # Usable while locked — using an alternate is a mid-play action, not an edit.
-        button.setEnabled(interactive and not in_use)
-        button.clicked.connect(
-            lambda _checked=False, g=parent, nid=node.id: self._set_array_active(g, nid)
-        )
-        return button
-
-    def _array_active_checkbox(
-        self, node: PowerNode, parent: PowerGroup | None, interactive: bool = True
-    ) -> QCheckBox | None:
-        """An "Active" switch for a node that is a member of an *array* parent.
-
-        Replaces the group's old active-member combo box: each array member carries its
-        own checkbox, and checking one selects it as the live alternate (its siblings
-        switch off). ``None`` when the node isn't inside a multi-member array.
-        """
-        if parent is None or parent.mode != STRUCTURE_ARRAY or len(parent.children) < 2:
-            return None
-        box = QCheckBox("Active")
-        box.setChecked(active_array_child(parent) is node)
-        box.setToolTip(
-            "Only one array member is active at a time — check to make this the "
-            "active one; its siblings switch off."
-        )
-        # Usable while locked — selecting the live alternate is a mid-play action.
-        box.setEnabled(interactive)
-        box.clicked.connect(
-            lambda checked, g=parent, nid=node.id, cb=box: self._on_array_active_clicked(
-                g, nid, cb, checked
-            )
-        )
-        return box
-
-    def _on_array_active_clicked(
-        self, group: PowerGroup, child_id: str, checkbox: QCheckBox, checked: bool
+    def _arm_activation(
+        self,
+        card: _DraggableCard,
+        node: PowerNode,
+        parent: PowerGroup | None,
+        interactive: bool,
     ) -> None:
-        """Handle a click on an array member's Active switch.
+        """Make the card its power's switch, if the power has one to offer.
 
-        Checking a member selects it; an array always keeps exactly one live member, so
-        un-checking the current one is refused (it just snaps back on).
+        The card *is* the control — there is no separate checkbox — so the whole frame
+        becomes the click target, and says so (see :meth:`_DraggableCard.set_clickable`).
+        ``interactive`` is ``False`` for a card inside a switched-off Linked group, which
+        still shows its state but can't be clicked back on past its group.
         """
-        if not checked:
-            checkbox.setChecked(True)
+        role = self._activation_role(node, parent)
+        if not (role and interactive):
             return
-        self._set_array_active(group, child_id)
+        card.set_clickable(True)
+        card.setToolTip(_CLICK_HINTS[role])
+        card.clicked.connect(lambda n=node, p=parent, r=role: self._on_card_clicked(n, p, r))
+
+    def _show_activation(
+        self, card: _DraggableCard, node: PowerNode, parent: PowerGroup | None
+    ) -> None:
+        """Put the card into its on/off look, easing there when the state just changed.
+
+        Every runtime setter ends in :meth:`_rebuild_list`, because flipping one power
+        can change the numbers printed on *another* card (switching off an Enhanced
+        Trait restates a Strength-Based Damage). So no card survives a toggle and there
+        is nothing to animate across it. Instead the section remembers, per node id, the
+        progress each card was last *showing* — and a freshly built card picks up from
+        exactly there and eases to its new target. Because the running animation writes
+        that progress back on every frame, a second click mid-transition resumes from
+        where the eye left off rather than snapping.
+
+        Called once the card's children exist, so the type scaling can see them.
+        """
+        role = self._activation_role(node, parent)
+        target = 1.0 if self._node_is_inactive(node, parent, role) else 0.0
+        previous = self._card_off_prev.get(node.id)
+        self._card_off[node.id] = target
+        if previous is None or previous == target or self.TRANSITION_MS <= 0:
+            card.set_off_progress(target)
+            return
+        card.set_off_progress(previous)
+        ease = QVariantAnimation(card)
+        ease.setStartValue(previous)
+        ease.setEndValue(target)
+        ease.setDuration(self.TRANSITION_MS)
+        ease.setEasingCurve(QEasingCurve.Type.OutCubic)
+        ease.valueChanged.connect(lambda value, c=card, i=node.id: self._on_ease(c, i, value))
+        ease.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_ease(self, card: _DraggableCard, node_id: str, progress: float) -> None:
+        card.set_off_progress(progress)
+        self._card_off[node_id] = progress
+
+    def _on_card_clicked(self, node: PowerNode, parent: PowerGroup | None, role: str) -> None:
+        """Apply a card click: select an array's live alternate, or flip a switch."""
+        if role == "select":
+            if isinstance(parent, PowerGroup) and active_array_child(parent) is not node:
+                # An array always keeps exactly one live member, so clicking the current
+                # one is a no-op rather than switching the whole array off.
+                self._set_array_active(parent, node.id)
+        elif role == "toggle":
+            if isinstance(node, PowerGroup):
+                self._set_group_active(node, not self._group_is_active(node))
+            else:
+                self._set_power_active(node, not self._power_is_active(node))
 
     def _set_array_active(self, group: PowerGroup, child_id: str) -> None:
         """Select an array member as the live alternate and switch it on.
@@ -887,17 +1198,17 @@ class PowersSection(TitledSection):
     ) -> QWidget:
         """A stat-block card for one power: header, description, effects, roll line.
 
-        The whole card carries the full game-term breakdown on its tooltip (the same
-        data the Power Constructor shows while building), so hovering reveals every
-        derived system value.
+        Each effect carries its full game-term breakdown inline (the same data the Power
+        Constructor shows while building), rendered quietly under the effect's name so
+        the derived system values are always on the page, never behind a hover.
+
+        The card body doubles as the power's on/off switch — see
+        :meth:`_arm_activation` and :meth:`_show_activation`.
         """
         card = _DraggableCard(power.id)
-        card.setToolTip(self._system_tooltip(power))
+        self._arm_activation(card, power, parent, interactive)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(4)
-
-        layout.addWidget(self._header_row(power, card, parent, interactive))
+        layout.addWidget(self._header_row(power, card, parent))
 
         if power.description:
             desc = QLabel(power.description)
@@ -909,10 +1220,13 @@ class PowersSection(TitledSection):
         if effects is not None:
             layout.addWidget(effects)
 
-        # A dedicated bottom line for the numbers that come up mid-play: the attack
-        # bonus and the save DC each effect imposes.
-        layout.addWidget(hline_separator())
-        layout.addWidget(self._rolls_label(power))
+        # A dedicated footer for the numbers that come up mid-play — one line per roll.
+        # A power that rolls nothing gets neither the footer nor its rule.
+        rolls = self._rolls_block(power)
+        if rolls is not None:
+            layout.addWidget(hline_separator())
+            layout.addWidget(rolls)
+        self._show_activation(card, power, parent)
         return card
 
     def _header_row(
@@ -920,10 +1234,9 @@ class PowersSection(TitledSection):
         power: Power,
         card: _DraggableCard,
         parent: PowerGroup | None,
-        interactive: bool = True,
     ) -> QWidget:
-        """Name + PL warning on the left; the on/off switch, cost, and edit/remove
-        chrome on the right, led by a drag grip (hidden when locked).
+        """Name + PL warning on the left; the cost and edit/remove chrome on the right,
+        led by a drag grip (hidden when locked).
 
         Returns a host widget (not a bare layout) so every child has a parent the
         moment it is created. Calling ``setVisible(True)`` on a *parentless* widget
@@ -941,16 +1254,19 @@ class PowersSection(TitledSection):
         grip.setVisible(not self._locked)
 
         name = QLabel(power_display_name(power, self._data))
+        # The size goes on the QFont, not into the stylesheet: a stylesheet font-size
+        # would outrank the card's own font and so sit out the switched-off transition.
+        font = name.font()
+        font.setPointSizeF(_NAME_POINT_SIZE)
         # A Debilitated condition naming this power loses it — strike the header through
         # and redden it (display-only; the power's point cost is untouched).
         if power.name and power.name in debilitated_traits(self._character, self._data):
-            name.setStyleSheet(f"font-weight: bold; font-size: 11pt; color: {_TINT_WORSE};")
-            font = name.font()
+            name.setStyleSheet(f"font-weight: bold; color: {_TINT_WORSE};")
             font.setStrikeOut(True)
-            name.setFont(font)
             name.setToolTip("Debilitated — this power is effectively lost")
         else:
-            name.setStyleSheet("font-weight: bold; font-size: 11pt;")
+            name.setStyleSheet(_BOLD)
+        name.setFont(font)
         layout.addWidget(name)
 
         # A power that breaks a PL cap carries a warning marker naming the breach;
@@ -972,27 +1288,6 @@ class PowersSection(TitledSection):
             )
             layout.addWidget(homerule)
         layout.addStretch()
-
-        # An array member gets a select control (an "Active" radio for a standing
-        # member, a momentary "Use" for an instant one, nothing for an all-instant
-        # array). A member of a Linked group has no per-card switch — the group's
-        # single toggle drives it. Otherwise a standalone power that carries a runtime
-        # gate *and* a standing bonus gets its own on/off switch.
-        control = self._array_member_control(power, parent, interactive)
-        if control is not None:
-            layout.addWidget(control)
-        elif isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
-            pass  # the linked group's one Active toggle lives on the group header
-        elif power_runtime_gates(power, self._data) and power_has_standing_effect(
-            power, self._data
-        ):
-            active = QCheckBox("Active")
-            active.setChecked(self._power_is_active(power))
-            active.setToolTip("Switch this power on/off — its bonuses apply only while active.")
-            # Usable while locked — turning a power on/off is a mid-play action.
-            active.setEnabled(interactive)
-            active.toggled.connect(lambda on, p=power: self._set_power_active(p, on))
-            layout.addWidget(active)
 
         # Inside an array group a non-base member contributes only its flat pooled cost;
         # every other card shows its full assembled cost (node_display_cost decides).
@@ -1017,22 +1312,36 @@ class PowersSection(TitledSection):
         remove.setVisible(not self._locked)
         return host
 
-    # -- effect summary (name + extras/flaws) -----------------------------
+    # -- effect summary (name + extras/flaws + game terms) ----------------
     def _effects_block(self, power: Power) -> QWidget | None:
-        """A stacked, per-effect summary; ``None`` for a power with no effects."""
+        """A stacked, per-effect summary; ``None`` for a power with no effects.
+
+        A composite power leads with its structure line (what Linked or Array means for
+        the effects below), which used to live only in the card's hover tooltip.
+        """
         if not power.effects:
             return None
         host = QWidget()
         layout = QVBoxLayout(host)
         layout.setContentsMargins(6, 0, 0, 0)
         layout.setSpacing(3)
+        header = self._structure_header(power)
+        if header:
+            line = QLabel(header)
+            line.setStyleSheet(_MUTED_ITALIC)
+            layout.addWidget(line)
         for index, effect in enumerate(power.effects):
             layout.addWidget(self._effect_summary(power, effect, index))
         return host
 
     def _effect_summary(self, power: Power, effect: PowerEffectInstance, index: int) -> QWidget:
-        """One effect: its name and effective rank, a composite role note, and its
-        attached extras (green) and flaws (red)."""
+        """One effect: its name and effective rank, a composite role note, then its
+        attached extras (green) and flaws (red) *beside* its game-term table.
+
+        The two sit side by side rather than stacked: what a player bought (the
+        modifiers) and what it costs them at the table (the terms) are read together,
+        and a card is a wide, shallow thing, so the width is there for the taking.
+        """
         box = QWidget()
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1051,19 +1360,79 @@ class PowersSection(TitledSection):
         header.addStretch()
         layout.addLayout(header)
 
-        extras = self._modifier_names(effect.extras)
-        if extras:
-            label = QLabel("Extras: " + ", ".join(extras))
-            label.setWordWrap(True)
-            label.setStyleSheet(f"color: {_TINT_BETTER};")
-            layout.addWidget(label)
-        flaws = self._modifier_names(effect.flaws)
-        if flaws:
-            label = QLabel("Flaws: " + ", ".join(flaws))
-            label.setWordWrap(True)
-            label.setStyleSheet(f"color: {_TINT_WORSE};")
-            layout.addWidget(label)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(10)
+        modifiers = self._modifiers_column(effect)
+        if modifiers is not None:
+            body.addWidget(modifiers, _MODIFIER_STRETCH)
+        # An effect with nothing bought onto it has no column to sit beside, so the
+        # terms take the whole width rather than leaving a third of the card blank.
+        body.addLayout(self._terms_grid(effect), _TERMS_STRETCH)
+        layout.addLayout(body)
         return box
+
+    def _modifiers_column(self, effect: PowerEffectInstance) -> QWidget | None:
+        """The effect's extras (green) over its flaws (red); ``None`` when it has neither."""
+        extras = self._modifier_names(effect.extras)
+        flaws = self._modifier_names(effect.flaws)
+        if not extras and not flaws:
+            return None
+        column = QWidget()
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        for caption, names, tint in (
+            ("Extras: ", extras, _TINT_BETTER),
+            ("Flaws: ", flaws, _TINT_WORSE),
+        ):
+            if not names:
+                continue
+            label = QLabel(caption + ", ".join(names))
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {tint};")
+            layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addStretch()
+        return column
+
+    def _terms_grid(self, effect: PowerEffectInstance) -> QGridLayout:
+        """The effect's game terms as a compact, always-visible label/value table.
+
+        The same rows the Power Constructor's ``PowerTermsView`` shows — Type, Range,
+        Action, Duration, checks, measures, derived readouts — but typeset to recede:
+        small text, muted labels, two pairs per line so the table stays short. A value a
+        modifier changed keeps its green/red tint (with the base value on its tooltip),
+        because that is the part worth noticing at a glance.
+        """
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 1, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(0)
+        attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
+        rows = effect_stat_rows(effect, self._data, self._character, attack_bonus)
+        for index, stat in enumerate(rows):
+            grid_row, pair = divmod(index, _TERM_PAIRS_PER_ROW)
+            column = pair * 2
+            label = QLabel(f"{stat.label}:")
+            label.setStyleSheet("color: palette(placeholder-text);")
+            value = QLabel(stat.value)
+            value.setWordWrap(True)
+            tint = _TINTS.get(stat.change)
+            if tint:
+                value.setStyleSheet(f"color: {tint};")
+                value.setToolTip(f"Base: {stat.base}")
+            # The table's small size lives on the QFont rather than in the stylesheet,
+            # so it scales with the card when the power is switched off (a stylesheet
+            # font-size would override the card font and stay put).
+            for widget in (label, value):
+                small = widget.font()
+                small.setPointSizeF(_TERM_POINT_SIZE)
+                widget.setFont(small)
+            grid.addWidget(label, grid_row, column, Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(value, grid_row, column + 1, Qt.AlignmentFlag.AlignTop)
+        for pair in range(_TERM_PAIRS_PER_ROW):
+            grid.setColumnStretch(pair * 2 + 1, 1)
+        return grid
 
     def _effect_title(self, effect: PowerEffectInstance) -> str:
         """``"Damage 8"`` — the effect's name at its effective rank (a Strength-Based
@@ -1098,77 +1467,62 @@ class PowersSection(TitledSection):
             return f"alternate ({array_alternate_cost(self._data)} pt)"
         return ""
 
-    # -- roll line --------------------------------------------------------
-    def _rolls_label(self, power: Power) -> QLabel:
-        """The bottom roll line; a muted placeholder when the power rolls nothing."""
-        text = self._rolls_text(power)
-        label = QLabel(f"🎲 {text}" if text else "No attack or resistance roll")
-        label.setWordWrap(True)
-        if text:
-            label.setStyleSheet(f"color: {_ACCENT};")  # a calm blue reserved for dice info
-        else:
-            label.setEnabled(False)
-        return label
+    # -- roll block -------------------------------------------------------
+    def _rolls_block(self, power: Power) -> QWidget | None:
+        """The card's dice footer, one line per roll; ``None`` when nothing is rolled.
 
-    def _rolls_text(self, power: Power) -> str:
-        """The attack bonus and save DC each effect imposes, read from the same
-        game-term rows the constructor shows; effect-prefixed for a multi-effect power."""
+        A power that resolves without dice — a Protection, a permanent Enhanced Trait —
+        gets no footer at all rather than a line saying so: the absence *is* the answer,
+        and a placeholder on every passive power is pure noise.
+        """
+        lines = self._rolls_lines(power)
+        if not lines:
+            return None
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        for line in lines:
+            label = QLabel(f"🎲 {line}")
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {_ACCENT};")  # a calm blue reserved for dice info
+            layout.addWidget(label)
+        return host
+
+    def _rolls_lines(self, power: Power) -> list[str]:
+        """One entry per die roll the power calls for, read from the same game-term rows
+        the constructor shows; effect-prefixed for a multi-effect power.
+
+        An attack check and the save it forces are separate rolls made by different
+        people, so they get a line each rather than sharing one.
+        """
         multi = len(power.effects) > 1
-        parts: list[str] = []
+        lines: list[str] = []
         for effect in power.effects:
             attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
             rows = {
                 r.key: r
                 for r in effect_stat_rows(effect, self._data, self._character, attack_bonus)
             }
-            segments = []
+            rolls = []
             if "check" in rows:
-                segments.append(rows["check"].value)
+                rolls.append(rows["check"].value)
             if "resistance" in rows:
-                segments.append(rows["resistance"].value)
+                rolls.append(rows["resistance"].value)
             elif "effect_dc" in rows:  # a save DC with no shown check/resistance phrase
-                segments.append(rows["effect_dc"].value)
-            if not segments:
+                rolls.append(rows["effect_dc"].value)
+            if not rolls:
                 continue
-            line = " · ".join(segments)
             if multi:
                 base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
-                line = f"{base.name if base else effect.effect_id}: {line}"
-            parts.append(line)
-        return "    ".join(parts)
-
-    # -- hover tooltip: the full game-term breakdown ----------------------
-    def _system_tooltip(self, power: Power) -> str:
-        """Rich-text breakdown of every effect's game-term stats for the card tooltip.
-
-        Mirrors the Power Constructor's PowerTermsView: a structure header for a
-        composite power, then each effect at its effective rank with its stat rows,
-        each modifier-changed value tinted green (better) or red (worse)."""
-        if not power.effects:
-            return ""
-        blocks: list[str] = []
-        header = self._structure_header(power)
-        if header:
-            blocks.append(f"<b>{html.escape(header)}</b>")
-        for index, effect in enumerate(power.effects):
-            attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
-            title = html.escape(self._effect_title(effect))
-            note = self._role_note(power, index)
-            if note:
-                title += f" <i>{html.escape(note)}</i>"
-            rows = []
-            for stat in effect_stat_rows(effect, self._data, self._character, attack_bonus):
-                value = html.escape(stat.value)
-                tint = _TINTS.get(stat.change)
-                if tint:
-                    value = f"<span style='color:{tint}'>{value}</span>"
-                rows.append(f"{html.escape(stat.label)}: {value}")
-            body = "<br>".join(rows)
-            blocks.append(f"<p style='margin:4px 0 0 0'><b>{title}</b><br>{body}</p>")
-        return "".join(blocks)
+                name = base.name if base else effect.effect_id
+                rolls = [f"{name}: {roll}" for roll in rolls]
+            lines.extend(rolls)
+        return lines
 
     @staticmethod
     def _structure_header(power: Power) -> str:
+        """What a composite power's structure means, as the card's lead-in line."""
         if len(power.effects) < 2:
             return ""
         if power.structure == STRUCTURE_LINKED:

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication, QCheckBox
+from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import power_points_spent, resistance_total, skill_total
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.sections.powers import _DraggableCard
 
 
 @pytest.fixture(scope="module")
@@ -117,14 +118,14 @@ def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
     sheet = CharacterSheet(data, char)
     assert resistance_total(char, data, "TOUGHNESS") == 6  # active by default
 
-    checkbox = sheet.powers.findChild(QCheckBox)  # the row's "Active" switch
-    assert checkbox is not None and checkbox.isChecked()
+    card = sheet.powers.findChild(_DraggableCard)  # the card *is* the on/off switch
+    assert card is not None and card.is_clickable()
 
     fired: list[int] = []
     dirtied: list[int] = []
     sheet.powers.runtimeChanged.connect(lambda: fired.append(1))
     sheet.edited.connect(lambda: dirtied.append(1))
-    checkbox.setChecked(False)
+    card.clicked.emit()
 
     assert fired  # the section signals a runtime change so the sheet re-derives
     assert not dirtied  # ...but a runtime toggle is not persisted, so it isn't an edit
@@ -206,11 +207,11 @@ def test_toggling_an_enhancer_re_derives_a_dependent_power_card(qapp: QApplicati
     )
     sheet = CharacterSheet(data, char)
     # Rage on: effective STR 8 → Damage rank 18 → Toughness DC 28.
-    assert "Toughness vs. 28" in sheet.powers._rolls_text(char.powers[1])
+    assert "Toughness vs. 28" in sheet.powers._rolls_lines(char.powers[1])
 
-    sheet.powers.findChild(QCheckBox).setChecked(False)  # switch Rage off
+    sheet.powers.findChild(_DraggableCard).clicked.emit()  # click Rage's card to switch it off
     # Rage off: effective STR 2 → Damage rank 12 → Toughness DC 22.
-    assert "Toughness vs. 22" in sheet.powers._rolls_text(char.powers[1])
+    assert "Toughness vs. 22" in sheet.powers._rolls_lines(char.powers[1])
 
 
 def test_sheet_accepts_an_existing_character(qapp: QApplication) -> None:
@@ -377,3 +378,65 @@ def test_speed_unit_toggle_switches_to_km_per_hour(qapp: QApplication) -> None:
     assert "ft" in speed._lines_label.text()
     speed._toggle_unit()
     assert "km/h" in speed._lines_label.text()
+
+
+def test_disabled_condition_lowers_the_initiative_readout(qapp: QApplication) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.abilities._abilities["AGL"].setValue(4)
+    assert sheet.system_info._initiative.text() == "+4 (AGL)"
+
+    apply_condition(sheet.character, "disabled", data)  # -5 on all checks
+    sheet.system_info.refresh_derived()
+
+    text = sheet.system_info._initiative.text()
+    assert "-1" in text  # +4 AGL - 5 = -1
+    assert "#d15b5b" in text  # the penalised value reads red
+    assert "-5" in sheet.system_info._initiative.toolTip()
+
+
+def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+
+    apply_condition(sheet.character, "hindered", data)  # -1 speed rank
+    sheet.system_info.refresh_derived()
+
+    text = sheet.system_info._speed._lines_label.text()
+    assert "-1 rank" in text
+    assert "#d15b5b" in text
+    assert "slowed" in sheet.system_info._speed.toolTip()
+
+
+def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplication) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+
+    apply_condition(sheet.character, "immobile", data)  # zeroes ground speed
+    sheet.system_info.refresh_derived()
+
+    text = sheet.system_info._speed._lines_label.text()
+    assert "immobilised" in text
+    assert "#d15b5b" in text
+
+
+def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
+    qapp: QApplication,
+) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+
+    # The condition is applied on the model and the section announces it the way the
+    # Conditions block does; the system block's speed readout must catch up via the bus.
+    apply_condition(sheet.character, "immobile", data)
+    sheet.conditions.conditionsChanged.emit()
+
+    assert "immobilised" in sheet.system_info._speed._lines_label.text()

@@ -97,11 +97,18 @@ clean (see Licensing below).
   resolver in `core/rules.py` (`apply_condition`/`remove_condition`, `expand_includes`)
   bundles umbrellas, applies per-part/trait-scoped supersession, stacks Hit, and
   cascades debilitation; queryable accessors (`condition_check_penalty`,
-  `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods but do **not**
-  yet flow into the sheet's displayed numbers. `ConditionsSection` (its own block)
-  drives it: the "+" menu applies a condition (a `ConditionParameterDialog` first
-  when it needs a subject) and renders one chip per `AppliedCondition`. Dice/recovery/
-  turn-economy are out of scope for now.
+  `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods. These flow into
+  the sheet as a **display-only overlay** (the build/derived math itself stays
+  condition-free): the ability/resistance grids re-skin their `→ total` via
+  `condition_scope_penalty`/`resistance_condition_effect` (`apply_stat_effects`), the
+  Skills block folds the scoped penalty into its "+" column, Advantages/Powers strike
+  through a `debilitated_traits` trait, and the System block's derived Speed and
+  Initiative readouts overlay `condition_speed_rank_mod` (a slowed/immobilised ground
+  line) and `condition_check_penalty` (an all-checks penalty on initiative), tinted red.
+  `ConditionsSection` (its own block) drives it: the "+" menu applies a condition (a
+  `ConditionParameterDialog` first when it needs a subject) and renders one chip per
+  `AppliedCondition`; its `conditionsChanged` fans out over the signal bus so every
+  overlay refreshes. Dice/recovery/turn-economy are out of scope for now.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
@@ -315,11 +322,42 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   brick-builder (a palette of Effect/Extra/Flaw bricks → an effect-card canvas,
   a `PowerModeBar` for the structure once ≥2 effects). It hands the finished
   `Power` back via `powerSaved`; the section appends it to the shared `Character`
-  and renders a stat-block **card** (header with cost, ⚠ PL-breach marker, and an
-  on/off switch for a gated power; description; per-effect extras/flaws; a roll
-  line; the full game-term breakdown on hover). Cards carry edit (reopens the
-  constructor on a deep copy, replaced in place on save) and remove buttons. The
-  constructor always gets costs from `rules`, never inline.
+  and renders a stat-block **card** (header with cost and ⚠ PL-breach marker;
+  description; per effect, its extras/flaws in a column *beside* that effect's
+  full game-term table, always visible, in small muted type; then a dice footer).
+  The footer lists **one roll per line** (`_rolls_lines` — an attack check and the
+  save it forces are separate rolls), and a power that rolls nothing gets no
+  footer and no rule above it rather than a "nothing to roll" placeholder. Cards
+  carry edit (reopens the constructor on a deep copy, replaced in place on save)
+  and remove buttons. The constructor always gets costs from `rules`, never inline.
+- The **card is the on/off switch** — there is no "Active" checkbox. Clicking a
+  card's body toggles a runtime-gated power, flips a Linked group (from its group
+  card), or picks an array's live alternate; `_activation_role(node, parent)`
+  decides which, `""` meaning "not clickable — let the click bubble to the
+  enclosing card", which is how a Linked group's members are driven by their
+  group. A switched-off card *shows* it: dimmed (`QGraphicsOpacityEffect`) and a
+  notch smaller, never `setEnabled(False)` (which would kill the click and grey
+  the text out). That look is a **continuous** quantity —
+  `_DraggableCard.set_off_progress(0..1)` interpolates opacity, type size and
+  padding together — so a flip *eases* over `PowersSection.TRANSITION_MS` instead
+  of cutting. Every runtime setter ends in `_rebuild_list()` (flipping one power
+  can restate another card's numbers), so no card survives a toggle: the section
+  instead remembers each node's on-screen progress in `_card_off` and the
+  replacement card eases on from there, the running animation writing that
+  progress back per frame so an interrupted flip resumes rather than snaps. Tests
+  zero `TRANSITION_MS` via an autouse fixture in `tests/conftest.py`. A clickable
+  card also advertises itself — a standing accent left edge, plus an accent border
+  on hover (`_DraggableCard._restyle`); an inert card stays flat. Only a **leaf**
+  card adds a background wash: a stylesheet background paints behind every child,
+  so a filled group card would flood its whole subtree. And **exactly one card is
+  lit at a time** — Qt sends no Leave to a widget the pointer merely moved deeper
+  into, so `enterEvent` stands every enclosing card down and `leaveEvent` hands the
+  highlight back to an ancestor still under the cursor (read from `QCursor.pos()`,
+  not `underMouse()`, whose flag is already stale by then). Any
+  label with an explicit size must set it on its `QFont`, **not** in a stylesheet:
+  a stylesheet `font-size` outranks the card's font and would sit the transition
+  out. Runtime toggling stays available in the locked read-only view — it is a
+  mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 
@@ -407,11 +445,23 @@ authoring guide is `docs/modding.md`; the shape:
 
 ## Conventions
 
-- Branches off `main`: `feature/…`, `fix/…`, `docs/…`. Commit messages in
-  imperative mood.
+- Git flow: **always branch off `develop`** — `feature/…`, `fix/…`, `docs/…` —
+  and merge back **into `develop`** with a `--no-ff` merge commit ("Merge
+  feature/X into develop"). `main` is the release branch; only a release merge
+  reaches it. Never branch from or merge into `main` for ordinary work. Commit
+  messages in imperative mood.
+- **Never commit directly on `main` or `develop`** — both receive merges only.
+  `main` takes a merge from `develop` only on a version bump; `develop` takes
+  merges only from work branches. All work happens on a work branch, over as many
+  commits as it takes, and is merged into `develop` **only when the user says the
+  feature is done** (the branch may then be deleted). In rare cases a branch may
+  come off another work branch rather than `develop`.
+- **One feature, one branch.** Don't spread a single piece of work across several
+  branches — stay in the same branch until the user considers it done. Start an
+  additional branch only when the task genuinely turns into something else.
 - **Do not open pull requests.** When starting work, automatically switch to an
-  appropriate existing branch or create a new one (named per the convention
-  above) rather than committing on `main`/`develop`. Integrate by merging
-  locally, not through a PR.
+  appropriate existing branch or create a new one off `develop` (named per the
+  convention above) rather than committing on `develop`/`main`. Integrate by
+  merging locally, not through a PR.
 - `.idea/` (PyCharm) is intentionally not committed. In PyCharm, mark `src/` as
   Sources Root so `import mm_companion` resolves.

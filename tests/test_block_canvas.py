@@ -121,6 +121,80 @@ def test_hidden_block_survives_relayout_and_reopens(make_sheet) -> None:
     assert sheet.block_frame("advantages").isVisible()
 
 
+def test_reopened_block_returns_beside_its_old_row_mate(make_sheet) -> None:
+    sheet = make_sheet()
+    before = sheet.arrangement()["rows"]
+
+    sheet.hide_block("resistances")
+    sheet.show_block("resistances")
+
+    # Back in the Abilities | Resistances | Conditions row, not appended at the end.
+    assert sheet.arrangement()["rows"] == before
+
+
+def test_reopened_lone_block_returns_to_its_own_row(make_sheet) -> None:
+    sheet = make_sheet()
+    before = sheet.arrangement()["rows"]
+
+    sheet.hide_block("advantages")  # alone in its row
+    assert all("advantages" not in row for row in sheet.arrangement()["rows"])
+    sheet.show_block("advantages")
+
+    assert sheet.arrangement()["rows"] == before
+
+
+def test_reopen_falls_back_to_the_default_position(make_sheet) -> None:
+    # A layout saved before anchors existed (or one whose anchor was dropped)
+    # reopens the block at its default spot rather than at the end of the page.
+    sheet = make_sheet()
+    before = sheet.arrangement()["rows"]
+
+    sheet.hide_block("resistances")
+    sheet.canvas._anchors.clear()
+    sheet.show_block("resistances")
+
+    assert sheet.arrangement()["rows"] == before
+
+
+def test_reopen_appends_when_nothing_resolves(make_sheet) -> None:
+    # No remembered anchor, and the default neighbour (Abilities) is itself
+    # hidden: with nothing left to hang off, the old append-at-the-end stands in.
+    sheet = make_sheet()
+
+    sheet.hide_block("abilities")
+    sheet.hide_block("resistances")
+    sheet.canvas._anchors.clear()
+    sheet.show_block("resistances")
+
+    assert sheet.arrangement()["rows"][-1] == ["resistances"]
+
+
+def test_hidden_anchor_survives_a_layout_round_trip(make_sheet) -> None:
+    sheet = make_sheet()
+    # Move Powers somewhere it would never land by default, then close it there.
+    sheet.dock_block("powers", 1, 0)
+    sheet.hide_block("powers")
+
+    blob = sheet.save_layout()
+    sheet.reset_layout()
+    assert sheet.restore_layout(blob) is True
+    assert sheet.is_block_hidden("powers")
+
+    sheet.show_block("powers")
+    assert sheet.arrangement()["rows"][1][0] == "powers"
+
+
+def test_layout_without_anchors_still_restores(make_sheet) -> None:
+    # `hidden_anchors` is additive, so a layout written before it existed loads.
+    import json
+
+    sheet = make_sheet()
+    model = sheet.arrangement()
+    model.pop("hidden_anchors")
+
+    assert sheet.restore_layout(json.dumps(model)) is True
+
+
 def test_apply_arrangement_transitions_dont_destroy_frames(make_sheet) -> None:
     # A block that goes docked→floating or docked→hidden via apply_arrangement must
     # not be destroyed when its old row is freed.

@@ -32,7 +32,9 @@ roster and full history, and players reconnect to it.
 | Reach | **Internet from day one**: automatic UPnP/IGD port-mapping + a short join code, with a manual port-forward / tunnel fallback. The transport is a swappable interface with a documented **relay protocol**, so a relay can be dropped in later without reworking the session layer. |
 | Reach, revised (2026-07-22) | **A relay is committed, not optional.** Phase 3's probe against the dev machine found ISP-side NAT and no global IPv6 — no port forward, automatic or manual, can ever make that machine reachable, and a large share of users (mobile broadband, fibre resellers, student housing) are in the same position. Since *outbound* connections work from behind every NAT, the only universal answer is both ends dialling out to a public box. Order of work: the **tunnel path** (GM runs playit.gg/ngrok, players need nothing) is surfaced in the GM window first because it already works; the **relay** is then built as its own phase so the finished app needs no third-party service. Hole punching is **rejected** — it needs a rendezvous server anyway, fails on the symmetric NAT that CGNAT users sit behind, and would require the relay as a fallback regardless. |
 | Relay hosting | Deliberately **deferred**. The relay is written to run on anything with a public IP and ships as `python -m mm_companion.relay`, with the relay URL a setting, so any GM can run their own rather than depending on one blessed box. Where the default instance lives is a deployment question, not a design one, and is answered when real players need to join. |
-| Transport security | **Open.** Session traffic is plaintext JSON today, join token included, which is fine on a LAN and not fine across the internet through someone else's box. Stdlib `ssl` covers it with no new dependency; the choice between relay-terminated TLS (a real cert on the relay, `create_default_context()` on the client, zero player config, relay operator can read traffic) and end-to-end (a key derived from the join token, which the relay never learns) is made **in the relay phase**, before any traffic crosses a third party. |
+| Transport security | **Relay-terminated TLS.** A real certificate on the relay, `ssl.create_default_context()` on both peers: zero configuration for players, stdlib only, Python 3.10+, and complete protection against anyone on the network path. The relay *operator* can in principle read traffic — stated plainly in the docs, with self-hosting as the answer for anyone who minds. Rejected for v1: end-to-end via `cryptography` (breaks no-new-dependencies) and via `ssl` TLS-PSK (needs 3.13, drops 3.10–3.12). The data is character sheets and dice rolls; the join token is per-session and ephemeral. Revisit only if the threat model changes. |
+| Relay cost | **Not a real constraint if the relay stays a dumb pipe.** Estimated ~25 MB per table-hour relayed (dominated by character snapshots, ~40 KB each, GM-ward only; rolls are ~250 B) — against a €4/month 20 TB box that is ~800,000 table-hours, roughly 45,000 groups playing weekly. The binding limit is concurrent sockets, and a `selectors` loop handles ~10k. **What would make it expensive is building it wrong**: parsing messages, persisting state, accounts, or a thread per connection. The ~40 KB snapshot figure is the estimate to *measure* in Phase 5 and correct here. |
+| Cost containment | Four levers, in order of effect: (1) **relay last, never first** — the app tries direct (UPnP / manual / tunnel) and only falls back to the relay, so every GM who can be reached directly costs nothing; (2) the relay is stateless with hard caps; (3) **snapshot debounce, later deltas** — built into Phase 5, not bolted on; (4) one-command self-hosting, so the default instance is a convenience and any heavy group can run its own. Explicitly **not** doing accounts, logins, or billing: it multiplies the work, creates a data-protection surface, and buys nothing for ephemeral anonymous sessions. |
 | Player sync | **Live push.** The player's client sends a character snapshot on join and on every change; GM cards and sheets update in real time, and GM-applied conditions are pushed back onto the player's live sheet. |
 | NPCs | GM-only, **reusing the `Character` model**, saved in the existing workspace `gm_characters/` dir. The PP pool row is replaced by an estimated PL from `rules.power_level_for_points`. |
 | Roll sources | **Dice Roller only.** Rolling from the character sheet stays out of scope; the protocol carries a free-form `label` so it can be added later without a protocol change. |
@@ -164,6 +166,13 @@ client dials through `discovery.transport_for(code.host)`, **not** a directly
 constructed `TcpTransport` — that is what makes a relay join code work later
 without touching this code.
 
+**Snapshot push must be debounced from the start** (coalesce a burst of edits
+into one send; a per-keystroke snapshot is the one thing that could make relay
+traffic expensive). Also **measure a real snapshot's encoded size** and record
+it in this file — the whole relay cost estimate rests on that number, currently
+a guess of ~40 KB. Sending deltas rather than whole sheets is the follow-up
+lever if the measurement warrants it.
+
 ### Phase 6 — The relay
 **Status: not started**
 The answer to "players anywhere, nothing to install". Both ends dial **out** to a
@@ -175,17 +184,30 @@ app genuinely internet-wide rather than LAN-plus-a-tunnel.
   `transport_for()` picks it up from a join code and **`server.py`/`client.py`
   need no changes at all**.
 - `src/mm_companion/relay/__main__.py` — the relay itself: `python -m
-  mm_companion.relay`, stdlib sockets and threads, no app imports beyond the
-  framing. It parses **only** the envelope (`relay_host` / `relay_join` →
-  `relay_ok` / `relay_error`, the protocol already written down in
-  `discovery.py`'s docstring) and is a dumb byte pipe after that, so it holds no
-  session state and never needs a `PROTOCOL_VERSION` bump.
-- **Decide transport security here** (see the decisions table) before any
-  traffic crosses a third-party box.
+  mm_companion.relay`, stdlib only, no app imports beyond the framing. It parses
+  **only** the envelope (`relay_host` / `relay_join` → `relay_ok` /
+  `relay_error`, the protocol already written down in `discovery.py`'s
+  docstring) and is a dumb byte pipe after that, so it holds no session state and
+  never needs a `PROTOCOL_VERSION` bump.
+- **Build it as a `selectors` event loop, not a thread per connection.** This is
+  the difference between one small box serving thousands of tables and needing a
+  fleet; see the cost rows in the decisions table.
+- **The relay never dials outward** — it only ever pairs two *inbound*
+  connections. That is what stops an open relay from being usable as a general
+  proxy against third parties, and it is a property to preserve deliberately, not
+  an accident of the implementation.
+- Hard caps, all configurable: max sessions, max clients per session, per-session
+  byte rate, idle timeout, absolute session TTL.
+- **TLS terminates at the relay** (decided; see the decisions table).
+  `ssl.create_default_context()` on both peers, a real certificate on the box.
+- **The connection ladder**: direct (UPnP / manual / tunnel) is tried first and
+  the relay is the fallback, never the default. A GM who is reachable directly
+  must not cost relay traffic.
 - A relay URL setting with the default instance overridable, so a GM can run
-  their own.
+  their own; degrade to a clear "ask your GM to forward a port or use a tunnel"
+  rather than a mystery failure when the relay is unreachable or at capacity.
 - Tests: relay envelope handling, a full GM↔player session over a relay running
-  on loopback, and a refused/unknown-session join.
+  on loopback, a refused/unknown-session join, and the caps actually capping.
 
 ### Phase 7 — GM fast-apply conditions
 **Status: not started**
@@ -491,7 +513,27 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
   - **Hosting is deliberately unanswered** — the relay runs anywhere with a
     public IP, the URL is a setting, and any GM can run their own. Pick a default
     instance when real players need to join.
-  - **Left open on purpose:** transport security. Traffic is plaintext JSON
-    today, join token included. Stdlib `ssl` covers it; relay-terminated TLS vs.
-    end-to-end keyed off the join token is decided **in Phase 6**, before
-    anything crosses a third-party box.
+- **2026-07-22 — Sustainability decisions for a public relay.** The open question
+  behind the relay was cost: this is an open-source app that should "just work"
+  on download, funded out of one person's pocket. Worked through with numbers
+  (see the two cost rows in the decisions table) and settled:
+  - **The cost fear is largely unfounded** — at ~25 MB per relayed table-hour, a
+    €4/month box carries tens of thousands of weekly groups, and concurrent
+    sockets bind before bandwidth does. What makes a relay expensive is building
+    it wrong, so the dumb-pipe / `selectors` / stateless constraints in Phase 6
+    are **cost decisions**, not style preferences, and should not be traded away
+    for implementation convenience.
+  - **Relay last, never first.** Direct connections cost nothing, so the ladder
+    is direct → relay, and Phase 5 debounces snapshots from the start. The
+    ~40 KB snapshot size the estimate rests on is a **guess to be measured in
+    Phase 5** and corrected here.
+  - **Transport security decided: relay-terminated TLS** — stdlib `ssl`, real
+    certificate, zero player configuration, keeps Python 3.10+. End-to-end was
+    rejected for v1 because the stdlib has no symmetric cipher: it would need
+    either `cryptography` (breaking the no-new-dependencies rule) or 3.13-only
+    TLS-PSK (dropping 3.10–3.12). The honest statement in the docs is that the
+    relay operator *could* read traffic and that self-hosting is one command.
+  - **Not building:** accounts, logins, billing, or hole punching. Also worth
+    remembering that the real cost of public infrastructure is uptime
+    expectation and abuse handling, not the €4 — hence best-effort with no SLA,
+    hard caps, and a readable degradation path.

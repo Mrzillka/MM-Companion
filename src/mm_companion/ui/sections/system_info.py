@@ -12,6 +12,8 @@ inputs change. The widgets never compute rules themselves.
 
 from __future__ import annotations
 
+from html import escape
+
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -29,6 +31,8 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    condition_check_penalty,
+    condition_speed_rank_mod,
     effective_size,
     has_cost_overrides,
     initiative_ability,
@@ -41,7 +45,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
-from mm_companion.ui.theme import ACCENT
+from mm_companion.ui.theme import ACCENT, TINT_WORSE
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
@@ -114,13 +118,16 @@ class SpeedWidget(QWidget):
         self._data = data
         self._metric = False
         self._lines: list = []
+        # A condition's net ground-speed rank change: 0 = none, a negative int = a
+        # slowing penalty (Hindered), None = immobilised (Immobile/Prone zeroes it).
+        self._speed_mod: int | None = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
 
         self._lines_label = QLabel()
-        self._lines_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._lines_label.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(self._lines_label)
 
         self._unit_button = QPushButton()
@@ -130,21 +137,43 @@ class SpeedWidget(QWidget):
 
         self._sync_unit_button()
 
-    def render_lines(self, lines: list) -> None:
-        """Redraw the speed lines from the given :class:`SpeedLine` list."""
+    def render_lines(self, lines: list, speed_mod: int | None = 0) -> None:
+        """Redraw the speed lines from the given :class:`SpeedLine` list.
+
+        ``speed_mod`` is a condition's ground-speed overlay (see
+        :func:`~mm_companion.core.rules.condition_speed_rank_mod`): ``0`` leaves the
+        base line untouched, a negative rank slows it (and tints it red), and ``None``
+        marks the character immobilised. It only re-skins the *base* (ground) line —
+        the build math and the per-power movement lines are untouched.
+        """
         self._lines = lines
-        text_lines = []
-        for line in lines:
-            walk, dash, run = speed_columns(line.rank, self._data, metric=self._metric)
-            text_lines.append(
-                f"{line.label}: {_compact(walk)} / {_compact(dash)} / {_compact(run)}"
-            )
-        self._lines_label.setText("\n".join(text_lines))
+        self._speed_mod = speed_mod
+        self._redraw()
+
+    def _redraw(self) -> None:
+        html_lines = []
+        for index, line in enumerate(self._lines):
+            is_base = index == 0
+            if is_base and self._speed_mod is None:
+                html_lines.append(
+                    f'<span style="color: {TINT_WORSE};">{escape(line.label)}: immobilised</span>'
+                )
+                continue
+            slowed = is_base and bool(self._speed_mod)
+            rank = line.rank + (self._speed_mod or 0) if slowed else line.rank
+            walk, dash, run = speed_columns(rank, self._data, metric=self._metric)
+            text = f"{line.label}: {_compact(walk)} / {_compact(dash)} / {_compact(run)}"
+            if slowed:
+                text += f" ({self._speed_mod:+d} rank)"
+                html_lines.append(f'<span style="color: {TINT_WORSE};">{escape(text)}</span>')
+            else:
+                html_lines.append(escape(text))
+        self._lines_label.setText("<br>".join(html_lines))
 
     def _toggle_unit(self) -> None:
         self._metric = not self._metric
         self._sync_unit_button()
-        self.render_lines(self._lines)
+        self._redraw()
 
     def _sync_unit_button(self) -> None:
         self._unit_button.setText("Show ft / round" if self._metric else "Show km / h")
@@ -153,6 +182,15 @@ class SpeedWidget(QWidget):
 def _compact(label: str) -> str:
     """Shorten a distance label for the compact speed row (``"15 feet"`` → ``"15 ft"``)."""
     return label.replace(" feet", " ft").replace(" foot", " ft")
+
+
+def _speed_condition_tooltip(speed_mod: int | None) -> str:
+    """Explain a condition's ground-speed overlay in the speed widget's tooltip."""
+    if speed_mod is None:
+        return "Immobilised by an active condition — no ground movement."
+    if speed_mod:
+        return f"Ground speed slowed by an active condition ({speed_mod:+d} rank)."
+    return ""
 
 
 class SystemInfoSection(QGroupBox):
@@ -371,13 +409,30 @@ class SystemInfoSection(QGroupBox):
         """Recompute the derived readouts: speed lines, initiative, effective size.
 
         Reads the model only, so it never emits ``changed`` — safe to call from any
-        cross-block signal.
+        cross-block signal. Active conditions overlay the speed and initiative readouts
+        (a slowing/immobilising condition on ground speed, a check penalty on initiative)
+        the same display-only way the stat grids show them — the build math is untouched.
         """
-        self._speed.render_lines(speed_lines(self._character, self._data))
+        speed_mod = condition_speed_rank_mod(self._character, self._data)
+        self._speed.render_lines(speed_lines(self._character, self._data), speed_mod)
+        self._speed.setToolTip(_speed_condition_tooltip(speed_mod))
 
         modifier = initiative_modifier(self._character, self._data)
         ability = initiative_ability(self._character, self._data)
-        self._initiative.setText(f"{modifier:+d} ({ability})")
+        penalty = condition_check_penalty(self._character, self._data)
+        net = modifier + penalty
+        if penalty:
+            self._initiative.setText(
+                f'<span style="color: {TINT_WORSE};">{net:+d}</span> ({ability})'
+            )
+            self._initiative.setToolTip(
+                f"{modifier:+d} base {penalty:+d} from an active condition on all checks"
+            )
+        else:
+            self._initiative.setText(f"{net:+d} ({ability})")
+            self._initiative.setToolTip(
+                "Agility (or an Alternate Initiative ability) plus advantages"
+            )
 
         effective = effective_size(self._character, self._data)
         base = str(self._character.characteristics.get("size", "Medium"))

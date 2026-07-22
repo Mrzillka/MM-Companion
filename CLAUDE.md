@@ -97,11 +97,18 @@ clean (see Licensing below).
   resolver in `core/rules.py` (`apply_condition`/`remove_condition`, `expand_includes`)
   bundles umbrellas, applies per-part/trait-scoped supersession, stacks Hit, and
   cascades debilitation; queryable accessors (`condition_check_penalty`,
-  `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods but do **not**
-  yet flow into the sheet's displayed numbers. `ConditionsSection` (its own block)
-  drives it: the "+" menu applies a condition (a `ConditionParameterDialog` first
-  when it needs a subject) and renders one chip per `AppliedCondition`. Dice/recovery/
-  turn-economy are out of scope for now.
+  `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods. These flow into
+  the sheet as a **display-only overlay** (the build/derived math itself stays
+  condition-free): the ability/resistance grids re-skin their `→ total` via
+  `condition_scope_penalty`/`resistance_condition_effect` (`apply_stat_effects`), the
+  Skills block folds the scoped penalty into its "+" column, Advantages/Powers strike
+  through a `debilitated_traits` trait, and the System block's derived Speed and
+  Initiative readouts overlay `condition_speed_rank_mod` (a slowed/immobilised ground
+  line) and `condition_check_penalty` (an all-checks penalty on initiative), tinted red.
+  `ConditionsSection` (its own block) drives it: the "+" menu applies a condition (a
+  `ConditionParameterDialog` first when it needs a subject) and renders one chip per
+  `AppliedCondition`; its `conditionsChanged` fans out over the signal bus so every
+  overlay refreshes. Dice/recovery/turn-economy are out of scope for now.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /

@@ -199,6 +199,24 @@ def test_local_ip_is_an_ipv4_address():
     assert ipaddress.IPv4Address(local_ip())
 
 
+def test_local_ip_for_a_host_asks_the_route_that_faces_it(monkeypatch):
+    asked: list[tuple[str, int]] = []
+
+    class _Socket:
+        def connect(self, address):
+            asked.append(address)
+
+        def getsockname(self):
+            return ("192.168.0.50", 0)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(discovery.socket, "socket", lambda *_a, **_k: _Socket())
+    assert discovery.local_ip_for("192.168.0.1") == "192.168.0.50"
+    assert asked == [("192.168.0.1", discovery._ROUTE_PROBE[1])]
+
+
 def test_local_ip_falls_back_when_there_is_no_route(monkeypatch):
     class _Broken:
         def connect(self, _address):
@@ -308,6 +326,7 @@ def router(monkeypatch):
 
     monkeypatch.setattr(discovery, "_soap_post", fake_post)
     monkeypatch.setattr(discovery, "local_ip", lambda: "192.168.1.50")
+    monkeypatch.setattr(discovery, "local_ip_for", lambda _host: "192.168.1.50")
 
     class Router:
         def __init__(self):
@@ -578,6 +597,26 @@ def test_publishing_can_be_told_the_internal_address(router):
     result = publish_session(47331, internal_ip="10.0.0.9", timeout=0.01)
     assert dict(router.action("AddPortMapping")[0])["NewInternalClient"] == "10.0.0.9"
     assert result.lan_ip == "10.0.0.9"
+
+
+def test_the_mapping_targets_the_interface_facing_the_router(router, monkeypatch):
+    """A default route held by something else (a VPN, a virtual adapter) is not
+    the address to forward to — the router's own subnet is."""
+    monkeypatch.setattr(discovery, "local_ip", lambda: "10.0.0.5")
+    monkeypatch.setattr(
+        discovery,
+        "local_ip_for",
+        lambda host: "192.168.1.50" if host == "192.168.1.1" else "10.0.0.5",
+    )
+    result = publish_session(47331, timeout=0.01)
+    assert dict(router.action("AddPortMapping")[0])["NewInternalClient"] == "192.168.1.50"
+    assert result.lan_ip == "192.168.1.50"
+
+
+def test_an_explicit_internal_address_is_not_second_guessed(router, monkeypatch):
+    monkeypatch.setattr(discovery, "local_ip_for", lambda host: "192.168.1.50")
+    publish_session(47331, internal_ip="10.0.0.9", timeout=0.01)
+    assert dict(router.action("AddPortMapping")[0])["NewInternalClient"] == "10.0.0.9"
 
 
 # --------------------------------------------------------------------------

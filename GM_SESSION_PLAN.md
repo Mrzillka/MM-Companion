@@ -404,10 +404,27 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     into canned XML and a call recorder, so a "router" is a dict. An autouse
     fixture unregisters anything a test put in the process-wide `transports`
     registry.
-  - Deferred: no live-network verification (adding a real port mapping edits the
-    user's router configuration, so it was not done unasked) — the SSDP/SOAP path
-    is exercised only against canned data, and the first real host is where a
-    router quirk would show up. No `Reachability` refresh/renewal timer either: a
-    permanent lease needs none, but a router that forced a finite lease in
-    `add_port_mapping` will drop the mapping when it expires. Nothing in `ui/`
-    yet — Phase 4 wires `publish_session` and the advice into the GM window.
+  - **Verified read-only against real hardware** (the dev machine's own router:
+    an `EC225-G5`, `WANIPConnection:1`). SSDP, the device description, the
+    control URL, and `GetExternalIPAddress` all parsed on the first try. The run
+    found two things canned XML could not, both now fixed:
+    1. **`local_ip()` was the wrong mapping target.** It answered `10.0.x.x`
+       (the default route) while the IGD that replied lives on `192.168.0.1` —
+       a router told to forward a port to an address outside its own subnet
+       refuses or silently does nothing. There is now `local_ip_for(host)`, and
+       `publish_session` re-aims at the interface facing *the discovered router*
+       before mapping (unless the caller passed `internal_ip` explicitly). The
+       re-probe confirms it: `192.168.x.x` instead of `10.0.x.x`.
+    2. **`ADVICE_DOUBLE_NAT` gave advice the GM could not act on.** That machine's
+       WAN address is `10.120.x.x` — ISP-side NAT in RFC1918 space, *not*
+       RFC6598, so `is_cgnat_address` is correctly False but the box in front is
+       still not the user's. The text now covers both cases and points at the
+       tunnel fallback. Worth knowing for Phase 4: **the developer's own network
+       cannot host to the internet at all**, so the GM window must be testable —
+       and honest — on the LAN-only path, and the relay is not hypothetical here.
+    Nothing was written to the router: no `AddPortMapping` call has ever run
+    against real hardware, so a mapping refusal is still an untested path.
+  - Deferred: no `Reachability` refresh/renewal timer — a permanent lease needs
+    none, but a router that forced a finite lease in `add_port_mapping` will drop
+    the mapping when it expires. Nothing in `ui/` yet — Phase 4 wires
+    `publish_session` and the advice into the GM window.

@@ -304,10 +304,24 @@ _PRIVATE_NETWORKS = tuple(
 
 
 def local_ip() -> str:
-    """This machine's LAN address — the one to hand the router as the mapping target."""
+    """This machine's address on whichever interface holds the default route."""
+    return local_ip_for(_ROUTE_PROBE[0])
+
+
+def local_ip_for(host: str) -> str:
+    """The local address that faces ``host`` — the mapping target to hand a router.
+
+    Not the same thing as :func:`local_ip` on a machine with more than one
+    interface, and the difference is what makes a port mapping work: a VPN or a
+    virtual adapter can hold the default route while the router lives on a
+    directly-connected LAN, and a router told to forward a port to an address
+    outside its own subnet either refuses or quietly does nothing. So the address
+    handed to ``AddPortMapping`` is always the one the OS would use to reach
+    *that router*.
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sock.connect(_ROUTE_PROBE)
+        sock.connect((host, _ROUTE_PROBE[1]))
         return str(sock.getsockname()[0])
     except OSError:
         pass
@@ -552,8 +566,10 @@ ADVICE_CGNAT = (
 )
 ADVICE_DOUBLE_NAT = (
     "Your router reports a private address on its internet side, so there is a "
-    "second router in front of it. The forward has to be repeated on that one "
-    "before players outside your network can reach you."
+    "second router in front of it. If that box is yours, repeat the port forward "
+    "on it too. If it belongs to your internet provider — which is common — you "
+    "cannot forward anything through it: use a tunnel such as Tailscale or "
+    "playit.gg, or ask the provider for a public IP address."
 )
 ADVICE_NO_EXTERNAL_IP = (
     "The port was forwarded, but the router would not say what your public "
@@ -649,6 +665,13 @@ def publish_session(
             lan_ip=lan,
             advice=(ADVICE_NO_IGD, ADVICE_FIREWALL),
         )
+
+    # Re-aim at the interface that faces this router. The default route can
+    # belong to something else entirely (a VPN, a virtual adapter), and a
+    # mapping pointed off the router's own subnet does not work.
+    if not internal_ip:
+        gateway = urllib.parse.urlsplit(device.control_url).hostname or ""
+        lan = local_ip_for(gateway) if gateway else lan
 
     wan = external_ip(device) or ""
     wanted_external = int(external_port or port)

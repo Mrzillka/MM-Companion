@@ -56,8 +56,10 @@ from mm_companion.core.session import discovery
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
+from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.player_card import PlayerCard
+from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.sections.conditions import condition_display_name
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.widgets import make_spin_box
@@ -111,6 +113,7 @@ class GMWindow(QMainWindow):
         layout.addWidget(self._build_session_box())
         layout.addWidget(self._build_connection_box())
         layout.addWidget(self._build_players_box(), stretch=1)
+        layout.addWidget(self._build_rolls_box(), stretch=1)
         layout.addWidget(self._build_notice())
 
         scroll = QScrollArea()
@@ -120,6 +123,7 @@ class GMWindow(QMainWindow):
 
         self._connect_bridge()
         self._refresh_idle_status()
+        self._refresh_rolls()
 
     # -- construction ------------------------------------------------------
 
@@ -221,6 +225,31 @@ class GMWindow(QMainWindow):
         layout.addStretch()
         return box
 
+    def _build_rolls_box(self) -> QGroupBox:
+        """The GM's own roller beside the table's shared history.
+
+        The same :class:`~mm_companion.ui.dice_roller.DiceRollerPanel` a player
+        uses, with the one thing only a GM gets: a **Hidden roll** switch. A
+        hidden roll is recorded and shown here, marked, and never put on the wire
+        — so it is not hidden by the players' apps agreeing to ignore it, it
+        simply never reaches them.
+        """
+        box = QGroupBox("Rolls")
+        layout = QHBoxLayout(box)
+
+        self._roller = DiceRollerPanel(hidden_option=True)
+        # While hosting, a roll made here goes through the server like everyone
+        # else's and comes back on the shared feed. Before that there is no
+        # session to record it in, so it is shown as a card and nothing more.
+        self._roller.localRoll.connect(self._show_offline_roll)
+        layout.addWidget(self._roller)
+
+        self._history = RollHistoryPanel()
+        self._history.saveRequested.connect(self._roller.save_quick_roll)
+        self._history.setMinimumHeight(240)
+        layout.addWidget(self._history, stretch=1)
+        return box
+
     def _build_notice(self) -> QLabel:
         self._notice = _wrapped("")
         self._notice.hide()
@@ -303,6 +332,10 @@ class GMWindow(QMainWindow):
         except ValueError as exc:  # an unreadable relay address
             self._show_notice(f"That relay address cannot be used: {exc}", theme.TINT_WORSE)
             return False
+        # Not on the ``started`` signal: the server emits that from inside its own
+        # ``start()``, before the bridge has taken ownership of it, so ``hosting``
+        # is still False there and the history would attach to nothing.
+        self._refresh_rolls()
         return True
 
     def _fall_back_to_relay(self) -> None:
@@ -356,6 +389,46 @@ class GMWindow(QMainWindow):
         self._name_edit.setText(self._state.name)
         self._clear_cards()
         self._refresh_idle_status()
+        self._refresh_rolls()
+
+    def _refresh_rolls(self) -> None:
+        """Point the history at the live session, or at the one on disk.
+
+        While hosting it follows the server. Between sessions there is nothing to
+        follow, but the state loaded from the workspace still carries the log —
+        so reopening GM Mode shows last night's rolls rather than a blank panel.
+        """
+        if self._bridge.hosting:
+            self._history.attach(self._bridge)
+            return
+        self._history.detach()
+        self._history.set_rolls([roll.to_dict() for roll in self._state.rolls])
+
+    def _show_offline_roll(self, roll: object) -> None:
+        """Show a roll the GM made before hosting started.
+
+        It has no ``seq`` and is never persisted — there is no session running to
+        record it in. Starting to host re-seeds the panel from the real log, at
+        which point these are gone.
+        """
+        if not isinstance(roll, dict):
+            return
+        result = roll.get("result")
+        self._history.add_roll(
+            {
+                "player_name": self._name_of_gm(),
+                "die": roll["die"],
+                "bonus": roll["bonus"],
+                "penalty": roll["penalty"],
+                "dc": roll["dc"],
+                "degree": None if result is None else result.degree,
+                "critical": bool(result is not None and result.critical),
+            }
+        )
+
+    def _name_of_gm(self) -> str:
+        slot = next((s for s in self._state.players.values() if s.is_gm), None)
+        return slot.display_name if slot is not None else "GM"
 
     def _rename_session(self) -> None:
         name = self._name_edit.text().strip() or "Session"
@@ -373,6 +446,7 @@ class GMWindow(QMainWindow):
 
     def _on_stopped(self) -> None:
         self._set_hosting_widgets(False)
+        self._refresh_rolls()
 
     def _on_published(self, reachability: discovery.Reachability) -> None:
         if self._should_try_relay(reachability):

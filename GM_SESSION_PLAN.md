@@ -218,7 +218,7 @@ ends. A GM-applied condition marks the player's sheet dirty, exactly like a loca
 one.
 
 ### Phase 8 — Roll history sync
-**Status: not started**
+**Status: done**
 Extract `DiceRollerPanel`, route rolls through the server, show the shared history
 in the GM window *and* in each player's roller, and add the GM's "Hidden roll"
 checkbox.
@@ -801,3 +801,69 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     card is inert; the GM applies conditions to itself on its own sheet. And a
     read-only sheet the GM opened from a card still does not live-update — that
     is the same Phase 5 gap, needing a re-seed API on `CharacterSheet`.
+
+- **2026-07-22 — Phase 8 done.** One roll log for the whole table, and the GM's
+  screen behind it. Like Phase 7 this is **entirely `ui/`** — the server has
+  resolved and broadcast rolls since Phase 2, and hidden rolls have been excluded
+  from the wire since then; nothing under `core/` changed.
+  - **`ui/dice_roller.py` split.** The roll column is now `DiceRollerPanel(QWidget)`
+    — settings, die, readout, quick-roll strip — and `DiceRollerWindow` is a thin
+    window around one. GM Mode embeds the same panel with `hidden_option=True`.
+    The window's private history stays exactly as it was (`RollCard`, save and
+    remove buttons); the panel reports a local roll on **`localRoll`** rather than
+    building the card itself, since the history is now a sibling, not part of it.
+    `_on_save_requested` became the public **`save_quick_roll`** (a history card's
+    "★ Save" ends up there from outside the panel).
+  - **In a session the panel does not roll.** `_start_roll` puts the request to
+    the session and the tumble runs until the answer arrives on `rollAdded`; the
+    die shown is the server's. Two things this order buys, both easy to get wrong
+    the other way round: the `rollAdded` listener is connected **before** the
+    request goes out (a hosted session resolves in-process and emits *during* the
+    call, so connecting after would miss every GM roll), and a broadcast is
+    matched against `own_player_id()` so another player's roll does not end ours.
+    A session that never answers gives up after `SESSION_ROLL_TIMEOUT_MS` (8 s)
+    and releases the inputs — the die is never left locked.
+  - **`ui/roll_history.py`** — `RollHistoryPanel` (`attach(bridge)` seeds from
+    `bridge.history()` then follows `rollAdded`/`historyReplaced`; `detach()`;
+    newest first; capped at `MAX_CARDS = 200` widgets) and `SessionRollCard`
+    (who / label / total / degree, a `HIDDEN_MARK` 👁 on a hidden roll, and a
+    "★ Save" **only on your own roll**). Deliberately not `RollCard`: a shared log
+    line cannot be deleted by one viewer. Two details worth keeping: `cards()`
+    reads the *layout* order, not `findChildren` (which answers oldest-first), and
+    display names and labels are HTML-escaped — they arrive off the wire and these
+    are rich-text labels.
+  - **`ui/session_bridge.py`** — four small seams, all so a widget never has to
+    branch on hosting-vs-joined: `request_roll(...)` (host rolls in-process, player
+    asks over the wire, both answer on `rollAdded`), `history()`, `own_player_id()`,
+    and the module-level **`live_session()`** — `active_session()` but only while
+    it is actually hosting or joined, which is the question a widget deciding
+    whether to roll through the session is really asking.
+  - **`ui/gm_window.py`** — a **Rolls** box: the roller with its Hidden-roll switch
+    beside the shared history. `_refresh_rolls()` attaches while hosting and
+    otherwise shows the *stored* session's rolls, so reopening GM Mode brings last
+    night's log back. It is called from `_begin_hosting`, **not** from the `started`
+    signal — the server emits that from inside its own `start()`, before the bridge
+    has taken ownership, so `bridge.hosting` is still False there. A roll made
+    before hosting starts is shown as a card and nothing more (no session to record
+    it in), and is wiped when the real log seeds.
+  - **The player's roller swaps its history.** `DiceRollerWindow._sync_session()`
+    (on construction, on show, and on the session's `disconnected`/`stopped`/
+    `kicked`) shows the shared panel in a session and the private one outside it.
+    Not both: every roll in a session goes through the server anyway, so a private
+    list beside it would be the same rolls twice, minus everyone else's.
+  - **Tests** — `tests/test_roll_history.py` (23), 9 new in `test_dice_roller.py`
+    (23 total, and the existing ones repointed at `window.panel`), 5 in
+    `test_gm_window.py` (48 total) and 3 in `test_session_player.py` (27 total,
+    including the full round trip: a player asks, the GM's server rolls, both
+    screens show the server's number). `ROLL_DURATION_MS` is monkeypatched to 0
+    wherever a test would otherwise wait out the 1.4 s tumble. Full suite:
+    967 passed, only the known environmental `test_block_sizes` font failure.
+  - Deferred, and worth knowing: **no roll labels yet** — the protocol carries a
+    free-form `label` and the cards render it, but the roller has no field for one,
+    so every roll from the UI is unlabelled (a GM roll made before hosting is the
+    only place a name appears). Rolling from the character sheet is still out of
+    scope (decisions table), and that is what would make labels worth a field.
+    Also deferred: no way to clear or export the shared log, the history is not
+    scrolled to a new roll automatically (it is inserted at the top, which is
+    where the view already sits), and a player's welcome history is still the
+    last 200 visible rolls while the GM sees the whole log.

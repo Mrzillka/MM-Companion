@@ -147,6 +147,59 @@ class SessionBridge(QObject):
             return ""
         return self._reachability.join_code(self._server.state.host_token)
 
+    def own_player_id(self) -> str:
+        """This app's own seat in the session — the GM's slot, or ours as a player."""
+        if self._server is not None:
+            return self._server.gm_slot().player_id
+        if self._client is not None:
+            return self._client.player_id
+        return ""
+
+    def history(self) -> list[dict]:
+        """The roll history as it stands right now, for a widget attaching late.
+
+        The host's is the whole log, hidden rolls included; a player's is what the
+        :class:`~mm_companion.core.session.protocol.Welcome` carried plus whatever
+        has been broadcast since. A widget built after the join would otherwise
+        start empty and only fill from the next roll onwards.
+        """
+        if self._server is not None:
+            return self._server.history()
+        if self._client is not None:
+            return list(self._client.history)
+        return []
+
+    # -- rolling -----------------------------------------------------------
+
+    def request_roll(
+        self,
+        *,
+        label: str = "",
+        bonus: int = 0,
+        penalty: int = 0,
+        dc: int | None = None,
+        hidden: bool = False,
+    ) -> bool:
+        """Put one roll to the session, whichever end of it this app is on.
+
+        The server always resolves — the host calls it in-process, a player asks
+        over the wire — so neither side ever supplies its own die. The answer
+        arrives as :attr:`rollAdded` either way, which is what lets the roller
+        treat hosting and joining identically. Returns False when there is no
+        live session to roll in.
+
+        ``hidden`` is honoured only for the host; the server ignores the flag on a
+        player's request rather than trusting it.
+        """
+        if self._server is not None:
+            self._server.roll(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden)
+            return True
+        if self._client is not None:
+            return self._client.request_roll(
+                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
+            )
+        return False
+
     # -- hosting -----------------------------------------------------------
 
     def host(
@@ -367,6 +420,20 @@ def set_active_session(bridge: SessionBridge | None) -> None:
     """Publish (or clear) the process-wide session bridge."""
     global _active
     _active = bridge
+
+
+def live_session() -> SessionBridge | None:
+    """The active bridge, but only while it actually has a session going.
+
+    A bridge exists from the moment GM Mode opens and outlives a stopped host or
+    a dropped join, so "is there a bridge" is the wrong question for a widget
+    deciding whether to roll through the session or by itself. This asks the one
+    that matters.
+    """
+    bridge = _active
+    if bridge is None or not (bridge.hosting or bridge.joined):
+        return None
+    return bridge
 
 
 # --------------------------------------------------------------------------

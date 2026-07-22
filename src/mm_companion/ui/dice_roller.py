@@ -7,6 +7,17 @@ of success/failure. Past rolls stack up in a history panel (each card can be
 removed or saved); a saved roll can be named, dragged to reorder, and lives in a
 persistent "quick rolls" strip pinned to the bottom for one-click reuse.
 
+The roll column is a reusable :class:`DiceRollerPanel`;
+:class:`DiceRollerWindow` is a thin window around one, and GM Mode embeds the
+same panel with its "Hidden roll" option turned on.
+
+**In a session the panel does not roll.** It asks the session — the server
+resolves every roll and broadcasts the result, so nobody reports their own
+number — and the answer arrives back on
+:attr:`~mm_companion.ui.session_bridge.SessionBridge.rollAdded`. The tumble
+animation covers the round trip, which is why it is a fixed 1.4 s rather than
+instant. Outside a session the panel rolls locally, exactly as before.
+
 The window owns no character state — it drives :mod:`mm_companion.core.dice`
 directly (no game rules live here) and persists quick rolls through
 :mod:`mm_companion.core.storage`.
@@ -19,7 +30,7 @@ from functools import lru_cache
 from importlib.resources import as_file, files
 
 from PySide6.QtCore import QElapsedTimer, QMimeData, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap
+from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -39,7 +50,10 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
+from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.roll_history import HIDDEN_MARK, RollHistoryPanel, degree_label
+from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
@@ -61,6 +75,15 @@ _DRAG_MIME = "application/x-mm-quick-roll"
 ROLL_DURATION_MS = 1400
 FLICKER_MIN_MS = 40
 FLICKER_MAX_MS = 220
+
+# How long a session roll may take before the die gives up. The tumble keeps
+# running until the server's answer arrives, so this is the outer bound on a
+# session that has gone quiet — long enough to ride out a slow relay, short
+# enough that the inputs are not locked forever.
+SESSION_ROLL_TIMEOUT_MS = 8000
+
+NO_ANSWER = "The session did not answer, so nothing was rolled."
+NOT_SENT = "The roll could not be sent to the session."
 
 
 @lru_cache(maxsize=1)
@@ -86,12 +109,7 @@ def degree_text(result: CheckResult | None) -> str:
     """
     if result is None:
         return ""
-    count = abs(result.degree)
-    base = "Success" if result.success else "Failure"
-    text = base if count == 1 else f"{base} ({count} degrees)"
-    if result.critical:
-        text += " — Nat 20!" if result.die_roll == 20 else " — Nat 1!"
-    return text
+    return degree_label(result.degree, result.critical, result.die_roll)
 
 
 def _params_label(params: dict) -> str:
@@ -226,36 +244,42 @@ class RollCard(QFrame):
         layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
 
 
-class DiceRollerWindow(QMainWindow):
-    """A standalone d20 roller: roll settings and the die on the left, a scrollable
-    history of past rolls on the right."""
+class DiceRollerPanel(QWidget):
+    """The roll column: the settings, the die, the readout, and the quick rolls.
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    Reusable on its own — :class:`DiceRollerWindow` puts one beside a history
+    panel, and GM Mode embeds one with ``hidden_option=True`` so the GM can roll
+    without it reaching anybody's history.
+
+    Where the roll *comes from* depends on the session: with one live the panel
+    asks the server and waits for the broadcast (see the module docstring);
+    without one it rolls locally and reports it on :attr:`localRoll`, which is
+    what the standalone window's own history renders.
+    """
+
+    #: A roll resolved locally, with no session to route it through:
+    #: ``{"die", "bonus", "penalty", "dc", "result"}`` — ``result`` being a
+    #: :class:`~mm_companion.core.dice.CheckResult`, or ``None`` when no DC was set.
+    localRoll = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Dice Roller")
-        self.resize(880, 520)
-
+        self._hidden_option = hidden_option
         self._rolling = False
+        # A roll is out with the session and its answer has not come back yet.
+        self._awaiting = False
+        self._pending: dict | None = None
+        # The session this roll went to, and our seat in it — held for as long as
+        # the roll is in flight so a broadcast can be told apart from someone
+        # else's, and the signal can be disconnected again when it lands.
+        self._bridge: SessionBridge | None = None
+        self._own_id = ""
         # Wall-clock for the tumble; drives the flicker's ease-out deceleration.
         self._roll_clock = QElapsedTimer()
         self._quick_rolls: list[dict] = self._load_quick_rolls()
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_left_column())
-        splitter.addWidget(self._build_history_panel())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([520, 340])
-        self.setCentralWidget(splitter)
-
-        self._rebuild_quick_strip()
-
-    # -- construction --------------------------------------------------------
-
-    def _build_left_column(self) -> QWidget:
-        column = QWidget()
-        layout = QVBoxLayout(column)
-
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._build_roll_settings())
         layout.addWidget(self._build_die(), alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -269,7 +293,10 @@ class DiceRollerWindow(QMainWindow):
         # the bottom — the readout growing a degree line no longer nudges it around.
         layout.addStretch()
         layout.addWidget(self._build_quick_rolls())
-        return column
+
+        self._rebuild_quick_strip()
+
+    # -- construction --------------------------------------------------------
 
     def _build_roll_settings(self) -> QGroupBox:
         group = QGroupBox("Roll")
@@ -292,6 +319,15 @@ class DiceRollerWindow(QMainWindow):
         self._dc_check.toggled.connect(self._dc_spin.setEnabled)
         grid.addWidget(self._dc_check, 2, 0)
         grid.addWidget(self._dc_spin, 2, 2)
+
+        self._hidden_check = QCheckBox("Hidden roll")
+        self._hidden_check.setToolTip(
+            "Roll without it reaching anyone else — a hidden roll is never sent "
+            "to a player, so there is nothing for them to see."
+        )
+        self._hidden_check.setVisible(self._hidden_option)
+        if self._hidden_option:
+            grid.addWidget(self._hidden_check, 3, 0, 1, 3)
 
         return group
 
@@ -347,20 +383,6 @@ class DiceRollerWindow(QMainWindow):
         layout.addWidget(self._quick_container)
         return group
 
-    def _build_history_panel(self) -> QWidget:
-        panel = QGroupBox("History")
-        outer = QVBoxLayout(panel)
-
-        self._history_container = QWidget()
-        self._history_layout = QVBoxLayout(self._history_container)
-        self._history_layout.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self._history_container)
-        outer.addWidget(scroll)
-        return panel
-
     # -- rolling -------------------------------------------------------------
 
     def _input_widgets(self) -> list[QWidget]:
@@ -371,11 +393,26 @@ class DiceRollerWindow(QMainWindow):
             self._penalty_spin,
             self._dc_check,
             self._dc_spin,
+            self._hidden_check,
             self._quick_container,
         ]
 
+    def _roll_parameters(self) -> tuple[int, int, int | None, bool]:
+        """What the inputs currently ask for: bonus, penalty, DC, hidden."""
+        return (
+            self._bonus_spin.value(),
+            self._penalty_spin.value(),
+            self._dc_spin.value() if self._dc_check.isChecked() else None,
+            self._hidden_option and self._hidden_check.isChecked(),
+        )
+
     def _start_roll(self) -> None:
-        """Begin a roll: lock the inputs, tumble the die, then reveal the result."""
+        """Begin a roll: lock the inputs, tumble the die, then reveal the result.
+
+        In a session the request goes out *now* and the tumble runs until the
+        server's answer arrives; on its own the die is thrown when the tumble
+        ends. Either way the inputs stay locked until there is a number.
+        """
         if self._rolling:
             return
         self._rolling = True
@@ -383,58 +420,150 @@ class DiceRollerWindow(QMainWindow):
         for widget in self._input_widgets():
             widget.setEnabled(False)
         self._roll_clock.restart()
+        self._request_session_roll()
         self._tick_roll()
+
+    def _request_session_roll(self) -> None:
+        """Put the roll to the session, if there is one to put it to.
+
+        The listener is connected *before* the request goes out: a hosted session
+        resolves in-process and emits the answer during the call, so connecting
+        afterwards would miss the GM's own roll every time.
+        """
+        bridge = live_session()
+        if bridge is None:
+            return
+        bonus, penalty, dc, hidden = self._roll_parameters()
+        self._bridge = bridge
+        self._own_id = bridge.own_player_id()
+        self._awaiting = True
+        self._pending = None
+        bridge.rollAdded.connect(self._on_session_roll)
+        if not bridge.request_roll(bonus=bonus, penalty=penalty, dc=dc, hidden=hidden):
+            self._abandon_roll(NOT_SENT)
+
+    def _on_session_roll(self, roll: object) -> None:
+        """A roll came back from the session — ours, or somebody else's.
+
+        Only our own answers this roll. The die keeps tumbling for the rest of
+        its animation even once the number is known, so a fast answer does not
+        cut the roll short.
+        """
+        if not self._awaiting or not isinstance(roll, dict):
+            return
+        if str(roll.get("player_id", "")) != self._own_id:
+            return
+        self._pending = roll
+        if self._roll_clock.elapsed() >= ROLL_DURATION_MS:
+            self._reveal_session_roll(roll)
 
     def _tick_roll(self) -> None:
         """One flicker frame: show a random face, then reschedule at a widening
-        interval so the tumble decelerates, or finish once the duration elapses."""
+        interval so the tumble decelerates, or finish once there is a result."""
         if not self._rolling:  # a direct _finish_roll() (e.g. in tests) pre-empted us
             return
         elapsed = self._roll_clock.elapsed()
         if elapsed >= ROLL_DURATION_MS:
-            self._finish_roll()
-            return
+            if not self._awaiting:
+                self._finish_roll()
+                return
+            if self._pending is not None:
+                self._reveal_session_roll(self._pending)
+                return
+            if elapsed >= SESSION_ROLL_TIMEOUT_MS:
+                self._abandon_roll(NO_ANSWER)
+                return
         self._face.setText(str(random.randint(1, 20)))
         # Ease-out: interval grows with the square of progress, so frames start
         # rapid and stretch out as the die settles.
-        progress = elapsed / ROLL_DURATION_MS
+        progress = min(1.0, elapsed / ROLL_DURATION_MS) if ROLL_DURATION_MS else 1.0
         interval = FLICKER_MIN_MS + (FLICKER_MAX_MS - FLICKER_MIN_MS) * progress**2
         QTimer.singleShot(round(interval), self._tick_roll)
 
     def _finish_roll(self) -> None:
-        """Resolve the real roll and record it, ending any tumble in progress."""
+        """Resolve the roll locally and report it, ending any tumble in progress."""
         self._rolling = False  # stops the _tick_roll chain from rescheduling
 
-        bonus = self._bonus_spin.value()
-        penalty = self._penalty_spin.value()
-        dc = self._dc_spin.value() if self._dc_check.isChecked() else None
-
+        bonus, penalty, dc, _hidden = self._roll_parameters()
         die = roll_d20()
         self._face.setText(str(die))
 
         modifier = bonus - penalty
         result = resolve_check(modifier, dc, roll=die) if dc is not None else None
-        self._update_readout(die, modifier, dc, result)
+        self._update_readout(
+            die,
+            modifier,
+            dc,
+            None if result is None else result.degree,
+            bool(result is not None and result.critical),
+        )
+        self.localRoll.emit(
+            {"die": die, "bonus": bonus, "penalty": penalty, "dc": dc, "result": result}
+        )
+        self._unlock_inputs()
 
-        card = RollCard(die=die, bonus=bonus, penalty=penalty, dc=dc, result=result)
-        card.saveRequested.connect(self._on_save_requested)
-        card.removeRequested.connect(lambda c=card: self._remove_history_card(c))
-        # Newest on top: insert above every existing card (the stretch is last).
-        self._history_layout.insertWidget(0, card)
+    def _reveal_session_roll(self, roll: dict) -> None:
+        """Show the number the session rolled for us and let go of the inputs."""
+        self._rolling = False
+        self._awaiting = False
+        self._pending = None
+        self._disconnect_session()
 
+        die = int(roll.get("die", 0))
+        bonus = int(roll.get("bonus", 0))
+        penalty = int(roll.get("penalty", 0))
+        dc = roll.get("dc")
+        degree = roll.get("degree")
+        self._face.setText(str(die))
+        self._update_readout(
+            die,
+            bonus - penalty,
+            None if dc is None else int(dc),
+            None if degree is None else int(degree),
+            bool(roll.get("critical")),
+            hidden=bool(roll.get("hidden")),
+        )
+        self._unlock_inputs()
+
+    def _abandon_roll(self, message: str) -> None:
+        """Give up on a session roll that never came back."""
+        if not self._rolling and not self._awaiting:
+            return
+        self._rolling = False
+        self._awaiting = False
+        self._pending = None
+        self._disconnect_session()
+        self._face.setText("?")
+        self._readout.setText(f"<span style='color:{theme.TINT_WORSE}'>{message}</span>")
+        self._unlock_inputs()
+
+    def _disconnect_session(self) -> None:
+        bridge, self._bridge = self._bridge, None
+        if bridge is None:
+            return
+        try:
+            bridge.rollAdded.disconnect(self._on_session_roll)
+        except (RuntimeError, TypeError):
+            # Already disconnected, or the bridge went away underneath us; either
+            # way there is nothing left to unhook.
+            pass
+
+    def _unlock_inputs(self) -> None:
         self._die_button.setEnabled(True)
         for widget in self._input_widgets():
             widget.setEnabled(True)
         # The DC spin follows its checkbox, not the blanket re-enable above.
         self._dc_spin.setEnabled(self._dc_check.isChecked())
 
-    def _remove_history_card(self, card: RollCard) -> None:
-        self._history_layout.removeWidget(card)
-        card.setParent(None)
-        card.deleteLater()
-
     def _update_readout(
-        self, die: int, modifier: int, dc: int | None, result: CheckResult | None
+        self,
+        die: int,
+        modifier: int,
+        dc: int | None,
+        degree: int | None,
+        critical: bool = False,
+        *,
+        hidden: bool = False,
     ) -> None:
         total = die + modifier
         html = (
@@ -443,9 +572,11 @@ class DiceRollerWindow(QMainWindow):
         )
         if dc is not None:
             html += f" vs DC {dc}"
-        if result is not None:
-            color = "green" if result.success else "red"
-            html += f"<br><span style='color:{color}'>{degree_text(result)}</span>"
+        if degree is not None:
+            color = "green" if degree > 0 else "red"
+            html += f"<br><span style='color:{color}'>{degree_label(degree, critical, die)}</span>"
+        if hidden:
+            html += f"<br><span style='color:gray'>{HIDDEN_MARK} only you can see this roll</span>"
         self._readout.setText(html)
 
     # -- quick rolls ---------------------------------------------------------
@@ -457,8 +588,12 @@ class DiceRollerWindow(QMainWindow):
     def _persist_quick_rolls(self) -> None:
         storage.update_settings(**{QUICK_ROLLS_KEY: self._quick_rolls})
 
-    def _on_save_requested(self, params: dict) -> None:
-        """Prompt for an optional name, then save the roll as a quick roll."""
+    def save_quick_roll(self, params: dict) -> None:
+        """Prompt for an optional name, then save the roll as a quick roll.
+
+        Public because it is what a history card's "★ Save" ends up in, and the
+        history — local or shared — is a sibling of this panel, not part of it.
+        """
         name, ok = QInputDialog.getText(
             self,
             "Save quick roll",
@@ -540,3 +675,125 @@ class DiceRollerWindow(QMainWindow):
         remove_button.clicked.connect(lambda _=False, e=entry: self._remove_quick_roll(e))
         layout.addWidget(remove_button)
         return chip
+
+
+class DiceRollerWindow(QMainWindow):
+    """A standalone d20 roller: the roll panel on the left, the history on the right.
+
+    Which history depends on the session. On its own the window keeps its own
+    list of what *this* app rolled, each card removable and saveable. In a session
+    that list is replaced by the table's shared one — every roll here is resolved
+    and broadcast by the server anyway, so a private copy beside it would be the
+    same rolls twice, minus everyone else's.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Dice Roller")
+        self.resize(880, 520)
+
+        self.panel = DiceRollerPanel()
+        self.panel.localRoll.connect(self._add_local_card)
+        # Held so the same object can be disconnected again; a fresh lambda per
+        # sync would leave the old one attached and stack up.
+        self._session_bridge: SessionBridge | None = None
+        self._on_session_end = lambda *_: self._sync_session()
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self.panel)
+        splitter.addWidget(self._build_history_panel())
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([520, 340])
+        self.setCentralWidget(splitter)
+
+        self._sync_session()
+
+    # -- construction --------------------------------------------------------
+
+    def _build_history_panel(self) -> QWidget:
+        holder = QWidget()
+        outer = QVBoxLayout(holder)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._local_box = QGroupBox("History")
+        local_layout = QVBoxLayout(self._local_box)
+        self._history_container = QWidget()
+        self._history_layout = QVBoxLayout(self._history_container)
+        self._history_layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._history_container)
+        local_layout.addWidget(scroll)
+        outer.addWidget(self._local_box)
+
+        self._session_box = QGroupBox("Session rolls")
+        session_layout = QVBoxLayout(self._session_box)
+        self._session_history = RollHistoryPanel()
+        self._session_history.saveRequested.connect(self.panel.save_quick_roll)
+        session_layout.addWidget(self._session_history)
+        self._session_box.hide()
+        outer.addWidget(self._session_box)
+        return holder
+
+    # -- the session ---------------------------------------------------------
+
+    def _sync_session(self) -> None:
+        """Show whichever history is the right one right now.
+
+        Re-run whenever the answer could have changed — the window may well have
+        been opened before the session was joined, and it outlives one ending.
+        """
+        bridge = live_session()
+        if bridge is not self._session_bridge:
+            self._follow(bridge)
+        self._session_history.attach(bridge)
+        self._session_box.setVisible(bridge is not None)
+        self._local_box.setVisible(bridge is None)
+
+    def _follow(self, bridge: SessionBridge | None) -> None:
+        """Watch a new session end (and stop watching the old one's)."""
+        previous, self._session_bridge = self._session_bridge, bridge
+        if previous is not None:
+            for signal in (previous.disconnected, previous.stopped, previous.kicked):
+                try:
+                    signal.disconnect(self._on_session_end)
+                except (RuntimeError, TypeError):
+                    pass
+        if bridge is not None:
+            for signal in (bridge.disconnected, bridge.stopped, bridge.kicked):
+                signal.connect(self._on_session_end)
+
+    # -- the local history ---------------------------------------------------
+
+    def _add_local_card(self, roll: object) -> None:
+        """Record a roll this app made on its own — the session was not involved."""
+        if not isinstance(roll, dict):
+            return
+        card = RollCard(
+            die=int(roll["die"]),
+            bonus=int(roll["bonus"]),
+            penalty=int(roll["penalty"]),
+            dc=roll["dc"],
+            result=roll["result"],
+        )
+        card.saveRequested.connect(self.panel.save_quick_roll)
+        card.removeRequested.connect(lambda c=card: self._remove_history_card(c))
+        # Newest on top: insert above every existing card (the stretch is last).
+        self._history_layout.insertWidget(0, card)
+
+    def _remove_history_card(self, card: RollCard) -> None:
+        self._history_layout.removeWidget(card)
+        card.setParent(None)
+        card.deleteLater()
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt override)
+        self._sync_session()
+        super().showEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._session_history.detach()
+        self._follow(None)
+        super().closeEvent(event)

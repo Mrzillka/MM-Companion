@@ -27,11 +27,13 @@ from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import apply_condition
-from mm_companion.core.session import discovery
+from mm_companion.core.session import discovery, store
+from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
+from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
-from mm_companion.ui import player_card
 from mm_companion.ui.gm_window import GMWindow
+from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
 from mm_companion.ui.session_bridge import active_session, set_active_session
 from mm_companion.ui.start_window import StartWindow
@@ -660,3 +662,69 @@ def test_an_offline_players_chips_lose_their_remove_button(
 
     assert card.condition_names() == ["Dazed"]  # still shown, just not commandable
     assert card._chip_flow.itemAt(0).widget()._remove is None
+
+
+# -- the GM's roller and the shared history --------------------------------
+
+
+def test_the_gm_roller_offers_hidden_rolls(window: GMWindow) -> None:
+    assert window._roller._hidden_check.isVisibleTo(window._roller) is True
+
+
+def test_a_gm_roll_lands_in_the_session_and_the_history(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    start_hosting(qapp, window, canned())
+    window._roller._bonus_spin.setValue(5)
+
+    window._roller._start_roll()
+    qapp.processEvents()
+
+    recorded = window.bridge.server.state.rolls
+    assert [roll.bonus for roll in recorded] == [5]
+    assert len(window._history.cards()) == 1
+
+
+def test_a_hidden_gm_roll_is_marked_and_not_broadcast(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    start_hosting(qapp, window, canned())
+    window._roller._hidden_check.setChecked(True)
+
+    window._roller._start_roll()
+    qapp.processEvents()
+
+    assert window.bridge.server.state.visible_rolls() == []
+    assert len(window._history.cards()) == 1
+    labels = window._history.cards()[0].findChildren(QLabel)
+    assert any(HIDDEN_MARK in label.text() for label in labels)
+
+
+def test_the_history_shows_a_resumed_sessions_rolls_before_hosting(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = new_session("Last night")
+    state.record_roll(player_id="p0", player_name="Aria", die=11, bonus=2)
+    store.save_session(state, write_rolls=True)
+    monkeypatch.setattr(gm_window_module, "last_session", lambda: state)
+
+    resumed = GMWindow(bind="127.0.0.1")
+    try:
+        assert len(resumed._history.cards()) == 1
+    finally:
+        resumed.bridge.stop()
+
+
+def test_a_roll_made_before_hosting_is_shown_but_not_recorded(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
+
+    window._roller._start_roll()
+    qapp.processEvents()
+
+    assert len(window._history.cards()) == 1
+    assert window._state.rolls == []

@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import AdvantageSelection, Character
@@ -35,8 +35,10 @@ from mm_companion.core.session.protocol import (
     encode,
     sanitize_snapshot,
 )
+from mm_companion.ui import dice_roller
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.dice_roller import DiceRollerWindow
 from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
 from mm_companion.ui.session_dialogs import NO_CHARACTER, JoinSessionDialog
 from mm_companion.ui.session_player import ConditionReceiver, SnapshotPusher, snapshot_size
@@ -482,3 +484,52 @@ def test_the_gm_reaches_a_sheet_the_launcher_opened(
 
     assert wait_for(qapp, lambda: bool(sheet.character.conditions))
     assert [c.condition_id for c in sheet.character.conditions] == ["dazed"]
+
+
+# -- rolling from a player's roller -----------------------------------------
+
+
+def test_a_players_roll_is_resolved_by_the_gm_and_shared(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, table
+) -> None:
+    """The whole round trip: the player asks, the GM's server rolls, both see it."""
+    host, player = table
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    set_active_session(player)
+    window = DiceRollerWindow()
+    window.panel._bonus_spin.setValue(7)
+    window.panel._dc_check.setChecked(True)
+    window.panel._dc_spin.setValue(12)
+
+    window.panel._start_roll()
+    assert wait_for(qapp, lambda: len(host.server.state.rolls) == 1)
+
+    recorded = host.server.state.rolls[0]
+    assert recorded.player_name == "Aria"
+    assert (recorded.bonus, recorded.dc) == (7, 12)
+    # The number on the player's screen is the server's, not one of its own.
+    assert wait_for(qapp, lambda: str(recorded.total) in window.panel._readout.text())
+    assert wait_for(qapp, lambda: len(window._session_history.cards()) == 1)
+
+
+def test_a_players_roller_shows_the_gms_rolls_too(qapp: QApplication, table) -> None:
+    host, player = table
+    set_active_session(player)
+    window = DiceRollerWindow()
+
+    host.server.roll(label="the GM's own", bonus=1)
+
+    assert wait_for(qapp, lambda: len(window._session_history.cards()) == 1)
+
+
+def test_a_players_roller_never_receives_a_hidden_roll(qapp: QApplication, table) -> None:
+    host, player = table
+    set_active_session(player)
+    window = DiceRollerWindow()
+
+    host.server.roll(label="behind the screen", hidden=True)
+    host.server.roll(label="in the open")
+
+    assert wait_for(qapp, lambda: len(window._session_history.cards()) == 1)
+    labels = window._session_history.cards()[0].findChildren(QLabel)
+    assert any("in the open" in label.text() for label in labels)

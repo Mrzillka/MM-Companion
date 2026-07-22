@@ -114,7 +114,7 @@ This plan file, the `/gm-session` skill, and the `feature/gm-session` branch off
 `develop`.
 
 ### Phase 1 — Session model, protocol, and store
-**Status: not started**
+**Status: done**
 `core/session/{protocol,model,store}.py` plus the `core/storage.py` additions
 (sessions dir, settings keys). Round-trip serialization, an appended roll log, and
 `list_sessions` over the workspace. Headless tests — `tests/test_session_protocol.py`,
@@ -204,3 +204,51 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
   wrote this plan, and added the `/gm-session` skill
   (`.claude/skills/gm-session/`) so a fresh session resumes at the first phase
   that is not `done`. Nothing under `src/` touched yet.
+
+- **2026-07-22 — Phase 1 done.** The Qt-free session layer's data half.
+  - **`core/session/protocol.py`** — `PROTOCOL_VERSION = 1`, `MAX_MESSAGE_BYTES`
+    (256 KiB), the `ERROR_*` code constants, `ProtocolError`, and 12 frozen
+    message dataclasses registered by their wire tag: `Hello`,
+    `CharacterSnapshot`, `RollRequest`, `Ping` (client→server) and `Welcome`,
+    `Roster`, `RollAdded`, `ApplyCondition`, `RemoveCondition`, `ErrorMessage`,
+    `Kicked`, `Pong` (server→client). `Pong` is the one addition to the plan's
+    list — `Ping` needs an answer for a client-side keepalive. `encode`/`decode`
+    do newline-delimited UTF-8 JSON with the size cap enforced on both sides.
+    **The validation is generic**: `Message.from_payload` walks `fields(cls)` and
+    type-checks each value against its annotation string via `_coerce`, so every
+    message gets strict shape-checking for free (a float or a `true` is not an
+    `int`; a missing required field raises; unknown extra keys are ignored for
+    forward compatibility). New messages just need plain annotations —
+    `str`/`int`/`bool`/`dict`/`list[...]` and `| None` — or `_coerce` must learn
+    the shape. `sanitize_snapshot()` strips `image_path` per the portrait
+    decision.
+  - **`core/session/model.py`** — `PlayerSlot` (with `to_dict` *and* a
+    `public_dict` that drops the slot's private `token`, which is what goes on
+    the wire), `RollRecord` (frozen; `modifier`/`total` derived, `dc`/`degree`
+    both `None` for an ungraded d20, `from_check` builds one from a
+    `dice.CheckResult`), and `SessionState` (roster ops, `player_by_token` for
+    reconnect via `compare_digest`, `record_roll` assigning `seq`,
+    `visible_rolls()` filtering hidden GM rolls, `to_dict(include_rolls=…)`).
+    Two token layers: the session's `host_token` (the join secret in the code)
+    and a per-`PlayerSlot` `token` a returning client presents to reclaim its
+    seat.
+  - **`core/session/store.py`** — `sessions/<id>/session.json` +
+    `rolls.jsonl`. `save_session` deliberately does **not** write rolls (pass
+    `write_rolls=True` only for create/import); `append_roll` is the only write
+    on the rolling path; `load_session` stitches them back, skips a torn last
+    line, and clears every slot's `connected` flag. `session_dir` validates the
+    id against `^[A-Za-z0-9_-]{1,64}$` — ids arrive over the network later, so
+    this is the path-traversal boundary. Plus `list_sessions` (newest first,
+    junk skipped), `load_rolls`, `delete_session`, `SessionSummary`,
+    `SessionStoreError`.
+  - **`core/storage.py`** — `SESSIONS_DIRNAME`, `Workspace.sessions_dir`,
+    creation in `ensure_workspace()`, and the settings keys `session_last_id`,
+    `session_player_name`, `session_recent_codes`.
+  - **Tests** — `tests/test_session_protocol.py` (37) and
+    `tests/test_session_store.py` (35), both headless and sub-second.
+  - Deferred: nothing from the phase. Note for Phase 2 — the server should reuse
+    `SessionState.record_roll` + `store.append_roll` together (the model does not
+    persist itself), and broadcast `roll.to_dict()` only for `not roll.hidden`.
+  - Pre-existing, untouched: `ruff check .` at the repo root reports 6 errors in
+    `.claude/skills/make-release/make_release.py` (committed in `a9e70e8`,
+    unrelated to this work). `ruff check src tests` is clean.

@@ -27,6 +27,7 @@ CHARACTERS_DIRNAME = "characters"
 GM_CHARACTERS_DIRNAME = "gm_characters"
 IMAGES_DIRNAME = "images"
 MODS_DIRNAME = "mods"
+SESSIONS_DIRNAME = "sessions"
 
 # How the builder reacts to a power that breaks a Power Level cap. ``warn`` flags
 # it but still lets it through; ``block`` refuses the save. There is no settings UI
@@ -61,6 +62,16 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # ``{"bonus": int, "penalty": int, "dc": int | None}``. Written by the Dice
     # Roller window; empty by default. See :mod:`mm_companion.ui.dice_roller`.
     "quick_rolls": [],
+    # The online session the app was last attached to, so reopening resumes it
+    # instead of starting a fresh one. ``None`` until a session is hosted or joined.
+    # See :mod:`mm_companion.core.session`.
+    "session_last_id": None,
+    # The display name this user last joined a session under, pre-filled in the
+    # join dialog so it does not have to be retyped every time.
+    "session_player_name": "",
+    # Join codes recently connected to, most recent first, as a convenience list in
+    # the join dialog. Plain strings; the code itself carries host/port/token.
+    "session_recent_codes": [],
 }
 
 
@@ -89,6 +100,10 @@ class Workspace:
     @property
     def mods_dir(self) -> Path:
         return self.root / MODS_DIRNAME
+
+    @property
+    def sessions_dir(self) -> Path:
+        return self.root / SESSIONS_DIRNAME
 
 
 def _platform_data_root() -> Path:
@@ -124,6 +139,7 @@ def ensure_workspace() -> Workspace:
     workspace.gm_characters_dir.mkdir(parents=True, exist_ok=True)
     workspace.images_dir.mkdir(parents=True, exist_ok=True)
     workspace.mods_dir.mkdir(parents=True, exist_ok=True)
+    workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
     if not workspace.settings_file.exists():
         workspace.settings_file.write_text(
             json.dumps(DEFAULT_SETTINGS, indent=2) + "\n", encoding="utf-8"

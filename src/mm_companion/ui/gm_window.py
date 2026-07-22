@@ -18,9 +18,11 @@ someone says so. So:
   states, not a silently-LAN address that looks like success until nobody can
   join.
 - A GM who runs a tunnel (playit.gg, ngrok, Tailscale) pastes the address it gave
-  them into **Tunnel address**, and the join code carries that instead. That is
-  the whole tunnel path, and until the relay ships it is what makes the app
-  usable over the internet.
+  them into **Tunnel address**, and the join code carries that instead.
+- Failing all of that, the session falls back to a **relay**: the GM's app dials
+  *out* to a public box, as every player does, so nothing has to be reachable at
+  all. Direct is always tried first — a direct connection costs the relay
+  nothing — so the relay is the last rung of the ladder, never the default.
 
 All the networking is in :mod:`mm_companion.core.session`; this window only talks
 to :class:`~mm_companion.ui.session_bridge.SessionBridge`.
@@ -32,6 +34,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QFont, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -45,6 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.session import discovery
@@ -61,6 +65,8 @@ from mm_companion.ui.widgets import make_spin_box
 BIND_ADDRESS = "0.0.0.0"
 
 TUNNEL_PLACEHOLDER = "e.g. 147.185.221.23:12345 — what your tunnel shows"
+
+RELAY_PLACEHOLDER = "e.g. relay.example.net — a relay to fall back to"
 
 NO_PLAYERS = "Nobody has joined yet — send the join code above to your players."
 
@@ -90,6 +96,9 @@ class GMWindow(QMainWindow):
         self._snapshots: dict[str, dict] = {}
         # Read-only sheets opened from a card, kept referenced while open.
         self._player_windows: dict[str, QMainWindow] = {}
+        # One relay attempt per hosting run: the fallback republishes, and a
+        # second attempt off that would loop.
+        self._relay_attempted = False
         set_active_session(self._bridge)
         # Resume the session this app was last in; a fresh one when there is none
         # (or its files have gone), so the window always has a session to host.
@@ -130,13 +139,24 @@ class GMWindow(QMainWindow):
         self._tunnel_edit = QLineEdit()
         self._tunnel_edit.setPlaceholderText(TUNNEL_PLACEHOLDER)
         form.addRow("Tunnel address", self._tunnel_edit)
+
+        self._relay_edit = QLineEdit(storage.relay_url())
+        self._relay_edit.setPlaceholderText(RELAY_PLACEHOLDER)
+        self._relay_edit.editingFinished.connect(self._save_relay_url)
+        form.addRow("Relay address", self._relay_edit)
         layout.addLayout(form)
+
+        self._relay_check = QCheckBox("Use the relay if this machine cannot be reached")
+        self._relay_check.setChecked(True)
+        layout.addWidget(self._relay_check)
 
         hint = _wrapped(
             "Leave the tunnel address empty to try your router automatically. If "
             "that cannot reach the internet, run a tunnel (playit.gg, ngrok, "
             "Tailscale) and paste the address it gives you here — players then "
-            "need nothing but the join code."
+            "need nothing but the join code. A relay is the fallback for when "
+            "neither works: both ends dial out to it, so nothing has to be "
+            "reachable. Direct is always tried first."
         )
         hint.setEnabled(False)
         layout.addWidget(hint)
@@ -237,6 +257,7 @@ class GMWindow(QMainWindow):
                 QMessageBox.warning(self, "Tunnel address", str(exc))
                 return
 
+        self._relay_attempted = False
         self._rename_session()
         # A resumed session already carries each seat's last snapshot, so the cards
         # come up populated rather than blank until everyone reconnects and pushes.
@@ -245,21 +266,7 @@ class GMWindow(QMainWindow):
             for player_id, slot in self._state.players.items()
             if slot.character
         }
-        try:
-            self._bridge.host(
-                self._state,
-                port=self._port_spin.value(),
-                bind=self._bind,
-                gm_name="GM",
-            )
-        except OSError as exc:
-            QMessageBox.warning(
-                self,
-                "Could not host",
-                f"The session could not start listening: {exc}\n\n"
-                "Another program may already be using that port — try a "
-                "different one, or set the port to automatic.",
-            )
+        if not self._begin_hosting():
             return
 
         self._set_hosting_widgets(True)
@@ -267,7 +274,63 @@ class GMWindow(QMainWindow):
         self._clear_advice()
         self._bridge.publish(manual_host=manual_host, external_port=manual_port)
 
+    def _begin_hosting(self, relay: str = "") -> bool:
+        """Start the server (directly, or through *relay*), reporting failure once."""
+        try:
+            self._bridge.host(
+                self._state,
+                port=self._port_spin.value(),
+                bind=self._bind,
+                gm_name="GM",
+                relay_url=relay,
+            )
+        except OSError as exc:
+            if relay:
+                # The relay is a fallback, so its failure is a notice and a
+                # return to the direct connection, not a dead end.
+                self._show_notice(f"{discovery.ADVICE_RELAY_UNREACHABLE} ({exc})", theme.TINT_WORSE)
+                return False
+            QMessageBox.warning(
+                self,
+                "Could not host",
+                f"The session could not start listening: {exc}\n\n"
+                "Another program may already be using that port — try a "
+                "different one, or set the port to automatic.",
+            )
+            return False
+        except ValueError as exc:  # an unreadable relay address
+            self._show_notice(f"That relay address cannot be used: {exc}", theme.TINT_WORSE)
+            return False
+        return True
+
+    def _fall_back_to_relay(self) -> None:
+        """Second rung of the ladder: re-host through the relay and republish.
+
+        Direct hosting is stopped first — the session can only be reached one way
+        at a time, and the join code has to name the one that works. Nobody has
+        joined yet at this point (the code is seconds old), so no player is being
+        dropped in the swap.
+        """
+        self._relay_attempted = True
+        relay = self._relay_edit.text().strip()
+        self._set_status("Trying the relay…", theme.ACCENT)
+        self._bridge.stop()
+        if not self._begin_hosting(relay) and not self._begin_hosting():
+            self._set_hosting_widgets(False)
+            self._refresh_idle_status()
+            return
+        self._set_hosting_widgets(True)
+        self._bridge.publish()
+
+    def _save_relay_url(self) -> None:
+        """Remember the relay across launches; a settings write is not worth a dialog."""
+        try:
+            storage.update_settings(session_relay_url=self._relay_edit.text().strip())
+        except OSError:
+            pass
+
     def _stop_hosting(self) -> None:
+        self._relay_attempted = False
         self._bridge.stop()
         self._set_hosting_widgets(False)
         self._code_edit.clear()
@@ -282,6 +345,8 @@ class GMWindow(QMainWindow):
         # are fixed for as long as a code is out in the world.
         self._port_spin.setEnabled(not hosting)
         self._tunnel_edit.setEnabled(not hosting)
+        self._relay_edit.setEnabled(not hosting)
+        self._relay_check.setEnabled(not hosting)
         self._new_button.setEnabled(not hosting)
 
     def _new_session(self) -> None:
@@ -308,10 +373,20 @@ class GMWindow(QMainWindow):
         self._set_hosting_widgets(False)
 
     def _on_published(self, reachability: discovery.Reachability) -> None:
+        if self._should_try_relay(reachability):
+            self._fall_back_to_relay()
+            return
+
         self._code_edit.setText(self._bridge.join_code())
         self._copy_button.setEnabled(bool(self._code_edit.text()))
 
-        if reachability.method == discovery.METHOD_MANUAL:
+        if reachability.method == discovery.METHOD_RELAY:
+            self._set_status(
+                "Players anywhere can join with this code — this session is going "
+                "through the relay.",
+                theme.TINT_BETTER,
+            )
+        elif reachability.method == discovery.METHOD_MANUAL:
             self._set_status(
                 f"This code points at {reachability.host}:{reachability.port}. "
                 "Anyone who can reach that address can join.",
@@ -329,6 +404,21 @@ class GMWindow(QMainWindow):
                 theme.TINT_WORSE,
             )
         self._show_advice(reachability.advice)
+
+    def _should_try_relay(self, reachability: discovery.Reachability) -> bool:
+        """Is this the moment for the last rung — and has it not been tried already?
+
+        Only after a *direct* attempt has come back unreachable. A tunnel address
+        the GM typed is taken at their word (there is nothing to probe and nothing
+        to improve on), and a relay is never tried twice for one hosting run.
+        """
+        return (
+            not self._relay_attempted
+            and self._relay_check.isChecked()
+            and bool(self._relay_edit.text().strip())
+            and reachability.method not in (discovery.METHOD_MANUAL, discovery.METHOD_RELAY)
+            and not reachability.internet_reachable
+        )
 
     def _on_player_joined(self, payload: dict) -> None:
         player = payload.get("player", {})

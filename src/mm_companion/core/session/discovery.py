@@ -24,21 +24,13 @@ yields plain TCP; a host of ``"mmrelay://relay.example:9000/<session-id>"``
 yields whatever is registered for the ``mmrelay`` scheme, so a relay can be added
 later without touching :mod:`.server`, :mod:`.client`, or the join-code format.
 
-The relay protocol, written down so an implementation has something to target:
-
-1. Both ends dial the relay over TCP and speak the *same* newline-delimited
-   UTF-8 JSON framing as :mod:`.net` — a relay never parses a session message.
-2. The first frame is a relay envelope, and only these three tags exist:
-   ``{"type": "relay_host", "session": "<id>", "token": "<host_token>"}`` from
-   the GM, ``{"type": "relay_join", "session": "<id>"}`` from a player, and the
-   answer ``{"type": "relay_ok"}`` or
-   ``{"type": "relay_error", "code": "...", "message": "..."}``.
-3. After ``relay_ok`` the relay is a dumb pipe. Each joining player becomes one
-   new stream on the host's side, surfacing from ``Listener.accept()`` as an
-   ordinary :class:`~.net.Connection`; every byte after the envelope is forwarded
-   verbatim in both directions.
-4. The relay therefore holds no session state, learns nothing but the session id,
-   and needs no upgrade when :data:`~.protocol.PROTOCOL_VERSION` changes.
+That transport is :mod:`.relay`, and the relay itself is
+:mod:`mm_companion.relay`; both ends of the protocol are documented there. In
+outline: the same newline-delimited JSON framing as :mod:`.net`, one small
+envelope frame per connection (``relay_host`` / ``relay_join`` / ``relay_accept``
+→ ``relay_ok`` or ``relay_error``), and a verbatim byte pipe after that, so the
+relay holds no session state and needs no upgrade when
+:data:`~.protocol.PROTOCOL_VERSION` changes.
 """
 
 from __future__ import annotations
@@ -539,6 +531,7 @@ class PortMapping:
 METHOD_UPNP = "upnp"
 METHOD_LAN = "lan"
 METHOD_MANUAL = "manual"
+METHOD_RELAY = "relay"
 
 ADVICE_FIREWALL = (
     "The first time you host, Windows asks whether to let MM-Companion accept "
@@ -581,6 +574,17 @@ ADVICE_MANUAL_ADDRESS = (
     "reaches this machine before sharing it."
 )
 ADVICE_LAN_ONLY = "Anyone on this network can join with the address below."
+ADVICE_RELAY = (
+    "This session is going through a relay, so players anywhere can join and "
+    "nobody has to forward a port. The relay only passes the table's traffic "
+    "along; it is slower than a direct connection and its operator could in "
+    "principle see what goes through it."
+)
+ADVICE_RELAY_UNREACHABLE = (
+    "The relay could not be reached, so the session is back on a direct "
+    "connection. Check the relay address, or forward the port on your router by "
+    "hand and use a tunnel such as Tailscale or playit.gg instead."
+)
 
 
 @dataclass(frozen=True)
@@ -605,6 +609,10 @@ class Reachability:
     @property
     def internet_reachable(self) -> bool:
         """A best-effort yes: a mapping exists and the WAN address is a public one."""
+        if self.method == METHOD_RELAY:
+            # Both ends dial out to the relay, so there is nothing left for a NAT
+            # to refuse: if the relay answered at all, players can reach us.
+            return True
         if self.mapping is None:
             return False
         return bool(self.external_ip) and not (
@@ -713,6 +721,24 @@ def publish_session(
         external_ip=wan,
         mapping=mapping,
         advice=tuple(advice),
+    )
+
+
+def relay_reachability(url: str, port: int) -> Reachability:
+    """The published address of a session already hosted through a relay.
+
+    There is nothing to probe — the relay accepted the registration or hosting
+    would have failed — so this only dresses the relay URL up as the
+    :class:`Reachability` the UI renders, with the join code pointing at the
+    relay. ``url`` is the full ``mmrelay://…/<session-id>`` address and ``port``
+    the relay's own port, kept in the code for readability; the transport reads
+    both from the URL.
+    """
+    return Reachability(
+        host=url,
+        port=int(port),
+        method=METHOD_RELAY,
+        advice=(ADVICE_RELAY,),
     )
 
 
@@ -974,10 +1000,13 @@ __all__ = [
     "ADVICE_NO_EXTERNAL_IP",
     "ADVICE_NO_IGD",
     "ADVICE_PORT_TAKEN",
+    "ADVICE_RELAY",
+    "ADVICE_RELAY_UNREACHABLE",
     "ADVICE_UPNP_REFUSED",
     "DEFAULT_PORT",
     "METHOD_LAN",
     "METHOD_MANUAL",
+    "METHOD_RELAY",
     "METHOD_UPNP",
     "AddressError",
     "IgdDevice",
@@ -999,6 +1028,7 @@ __all__ = [
     "local_ip",
     "parse_address",
     "publish_session",
+    "relay_reachability",
     "transport_for",
     "transport_scheme",
     "transports",

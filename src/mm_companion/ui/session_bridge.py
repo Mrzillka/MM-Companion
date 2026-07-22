@@ -34,6 +34,7 @@ from PySide6.QtCore import QObject, Signal
 from mm_companion.core import mods, storage
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
+from mm_companion.core.session import relay as session_relay
 from mm_companion.core.session import server as session_server
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
@@ -101,6 +102,7 @@ class SessionBridge(QObject):
         self._server: session_server.SessionServer | None = None
         self._client: session_client.SessionClient | None = None
         self._reachability: discovery.Reachability | None = None
+        self._relay: session_relay.RelayTransport | None = None
         self._publish_thread: threading.Thread | None = None
         # The reachability probe, indirected so a test can swap the network for a
         # canned answer without patching the discovery module globally.
@@ -134,6 +136,11 @@ class SessionBridge(QObject):
         """The last :meth:`publish` answer, or ``None`` before one arrives."""
         return self._reachability
 
+    @property
+    def relaying(self) -> bool:
+        """True when this session is hosted through a relay rather than directly."""
+        return self._relay is not None
+
     def join_code(self) -> str:
         """The code to share, or ``""`` before the session is published."""
         if self._server is None or self._reachability is None:
@@ -149,12 +156,19 @@ class SessionBridge(QObject):
         port: int = DEFAULT_PORT,
         bind: str = "0.0.0.0",
         gm_name: str = "GM",
+        relay_url: str = "",
     ) -> tuple[str, int]:
         """Start hosting *state* (a fresh session when omitted) and return the address.
 
         The bound address is not what players type — the join code comes from
         :meth:`publish`, which is what decides whether they need the LAN address,
         a public one, or a tunnel's.
+
+        ``relay_url`` hosts through a relay instead of a listening socket: the GM's
+        app dials *out* to it, as every player does, which is the only thing that
+        works from behind carrier-grade NAT. It is the second rung of the ladder —
+        the caller tries a direct host first, because a direct connection costs the
+        relay nothing.
         """
         if self._server is not None:
             raise SessionBridgeError("this bridge is already hosting a session")
@@ -162,16 +176,21 @@ class SessionBridge(QObject):
             raise SessionBridgeError("this bridge is joined to someone else's session")
 
         state = state if state is not None else new_session()
+        transport = None
+        if relay_url:
+            transport = session_relay.RelayTransport(session_relay.relay_url(relay_url, state.id))
         server = session_server.SessionServer(
             state,
             host=bind,
             port=int(port),
+            transport=transport,
             on_event=self._on_server_event,
             mod_fingerprint=mods.stack_fingerprint(),
             gm_name=gm_name,
         )
         address = server.start()
         self._server = server
+        self._relay = transport
         _remember_session(state.id)
         self.historyReplaced.emit(server.history())
         self.rosterChanged.emit(server.roster())
@@ -190,6 +209,13 @@ class SessionBridge(QObject):
         """
         if self._server is None:
             raise SessionBridgeError("nothing is being hosted, so there is nothing to publish")
+        if self._relay is not None:
+            # Nothing to probe: the relay accepted the session or hosting would
+            # have failed, and the join code points at the relay either way.
+            reachability = discovery.relay_reachability(self._relay.url, self._relay.relay.port)
+            self._reachability = reachability
+            self.published.emit(reachability)
+            return
         port = self._server.address[1]
         thread = threading.Thread(
             target=self._publish_worker,
@@ -267,6 +293,7 @@ class SessionBridge(QObject):
             client.close()
 
         server, self._server = self._server, None
+        self._relay = None
         if server is not None:
             server.stop()
 

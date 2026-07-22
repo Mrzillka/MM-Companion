@@ -656,6 +656,7 @@ def test_a_plain_host_uses_direct_tcp():
 
 
 def test_a_registered_scheme_builds_its_own_transport():
+    """A mod (or the built-in relay) adds a transport by registering a scheme."""
     seen: list[str] = []
 
     class FakeRelay(Transport):
@@ -669,13 +670,19 @@ def test_a_registered_scheme_builds_its_own_transport():
         seen.append(url)
         return FakeRelay()
 
-    discovery.transports.register(RELAY_SCHEME, factory)
-    url = f"{RELAY_SCHEME}://relay.example:9000/abcdef"
-    assert transport_scheme(url) == RELAY_SCHEME
+    # A scheme of its own: ``mmrelay`` is taken, by the relay that ships with the
+    # app (see ``core.session.relay``).
+    discovery.transports.register("fakerelay", factory)
+    url = "fakerelay://relay.example:9000/abcdef"
+    assert transport_scheme(url) == "fakerelay"
     assert isinstance(transport_for(url), FakeRelay)
     assert seen == [url]
 
 
+def test_the_relay_scheme_is_registered_by_the_app_itself():
+    assert discovery.transports.get(RELAY_SCHEME) is not None
+
+
 def test_an_unregistered_scheme_is_a_readable_refusal():
-    with pytest.raises(UnknownTransportError, match=RELAY_SCHEME):
-        transport_for(f"{RELAY_SCHEME}://relay.example:9000/abcdef")
+    with pytest.raises(UnknownTransportError, match="carrierpigeon"):
+        transport_for("carrierpigeon://relay.example:9000/abcdef")

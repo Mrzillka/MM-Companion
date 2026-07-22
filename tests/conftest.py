@@ -12,10 +12,39 @@ never accumulate across the session.
 
 from __future__ import annotations
 
+import threading
+from dataclasses import dataclass
+
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from mm_companion.core.session.relay import RELAY_SCHEME_PLAIN
+from mm_companion.relay import RelayServer
 from mm_companion.ui.sections.powers import PowersSection
+
+
+@dataclass
+class RelayBox:
+    """A real relay on loopback, for tests about hosting through one."""
+
+    server: RelayServer
+    base: str
+
+
+@pytest.fixture
+def relay_box():
+    """A plaintext relay on an ephemeral loopback port, running in a thread.
+
+    Plaintext because a TLS relay needs a certificate; the encrypted path is
+    covered end to end in ``test_session_relay.py``.
+    """
+    server = RelayServer("127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.address
+    yield RelayBox(server, f"{RELAY_SCHEME_PLAIN}://{host}:{port}")
+    server.stop()
+    thread.join(timeout=5.0)
 
 
 @pytest.fixture(autouse=True)

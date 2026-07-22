@@ -15,6 +15,9 @@ headless-testable and can also run as a standalone server. The pieces:
 - :mod:`.client` — :class:`~.client.SessionClient`, what a player runs.
 - :mod:`.discovery` — join codes, UPnP port mapping, the plain-language
   connectivity advice the UI shows, and the relay transport registry.
+- :mod:`.relay` — the relay transport, for the many players (and GMs) whom no
+  port forward can reach. Importing this package registers it, so a relay join
+  code works with no further wiring.
 
 Both ends take an ``on_event`` callback and hand it ``(kind, payload)`` pairs
 where the payload is always a plain dict. Qt-side wiring (turning those into
@@ -23,6 +26,6 @@ signals) lives in ``ui/session_bridge.py`` and never leaks back into this packag
 
 from __future__ import annotations
 
-from . import client, discovery, model, net, protocol, server, store
+from . import client, discovery, model, net, protocol, relay, server, store
 
-__all__ = ["client", "discovery", "model", "net", "protocol", "server", "store"]
+__all__ = ["client", "discovery", "model", "net", "protocol", "relay", "server", "store"]

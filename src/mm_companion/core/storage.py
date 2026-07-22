@@ -72,6 +72,12 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # Join codes recently connected to, most recent first, as a convenience list in
     # the join dialog. Plain strings; the code itself carries host/port/token.
     "session_recent_codes": [],
+    # The relay to fall back to when this machine cannot be reached directly —
+    # ``relay.example.net``, ``host:port``, or a full ``mmrelay://…`` URL. Empty
+    # by default: there is no blessed public instance yet, and a GM who runs their
+    # own (``python -m mm_companion.relay``) points at it here. See
+    # :mod:`mm_companion.core.session.relay`.
+    "session_relay_url": "",
 }
 
 
@@ -185,3 +191,13 @@ def pl_enforcement() -> str:
     """
     value = load_settings().get("pl_enforcement", PL_ENFORCE_WARN)
     return value if value in (PL_ENFORCE_WARN, PL_ENFORCE_BLOCK) else PL_ENFORCE_WARN
+
+
+def relay_url() -> str:
+    """The configured session relay, or ``""`` when there is none.
+
+    The one seam for "is a relay available to fall back to", so the connection
+    ladder (direct first, relay only if that fails) has a single place to ask.
+    """
+    value = load_settings().get("session_relay_url", "")
+    return value.strip() if isinstance(value, str) else ""

@@ -175,7 +175,7 @@ a guess of ~40 KB. Sending deltas rather than whole sheets is the follow-up
 lever if the measurement warrants it.
 
 ### Phase 6 — The relay
-**Status: not started**
+**Status: done**
 The answer to "players anywhere, nothing to install". Both ends dial **out** to a
 public box, which works from behind every NAT; this is the phase that makes the
 app genuinely internet-wide rather than LAN-plus-a-tunnel.
@@ -661,3 +661,91 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     reconnect-on-drop (the client remembers `player_id`/`player_token`, but
     nothing retries), no kick control on the card (`server.kick` exists), and
     portraits still show a placeholder.
+
+- **2026-07-22 — Phase 6 done.** The relay. The app is now internet-wide without
+  anyone forwarding anything: both ends dial **out** to a public box that splices
+  them. Still Qt-free below `ui/`, still stdlib only.
+  - **`core/session/relay.py`** — `RelayTransport` (a `net.Transport`) and
+    `RelayListener`, registered at import into `discovery.transports` under
+    **two** schemes: `mmrelay://` (TLS) and `mmrelay+tcp://` (plaintext, for a
+    relay on a trusted network and for every test here). `server.py` and
+    `client.py` were **not touched** — the seam held exactly as Phase 3 promised.
+    `parse_relay_url` / `relay_url(base, session_id)` turn a configured relay
+    (`relay.example.net`, `host:port`, or a full URL) into the join-code host.
+  - **One connection per player, not a multiplexed stream.** This is the design
+    decision of the phase. The GM holds a *control* connection (`relay_host` →
+    `relay_ok`, then a `relay_incoming` per joiner, plus a `relay_ping` keepalive
+    inside the relay's idle timeout) and dials a **fresh** connection per player
+    (`relay_accept`). Multiplexing would have forced the relay to add channel
+    framing — i.e. to parse and rewrite the stream, which is precisely the thing
+    the cost rows forbid — and would have put every player behind one
+    head-of-line queue. So the envelope vocabulary gained `relay_accept`,
+    `relay_incoming` and `relay_ping`/`relay_pong` beyond the three tags Phase 3
+    wrote down; `discovery.py`'s docstring now points at `relay.py` for the real
+    protocol instead of restating a stale version.
+  - **The relay secret is *not* the session's host token.** Phase 3's sketch had
+    `relay_host` authenticate with the host token — but that token is in the join
+    code, so every player has it and any of them could have taken the session
+    over at the relay. `RelayTransport` generates a separate per-run secret that
+    never leaves the GM's app; the session id in the URL is public, and guessing
+    it reaches nothing but the session server's own handshake.
+  - **`net.Connection` gained `initial_buffer`** — the relay's `relay_ok` and the
+    first session bytes can share a TCP segment, and those extra bytes belong to
+    the stream, not to the transport that read the envelope. Without it the first
+    message of a fast client is silently eaten; there is a test for exactly that.
+  - **`mm_companion/relay/`** — the box itself: `python -m mm_companion.relay`,
+    a single-threaded `selectors` loop (`__init__.py`) and its argparse CLI
+    (`cli.py`). It parses one envelope per connection and forwards bytes
+    verbatim after that; it holds no session state beyond who is paired with
+    whom, and **there is no `connect` in the module at all** — every socket comes
+    from `accept()`, which is what stops an open relay being usable as a general
+    proxy. Backpressure (`HIGH_WATER`/`LOW_WATER`) stops reading from a peer whose
+    partner is not draining, so memory is bounded. Caps in `RelayLimits`, all CLI
+    options: max sessions, clients per session, a per-session token bucket, idle
+    timeout, absolute session TTL. TLS terminates here (`--cert`/`--key`) with a
+    non-blocking handshake state machine.
+  - **Two numbers worth knowing before retuning the caps.** The effective
+    throughput ceiling is `min(rate_bytes, burst_bytes / TICK)`, because a
+    throttled session is only re-armed on the 0.5 s sweep — the defaults
+    (256 KB/s, 1 MB burst) leave `rate` binding, but a small `--burst` silently
+    caps throughput lower than `--rate` says. And a burst up to `READ_CHUNK`
+    (64 KB) passes before throttling engages at all, since the budget is checked
+    after a read, not before.
+  - **The ladder is in the GM window** (`ui/gm_window.py`): a **Relay address**
+    field (persisted as the new `session_relay_url` setting, read via
+    `storage.relay_url()`) and a "Use the relay if this machine cannot be reached"
+    checkbox. Direct is *always* tried first — a direct connection costs the relay
+    nothing — and only a direct publish that comes back not-internet-reachable
+    falls back: `_fall_back_to_relay` stops hosting, re-hosts through
+    `bridge.host(relay_url=…)` and republishes. A typed tunnel address is taken at
+    its word and never triggers the relay; `_relay_attempted` makes it once per
+    hosting run. If the relay cannot be reached the window says so
+    (`ADVICE_RELAY_UNREACHABLE`) and **returns to direct hosting** rather than
+    dying.
+  - **`ui/session_bridge.py`** — `host(..., relay_url=…)` builds the transport,
+    `relaying` reports it, and `publish()` short-circuits to
+    `discovery.relay_reachability(...)` (no probe: the relay accepted the session
+    or hosting would have failed). `discovery` gained `METHOD_RELAY`,
+    `ADVICE_RELAY`, `ADVICE_RELAY_UNREACHABLE`, and `internet_reachable` is True
+    for a relayed session — nothing is left for a NAT to refuse.
+  - **Tests** — `tests/test_session_relay.py` (37: URL parsing, registration, the
+    envelope protocol by hand over raw sockets, verbatim binary forwarding,
+    bytes-behind-the-envelope, every cap, a full `SessionServer`↔`SessionClient`
+    session over a loopback relay, two players at once, a wrong token still
+    refused *through* the relay, and TLS end to end). Plus 4 in
+    `test_session_bridge.py` and 7 in `test_gm_window.py` for the ladder, and a
+    shared `relay_box` fixture in `tests/conftest.py`. The TLS certificate is
+    **generated by `openssl` in a session fixture**, not checked in (a private key
+    in the repo is a liability and a committed certificate expires); the test
+    skips where openssl is missing. Two tests in `test_session_discovery.py` were
+    rewritten — `mmrelay` is a *registered* scheme now, so the "a mod registers a
+    scheme" test uses `fakerelay` and the "unknown scheme" test uses
+    `carrierpigeon`. Full suite: 909 passed, only the known environmental
+    `test_block_sizes` font failure.
+  - Deferred, and worth knowing: **no relay is deployed** — `session_relay_url`
+    defaults to `""`, so the fallback does nothing until a GM points at one
+    (their own, or a public instance when one exists). Hosting is still the open
+    deployment question, not a design one. Also deferred: no `--config` file for
+    the relay, no metrics endpoint, no per-IP (as opposed to per-session) cap, and
+    the relay logs to stderr only. The connection ladder does **not** re-probe: a
+    session that fell back to the relay stays on it until the GM stops hosting.

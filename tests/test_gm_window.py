@@ -470,3 +470,84 @@ def test_a_label_exists_for_every_piece_of_advice_the_window_is_given(
     window._show_advice(everything)
     labels = [w for w in window.findChildren(QLabel) if w.text().startswith("• ")]
     assert len(labels) == len(everything)
+
+
+# -- the connection ladder: direct first, relay last -----------------------
+
+
+def test_an_unreachable_machine_falls_back_to_the_relay(
+    qapp: QApplication, window: GMWindow, relay_box
+) -> None:
+    window._relay_edit.setText(relay_box.base)
+    start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
+
+    code = discovery.decode_join_code(window._code_edit.text())
+    assert code.host.startswith("mmrelay")
+    assert code.host.endswith(window._state.id)
+    assert window.bridge.relaying is True
+    assert discovery.ADVICE_RELAY in advice_texts(window)[0]
+    assert "relay" in window._status_label.text()
+
+
+def test_a_reachable_machine_never_touches_the_relay(
+    qapp: QApplication, window: GMWindow, relay_box
+) -> None:
+    """Direct costs the relay nothing, so a working direct connection keeps it."""
+    window._relay_edit.setText(relay_box.base)
+    start_hosting(
+        qapp, window, canned(host="203.0.113.7", mapping=FakeMapping(), external_ip="203.0.113.7")
+    )
+
+    assert window.bridge.relaying is False
+    assert discovery.decode_join_code(window._code_edit.text()).host == "203.0.113.7"
+    assert relay_box.server.session_count() == 0
+
+
+def test_a_tunnel_address_is_taken_at_its_word(
+    qapp: QApplication, window: GMWindow, relay_box
+) -> None:
+    window._relay_edit.setText(relay_box.base)
+    window._tunnel_edit.setText("147.185.221.23:12345")
+    start_hosting(
+        qapp, window, canned(host="147.185.221.23", port=12345, method=discovery.METHOD_MANUAL)
+    )
+
+    assert window.bridge.relaying is False
+    assert relay_box.server.session_count() == 0
+
+
+def test_the_relay_is_only_used_when_it_is_asked_for(
+    qapp: QApplication, window: GMWindow, relay_box
+) -> None:
+    window._relay_edit.setText(relay_box.base)
+    window._relay_check.setChecked(False)
+    start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
+
+    assert window.bridge.relaying is False
+    assert discovery.decode_join_code(window._code_edit.text()).host == "192.168.0.5"
+
+
+def test_a_relay_that_cannot_be_reached_leaves_the_session_hosted(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    window._relay_edit.setText("mmrelay+tcp://127.0.0.1:1")
+    start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
+
+    assert window.bridge.hosting is True
+    assert window.bridge.relaying is False
+    assert discovery.ADVICE_RELAY_UNREACHABLE in window._notice.text()
+
+
+def test_the_relay_address_is_remembered_between_launches(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    window._relay_edit.setText("relay.example.net")
+    window._save_relay_url()
+    assert storage.relay_url() == "relay.example.net"
+    assert GMWindow(bind="127.0.0.1")._relay_edit.text() == "relay.example.net"
+
+
+def test_hosting_locks_the_relay_controls_too(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    assert window._relay_edit.isEnabled() is False
+    assert window._relay_check.isEnabled() is False

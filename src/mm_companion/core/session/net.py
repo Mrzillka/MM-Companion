@@ -64,9 +64,19 @@ class Connection:
     connection is the model everywhere above.
     """
 
-    def __init__(self, sock: socket.socket, address: tuple[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        sock: socket.socket,
+        address: tuple[str, int] | None = None,
+        *,
+        initial_buffer: bytes = b"",
+    ) -> None:
         self._sock = sock
-        self._buffer = bytearray()
+        # ``initial_buffer`` is for a transport that read a handshake off the
+        # socket before handing it over: a relay's envelope reply and the first
+        # session bytes can arrive in one TCP segment, and those extra bytes
+        # belong to this connection's stream, not to the transport that read them.
+        self._buffer = bytearray(initial_buffer)
         self._send_lock = threading.Lock()
         self._closed = False
         self.address = address if address is not None else _peer_address(sock)

@@ -293,3 +293,67 @@ def test_the_active_session_is_settable(qapp: QApplication) -> None:
     assert active_session() is made
     set_active_session(None)
     assert active_session() is None
+
+
+# -- hosting through a relay ----------------------------------------------
+
+
+def test_hosting_through_a_relay_publishes_a_relay_join_code(
+    qapp: QApplication, bridge: SessionBridge, relay_box
+) -> None:
+    state = new_session("Relayed")
+    published = collect(bridge.published)
+
+    bridge.host(state, port=0, bind="127.0.0.1", relay_url=relay_box.base)
+    assert bridge.relaying is True
+    bridge.publish()
+    qapp.processEvents()
+
+    assert len(published) == 1
+    reachability = published[0][0]
+    assert reachability.method == discovery.METHOD_RELAY
+    assert reachability.internet_reachable is True
+    assert discovery.ADVICE_RELAY in reachability.advice
+
+    code = discovery.decode_join_code(bridge.join_code())
+    assert code.host.startswith("mmrelay")
+    assert code.host.endswith(state.id)
+    assert code.token == state.host_token
+
+
+def test_a_player_joins_a_relayed_session_through_its_join_code(
+    qapp: QApplication, bridge: SessionBridge, relay_box
+) -> None:
+    """The whole point of the seam: joining reads the code and nothing else."""
+    state = new_session("Relayed")
+    bridge.host(state, port=0, bind="127.0.0.1", relay_url=relay_box.base)
+    bridge.publish()
+    qapp.processEvents()
+
+    code = discovery.decode_join_code(bridge.join_code())
+    player = SessionBridge()
+    try:
+        client = player.join(code, "Ada")
+        assert client.connected is True
+        deadline = time.monotonic() + 5.0
+        while len(bridge.server.connected_player_ids()) < 1 and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert bridge.server.connected_player_ids()
+    finally:
+        player.stop()
+
+
+def test_an_unreachable_relay_refuses_to_host(bridge: SessionBridge) -> None:
+    with pytest.raises(OSError):
+        bridge.host(new_session(), port=0, bind="127.0.0.1", relay_url="mmrelay+tcp://127.0.0.1:1")
+    assert bridge.hosting is False
+    assert bridge.relaying is False
+
+
+def test_stopping_forgets_that_it_was_relaying(
+    qapp: QApplication, bridge: SessionBridge, relay_box
+) -> None:
+    bridge.host(new_session(), port=0, bind="127.0.0.1", relay_url=relay_box.base)
+    bridge.stop()
+    assert bridge.relaying is False

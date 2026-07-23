@@ -21,7 +21,15 @@ class MainWindow(QMainWindow):
     Emits :attr:`closed` when the window is closed so a launcher can reappear,
     and :attr:`saved` after a character is written to disk so a launcher can
     refresh its library.
+
+    Three small seams make this reusable for a character that is not a player's:
+    :attr:`TITLE`, :meth:`storage_dir` (where the File dialogs open) and
+    :meth:`_new_child` (what Open builds). :class:`~mm_companion.ui.npc_window.NPCWindow`
+    is the same window pointed at the GM's ``gm_characters/`` dir.
     """
+
+    #: What the window title is prefixed with.
+    TITLE = "MM-Companion"
 
     closed = Signal()
     saved = Signal()
@@ -71,6 +79,19 @@ class MainWindow(QMainWindow):
     def sheet(self) -> CharacterSheet:
         """The character sheet this window hosts — the seam a session attaches to."""
         return self._sheet
+
+    @property
+    def path(self) -> Path | None:
+        """The file this sheet is saved to, or ``None`` until the first save."""
+        return self._path
+
+    def storage_dir(self) -> Path:
+        """The workspace directory this window's Open/Save dialogs start in."""
+        return storage.get_workspace().characters_dir
+
+    def _new_child(self, character: Character, path: Path) -> MainWindow:
+        """The window File ▸ Open builds — the same kind as this one."""
+        return MainWindow(character=character, path=path, locked=True)
 
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar."""
@@ -151,7 +172,7 @@ class MainWindow(QMainWindow):
 
     def _save_as(self) -> bool:
         """Prompt for a destination and write the character there."""
-        directory = storage.get_workspace().characters_dir
+        directory = self.storage_dir()
         directory.mkdir(parents=True, exist_ok=True)
         suggested = directory / library.suggested_filename(self._sheet.character)
         path, _ = QFileDialog.getSaveFileName(
@@ -173,14 +194,14 @@ class MainWindow(QMainWindow):
 
     def _open(self) -> None:
         """Load a saved character into a new, read-only window."""
-        directory = storage.get_workspace().characters_dir
+        directory = self.storage_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Character", str(directory), CHARACTER_FILTER
         )
         if not path:
             return
         character = library.load_character(Path(path))
-        window = MainWindow(character=character, path=Path(path), locked=True)
+        window = self._new_child(character, Path(path))
         self._child_windows.append(window)
         window.show()
 
@@ -240,7 +261,7 @@ class MainWindow(QMainWindow):
     def _update_title(self) -> None:
         name = library.display_name(self._sheet.character)
         marker = "*" if self._dirty else ""
-        self.setWindowTitle(f"MM-Companion — {marker}{name}")
+        self.setWindowTitle(f"{self.TITLE} — {marker}{name}")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Guard unsaved changes, announce the close, then close normally."""

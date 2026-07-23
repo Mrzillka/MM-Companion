@@ -216,8 +216,10 @@ class SystemInfoSection(QGroupBox):
         self._locked = False
         self._by_key = {c.key: c for c in data.characteristics}
         self._editable: list[QWidget] = []
+        # A GM's NPC has no point budget (see :meth:`set_npc_mode`).
+        self._npc = False
 
-        form = QFormLayout(self)
+        form = self._form = QFormLayout(self)
         form.addRow("Power Level:", self._build_power_level())
         form.addRow("Power Points:", self._build_power_points())
         form.addRow(self._build_cost_notice())
@@ -254,6 +256,7 @@ class SystemInfoSection(QGroupBox):
         row.setContentsMargins(0, 0, 0, 0)
         self._pool_current = QLabel("—")
         self._pool_current.setToolTip("Spent — calculated from the build")
+        self._pool_separator = QLabel("/")
         self._power_points = make_spin_box(
             c.minimum if c else 0,
             c.maximum if c else 9999,
@@ -261,11 +264,21 @@ class SystemInfoSection(QGroupBox):
         )
         self._power_points.setToolTip("Total available")
         self._power_points.valueChanged.connect(self._on_power_points_changed)
+        # The NPC sheet's stand-in for the whole pool: what the build would cost,
+        # read back as a Power Level. Hidden until :meth:`set_npc_mode` asks.
+        self._estimated_pl = QLabel("—")
+        self._estimated_pl.setToolTip(
+            "The Power Level this build's cost would buy — an NPC is not budgeted, "
+            "so this is an estimate, not a limit."
+        )
+        self._estimated_pl.hide()
         row.addWidget(self._pool_current)
-        row.addWidget(QLabel("/"))
+        row.addWidget(self._pool_separator)
         row.addWidget(self._power_points)
+        row.addWidget(self._estimated_pl)
         row.addStretch()
         self._editable.append(self._power_points)
+        self._points_row = container
         return container
 
     def _build_cost_notice(self) -> QWidget:
@@ -364,8 +377,11 @@ class SystemInfoSection(QGroupBox):
 
         Editing Power Level snaps the budget to that level's band; editing the budget
         re-derives Power Level. Only the *other* field is updated, silently, so the two
-        never fight in a signal loop.
+        never fight in a signal loop. An NPC has no budget to reconcile against, so
+        this does nothing there — its Power Level is whatever the GM says it is.
         """
+        if self._npc:
+            return
         if edited == "power_level":
             new_pp = reconcile_points_to_level(
                 self._character.power_level,
@@ -401,9 +417,41 @@ class SystemInfoSection(QGroupBox):
     # -- derived readouts -----------------------------------------------------
 
     def set_pool_current(self, key: str, value: object) -> None:
-        """Update the power-point pool's calculated *spent* value."""
-        if key == "power_points":
-            self._pool_current.setText(str(value))
+        """Update the power-point pool's calculated *spent* value.
+
+        The same number drives the NPC sheet's estimated Power Level — an NPC is
+        not budgeted, so its build cost is read back as the level it would buy
+        rather than checked against a pool.
+        """
+        if key != "power_points":
+            return
+        self._pool_current.setText(str(value))
+        try:
+            spent = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        level = power_level_for_points(spent, self._data, self._character)
+        # No "PL" prefix: the row's own caption already says Estimated PL.
+        self._estimated_pl.setText(f"{level} — from {spent} points spent")
+
+    def set_npc_mode(self, npc: bool) -> None:
+        """Swap the point budget for an estimated Power Level, or back.
+
+        A GM's NPC is an ordinary character without the accounting: nobody spends
+        points on a thug, so the pool row would only ever be a number to ignore.
+        In its place the row reads back what the build *costs*, as the Power Level
+        that cost would buy (:func:`~mm_companion.core.rules.power_level_for_points`).
+        The Power Level field above it stays exactly as it was — that is the level
+        the NPC is *meant* to be, and it is what the PL caps are checked against;
+        the estimate underneath says what was actually built.
+        """
+        self._npc = npc
+        for widget in (self._pool_current, self._pool_separator, self._power_points):
+            widget.setVisible(not npc)
+        self._estimated_pl.setVisible(npc)
+        label = self._form.labelForField(self._points_row)
+        if isinstance(label, QLabel):
+            label.setText("Estimated PL:" if npc else "Power Points:")
 
     def refresh_derived(self) -> None:
         """Recompute the derived readouts: speed lines, initiative, effective size.

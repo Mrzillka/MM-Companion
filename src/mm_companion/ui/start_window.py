@@ -44,17 +44,28 @@ CHARACTER_FILTER = "Character files (*.json)"
 class CharacterCard(QFrame):
     """A single saved character rendered as a clickable card: image, name, PL.
 
-    Left-click opens the character; right-click offers to delete it.
+    Left-click opens the character; right-click offers to delete it. A *removable*
+    card (the GM window's NPCs, which belong to a session as well as to the disk)
+    offers taking it out of that list first — deleting the file is the heavier of
+    the two actions and should not be the only one on offer.
     """
 
     clicked = Signal(object)
     deleteRequested = Signal(object)
+    removeRequested = Signal(object)
 
-    def __init__(self, summary: CharacterSummary, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        summary: CharacterSummary,
+        parent: QWidget | None = None,
+        *,
+        removable: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._summary = summary
+        self._removable = removable
 
         layout = QVBoxLayout(self)
 
@@ -92,6 +103,11 @@ class CharacterCard(QFrame):
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
         menu = QMenu(self)
+        if self._removable:
+            menu.addAction(
+                "Remove from this session",
+                lambda: self.removeRequested.emit(self._summary),
+            )
         menu.addAction(
             f"Delete {self._summary.name}",
             lambda: self.deleteRequested.emit(self._summary),

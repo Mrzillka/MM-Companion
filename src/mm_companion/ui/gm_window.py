@@ -3,9 +3,10 @@
 The GM's control panel — start and stop hosting, the join code to share, and a
 live card per connected player (name, character, PL, hero points, conditions,
 and their sheet one click away). A card's "+" applies a condition straight onto
-that player's live sheet, and a chip's "×" takes one off again. NPCs and the
-shared roll history land in later phases; what is here first is the part
-everything else needs, which is getting players *connected*.
+that player's live sheet, and a chip's "×" takes one off again. Below the players
+sit the session's **NPCs** (ordinary characters in the GM's own folder, on a
+simplified sheet) and the table's shared **roll history** beside the GM's roller,
+which can roll hidden.
 
 Most of the surface is about that last problem being genuinely hard. A home
 connection is often not reachable from the internet at all — carrier-grade NAT,
@@ -31,11 +32,14 @@ to :class:`~mm_companion.ui.session_bridge.SessionBridge`.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QFont, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -49,19 +53,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core import storage
+from mm_companion.core import library, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
-from mm_companion.core.session import discovery
+from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.sections.conditions import condition_display_name
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
+from mm_companion.ui.start_window import CharacterCard
 from mm_companion.ui.widgets import make_spin_box
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
@@ -73,6 +79,8 @@ TUNNEL_PLACEHOLDER = "e.g. 147.185.221.23:12345 — what your tunnel shows"
 RELAY_PLACEHOLDER = "e.g. relay.example.net — a relay to fall back to"
 
 NO_PLAYERS = "Nobody has joined yet — send the join code above to your players."
+
+NO_NPCS = "No NPCs in this session yet — create one, or add one you have already written."
 
 
 class GMWindow(QMainWindow):
@@ -100,6 +108,9 @@ class GMWindow(QMainWindow):
         self._snapshots: dict[str, dict] = {}
         # Read-only sheets opened from a card, kept referenced while open.
         self._player_windows: dict[str, QMainWindow] = {}
+        # NPC sheets opened from this window, keyed by the file they came from
+        # (an unsaved new NPC by a placeholder key), likewise kept referenced.
+        self._npc_windows: dict[str, QMainWindow] = {}
         # One relay attempt per hosting run: the fallback republishes, and a
         # second attempt off that would loop.
         self._relay_attempted = False
@@ -113,6 +124,7 @@ class GMWindow(QMainWindow):
         layout.addWidget(self._build_session_box())
         layout.addWidget(self._build_connection_box())
         layout.addWidget(self._build_players_box(), stretch=1)
+        layout.addWidget(self._build_npcs_box(), stretch=1)
         layout.addWidget(self._build_rolls_box(), stretch=1)
         layout.addWidget(self._build_notice())
 
@@ -124,6 +136,7 @@ class GMWindow(QMainWindow):
         self._connect_bridge()
         self._refresh_idle_status()
         self._refresh_rolls()
+        self._refresh_npcs()
 
     # -- construction ------------------------------------------------------
 
@@ -222,6 +235,37 @@ class GMWindow(QMainWindow):
         self._cards_container = FlowContainer()
         self._cards_flow = FlowLayout(self._cards_container)
         layout.addWidget(self._cards_container)
+        layout.addStretch()
+        return box
+
+    def _build_npcs_box(self) -> QGroupBox:
+        """The session's cast of NPCs, and the two ways to add one.
+
+        An NPC is an ordinary character saved in the workspace ``gm_characters/``
+        dir, so the GM's bestiary outlives any one session; what belongs to *this*
+        session is which of them are in it (``SessionState.npc_paths``). Hence two
+        buttons: write a new one, or bring an existing one in.
+        """
+        box = QGroupBox("NPCs")
+        layout = QVBoxLayout(box)
+
+        buttons = QHBoxLayout()
+        create = QPushButton("Create NPC")
+        create.clicked.connect(self._create_npc)
+        buttons.addWidget(create)
+        add = QPushButton("Add existing…")
+        add.clicked.connect(self._add_existing_npc)
+        buttons.addWidget(add)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+        self._no_npcs = _wrapped(NO_NPCS)
+        self._no_npcs.setEnabled(False)
+        layout.addWidget(self._no_npcs)
+
+        self._npc_container = FlowContainer()
+        self._npc_flow = FlowLayout(self._npc_container)
+        layout.addWidget(self._npc_container)
         layout.addStretch()
         return box
 
@@ -390,6 +434,7 @@ class GMWindow(QMainWindow):
         self._clear_cards()
         self._refresh_idle_status()
         self._refresh_rolls()
+        self._refresh_npcs()
 
     def _refresh_rolls(self) -> None:
         """Point the history at the live session, or at the one on disk.
@@ -636,6 +681,164 @@ class GMWindow(QMainWindow):
         self._snapshots.clear()
         self._no_players.setVisible(True)
 
+    # -- NPCs ---------------------------------------------------------------
+
+    def _npc_dir(self) -> Path:
+        """Where NPCs are saved — apart from the player characters, and never listed
+        in the launcher's library."""
+        return storage.get_workspace().gm_characters_dir
+
+    def _npc_summaries(self) -> list[library.CharacterSummary]:
+        """This session's NPCs, in the order they were added.
+
+        Reads the whole ``gm_characters/`` dir through the same seam the launcher
+        uses and keeps the ones this session names. A file deleted behind the app's
+        back is quietly dropped from the session rather than left as a card that
+        opens nothing.
+        """
+        wanted = list(self._state.npc_paths)
+        if not wanted:
+            return []
+        by_name = {
+            summary.path.name: summary
+            for summary in library.list_saved_characters(self._npc_dir())
+            if summary.path is not None
+        }
+        alive = [name for name in wanted if name in by_name]
+        if alive != wanted:
+            self._set_npc_paths(alive)
+        return [by_name[name] for name in alive]
+
+    def _set_npc_paths(self, paths: list[str]) -> None:
+        """Record the session's cast, persisting it wherever the session lives now.
+
+        While hosting, the state belongs to the server's lock — writing it from
+        here would race its own saves — so the change goes through the server. Off
+        the air the window owns the state and writes it itself; either way the
+        cast survives a restart.
+        """
+        server = self._bridge.server
+        if server is not None:
+            server.set_npc_paths(paths)
+            return
+        self._state.npc_paths = list(paths)
+        self._state.touch()
+        try:
+            store.save_session(self._state)
+            storage.update_settings(session_last_id=self._state.id)
+        except OSError:
+            pass  # an unwritable workspace is not worth a dialog mid-session
+
+    def _refresh_npcs(self) -> None:
+        """Rebuild the NPC grid from the session's cast."""
+        while self._npc_flow.count():
+            item = self._npc_flow.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+        summaries = self._npc_summaries()
+        for summary in summaries:
+            card = CharacterCard(summary, removable=True)
+            card.clicked.connect(self._open_npc)
+            card.removeRequested.connect(self._remove_npc)
+            card.deleteRequested.connect(self._delete_npc)
+            self._npc_flow.addWidget(card)
+        self._no_npcs.setVisible(not summaries)
+
+    def _create_npc(self) -> None:
+        """Write a new NPC: an editable, simplified sheet that saves into the cast."""
+        self._track_npc_window(NPCWindow(locked=False))
+
+    def _add_existing_npc(self) -> None:
+        """Bring an NPC written for another session into this one."""
+        directory = self._npc_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Add NPC", str(directory), "Character files (*.json)"
+        )
+        if not chosen:
+            return
+        path = Path(chosen)
+        if path.parent != directory:
+            QMessageBox.warning(
+                self,
+                "Add NPC",
+                "An NPC has to live in the GM characters folder:\n"
+                f"{directory}\n\nCopy the file there and try again.",
+            )
+            return
+        self._register_npc(path)
+
+    def _register_npc(self, path: Path) -> None:
+        """Put *path* in the session's cast (no-op if it is already there) and redraw."""
+        if path.name not in self._state.npc_paths:
+            self._set_npc_paths([*self._state.npc_paths, path.name])
+        self._refresh_npcs()
+
+    def _open_npc(self, summary: library.CharacterSummary) -> None:
+        """Open an NPC's sheet, or raise the one already open for it.
+
+        Not replaced the way a player's read-only sheet is: this one is editable,
+        so throwing it away could throw away work the GM has not saved yet.
+        """
+        if summary.path is None:
+            return
+        path = Path(summary.path)
+        existing = self._window_for(path)
+        if existing is not None:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+        self._track_npc_window(NPCWindow(character=library.load_character(path), path=path))
+
+    def _track_npc_window(self, window: NPCWindow) -> None:
+        """Show an NPC sheet and keep it alive, watching for saves and its close."""
+        key = id(window)
+        self._npc_windows[key] = window
+        window.saved.connect(lambda w=window: self._on_npc_saved(w))
+        window.closed.connect(lambda k=key: self._npc_windows.pop(k, None))
+        window.show()
+        window.raise_()
+
+    def _on_npc_saved(self, window: NPCWindow) -> None:
+        """A saved NPC joins the cast (a new one) and restates its card (an old one)."""
+        if window.path is not None:
+            self._register_npc(Path(window.path))
+
+    def _window_for(self, path: Path) -> QMainWindow | None:
+        return next(
+            (w for w in self._npc_windows.values() if w.path is not None and Path(w.path) == path),
+            None,
+        )
+
+    def _remove_npc(self, summary: library.CharacterSummary) -> None:
+        """Take an NPC out of this session, leaving the file where it is."""
+        if summary.path is None:
+            return
+        name = Path(summary.path).name
+        self._set_npc_paths([n for n in self._state.npc_paths if n != name])
+        self._refresh_npcs()
+        self._show_notice(f"“{summary.name}” is no longer in this session.", theme.ACCENT)
+
+    def _delete_npc(self, summary: library.CharacterSummary) -> None:
+        """Delete an NPC's file for good, once the GM confirms it."""
+        if summary.path is None:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Delete NPC",
+            f"Delete “{summary.name}”? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        library.delete_character(Path(summary.path))
+        self._remove_npc(summary)
+
     # -- small view helpers ------------------------------------------------
 
     def _refresh_idle_status(self) -> None:
@@ -696,6 +899,10 @@ class GMWindow(QMainWindow):
         for window in self._player_windows.values():
             window.close()
         self._player_windows.clear()
+        # An NPC sheet with unsaved edits prompts, and may refuse to close; it
+        # stays open and tracked, which is fine — this window is reusable.
+        for npc_window in list(self._npc_windows.values()):
+            npc_window.close()
         self._stop_hosting()
         set_active_session(None)
         super().closeEvent(event)

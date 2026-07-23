@@ -300,6 +300,20 @@ class SessionServer:
             self.state.touch()
             self._persist()
 
+    def set_npc_paths(self, paths: Iterable[str]) -> None:
+        """Replace the session's NPC list and persist it.
+
+        NPCs are GM-only: the filenames name characters in the workspace
+        ``gm_characters/`` dir and nothing about them ever goes on the wire. This
+        exists so the GM's window can change the cast while a session is running
+        without racing the server's own writes — the state is shared, so the
+        write takes the same lock every other mutation does.
+        """
+        with self._lock:
+            self.state.npc_paths = [str(path) for path in paths]
+            self.state.touch()
+            self._persist()
+
     # -- outbound ----------------------------------------------------------
 
     def roster(self) -> list[dict]:

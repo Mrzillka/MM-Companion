@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
-from mm_companion.core import storage
+from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import apply_condition
@@ -33,6 +33,7 @@ from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
 from mm_companion.ui.gm_window import GMWindow
+from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
 from mm_companion.ui.session_bridge import active_session, set_active_session
@@ -62,6 +63,9 @@ def window(qapp: QApplication) -> GMWindow:
     made = GMWindow(bind="127.0.0.1")
     made._port_spin.setValue(0)  # any free port, so tests never collide
     yield made
+    for npc in list(made._npc_windows.values()):
+        npc._dirty = False  # a "save your changes?" modal would hang the run
+        npc.close()
     made.bridge.stop()
 
 
@@ -728,3 +732,176 @@ def test_a_roll_made_before_hosting_is_shown_but_not_recorded(
 
     assert len(window._history.cards()) == 1
     assert window._state.rolls == []
+
+
+# --------------------------------------------------------------------------
+# NPCs
+#
+# The GM's bestiary lives in the workspace ``gm_characters/`` dir and outlives any
+# one session; what belongs to a session is which of those are *in* it
+# (``SessionState.npc_paths``). So the two verbs are deliberately different —
+# removing takes an NPC out of tonight's cast, deleting takes the file away — and
+# both have to survive the app being closed.
+# --------------------------------------------------------------------------
+
+
+def write_npc(name: str = "Thug", power_level: int = 8) -> Path:
+    """Save an NPC into the GM folder, the way the NPC window would."""
+    character = Character.new_default(load_game_data())
+    character.profile["hero_name"] = name
+    character.power_level = power_level
+    return library.save_character(character, directory=storage.get_workspace().gm_characters_dir)
+
+
+def npc_names(window: GMWindow) -> list[str]:
+    """The captions on the NPC cards, in the order they are laid out."""
+    return [
+        window._npc_flow.itemAt(i).widget()._summary.name  # type: ignore[union-attr]
+        for i in range(window._npc_flow.count())
+    ]
+
+
+def test_a_session_starts_with_no_npcs(window: GMWindow) -> None:
+    assert npc_names(window) == []
+    assert window._no_npcs.isVisibleTo(window)
+
+
+def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWindow) -> None:
+    window._create_npc()
+    (sheet,) = window._npc_windows.values()
+    sheet.sheet.character.profile["hero_name"] = "Bank Robber"
+    sheet._write(window._npc_dir() / "bank-robber.json")
+    qapp.processEvents()
+
+    assert window._state.npc_paths == ["bank-robber.json"]
+    assert npc_names(window) == ["Bank Robber"]
+
+
+def test_an_npc_sheet_is_the_simplified_one(window: GMWindow) -> None:
+    window._create_npc()
+    (sheet,) = window._npc_windows.values()
+
+    assert isinstance(sheet, NPCWindow)
+    assert sheet.storage_dir() == window._npc_dir()
+    assert sheet.sheet.system_info._estimated_pl.isVisibleTo(sheet)
+
+
+def test_an_existing_npc_can_be_brought_into_the_session(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_npc("Ogre")
+    monkeypatch.setattr(
+        gm_window_module.QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), "")
+    )
+
+    window._add_existing_npc()
+
+    assert window._state.npc_paths == ["ogre.json"]
+    assert npc_names(window) == ["Ogre"]
+
+
+def test_the_same_npc_is_not_added_twice(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._register_npc(path)
+
+    assert window._state.npc_paths == ["ogre.json"]
+    assert npc_names(window) == ["Ogre"]
+
+
+def test_the_cast_is_still_there_next_time_gm_mode_opens(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    window._register_npc(write_npc("Ogre"))
+
+    reopened = GMWindow(bind="127.0.0.1")
+    try:
+        assert reopened._state.id == window._state.id
+        assert npc_names(reopened) == ["Ogre"]
+    finally:
+        reopened.bridge.stop()
+
+
+def test_removing_an_npc_leaves_its_file_where_it_is(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+
+    window._remove_npc(library.list_saved_characters(window._npc_dir())[0])
+
+    assert window._state.npc_paths == []
+    assert npc_names(window) == []
+    assert path.is_file()  # still in the bestiary, just not in this session
+
+
+def test_deleting_an_npc_takes_the_file_with_it(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+
+    window._delete_npc(library.list_saved_characters(window._npc_dir())[0])
+
+    assert window._state.npc_paths == []
+    assert npc_names(window) == []
+    assert not path.exists()
+
+
+def test_a_refused_deletion_changes_nothing(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+
+    window._delete_npc(library.list_saved_characters(window._npc_dir())[0])
+
+    assert window._state.npc_paths == ["ogre.json"]
+    assert path.is_file()
+
+
+def test_an_npc_whose_file_vanished_drops_out_of_the_session(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    path.unlink()  # deleted behind the app's back
+
+    window._refresh_npcs()
+
+    assert window._state.npc_paths == []
+    assert npc_names(window) == []
+
+
+def test_opening_the_same_npc_twice_raises_the_one_window(window: GMWindow) -> None:
+    window._register_npc(write_npc("Ogre"))
+    summary = library.list_saved_characters(window._npc_dir())[0]
+
+    window._open_npc(summary)
+    first = next(iter(window._npc_windows.values()))
+    window._open_npc(summary)
+
+    # Reopening must not replace the sheet the way a player's read-only one is:
+    # this one is editable, and a replacement would take unsaved work with it.
+    assert list(window._npc_windows.values()) == [first]
+
+
+def test_a_new_session_starts_with_an_empty_cast(window: GMWindow) -> None:
+    window._register_npc(write_npc("Ogre"))
+
+    window._new_session()
+
+    assert window._state.npc_paths == []
+    assert npc_names(window) == []
+
+
+def test_an_npc_added_while_hosting_goes_through_the_server(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    start_hosting(qapp, window, canned(mapping=FakeMapping()))
+    window._register_npc(write_npc("Ogre"))
+
+    server = window.bridge.server
+    assert server is not None
+    # Through the server, not around it: the state is shared with its worker
+    # threads, so the write has to take the same lock every other mutation does.
+    assert server.state.npc_paths == ["ogre.json"]
+    assert store.load_session(window._state.id).npc_paths == ["ogre.json"]

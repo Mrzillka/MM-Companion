@@ -214,3 +214,14 @@ class CharacterSheet(QWidget):
         """Toggle read-only view mode across every block (incl. floated ones)."""
         for section in self._sections():
             section.set_locked(locked)
+
+    def set_npc_mode(self, npc: bool) -> None:
+        """Simplify the sheet for a GM's NPC: no point budget, an estimated PL.
+
+        Fanned out after construction, the same way :meth:`set_locked` is — the
+        blocks come from the registry and are built from ``(data, character)``
+        alone, so a mode is something the sheet turns on afterwards rather than a
+        constructor argument threaded through every factory.
+        """
+        self.system_info.set_npc_mode(npc)
+        self._recompute_derived()

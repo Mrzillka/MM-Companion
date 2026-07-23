@@ -224,7 +224,7 @@ in the GM window *and* in each player's roller, and add the GM's "Hidden roll"
 checkbox.
 
 ### Phase 9 — NPCs
-**Status: not started**
+**Status: done**
 NPC cards and "Create NPC" on the GM window; `NPCWindow` with the simplified sheet
 (PP pool row replaced by the estimated PL); storage in `gm_characters/` through the
 existing `core/library.py` seams.
@@ -867,3 +867,69 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     scrolled to a new roll automatically (it is inserted at the top, which is
     where the view already sits), and a player's welcome history is still the
     last 200 visible rolls while the GM sees the whole log.
+
+- **2026-07-23 — Phase 9 done.** The GM's own cast: NPC cards on the GM window and
+  a simplified sheet behind them. Almost entirely `ui/` again — one small core
+  addition — because an NPC *is* a `Character` and the storage seams already took
+  a directory.
+  - **The simplified sheet is a mode, not a second sheet.** `ui/npc_window.py`'s
+    `NPCWindow` **subclasses `MainWindow`**, which grew three seams for it:
+    `TITLE`, `storage_dir()` (where the File dialogs open) and `_new_child()`
+    (what File ▸ Open builds — from an NPC window that is another NPC). Plus a
+    public `path` property, which is how the GM window learns where a new NPC was
+    just saved. Everything else — dirty tracking, the layout persistence, the
+    Lock action, the dice roller — is inherited rather than rebuilt.
+  - **`SystemInfoSection.set_npc_mode()`** hides the pool (`spent / total`) and
+    shows an estimated Power Level in its place, renaming the row's own caption
+    through `QFormLayout.labelForField` — no row hiding, so it works on every
+    supported Qt. The estimate rides on the hook that already existed:
+    `set_pool_current` is called by the sheet on every `BUILD_CHANGED`, so the
+    same number that fills the pool feeds `power_level_for_points`. **The Power
+    Level spin box stays**, and stays authoritative: it is the level the NPC is
+    *meant* to be and what the PL caps check against, while the estimate under it
+    says what was actually built. `_link_pl_pp` no-ops in NPC mode — an NPC has no
+    budget to snap a level to. `CharacterSheet.set_npc_mode()` fans it out after
+    construction, exactly like `set_locked`, because blocks come from the registry
+    and are built from `(data, character)` alone.
+  - **NPCs open unlocked.** A saved player character opens read-only because it is
+    finished; an NPC is working material the GM is still writing, often mid-fight.
+  - **Two scopes, deliberately.** The GM's *bestiary* is the workspace
+    `gm_characters/` dir and outlives any session; a *session's cast* is
+    `SessionState.npc_paths` (the field has been in the model since Phase 1). So
+    the card menu has two verbs — **Remove from this session** leaves the file
+    alone, **Delete** takes it away — and there are two ways in: "Create NPC" and
+    "Add existing…". A file deleted behind the app's back is pruned from the cast
+    on the next refresh rather than left as a card that opens nothing.
+  - **`core/session/server.py::set_npc_paths`** — the one core change, twinned
+    with `set_session_name`. While hosting, the state belongs to the server's lock
+    and its worker threads; writing `session.json` from the GUI thread would race
+    its own saves. Off the air the GM window owns the state and writes it itself
+    (and sets `session_last_id`, so a cast added before ever hosting still comes
+    back). Nothing about an NPC goes on the wire — they are GM-only.
+  - **`ui/start_window.py`** — `CharacterCard` gained `removable=True` and a
+    `removeRequested` signal for the extra menu entry; the launcher is unchanged.
+    `ui/gm_window.py` imports that card rather than growing a second one.
+  - **Reopening an NPC raises its window instead of replacing it.** A player's
+    read-only sheet is rebuilt from the newest snapshot on every click (Phase 5);
+    an NPC sheet is *editable*, so replacing it could throw away unsaved work.
+  - **Tests** — `tests/test_npc_window.py` (10: the folder, the swapped row, the
+    estimate tracking the build, and the PL/budget link being off — with the
+    player-character behaviour asserted beside each so the difference is the
+    subject) and 13 in `test_gm_window.py` (61 total: the cast surviving a
+    restart, the two verbs, the vanished file, the raise-don't-replace rule, and
+    an NPC added while hosting going *through* the server). A modal-answering
+    fixture is needed in both files — an unsaved sheet's "save your changes?"
+    prompt has nobody to answer it and hangs the run.
+  - **Seen in the real app**: the driver grew `gm` and `npc` targets
+    (`.claude/skills/run-mm-companion/`), so GM Mode with a populated NPC panel
+    and the simplified sheet are one command each.
+  - Full suite: 990 passed, only the known environmental `test_block_sizes` font
+    failure.
+  - Deferred, and worth knowing: an NPC card shows the **saved** file, not a live
+    sheet — editing an NPC and saving refreshes its card, but an open unsaved
+    sheet is not reflected. NPCs are not on the wire at all, so a player cannot be
+    shown one; that is a design choice to revisit only with a "reveal this NPC"
+    feature behind it. There is no drag-to-reorder on the cast (it is in the order
+    added), no duplicate-an-NPC action, and the portrait is whatever the file
+    carries — unlike a player card, an NPC's image resolves normally because the
+    file is local.

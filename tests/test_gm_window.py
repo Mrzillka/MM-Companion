@@ -33,6 +33,7 @@ from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
 from mm_companion.ui.gm_window import GMWindow
+from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
@@ -911,9 +912,28 @@ def npc_names(window: GMWindow) -> list[str]:
     ]
 
 
+def npc_cards(window: GMWindow) -> list[NPCCard]:
+    return [
+        window._npc_flow.itemAt(i).widget()  # type: ignore[return-value]
+        for i in range(window._npc_flow.count())
+    ]
+
+
 def test_a_session_starts_with_no_npcs(window: GMWindow) -> None:
     assert npc_names(window) == []
     assert window._no_npcs.isVisibleTo(window)
+
+
+def test_an_npc_renders_as_a_live_card_over_its_model(window: GMWindow) -> None:
+    window._register_npc(write_npc("Ogre", power_level=9))
+
+    (card,) = npc_cards(window)
+    assert isinstance(card, NPCCard)
+    assert card.display_name() == "Ogre"
+    # The card is backed by the loaded model, not just a summary.
+    assert card.character.profile["hero_name"] == "Ogre"
+    # And the GM window holds an entry keyed by the file name.
+    assert "ogre.json" in window._npc_state
 
 
 def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWindow) -> None:
@@ -976,7 +996,7 @@ def test_removing_an_npc_leaves_its_file_where_it_is(window: GMWindow) -> None:
     path = write_npc("Ogre")
     window._register_npc(path)
 
-    window._remove_npc(library.list_saved_characters(window._npc_dir())[0])
+    window._remove_npc(path.name)
 
     assert window._state.npc_paths == []
     assert npc_names(window) == []
@@ -990,7 +1010,7 @@ def test_deleting_an_npc_takes_the_file_with_it(
     window._register_npc(path)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
 
-    window._delete_npc(library.list_saved_characters(window._npc_dir())[0])
+    window._delete_npc(path.name)
 
     assert window._state.npc_paths == []
     assert npc_names(window) == []
@@ -1004,7 +1024,7 @@ def test_a_refused_deletion_changes_nothing(
     window._register_npc(path)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
 
-    window._delete_npc(library.list_saved_characters(window._npc_dir())[0])
+    window._delete_npc(path.name)
 
     assert window._state.npc_paths == ["ogre.json"]
     assert path.is_file()
@@ -1022,12 +1042,12 @@ def test_an_npc_whose_file_vanished_drops_out_of_the_session(window: GMWindow) -
 
 
 def test_opening_the_same_npc_twice_raises_the_one_window(window: GMWindow) -> None:
-    window._register_npc(write_npc("Ogre"))
-    summary = library.list_saved_characters(window._npc_dir())[0]
+    path = write_npc("Ogre")
+    window._register_npc(path)
 
-    window._open_npc(summary)
+    window._open_npc(path.name)
     first = next(iter(window._npc_windows.values()))
-    window._open_npc(summary)
+    window._open_npc(path.name)
 
     # Reopening must not replace the sheet the way a player's read-only one is:
     # this one is editable, and a replacement would take unsaved work with it.

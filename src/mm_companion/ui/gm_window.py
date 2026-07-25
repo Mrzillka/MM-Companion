@@ -33,6 +33,7 @@ to :class:`~mm_companion.ui.session_bridge.SessionBridge`.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
@@ -64,6 +65,7 @@ from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
@@ -71,7 +73,6 @@ from mm_companion.ui.sections.conditions import condition_display_name
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
-from mm_companion.ui.start_window import CharacterCard
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
@@ -80,6 +81,21 @@ BIND_ADDRESS = "0.0.0.0"
 NO_PLAYERS = "Nobody has joined yet — send the join code above to your players."
 
 NO_NPCS = "No NPCs in this session yet — create one, or add one you have already written."
+
+
+@dataclass
+class _NpcEntry:
+    """One NPC in the session's cast, with its loaded model and runtime state.
+
+    Keyed by file name. The model comes from disk (so a saved condition edit is
+    reflected on the next refresh); ``initiative`` is transient — rolled at the
+    table, not part of the character — so it lives here rather than in the file.
+    """
+
+    path: Path
+    summary: library.CharacterSummary
+    character: Character
+    initiative: int | None = None
 
 
 class GMWindow(QMainWindow):
@@ -110,6 +126,10 @@ class GMWindow(QMainWindow):
         # NPC sheets opened from this window, keyed by the file they came from
         # (an unsaved new NPC by a placeholder key), likewise kept referenced.
         self._npc_windows: dict[str, QMainWindow] = {}
+        # The session's cast as live cards need it: one entry per file name, with
+        # the loaded model and its transient initiative. Rebuilt on every refresh
+        # from disk, carrying the runtime state across.
+        self._npc_state: dict[str, _NpcEntry] = {}
         # One relay attempt per hosting run: the fallback republishes, and a
         # second attempt off that would loop.
         self._relay_attempted = False
@@ -873,7 +893,11 @@ class GMWindow(QMainWindow):
             pass  # an unwritable workspace is not worth a dialog mid-session
 
     def _refresh_npcs(self) -> None:
-        """Rebuild the NPC grid from the session's cast."""
+        """Rebuild the NPC grid from the session's cast.
+
+        Each NPC's model is loaded from disk, so a saved edit shows up here; the
+        transient initiative is carried over from the previous state by file name.
+        """
         while self._npc_flow.count():
             item = self._npc_flow.takeAt(0)
             widget = item.widget() if item is not None else None
@@ -882,13 +906,28 @@ class GMWindow(QMainWindow):
                 widget.deleteLater()
 
         summaries = self._npc_summaries()
+        previous = self._npc_state
+        self._npc_state = {}
         for summary in summaries:
-            card = CharacterCard(summary, removable=True)
-            card.clicked.connect(self._open_npc)
+            if summary.path is None:
+                continue
+            name = summary.path.name
+            character = library.load_character(summary.path)
+            initiative = previous[name].initiative if name in previous else None
+            self._npc_state[name] = _NpcEntry(
+                path=Path(summary.path),
+                summary=summary,
+                character=character,
+                initiative=initiative,
+            )
+
+        for entry in self._npc_state.values():
+            card = NPCCard(entry.character, entry.summary, self._data)
+            card.openRequested.connect(self._open_npc)
             card.removeRequested.connect(self._remove_npc)
             card.deleteRequested.connect(self._delete_npc)
             self._npc_flow.addWidget(card)
-        self._no_npcs.setVisible(not summaries)
+        self._no_npcs.setVisible(not self._npc_state)
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""
@@ -920,15 +959,16 @@ class GMWindow(QMainWindow):
             self._set_npc_paths([*self._state.npc_paths, path.name])
         self._refresh_npcs()
 
-    def _open_npc(self, summary: library.CharacterSummary) -> None:
+    def _open_npc(self, name: str) -> None:
         """Open an NPC's sheet, or raise the one already open for it.
 
         Not replaced the way a player's read-only sheet is: this one is editable,
         so throwing it away could throw away work the GM has not saved yet.
         """
-        if summary.path is None:
+        entry = self._npc_state.get(name)
+        if entry is None:
             return
-        path = Path(summary.path)
+        path = entry.path
         existing = self._window_for(path)
         if existing is not None:
             existing.show()
@@ -957,30 +997,30 @@ class GMWindow(QMainWindow):
             None,
         )
 
-    def _remove_npc(self, summary: library.CharacterSummary) -> None:
+    def _remove_npc(self, name: str) -> None:
         """Take an NPC out of this session, leaving the file where it is."""
-        if summary.path is None:
-            return
-        name = Path(summary.path).name
+        entry = self._npc_state.get(name)
+        display = entry.summary.name if entry is not None else name
         self._set_npc_paths([n for n in self._state.npc_paths if n != name])
         self._refresh_npcs()
-        self._show_notice(f"“{summary.name}” is no longer in this session.", theme.ACCENT)
+        self._show_notice(f"“{display}” is no longer in this session.", theme.ACCENT)
 
-    def _delete_npc(self, summary: library.CharacterSummary) -> None:
+    def _delete_npc(self, name: str) -> None:
         """Delete an NPC's file for good, once the GM confirms it."""
-        if summary.path is None:
+        entry = self._npc_state.get(name)
+        if entry is None:
             return
         confirm = QMessageBox.question(
             self,
             "Delete NPC",
-            f"Delete “{summary.name}”? This cannot be undone.",
+            f"Delete “{entry.summary.name}”? This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        library.delete_character(Path(summary.path))
-        self._remove_npc(summary)
+        library.delete_character(entry.path)
+        self._remove_npc(name)
 
     # -- small view helpers ------------------------------------------------
 

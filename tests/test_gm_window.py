@@ -385,8 +385,9 @@ def test_the_roster_becomes_one_card_per_player(qapp: QApplication, window: GMWi
             {"display_name": "Bex", "connected": False},
         )
     )
+    # The GM is not a player on their own board — no card for the GM's own seat.
     names = [card._name_label.text() for card in window._cards.values()]
-    assert names == ["GM (you)", "Aria", "Bex — offline"]
+    assert names == ["Aria", "Bex — offline"]
     assert window._no_players.isHidden() is True
 
 
@@ -477,7 +478,12 @@ def test_open_sheet_shows_the_character_read_only(qapp: QApplication, window: GM
 
     sheet_window = window._player_windows["p0"]
     assert sheet_window.sheet.character.profile["hero_name"] == "Nightingale"
-    assert sheet_window._lock_action.isChecked() is True
+    # A GM view is a locked read-only window: no Lock toggle to undo it, and only
+    # a View menu (no File/Settings/Tools/Session).
+    assert not hasattr(sheet_window, "_lock_action")
+    assert sheet_window.sheet.locked is True
+    menus = [action.text() for action in sheet_window.menuBar().actions()]
+    assert menus == ["&View"]
     window.close()  # closes the player sheets it opened
 
 
@@ -690,9 +696,9 @@ def test_only_a_connected_player_can_be_given_a_condition(
         )
     )
 
-    # The GM applies conditions to itself on its own sheet, and an offline player
-    # has no connection for the command to travel down.
-    assert window._cards["p0"]._condition_button.isEnabled() is False
+    # The GM applies conditions to itself on its own sheet, so gets no card at all;
+    # an offline player has no connection for the command to travel down.
+    assert "p0" not in window._cards
     assert window._cards["p1"]._condition_button.isEnabled() is True
     assert window._cards["p2"]._condition_button.isEnabled() is False
 

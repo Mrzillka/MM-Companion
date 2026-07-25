@@ -94,8 +94,9 @@ The windows and widgets:
   button, the reachability advice, the **Players** grid, the **NPCs** grid, and a
   **Rolls** box (an embedded roller with a Hidden-roll switch beside the shared
   history).
-- **`player_card.py`** — one card per connected player: portrait placeholder,
-  name, PL, hero points, condition chips, "Open sheet", and a "+" that
+- **`player_card.py`** — one card per connected player (never the GM's own seat):
+  portrait (the transmitted thumbnail, else a placeholder), name, PL, hero points,
+  condition chips (each with a hover hint), "Open sheet", and a "+" that
   fast-applies a condition onto that player's live sheet.
 - **`npc_window.py`** — an NPC is an ordinary `Character` in a simplified sheet
   (the point-pool row replaced by an *estimated* PL). NPCs are GM-only and never
@@ -112,8 +113,12 @@ A player's client pushes a **whole character snapshot** on join and on every
 change, coalesced by a 400 ms debounce so a burst of edits is one send. A typical
 PL 10 sheet encodes to **~3–4 KB** (measured with
 `ui.session_player.snapshot_size`), so bandwidth is a non-issue at any plausible
-scale and sending deltas is not needed — the debounce is. Snapshots carry no
-portrait; player cards show a placeholder for now.
+scale and sending deltas is not needed — the debounce is. The snapshot's
+`image_path` is stripped (a path is meaningless on another machine); the portrait
+instead rides along as a **downscaled base64 thumbnail** under a `portrait` key
+(`ui/session_portrait.py`), kept well under the message cap so it shares the same
+snapshot. `SnapshotPusher` encodes it (caching until the source changes) and the
+player card / GM's read-only sheet decode it; a card with none shows a placeholder.
 
 ## The two headless entrypoints
 
@@ -136,9 +141,9 @@ portrait; player cards show a placeholder for now.
   until a GM-auth field is added to the handshake.
 - **An opened player sheet on the GM side is a snapshot, not live.** The player
   *card* updates in real time; re-opening the sheet re-reads the latest snapshot.
-  Live re-seeding needs a re-seed API on `CharacterSheet`.
-- **Portraits do not travel** — a size-capped base64 payload is the planned
-  follow-up.
+  The GM's sheet is a **fully-locked read-only view** (`MainWindow(gm_view=True)`):
+  only a View menu, no way to unlock, save, or edit. Live re-seeding needs a
+  re-seed API on `CharacterSheet`.
 - **End-to-end encryption.** TLS terminates at the relay, so the relay *operator*
   could in principle read traffic; self-hosting the relay is the answer for anyone
   who minds (one command). The stdlib has no symmetric cipher usable across

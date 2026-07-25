@@ -55,6 +55,7 @@ class CharacterSheet(QWidget):
         self._data = data or load_game_data()
         self.character = character or Character.new_default(self._data)
         self._npc = False
+        self._locked = False
 
         # Register any data-described (declarative) blocks the active mods contribute
         # via blocks.json, so they join the registry before we iterate it below.
@@ -218,8 +219,14 @@ class CharacterSheet(QWidget):
             spent = power_points_spent(self.character, self._data)
             self.system_info.set_pool_current("power_points", spent)
 
+    @property
+    def locked(self) -> bool:
+        """Whether the sheet is in read-only view mode."""
+        return self._locked
+
     def set_locked(self, locked: bool) -> None:
         """Toggle read-only view mode across every block (incl. floated ones)."""
+        self._locked = locked
         for section in self._sections():
             section.set_locked(locked)
 

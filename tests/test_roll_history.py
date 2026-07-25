@@ -208,6 +208,36 @@ def test_saving_reports_the_parameters(panel: RollHistoryPanel) -> None:
     assert seen == [{"bonus": 6, "penalty": 0, "dc": 15}]
 
 
+# -- deferring one's own roll until the die settles -------------------------
+
+
+def test_a_deferred_own_roll_is_held_until_released(panel: RollHistoryPanel) -> None:
+    panel._own_id = "p1"
+    panel.set_defer_own(True)
+
+    # Our own roll is held back...
+    panel.add_roll(roll(seq=1, player_id="p1"))
+    assert panel.cards() == []
+    # ...while another player's lands at once (no local animation to wait for).
+    panel.add_roll(roll(seq=2, player_id="p2"))
+    assert len(panel.cards()) == 1
+
+    # Releasing it (the roller's die has settled) finally shows it.
+    panel.release_roll(roll(seq=1, player_id="p1"))
+    assert len(panel.cards()) == 2
+
+
+def test_a_released_roll_is_not_shown_twice(panel: RollHistoryPanel) -> None:
+    panel._own_id = "p1"
+    panel.set_defer_own(True)
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    panel.release_roll(roll(seq=1, player_id="p1"))
+    panel.release_roll(roll(seq=1, player_id="p1"))  # a second cue must not double it
+
+    assert len(panel.cards()) == 1
+
+
 # -- the remove button (GM only) --------------------------------------------
 
 

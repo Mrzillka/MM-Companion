@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Signal
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QMessageBox, QWidget
+from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMenu, QMessageBox, QWidget
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
@@ -41,8 +41,14 @@ class MainWindow(QMainWindow):
         character: Character | None = None,
         path: Path | None = None,
         locked: bool = True,
+        gm_view: bool = False,
     ) -> None:
         super().__init__(parent)
+        # A GM's read-only view of a player's snapshot: force-locked, with only the
+        # View menu — no File/Settings/Tools/Session and no way to unlock or save.
+        self._gm_view = gm_view
+        if gm_view:
+            locked = True
         # Comfortably fits Base Information's natural width; the blocks stay well
         # inside this, so the sheet only ever scrolls vertically inside the central
         # scroll area when the blocks are taller than the window (see below).
@@ -94,18 +100,50 @@ class MainWindow(QMainWindow):
         return MainWindow(character=character, path=path, locked=True)
 
     def _build_menu_bar(self, locked: bool) -> None:
-        """Build the top menu bar."""
+        """Build the top menu bar.
+
+        A GM's read-only view (:attr:`_gm_view`) gets only the **View** menu — no
+        File/Settings/Tools/Session, and no Lock toggle — so a player's snapshot
+        can be looked at and rearranged but never edited, saved, or unlocked.
+        """
         menu_bar = self.menuBar()
 
-        file_menu = menu_bar.addMenu("&File")
-        self._add_placeholder_actions(file_menu, ["New"])
-        file_menu.addAction("Open...").triggered.connect(self._open)
-        file_menu.addAction("Save").triggered.connect(self._save)
-        file_menu.addAction("Save As...").triggered.connect(self._save_as)
-        file_menu.addSeparator()
-        # Exit closes the sheet; closing brings the launcher back (see closeEvent).
-        file_menu.addAction("Exit").triggered.connect(self.close)
+        if not self._gm_view:
+            file_menu = menu_bar.addMenu("&File")
+            self._add_placeholder_actions(file_menu, ["New"])
+            file_menu.addAction("Open...").triggered.connect(self._open)
+            file_menu.addAction("Save").triggered.connect(self._save)
+            file_menu.addAction("Save As...").triggered.connect(self._save_as)
+            file_menu.addSeparator()
+            # Exit closes the sheet; closing brings the launcher back (see closeEvent).
+            file_menu.addAction("Exit").triggered.connect(self.close)
 
+        self._build_view_menu(menu_bar)
+
+        if self._gm_view:
+            return
+
+        settings_menu = menu_bar.addMenu("&Settings")
+        self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
+        settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
+        # Homebrew the non-power PP-cost rates for this character. Stays available even
+        # in a locked (read-only) view — it is a config action, not a build edit.
+        self._cost_config_action = settings_menu.addAction("Cost config...")
+        self._cost_config_action.triggered.connect(self._open_cost_config)
+
+        self._lock_action = settings_menu.addAction("Lock")
+        self._lock_action.setCheckable(True)
+        self._lock_action.setChecked(locked)
+        self._lock_action.toggled.connect(self._sheet.set_locked)
+
+        session_menu = menu_bar.addMenu("&Session")
+        session_menu.addAction("Join session...").triggered.connect(self._join_session)
+
+        tools_menu = menu_bar.addMenu("&Tools")
+        tools_menu.addAction("Dice Roller...").triggered.connect(self._open_dice_roller)
+
+    def _build_view_menu(self, menu_bar) -> None:
+        """The View menu: one show/hide toggle per block, plus Reset Layout."""
         self._view_menu = menu_bar.addMenu("&View")
         # A show/hide toggle per block, so a block closed with its × can be
         # reopened, plus a reset back to the default arrangement.
@@ -122,21 +160,38 @@ class MainWindow(QMainWindow):
         # (its × button, a drag, or Reset Layout).
         self._sheet.canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
 
-        settings_menu = menu_bar.addMenu("&Settings")
-        self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
-        settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
-        # Homebrew the non-power PP-cost rates for this character. Stays available even
-        # in a locked (read-only) view — it is a config action, not a build edit.
-        self._cost_config_action = settings_menu.addAction("Cost config...")
-        self._cost_config_action.triggered.connect(self._open_cost_config)
+    def _join_session(self) -> None:
+        """Join a GM's session, bringing the character already open in this window.
 
-        self._lock_action = settings_menu.addAction("Lock")
-        self._lock_action.setCheckable(True)
-        self._lock_action.setChecked(locked)
-        self._lock_action.toggled.connect(self._sheet.set_locked)
+        Unlike the launcher's Join, this skips the character picker — the sheet in
+        front of the player *is* the character they are bringing, and the pusher
+        reads it live from :attr:`sheet`.
+        """
+        from mm_companion.core.session.client import SessionClientError
+        from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
+        from mm_companion.ui.session_dialogs import JoinSessionDialog
+        from mm_companion.ui.session_player import attach_player_session
 
-        tools_menu = menu_bar.addMenu("&Tools")
-        tools_menu.addAction("Dice Roller...").triggered.connect(self._open_dice_roller)
+        if active_session() is not None:
+            QMessageBox.information(
+                self,
+                "Already in a session",
+                "This app is already in a session. Close that window first.",
+            )
+            return
+
+        dialog = JoinSessionDialog(self, pick_character=False)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        bridge = SessionBridge()
+        try:
+            bridge.join(dialog.join_code(), dialog.display_name())
+        except SessionClientError as exc:
+            QMessageBox.warning(self, "Could not join", str(exc))
+            return
+        set_active_session(bridge)
+        attach_player_session(self, bridge)
 
     def _open_dice_roller(self) -> None:
         """Open the standalone Dice Roller window."""

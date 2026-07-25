@@ -33,6 +33,7 @@ to :class:`~mm_companion.ui.session_bridge.SessionBridge`.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -98,6 +99,22 @@ class _NpcEntry:
     character: Character
     initiative: int | None = None
     card: NPCCard | None = None
+
+
+def _next_copy_name(source_name: str, existing: set[str]) -> str:
+    """The next free ``"<base>-<n>"`` for a copy of *source_name*.
+
+    A trailing ``-<digits>`` on the source is stripped to find the base, so
+    copying "Goon" gives "Goon-2" and copying "Goon-2" gives the next free
+    "Goon-N" rather than "Goon-2-2". ``n`` starts at 2 and steps up until the
+    name is free among *existing*.
+    """
+    match = re.match(r"^(.*?)-(\d+)$", source_name)
+    base = match.group(1) if match else source_name
+    n = 2
+    while f"{base}-{n}" in existing:
+        n += 1
+    return f"{base}-{n}"
 
 
 class GMWindow(QMainWindow):
@@ -931,6 +948,7 @@ class GMWindow(QMainWindow):
             card.applyConditionRequested.connect(self._apply_npc_condition)
             card.removeConditionRequested.connect(self._remove_npc_condition)
             card.initiativeRolled.connect(self._on_npc_initiative)
+            card.copyRequested.connect(self._copy_npc)
             entry.card = card
             self._npc_flow.addWidget(card)
         self._no_npcs.setVisible(not self._npc_state)
@@ -970,6 +988,21 @@ class GMWindow(QMainWindow):
         if path.name not in self._state.npc_paths:
             self._set_npc_paths([*self._state.npc_paths, path.name])
         self._refresh_npcs()
+
+    def _copy_npc(self, name: str) -> None:
+        """Duplicate an NPC into a new one, named ``Goon → Goon-2``.
+
+        A deep copy of the model (through its own serialization), renamed to the
+        next free ``<base>-<n>``, saved as its own file, and added to the cast.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        copy = Character.from_dict(entry.character.to_dict())
+        existing = {other.summary.name for other in self._npc_state.values()}
+        copy.profile["hero_name"] = _next_copy_name(entry.summary.name, existing)
+        path = library.save_character(copy, directory=self._npc_dir())
+        self._register_npc(path)
 
     def _open_npc(self, name: str) -> None:
         """Open an NPC's sheet, or raise the one already open for it.

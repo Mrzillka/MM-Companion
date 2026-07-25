@@ -1116,6 +1116,43 @@ def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) ->
     assert remaining == [("impaired", "Dodge")]
 
 
+def test_copying_an_npc_names_it_goon_2(window: GMWindow) -> None:
+    path = write_npc("Goon")
+    window._register_npc(path)
+
+    window._copy_npc(path.name)
+
+    assert sorted(npc_names(window)) == ["Goon", "Goon-2"]
+    # The copy is its own file in the session's cast.
+    assert "goon-2.json" in window._state.npc_paths
+
+
+def test_copying_twice_walks_up_the_numbers(window: GMWindow) -> None:
+    path = write_npc("Goon")
+    window._register_npc(path)
+
+    window._copy_npc("goon.json")
+    window._copy_npc("goon.json")
+
+    assert sorted(npc_names(window)) == ["Goon", "Goon-2", "Goon-3"]
+
+
+def test_copying_a_numbered_npc_keeps_the_base(window: GMWindow) -> None:
+    window._register_npc(write_npc("Goon"))
+    window._copy_npc("goon.json")  # -> Goon-2
+
+    window._copy_npc("goon-2.json")  # base is "Goon", not "Goon-2"
+
+    assert sorted(npc_names(window)) == ["Goon", "Goon-2", "Goon-3"]
+
+
+def test_next_copy_name_is_base_aware() -> None:
+    assert gm_window_module._next_copy_name("Goon", set()) == "Goon-2"
+    assert gm_window_module._next_copy_name("Goon", {"Goon-2"}) == "Goon-3"
+    assert gm_window_module._next_copy_name("Goon-2", {"Goon-2"}) == "Goon-3"
+    assert gm_window_module._next_copy_name("Goon-7", {"Goon-2", "Goon-3"}) == "Goon-4"
+
+
 def write_agile_npc(name: str, agility: int) -> Path:
     """An NPC with a known Agility, so its initiative modifier is predictable."""
     character = Character.new_default(load_game_data())

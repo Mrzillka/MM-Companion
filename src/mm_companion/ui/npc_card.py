@@ -61,6 +61,8 @@ class NPCCard(QFrame):
     removeConditionRequested = Signal(str, str, object)
     #: ``(file_name, total)`` — this NPC just rolled initiative.
     initiativeRolled = Signal(str, int)
+    #: The NPC's file name — duplicate it into a new NPC (Goon → Goon-2).
+    copyRequested = Signal(str)
 
     def __init__(
         self,
@@ -120,6 +122,11 @@ class NPCCard(QFrame):
         self._initiative_button.setToolTip("Roll initiative for this NPC")
         self._initiative_button.clicked.connect(self.roll_initiative)
         buttons_row.addWidget(self._initiative_button)
+        self._copy_button = QToolButton()
+        self._copy_button.setText("Copy")
+        self._copy_button.setToolTip("Duplicate this NPC (Goon → Goon-2)")
+        self._copy_button.clicked.connect(lambda: self.copyRequested.emit(self.name_key))
+        buttons_row.addWidget(self._copy_button)
         buttons_row.addStretch()
         layout.addLayout(buttons_row)
 

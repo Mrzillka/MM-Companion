@@ -27,7 +27,8 @@ from PySide6.QtCore import QObject, QTimer
 from mm_companion.core.character import Character
 from mm_companion.core.session.protocol import CharacterSnapshot, encode, sanitize_snapshot
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED
-from mm_companion.ui.session_bridge import SessionBridge
+from mm_companion.ui.session_bridge import SessionBridge, set_active_session
+from mm_companion.ui.session_portrait import encode_portrait
 
 #: How long a burst of edits is allowed to coalesce before one snapshot goes out.
 SNAPSHOT_DEBOUNCE_MS = 400
@@ -70,6 +71,11 @@ class SnapshotPusher(QObject):
         self._attached = True
         #: How many snapshots have actually gone out — the coalescing is visible here.
         self.sent = 0
+        # The last portrait source encoded and its result, so a burst of edits does
+        # not re-encode the (unchanged) image every push. ``_portrait_source`` starts
+        # as a sentinel so even a ``None`` path is computed once.
+        self._portrait_source: object = object()
+        self._portrait_cache: str | None = None
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -101,10 +107,24 @@ class SnapshotPusher(QObject):
         client = self._bridge.client
         if client is None or not client.connected:
             return False
-        if not client.send_snapshot(self._sheet.character.to_dict()):
+        snapshot = self._sheet.character.to_dict()
+        portrait = self._portrait_payload(self._sheet.character.image_path)
+        if portrait:
+            # Rides in the snapshot dict; sanitize_snapshot keeps it (it only strips
+            # image_path), so the GM's card and read-only sheet get the picture.
+            snapshot["portrait"] = portrait
+        if not client.send_snapshot(snapshot):
             return False
         self.sent += 1
         return True
+
+    def _portrait_payload(self, image_path: str | None) -> str | None:
+        """The base64 thumbnail for *image_path*, encoding only when it has changed."""
+        if image_path == self._portrait_source:
+            return self._portrait_cache
+        self._portrait_source = image_path
+        self._portrait_cache = encode_portrait(image_path)
+        return self._portrait_cache
 
     def detach(self) -> None:
         """Stop pushing — the sheet closed, or the session ended."""
@@ -167,3 +187,40 @@ class ConditionReceiver(QObject):
     def detach(self) -> None:
         """Stop applying — the sheet closed, or the session ended."""
         self._attached = False
+
+
+def attach_player_session(window, bridge: SessionBridge) -> None:
+    """Wire a joined session to a character-sheet window.
+
+    Sets up the :class:`SnapshotPusher` and :class:`ConditionReceiver` on the
+    window's sheet, leaves the session (and clears the process-wide handle) when
+    the window closes, and reports a disconnect/kick on its status bar. The wires
+    are stashed on the window so they live exactly as long as it does.
+
+    The single seam both entry points share: the launcher's "Join Session" (with a
+    freshly loaded character) and a sheet's own ``Session ▸ Join session…`` (with
+    the character already open) both call this after ``bridge.join(...)`` succeeds.
+    """
+    pusher = SnapshotPusher(window.sheet, bridge, parent=window)
+    receiver = ConditionReceiver(window.sheet, bridge, parent=window)
+
+    def leave() -> None:
+        pusher.detach()
+        receiver.detach()
+        bridge.stop()
+        set_active_session(None)
+
+    window.closed.connect(leave)
+    bridge.disconnected.connect(
+        lambda reason: window.statusBar().showMessage(f"Left the session: {reason}", 10000)
+    )
+    bridge.kicked.connect(
+        lambda reason: window.statusBar().showMessage(
+            f"The GM removed you from the session: {reason}", 10000
+        )
+    )
+    window.statusBar().showMessage(f"Joined “{bridge.client.session_name}”.", 10000)
+    # Keep the wires alive for the window's lifetime.
+    window._session_pusher = pusher
+    window._session_receiver = receiver
+    window._session_bridge = bridge

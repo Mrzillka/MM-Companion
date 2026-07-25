@@ -262,6 +262,11 @@ class DiceRollerPanel(QWidget):
     #: :class:`~mm_companion.core.dice.CheckResult`, or ``None`` when no DC was set.
     localRoll = Signal(object)
 
+    #: This panel's own session roll, emitted once the die finishes tumbling — the
+    #: cue a paired :class:`~mm_companion.ui.roll_history.RollHistoryPanel` waits on
+    #: so one's own card lands as the die settles, not the instant the server answers.
+    sessionRollRevealed = Signal(object)
+
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
         self._hidden_option = hidden_option
@@ -524,6 +529,8 @@ class DiceRollerPanel(QWidget):
             hidden=bool(roll.get("hidden")),
         )
         self._unlock_inputs()
+        # The die has settled — a paired history panel can now show this own roll.
+        self.sessionRollRevealed.emit(roll)
 
     def _abandon_roll(self, message: str) -> None:
         """Give up on a session roll that never came back."""
@@ -731,6 +738,9 @@ class DiceRollerWindow(QMainWindow):
         session_layout = QVBoxLayout(self._session_box)
         self._session_history = RollHistoryPanel()
         self._session_history.saveRequested.connect(self.panel.save_quick_roll)
+        # Hold this app's own roll until its die stops tumbling; the roller cues it.
+        self._session_history.set_defer_own(True)
+        self.panel.sessionRollRevealed.connect(self._session_history.release_roll)
         session_layout.addWidget(self._session_history)
         self._session_box.hide()
         outer.addWidget(self._session_box)

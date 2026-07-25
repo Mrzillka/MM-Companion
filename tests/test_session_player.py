@@ -335,8 +335,10 @@ def joined_launcher(qapp: QApplication, monkeypatch: pytest.MonkeyPatch):
     yield host, launcher
     for window in list(launcher._child_windows):
         window.close()
-    if launcher._session_bridge is not None:
-        launcher._session_bridge.stop()
+    bridge = active_session()
+    if bridge is not None:
+        bridge.stop()
+        set_active_session(None)
     host.stop()
 
 
@@ -345,8 +347,9 @@ def test_the_launcher_joins_and_the_gm_gets_the_sheet(qapp: QApplication, joined
 
     launcher._join_session()
 
-    assert active_session() is launcher._session_bridge
-    player_id = launcher._session_bridge.client.player_id
+    bridge = active_session()
+    assert bridge is not None
+    player_id = bridge.client.player_id
     assert wait_for(qapp, lambda: bool(host.state.players[player_id].character))
     assert host.state.players[player_id].character["profile"]["hero_name"] == "Nightingale"
     assert host.state.players[player_id].display_name == "Aria"
@@ -360,7 +363,6 @@ def test_closing_the_sheet_leaves_the_session(qapp: QApplication, joined_launche
     window.close()
 
     assert active_session() is None
-    assert launcher._session_bridge is None
 
 
 def test_the_app_refuses_to_join_two_sessions_at_once(
@@ -368,7 +370,7 @@ def test_the_app_refuses_to_join_two_sessions_at_once(
 ) -> None:
     _host, launcher = joined_launcher
     launcher._join_session()
-    first = launcher._session_bridge
+    first = active_session()
 
     told: list[str] = []
     monkeypatch.setattr(
@@ -376,7 +378,7 @@ def test_the_app_refuses_to_join_two_sessions_at_once(
     )
     launcher._join_session()
 
-    assert launcher._session_bridge is first
+    assert active_session() is first
     assert told
 
 
@@ -477,7 +479,9 @@ def test_the_gm_reaches_a_sheet_the_launcher_opened(
     )
     host, launcher = joined_launcher
     launcher._join_session()
-    player_id = launcher._session_bridge.client.player_id
+    bridge = active_session()
+    assert bridge is not None
+    player_id = bridge.client.player_id
     sheet = launcher._child_windows[-1].sheet
 
     host.server.apply_condition(player_id, "dazed")

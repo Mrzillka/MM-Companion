@@ -145,7 +145,7 @@ class GMWindow(QMainWindow):
             "session": BlockSize(min_width=380, min_height=110),
             "players": BlockSize(min_width=250, min_height=130),
             "npcs": BlockSize(min_width=250, min_height=150),
-            "rolls": BlockSize(min_width=520, min_height=260),
+            "rolls": BlockSize(min_width=660, min_height=260),
         }
         default_rows = [["session"], ["players"], ["npcs"], ["rolls"]]
         self._canvas = BlockCanvas(panels, sizes, default_rows)
@@ -363,6 +363,9 @@ class GMWindow(QMainWindow):
         self._history.saveRequested.connect(self._roller.save_quick_roll)
         self._history.rollRemovedLocally.connect(self._on_local_roll_removed)
         self._history.setMinimumHeight(240)
+        # Hold the GM's own roll until its die stops tumbling; the roller cues it.
+        self._history.set_defer_own(True)
+        self._roller.sessionRollRevealed.connect(self._history.release_roll)
         layout.addWidget(self._history, stretch=1)
         return box
 
@@ -660,6 +663,10 @@ class GMWindow(QMainWindow):
             player_id = str(entry.get("player_id", ""))
             if not player_id:
                 continue
+            # The GM is not a player on their own board: conditions and rolls for
+            # the GM happen on the GM's own sheet and roller, not through a card.
+            if entry.get("is_gm"):
+                continue
             seen.add(player_id)
             card = self._cards.get(player_id)
             if card is None:
@@ -702,10 +709,26 @@ class GMWindow(QMainWindow):
         previous = self._player_windows.pop(player_id, None)
         if previous is not None:
             previous.close()
-        window = MainWindow(character=Character.from_dict(snapshot), locked=True)
+        window = MainWindow(character=self._character_from_snapshot(snapshot), gm_view=True)
         self._player_windows[player_id] = window
         window.show()
         window.raise_()
+
+    @staticmethod
+    def _character_from_snapshot(snapshot: dict) -> Character:
+        """Rebuild a character from a snapshot, restoring its portrait.
+
+        The portrait travels as a base64 thumbnail (image_path was stripped on the
+        wire); decode it to a temp file so the read-only sheet's image block — which
+        reads a path — shows the picture.
+        """
+        from mm_companion.ui.session_portrait import portrait_to_tempfile
+
+        character = Character.from_dict(snapshot)
+        path = portrait_to_tempfile(snapshot.get("portrait"))
+        if path is not None:
+            character.image_path = path
+        return character
 
     # -- fast-apply conditions ---------------------------------------------
 

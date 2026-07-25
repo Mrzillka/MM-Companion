@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QLabel,
+    QLayout,
     QLineEdit,
     QRadioButton,
     QVBoxLayout,
@@ -79,8 +80,13 @@ class HostSessionDialog(QDialog):
     def __init__(self, parent: QWidget | None = None, *, session_name: str = "Session") -> None:
         super().__init__(parent)
         self.setWindowTitle("Start a session")
+        self.setMinimumWidth(360)
 
         layout = QVBoxLayout(self)
+        # Grow and shrink to fit as the tunnel row appears/disappears, so revealing
+        # it never overlaps the Advanced group below (the dialog is re-fitted in
+        # _sync_method).
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         form = QFormLayout()
         self._name_edit = QLineEdit(session_name)
@@ -142,6 +148,9 @@ class HostSessionDialog(QDialog):
     def _sync_method(self) -> None:
         """Show only the field the chosen method needs (the tunnel address, or none)."""
         self._tunnel_row.set_visible(self._via_tunnel.isChecked())
+        # Re-fit now that a row appeared or vanished, or the freed/needed space would
+        # leave the layout stale and the fields overlapping.
+        self.adjustSize()
 
     def _on_accept(self) -> None:
         """Persist the relay for next time, then close; the GM window does the hosting."""
@@ -191,12 +200,21 @@ class _FormRow:
 
 
 class JoinSessionDialog(QDialog):
-    """Join code, display name, and the character to bring."""
+    """Join code, display name, and (optionally) the character to bring.
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    ``pick_character=False`` drops the character picker for the caller that already
+    has a character open — joining from a sheet brings *that* sheet, so choosing one
+    would be a second, contradictory choice.
+    """
+
+    def __init__(self, parent: QWidget | None = None, *, pick_character: bool = True) -> None:
         super().__init__(parent)
         self.setWindowTitle("Join Session")
+        # A comfortable floor so the join-code combo and character names are not
+        # clipped and the dialog never opens cramped.
+        self.setMinimumWidth(420)
         self._code: discovery.JoinCode | None = None
+        self._character_box: QComboBox | None = None
 
         settings = storage.load_settings()
         recent = [str(c) for c in settings.get("session_recent_codes", []) if c]
@@ -215,12 +233,15 @@ class JoinSessionDialog(QDialog):
         self._name_edit.setPlaceholderText("the name the GM sees")
         form.addRow("Your name", self._name_edit)
 
-        self._character_box = QComboBox()
-        self._character_box.addItem(NO_CHARACTER, None)
-        for summary in list_saved_characters():
-            if summary.path is not None:
-                self._character_box.addItem(f"{summary.name} (PL {summary.power_level})", summary)
-        form.addRow("Character", self._character_box)
+        if pick_character:
+            self._character_box = QComboBox()
+            self._character_box.addItem(NO_CHARACTER, None)
+            for summary in list_saved_characters():
+                if summary.path is not None:
+                    self._character_box.addItem(
+                        f"{summary.name} (PL {summary.power_level})", summary
+                    )
+            form.addRow("Character", self._character_box)
         layout.addLayout(form)
 
         self._problem = QLabel("")
@@ -250,7 +271,9 @@ class JoinSessionDialog(QDialog):
         return self._name_edit.text().strip()
 
     def character_path(self) -> Path | None:
-        """The chosen character's file, or ``None`` for "no character"."""
+        """The chosen character's file, or ``None`` for "no character" / no picker."""
+        if self._character_box is None:
+            return None
         summary = self._character_box.currentData()
         return Path(summary.path) if summary is not None and summary.path else None
 

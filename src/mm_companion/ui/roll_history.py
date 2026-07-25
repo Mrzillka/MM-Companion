@@ -186,6 +186,11 @@ class RollHistoryPanel(QWidget):
         # to drop a roll that arrives twice — a fresh history replacing an
         # existing one overlaps with what was already appended.
         self._seen: set[int] = set()
+        # When paired with a dice roller (see :meth:`set_defer_own`), one's own
+        # roll is held here until the die finishes tumbling, so the card lands as
+        # the die settles rather than the instant the server resolves it.
+        self._defer_own = False
+        self._held: dict[int, dict] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -202,9 +207,22 @@ class RollHistoryPanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
+        # A card carries a name, a headline and (for one's own) a "★ Save" button;
+        # below this the buttons truncate. Pin a floor so the column never squashes
+        # them, whatever it shares its row with.
+        self._scroll.setMinimumWidth(260)
         layout.addWidget(self._scroll)
 
     # -- the feed ----------------------------------------------------------
+
+    def set_defer_own(self, defer: bool) -> None:
+        """Hold one's own roll until :meth:`release_roll`, matching a die's tumble.
+
+        Set on a panel paired with a :class:`~mm_companion.ui.dice_roller.DiceRollerPanel`,
+        whose ``sessionRollRevealed`` drives :meth:`release_roll`. Other players'
+        rolls — which have no local animation to wait for — still land at once.
+        """
+        self._defer_own = defer
 
     def attach(self, bridge: SessionBridge | None) -> None:
         """Follow *bridge*'s rolls, starting from the history it already has.
@@ -250,17 +268,43 @@ class RollHistoryPanel(QWidget):
             self.add_roll(roll)
 
     def add_roll(self, roll: object) -> None:
-        """Put one roll at the top of the list."""
+        """Put one roll at the top of the list.
+
+        One's own roll is held (not shown) while :attr:`_defer_own` is set, so a
+        paired roller can release it as the die settles — see :meth:`release_roll`.
+        """
         if not isinstance(roll, dict):
             return
+        seq = roll.get("seq")
+        if isinstance(seq, int) and seq in self._seen:
+            return
+        if self._defer_own and self._is_own(roll):
+            if isinstance(seq, int):
+                self._held[seq] = roll
+            return
+        self._insert(roll)
+
+    def release_roll(self, roll: object) -> None:
+        """Show a previously-deferred own roll now that its die has settled."""
+        if not isinstance(roll, dict):
+            return
+        seq = roll.get("seq")
+        if isinstance(seq, int):
+            self._held.pop(seq, None)
+        self._insert(roll)
+
+    def _is_own(self, roll: dict) -> bool:
+        return bool(self._own_id) and str(roll.get("player_id", "")) == self._own_id
+
+    def _insert(self, roll: dict) -> None:
+        """Build and place a card for *roll*, deduplicating by ``seq``."""
         seq = roll.get("seq")
         if isinstance(seq, int):
             if seq in self._seen:
                 return
             self._seen.add(seq)
 
-        own = bool(self._own_id) and str(roll.get("player_id", "")) == self._own_id
-        card = SessionRollCard(roll, own=own, can_remove=self._gm)
+        card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
         card.saveRequested.connect(self.saveRequested)
         card.removeRequested.connect(self._request_remove)
         # Newest on top: insert above every existing card (the stretch is last).
@@ -300,6 +344,7 @@ class RollHistoryPanel(QWidget):
             card.setParent(None)
             card.deleteLater()
         self._seen.clear()
+        self._held.clear()
         self._empty.setVisible(True)
 
     def cards(self) -> list[SessionRollCard]:

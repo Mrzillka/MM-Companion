@@ -79,6 +79,29 @@ def condition_display_name(applied: AppliedCondition, record: Condition | None) 
     return name
 
 
+def condition_tooltip(
+    applied: AppliedCondition,
+    record: Condition | None,
+    conditions_by_id: dict[str, Condition],
+) -> str:
+    """The hover hint for one applied condition: origin, effect, and recovery.
+
+    Module-level because a condition reads the same wherever it is shown — this
+    block's chips and the GM window's player cards both hint through here.
+    """
+    if record is None:
+        return ""
+    parts: list[str] = []
+    if applied.provenance is not None:
+        umbrella = conditions_by_id.get(applied.provenance)
+        parts.append(f"via {umbrella.name if umbrella else applied.provenance}")
+    if record.effect:
+        parts.append(record.effect)
+    if record.recovery and record.recovery != "n/a":
+        parts.append(f"Recovery: {record.recovery}")
+    return "\n\n".join(parts)
+
+
 class ConditionsSection(QGroupBox):
     """The character's applied conditions, added via a "+" button and shown as chips.
 
@@ -306,17 +329,7 @@ class ConditionsSection(QGroupBox):
         return condition_display_name(applied, record)
 
     def _condition_tooltip(self, applied: AppliedCondition, record: Condition | None) -> str:
-        if record is None:
-            return ""
-        parts: list[str] = []
-        if applied.provenance is not None:
-            umbrella = self._conditions_by_id.get(applied.provenance)
-            parts.append(f"via {umbrella.name if umbrella else applied.provenance}")
-        if record.effect:
-            parts.append(record.effect)
-        if record.recovery and record.recovery != "n/a":
-            parts.append(f"Recovery: {record.recovery}")
-        return "\n\n".join(parts)
+        return condition_tooltip(applied, record, self._conditions_by_id)
 
     def set_locked(self, locked: bool) -> None:
         """No-op: conditions stay editable in either view mode — they change

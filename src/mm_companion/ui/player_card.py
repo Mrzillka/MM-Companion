@@ -10,7 +10,9 @@ two calls, and a card renders happily with only the first (a player who has
 joined but not yet pushed a sheet).
 
 Snapshots carry no ``image_path`` — resolving a remote peer's path would read the
-*receiver's* files — so the portrait is a placeholder for now.
+*receiver's* files — so the portrait rides along as a small base64 thumbnail
+instead (see :mod:`~mm_companion.ui.session_portrait`); a card with none shows a
+placeholder.
 
 The card is also where the GM *acts*: its "+" applies a condition straight onto
 that player's live sheet and a chip's "×" takes one off. Neither touches the
@@ -23,6 +25,7 @@ what the GM hoped it would be.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -39,8 +42,13 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.sections.conditions import addable_conditions, condition_display_name
+from mm_companion.ui.sections.conditions import (
+    addable_conditions,
+    condition_display_name,
+    condition_tooltip,
+)
 from mm_companion.ui.sections.system_info import HeroPointsWidget
+from mm_companion.ui.session_portrait import decode_portrait
 
 #: The portrait placeholder's side, in pixels. Matches the launcher's cards.
 PORTRAIT_SIZE = 96
@@ -167,8 +175,26 @@ class PlayerCard(QFrame):
         self._character_label.setText(library.display_name(character))
         self._pl_label.setText(f"PL {character.power_level}")
         self._hero_points.set_value(int(character.characteristics.get("hero_points", 0) or 0))
+        self._set_portrait(raw.get("portrait"))
         self._show_conditions()
         self._open_button.setEnabled(True)
+
+    def _set_portrait(self, data: object) -> None:
+        """Show the transmitted thumbnail, or fall back to the placeholder."""
+        pixmap = decode_portrait(data)
+        if pixmap is None:
+            self._portrait.setText("No image")
+            self._portrait.setPixmap(QPixmap())
+            return
+        self._portrait.setText("")
+        self._portrait.setPixmap(
+            pixmap.scaled(
+                PORTRAIT_SIZE,
+                PORTRAIT_SIZE,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
     # -- condition chips ---------------------------------------------------
 
@@ -182,7 +208,10 @@ class PlayerCard(QFrame):
         conditions = self._character.conditions if self._character is not None else []
         for applied in conditions:
             record = self._conditions_by_id.get(applied.condition_id)
-            chip = _ConditionChip(condition_display_name(applied, record))
+            chip = _ConditionChip(
+                condition_display_name(applied, record),
+                tooltip=condition_tooltip(applied, record, self._conditions_by_id),
+            )
             if self._targetable:
                 chip.arm_removal(
                     lambda cid=applied.condition_id, param=applied.parameter: (
@@ -230,13 +259,15 @@ class PlayerCard(QFrame):
 class _ConditionChip(QFrame):
     """One condition, as a compact chip with an optional "×" to take it off."""
 
-    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+    def __init__(self, text: str, *, tooltip: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setStyleSheet(
             f"border: 1px solid {theme.TINT_WORSE};"
             f"background: {theme.tint_rgba(theme.TINT_WORSE, 0.12)};"
             "border-radius: 6px;"
         )
+        if tooltip:
+            self.setToolTip(tooltip)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(5, 1, 2, 1)
         layout.setSpacing(2)

@@ -74,7 +74,11 @@ from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
-from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
+from mm_companion.ui.session_dialogs import (
+    HostOptions,
+    HostSessionDialog,
+    SessionPickerDialog,
+)
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
@@ -333,6 +337,10 @@ class GMWindow(QMainWindow):
         self._new_button = QPushButton("New session")
         self._new_button.clicked.connect(self._new_session)
         buttons.addWidget(self._new_button)
+
+        self._previous_button = QPushButton("Previous sessions…")
+        self._previous_button.clicked.connect(self._open_session_picker)
+        buttons.addWidget(self._previous_button)
         buttons.addStretch()
         layout.addLayout(buttons)
         return box
@@ -545,11 +553,42 @@ class GMWindow(QMainWindow):
 
     def _set_hosting_widgets(self, hosting: bool) -> None:
         self._host_button.setText("Stop hosting" if hosting else "Start a session…")
-        # A new session cannot be started on top of a live one.
+        # Neither a new session nor switching to an old one is possible on top of a
+        # live one — the running session belongs to the server's lock.
         self._new_button.setEnabled(not hosting)
+        self._previous_button.setEnabled(not hosting)
 
     def _new_session(self) -> None:
         self._state = new_session("Session")
+        self._reset_for_session()
+
+    def _open_session_picker(self) -> None:
+        """Let the GM pick a previous session to run (blocked while hosting)."""
+        if self._bridge.hosting:
+            return
+        dialog = SessionPickerDialog(current_id=self._state.id, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.chosen_id():
+            self._load_session(dialog.chosen_id())
+
+    def _load_session(self, session_id: str) -> None:
+        """Switch to a stored session, resuming its cast and roll log."""
+        if self._bridge.hosting:
+            return
+        try:
+            self._state = store.load_session(session_id)
+        except store.SessionStoreError:
+            return
+        try:
+            storage.update_settings(session_last_id=self._state.id)
+        except OSError:
+            pass
+        self._reset_for_session()
+
+    def _reset_for_session(self) -> None:
+        """Bring the window's views onto the current ``self._state``."""
+        self._snapshots.clear()
+        self._npc_state = {}
+        self._manual_order = []
         self._clear_cards()
         self._refresh_idle_status()
         self._refresh_rolls()

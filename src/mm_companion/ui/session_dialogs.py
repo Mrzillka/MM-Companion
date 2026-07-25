@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -30,9 +31,14 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLayout,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
     QRadioButton,
     QVBoxLayout,
     QWidget,
@@ -40,7 +46,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.core.library import list_saved_characters
-from mm_companion.core.session import discovery
+from mm_companion.core.session import discovery, store
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.widgets import make_spin_box
@@ -313,3 +319,90 @@ class JoinSessionDialog(QDialog):
             )
         except OSError:
             pass
+
+
+class SessionPickerDialog(QDialog):
+    """Pick one of the GM's previous sessions to re-run, or delete one.
+
+    Reads the workspace's saved sessions (``store.list_sessions``) and hands back
+    the chosen id through :meth:`chosen_id`; deletion happens in place through
+    ``store.delete_session`` so the list a GM sees is always the disk truth.
+    """
+
+    def __init__(self, *, current_id: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Previous sessions")
+        self.resize(460, 320)
+        self._current_id = current_id
+        self._chosen_id: str | None = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Choose a session to run as GM:"))
+
+        self._list = QListWidget()
+        self._list.itemDoubleClicked.connect(lambda _item: self._accept_selection())
+        layout.addWidget(self._list)
+
+        row = QHBoxLayout()
+        self._delete_button = QPushButton("Delete")
+        self._delete_button.clicked.connect(self._delete_selected)
+        row.addWidget(self._delete_button)
+        row.addStretch()
+        layout.addLayout(row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._accept_selection)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._reload()
+
+    def chosen_id(self) -> str | None:
+        """The id the GM chose to open, or ``None`` if they cancelled."""
+        return self._chosen_id
+
+    def _reload(self) -> None:
+        """(Re)fill the list from disk, keeping the current session marked."""
+        self._list.clear()
+        for summary in store.list_sessions():
+            when = summary.updated_at[:16].replace("T", " ")
+            mark = "  — current" if summary.id == self._current_id else ""
+            label = (
+                f"{summary.name or 'Session'}"
+                f"   ({when} · {summary.player_count} player(s) · {summary.roll_count} roll(s))"
+                f"{mark}"
+            )
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, summary.id)
+            self._list.addItem(item)
+        if self._list.count():
+            self._list.setCurrentRow(0)
+        self._delete_button.setEnabled(self._list.count() > 0)
+
+    def _selected_id(self) -> str | None:
+        item = self._list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def _accept_selection(self) -> None:
+        session_id = self._selected_id()
+        if session_id:
+            self._chosen_id = session_id
+            self.accept()
+
+    def _delete_selected(self) -> None:
+        session_id = self._selected_id()
+        if not session_id:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Delete session",
+            "Delete this session and its roll history? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        store.delete_session(session_id)
+        self._reload()

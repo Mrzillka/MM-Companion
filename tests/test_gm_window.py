@@ -38,7 +38,7 @@ from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
 from mm_companion.ui.session_bridge import active_session, set_active_session
-from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
+from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog, SessionPickerDialog
 from mm_companion.ui.start_window import StartWindow
 
 
@@ -1255,3 +1255,62 @@ def test_a_rolled_initiative_survives_a_refresh(
     (card,) = npc_cards(window)
     assert card.initiative == 12
     assert "12" in card._initiative_badge.text()
+
+
+# --------------------------------------------------------------------------
+# Previous sessions (GM side)
+#
+# A GM can re-run any session they have ever hosted, not just the last one:
+# store.list_sessions enumerates the workspace, and switching loads the chosen
+# one's cast and roll log. Switching is blocked while hosting — the live session
+# belongs to the server's lock.
+# --------------------------------------------------------------------------
+
+
+def test_loading_a_previous_session_switches_to_it(window: GMWindow) -> None:
+    write_npc("Ghoul")  # the cast file the stored session names
+    other = new_session("Old Table")
+    other.npc_paths = ["ghoul.json"]
+    store.save_session(other, write_rolls=True)
+
+    window._load_session(other.id)
+
+    assert window._state.id == other.id
+    assert window._state.name == "Old Table"
+    assert npc_names(window) == ["Ghoul"]
+    assert storage.load_settings()["session_last_id"] == other.id
+
+
+def test_the_previous_sessions_button_is_disabled_while_hosting(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    assert window._previous_button.isEnabled() is True
+    start_hosting(qapp, window, canned())
+    assert window._previous_button.isEnabled() is False
+
+
+def test_loading_a_session_is_blocked_while_hosting(qapp: QApplication, window: GMWindow) -> None:
+    other = new_session("Old Table")
+    store.save_session(other)
+    start_hosting(qapp, window, canned())
+    current = window._state.id
+
+    window._load_session(other.id)
+
+    assert window._state.id == current  # unchanged: the live session is untouched
+
+
+def test_the_session_picker_lists_and_deletes(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.save_session(new_session("A"))
+    store.save_session(new_session("B"))
+
+    dialog = SessionPickerDialog(current_id="")
+    assert dialog._list.count() == 2
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    dialog._delete_selected()
+
+    assert dialog._list.count() == 1
+    assert len(store.list_sessions()) == 1

@@ -109,7 +109,9 @@ def main() -> int:
         action="store_true",
         help="Report what would happen (version, tag, branch) and change nothing.",
     )
-    parser.add_argument("--remote", default="origin", help="Git remote to push to (default: origin).")
+    parser.add_argument(
+        "--remote", default="origin", help="Git remote to push to (default: origin)."
+    )
     parser.add_argument(
         "--allow-branch",
         action="store_true",
@@ -156,7 +158,9 @@ def main() -> int:
         elif already_tagged:
             print(f"  - REFUSE: tag {tag} already exists (bump the version to release again).")
         elif wrong_branch:
-            print(f"  - REFUSE: on '{branch}', not '{RELEASE_BRANCH}' (use --allow-branch to override).")
+            print(
+                f"  - REFUSE: on '{branch}', not '{RELEASE_BRANCH}' (use --allow-branch to override)."
+            )
         else:
             print(f"  - create annotated tag {tag} at {git(root, 'rev-parse', '--short', 'HEAD')}")
             print(f"  - push {branch} and {tag} to {args.remote} (fires release.yml)")

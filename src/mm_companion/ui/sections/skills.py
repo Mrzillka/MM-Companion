@@ -61,7 +61,7 @@ from mm_companion.ui.sections.stat_grid import (
 )
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, readonly_item, title_with_cost
+from mm_companion.ui.widgets import make_spin_box, readonly_item
 
 RANK_MIN, RANK_MAX = 0, 20
 COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
@@ -571,9 +571,7 @@ class SkillsSection(TitledSection):
             row.total_item.setText(str(effect.apply(total) if effect.active else total))
             self._style_condition(row.total_item, row.name_item, effect, total)
         # Keep the section title's running point cost current.
-        self.set_block_title(
-            title_with_cost("Skills", skill_points_spent(self._character, self._data))
-        )
+        self.set_priced_title("Skills", skill_points_spent(self._character, self._data))
 
     @staticmethod
     def _fill_modifier_cell(mod_item: QTableWidgetItem, mod: SkillModifiers) -> None:

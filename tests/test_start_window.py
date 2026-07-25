@@ -38,6 +38,7 @@ def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
         "Create New Character",
         "Open Existing",
         "Open GM Mode",
+        "Join Session",
         "Manage Mods",
         "Dice Roller",
         "Exit",

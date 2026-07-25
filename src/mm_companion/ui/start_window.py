@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -31,8 +32,10 @@ from PySide6.QtWidgets import (
 from mm_companion import __version__
 from mm_companion.core import library, storage
 from mm_companion.core.library import CharacterSummary, list_saved_characters
+from mm_companion.core.session.client import SessionClientError
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.main_window import MainWindow
+from mm_companion.ui.session_bridge import SessionBridge
 
 CARD_IMAGE_SIZE = 120
 CHARACTER_FILTER = "Character files (*.json)"
@@ -41,17 +44,28 @@ CHARACTER_FILTER = "Character files (*.json)"
 class CharacterCard(QFrame):
     """A single saved character rendered as a clickable card: image, name, PL.
 
-    Left-click opens the character; right-click offers to delete it.
+    Left-click opens the character; right-click offers to delete it. A *removable*
+    card (the GM window's NPCs, which belong to a session as well as to the disk)
+    offers taking it out of that list first — deleting the file is the heavier of
+    the two actions and should not be the only one on offer.
     """
 
     clicked = Signal(object)
     deleteRequested = Signal(object)
+    removeRequested = Signal(object)
 
-    def __init__(self, summary: CharacterSummary, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        summary: CharacterSummary,
+        parent: QWidget | None = None,
+        *,
+        removable: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._summary = summary
+        self._removable = removable
 
         layout = QVBoxLayout(self)
 
@@ -89,6 +103,11 @@ class CharacterCard(QFrame):
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
         menu = QMenu(self)
+        if self._removable:
+            menu.addAction(
+                "Remove from this session",
+                lambda: self.removeRequested.emit(self._summary),
+            )
         menu.addAction(
             f"Delete {self._summary.name}",
             lambda: self.deleteRequested.emit(self._summary),
@@ -110,6 +129,15 @@ class StartWindow(QMainWindow):
         self._mods_window: QWidget | None = None
         # The dice roller window, likewise kept referenced while open.
         self._dice_window: QWidget | None = None
+        # The GM window. Only one may exist — it owns the hosted session — so a
+        # second "Open GM Mode" raises this one instead of building another.
+        self._gm_window: QWidget | None = None
+        # The session this app has *joined* (as a player), the pusher keeping the
+        # GM's copy of the sheet current, and the receiver applying the GM's
+        # condition commands to it. All cleared when the sheet closes.
+        self._session_bridge: SessionBridge | None = None
+        self._session_pusher: QObject | None = None
+        self._session_receiver: QObject | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -132,8 +160,12 @@ class StartWindow(QMainWindow):
         column.addWidget(open_button)
 
         gm_button = QPushButton("Open GM Mode")
-        gm_button.clicked.connect(self._not_implemented)
+        gm_button.clicked.connect(self._open_gm_mode)
         column.addWidget(gm_button)
+
+        join_button = QPushButton("Join Session")
+        join_button.clicked.connect(self._join_session)
+        column.addWidget(join_button)
 
         mods_button = QPushButton("Manage Mods")
         mods_button.clicked.connect(self._manage_mods)
@@ -256,5 +288,82 @@ class StartWindow(QMainWindow):
         self._dice_window = window
         window.show()
 
-    def _not_implemented(self) -> None:
-        """Placeholder for the not-yet-wired GM mode button."""
+    def _join_session(self) -> None:
+        """Join a GM's session and open the character being brought to it.
+
+        The sheet stays open for as long as the player is in the session, pushing
+        a snapshot on every change (debounced) so the GM's card is live; closing
+        it leaves the session.
+        """
+        from mm_companion.ui.session_bridge import active_session, set_active_session
+        from mm_companion.ui.session_dialogs import JoinSessionDialog
+        from mm_companion.ui.session_player import ConditionReceiver, SnapshotPusher
+
+        if active_session() is not None:
+            QMessageBox.information(
+                self,
+                "Already in a session",
+                "This app is already in a session. Close that window first.",
+            )
+            return
+
+        dialog = JoinSessionDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        bridge = SessionBridge()
+        try:
+            bridge.join(dialog.join_code(), dialog.display_name())
+        except SessionClientError as exc:
+            QMessageBox.warning(self, "Could not join", str(exc))
+            return
+        set_active_session(bridge)
+
+        path = dialog.character_path()
+        character = library.load_character(path) if path is not None else None
+        window = MainWindow(character=character, path=path, locked=True)
+        pusher = SnapshotPusher(window.sheet, bridge, parent=window)
+        # The one thing that comes back down the wire: the GM putting a condition
+        # on this sheet. It applies through the sheet's own conditions block, so
+        # the pusher above bounces the result back to the GM's card.
+        receiver = ConditionReceiver(window.sheet, bridge, parent=window)
+        self._session_pusher = pusher
+        self._session_receiver = receiver
+        self._session_bridge = bridge
+
+        def leave() -> None:
+            pusher.detach()
+            receiver.detach()
+            bridge.stop()
+            set_active_session(None)
+            self._session_bridge = None
+            self._session_pusher = None
+            self._session_receiver = None
+
+        window.closed.connect(leave)
+        bridge.disconnected.connect(
+            lambda reason: window.statusBar().showMessage(f"Left the session: {reason}", 10000)
+        )
+        bridge.kicked.connect(
+            lambda reason: window.statusBar().showMessage(
+                f"The GM removed you from the session: {reason}", 10000
+            )
+        )
+        window.statusBar().showMessage(f"Joined “{bridge.client.session_name}”.", 10000)
+        self._open_sheet(window)
+
+    def _open_gm_mode(self) -> None:
+        """Open the GM window, or raise the one already open.
+
+        The launcher stays visible behind it (unlike a character sheet): a GM
+        hosting a session still opens character sheets, and the session has to
+        survive that. Only one GM window ever exists — it owns the hosted
+        session — so a second click raises the first rather than starting over.
+        """
+        from mm_companion.ui.gm_window import GMWindow
+
+        if self._gm_window is None:
+            self._gm_window = GMWindow()
+        self._gm_window.show()
+        self._gm_window.raise_()
+        self._gm_window.activateWindow()

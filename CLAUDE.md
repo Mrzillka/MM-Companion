@@ -27,6 +27,9 @@ pip install -e ".[dev]"
 - Run the app: `python -m mm_companion` (or `python run.py`, or the
   `mm-companion` console script). `run.py` is a convenience wrapper for IDE Run
   buttons — all three are equivalent.
+- Host a session headless: `python -m mm_companion.server` (or the
+  `mm-companion-server` console script; `--help` for options). Run the public
+  relay: `python -m mm_companion.relay`. Both are Qt-free and stdlib-only.
 - Run tests: `pytest`
 - Run a single test: `pytest tests/test_data_loader.py::test_load_game_data_is_cached`
 - Format: `black .` (line length 100)
@@ -358,6 +361,36 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   a stylesheet `font-size` outranks the card's font and would sit the transition
   out. Runtime toggling stays available in the locked read-only view — it is a
   mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`.
+
+## The session layer (matters when touching GM mode / online play)
+
+GM Mode and online play are a self-contained subsystem, split the usual
+`ui → core → data` way. The full map is `docs/mm-session-architecture.md`; the
+player-facing networking/troubleshooting guide is `docs/mm-session-networking.md`.
+The shape:
+
+- `src/mm_companion/core/session/` — **pure Python, no PySide6**: `protocol.py`
+  (the wire vocabulary — newline-JSON messages, `PROTOCOL_VERSION`, size caps),
+  `model.py` (`SessionState`/`PlayerSlot`/`RollRecord`, two token layers),
+  `store.py` (`sessions/<id>/session.json` + an appended `rolls.jsonl`), `net.py`
+  (`Connection`, the `Transport`/`Listener` ABCs, `TcpTransport`), `server.py`
+  (`SessionServer` — accept + reader threads, **the server rolls**, hidden rolls
+  never broadcast), `client.py` (`SessionClient`), `discovery.py` (join codes,
+  UPnP, `publish_session` → a `Reachability` with verbatim `advice`, and the
+  `transports` registry a relay plugs into), `relay.py` (`RelayTransport`
+  registered under `mmrelay://` so a relay join code just works).
+- `src/mm_companion/ui/` — Qt: `session_bridge.py` (`SessionBridge`, the **only**
+  place core `on_event` callbacks become signals; module-level
+  `active_session()`/`live_session()`), `gm_window.py`, `npc_window.py`,
+  `player_card.py`, `roll_history.py`, and `session_player.py`/`session_dialogs.py`.
+- `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
+  stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
+  thin `cli.py` around the core session server / a `selectors` byte-pump.
+- Standing constraints: session networking stays **Qt-free and
+  headless-testable** (Qt only in `ui/`), **no new dependencies** (PySide6 + the
+  stdlib), and **nothing new under `data/`** — the session layer is MIT code, not
+  OGL content. Verify with the fast, window-free files (`tests/test_session_*.py`,
+  `tests/test_headless_server.py`); the GUI ones need `QT_QPA_PLATFORM=offscreen`.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

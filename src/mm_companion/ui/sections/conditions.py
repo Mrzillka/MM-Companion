@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -47,6 +46,37 @@ CONDITIONS_ROW_HEIGHT = 44
 CONDITIONS_MIN_HEIGHT = 150
 # The chip groups the conditions box splits into, in display order.
 CONDITION_CATEGORY_SECTIONS = (("condition", "General"), ("damage_condition", "Damage"))
+# The catalog categories a "+" menu offers — statuses that apply to a character,
+# not the object-damage ladder or the "normal" bookkeeping marker.
+ADDABLE_CATEGORIES = tuple(category for category, _title in CONDITION_CATEGORY_SECTIONS)
+
+
+def addable_conditions(data: GameData) -> list[Condition]:
+    """The conditions a "+" menu may apply, in catalog order.
+
+    Module-level because two menus offer the same list: this block's own "+", and
+    the GM's fast-apply on a player card.
+    """
+    return [c for c in data.conditions if c.category in ADDABLE_CATEGORIES]
+
+
+def condition_display_name(applied: AppliedCondition, record: Condition | None) -> str:
+    """Fold the chosen parameter and stacking count into the shown name (§6):
+    ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
+
+    Module-level because a condition reads the same wherever it is shown — this
+    block's chips and the GM window's player cards both name them through here.
+    """
+    name = record.name if record else applied.condition_id
+    if applied.parameter:
+        ptype = record.parameter.type if record and record.parameter else ""
+        if ptype in ("trait_select", "sense_select"):
+            name = f"{applied.parameter} {name}"
+        else:
+            name = f"{name} ({applied.parameter})"
+    if applied.count > 1:
+        name = f"{name} ×{applied.count}"
+    return name
 
 
 class ConditionsSection(QGroupBox):
@@ -73,11 +103,7 @@ class ConditionsSection(QGroupBox):
         self._data = data
         self._character = character
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
-        # Conditions the "+" menu offers — statuses that apply to a character (not the
-        # object-damage ladder or the "normal" bookkeeping marker).
-        self._addable_conditions: list[Condition] = [
-            c for c in data.conditions if c.category in ("condition", "damage_condition")
-        ]
+        self._addable_conditions: list[Condition] = addable_conditions(data)
         self._condition_chips: list[QFrame] = []
         # Ephemeral last-rolled Confused action, keyed by (condition_id, parameter);
         # runtime combat state, not saved with the character.
@@ -133,17 +159,48 @@ class ConditionsSection(QGroupBox):
     def _choose_condition(self, condition: Condition) -> None:
         """Apply a picked condition, prompting for its parameter first if it needs one."""
         # Imported lazily to avoid a construction-time cycle through the dialog.
-        from mm_companion.ui.sections.condition_dialog import ConditionParameterDialog
+        from mm_companion.ui.sections.condition_dialog import prompt_condition_parameter
 
-        parameter: str | None = None
-        if condition.parameter is not None:
-            dialog = ConditionParameterDialog(condition, self._data, self._character, self)
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            parameter = dialog.value()
-        apply_condition(self._character, condition.id, self._data, parameter=parameter)
+        go_ahead, parameter = prompt_condition_parameter(
+            condition, self._data, self._character, self
+        )
+        if go_ahead:
+            self.apply_condition_by_id(condition.id, parameter)
+
+    def apply_condition_by_id(self, condition_id: str, parameter: str | None = None) -> bool:
+        """Apply a condition by id, with no menu and no prompt.
+
+        The seam a *remote* GM applies through (``ui/session_player.py``), so a
+        condition the GM sends bundles, supersedes and stacks through the same
+        resolver a locally applied one does — and marks the sheet dirty the same
+        way. Returns whether the id was one the catalog knows.
+        """
+        if condition_id not in self._conditions_by_id:
+            return False
+        apply_condition(self._character, condition_id, self._data, parameter=parameter)
         self._render_conditions()
         self._emit_conditions_changed()
+        return True
+
+    def remove_condition_by_id(self, condition_id: str, parameter: str | None = None) -> bool:
+        """Shed one instance of a condition by id; the twin of
+        :meth:`apply_condition_by_id`.
+
+        Matches on the parameter too, so removing "Attack Impaired" leaves
+        "Dodge Impaired" alone, and prefers a directly applied instance over a
+        bundled member — dropping the umbrella is what the GM means by taking the
+        condition off. Returns whether anything was on the character to remove.
+        """
+        matches = [
+            applied
+            for applied in self._character.conditions
+            if applied.condition_id == condition_id and applied.parameter == parameter
+        ]
+        if not matches:
+            return False
+        direct = [applied for applied in matches if applied.provenance is None]
+        self._shed_condition(direct[0] if direct else matches[0])
+        return True
 
     def _shed_condition(self, applied: AppliedCondition) -> None:
         """Remove-button handler: peel one Hit off its stack, else drop the condition."""
@@ -246,19 +303,7 @@ class ConditionsSection(QGroupBox):
         self._render_conditions()
 
     def _condition_display_name(self, applied: AppliedCondition, record: Condition | None) -> str:
-        """Fold the chosen parameter and stacking count into the shown name (§6):
-        ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
-        """
-        name = record.name if record else applied.condition_id
-        if applied.parameter:
-            ptype = record.parameter.type if record and record.parameter else ""
-            if ptype in ("trait_select", "sense_select"):
-                name = f"{applied.parameter} {name}"
-            else:
-                name = f"{name} ({applied.parameter})"
-        if applied.count > 1:
-            name = f"{name} ×{applied.count}"
-        return name
+        return condition_display_name(applied, record)
 
     def _condition_tooltip(self, applied: AppliedCondition, record: Condition | None) -> str:
         if record is None:

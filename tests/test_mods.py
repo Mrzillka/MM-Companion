@@ -168,3 +168,28 @@ def test_disabled_mods_leave_base_content_identical(_home: Path) -> None:
     data = load_game_data()
     damage = next(e for e in data.effects if e.id == "damage")
     assert damage.base_cost_value == 1
+
+
+# --------------------------------------------------------------------------
+# The mod-stack fingerprint (an online session's skew check)
+# --------------------------------------------------------------------------
+
+
+def test_stack_fingerprint_is_stable_for_the_same_stack(_home: Path) -> None:
+    assert mods.stack_fingerprint() == mods.stack_fingerprint()
+
+
+def test_stack_fingerprint_changes_when_a_mod_is_enabled(_home: Path) -> None:
+    base_print = mods.stack_fingerprint()
+    _write_mod(_home, "testmod", {"advantages.json": {"advantages": []}})
+    storage.update_settings(enabled_mods=["testmod"])
+    assert mods.stack_fingerprint() != base_print
+
+
+def test_stack_fingerprint_follows_the_load_order(_home: Path) -> None:
+    _write_mod(_home, "one", {"advantages.json": {"advantages": []}})
+    _write_mod(_home, "two", {"advantages.json": {"advantages": []}})
+    storage.update_settings(enabled_mods=["one", "two"], mod_order=["one", "two"])
+    forwards = mods.stack_fingerprint()
+    storage.update_settings(mod_order=["two", "one"])
+    assert mods.stack_fingerprint() != forwards

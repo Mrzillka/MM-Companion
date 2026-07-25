@@ -24,7 +24,6 @@ from mm_companion.core.rules import (
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
 from mm_companion.ui.sections.titled_section import TitledSection
-from mm_companion.ui.widgets import title_with_cost
 
 
 class AbilitiesSection(TitledSection):
@@ -74,9 +73,7 @@ class AbilitiesSection(TitledSection):
     def refresh_cost(self) -> None:
         """Re-title the block with its current PP subtotal (also driven by a homebrew
         cost-rate change, via ``cost-rates-changed``)."""
-        self.set_block_title(
-            title_with_cost("Abilities", ability_points_spent(self._character, self._data))
-        )
+        self.set_priced_title("Abilities", ability_points_spent(self._character, self._data))
 
     def refresh_enhancements(self) -> None:
         """Recompute each ability's "→ total" from power boosts and condition penalties."""

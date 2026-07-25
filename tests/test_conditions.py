@@ -575,3 +575,70 @@ def test_debilitated_power_card_struck_through(qapp2: QApplication) -> None:
         if label.text() == "Force Field" and label.font().strikeOut()
     ]
     assert struck
+
+
+# -- the by-id seam a remote GM applies through -----------------------------
+
+
+def test_applying_by_id_bundles_and_marks_the_sheet_edited(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    section = ConditionsSection(data, char)
+    edits: list[int] = []
+    section.edited.connect(lambda: edits.append(1))
+
+    assert section.apply_condition_by_id("incapacitated") is True
+
+    # The same resolver the local "+" runs: the umbrella brings its members.
+    assert len(char.conditions) == 4
+    assert len(section._condition_chips) == 4
+    assert edits  # a GM-applied condition dirties the sheet like a local one
+
+
+def test_applying_an_unknown_id_changes_nothing(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    section = ConditionsSection(data, char)
+
+    assert section.apply_condition_by_id("not-a-condition") is False
+    assert char.conditions == []
+
+
+def test_removing_by_id_matches_the_parameter(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    section = ConditionsSection(data, char)
+    section.apply_condition_by_id("impaired", "Attack")
+    section.apply_condition_by_id("impaired", "Dodge")
+
+    assert section.remove_condition_by_id("impaired", "Attack") is True
+
+    assert [c.parameter for c in char.conditions] == ["Dodge"]
+    assert section.remove_condition_by_id("impaired", "Sleight of Hand") is False
+
+
+def test_removing_by_id_peels_one_hit_off_the_stack(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character()
+    section = ConditionsSection(data, char)
+    section.apply_condition_by_id("hit")
+    section.apply_condition_by_id("hit")
+    assert char.conditions[0].count == 2
+
+    section.remove_condition_by_id("hit")
+
+    assert char.conditions[0].count == 1
+
+
+def test_removing_by_id_can_take_off_a_bundled_member(qapp: QApplication) -> None:
+    """Dazed arrives inside Staggered; taking it off leaves the umbrella standing."""
+    data = load_game_data()
+    char = Character()
+    section = ConditionsSection(data, char)
+    section.apply_condition_by_id("staggered")  # bundles dazed + hindered as members
+    assert "dazed" in _ids(char)
+
+    assert section.remove_condition_by_id("dazed") is True
+
+    assert "dazed" not in _ids(char)
+    assert "staggered" in _ids(char)

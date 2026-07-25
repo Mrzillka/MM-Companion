@@ -43,6 +43,8 @@ Single surfaces:
 python .claude/skills/run-mm-companion/driver.py start        # the launcher
 python .claude/skills/run-mm-companion/driver.py sheet        # blank editable character sheet
 python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+python .claude/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)
+python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
 ```
 
 **Then open the PNG and actually look at it** — a blank or error frame means you

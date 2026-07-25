@@ -252,6 +252,35 @@ def test_a_bad_join_code_is_refused_and_reported(qapp: QApplication, bridge: Ses
     assert refusals[0][0]["code"]
 
 
+def test_kicking_removes_the_seat_and_disconnects_the_player(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    state = new_session("Table")
+    host, port = host_locally(bridge, state)
+    joined = collect(bridge.playerJoined)
+
+    client = SessionClient(host, port, token=state.host_token, display_name="Aria")
+    client.connect()
+    try:
+        drain(qapp, joined)
+        player_id = client.player_id
+        assert bridge.kick(player_id) is True
+        # The seat is gone from the server's state.
+        assert player_id not in bridge.server.state.players
+        # Kicking a seat that is no longer there answers False.
+        assert bridge.kick(player_id) is False
+    finally:
+        client.close()
+
+
+def test_kicking_without_hosting_is_a_no_op(qapp: QApplication) -> None:
+    joined = SessionBridge()
+    try:
+        assert joined.kick("p0") is False
+    finally:
+        joined.stop()
+
+
 # -- joining ---------------------------------------------------------------
 
 

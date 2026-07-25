@@ -674,6 +674,7 @@ class GMWindow(QMainWindow):
                 card.openSheetRequested.connect(self._open_player_sheet)
                 card.applyConditionRequested.connect(self._apply_condition)
                 card.removeConditionRequested.connect(self._remove_condition)
+                card.removePlayerRequested.connect(self._remove_player)
                 self._cards[player_id] = card
                 self._cards_flow.addWidget(card)
             card.set_roster(entry)
@@ -729,6 +730,34 @@ class GMWindow(QMainWindow):
         if path is not None:
             character.image_path = path
         return character
+
+    # -- removing a player --------------------------------------------------
+
+    def _remove_player(self, player_id: str) -> None:
+        """Kick a player out of the session, once the GM confirms it.
+
+        The kick drops the seat and closes the socket; the server broadcasts a new
+        roster without it, so :meth:`_show_roster` reconciles the card away. Any
+        read-only sheet the GM had open for that player is closed too.
+        """
+        card = self._cards.get(player_id)
+        name = card.display_name() if card is not None else "this player"
+        confirm = QMessageBox.question(
+            self,
+            "Remove player",
+            f"Remove {name} from the session? They will be disconnected.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        if not self._bridge.kick(player_id):
+            self._show_notice(f"{name} could not be removed.", theme.TINT_WORSE)
+            return
+        window = self._player_windows.pop(player_id, None)
+        if window is not None:
+            window.close()
+        self._show_notice(f"{name} was removed from the session.", theme.ACCENT)
 
     # -- fast-apply conditions ---------------------------------------------
 

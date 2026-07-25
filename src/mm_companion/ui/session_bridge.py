@@ -215,6 +215,18 @@ class SessionBridge(QObject):
             return self._client.request_remove_roll(seq)
         return False
 
+    def kick(self, player_id: str, reason: str = "") -> bool:
+        """Remove a player from the session (a GM action). Returns whether a seat
+        was actually removed.
+
+        Only the in-process host can do this — the host owns the server and every
+        connection. A player, or a GM driving a headless server over the wire, has
+        no server here, so this is a no-op that returns False.
+        """
+        if self._server is None:
+            return False
+        return self._server.kick(player_id, reason)
+
     # -- hosting -----------------------------------------------------------
 
     def host(

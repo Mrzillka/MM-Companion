@@ -449,6 +449,42 @@ def test_a_seat_that_leaves_the_roster_loses_its_card(qapp: QApplication, window
     assert window._cards_flow.count() == 1
 
 
+def test_a_connected_player_card_offers_removal(qapp: QApplication, window: GMWindow) -> None:
+    card = player_card.PlayerCard(window._data)
+    card.set_roster({"player_id": "p0", "display_name": "Aria", "connected": True})
+    assert card._is_gm is False and card.player_id == "p0"
+    # The GM's own card never offers it, however the roster describes the seat.
+    gm = player_card.PlayerCard(window._data)
+    gm.set_roster({"player_id": "g0", "display_name": "GM", "is_gm": True, "connected": True})
+    assert gm._is_gm is True
+
+
+def test_removing_a_player_confirms_then_kicks(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    kicked: list[str] = []
+    monkeypatch.setattr(window._bridge, "kick", lambda pid, *a, **k: kicked.append(pid) or True)
+
+    window._remove_player("p0")
+    assert kicked == ["p0"]
+
+
+def test_removing_a_player_can_be_cancelled(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(
+        window._bridge, "kick", lambda *a, **k: pytest.fail("kick should not run on cancel")
+    )
+
+    window._remove_player("p0")
+
+
 def test_stopping_clears_the_cards(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
     window._show_roster(roster({"display_name": "Aria"}))

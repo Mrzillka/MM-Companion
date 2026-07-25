@@ -62,6 +62,87 @@ CONNECT_AUTOMATIC = "automatic"
 CONNECT_RELAY = "relay"
 CONNECT_TUNNEL = "tunnel"
 
+#: How many joined sessions the player-side history keeps.
+HISTORY_LIMIT = 12
+
+
+def load_session_history() -> list[dict]:
+    """The player's joined-session history, most recent first.
+
+    Reads the rich ``session_history`` list, and folds in any legacy
+    ``session_recent_codes`` (code-only) that are not already represented, so a
+    user upgrading from the old flat list still sees their previous codes.
+    """
+    settings = storage.load_settings()
+    history: list[dict] = []
+    seen: set[str] = set()
+    for entry in settings.get("session_history", []):
+        if isinstance(entry, dict) and entry.get("code") and entry["code"] not in seen:
+            history.append(dict(entry))
+            seen.add(entry["code"])
+    for code in settings.get("session_recent_codes", []):
+        code = str(code)
+        if code and code not in seen:
+            history.append({"code": code, "session_name": "", "display_name": ""})
+            seen.add(code)
+    return history
+
+
+def record_session_history(
+    *,
+    code: str,
+    session_id: str = "",
+    session_name: str = "",
+    display_name: str = "",
+    player_id: str = "",
+    player_token: str = "",
+) -> None:
+    """Remember a joined session (newest first, one row per code), for the picker.
+
+    The ``player_id`` / ``player_token`` are what let a return visit reclaim the
+    same roster slot. Keyed by ``code``: rejoining the same code updates its row
+    rather than adding a second. Failing to persist is not worth raising over.
+    """
+    from datetime import datetime, timezone
+
+    if not code:
+        return
+    settings = storage.load_settings()
+    rest = [
+        entry
+        for entry in settings.get("session_history", [])
+        if isinstance(entry, dict) and entry.get("code") and entry["code"] != code
+    ]
+    entry = {
+        "code": code,
+        "session_id": session_id,
+        "session_name": session_name,
+        "display_name": display_name,
+        "player_id": player_id,
+        "player_token": player_token,
+        "last_joined": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        storage.update_settings(session_history=[entry, *rest][:HISTORY_LIMIT])
+    except OSError:
+        pass
+
+
+def remove_session_history(code: str) -> None:
+    """Drop one joined session (by its code) from the player's history."""
+    settings = storage.load_settings()
+    rest = [
+        entry
+        for entry in settings.get("session_history", [])
+        if isinstance(entry, dict) and entry.get("code") and entry["code"] != code
+    ]
+    # Also strip the legacy convenience list, so a deleted code does not linger.
+    recent = [str(c) for c in settings.get("session_recent_codes", []) if str(c) != code]
+    try:
+        storage.update_settings(session_history=rest, session_recent_codes=recent)
+    except OSError:
+        pass
+
 
 @dataclass(frozen=True)
 class HostOptions:
@@ -218,21 +299,49 @@ class JoinSessionDialog(QDialog):
         self.setWindowTitle("Join Session")
         # A comfortable floor so the join-code combo and character names are not
         # clipped and the dialog never opens cramped.
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(440)
         self._code: discovery.JoinCode | None = None
         self._character_box: QComboBox | None = None
+        # The slot to reclaim if a history row is chosen and its code is unchanged.
+        self._reclaim: tuple[str, str] = ("", "")
+        self._reclaim_code = ""
 
         settings = storage.load_settings()
-        recent = [str(c) for c in settings.get("session_recent_codes", []) if c]
+        history = load_session_history()
 
         layout = QVBoxLayout(self)
+
+        # The list of sessions this player has joined before — pick one to rejoin
+        # (reclaiming the same seat), or delete one that has gone stale.
+        self._history_list: QListWidget | None = None
+        if history:
+            layout.addWidget(QLabel("Rejoin a previous session:"))
+            self._history_list = QListWidget()
+            for entry in history:
+                self._history_list.addItem(self._history_item(entry))
+            self._history_list.currentItemChanged.connect(
+                lambda current, _prev: self._on_history_selected(current)
+            )
+            self._history_list.itemDoubleClicked.connect(lambda _item: self._try_accept())
+            self._history_list.setMaximumHeight(150)
+            layout.addWidget(self._history_list)
+
+            delete_row = QHBoxLayout()
+            delete_row.addStretch()
+            self._forget_button = QPushButton("Forget")
+            self._forget_button.setToolTip("Remove the selected session from this list")
+            self._forget_button.clicked.connect(self._forget_selected)
+            delete_row.addWidget(self._forget_button)
+            layout.addLayout(delete_row)
+
         form = QFormLayout()
 
-        self._code_edit = QComboBox()
-        self._code_edit.setEditable(True)
-        self._code_edit.addItems(recent[:RECENT_CODES])
-        self._code_edit.setCurrentText(recent[0] if recent else "")
-        self._code_edit.lineEdit().setPlaceholderText("the code your GM sent you")
+        newest_code = history[0]["code"] if history else ""
+        self._code_edit = QLineEdit(newest_code)
+        self._code_edit.setPlaceholderText("the code your GM sent you")
+        # Typing a fresh code means this is not a return to the selected session,
+        # so the reclaimed seat no longer applies.
+        self._code_edit.textEdited.connect(lambda _text: self._clear_reclaim())
         form.addRow("Join code", self._code_edit)
 
         self._name_edit = QLineEdit(str(settings.get("session_player_name", "")))
@@ -283,6 +392,58 @@ class JoinSessionDialog(QDialog):
         summary = self._character_box.currentData()
         return Path(summary.path) if summary is not None and summary.path else None
 
+    def code_text(self) -> str:
+        """The raw join-code text entered — the key the history is recorded under."""
+        return self._code_edit.text().strip()
+
+    def reclaim_ids(self) -> tuple[str, str]:
+        """``(player_id, player_token)`` to reclaim a seat, or ``("", "")``.
+
+        Only meaningful when a history row was chosen and its code is unchanged —
+        those ids belong to that one session and would be refused by any other.
+        """
+        if self.code_text() == self._reclaim_code:
+            return self._reclaim
+        return ("", "")
+
+    # -- previous sessions -------------------------------------------------
+
+    @staticmethod
+    def _history_item(entry: dict) -> QListWidgetItem:
+        name = entry.get("session_name") or "(unnamed session)"
+        when = str(entry.get("last_joined", ""))[:16].replace("T", " ")
+        label = f"{name}   {when}".rstrip()
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, entry)
+        return item
+
+    def _on_history_selected(self, item: QListWidgetItem | None) -> None:
+        """Fill the code and name from a chosen previous session, and arm reclaim."""
+        if item is None:
+            return
+        entry = item.data(Qt.ItemDataRole.UserRole) or {}
+        code = str(entry.get("code", ""))
+        self._code_edit.setText(code)
+        if entry.get("display_name"):
+            self._name_edit.setText(str(entry["display_name"]))
+        self._reclaim = (str(entry.get("player_id", "")), str(entry.get("player_token", "")))
+        self._reclaim_code = code
+
+    def _clear_reclaim(self) -> None:
+        self._reclaim = ("", "")
+        self._reclaim_code = ""
+
+    def _forget_selected(self) -> None:
+        """Remove the selected previous session from the list and from settings."""
+        if self._history_list is None:
+            return
+        item = self._history_list.currentItem()
+        if item is None:
+            return
+        entry = item.data(Qt.ItemDataRole.UserRole) or {}
+        remove_session_history(str(entry.get("code", "")))
+        self._history_list.takeItem(self._history_list.row(item))
+
     # -- validation --------------------------------------------------------
 
     def _try_accept(self) -> None:
@@ -291,7 +452,7 @@ class JoinSessionDialog(QDialog):
         if not name:
             self._show_problem("Enter the name you want the GM to see.")
             return
-        text = self._code_edit.currentText().strip()
+        text = self.code_text()
         if not text:
             self._show_problem("Paste the join code your GM sent you.")
             return

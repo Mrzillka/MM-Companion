@@ -40,7 +40,13 @@ from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.dice_roller import DiceRollerWindow
 from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
-from mm_companion.ui.session_dialogs import NO_CHARACTER, JoinSessionDialog
+from mm_companion.ui.session_dialogs import (
+    NO_CHARACTER,
+    JoinSessionDialog,
+    load_session_history,
+    record_session_history,
+    remove_session_history,
+)
 from mm_companion.ui.session_player import ConditionReceiver, SnapshotPusher, snapshot_size
 from mm_companion.ui.start_window import StartWindow
 
@@ -256,7 +262,7 @@ def test_a_pusher_without_a_connection_is_harmless(qapp: QApplication) -> None:
 def test_the_dialog_refuses_a_mistyped_code(qapp: QApplication) -> None:
     dialog = JoinSessionDialog()
     dialog._name_edit.setText("Aria")
-    dialog._code_edit.setCurrentText("AAAAA-BBBBB-CCCCC")
+    dialog._code_edit.setText("AAAAA-BBBBB-CCCCC")
 
     dialog._try_accept()
 
@@ -267,7 +273,7 @@ def test_the_dialog_refuses_a_mistyped_code(qapp: QApplication) -> None:
 def test_the_dialog_refuses_an_empty_name(qapp: QApplication) -> None:
     dialog = JoinSessionDialog()
     dialog._name_edit.setText("   ")
-    dialog._code_edit.setCurrentText("whatever")
+    dialog._code_edit.setText("whatever")
 
     dialog._try_accept()
 
@@ -278,7 +284,7 @@ def test_a_good_code_is_decoded_and_remembered(qapp: QApplication) -> None:
     code = discovery.encode_join_code("203.0.113.7", 47331, "s3cret-token")
     dialog = JoinSessionDialog()
     dialog._name_edit.setText("Aria")
-    dialog._code_edit.setCurrentText(code)
+    dialog._code_edit.setText(code)
 
     dialog._try_accept()
 
@@ -308,8 +314,103 @@ def test_the_dialog_offers_the_saved_characters(qapp: QApplication) -> None:
 def test_the_last_code_is_offered_back(qapp: QApplication) -> None:
     storage.update_settings(session_recent_codes=["AAAAA-BBBBB"], session_player_name="Aria")
     dialog = JoinSessionDialog()
-    assert dialog._code_edit.currentText() == "AAAAA-BBBBB"
+    assert dialog._code_edit.text() == "AAAAA-BBBBB"
     assert dialog._name_edit.text() == "Aria"
+
+
+# -- the player-side session history ---------------------------------------
+
+
+def test_recording_and_loading_session_history() -> None:
+    record_session_history(
+        code="CODE1",
+        session_id="s1",
+        session_name="Wednesday",
+        display_name="Aria",
+        player_id="p1",
+        player_token="t1",
+    )
+    (entry,) = load_session_history()
+    assert entry["code"] == "CODE1"
+    assert entry["session_name"] == "Wednesday"
+    assert entry["player_id"] == "p1" and entry["player_token"] == "t1"
+
+
+def test_rejoining_the_same_code_updates_one_row() -> None:
+    record_session_history(code="CODE1", session_name="Old")
+    record_session_history(code="CODE1", session_name="New")
+    history = load_session_history()
+    assert [e["code"] for e in history] == ["CODE1"]
+    assert history[0]["session_name"] == "New"
+
+
+def test_forgetting_a_session_removes_it() -> None:
+    record_session_history(code="CODE1", session_name="Wednesday")
+    remove_session_history("CODE1")
+    assert load_session_history() == []
+
+
+def test_history_folds_in_legacy_recent_codes() -> None:
+    storage.update_settings(session_recent_codes=["LEGACY-CODE"])
+    assert any(e["code"] == "LEGACY-CODE" for e in load_session_history())
+
+
+def test_the_dialog_lists_and_reclaims_a_previous_session(qapp: QApplication) -> None:
+    record_session_history(
+        code="CODE1",
+        session_name="Wednesday",
+        display_name="Aria",
+        player_id="p1",
+        player_token="t1",
+    )
+    dialog = JoinSessionDialog()
+
+    assert dialog._history_list is not None and dialog._history_list.count() == 1
+    dialog._history_list.setCurrentRow(0)
+    assert dialog.code_text() == "CODE1"
+    assert dialog._name_edit.text() == "Aria"
+    assert dialog.reclaim_ids() == ("p1", "t1")
+
+
+def test_typing_a_different_code_drops_the_reclaimed_seat(qapp: QApplication) -> None:
+    record_session_history(code="CODE1", player_id="p1", player_token="t1")
+    dialog = JoinSessionDialog()
+    dialog._history_list.setCurrentRow(0)
+
+    dialog._code_edit.setText("SOMETHING-ELSE")
+
+    assert dialog.reclaim_ids() == ("", "")
+
+
+def test_forgetting_from_the_dialog_removes_the_row(qapp: QApplication) -> None:
+    record_session_history(code="CODE1", session_name="Wednesday")
+    dialog = JoinSessionDialog()
+    dialog._history_list.setCurrentRow(0)
+
+    dialog._forget_selected()
+
+    assert dialog._history_list.count() == 0
+    assert load_session_history() == []
+
+
+def test_a_returning_player_reclaims_their_slot(qapp: QApplication) -> None:
+    host = SessionBridge()
+    address = host.host(new_session("Table"), port=0, bind="127.0.0.1")
+    code = _code_for(host, address)
+    try:
+        first = SessionBridge()
+        client = first.join(code, "Aria")
+        player_id, player_token = client.player_id, client.player_token
+        first.stop()
+
+        returning = SessionBridge()
+        reclaimed = returning.join(code, "Aria", player_id=player_id, player_token=player_token)
+        try:
+            assert reclaimed.player_id == player_id  # the same seat, not a new one
+        finally:
+            returning.stop()
+    finally:
+        host.stop()
 
 
 # -- the launcher's join, end to end ---------------------------------------

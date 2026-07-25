@@ -169,7 +169,7 @@ class MainWindow(QMainWindow):
         """
         from mm_companion.core.session.client import SessionClientError
         from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
-        from mm_companion.ui.session_dialogs import JoinSessionDialog
+        from mm_companion.ui.session_dialogs import JoinSessionDialog, record_session_history
         from mm_companion.ui.session_player import attach_player_session
 
         if active_session() is not None:
@@ -185,12 +185,26 @@ class MainWindow(QMainWindow):
             return
 
         bridge = SessionBridge()
+        player_id, player_token = dialog.reclaim_ids()
         try:
-            bridge.join(dialog.join_code(), dialog.display_name())
+            client = bridge.join(
+                dialog.join_code(),
+                dialog.display_name(),
+                player_id=player_id,
+                player_token=player_token,
+            )
         except SessionClientError as exc:
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
+        record_session_history(
+            code=dialog.code_text(),
+            session_id=client.session_id,
+            session_name=client.session_name,
+            display_name=dialog.display_name(),
+            player_id=client.player_id,
+            player_token=client.player_token,
+        )
         attach_player_session(self, bridge)
 
     def _open_dice_roller(self) -> None:

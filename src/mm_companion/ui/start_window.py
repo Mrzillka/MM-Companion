@@ -290,7 +290,7 @@ class StartWindow(QMainWindow):
         it leaves the session.
         """
         from mm_companion.ui.session_bridge import active_session, set_active_session
-        from mm_companion.ui.session_dialogs import JoinSessionDialog
+        from mm_companion.ui.session_dialogs import JoinSessionDialog, record_session_history
         from mm_companion.ui.session_player import attach_player_session
 
         if active_session() is not None:
@@ -306,12 +306,26 @@ class StartWindow(QMainWindow):
             return
 
         bridge = SessionBridge()
+        player_id, player_token = dialog.reclaim_ids()
         try:
-            bridge.join(dialog.join_code(), dialog.display_name())
+            client = bridge.join(
+                dialog.join_code(),
+                dialog.display_name(),
+                player_id=player_id,
+                player_token=player_token,
+            )
         except SessionClientError as exc:
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
+        record_session_history(
+            code=dialog.code_text(),
+            session_id=client.session_id,
+            session_name=client.session_name,
+            display_name=dialog.display_name(),
+            player_id=client.player_id,
+            player_token=client.player_token,
+        )
 
         path = dialog.character_path()
         character = library.load_character(path) if path is not None else None

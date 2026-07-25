@@ -208,6 +208,86 @@ def test_saving_reports_the_parameters(panel: RollHistoryPanel) -> None:
     assert seen == [{"bonus": 6, "penalty": 0, "dc": 15}]
 
 
+# -- the remove button (GM only) --------------------------------------------
+
+
+def test_only_a_gm_panel_shows_a_remove_button(qapp: QApplication) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.add_roll(roll(seq=1, player_id="p2"))
+    assert any(b.text() == "✕" for b in gm_panel.findChildren(QPushButton))
+
+    player_panel = RollHistoryPanel()
+    player_panel.add_roll(roll(seq=1, player_id="p2"))
+    assert not any(b.text() == "✕" for b in player_panel.findChildren(QPushButton))
+
+
+def test_remove_roll_drops_the_matching_card(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(roll(seq=1))
+    panel.add_roll(roll(seq=2))
+
+    panel.remove_roll(1)
+
+    assert [card.seq for card in panel.cards()] == [2]
+    # The seq is forgotten, so the same roll could legitimately be re-added later.
+    assert 1 not in panel._seen
+
+
+def test_removing_the_last_card_shows_the_empty_state(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(roll(seq=1))
+    panel.remove_roll(1)
+    assert panel.cards() == []
+    assert panel._empty.isVisibleTo(panel)
+
+
+def test_an_offline_roll_can_be_struck_with_no_session(qapp: QApplication) -> None:
+    """A roll made before hosting (no bridge) still removes locally off its ✕."""
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRemovedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=-1))  # a pre-hosting roll's negative id
+
+    button = next(b for b in panel.findChildren(QPushButton) if b.text() == "✕")
+    button.click()
+
+    assert panel.cards() == []
+    assert seen == [-1]
+
+
+def test_a_roll_without_any_id_shows_no_remove_button(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    no_seq = {k: v for k, v in roll().items() if k != "seq"}
+    panel.add_roll(no_seq)
+    assert not any(b.text() == "✕" for b in panel.findChildren(QPushButton))
+
+
+def test_the_gm_removing_a_roll_clears_it_for_a_player(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.attach(hosting)
+    player = SessionBridge()
+    player_panel = RollHistoryPanel()
+    try:
+        player.join(_code_for(hosting), "Aria")
+        player_panel.attach(player)
+
+        record = hosting.server.roll(label="oops", bonus=1)
+        _pump(qapp, lambda: len(player_panel.cards()) == 1)
+        assert len(gm_panel.cards()) == 1
+
+        # The GM strikes it; the removal fans out over the session to both panels.
+        hosting.remove_roll(record.seq)
+        _pump(qapp, lambda: player_panel.cards() == [] and gm_panel.cards() == [])
+
+        assert gm_panel.cards() == []
+        assert player_panel.cards() == []
+    finally:
+        player_panel.detach()
+        player.stop()
+
+
 # -- following a session ----------------------------------------------------
 
 

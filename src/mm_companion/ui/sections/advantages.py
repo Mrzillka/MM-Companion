@@ -53,7 +53,7 @@ from mm_companion.ui.sections.column_flow import column_count, even_split
 from mm_companion.ui.sections.stat_grid import CONDITION_TINT
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, title_with_cost
+from mm_companion.ui.widgets import make_spin_box
 
 RANK_MIN, RANK_MAX = 1, 20
 
@@ -791,9 +791,7 @@ class AdvantagesSection(TitledSection):
     def refresh_cost(self) -> None:
         """Re-title the block with its current PP subtotal (also driven by a homebrew
         cost-rate change, via ``cost-rates-changed``)."""
-        self.set_block_title(
-            title_with_cost("Advantages", advantage_points_spent(self._character, self._data))
-        )
+        self.set_priced_title("Advantages", advantage_points_spent(self._character, self._data))
 
     def refresh_limits(self) -> None:
         """Recompute the Heroic-advantage budget display and the rank ceiling.

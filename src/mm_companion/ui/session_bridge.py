@@ -76,6 +76,8 @@ class SessionBridge(QObject):
     rosterChanged = Signal(object)
     #: One resolved roll, as a dict. On the host this includes hidden GM rolls.
     rollAdded = Signal(object)
+    #: One roll removed from the log, by its ``seq`` (int). GM-driven either side.
+    rollRemoved = Signal(int)
     #: The whole roll history at once — on attach, and on a fresh join.
     historyReplaced = Signal(object)
 
@@ -198,6 +200,19 @@ class SessionBridge(QObject):
             return self._client.request_roll(
                 label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
             )
+        return False
+
+    def remove_roll(self, seq: int) -> bool:
+        """Drop one roll from the shared log (a GM action).
+
+        The host removes it in-process; a GM driving a headless server asks over the
+        wire. Either way the removal comes back as :attr:`rollRemoved`. Returns False
+        when there is no live session.
+        """
+        if self._server is not None:
+            return self._server.remove_roll(seq)
+        if self._client is not None:
+            return self._client.request_remove_roll(seq)
         return False
 
     # -- hosting -----------------------------------------------------------
@@ -378,6 +393,8 @@ class SessionBridge(QObject):
             )
         elif kind == session_server.EVENT_ROLL:
             self.rollAdded.emit(payload)
+        elif kind == session_server.EVENT_ROLL_REMOVED:
+            self.rollRemoved.emit(int(payload.get("seq", 0)))
         elif kind == session_server.EVENT_REFUSED:
             self.refused.emit(payload)
         elif kind == session_server.EVENT_ERROR:
@@ -394,6 +411,8 @@ class SessionBridge(QObject):
             self.rosterChanged.emit(payload.get("players", []))
         elif kind == session_client.EVENT_ROLL:
             self.rollAdded.emit(payload)
+        elif kind == session_client.EVENT_ROLL_REMOVED:
+            self.rollRemoved.emit(int(payload.get("seq", 0)))
         elif kind == session_client.EVENT_APPLY_CONDITION:
             self.conditionCommand.emit("apply", payload)
         elif kind == session_client.EVENT_REMOVE_CONDITION:

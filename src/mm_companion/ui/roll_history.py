@@ -12,6 +12,11 @@ server never puts one on the wire, so a player's panel cannot render what it was
 never sent. The GM's own panel *does* see them, and marks them with
 :data:`HIDDEN_MARK` so it is obvious which rolls the table cannot.
 
+A roll can be struck from the log — but only the GM's panel (``gm=True``) shows the
+``✕``. Clicking it asks the session to remove the roll, which replies with a
+``rollRemoved`` broadcast; every panel drops the card off that reply, so the GM's
+own screen and every player's fall away together.
+
 Nothing here talks to a socket — the bridge is the only thing this module knows
 about, and grading is plain arithmetic over the roll dict.
 """
@@ -76,17 +81,31 @@ class SessionRollCard(QFrame):
     """One roll in the shared history: who rolled it, what it was, how it went.
 
     Deliberately not :class:`~mm_companion.ui.dice_roller.RollCard`: that one is
-    the local roller's own entry and can be thrown away, while this is a line in
-    a log everyone shares — there is no removing it, only saving its parameters
-    for reuse, and only for a roll of one's own.
+    the local roller's own entry and can be thrown away, while this is a line in a
+    log everyone shares. Its parameters can be saved for reuse (for a roll of one's
+    own), and the GM — and only the GM — can strike it from everyone's log with the
+    ``✕`` button (``can_remove``).
     """
 
     saveRequested = Signal(dict)
+    removeRequested = Signal(int)
 
-    def __init__(self, roll: dict, *, own: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        roll: dict,
+        *,
+        own: bool = False,
+        can_remove: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._roll = dict(roll)
+        raw_seq = roll.get("seq")
+        # A session roll has a positive seq; a pre-hosting (offline) roll is given a
+        # negative one so it too has a stable id to remove by. Only a roll with no
+        # id at all cannot be struck.
+        self.seq = raw_seq if isinstance(raw_seq, int) else None
 
         die = int(roll.get("die", 0))
         bonus = int(roll.get("bonus", 0))
@@ -139,17 +158,30 @@ class SessionRollCard(QFrame):
             )
             layout.addWidget(save_button, alignment=Qt.AlignmentFlag.AlignVCenter)
 
+        if can_remove and self.seq is not None:
+            # GM only — strikes the roll from the log (from every screen, in a session).
+            remove_button = QPushButton("✕")
+            remove_button.setToolTip("Remove this roll from the history")
+            remove_button.setFixedWidth(28)
+            remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
+            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+
 
 class RollHistoryPanel(QWidget):
     """The shared roll log, newest first, fed by a :class:`SessionBridge`."""
 
     #: A card's "★ Save" — the roll's parameters, for the roller's quick strip.
     saveRequested = Signal(dict)
+    #: A roll the GM struck with no live session to remove it from — so an owner
+    #: (the GM window) can drop it from a persisted, off-air session too.
+    rollRemovedLocally = Signal(int)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, gm: bool = False) -> None:
         super().__init__(parent)
         self._bridge: SessionBridge | None = None
         self._own_id = ""
+        # The GM's panel gets a per-roll ✕ to strike a roll from everyone's log.
+        self._gm = gm
         # Newest first, so the seq of the card at the top is the newest seen. Kept
         # to drop a roll that arrives twice — a fresh history replacing an
         # existing one overlaps with what was already appended.
@@ -187,6 +219,7 @@ class RollHistoryPanel(QWidget):
         self._bridge = bridge
         self._own_id = bridge.own_player_id()
         bridge.rollAdded.connect(self.add_roll)
+        bridge.rollRemoved.connect(self.remove_roll)
         bridge.historyReplaced.connect(self.set_rolls)
         self.set_rolls(bridge.history())
 
@@ -195,7 +228,11 @@ class RollHistoryPanel(QWidget):
         bridge, self._bridge = self._bridge, None
         if bridge is None:
             return
-        pairs = ((bridge.rollAdded, self.add_roll), (bridge.historyReplaced, self.set_rolls))
+        pairs = (
+            (bridge.rollAdded, self.add_roll),
+            (bridge.rollRemoved, self.remove_roll),
+            (bridge.historyReplaced, self.set_rolls),
+        )
         for signal, slot in pairs:
             try:
                 signal.disconnect(slot)
@@ -223,12 +260,39 @@ class RollHistoryPanel(QWidget):
             self._seen.add(seq)
 
         own = bool(self._own_id) and str(roll.get("player_id", "")) == self._own_id
-        card = SessionRollCard(roll, own=own)
+        card = SessionRollCard(roll, own=own, can_remove=self._gm)
         card.saveRequested.connect(self.saveRequested)
+        card.removeRequested.connect(self._request_remove)
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
         self._empty.setVisible(False)
+
+    def _request_remove(self, seq: int) -> None:
+        """A ✕ was clicked — drop the roll (GM action).
+
+        In a live session the server removes it and echoes :attr:`rollRemoved` back,
+        which drives :meth:`remove_roll` so every screen (this one included) drops it
+        together. With no live session — a roll made before hosting, or a resumed
+        session shown off the air — there is nothing to broadcast to, so the card is
+        dropped here and :attr:`rollRemovedLocally` lets an owner persist that.
+        """
+        if self._bridge is not None and self._bridge.remove_roll(seq):
+            return
+        self.remove_roll(seq)
+        self.rollRemovedLocally.emit(seq)
+
+    def remove_roll(self, seq: int) -> None:
+        """Drop the card for *seq* (from a ``rollRemoved`` broadcast); no-op if absent."""
+        for card in self.cards():
+            if card.seq == seq:
+                self._layout.removeWidget(card)
+                card.setParent(None)
+                card.deleteLater()
+                break
+        self._seen.discard(seq)
+        if not self.cards():
+            self._empty.setVisible(True)
 
     def clear(self) -> None:
         for card in self.cards():

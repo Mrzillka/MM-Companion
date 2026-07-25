@@ -54,7 +54,9 @@ from .protocol import (
     Pong,
     ProtocolError,
     RemoveCondition,
+    RemoveRollRequest,
     RollAdded,
+    RollRemoved,
     RollRequest,
     Roster,
     Welcome,
@@ -98,6 +100,7 @@ EVENT_PLAYER_LEFT = "player_left"  # {"player": public slot dict}
 EVENT_ROSTER = "roster"  # {"players": [roster dicts — no tokens, no characters]}
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
 EVENT_ROLL = "roll"  # a full roll dict, hidden rolls included
+EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
 EVENT_REFUSED = "refused"  # {"code", "message", "address"}
 EVENT_ERROR = "error"  # {"code", "message"}
 
@@ -257,6 +260,24 @@ class SessionServer:
         return self._resolve_roll(
             slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
         )
+
+    def remove_roll(self, seq: int) -> bool:
+        """Drop one roll from the shared log and tell every client (a GM action).
+
+        Returns ``False`` when no roll carried that sequence number. A hidden roll's
+        removal is not broadcast — it was never on the wire in the first place, so
+        only the GM's own window is told (through :data:`EVENT_ROLL_REMOVED`).
+        """
+        with self._lock:
+            record = self.state.remove_roll(seq)
+            if record is not None:
+                self._rewrite_rolls()
+        if record is None:
+            return False
+        self._emit(EVENT_ROLL_REMOVED, {"seq": seq})
+        if not record.hidden:
+            self.broadcast(RollRemoved(seq=seq))
+        return True
 
     def apply_condition(
         self, player_id: str, condition_id: str, parameter: str | None = None
@@ -559,6 +580,9 @@ class SessionServer:
                 # Only the GM may roll unseen; a player's flag is simply ignored.
                 hidden=message.hidden and slot.is_gm,
             )
+        elif isinstance(message, RemoveRollRequest) and slot.is_gm:
+            # Removing a roll is a GM privilege; a player's request is ignored.
+            self.remove_roll(message.seq)
         elif isinstance(message, Ping):
             self._send_quietly(connection, Pong(nonce=message.nonce))
         elif isinstance(message, (ApplyCondition, RemoveCondition)) and slot.is_gm:
@@ -671,6 +695,15 @@ class SessionServer:
             return
         try:
             store.append_roll(self.state.id, record, self._workspace)
+        except (OSError, store.SessionStoreError) as exc:
+            self._emit(EVENT_ERROR, {"code": "persist", "message": str(exc)})
+
+    def _rewrite_rolls(self) -> None:
+        """Rewrite the whole roll log after a removal (the log can't delete in place)."""
+        if not self._persist_enabled:
+            return
+        try:
+            store.save_session(self.state, self._workspace, write_rolls=True)
         except (OSError, store.SessionStoreError) as exc:
             self._emit(EVENT_ERROR, {"code": "persist", "message": str(exc)})
 

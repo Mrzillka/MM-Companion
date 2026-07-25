@@ -32,15 +32,15 @@ to :class:`~mm_companion.ui.session_bridge.SessionBridge`.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QCloseEvent, QFont, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
+    QDialog,
     QFileDialog,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -60,23 +60,22 @@ from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
+from mm_companion.ui.block_canvas import BlockCanvas
+from mm_companion.ui.block_sizes import BlockSize
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.sections.conditions import condition_display_name
+from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
+from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
 from mm_companion.ui.start_window import CharacterCard
-from mm_companion.ui.widgets import make_spin_box
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
 BIND_ADDRESS = "0.0.0.0"
-
-TUNNEL_PLACEHOLDER = "e.g. 147.185.221.23:12345 — what your tunnel shows"
-
-RELAY_PLACEHOLDER = "e.g. relay.example.net — a relay to fall back to"
 
 NO_PLAYERS = "Nobody has joined yet — send the join code above to your players."
 
@@ -114,86 +113,147 @@ class GMWindow(QMainWindow):
         # One relay attempt per hosting run: the fallback republishes, and a
         # second attempt off that would loop.
         self._relay_attempted = False
+        # Ids for rolls made before hosting: negative so they never collide with a
+        # session's positive seqs, and still removable from the local view.
+        self._offline_seq = 0
+        # The connection choices the current/most-recent host run used; the dialog
+        # replaces this each time hosting starts. A sane default lets the relay
+        # fallback and the port read something before the first run.
+        self._host_options = HostOptions(
+            name="Session", port=DEFAULT_PORT, tunnel="", relay=storage.relay_url(), use_relay=True
+        )
         set_active_session(self._bridge)
         # Resume the session this app was last in; a fresh one when there is none
         # (or its files have gone), so the window always has a session to host.
         self._state: SessionState = last_session() or new_session("Session")
 
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(self._build_session_box())
-        layout.addWidget(self._build_connection_box())
-        layout.addWidget(self._build_players_box(), stretch=1)
-        layout.addWidget(self._build_npcs_box(), stretch=1)
-        layout.addWidget(self._build_rolls_box(), stretch=1)
-        layout.addWidget(self._build_notice())
+        # The blocks are draggable / hideable / reorderable the same way the
+        # character sheet's are — a shared BlockCanvas rather than a fixed stack.
+        # Players and NPCs get a growable width just wider than one card, so their
+        # FlowLayout keeps at least one card per row and fits more as the window
+        # widens. The connection knobs are gone from here (see HostSessionDialog),
+        # so the Session block is compact.
+        panels = [
+            ("session", "Session", self._build_session_box()),
+            ("players", "Players", self._build_players_box()),
+            ("npcs", "NPCs", self._build_npcs_box()),
+            ("rolls", "Rolls", self._build_rolls_box()),
+        ]
+        for _key, _title, box in panels:
+            strip_groupbox_caption(box)  # the block's title bar carries the name now
+        sizes = {
+            "session": BlockSize(min_width=380, min_height=110),
+            "players": BlockSize(min_width=250, min_height=130),
+            "npcs": BlockSize(min_width=250, min_height=150),
+            "rolls": BlockSize(min_width=520, min_height=260),
+        }
+        default_rows = [["session"], ["players"], ["npcs"], ["rolls"]]
+        self._canvas = BlockCanvas(panels, sizes, default_rows)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(page)
-        self.setCentralWidget(scroll)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setWidget(self._canvas)
+        self._canvas.set_scroll_area(self._scroll)
+
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self._scroll, stretch=1)
+        central_layout.addWidget(self._build_notice())
+        self.setCentralWidget(central)
+
+        self._canvas.arrangement_changed.connect(self._update_min_width)
+        self._update_min_width()
+        self._build_menu()
+        self._restore_layout()
 
         self._connect_bridge()
         self._refresh_idle_status()
         self._refresh_rolls()
         self._refresh_npcs()
 
+    def _update_min_width(self) -> None:
+        """Pin the page's min width to the widest docked row (blocks never squash)."""
+        bar = self._scroll.verticalScrollBar()
+        extra = bar.sizeHint().width() if bar is not None else 0
+        self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extra + 2)
+
+    def _build_menu(self) -> None:
+        """A View menu: one show/hide toggle per block, plus Reset Layout."""
+        view_menu = self.menuBar().addMenu("&View")
+        self._block_actions: dict[str, object] = {}
+        for key in self._canvas.block_keys():
+            action = view_menu.addAction(self._canvas.block_frame(key).title)
+            action.setCheckable(True)
+            action.setChecked(not self._canvas.is_hidden(key))
+            action.toggled.connect(lambda visible, k=key: self._on_block_toggled(k, visible))
+            self._block_actions[key] = action
+        view_menu.addSeparator()
+        view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
+        self._canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
+
+    def _on_block_toggled(self, key: str, visible: bool) -> None:
+        if visible:
+            self._canvas.show_block(key)
+        else:
+            self._canvas.hide_block(key)
+
+    def _on_block_visibility_changed(self, key: str, visible: bool) -> None:
+        action = self._block_actions.get(key)
+        if action is None or action.isChecked() == visible:
+            return
+        action.blockSignals(True)
+        action.setChecked(visible)
+        action.blockSignals(False)
+
+    def _reset_layout(self) -> None:
+        self._canvas.reset()
+        for key, action in self._block_actions.items():
+            action.blockSignals(True)
+            action.setChecked(not self._canvas.is_hidden(key))
+            action.blockSignals(False)
+
+    # -- layout persistence ------------------------------------------------
+
+    def _restore_layout(self) -> None:
+        """Restore the remembered geometry and block arrangement (its own settings key)."""
+        layout = storage.load_settings().get("gm_layout") or {}
+        geometry = layout.get("window_geometry") if isinstance(layout, dict) else None
+        if isinstance(geometry, str) and geometry:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
+        state = layout.get("dock_state") if isinstance(layout, dict) else None
+        if isinstance(state, str) and state:
+            try:
+                self._canvas.apply_arrangement(json.loads(state))
+            except (ValueError, TypeError):
+                pass
+
+    def _persist_layout(self) -> None:
+        """Save the GM window's geometry and block arrangement as a global preference."""
+        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        try:
+            storage.update_settings(
+                gm_layout={
+                    "window_geometry": geometry,
+                    "dock_state": json.dumps(self._canvas.arrangement()),
+                }
+            )
+        except OSError:
+            pass
+
     # -- construction ------------------------------------------------------
 
     def _build_session_box(self) -> QGroupBox:
+        """The compact session block: one button to start, the join code once hosting.
+
+        The connection knobs (port, relay, a typed tunnel address) live in
+        :class:`~mm_companion.ui.session_dialogs.HostSessionDialog`, reached through
+        the **Start a session…** button, so the always-visible surface is just a
+        status line, the join code and its Copy button, and the advice underneath.
+        """
         box = QGroupBox("Session")
-        layout = QVBoxLayout(box)
-
-        form = QFormLayout()
-        self._name_edit = QLineEdit(self._state.name)
-        self._name_edit.editingFinished.connect(self._rename_session)
-        form.addRow("Name", self._name_edit)
-
-        self._port_spin = make_spin_box(0, 65535, value=DEFAULT_PORT)
-        # 0 means "let the OS pick a free one" — useful when the default port is
-        # already taken, though a fixed port is friendlier to firewall rules.
-        self._port_spin.setSpecialValueText("automatic")
-        form.addRow("Port", self._port_spin)
-
-        self._tunnel_edit = QLineEdit()
-        self._tunnel_edit.setPlaceholderText(TUNNEL_PLACEHOLDER)
-        form.addRow("Tunnel address", self._tunnel_edit)
-
-        self._relay_edit = QLineEdit(storage.relay_url())
-        self._relay_edit.setPlaceholderText(RELAY_PLACEHOLDER)
-        self._relay_edit.editingFinished.connect(self._save_relay_url)
-        form.addRow("Relay address", self._relay_edit)
-        layout.addLayout(form)
-
-        self._relay_check = QCheckBox("Use the relay if this machine cannot be reached")
-        self._relay_check.setChecked(True)
-        layout.addWidget(self._relay_check)
-
-        hint = _wrapped(
-            "Leave the tunnel address empty to try your router automatically. If "
-            "that cannot reach the internet, run a tunnel (playit.gg, ngrok, "
-            "Tailscale) and paste the address it gives you here — players then "
-            "need nothing but the join code. A relay is the fallback for when "
-            "neither works: both ends dial out to it, so nothing has to be "
-            "reachable. Direct is always tried first."
-        )
-        hint.setEnabled(False)
-        layout.addWidget(hint)
-
-        buttons = QHBoxLayout()
-        self._host_button = QPushButton("Start hosting")
-        self._host_button.clicked.connect(self._toggle_hosting)
-        buttons.addWidget(self._host_button)
-
-        self._new_button = QPushButton("New session")
-        self._new_button.clicked.connect(self._new_session)
-        buttons.addWidget(self._new_button)
-        buttons.addStretch()
-        layout.addLayout(buttons)
-        return box
-
-    def _build_connection_box(self) -> QGroupBox:
-        box = QGroupBox("Players join with")
         layout = QVBoxLayout(box)
 
         self._status_label = _wrapped("")
@@ -205,7 +265,7 @@ class GMWindow(QMainWindow):
         code_row = QHBoxLayout()
         self._code_edit = QLineEdit()
         self._code_edit.setReadOnly(True)
-        self._code_edit.setPlaceholderText("the join code appears here once you host")
+        self._code_edit.setPlaceholderText("your join code appears here once you start hosting")
         code_font = QFont(self._code_edit.font())
         code_font.setStyleHint(QFont.StyleHint.Monospace)
         code_font.setPointSize(code_font.pointSize() + 2)
@@ -222,6 +282,17 @@ class GMWindow(QMainWindow):
         # ``discovery`` wrote it. They are player-facing sentences, not log lines.
         self._advice_layout = QVBoxLayout()
         layout.addLayout(self._advice_layout)
+
+        buttons = QHBoxLayout()
+        self._host_button = QPushButton("Start a session…")
+        self._host_button.clicked.connect(self._toggle_hosting)
+        buttons.addWidget(self._host_button)
+
+        self._new_button = QPushButton("New session")
+        self._new_button.clicked.connect(self._new_session)
+        buttons.addWidget(self._new_button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
         return box
 
     def _build_players_box(self) -> QGroupBox:
@@ -288,8 +359,9 @@ class GMWindow(QMainWindow):
         self._roller.localRoll.connect(self._show_offline_roll)
         layout.addWidget(self._roller)
 
-        self._history = RollHistoryPanel()
+        self._history = RollHistoryPanel(gm=True)
         self._history.saveRequested.connect(self._roller.save_quick_roll)
+        self._history.rollRemovedLocally.connect(self._on_local_roll_removed)
         self._history.setMinimumHeight(240)
         layout.addWidget(self._history, stretch=1)
         return box
@@ -318,21 +390,35 @@ class GMWindow(QMainWindow):
 
     def _toggle_hosting(self) -> None:
         if self._bridge.hosting:
-            self._stop_hosting()
+            self.stop_hosting()
         else:
-            self._start_hosting()
+            self._prompt_and_host()
 
-    def _start_hosting(self) -> None:
-        tunnel = self._tunnel_edit.text().strip()
+    def _prompt_and_host(self) -> None:
+        """Ask how to host (name + connection), then start with the chosen options."""
+        dialog = HostSessionDialog(self, session_name=self._state.name)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.start_hosting(dialog.options())
+
+    def start_hosting(self, options: HostOptions) -> None:
+        """Begin hosting with *options* (from :class:`HostSessionDialog`) and publish.
+
+        The connection choices are held for the run so the relay fallback and the
+        reachability probe read the same values the GM picked, rather than any
+        always-visible field.
+        """
         manual_host, manual_port = "", 0
-        if tunnel:
+        if options.tunnel:
             try:
-                manual_host, manual_port = discovery.parse_address(tunnel)
+                manual_host, manual_port = discovery.parse_address(options.tunnel)
             except discovery.AddressError as exc:
                 QMessageBox.warning(self, "Tunnel address", str(exc))
                 return
 
+        self._host_options = options
         self._relay_attempted = False
+        self._state.name = options.name
         self._rename_session()
         # A resumed session already carries each seat's last snapshot, so the cards
         # come up populated rather than blank until everyone reconnects and pushes.
@@ -354,7 +440,7 @@ class GMWindow(QMainWindow):
         try:
             self._bridge.host(
                 self._state,
-                port=self._port_spin.value(),
+                port=self._host_options.port,
                 bind=self._bind,
                 gm_name="GM",
                 relay_url=relay,
@@ -391,7 +477,7 @@ class GMWindow(QMainWindow):
         dropped in the swap.
         """
         self._relay_attempted = True
-        relay = self._relay_edit.text().strip()
+        relay = self._host_options.relay
         self._set_status("Trying the relay…", theme.ACCENT)
         self._bridge.stop()
         if not self._begin_hosting(relay) and not self._begin_hosting():
@@ -401,14 +487,8 @@ class GMWindow(QMainWindow):
         self._set_hosting_widgets(True)
         self._bridge.publish()
 
-    def _save_relay_url(self) -> None:
-        """Remember the relay across launches; a settings write is not worth a dialog."""
-        try:
-            storage.update_settings(session_relay_url=self._relay_edit.text().strip())
-        except OSError:
-            pass
-
-    def _stop_hosting(self) -> None:
+    def stop_hosting(self) -> None:
+        """Stop hosting, clear the join code and cards, and return to the idle state."""
         self._relay_attempted = False
         self._bridge.stop()
         self._set_hosting_widgets(False)
@@ -419,18 +499,12 @@ class GMWindow(QMainWindow):
         self._refresh_idle_status()
 
     def _set_hosting_widgets(self, hosting: bool) -> None:
-        self._host_button.setText("Stop hosting" if hosting else "Start hosting")
-        # The port and the tunnel address decide what the join code says, so they
-        # are fixed for as long as a code is out in the world.
-        self._port_spin.setEnabled(not hosting)
-        self._tunnel_edit.setEnabled(not hosting)
-        self._relay_edit.setEnabled(not hosting)
-        self._relay_check.setEnabled(not hosting)
+        self._host_button.setText("Stop hosting" if hosting else "Start a session…")
+        # A new session cannot be started on top of a live one.
         self._new_button.setEnabled(not hosting)
 
     def _new_session(self) -> None:
         self._state = new_session("Session")
-        self._name_edit.setText(self._state.name)
         self._clear_cards()
         self._refresh_idle_status()
         self._refresh_rolls()
@@ -452,15 +526,17 @@ class GMWindow(QMainWindow):
     def _show_offline_roll(self, roll: object) -> None:
         """Show a roll the GM made before hosting started.
 
-        It has no ``seq`` and is never persisted — there is no session running to
-        record it in. Starting to host re-seeds the panel from the real log, at
-        which point these are gone.
+        It is never persisted — there is no session running to record it in — but it
+        gets a negative ``seq`` so the GM can still strike it from the panel. Starting
+        to host re-seeds the panel from the real log, at which point these are gone.
         """
         if not isinstance(roll, dict):
             return
         result = roll.get("result")
+        self._offline_seq -= 1
         self._history.add_roll(
             {
+                "seq": self._offline_seq,
                 "player_name": self._name_of_gm(),
                 "die": roll["die"],
                 "bonus": roll["bonus"],
@@ -471,13 +547,28 @@ class GMWindow(QMainWindow):
             }
         )
 
+    def _on_local_roll_removed(self, seq: int) -> None:
+        """Persist a roll the GM struck while not hosting.
+
+        A live session removes on the server (and this never fires). Off the air the
+        panel shows the resumed session's persisted log, so drop the roll from the
+        state and save it too; a pre-hosting offline roll is not in the state, so
+        this is a no-op for those.
+        """
+        if self._bridge.hosting:
+            return
+        if self._state.remove_roll(seq) is not None:
+            try:
+                store.save_session(self._state, write_rolls=True)
+            except OSError:
+                pass
+
     def _name_of_gm(self) -> str:
         slot = next((s for s in self._state.players.values() if s.is_gm), None)
         return slot.display_name if slot is not None else "GM"
 
     def _rename_session(self) -> None:
-        name = self._name_edit.text().strip() or "Session"
-        self._name_edit.setText(name)
+        name = (self._state.name or "").strip() or "Session"
         self._state.name = name
         if self._bridge.hosting and self._bridge.server is not None:
             self._bridge.server.set_session_name(name)
@@ -535,8 +626,8 @@ class GMWindow(QMainWindow):
         """
         return (
             not self._relay_attempted
-            and self._relay_check.isChecked()
-            and bool(self._relay_edit.text().strip())
+            and self._host_options.use_relay
+            and bool(self._host_options.relay)
             and reachability.method not in (discovery.METHOD_MANUAL, discovery.METHOD_RELAY)
             and not reachability.internet_reachable
         )
@@ -701,7 +792,7 @@ class GMWindow(QMainWindow):
             return []
         by_name = {
             summary.path.name: summary
-            for summary in library.list_saved_characters(self._npc_dir())
+            for summary in library.list_saved_characters(self._npc_dir(), estimate_pl=True)
             if summary.path is not None
         }
         alive = [name for name in wanted if name in by_name]
@@ -903,7 +994,8 @@ class GMWindow(QMainWindow):
         # stays open and tracked, which is fine — this window is reusable.
         for npc_window in list(self._npc_windows.values()):
             npc_window.close()
-        self._stop_hosting()
+        self._persist_layout()
+        self.stop_hosting()
         set_active_session(None)
         super().closeEvent(event)
 

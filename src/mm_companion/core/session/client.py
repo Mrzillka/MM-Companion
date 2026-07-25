@@ -37,7 +37,9 @@ from .protocol import (
     Pong,
     ProtocolError,
     RemoveCondition,
+    RemoveRollRequest,
     RollAdded,
+    RollRemoved,
     RollRequest,
     Roster,
     Welcome,
@@ -49,6 +51,7 @@ EVENT_CONNECTED = "connected"  # the welcome envelope
 EVENT_DISCONNECTED = "disconnected"  # {"reason"}
 EVENT_ROSTER = "roster"  # {"players": [public slot dicts]}
 EVENT_ROLL = "roll"  # one roll dict
+EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
 EVENT_APPLY_CONDITION = "apply_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_REMOVE_CONDITION = "remove_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_ERROR = "error"  # {"code", "message"}
@@ -230,6 +233,14 @@ class SessionClient:
             RollRequest(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden)
         )
 
+    def request_remove_roll(self, seq: int) -> bool:
+        """Ask the server to drop one roll from the log (honored only for the GM).
+
+        The removal comes back as :data:`EVENT_ROLL_REMOVED` once the server applies
+        it, the same as it reaches every other client.
+        """
+        return self.send(RemoveRollRequest(seq=seq))
+
     def ping(self, nonce: int = 0) -> bool:
         """Keepalive; the answer arrives as :data:`EVENT_PONG`."""
         return self.send(Ping(nonce=nonce))
@@ -273,6 +284,9 @@ class SessionClient:
         elif isinstance(message, RollAdded):
             self.history.append(message.roll)
             self._emit(EVENT_ROLL, message.roll)
+        elif isinstance(message, RollRemoved):
+            self.history = [r for r in self.history if r.get("seq") != message.seq]
+            self._emit(EVENT_ROLL_REMOVED, {"seq": message.seq})
         elif isinstance(message, ApplyCondition):
             self._emit(EVENT_APPLY_CONDITION, message.to_dict())
         elif isinstance(message, RemoveCondition):

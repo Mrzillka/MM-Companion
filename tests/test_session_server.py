@@ -30,6 +30,7 @@ from mm_companion.core.session.client import (
     EVENT_KICKED,
     EVENT_PONG,
     EVENT_ROLL,
+    EVENT_ROLL_REMOVED,
     EVENT_ROSTER,
     SessionClient,
     SessionClientError,
@@ -647,6 +648,58 @@ def test_absurd_modifiers_are_clamped(running_server, connect) -> None:
     assert roll["penalty"] == -server_mod.MAX_ROLL_MODIFIER
     assert roll["dc"] == server_mod.MAX_ROLL_MODIFIER
     assert len(roll["label"]) == server_mod.MAX_LABEL_CHARS
+
+
+def test_the_gm_can_remove_a_roll_for_everyone(running_server, connect) -> None:
+    srv = running_server(rng=Random(8))
+    client, events = connect(srv, "Volt")
+
+    client.request_roll("Oops", dc=10)
+    seq = events.next_of(EVENT_ROLL)["seq"]
+
+    assert srv.remove_roll(seq) is True
+    assert events.next_of(EVENT_ROLL_REMOVED)["seq"] == seq
+    assert [roll.seq for roll in srv.state.rolls] == []
+    # The rewrite reached disk too, so a reload does not resurrect it.
+    assert store.load_rolls(srv.state.id) == []
+
+
+def test_removing_an_absent_roll_is_a_noop(running_server) -> None:
+    srv = running_server(rng=Random(8))
+    srv.roll(label="Keep", dc=10)
+    assert srv.remove_roll(999) is False
+    assert [roll.label for roll in srv.state.rolls] == ["Keep"]
+
+
+def test_removing_a_hidden_roll_is_not_broadcast(running_server, connect) -> None:
+    gm_events = Events()
+    srv = running_server(rng=Random(2), on_event=gm_events)
+    client, events = connect(srv, "Volt")
+
+    record = srv.roll(label="Ambush", dc=15, hidden=True)
+    gm_events.next_of(server_mod.EVENT_ROLL)
+
+    assert srv.remove_roll(record.seq) is True
+    # The GM's own window is told; the player — who never got the roll — is not.
+    assert gm_events.next_of(server_mod.EVENT_ROLL_REMOVED)["seq"] == record.seq
+    client.ping(1)
+    events.next_of(EVENT_PONG)
+    assert EVENT_ROLL_REMOVED not in events.kinds()
+
+
+def test_a_player_cannot_remove_a_roll(running_server, connect) -> None:
+    srv = running_server(rng=Random(8))
+    client, events = connect(srv, "Volt")
+
+    client.request_roll("Mine", dc=10)
+    seq = events.next_of(EVENT_ROLL)["seq"]
+
+    client.request_remove_roll(seq)  # a player has no such privilege
+    client.ping(1)
+    events.next_of(EVENT_PONG)
+
+    assert EVENT_ROLL_REMOVED not in events.kinds()
+    assert [roll.seq for roll in srv.state.rolls] == [seq]
 
 
 # --------------------------------------------------------------------------

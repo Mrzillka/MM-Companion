@@ -24,7 +24,9 @@ from mm_companion.core.session.protocol import (
     Pong,
     ProtocolError,
     RemoveCondition,
+    RemoveRollRequest,
     RollAdded,
+    RollRemoved,
     RollRequest,
     Roster,
     Welcome,
@@ -39,6 +41,7 @@ ROUND_TRIP_CASES = [
     CharacterSnapshot(character={"power_level": 10, "abilities": {"str": 4}}),
     RollRequest(label="Athletics", bonus=6, penalty=2, dc=15, hidden=False),
     RollRequest(),  # a bare d20 with no DC
+    RemoveRollRequest(seq=3),
     Ping(nonce=7),
     Welcome(
         session_id="s1",
@@ -50,6 +53,7 @@ ROUND_TRIP_CASES = [
     ),
     Roster(players=[{"player_id": "p1"}, {"player_id": "p2"}]),
     RollAdded(roll={"seq": 3, "die": 20, "degree": 2}),
+    RollRemoved(seq=3),
     ApplyCondition(player_id="p1", condition_id="dazed", parameter="Strength"),
     RemoveCondition(player_id="p1", condition_id="dazed"),
     ErrorMessage(code=protocol.ERROR_BAD_TOKEN, message="wrong join code"),

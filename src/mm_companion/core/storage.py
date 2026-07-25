@@ -78,6 +78,11 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # own (``python -m mm_companion.relay``) points at it here. See
     # :mod:`mm_companion.core.session.relay`.
     "session_relay_url": "",
+    # The GM window's block arrangement + geometry, mirroring ``layout`` for the
+    # character sheet: ``{"window_geometry": base64, "dock_state": json}``. Its own
+    # key because the GM window has a different block set. See
+    # :mod:`mm_companion.ui.gm_window`.
+    "gm_layout": {},
 }
 
 

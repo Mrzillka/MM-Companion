@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
+
 from ..character import Character
 from ..data_loader import GameData
-from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance
+from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
 from .derived import effective_ability, resistance_total, skill_total
 from .powers_cost import effect_effective_rank
 from .powers_terms import _effect_name, _effective_stats
@@ -99,6 +101,80 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
                 f"{base.name} rank {rank} exceeds the PL {power_level} rank cap of {power_level}."
             )
     return violations
+
+
+def _iter_leaf_powers(nodes: list[PowerNode]):
+    """Yield every leaf :class:`Power` in a powers tree, ignoring array selection.
+
+    Unlike :func:`~mm_companion.core.rules.live_powers`, this descends into *all*
+    children of every group — including an array's unselected alternates — because
+    Power Level caps apply to the whole build, not just the currently-active branch.
+    """
+
+    for node in nodes:
+        if isinstance(node, PowerGroup):
+            yield from _iter_leaf_powers(node.children)
+        else:
+            yield node
+
+
+def _pl_for_cap(value: int, cap) -> int:
+    """Smallest Power Level under which ``value`` obeys ``value <= pl * mult + add``."""
+
+    if cap.mult <= 0:
+        return 0
+    return max(0, math.ceil((value - cap.add) / cap.mult))
+
+
+def estimated_power_level(char: Character, game_data: GameData) -> int:
+    """Estimate a character's effective Power Level from its traits alone.
+
+    The smallest Power Level that would keep the build legal under the three caps in
+    ``docs/mm-core-mechanics.md`` §7 — the ``max`` of:
+
+    - the attack + effect-rank cap over every offensive power effect (mirroring
+      :func:`power_pl_violations`: an attack-roll effect needs
+      ``ceil((attack + rank) / 2)``, an auto-hit effect needs ``rank`` outright);
+    - each paired-resistance cap from ``system.json`` (Dodge + Toughness,
+      Fortitude + Will), summed via :func:`resistance_total`.
+
+    Used for NPCs, which carry no power-point budget, so their Power Level is derived
+    from what they can do rather than what they cost. A trait-less NPC estimates 0.
+    All numbers are data-driven (the caps come from ``costs.json``/``system.json``).
+    """
+
+    pl = 0
+
+    attack_cap = game_data.costs.power_level.caps.get("attack_effect")
+    if attack_cap is not None:
+        attack_key = game_data.system.trait_keys.attack
+        for power in _iter_leaf_powers(char.powers):
+            for effect in power.effects:
+                base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+                if base is None or base.resistance_dc_base is None:
+                    continue  # not an attack/resisted effect — these caps don't apply
+                rank = effect_effective_rank(effect, game_data, char)
+                if effect_makes_attack(effect, game_data):
+                    linked = effect_attack_skill_bonus(effect, char, game_data)
+                    attack_ability = (
+                        linked
+                        if linked is not None
+                        else effective_ability(char, game_data, attack_key)
+                    )
+                    impact = _effective_stats(effect, game_data)[3]
+                    attack = attack_ability + impact.check_bonus + rank
+                    pl = max(pl, _pl_for_cap(attack, attack_cap))
+                else:  # auto-hit effect: rank alone is capped at PL
+                    pl = max(pl, rank)
+
+    for pair in game_data.system.paired_caps:
+        cap = game_data.costs.power_level.caps.get(pair.cap)
+        if cap is None:
+            continue
+        value = sum(resistance_total(char, game_data, key) for key in pair.traits)
+        pl = max(pl, _pl_for_cap(value, cap))
+
+    return pl
 
 
 def effect_allocation_used(effect: PowerEffectInstance, game_data: GameData) -> int:

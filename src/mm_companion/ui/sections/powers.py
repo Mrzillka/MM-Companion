@@ -113,7 +113,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.theme import ACCENT, DICE_ACCENT, TINT_BETTER, TINT_WORSE, tint_rgba
-from mm_companion.ui.widgets import hline_separator, title_with_cost
+from mm_companion.ui.widgets import hline_separator
 
 # Tints for a stat a modifier changed, matching the Power Constructor's
 # PowerTermsView: an extra improved it (green), a flaw limited it (red).
@@ -912,9 +912,7 @@ class PowersSection(TitledSection):
         for node in self._character.powers:
             self._list_host.add_entry(node.id, self._render_node(node, None))
         self._empty.setVisible(not self._character.powers)
-        self.set_block_title(
-            title_with_cost("Powers", powers_points_spent(self._character, self._data))
-        )
+        self.set_priced_title("Powers", powers_points_spent(self._character, self._data))
 
     def _render_node(
         self, node: PowerNode, parent: PowerGroup | None, interactive: bool = True

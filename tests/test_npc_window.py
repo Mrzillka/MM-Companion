@@ -3,10 +3,10 @@
 An NPC is an ordinary :class:`~mm_companion.core.character.Character` on the
 ordinary sheet, so what is worth testing is only what is *different*: it saves
 into the GM's own folder rather than the character library, and the power-point
-pool is replaced by a Power Level estimated from what the build costs. The point
-of the estimate is that a GM never budgets an NPC, so the two things that must
-hold are that the number tracks the build and that editing the Power Level no
-longer drags a budget around behind it.
+pool is replaced by a Power Level *estimated from the build's traits* (its
+Resistances and best attack). The point of the estimate is that a GM never
+budgets an NPC, so the two things that must hold are that the number tracks the
+traits and that editing the Power Level no longer drags a budget around behind it.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from mm_companion.core import library, storage
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.rules import power_level_for_points, power_points_spent
+from mm_companion.core.rules import estimated_power_level
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.npc_window import NPCWindow
 
@@ -84,21 +84,34 @@ def test_an_ordinary_character_sheet_still_has_its_pool(qapp: QApplication) -> N
     window.close()
 
 
-def test_the_estimate_follows_what_the_build_costs(npc: NPCWindow) -> None:
+def test_the_estimate_follows_the_traits_not_the_points(npc: NPCWindow) -> None:
     data = load_game_data()
     before = npc.sheet.system_info._estimated_pl.text()
 
     character = npc.sheet.character
-    for key in list(character.abilities)[:4]:
-        character.abilities[key] = 8
+    # Raise a paired-cap resistance so the estimate must move (Dodge + Toughness).
+    character.resistances["TOUGHNESS"] = 8
+    character.resistances["DODGE"] = 6
     npc.sheet._recompute_derived()
 
-    spent = power_points_spent(character, data)
-    expected = power_level_for_points(spent, data, character)
+    expected = estimated_power_level(character, data)
     text = npc.sheet.system_info._estimated_pl.text()
     assert text != before
-    assert text.startswith(str(expected))
-    assert str(spent) in text
+    assert text == str(expected)
+    assert expected == 7  # ceil((6 + 8) / 2)
+
+
+def test_npc_priced_blocks_drop_the_pp_subtotal(npc: NPCWindow) -> None:
+    # An NPC has no budget, so the priced blocks show a plain caption, not "— N PP".
+    for key in ("abilities", "resistances", "advantages", "skills", "powers"):
+        title = getattr(npc.sheet, key).block_title()
+        assert "PP" not in title, f"{key} block still shows a PP subtotal: {title!r}"
+
+
+def test_a_player_sheet_keeps_the_pp_subtotal(qapp: QApplication) -> None:
+    window = MainWindow(locked=False)
+    assert "PP" in window.sheet.abilities.block_title()
+    window.close()
 
 
 def test_an_npcs_power_level_does_not_drag_a_budget_behind_it(npc: NPCWindow) -> None:

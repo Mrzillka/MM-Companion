@@ -136,6 +136,20 @@ def test_rolls_are_numbered_in_order_across_players() -> None:
     assert state.next_seq() == 3
 
 
+def test_removing_a_roll_leaves_a_gap_and_never_reuses_the_seq() -> None:
+    state = new_session()
+    state.record_roll(player_id="p1", player_name="Alex", die=11)
+    second = state.record_roll(player_id="p2", player_name="Sam", die=3)
+    state.record_roll(player_id="p1", player_name="Alex", die=7)
+
+    removed = state.remove_roll(second.seq)
+
+    assert removed is second
+    assert [roll.seq for roll in state.rolls] == [1, 3]
+    assert state.next_seq() == 4  # the gap is not backfilled
+    assert state.remove_roll(second.seq) is None  # already gone
+
+
 def test_a_roll_carries_the_resolved_check() -> None:
     result = resolve_check(4, 15, roll=13)
 

@@ -22,6 +22,7 @@ from mm_companion.core.rules import (
     defense_class,
     effective_pp_per_level,
     effective_trait_costs,
+    estimated_power_level,
     has_cost_overrides,
     heroic_advantage_budget,
     heroic_advantage_ranks,
@@ -455,6 +456,37 @@ def test_clean_build_has_no_violations() -> None:
     char.abilities["AGL"] = 2
     char.skill_ranks["Stealth"] = 4  # total 6, well under cap
     assert power_level_violations(char, data) == []
+
+
+def test_estimated_power_level_is_zero_for_a_trait_less_character() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # all traits at 0
+    assert estimated_power_level(char, data) == 0
+
+
+def test_estimated_power_level_reads_the_paired_resistance_caps() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # Dodge + Toughness = 6 + 8 = 14 -> ceil(14 / 2) = 7 (the ×2 paired cap).
+    char.resistances["DODGE"] = 6
+    char.resistances["TOUGHNESS"] = 8
+    assert estimated_power_level(char, data) == 7
+    # A bigger Fortitude + Will pair raises the estimate to the larger of the two.
+    char.resistances["FORTITUDE"] = 10
+    char.resistances["WILL"] = 10  # sum 20 -> 10
+    assert estimated_power_level(char, data) == 10
+
+
+def test_estimated_power_level_counts_an_offensive_power() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+    damage = next(e for e in data.effects if e.resistance_dc_base is not None)
+    char.powers.append(
+        Power(name="Blast", effects=[PowerEffectInstance(effect_id=damage.id, rank=10)])
+    )
+    # An attack effect obeys attack + rank <= PL*2; here that is at least ceil(rank/2).
+    assert estimated_power_level(char, data) >= 5
 
 
 def _advantage(data, name):

@@ -31,7 +31,6 @@ from mm_companion.core.rules import (
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
 from mm_companion.ui.sections.titled_section import TitledSection
-from mm_companion.ui.widgets import title_with_cost
 
 
 class ResistancesSection(TitledSection):
@@ -123,9 +122,7 @@ class ResistancesSection(TitledSection):
     def refresh_cost(self) -> None:
         """Re-title the block with its current PP subtotal (also driven by a homebrew
         cost-rate change, via ``cost-rates-changed``)."""
-        self.set_block_title(
-            title_with_cost("Resistances", resistance_points_spent(self._character, self._data))
-        )
+        self.set_priced_title("Resistances", resistance_points_spent(self._character, self._data))
 
     def set_locked(self, locked: bool) -> None:
         """Make the resistance spin boxes read-only labels (locked) or editable."""

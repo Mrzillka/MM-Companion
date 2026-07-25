@@ -37,6 +37,7 @@ from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
 from mm_companion.ui.session_bridge import active_session, set_active_session
+from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
 from mm_companion.ui.start_window import StartWindow
 
 
@@ -61,7 +62,6 @@ def _clear_active_session():
 @pytest.fixture
 def window(qapp: QApplication) -> GMWindow:
     made = GMWindow(bind="127.0.0.1")
-    made._port_spin.setValue(0)  # any free port, so tests never collide
     yield made
     for npc in list(made._npc_windows.values()):
         npc._dirty = False  # a "save your changes?" modal would hang the run
@@ -81,10 +81,24 @@ def canned(**kwargs) -> discovery.Reachability:
     return discovery.Reachability(**{**defaults, **kwargs})
 
 
-def start_hosting(qapp: QApplication, window: GMWindow, reachability, timeout: float = 5.0) -> None:
-    """Host, with the network probe replaced by *reachability*, and wait for the code."""
+def host_options(**overrides) -> HostOptions:
+    """Host options with a free port by default, so tests never collide."""
+    defaults = {"name": "Session", "port": 0, "tunnel": "", "relay": "", "use_relay": True}
+    return HostOptions(**{**defaults, **overrides})
+
+
+def start_hosting(
+    qapp: QApplication, window: GMWindow, reachability, *, timeout: float = 5.0, **options
+) -> None:
+    """Host, with the network probe replaced by *reachability*, and wait for the code.
+
+    The connection choices the GM would pick in the dialog are passed as keyword
+    options (``relay=``, ``tunnel=``, ``use_relay=``); hosting is driven through
+    :meth:`GMWindow.start_hosting` directly rather than through the modal dialog.
+    """
     window.bridge._publish_session = lambda port, **kw: reachability
-    window._host_button.click()
+    options.setdefault("name", window._state.name)
+    window.start_hosting(host_options(**options))
     deadline = time.monotonic() + timeout
     while not window._code_edit.text() and time.monotonic() < deadline:
         qapp.processEvents()
@@ -99,12 +113,77 @@ def advice_texts(window: GMWindow) -> list[str]:
     ]
 
 
+# -- the draggable blocks --------------------------------------------------
+
+
+def test_the_gm_window_has_the_four_session_blocks(window: GMWindow) -> None:
+    assert set(window._canvas.block_keys()) == {"session", "players", "npcs", "rolls"}
+
+
+def test_the_view_menu_can_hide_and_show_a_block(window: GMWindow) -> None:
+    action = window._block_actions["npcs"]
+    assert action.isChecked() is True
+
+    action.setChecked(False)  # toggled -> hide
+    assert window._canvas.is_hidden("npcs") is True
+
+    action.setChecked(True)  # toggled -> show
+    assert window._canvas.is_hidden("npcs") is False
+
+
+def test_hiding_a_block_by_its_x_syncs_the_view_menu(window: GMWindow) -> None:
+    window._canvas.hide_block("rolls")
+    assert window._block_actions["rolls"].isChecked() is False
+    window._canvas.show_block("rolls")
+    assert window._block_actions["rolls"].isChecked() is True
+
+
+def test_the_player_and_npc_blocks_grow_to_fit_more_cards(window: GMWindow) -> None:
+    # A growable (unpinned) width lets the FlowLayout add columns as the block widens.
+    assert window._canvas._is_growable("players") is True
+    assert window._canvas._is_growable("npcs") is True
+
+
+def test_the_block_layout_persists_across_a_reopen(qapp: QApplication, window: GMWindow) -> None:
+    window._canvas.hide_block("npcs")
+    window._persist_layout()
+
+    reopened = GMWindow(bind="127.0.0.1")
+    try:
+        assert reopened._canvas.is_hidden("npcs") is True
+    finally:
+        reopened.bridge.stop()
+
+
+def test_an_offline_roll_can_be_removed_before_any_session(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    from PySide6.QtWidgets import QPushButton
+
+    # A roll made in GM mode without hosting (the roller's localRoll) shows with a ✕.
+    window._show_offline_roll({"die": 14, "bonus": 2, "penalty": 0, "dc": 10, "result": None})
+    assert len(window._history.cards()) == 1
+    card = window._history.cards()[0]
+    assert card.seq is not None and card.seq < 0
+
+    button = next(b for b in card.findChildren(QPushButton) if b.text() == "✕")
+    button.click()
+    assert window._history.cards() == []
+
+
+def test_reset_layout_brings_every_block_back(window: GMWindow) -> None:
+    window._canvas.hide_block("npcs")
+    window._reset_layout()
+    assert window._canvas.is_hidden("npcs") is False
+    assert window._block_actions["npcs"].isChecked() is True
+
+
 # -- the idle window -------------------------------------------------------
 
 
 def test_the_window_starts_not_hosting(window: GMWindow) -> None:
     assert window.bridge.hosting is False
-    assert window._host_button.text() == "Start hosting"
+    assert window._host_button.text() == "Start a session…"
     assert window._code_edit.text() == ""
     assert window._copy_button.isEnabled() is False
     assert "Not hosting" in window._status_label.text()
@@ -115,7 +194,7 @@ def test_the_window_publishes_itself_as_the_active_session(window: GMWindow) -> 
 
 
 def test_renaming_the_session_retitles_the_window(window: GMWindow) -> None:
-    window._name_edit.setText("Wednesday Night")
+    window._state.name = "Wednesday Night"
     window._rename_session()
     assert window._state.name == "Wednesday Night"
     assert "Wednesday Night" in window.windowTitle()
@@ -143,16 +222,13 @@ def test_hosting_shows_a_code_that_matches_the_session(
     assert window._copy_button.isEnabled() is True
 
 
-def test_hosting_locks_the_fields_that_the_code_depends_on(
-    qapp: QApplication, window: GMWindow
-) -> None:
+def test_hosting_locks_out_starting_a_new_session(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
-    assert window._port_spin.isEnabled() is False
-    assert window._tunnel_edit.isEnabled() is False
+    assert window._host_button.text() == "Stop hosting"
     assert window._new_button.isEnabled() is False
 
 
-def test_stopping_clears_the_code_and_unlocks_the_fields(
+def test_stopping_clears_the_code_and_reopens_the_start_button(
     qapp: QApplication, window: GMWindow
 ) -> None:
     start_hosting(qapp, window, canned())
@@ -161,7 +237,8 @@ def test_stopping_clears_the_code_and_unlocks_the_fields(
     assert window.bridge.hosting is False
     assert window._code_edit.text() == ""
     assert window._copy_button.isEnabled() is False
-    assert window._port_spin.isEnabled() is True
+    assert window._host_button.text() == "Start a session…"
+    assert window._new_button.isEnabled() is True
     assert "Not hosting" in window._status_label.text()
 
 
@@ -177,11 +254,11 @@ def test_a_port_already_in_use_is_reported_not_raised(
     monkeypatch.setattr(
         window.bridge, "host", lambda *a, **k: (_ for _ in ()).throw(OSError("address in use"))
     )
-    window._host_button.click()
+    window.start_hosting(host_options())
 
     assert window.bridge.hosting is False
     assert "address in use" in warnings[0]
-    assert window._host_button.text() == "Start hosting"
+    assert window._host_button.text() == "Start a session…"
 
 
 # -- what the GM is told about reachability --------------------------------
@@ -246,9 +323,8 @@ def test_a_tunnel_address_becomes_the_join_code(qapp: QApplication, window: GMWi
         calls.append(kwargs)
         return discovery.publish_session(port, **kwargs)
 
-    window._tunnel_edit.setText("tunnel.example.net:12345")
     window.bridge._publish_session = fake
-    window._host_button.click()
+    window.start_hosting(host_options(tunnel="tunnel.example.net:12345", use_relay=False))
     deadline = time.monotonic() + 5.0
     while not window._code_edit.text() and time.monotonic() < deadline:
         qapp.processEvents()
@@ -271,8 +347,7 @@ def test_an_unreadable_tunnel_address_refuses_to_host(
         "warning",
         lambda *args, **kw: warnings.append(args[2]) or QMessageBox.StandardButton.Ok,
     )
-    window._tunnel_edit.setText("nonsense:port")
-    window._host_button.click()
+    window.start_hosting(host_options(tunnel="nonsense:port"))
 
     assert window.bridge.hosting is False
     assert warnings  # the GM is told why, rather than silently not hosting
@@ -416,7 +491,7 @@ def test_copy_puts_the_code_on_the_clipboard(qapp: QApplication, window: GMWindo
 def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
     qapp: QApplication, window: GMWindow
 ) -> None:
-    window._name_edit.setText("Wednesday")
+    window._state.name = "Wednesday"
     window._rename_session()
     start_hosting(qapp, window, canned())
     session_id = window._state.id
@@ -429,7 +504,7 @@ def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
     window.show()
     assert active_session() is window.bridge
     assert window._state.id == session_id
-    assert window._name_edit.text() == "Wednesday"
+    assert window._state.name == "Wednesday"
 
 
 def test_a_refused_connection_is_shown_to_the_gm(qapp: QApplication, window: GMWindow) -> None:
@@ -488,8 +563,7 @@ def test_a_label_exists_for_every_piece_of_advice_the_window_is_given(
 def test_an_unreachable_machine_falls_back_to_the_relay(
     qapp: QApplication, window: GMWindow, relay_box
 ) -> None:
-    window._relay_edit.setText(relay_box.base)
-    start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
+    start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)), relay=relay_box.base)
 
     code = discovery.decode_join_code(window._code_edit.text())
     assert code.host.startswith("mmrelay")
@@ -503,9 +577,11 @@ def test_a_reachable_machine_never_touches_the_relay(
     qapp: QApplication, window: GMWindow, relay_box
 ) -> None:
     """Direct costs the relay nothing, so a working direct connection keeps it."""
-    window._relay_edit.setText(relay_box.base)
     start_hosting(
-        qapp, window, canned(host="203.0.113.7", mapping=FakeMapping(), external_ip="203.0.113.7")
+        qapp,
+        window,
+        canned(host="203.0.113.7", mapping=FakeMapping(), external_ip="203.0.113.7"),
+        relay=relay_box.base,
     )
 
     assert window.bridge.relaying is False
@@ -516,10 +592,13 @@ def test_a_reachable_machine_never_touches_the_relay(
 def test_a_tunnel_address_is_taken_at_its_word(
     qapp: QApplication, window: GMWindow, relay_box
 ) -> None:
-    window._relay_edit.setText(relay_box.base)
-    window._tunnel_edit.setText("147.185.221.23:12345")
     start_hosting(
-        qapp, window, canned(host="147.185.221.23", port=12345, method=discovery.METHOD_MANUAL)
+        qapp,
+        window,
+        canned(host="147.185.221.23", port=12345, method=discovery.METHOD_MANUAL),
+        relay=relay_box.base,
+        tunnel="147.185.221.23:12345",
+        use_relay=False,
     )
 
     assert window.bridge.relaying is False
@@ -529,9 +608,13 @@ def test_a_tunnel_address_is_taken_at_its_word(
 def test_the_relay_is_only_used_when_it_is_asked_for(
     qapp: QApplication, window: GMWindow, relay_box
 ) -> None:
-    window._relay_edit.setText(relay_box.base)
-    window._relay_check.setChecked(False)
-    start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
+    start_hosting(
+        qapp,
+        window,
+        canned(advice=(discovery.ADVICE_CGNAT,)),
+        relay=relay_box.base,
+        use_relay=False,
+    )
 
     assert window.bridge.relaying is False
     assert discovery.decode_join_code(window._code_edit.text()).host == "192.168.0.5"
@@ -540,27 +623,52 @@ def test_the_relay_is_only_used_when_it_is_asked_for(
 def test_a_relay_that_cannot_be_reached_leaves_the_session_hosted(
     qapp: QApplication, window: GMWindow
 ) -> None:
-    window._relay_edit.setText("mmrelay+tcp://127.0.0.1:1")
-    start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
+    start_hosting(
+        qapp,
+        window,
+        canned(advice=(discovery.ADVICE_CGNAT,)),
+        relay="mmrelay+tcp://127.0.0.1:1",
+    )
 
     assert window.bridge.hosting is True
     assert window.bridge.relaying is False
     assert discovery.ADVICE_RELAY_UNREACHABLE in window._notice.text()
 
 
-def test_the_relay_address_is_remembered_between_launches(
-    qapp: QApplication, window: GMWindow
-) -> None:
-    window._relay_edit.setText("relay.example.net")
-    window._save_relay_url()
+def test_the_host_dialog_remembers_the_relay_between_launches(qapp: QApplication) -> None:
+    dialog = HostSessionDialog()
+    dialog._relay_edit.setText("relay.example.net")
+    dialog._on_accept()
+
     assert storage.relay_url() == "relay.example.net"
-    assert GMWindow(bind="127.0.0.1")._relay_edit.text() == "relay.example.net"
+    # A fresh dialog pre-fills the field from the saved value.
+    assert HostSessionDialog()._relay_edit.text() == "relay.example.net"
 
 
-def test_hosting_locks_the_relay_controls_too(qapp: QApplication, window: GMWindow) -> None:
-    start_hosting(qapp, window, canned())
-    assert window._relay_edit.isEnabled() is False
-    assert window._relay_check.isEnabled() is False
+def test_the_host_dialog_defaults_to_automatic(qapp: QApplication) -> None:
+    dialog = HostSessionDialog(session_name="Tuesday")
+    opts = dialog.options()
+    assert opts.name == "Tuesday"
+    assert opts.tunnel == "" and opts.use_relay is True
+
+
+def test_the_host_dialog_reads_back_a_tunnel_and_arms_no_relay(qapp: QApplication) -> None:
+    dialog = HostSessionDialog()
+    dialog._via_tunnel.setChecked(True)
+    dialog._tunnel_edit.setText("1.2.3.4:5678")
+    opts = dialog.options()
+    assert opts.tunnel == "1.2.3.4:5678"
+    assert opts.use_relay is False  # a typed address is taken at its word
+
+
+def test_the_host_dialog_only_shows_the_tunnel_field_for_the_tunnel_method(
+    qapp: QApplication,
+) -> None:
+    dialog = HostSessionDialog()
+    dialog.show()
+    assert dialog._tunnel_edit.isVisibleTo(dialog) is False
+    dialog._via_tunnel.setChecked(True)
+    assert dialog._tunnel_edit.isVisibleTo(dialog) is True
 
 
 # -- fast-apply conditions -------------------------------------------------

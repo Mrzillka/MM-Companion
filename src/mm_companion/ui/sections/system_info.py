@@ -34,6 +34,7 @@ from mm_companion.core.rules import (
     condition_check_penalty,
     condition_speed_rank_mod,
     effective_size,
+    estimated_power_level,
     has_cost_overrides,
     initiative_ability,
     initiative_modifier,
@@ -264,12 +265,12 @@ class SystemInfoSection(QGroupBox):
         )
         self._power_points.setToolTip("Total available")
         self._power_points.valueChanged.connect(self._on_power_points_changed)
-        # The NPC sheet's stand-in for the whole pool: what the build would cost,
-        # read back as a Power Level. Hidden until :meth:`set_npc_mode` asks.
+        # The NPC sheet's stand-in for the whole pool: the Power Level the build's
+        # traits estimate to. Hidden until :meth:`set_npc_mode` asks.
         self._estimated_pl = QLabel("—")
         self._estimated_pl.setToolTip(
-            "The Power Level this build's cost would buy — an NPC is not budgeted, "
-            "so this is an estimate, not a limit."
+            "Estimated from this build's Resistances and best attack — an NPC is not "
+            "budgeted, so its Power Level is read from what it can do, not what it costs."
         )
         self._estimated_pl.hide()
         row.addWidget(self._pool_current)
@@ -369,8 +370,13 @@ class SystemInfoSection(QGroupBox):
         self._emit_edited()
 
     def _refresh_cost_notice(self) -> None:
-        """Show the homebrew-cost notice when any non-power rate differs from default."""
-        self._cost_notice.setVisible(has_cost_overrides(self._character, self._data))
+        """Show the homebrew-cost notice when any non-power rate differs from default.
+
+        Never shown for an NPC — it has no point budget, so PP-cost homebrew is moot.
+        """
+        self._cost_notice.setVisible(
+            not self._npc and has_cost_overrides(self._character, self._data)
+        )
 
     def _link_pl_pp(self, *, edited: str) -> None:
         """Reconcile Power Level and the point budget after one of them changed.
@@ -417,33 +423,37 @@ class SystemInfoSection(QGroupBox):
     # -- derived readouts -----------------------------------------------------
 
     def set_pool_current(self, key: str, value: object) -> None:
-        """Update the power-point pool's calculated *spent* value.
+        """Update the power-point pool's calculated *spent* value (player sheets only).
 
-        The same number drives the NPC sheet's estimated Power Level — an NPC is
-        not budgeted, so its build cost is read back as the level it would buy
-        rather than checked against a pool.
+        NPCs carry no budget, so the sheet skips this for them and shows an estimated
+        Power Level instead (:meth:`refresh_estimated_pl`).
         """
         if key != "power_points":
             return
         self._pool_current.setText(str(value))
-        try:
-            spent = int(value)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            return
-        level = power_level_for_points(spent, self._data, self._character)
+
+    def refresh_estimated_pl(self) -> None:
+        """Recompute the NPC sheet's estimated Power Level from the build's traits.
+
+        An NPC is not budgeted, so its Power Level is read from what it can do —
+        the smallest level its Resistances and best attack stay legal under
+        (:func:`~mm_companion.core.rules.estimated_power_level`) — rather than from
+        spent points. Cheap and model-only, so the sheet calls it on any build change.
+        """
+        level = estimated_power_level(self._character, self._data)
         # No "PL" prefix: the row's own caption already says Estimated PL.
-        self._estimated_pl.setText(f"{level} — from {spent} points spent")
+        self._estimated_pl.setText(str(level))
 
     def set_npc_mode(self, npc: bool) -> None:
         """Swap the point budget for an estimated Power Level, or back.
 
         A GM's NPC is an ordinary character without the accounting: nobody spends
         points on a thug, so the pool row would only ever be a number to ignore.
-        In its place the row reads back what the build *costs*, as the Power Level
-        that cost would buy (:func:`~mm_companion.core.rules.power_level_for_points`).
+        In its place the row reads back an *estimated* Power Level derived from the
+        NPC's traits — its Resistances and best attack (:meth:`refresh_estimated_pl`).
         The Power Level field above it stays exactly as it was — that is the level
-        the NPC is *meant* to be, and it is what the PL caps are checked against;
-        the estimate underneath says what was actually built.
+        the NPC is *meant* to be, and what the PL caps are checked against; the
+        estimate underneath says what the traits actually add up to.
         """
         self._npc = npc
         for widget in (self._pool_current, self._pool_separator, self._power_points):
@@ -452,6 +462,9 @@ class SystemInfoSection(QGroupBox):
         label = self._form.labelForField(self._points_row)
         if isinstance(label, QLabel):
             label.setText("Estimated PL:" if npc else "Power Points:")
+        self._refresh_cost_notice()
+        if npc:
+            self.refresh_estimated_pl()
 
     def refresh_derived(self) -> None:
         """Recompute the derived readouts: speed lines, initiative, effective size.
@@ -486,6 +499,8 @@ class SystemInfoSection(QGroupBox):
         base = str(self._character.characteristics.get("size", "Medium"))
         self._size_effective.setText(f"→ {effective}" if effective != base else "")
 
+        if self._npc:
+            self.refresh_estimated_pl()  # traits may have shifted the estimate
         self._refresh_cost_notice()
 
     def set_locked(self, locked: bool) -> None:

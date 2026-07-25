@@ -326,6 +326,19 @@ class SessionState:
         """The history minus hidden GM rolls — what a player client may see."""
         return [roll for roll in self.rolls if not roll.hidden]
 
+    def remove_roll(self, seq: int) -> RollRecord | None:
+        """Drop the roll with this sequence number; return it, or ``None`` if absent.
+
+        Sequence numbers are never reused (:meth:`next_seq` reads the last roll's),
+        so a removed roll leaves a gap rather than renumbering the log.
+        """
+        for index, roll in enumerate(self.rolls):
+            if roll.seq == seq:
+                del self.rolls[index]
+                self.touch()
+                return roll
+        return None
+
     # -- housekeeping ------------------------------------------------------
 
     def touch(self) -> None:

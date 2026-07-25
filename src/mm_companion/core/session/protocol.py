@@ -12,18 +12,20 @@ Every field is type-checked on the way in (see :func:`_coerce`): a message that
 omits a required field, or supplies a string where a rank belongs, never reaches
 the session logic.
 
-Vocabulary (protocol v1):
+Vocabulary (protocol v2):
 
 **Client → server** — :class:`Hello`, :class:`CharacterSnapshot`,
-:class:`RollRequest`, :class:`Ping`.
+:class:`RollRequest`, :class:`RemoveRollRequest`, :class:`Ping`.
 
 **Server → client** — :class:`Welcome`, :class:`Roster`, :class:`RollAdded`,
-:class:`ApplyCondition`, :class:`RemoveCondition`, :class:`ErrorMessage`,
-:class:`Kicked`, :class:`Pong`.
+:class:`RollRemoved`, :class:`ApplyCondition`, :class:`RemoveCondition`,
+:class:`ErrorMessage`, :class:`Kicked`, :class:`Pong`.
 
 A *hidden* roll is stored on the server with ``hidden: true`` and is never
 broadcast at all, so there is nothing for a player client to peek at — only the
-GM's own window renders it.
+GM's own window renders it. Removing a roll (GM only) drops it from the log and
+tells every client with a :class:`RollRemoved`; a hidden roll's removal is never
+broadcast, matching how it was never added.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from typing import ClassVar
 #: Bumped whenever the message vocabulary changes incompatibly. A client whose
 #: version differs from the server's is refused at the handshake with a readable
 #: message instead of failing obscurely later.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -198,6 +200,20 @@ class RollRequest(Message):
 
 @_register
 @dataclass(frozen=True)
+class RemoveRollRequest(Message):
+    """A GM request to drop one roll from the shared log, by its ``seq``.
+
+    Honored only for the GM (the server ignores it from a player); the removed
+    roll is then announced to every client with :class:`RollRemoved`.
+    """
+
+    TYPE: ClassVar[str] = "remove_roll_request"
+
+    seq: int
+
+
+@_register
+@dataclass(frozen=True)
 class Ping(Message):
     """Keepalive; the server answers :class:`Pong` with the same ``nonce``."""
 
@@ -252,6 +268,16 @@ class RollAdded(Message):
     TYPE: ClassVar[str] = "roll_added"
 
     roll: dict
+
+
+@_register
+@dataclass(frozen=True)
+class RollRemoved(Message):
+    """One roll removed from the shared log, identified by its ``seq``."""
+
+    TYPE: ClassVar[str] = "roll_removed"
+
+    seq: int
 
 
 @_register

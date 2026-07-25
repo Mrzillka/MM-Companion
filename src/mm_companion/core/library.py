@@ -155,12 +155,19 @@ def delete_character(path: Path) -> None:
     Path(path).unlink(missing_ok=True)
 
 
-def list_saved_characters(directory: Path | None = None) -> list[CharacterSummary]:
+def list_saved_characters(
+    directory: Path | None = None, *, estimate_pl: bool = False
+) -> list[CharacterSummary]:
     """Return a summary of every saved character, for the launcher's library.
 
     Scans *directory* (defaulting to the workspace ``characters/`` dir) for
     ``*.json`` files, tolerating any that fail to parse, and returns one
     :class:`CharacterSummary` per readable file, sorted by name.
+
+    ``estimate_pl`` swaps the stored Power Level for one *estimated* from the
+    character's traits (:func:`~mm_companion.core.rules.estimated_power_level`) —
+    the GM's NPC roster uses this, since NPCs carry no point budget and their Power
+    Level is read from what they can do rather than a saved number.
     """
     directory = Path(directory) if directory is not None else _characters_dir()
     if not directory.is_dir():
@@ -173,13 +180,26 @@ def list_saved_characters(directory: Path | None = None) -> list[CharacterSummar
         except (OSError, json.JSONDecodeError):
             continue
         character = Character.from_dict(raw)
+        power_level = _estimated_pl(character) if estimate_pl else character.power_level
         summaries.append(
             CharacterSummary(
                 name=display_name(character),
-                power_level=character.power_level,
+                power_level=power_level,
                 image_path=character.image_path,
                 path=file,
             )
         )
     summaries.sort(key=lambda s: s.name.lower())
     return summaries
+
+
+def _estimated_pl(character: Character) -> int:
+    """Power Level estimated from *character*'s traits (imports rules lazily).
+
+    Kept off the module's import path so the common launcher listing stays light;
+    only the GM's NPC roster pays for loading the rules engine + game data.
+    """
+    from mm_companion.core.data_loader import load_game_data
+    from mm_companion.core.rules import estimated_power_level
+
+    return estimated_power_level(character, load_game_data())

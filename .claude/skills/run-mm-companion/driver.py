@@ -9,6 +9,8 @@ from a single command:
     python .claude/skills/run-mm-companion/driver.py sheet        # editable character sheet
     python .claude/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
     python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+    python .claude/skills/run-mm-companion/driver.py gm           # GM Mode, with a cast of NPCs
+    python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
     python .claude/skills/run-mm-companion/driver.py all           # start + sheet + constructor
 
 Screenshots land in ./_driver_shots/<target>.png by default (override with
@@ -96,6 +98,35 @@ def build(target: str):
             win._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
             win._dc_check.setChecked(False)
             win._finish_roll()
+    elif target == "gm":
+        # GM Mode with a cast already in it, so the NPC panel is not an empty
+        # state: two NPCs are written into the workspace gm_characters/ dir and
+        # registered with the session exactly as "Create NPC" would.
+        from mm_companion.core import library
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.ui.gm_window import GMWindow
+
+        data = load_game_data()
+        win = GMWindow(bind="127.0.0.1")
+        for name, ranks in (("Bank Robber", 2), ("Ogre", 9)):
+            npc = Character.new_default(data)
+            npc.profile["hero_name"] = name
+            for key in ("STR", "STA", "AGL", "FGT"):
+                if key in npc.abilities:
+                    npc.abilities[key] = ranks
+            win._register_npc(library.save_character(npc, directory=win._npc_dir()))
+    elif target == "npc":
+        from mm_companion.ui.npc_window import NPCWindow
+
+        # The simplified sheet: the power-point pool is replaced by the Power
+        # Level the build's cost would buy, so drive some abilities in to make
+        # that estimate move.
+        win = NPCWindow()
+        win.sheet.base_info._profile_fields["hero_name"].setText("Ogre")
+        for key, value in {"STR": 9, "STA": 9, "AGL": 1, "FGT": 4}.items():
+            if key in win.sheet.abilities._abilities:
+                win.sheet.abilities._abilities[key].setValue(value)
     else:  # pragma: no cover - guarded by argparse choices
         raise ValueError(target)
 
@@ -107,7 +138,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "target",
-        choices=["start", "sheet", "sheet-demo", "constructor", "dice", "dice-demo", "all"],
+        choices=[
+            "start",
+            "sheet",
+            "sheet-demo",
+            "constructor",
+            "dice",
+            "dice-demo",
+            "gm",
+            "npc",
+            "all",
+        ],
         help="which UI surface to launch and screenshot",
     )
     parser.add_argument("--out", type=Path, default=Path("_driver_shots"))

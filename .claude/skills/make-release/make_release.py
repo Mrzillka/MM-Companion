@@ -33,16 +33,16 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
+from typing import NoReturn
 
 VERSION_RE = re.compile(r'(?m)^__version__\s*=\s*"(\d+\.\d+\.\d+)"')
 RELEASE_BRANCH = "main"
 INIT_REL = "src/mm_companion/__init__.py"
 
 
-def fail(msg: str) -> "NoReturn":  # type: ignore[valid-type]
+def fail(msg: str) -> NoReturn:
     raise SystemExit(f"!! {msg}")
 
 
@@ -109,7 +109,9 @@ def main() -> int:
         action="store_true",
         help="Report what would happen (version, tag, branch) and change nothing.",
     )
-    parser.add_argument("--remote", default="origin", help="Git remote to push to (default: origin).")
+    parser.add_argument(
+        "--remote", default="origin", help="Git remote to push to (default: origin)."
+    )
     parser.add_argument(
         "--allow-branch",
         action="store_true",
@@ -156,7 +158,10 @@ def main() -> int:
         elif already_tagged:
             print(f"  - REFUSE: tag {tag} already exists (bump the version to release again).")
         elif wrong_branch:
-            print(f"  - REFUSE: on '{branch}', not '{RELEASE_BRANCH}' (use --allow-branch to override).")
+            print(
+                f"  - REFUSE: on '{branch}', not '{RELEASE_BRANCH}' "
+                "(use --allow-branch to override)."
+            )
         else:
             print(f"  - create annotated tag {tag} at {git(root, 'rev-parse', '--short', 'HEAD')}")
             print(f"  - push {branch} and {tag} to {args.remote} (fires release.yml)")
@@ -195,7 +200,7 @@ def main() -> int:
 
     print("\n" + "=" * 60)
     print(f"  Pushed {tag}. release.yml is now building + publishing the installer.")
-    print(f"  Release page (live in ~3 min):")
+    print("  Release page (live in ~3 min):")
     print("    https://github.com/Mrzillka/MM-Companion/releases/latest")
 
     # Give the run a moment to register, then point at it.

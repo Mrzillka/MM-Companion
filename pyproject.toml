@@ -40,6 +40,7 @@ dev = [
 
 [project.scripts]
 mm-companion = "mm_companion.__main__:main"
+mm-companion-server = "mm_companion.server.cli:run"
 
 [project.urls]
 Homepage = "https://github.com/Mrzillka/MM-Companion"

@@ -18,6 +18,8 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QGroupBox, QWidget
 
+from mm_companion.ui.widgets import title_with_cost
+
 
 def strip_groupbox_caption(box: QGroupBox) -> None:
     """Hide *box*'s own caption so it doesn't duplicate the block title bar.
@@ -51,11 +53,40 @@ class TitledSection(QGroupBox):
         super().__init__(parent)
         strip_groupbox_caption(self)
         self._block_title = ""
+        self._npc = False
+        self._plain_title = ""
+        self._cost_points: int | None = None
 
     def set_block_title(self, text: str) -> None:
         """Record and broadcast the block's title (e.g. ``"Abilities — 0 PP"``)."""
         self._block_title = text
         self.titleChanged.emit(text)
+
+    def set_priced_title(self, title: str, points: int) -> None:
+        """Set the block title with its running PP cost — omitted for NPCs.
+
+        A GM's NPC carries no point budget, so its priced blocks show a plain caption
+        (``"Abilities"``) rather than a ``"— N PP"`` subtotal. Subclasses call this in
+        place of ``set_block_title(title_with_cost(...))``; NPC mode is a live toggle
+        (:meth:`set_npc_mode`), so the last title/points are remembered to re-render.
+        """
+        self._plain_title = title
+        self._cost_points = points
+        self._render_priced_title()
+
+    def set_npc_mode(self, npc: bool) -> None:
+        """Show or hide the PP subtotal in this block's title (NPCs hide it)."""
+        if npc == self._npc:
+            return
+        self._npc = npc
+        if self._cost_points is not None:
+            self._render_priced_title()
+
+    def _render_priced_title(self) -> None:
+        if self._npc or self._cost_points is None:
+            self.set_block_title(self._plain_title)
+        else:
+            self.set_block_title(title_with_cost(self._plain_title, self._cost_points))
 
     def block_title(self) -> str:
         """The most recently set block title (``""`` until one is set)."""

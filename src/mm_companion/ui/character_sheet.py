@@ -54,6 +54,7 @@ class CharacterSheet(QWidget):
         super().__init__(parent)
         self._data = data or load_game_data()
         self.character = character or Character.new_default(self._data)
+        self._npc = False
 
         # Register any data-described (declarative) blocks the active mods contribute
         # via blocks.json, so they join the registry before we iterate it below.
@@ -206,11 +207,34 @@ class CharacterSheet(QWidget):
         return tuple(self._sections_by_key.values())
 
     def _recompute_derived(self) -> None:
-        """Refresh values the model derives from the build (spent power points)."""
-        spent = power_points_spent(self.character, self._data)
-        self.system_info.set_pool_current("power_points", spent)
+        """Refresh values the model derives from the build (spent power points).
+
+        NPCs carry no point budget, so the sheet skips the spent-PP total for them
+        and refreshes the System block's estimated Power Level (from traits) instead.
+        """
+        if self._npc:
+            self.system_info.refresh_estimated_pl()
+        else:
+            spent = power_points_spent(self.character, self._data)
+            self.system_info.set_pool_current("power_points", spent)
 
     def set_locked(self, locked: bool) -> None:
         """Toggle read-only view mode across every block (incl. floated ones)."""
         for section in self._sections():
             section.set_locked(locked)
+
+    def set_npc_mode(self, npc: bool) -> None:
+        """Simplify the sheet for a GM's NPC: no point budget, an estimated PL.
+
+        Fanned out after construction, the same way :meth:`set_locked` is — the
+        blocks come from the registry and are built from ``(data, character)``
+        alone, so a mode is something the sheet turns on afterwards rather than a
+        constructor argument threaded through every factory.
+        """
+        self._npc = npc
+        self.system_info.set_npc_mode(npc)
+        for section in self._sections():
+            setter = getattr(section, "set_npc_mode", None)
+            if callable(setter) and section is not self.system_info:
+                setter(npc)
+        self._recompute_derived()

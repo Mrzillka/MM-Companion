@@ -5,20 +5,21 @@ Masterminds* tabletop RPG (3rd / 4th edition), built with Python and PySide6.
 
 ## Status
 
-🚧 **Early development (pre-alpha, `0.2.2`) — but functional.** The character
+🚧 **Early development (pre-alpha, `0.3.0`) — but functional.** The character
 creator is real and usable today: you can build a character point-by-point,
 assemble powers in a drag-and-drop constructor, track conditions, and save/load
 your work. The rules engine, powers layer, conditions, save/load, and mod support
-all work. **Dice rolling and GM Mode are not yet implemented** (the "dice roller"
-half of the name is still on the roadmap — see [Future plans](#future-plans)).
-Expect breaking changes between versions.
+all work. A **dice roller** and **GM Mode with online play** — a GM hosts a live
+session that players join over the internet, sharing a roster, synchronised rolls,
+and NPCs — are in place on the development branch. Expect breaking changes between
+versions.
 
 ## Features (available now)
 
 **Launcher.** The app opens on a standalone start window: create a new character,
-open an existing one, or pick from a scrollable library of saved-character cards
-(portrait, name, Power Level). Right-click a card to delete it. (An "Open GM Mode"
-button exists but is currently a placeholder.)
+open an existing one, join an online session, open GM Mode, or pick from a
+scrollable library of saved-character cards (portrait, name, Power Level).
+Right-click a card to delete it.
 
 **Character sheet.** The whole sheet is one scrollable page of rearrangeable
 blocks — drag them around, float a block into its own window, redock it, or
@@ -59,6 +60,18 @@ umbrella bundling, supersession, Hit stacking, and debilitation cascades.
 copied into the workspace so a saved character keeps its picture even if the
 original image moves. Saving, Save As, opening, and deleting are wired through the
 File menu and the launcher.
+
+**GM Mode & online play.** A GM hosts a **live session** that players join over
+the network with a short join code. Everyone shares one roster of player cards
+(portrait, name, PL, hero points, conditions), a **synchronised roll history**,
+and the GM can roll **hidden**, keep a cast of **NPCs**, and apply a condition
+straight onto a connected player's live sheet. The session **persists** — reopen
+the app and it resumes. Reaching players over the internet uses an automatic
+ladder (UPnP → a tunnel you paste in → a relay both ends dial out to), so it works
+even from behind carrier-grade NAT; a headless `python -m mm_companion.server`
+hosts the same session on an always-on box. See
+[`docs/mm-session-architecture.md`](docs/mm-session-architecture.md) and the
+[networking guide](docs/mm-session-networking.md).
 
 **Mods.** The app is data-first and moddable: the base ruleset loads through the
 same pipeline as user-installed mods, and an in-app **Mod Manager** lets you
@@ -120,17 +133,66 @@ pytest
    `import mm_companion` resolve correctly.
 4. The `.idea/` folder is intentionally **not** committed (see `.gitignore`).
 
+## Playing online (GM Mode)
+
+MM-Companion has a built-in **live session**: one person hosts as the GM, and
+players join over the network to share a roster, a synchronised roll history, and
+the GM's NPCs. Rolls are resolved by the host (no one can fake a die), the GM can
+roll **hidden**, and the session is saved to the workspace so it survives closing
+the app — reopen and it resumes.
+
+### Host a session (GM)
+
+1. From the launcher, click **Open GM Mode**.
+2. Click **Start hosting**. A **join code** appears, along with a short
+   reachability banner telling you whether players on the internet can reach you
+   and, if not, exactly what to do next.
+3. Click **Copy** and send the join code to your players (chat, email — anything).
+
+That is the whole flow when your connection is reachable. The join code encodes
+the address, port, and the session's secret, so it is the only thing a player
+needs; it is per-session and ephemeral.
+
+### Join a session (player)
+
+1. From the launcher, click **Join Session**.
+2. Paste the **join code** from the GM.
+3. Pick a display name and, optionally, one of your saved characters, then
+   connect. Your card joins the shared roster.
+
+### If players can't reach you
+
+Home internet connections often sit behind NAT (or carrier-grade NAT, where **no**
+port forward can help). The banner under the join code names your case and the
+fix. In short, the host tries an automatic ladder and you have three options:
+
+- **UPnP (automatic).** If your router allows it, the app forwards the port for
+  you and players connect directly — nothing to do.
+- **A tunnel.** Run a TCP tunnel (e.g. [playit.gg](https://playit.gg), ngrok,
+  Tailscale Funnel) pointed at the host port, paste its public address into the
+  **"I'm using a tunnel"** field, then host. Works from behind CGNAT; players
+  still need only the join code.
+- **A relay.** Put a relay's address in the **Relay address** field and tick the
+  fallback box; both ends dial *out* to it, so it works behind any NAT. You can
+  run your own with `python -m mm_companion.relay` (there is no default public
+  relay bundled yet).
+
+You can also host headlessly on an always-on box with
+`python -m mm_companion.server` (see `--help`). The full walkthrough, tunnel and
+relay setup, and a troubleshooting table are in the
+[networking guide](docs/mm-session-networking.md); for how the pieces fit
+together, see [`docs/mm-session-architecture.md`](docs/mm-session-architecture.md).
+
 ## Future plans
 
 Direction, not commitments — roughly in priority order:
 
-- **Dice rolling** — an integrated roller wired into the sheet and powers (attack
-  and resistance checks, degrees of success), completing the "dice roller" half of
-  the app.
-- **GM Mode** — the currently-placeholder GM entry point, for running characters,
-  NPCs, and encounters from the GM's side.
-- **Online play** — a live connection between players and a GM so a table can share
-  characters and rolls in real time.
+- **Rolling from the sheet** — wiring the roller into the sheet and powers (attack
+  and resistance checks straight off a stat block, with their DCs), building on the
+  standalone dice roller that exists today.
+- **A public relay** — a default hosted relay so online play works on download with
+  nothing to run, plus portraits travelling with a snapshot and a live GM-side view
+  of a player's sheet.
 - **More** — richer character exports, more of the rules surface flowing into the
   displayed sheet numbers, and continued expansion of the moddable data catalogs.
 
@@ -138,10 +200,12 @@ Direction, not commitments — roughly in priority order:
 
 ```
 src/mm_companion/
-  core/   # rules engine — dice, character model, powers, rules math,
-          # conditions, data loading, workspace storage & library (no Qt)
+  core/   # rules engine — dice, character model, powers, rules math, conditions,
+          # data loading, workspace storage & library, and core/session/ (no Qt)
   data/   # game data as JSON (Open Game Content — see LICENSE-CONTENT.md)
-  ui/     # PySide6 user interface (launcher, sheet, power constructor)
+  ui/     # PySide6 user interface (launcher, sheet, power constructor, GM Mode)
+  server/ # python -m mm_companion.server — a headless session host
+  relay/  # python -m mm_companion.relay  — the public relay box
 tests/    # pytest / pytest-qt tests
 docs/     # documentation, incl. modding guide and Open Game License text
 installer/# Windows installer pipeline (PyInstaller + Inno Setup)
@@ -157,6 +221,8 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rationale behind the `core` /
 - [`docs/modding.md`](docs/modding.md) — authoring data-only and data+Python mods.
 - [`docs/mm-powers-architecture.md`](docs/mm-powers-architecture.md) — the powers model.
 - [`docs/mm-conditions-design.md`](docs/mm-conditions-design.md) — the conditions system.
+- [`docs/mm-session-architecture.md`](docs/mm-session-architecture.md) — GM Mode and the online session.
+- [`docs/mm-session-networking.md`](docs/mm-session-networking.md) — playing over the internet, tunnels, the relay, troubleshooting.
 - [`docs/packaging.md`](docs/packaging.md) — building the Windows installer.
 
 ## License

@@ -175,3 +175,28 @@ class ConditionParameterDialog(QDialog):
             needs_specific and not self._specific.currentText().strip()
         )
         self._ok_button.setEnabled(not blocked)
+
+
+def prompt_condition_parameter(
+    condition: Condition,
+    game_data: GameData,
+    character: Character,
+    parent: QWidget | None = None,
+) -> tuple[bool, str | None]:
+    """Ask for a condition's subject when it needs one, before applying it.
+
+    Returns ``(go_ahead, parameter)`` — ``(False, None)`` when the user cancelled.
+    A condition with no parameter never opens a dialog and answers
+    ``(True, None)``.
+
+    Shared because a condition is picked in two places that must behave
+    identically: the sheet's own conditions block, and the GM's fast-apply menu on
+    a player card.
+    """
+
+    if condition.parameter is None:
+        return True, None
+    dialog = ConditionParameterDialog(condition, game_data, character, parent)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return False, None
+    return True, dialog.value()

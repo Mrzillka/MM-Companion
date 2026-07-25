@@ -924,15 +924,22 @@ class GMWindow(QMainWindow):
             )
 
         for entry in self._npc_state.values():
-            card = NPCCard(entry.character, entry.summary, self._data)
+            card = NPCCard(entry.character, entry.summary, self._data, initiative=entry.initiative)
             card.openRequested.connect(self._open_npc)
             card.removeRequested.connect(self._remove_npc)
             card.deleteRequested.connect(self._delete_npc)
             card.applyConditionRequested.connect(self._apply_npc_condition)
             card.removeConditionRequested.connect(self._remove_npc_condition)
+            card.initiativeRolled.connect(self._on_npc_initiative)
             entry.card = card
             self._npc_flow.addWidget(card)
         self._no_npcs.setVisible(not self._npc_state)
+
+    def _on_npc_initiative(self, name: str, total: int) -> None:
+        """Remember an NPC's rolled initiative (the card already shows the badge)."""
+        entry = self._npc_state.get(name)
+        if entry is not None:
+            entry.initiative = total
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""

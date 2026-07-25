@@ -27,7 +27,10 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
+from mm_companion.core.dice import roll_d20
 from mm_companion.core.library import CharacterSummary
+from mm_companion.core.rules import initiative_modifier
+from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.player_card import _ConditionChip
 from mm_companion.ui.sections.conditions import (
@@ -56,6 +59,8 @@ class NPCCard(QFrame):
     applyConditionRequested = Signal(str, str, object)
     #: ``(file_name, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
+    #: ``(file_name, total)`` — this NPC just rolled initiative.
+    initiativeRolled = Signal(str, int)
 
     def __init__(
         self,
@@ -63,6 +68,8 @@ class NPCCard(QFrame):
         summary: CharacterSummary,
         data: GameData,
         parent: QWidget | None = None,
+        *,
+        initiative: int | None = None,
     ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -93,8 +100,30 @@ class NPCCard(QFrame):
         layout.addWidget(self._portrait, alignment=Qt.AlignmentFlag.AlignHCenter)
         self._set_portrait(summary.image_path)
 
+        pl_row = QHBoxLayout()
+        pl_row.setContentsMargins(0, 0, 0, 0)
         self._pl_label = QLabel(f"PL {summary.power_level}")
-        layout.addWidget(self._pl_label)
+        pl_row.addWidget(self._pl_label)
+        pl_row.addStretch()
+        self._initiative_badge = QLabel("")
+        badge_font = self._initiative_badge.font()
+        badge_font.setBold(True)
+        self._initiative_badge.setFont(badge_font)
+        self._initiative_badge.setStyleSheet(f"color: {theme.ACCENT};")
+        pl_row.addWidget(self._initiative_badge)
+        layout.addLayout(pl_row)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.setContentsMargins(0, 0, 0, 0)
+        self._initiative_button = QToolButton()
+        self._initiative_button.setText("Initiative")
+        self._initiative_button.setToolTip("Roll initiative for this NPC")
+        self._initiative_button.clicked.connect(self.roll_initiative)
+        buttons_row.addWidget(self._initiative_button)
+        buttons_row.addStretch()
+        layout.addLayout(buttons_row)
+
+        self.set_initiative(initiative)
 
         condition_row = QHBoxLayout()
         condition_row.setContentsMargins(0, 0, 0, 0)
@@ -121,6 +150,29 @@ class NPCCard(QFrame):
     def display_name(self) -> str:
         """The NPC's name, as its summary gives it."""
         return self._summary.name
+
+    @property
+    def initiative(self) -> int | None:
+        """The NPC's rolled initiative this session, or ``None`` if unrolled."""
+        return self._initiative
+
+    # -- initiative --------------------------------------------------------
+
+    def set_initiative(self, total: int | None) -> None:
+        """Show (or clear) the NPC's initiative badge."""
+        self._initiative = total
+        self._initiative_badge.setText("" if total is None else f"init {total}")
+
+    def roll_initiative(self) -> int:
+        """Roll d20 + this NPC's initiative modifier, show it, and announce it.
+
+        Local by design — an NPC is the GM's own and never on the wire, so this
+        is not routed through the session server the way a shared roll is.
+        """
+        total = roll_d20() + initiative_modifier(self._character, self._data)
+        self.set_initiative(total)
+        self.initiativeRolled.emit(self.name_key, total)
+        return total
 
     def _set_portrait(self, image_path: str | None) -> None:
         """Show the NPC's picture (a local file, so it resolves normally)."""

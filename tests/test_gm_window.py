@@ -1114,3 +1114,47 @@ def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) ->
     entry = window._npc_state[path.name]
     remaining = [(c.condition_id, c.parameter) for c in entry.character.conditions]
     assert remaining == [("impaired", "Dodge")]
+
+
+def write_agile_npc(name: str, agility: int) -> Path:
+    """An NPC with a known Agility, so its initiative modifier is predictable."""
+    character = Character.new_default(load_game_data())
+    character.profile["hero_name"] = name
+    character.abilities["AGL"] = agility
+    return library.save_character(character, directory=storage.get_workspace().gm_characters_dir)
+
+
+def test_rolling_npc_initiative_uses_its_modifier_and_shows_a_badge(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_agile_npc("Ogre", agility=3)
+    window._register_npc(path)
+    from mm_companion.ui import npc_card as npc_card_module
+
+    monkeypatch.setattr(npc_card_module, "roll_d20", lambda *a, **k: 15)
+
+    (card,) = npc_cards(window)
+    total = card.roll_initiative()
+
+    assert total == 18  # d20 15 + Agility 3
+    assert card.initiative == 18
+    assert "18" in card._initiative_badge.text()
+    # The GM window remembered it for the ordering to come.
+    assert window._npc_state[path.name].initiative == 18
+
+
+def test_a_rolled_initiative_survives_a_refresh(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_agile_npc("Ogre", agility=0)
+    window._register_npc(path)
+    from mm_companion.ui import npc_card as npc_card_module
+
+    monkeypatch.setattr(npc_card_module, "roll_d20", lambda *a, **k: 12)
+    npc_cards(window)[0].roll_initiative()
+
+    window._refresh_npcs()
+
+    (card,) = npc_cards(window)
+    assert card.initiative == 12
+    assert "12" in card._initiative_badge.text()

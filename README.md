@@ -133,6 +133,56 @@ pytest
    `import mm_companion` resolve correctly.
 4. The `.idea/` folder is intentionally **not** committed (see `.gitignore`).
 
+## Playing online (GM Mode)
+
+MM-Companion has a built-in **live session**: one person hosts as the GM, and
+players join over the network to share a roster, a synchronised roll history, and
+the GM's NPCs. Rolls are resolved by the host (no one can fake a die), the GM can
+roll **hidden**, and the session is saved to the workspace so it survives closing
+the app — reopen and it resumes.
+
+### Host a session (GM)
+
+1. From the launcher, click **Open GM Mode**.
+2. Click **Start hosting**. A **join code** appears, along with a short
+   reachability banner telling you whether players on the internet can reach you
+   and, if not, exactly what to do next.
+3. Click **Copy** and send the join code to your players (chat, email — anything).
+
+That is the whole flow when your connection is reachable. The join code encodes
+the address, port, and the session's secret, so it is the only thing a player
+needs; it is per-session and ephemeral.
+
+### Join a session (player)
+
+1. From the launcher, click **Join Session**.
+2. Paste the **join code** from the GM.
+3. Pick a display name and, optionally, one of your saved characters, then
+   connect. Your card joins the shared roster.
+
+### If players can't reach you
+
+Home internet connections often sit behind NAT (or carrier-grade NAT, where **no**
+port forward can help). The banner under the join code names your case and the
+fix. In short, the host tries an automatic ladder and you have three options:
+
+- **UPnP (automatic).** If your router allows it, the app forwards the port for
+  you and players connect directly — nothing to do.
+- **A tunnel.** Run a TCP tunnel (e.g. [playit.gg](https://playit.gg), ngrok,
+  Tailscale Funnel) pointed at the host port, paste its public address into the
+  **"I'm using a tunnel"** field, then host. Works from behind CGNAT; players
+  still need only the join code.
+- **A relay.** Put a relay's address in the **Relay address** field and tick the
+  fallback box; both ends dial *out* to it, so it works behind any NAT. You can
+  run your own with `python -m mm_companion.relay` (there is no default public
+  relay bundled yet).
+
+You can also host headlessly on an always-on box with
+`python -m mm_companion.server` (see `--help`). The full walkthrough, tunnel and
+relay setup, and a troubleshooting table are in the
+[networking guide](docs/mm-session-networking.md); for how the pieces fit
+together, see [`docs/mm-session-architecture.md`](docs/mm-session-architecture.md).
+
 ## Future plans
 
 Direction, not commitments — roughly in priority order:

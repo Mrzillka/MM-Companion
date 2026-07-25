@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
+from mm_companion.core.rules import apply_condition, decrement_condition
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
@@ -69,7 +70,7 @@ from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
-from mm_companion.ui.sections.conditions import condition_display_name
+from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
@@ -96,6 +97,7 @@ class _NpcEntry:
     summary: library.CharacterSummary
     character: Character
     initiative: int | None = None
+    card: NPCCard | None = None
 
 
 class GMWindow(QMainWindow):
@@ -926,6 +928,9 @@ class GMWindow(QMainWindow):
             card.openRequested.connect(self._open_npc)
             card.removeRequested.connect(self._remove_npc)
             card.deleteRequested.connect(self._delete_npc)
+            card.applyConditionRequested.connect(self._apply_npc_condition)
+            card.removeConditionRequested.connect(self._remove_npc_condition)
+            entry.card = card
             self._npc_flow.addWidget(card)
         self._no_npcs.setVisible(not self._npc_state)
 
@@ -1021,6 +1026,54 @@ class GMWindow(QMainWindow):
             return
         library.delete_character(entry.path)
         self._remove_npc(name)
+
+    # -- NPC conditions -----------------------------------------------------
+
+    def _apply_npc_condition(self, name: str, condition_id: str, parameter: object) -> None:
+        """Apply a condition straight onto the NPC's local model, and persist it."""
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        subject = str(parameter) if parameter else None
+        apply_condition(entry.character, condition_id, self._data, parameter=subject)
+        self._after_npc_condition_change(entry, condition_id, subject, applying=True)
+
+    def _remove_npc_condition(self, name: str, condition_id: str, parameter: object) -> None:
+        """Take one condition off the NPC's model again."""
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        subject = str(parameter) if parameter else None
+        applied = matching_condition(entry.character, condition_id, subject)
+        if applied is not None:
+            decrement_condition(entry.character, applied)
+        self._after_npc_condition_change(entry, condition_id, subject, applying=False)
+
+    def _after_npc_condition_change(
+        self, entry: _NpcEntry, condition_id: str, parameter: str | None, *, applying: bool
+    ) -> None:
+        """Restate the NPC's card and persist the change.
+
+        Unlike a player, an NPC is local — so the change is applied to the model
+        here rather than sent over the wire. If a sheet for this NPC is open, route
+        the same change through its conditions block so the open sheet stays in
+        sync and owns its own save; otherwise write the model to its file now.
+        """
+        window = self._window_for(entry.path)
+        if window is not None:
+            section = getattr(window.sheet, "conditions", None)
+            if section is not None:
+                if applying:
+                    section.apply_condition_by_id(condition_id, parameter)
+                else:
+                    section.remove_condition_by_id(condition_id, parameter)
+        else:
+            try:
+                library.save_character(entry.character, path=entry.path)
+            except OSError:
+                pass  # an unwritable workspace is not worth a dialog mid-session
+        if entry.card is not None:
+            entry.card.refresh_conditions()
 
     # -- small view helpers ------------------------------------------------
 

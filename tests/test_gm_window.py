@@ -1075,3 +1075,42 @@ def test_an_npc_added_while_hosting_goes_through_the_server(
     # threads, so the write has to take the same lock every other mutation does.
     assert server.state.npc_paths == ["ogre.json"]
     assert store.load_session(window._state.id).npc_paths == ["ogre.json"]
+
+
+def test_applying_a_condition_to_an_npc_persists_and_shows_a_chip(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+
+    window._apply_npc_condition(path.name, "dazed", None)
+
+    # On the model, on disk, and on the card.
+    entry = window._npc_state[path.name]
+    assert [c.condition_id for c in entry.character.conditions] == ["dazed"]
+    assert [c.condition_id for c in library.load_character(path).conditions] == ["dazed"]
+    assert entry.card.condition_names() == ["Dazed"]
+
+
+def test_removing_a_condition_from_an_npc_takes_it_off(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._apply_npc_condition(path.name, "dazed", None)
+
+    window._remove_npc_condition(path.name, "dazed", None)
+
+    entry = window._npc_state[path.name]
+    assert entry.character.conditions == []
+    assert library.load_character(path).conditions == []
+    assert entry.card.condition_names() == []
+
+
+def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._apply_npc_condition(path.name, "impaired", "Fortitude")
+    window._apply_npc_condition(path.name, "impaired", "Dodge")
+
+    window._remove_npc_condition(path.name, "impaired", "Fortitude")
+
+    entry = window._npc_state[path.name]
+    remaining = [(c.condition_id, c.parameter) for c in entry.character.conditions]
+    assert remaining == [("impaired", "Dodge")]

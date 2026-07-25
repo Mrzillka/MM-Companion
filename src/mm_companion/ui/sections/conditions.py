@@ -60,6 +60,28 @@ def addable_conditions(data: GameData) -> list[Condition]:
     return [c for c in data.conditions if c.category in ADDABLE_CATEGORIES]
 
 
+def matching_condition(
+    character: Character, condition_id: str, parameter: str | None = None
+) -> AppliedCondition | None:
+    """The applied condition a by-id removal should shed, or ``None``.
+
+    Matches on the parameter too, so removing "Attack Impaired" leaves "Dodge
+    Impaired" alone, and prefers a directly applied instance over a bundled member
+    — dropping the umbrella is what taking a condition off means. Module-level so
+    the sheet's own chips and the GM's fast-apply on a card (player or NPC) shed
+    a condition identically.
+    """
+    matches = [
+        applied
+        for applied in character.conditions
+        if applied.condition_id == condition_id and applied.parameter == parameter
+    ]
+    if not matches:
+        return None
+    direct = [applied for applied in matches if applied.provenance is None]
+    return direct[0] if direct else matches[0]
+
+
 def condition_display_name(applied: AppliedCondition, record: Condition | None) -> str:
     """Fold the chosen parameter and stacking count into the shown name (§6):
     ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
@@ -214,15 +236,10 @@ class ConditionsSection(QGroupBox):
         bundled member — dropping the umbrella is what the GM means by taking the
         condition off. Returns whether anything was on the character to remove.
         """
-        matches = [
-            applied
-            for applied in self._character.conditions
-            if applied.condition_id == condition_id and applied.parameter == parameter
-        ]
-        if not matches:
+        applied = matching_condition(self._character, condition_id, parameter)
+        if applied is None:
             return False
-        direct = [applied for applied in matches if applied.provenance is None]
-        self._shed_condition(direct[0] if direct else matches[0])
+        self._shed_condition(applied)
         return True
 
     def _shed_condition(self, applied: AppliedCondition) -> None:

@@ -183,6 +183,37 @@ def _lerp(start: float, end: float, progress: float) -> float:
     return start + (end - start) * progress
 
 
+def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
+    """One entry per die roll a power calls for, read from its game-term rows;
+    effect-prefixed for a multi-effect power.
+
+    Module-level so both the power card's dice footer and the GM's NPC hover
+    summary read the same lines. An attack check and the save it forces are
+    separate rolls made by different people, so they get a line each rather than
+    sharing one.
+    """
+    multi = len(power.effects) > 1
+    lines: list[str] = []
+    for effect in power.effects:
+        attack_bonus = effect_attack_skill_bonus(effect, character, data)
+        rows = {r.key: r for r in effect_stat_rows(effect, data, character, attack_bonus)}
+        rolls = []
+        if "check" in rows:
+            rolls.append(rows["check"].value)
+        if "resistance" in rows:
+            rolls.append(rows["resistance"].value)
+        elif "effect_dc" in rows:  # a save DC with no shown check/resistance phrase
+            rolls.append(rows["effect_dc"].value)
+        if not rolls:
+            continue
+        if multi:
+            base = next((e for e in data.effects if e.id == effect.effect_id), None)
+            name = base.name if base else effect.effect_id
+            rolls = [f"{name}: {roll}" for roll in rolls]
+        lines.extend(rolls)
+    return lines
+
+
 class _DragHandle(QLabel):
     """The ``⠿`` grip at the head of a card; a press-drag on it starts the drag.
 
@@ -1488,35 +1519,9 @@ class PowersSection(TitledSection):
         return host
 
     def _rolls_lines(self, power: Power) -> list[str]:
-        """One entry per die roll the power calls for, read from the same game-term rows
-        the constructor shows; effect-prefixed for a multi-effect power.
-
-        An attack check and the save it forces are separate rolls made by different
-        people, so they get a line each rather than sharing one.
-        """
-        multi = len(power.effects) > 1
-        lines: list[str] = []
-        for effect in power.effects:
-            attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
-            rows = {
-                r.key: r
-                for r in effect_stat_rows(effect, self._data, self._character, attack_bonus)
-            }
-            rolls = []
-            if "check" in rows:
-                rolls.append(rows["check"].value)
-            if "resistance" in rows:
-                rolls.append(rows["resistance"].value)
-            elif "effect_dc" in rows:  # a save DC with no shown check/resistance phrase
-                rolls.append(rows["effect_dc"].value)
-            if not rolls:
-                continue
-            if multi:
-                base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
-                name = base.name if base else effect.effect_id
-                rolls = [f"{name}: {roll}" for roll in rolls]
-            lines.extend(rolls)
-        return lines
+        """One entry per die roll the power calls for; see module-level
+        :func:`roll_lines`."""
+        return roll_lines(power, self._character, self._data)
 
     @staticmethod
     def _structure_header(power: Power) -> str:

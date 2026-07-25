@@ -1195,6 +1195,24 @@ def test_dragging_a_rolled_card_clears_its_initiative(window: GMWindow) -> None:
     assert npc_names(window) == ["Bravo", "Alpha"]
 
 
+def test_the_hover_summary_shows_abilities_resistances_and_powers(window: GMWindow) -> None:
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    character = Character.new_default(load_game_data())
+    character.profile["hero_name"] = "Ogre"
+    character.abilities["STR"] = 6
+    character.powers.append(Power(effects=[PowerEffectInstance("damage", rank=8)], name="Smash"))
+    path = library.save_character(character, directory=storage.get_workspace().gm_characters_dir)
+    window._register_npc(path)
+
+    (card,) = npc_cards(window)
+    html = card.summary_html()
+
+    assert "Abilities" in html and "Strength +6" in html
+    assert "Resistances" in html
+    assert "Powers" in html and "Smash" in html
+
+
 def write_agile_npc(name: str, agility: int) -> Path:
     """An NPC with a known Agility, so its initiative modifier is predictable."""
     character = Character.new_default(load_game_data())

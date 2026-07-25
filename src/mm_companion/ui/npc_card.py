@@ -12,6 +12,8 @@ by its file name, which is the stable identity a session's cast
 
 from __future__ import annotations
 
+from html import escape
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
@@ -29,7 +31,8 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.dice import roll_d20
 from mm_companion.core.library import CharacterSummary
-from mm_companion.core.rules import initiative_modifier
+from mm_companion.core.powers import Power, PowerGroup
+from mm_companion.core.rules import effective_ability, initiative_modifier, resistance_total
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.player_card import _ConditionChip
@@ -155,6 +158,7 @@ class NPCCard(QFrame):
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
         self.refresh_conditions()
+        self._refresh_tooltip()
 
     # -- what the card is showing -----------------------------------------
 
@@ -207,6 +211,51 @@ class NPCCard(QFrame):
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
+
+    # -- hover summary -----------------------------------------------------
+
+    def _refresh_tooltip(self) -> None:
+        """Set the card's hover summary from the current model."""
+        self.setToolTip(self.summary_html())
+
+    def summary_html(self) -> str:
+        """A compact abilities / resistances / powers summary, as tooltip HTML."""
+        from mm_companion.ui.sections.powers import roll_lines
+
+        data, char = self._data, self._character
+        rows = [f"<b>{escape(self._summary.name)}</b>"]
+
+        abilities = ", ".join(
+            f"{escape(a.name)} {effective_ability(char, data, a.key):+d}" for a in data.abilities
+        )
+        if abilities:
+            rows.append(f"<b>Abilities</b><br>{abilities}")
+
+        resistances = ", ".join(
+            f"{escape(r.name)} {resistance_total(char, data, r.key)}" for r in data.resistances
+        )
+        if resistances:
+            rows.append(f"<b>Resistances</b><br>{resistances}")
+
+        power_lines = []
+        for power in self._leaf_powers():
+            name = escape(power.name or "Power")
+            rolls = roll_lines(power, char, data)
+            power_lines.append(f"{name}: {escape(', '.join(rolls))}" if rolls else name)
+        if power_lines:
+            rows.append("<b>Powers</b><br>" + "<br>".join(power_lines))
+
+        return "<br><br>".join(rows)
+
+    def _leaf_powers(self):
+        """Every leaf power on the NPC, descending into any groups."""
+        stack = list(self._character.powers)
+        while stack:
+            node = stack.pop(0)
+            if isinstance(node, PowerGroup):
+                stack[0:0] = node.children
+            elif isinstance(node, Power):
+                yield node
 
     # -- conditions --------------------------------------------------------
 

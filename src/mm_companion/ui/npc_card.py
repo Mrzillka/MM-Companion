@@ -43,6 +43,9 @@ from mm_companion.ui.sections.conditions import (
 PORTRAIT_SIZE = 96
 #: How wide a card is. Fixed, so a row of them lines up in the flow layout.
 CARD_WIDTH = 210
+#: How far the pointer must move with the button down to count as a drag rather
+#: than a click, in pixels.
+DRAG_THRESHOLD = 8
 
 
 class NPCCard(QFrame):
@@ -63,6 +66,10 @@ class NPCCard(QFrame):
     initiativeRolled = Signal(str, int)
     #: The NPC's file name — duplicate it into a new NPC (Goon → Goon-2).
     copyRequested = Signal(str)
+    #: ``(file_name, target_index)`` — the card was dragged to a new slot. A drag
+    #: drops the NPC into the manual (un-rolled) zone, so any rolled initiative is
+    #: cleared by the handler.
+    reorderRequested = Signal(str, int)
 
     def __init__(
         self,
@@ -85,6 +92,8 @@ class NPCCard(QFrame):
         self._addable_conditions: list[Condition] = addable_conditions(data)
         #: The file name, this card's stable identity across a refresh.
         self.name_key = summary.path.name if summary.path is not None else ""
+        #: Where a left-button press landed, to tell a drag from a click.
+        self._press_pos = None
 
         layout = QVBoxLayout(self)
 
@@ -257,10 +266,45 @@ class NPCCard(QFrame):
 
     # -- interaction -------------------------------------------------------
 
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.pos()
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
-            self.openRequested.emit(self.name_key)
+        if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
+            moved = (event.pos() - self._press_pos).manhattanLength()
+            self._press_pos = None
+            if moved >= DRAG_THRESHOLD:
+                target = self._drop_target_index(event.globalPosition().toPoint())
+                self.reorderRequested.emit(self.name_key, target)
+            elif self.rect().contains(event.pos()):
+                self.openRequested.emit(self.name_key)
         super().mouseReleaseEvent(event)
+
+    def _drop_target_index(self, global_pos) -> int:
+        """Where in the sibling flow a drop at *global_pos* lands.
+
+        Walks the sibling cards in layout order and returns the index to insert
+        before — the first card the point sits left-of (on the same row) or inside
+        — or the count when the drop is past every card. Approximate, as befits a
+        wrapping layout; the exact ordering rules live in the GM window's handler.
+        """
+        container = self.parentWidget()
+        layout = container.layout() if container is not None else None
+        if layout is None:
+            return 0
+        point = container.mapFromGlobal(global_pos)
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None:
+                continue
+            geo = widget.geometry()
+            on_row = geo.top() <= point.y() <= geo.bottom()
+            if geo.contains(point) or (on_row and point.x() < geo.center().x()):
+                return index
+        return layout.count()
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
         menu = QMenu(self)

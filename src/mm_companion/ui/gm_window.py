@@ -149,6 +149,9 @@ class GMWindow(QMainWindow):
         # the loaded model and its transient initiative. Rebuilt on every refresh
         # from disk, carrying the runtime state across.
         self._npc_state: dict[str, _NpcEntry] = {}
+        # The manual (un-rolled) order of the cast, by file name. Rolled NPCs sort
+        # above this by initiative; dragging a card sets its place here.
+        self._manual_order: list[str] = []
         # One relay attempt per hosting run: the fallback republishes, and a
         # second attempt off that would loop.
         self._relay_attempted = False
@@ -940,7 +943,13 @@ class GMWindow(QMainWindow):
                 initiative=initiative,
             )
 
-        for entry in self._npc_state.values():
+        # Keep the manual order in step with the cast: drop the departed, append
+        # newcomers at the end of the un-rolled zone.
+        self._manual_order = [n for n in self._manual_order if n in self._npc_state]
+        self._manual_order += [n for n in self._npc_state if n not in self._manual_order]
+
+        for name in self._ordered_npcs():
+            entry = self._npc_state[name]
             card = NPCCard(entry.character, entry.summary, self._data, initiative=entry.initiative)
             card.openRequested.connect(self._open_npc)
             card.removeRequested.connect(self._remove_npc)
@@ -949,15 +958,48 @@ class GMWindow(QMainWindow):
             card.removeConditionRequested.connect(self._remove_npc_condition)
             card.initiativeRolled.connect(self._on_npc_initiative)
             card.copyRequested.connect(self._copy_npc)
+            card.reorderRequested.connect(self._reorder_npc)
             entry.card = card
             self._npc_flow.addWidget(card)
         self._no_npcs.setVisible(not self._npc_state)
 
+    def _ordered_npcs(self) -> list[str]:
+        """The cast in render order: rolled NPCs highest-initiative first, then the
+        un-rolled ones in their manual order."""
+        base = [n for n in self._manual_order if n in self._npc_state]
+        base += [n for n in self._npc_state if n not in base]
+        rolled = sorted(
+            (n for n in base if self._npc_state[n].initiative is not None),
+            key=lambda n: self._npc_state[n].initiative,  # type: ignore[arg-type,return-value]
+            reverse=True,
+        )
+        unrolled = [n for n in base if self._npc_state[n].initiative is None]
+        return rolled + unrolled
+
     def _on_npc_initiative(self, name: str, total: int) -> None:
-        """Remember an NPC's rolled initiative (the card already shows the badge)."""
+        """Remember an NPC's rolled initiative and re-sort the grid around it."""
         entry = self._npc_state.get(name)
-        if entry is not None:
-            entry.initiative = total
+        if entry is None:
+            return
+        entry.initiative = total
+        self._refresh_npcs()
+
+    def _reorder_npc(self, name: str, target_index: int) -> None:
+        """Move an NPC to a dropped slot, in the manual (un-rolled) zone.
+
+        A drag always drops into the manual zone, so the NPC's rolled initiative
+        (if any) is cleared; it then takes the target position among the un-rolled
+        cards. A drop inside the rolled block clamps to the top of the un-rolled
+        zone, since rolled NPCs always sort above it.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        entry.initiative = None
+        order = [n for n in self._ordered_npcs() if n != name]
+        order.insert(max(0, min(target_index, len(order))), name)
+        self._manual_order = order
+        self._refresh_npcs()
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""

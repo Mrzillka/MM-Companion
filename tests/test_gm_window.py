@@ -1153,6 +1153,48 @@ def test_next_copy_name_is_base_aware() -> None:
     assert gm_window_module._next_copy_name("Goon-7", {"Goon-2", "Goon-3"}) == "Goon-4"
 
 
+def register_npcs(window: GMWindow, *names: str) -> None:
+    for name in names:
+        window._register_npc(write_npc(name))
+
+
+def test_rolled_npcs_sort_highest_initiative_first(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo", "Charlie")
+
+    window._on_npc_initiative("alpha.json", 12)
+    window._on_npc_initiative("bravo.json", 24)
+    window._on_npc_initiative("charlie.json", 18)
+
+    assert npc_names(window) == ["Bravo", "Charlie", "Alpha"]
+
+
+def test_unrolled_npcs_sit_below_rolled(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo")
+
+    window._on_npc_initiative("bravo.json", 15)
+
+    assert npc_names(window) == ["Bravo", "Alpha"]
+
+
+def test_manual_order_among_unrolled_is_honored(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo", "Charlie")
+
+    window._reorder_npc("charlie.json", 0)  # drag Charlie to the front
+
+    assert npc_names(window) == ["Charlie", "Alpha", "Bravo"]
+
+
+def test_dragging_a_rolled_card_clears_its_initiative(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo")
+    window._on_npc_initiative("alpha.json", 25)
+    assert npc_names(window) == ["Alpha", "Bravo"]
+
+    window._reorder_npc("alpha.json", 99)  # drag Alpha down into the manual zone
+
+    assert window._npc_state["alpha.json"].initiative is None
+    assert npc_names(window) == ["Bravo", "Alpha"]
+
+
 def write_agile_npc(name: str, agility: int) -> Path:
     """An NPC with a known Agility, so its initiative modifier is predictable."""
     character = Character.new_default(load_game_data())

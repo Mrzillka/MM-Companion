@@ -230,7 +230,7 @@ NPC cards and "Create NPC" on the GM window; `NPCWindow` with the simplified she
 existing `core/library.py` seams.
 
 ### Phase 10 — Headless server, docs, polish
-**Status: not started**
+**Status: done**
 `python -m mm_companion.server` (+ a `mm-companion-server` console script),
 `docs/mm-session-architecture.md` and a networking/troubleshooting guide (the
 tunnel walkthrough and the relay deployment guide land here),
@@ -933,3 +933,62 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     added), no duplicate-an-NPC action, and the portrait is whatever the file
     carries — unlike a player card, an NPC's image resolves normally because the
     file is local.
+
+- **2026-07-25 — Phase 10 done.** The headless host, the docs, and the polish —
+  the last phase. This is the feature complete except for the merge (which deletes
+  this file). Almost all new code is one small Qt-free package; the rest is prose.
+  - **`src/mm_companion/server/`** — the headless host: `python -m
+    mm_companion.server` (+ the `mm-companion-server` console script in
+    `pyproject.toml`). `__main__.py` / `__init__.py` mirror the relay package;
+    the orchestration is in **`cli.py`**, split into small testable helpers:
+    `resolve_session` (--new creates+persists / --session loads by id / no arg
+    resumes the most recent, a clean `SessionStoreError` when none exist),
+    `build_transport` (a `RelayTransport` when `--relay` is given, else `None` for
+    a direct socket), `publish` (mirrors the GM window's ladder — a relay needs no
+    probe, `--manual-host` is taken at its word via `parse_address`, otherwise
+    UPnP unless `--no-upnp`), and `describe` (the join-code banner). `run(argv, *,
+    stop=None)` wires them, `ensure_workspace()` + `initialize_mods()` first, and
+    **blocks on a `threading.Event` until SIGINT/SIGTERM**; the `stop` kwarg is the
+    test seam that pre-sets the event so `run` returns instead of blocking. It
+    reuses the same `SessionServer`, workspace store, and `mods.stack_fingerprint()`
+    the app hosts with — no new session code was needed, which is the point.
+  - **The one behavioural limit to keep visible:** a **remote GM cannot drive a
+    headless session** — the only `is_gm` slot is the in-process host's, so hidden
+    rolls and GM-applied conditions need the app that started the server (the
+    Phase-2 deferred note). The box keeps the session alive, resolves rolls, and
+    syncs sheets; a GM connecting over the wire is seated as a player. Stated in
+    `--help`, both docs, and the deferred lists. Closing it needs a GM-auth field
+    in `Hello` — the natural next piece if remote-GM control is wanted.
+  - **Docs.** Two new files: `docs/mm-session-architecture.md` (the whole
+    subsystem — the core/session modules, the handshake, the two invariants "the
+    server rolls" / "hidden rolls never broadcast", the connection ladder, the Qt
+    bridge, snapshot sync with the measured ~3–4 KB size, both headless
+    entrypoints, and the deferred list) and `docs/mm-session-networking.md` (the
+    player-facing guide: how a join works, why "just forward a port" fails on
+    CGNAT, the tunnel walkthrough, using and **self-hosting the relay**, the
+    headless-server recipes, and a troubleshooting table keyed to the on-screen
+    advice). `README.md` and `CLAUDE.md` both gained a session section, the new
+    entrypoints, the `server/` + `relay/` layout, and doc links; the stale "dice
+    rolling and GM Mode are not yet implemented" / "Open GM Mode is a placeholder"
+    lines are gone.
+  - **Polish taken from the Phase-4 note:** `ADVICE_FIREWALL`'s literal `*and*`
+    markdown asterisks (which read as leftover markup in a GUI label *and* in the
+    headless banner) are now "both private and public networks". The server's own
+    CLI/banner text is ASCII — em-dashes mojibake in a non-UTF-8 Windows console,
+    and this output *is* a terminal banner. (The advice prose from `discovery` may
+    still contain Unicode; it is the same text the GUI shows and renders fine in a
+    modern UTF-8 terminal.)
+  - **Tests** — `tests/test_headless_server.py` (16, Qt-free, real loopback on
+    `127.0.0.1` port 0 so nothing pops a firewall prompt): the three `resolve_session`
+    routes + both error paths, `build_transport`, `publish` for LAN / manual /
+    relay with the join code decoded back, the banner, and `run` end to end via a
+    pre-set stop event (hosts, persists, sets `session_last_id`), plus a real
+    `SessionClient` joining a started server. `test_the_most_recent` sets explicit
+    `updated_at` values because the model's timestamp has whole-second resolution.
+    Full suite: **1006 passed**, only the known environmental `test_block_sizes`
+    font failure (Windows offscreen; passes on CI, not ours).
+  - Deferred to the merge itself: **delete this file** when `feature/gm-session`
+    merges into `develop` (a `--no-ff` merge, only when the user says the feature
+    is done). Also still open and now documented rather than hidden: no default
+    public relay is deployed (`session_relay_url` defaults to `""`), remote-GM auth,
+    live GM-side player sheets, and travelling portraits.

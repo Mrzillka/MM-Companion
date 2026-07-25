@@ -535,7 +535,7 @@ METHOD_RELAY = "relay"
 
 ADVICE_FIREWALL = (
     "The first time you host, Windows asks whether to let MM-Companion accept "
-    "connections. Allow it on private *and* public networks, or nobody can join."
+    "connections. Allow it on both private and public networks, or nobody can join."
 )
 ADVICE_NO_IGD = (
     "No router answered the automatic port-forward request (UPnP is often off by "

@@ -93,6 +93,8 @@ class SessionBridge(QObject):
     #: ``("apply" | "remove", payload)`` — the GM told this client to change a
     #: condition on its live sheet. Client side only.
     conditionCommand = Signal(str, object)
+    #: ``value`` — the GM set this client's hero-point total. Client side only.
+    heroPointsCommand = Signal(int)
     #: The GM dropped us; carries the reason. Client side only.
     kicked = Signal(str)
 
@@ -214,6 +216,18 @@ class SessionBridge(QObject):
         if self._client is not None:
             return self._client.request_remove_roll(seq)
         return False
+
+    def kick(self, player_id: str, reason: str = "") -> bool:
+        """Remove a player from the session (a GM action). Returns whether a seat
+        was actually removed.
+
+        Only the in-process host can do this — the host owns the server and every
+        connection. A player, or a GM driving a headless server over the wire, has
+        no server here, so this is a no-op that returns False.
+        """
+        if self._server is None:
+            return False
+        return self._server.kick(player_id, reason)
 
     # -- hosting -----------------------------------------------------------
 
@@ -417,6 +431,8 @@ class SessionBridge(QObject):
             self.conditionCommand.emit("apply", payload)
         elif kind == session_client.EVENT_REMOVE_CONDITION:
             self.conditionCommand.emit("remove", payload)
+        elif kind == session_client.EVENT_SET_HERO_POINTS:
+            self.heroPointsCommand.emit(int(payload.get("value", 0)))
         elif kind == session_client.EVENT_KICKED:
             self.kicked.emit(str(payload.get("reason", "")))
         elif kind == session_client.EVENT_ERROR:

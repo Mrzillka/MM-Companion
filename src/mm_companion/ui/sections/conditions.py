@@ -60,6 +60,28 @@ def addable_conditions(data: GameData) -> list[Condition]:
     return [c for c in data.conditions if c.category in ADDABLE_CATEGORIES]
 
 
+def matching_condition(
+    character: Character, condition_id: str, parameter: str | None = None
+) -> AppliedCondition | None:
+    """The applied condition a by-id removal should shed, or ``None``.
+
+    Matches on the parameter too, so removing "Attack Impaired" leaves "Dodge
+    Impaired" alone, and prefers a directly applied instance over a bundled member
+    — dropping the umbrella is what taking a condition off means. Module-level so
+    the sheet's own chips and the GM's fast-apply on a card (player or NPC) shed
+    a condition identically.
+    """
+    matches = [
+        applied
+        for applied in character.conditions
+        if applied.condition_id == condition_id and applied.parameter == parameter
+    ]
+    if not matches:
+        return None
+    direct = [applied for applied in matches if applied.provenance is None]
+    return direct[0] if direct else matches[0]
+
+
 def condition_display_name(applied: AppliedCondition, record: Condition | None) -> str:
     """Fold the chosen parameter and stacking count into the shown name (§6):
     ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
@@ -214,15 +236,10 @@ class ConditionsSection(QGroupBox):
         bundled member — dropping the umbrella is what the GM means by taking the
         condition off. Returns whether anything was on the character to remove.
         """
-        matches = [
-            applied
-            for applied in self._character.conditions
-            if applied.condition_id == condition_id and applied.parameter == parameter
-        ]
-        if not matches:
+        applied = matching_condition(self._character, condition_id, parameter)
+        if applied is None:
             return False
-        direct = [applied for applied in matches if applied.provenance is None]
-        self._shed_condition(direct[0] if direct else matches[0])
+        self._shed_condition(applied)
         return True
 
     def _shed_condition(self, applied: AppliedCondition) -> None:
@@ -267,6 +284,27 @@ class ConditionsSection(QGroupBox):
         for category, (head, rule, container) in self._category_sections.items():
             for widget in (head, rule, container):
                 widget.setVisible(category in used)
+        self._refit_containers()
+
+    def _refit_containers(self) -> None:
+        """Re-fit each chip container to its current content.
+
+        ``FlowContainer`` only recomputes its ``minimumHeight`` on a resize event
+        (see :mod:`~mm_companion.ui.flow_layout`). Adding chips that wrap grows it,
+        but *removing* chips fires no resize, so a stale, taller minimum would stick
+        and the block would never shrink back. Recompute it here for every visible
+        container and let the geometry change bubble up so the enclosing
+        ``BlockFrame`` re-queries its size hint and the canvas row shrinks.
+        """
+        for category, flow in self._category_flows.items():
+            _head, _rule, container = self._category_sections[category]
+            if not container.isVisible():
+                continue
+            width = container.width()
+            height = flow.heightForWidth(width) if width > 0 else CONDITIONS_ROW_HEIGHT
+            container.setMinimumHeight(max(CONDITIONS_ROW_HEIGHT, height))
+            container.updateGeometry()
+        self.updateGeometry()
 
     def _build_condition_chip(self, applied: AppliedCondition, record: Condition | None) -> QFrame:
         name = self._condition_display_name(applied, record)

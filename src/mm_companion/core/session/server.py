@@ -59,6 +59,7 @@ from .protocol import (
     RollRemoved,
     RollRequest,
     Roster,
+    SetHeroPoints,
     Welcome,
     sanitize_snapshot,
 )
@@ -296,6 +297,10 @@ class SessionServer:
             player_id,
             RemoveCondition(player_id=player_id, condition_id=condition_id, parameter=parameter),
         )
+
+    def set_hero_points(self, player_id: str, value: int) -> bool:
+        """Tell one player's client to set their hero-point total on their sheet."""
+        return self.send_to(player_id, SetHeroPoints(player_id=player_id, value=value))
 
     def kick(self, player_id: str, reason: str = "") -> bool:
         """Drop a player's connection *and* their roster slot."""
@@ -585,7 +590,7 @@ class SessionServer:
             self.remove_roll(message.seq)
         elif isinstance(message, Ping):
             self._send_quietly(connection, Pong(nonce=message.nonce))
-        elif isinstance(message, (ApplyCondition, RemoveCondition)) and slot.is_gm:
+        elif isinstance(message, (ApplyCondition, RemoveCondition, SetHeroPoints)) and slot.is_gm:
             # A GM driving a headless server from a remote app: relay the command
             # on to the player it names.
             self.send_to(message.player_id, message)

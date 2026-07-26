@@ -37,7 +37,7 @@ class NPCWindow(MainWindow):
         path: Path | None = None,
         locked: bool = False,
     ) -> None:
-        super().__init__(parent, character=character, path=path, locked=locked)
+        super().__init__(parent, character=character, path=path, locked=locked, npc=True)
         self.sheet.set_npc_mode(True)
 
     def storage_dir(self) -> Path:

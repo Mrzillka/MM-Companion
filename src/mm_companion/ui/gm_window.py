@@ -33,22 +33,25 @@ to :class:`~mm_companion.ui.session_bridge.SessionBridge`.
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QCloseEvent, QFont, QShowEvent
+from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QRect, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
-    QDialog,
     QFileDialog,
+    QFrame,
+    QGraphicsOpacityEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -56,34 +59,74 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
+from mm_companion.core.rules import apply_condition, decrement_condition
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
-from mm_companion.ui.block_canvas import BlockCanvas
+from mm_companion.ui.block_canvas import BlockCanvas, DropIndicator
 from mm_companion.ui.block_sizes import BlockSize
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
-from mm_companion.ui.sections.conditions import condition_display_name
+from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
-from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
-from mm_companion.ui.start_window import CharacterCard
+from mm_companion.ui.session_dialogs import HostOptions
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
 BIND_ADDRESS = "0.0.0.0"
 
-NO_PLAYERS = "Nobody has joined yet — send the join code above to your players."
+NO_PLAYERS = "Nobody has joined yet — send your players the join code (Session ▸ Copy join code)."
 
 NO_NPCS = "No NPCs in this session yet — create one, or add one you have already written."
 
 
+@dataclass
+class _NpcEntry:
+    """One NPC in the session's cast, with its loaded model and runtime state.
+
+    Keyed by file name. The model comes from disk (so a saved condition edit is
+    reflected on the next refresh); ``initiative`` is transient — rolled at the
+    table, not part of the character — so it lives here rather than in the file.
+    """
+
+    path: Path
+    summary: library.CharacterSummary
+    character: Character
+    initiative: int | None = None
+    card: NPCCard | None = None
+
+
+def _next_copy_name(source_name: str, existing: set[str]) -> str:
+    """The next free ``"<base>-<n>"`` for a copy of *source_name*.
+
+    A trailing ``-<digits>`` on the source is stripped to find the base, so
+    copying "Goon" gives "Goon-2" and copying "Goon-2" gives the next free
+    "Goon-N" rather than "Goon-2-2". ``n`` starts at 2 and steps up until the
+    name is free among *existing*.
+    """
+    match = re.match(r"^(.*?)-(\d+)$", source_name)
+    base = match.group(1) if match else source_name
+    n = 2
+    while f"{base}-{n}" in existing:
+        n += 1
+    return f"{base}-{n}"
+
+
 class GMWindow(QMainWindow):
-    """Host controls, the join code, and the connectivity story around both."""
+    """The GM's board: player cards, NPCs, the shared roll log, and a status strip.
+
+    Which session to run and how to host it are chosen *before* this window opens
+    (the launcher's :class:`~mm_companion.ui.session_dialogs.GMSessionLaunchDialog`),
+    so there are no host controls here — the window comes up already hosting the
+    chosen session. The join code is copied from **Session ▸ Copy join code**; the
+    connectivity story is told in the status strip along the bottom.
+    """
 
     def __init__(
         self,
@@ -91,6 +134,9 @@ class GMWindow(QMainWindow):
         *,
         bind: str = BIND_ADDRESS,
         data: GameData | None = None,
+        state: SessionState | None = None,
+        host_options: HostOptions | None = None,
+        autohost: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("GM Mode")
@@ -99,6 +145,8 @@ class GMWindow(QMainWindow):
         self._bind = bind
         self._data = data or load_game_data()
         self._bridge = SessionBridge(self)
+        #: The current join code, or "" while not published. Copied from the menu.
+        self._join_code = ""
         # One card per seat, keyed by player id, and the last snapshot each player
         # pushed. The roster and the snapshots arrive on separate signals (a roster
         # entry deliberately carries no character), so both are held here and the
@@ -110,31 +158,36 @@ class GMWindow(QMainWindow):
         # NPC sheets opened from this window, keyed by the file they came from
         # (an unsaved new NPC by a placeholder key), likewise kept referenced.
         self._npc_windows: dict[str, QMainWindow] = {}
+        # The session's cast as live cards need it: one entry per file name, with
+        # the loaded model and its transient initiative. Rebuilt on every refresh
+        # from disk, carrying the runtime state across.
+        self._npc_state: dict[str, _NpcEntry] = {}
+        # The manual (un-rolled) order of the cast, by file name. Rolled NPCs sort
+        # above this by initiative; dragging a card sets its place here.
+        self._manual_order: list[str] = []
         # One relay attempt per hosting run: the fallback republishes, and a
         # second attempt off that would loop.
         self._relay_attempted = False
         # Ids for rolls made before hosting: negative so they never collide with a
         # session's positive seqs, and still removable from the local view.
         self._offline_seq = 0
-        # The connection choices the current/most-recent host run used; the dialog
-        # replaces this each time hosting starts. A sane default lets the relay
-        # fallback and the port read something before the first run.
-        self._host_options = HostOptions(
+        # The connection choices this window hosts with, picked in the launch dialog
+        # before the window opened. A sane default lets the relay fallback and the
+        # port read something even when a caller passes none (e.g. the test fixture).
+        self._host_options = host_options or HostOptions(
             name="Session", port=DEFAULT_PORT, tunnel="", relay=storage.relay_url(), use_relay=True
         )
         set_active_session(self._bridge)
-        # Resume the session this app was last in; a fresh one when there is none
-        # (or its files have gone), so the window always has a session to host.
-        self._state: SessionState = last_session() or new_session("Session")
+        # The session to run was chosen in the launch dialog; fall back to the last
+        # one this app hosted (or a fresh one) so the window always has a session.
+        self._state: SessionState = state or last_session() or new_session("Session")
 
         # The blocks are draggable / hideable / reorderable the same way the
         # character sheet's are — a shared BlockCanvas rather than a fixed stack.
         # Players and NPCs get a growable width just wider than one card, so their
         # FlowLayout keeps at least one card per row and fits more as the window
-        # widens. The connection knobs are gone from here (see HostSessionDialog),
-        # so the Session block is compact.
+        # widens.
         panels = [
-            ("session", "Session", self._build_session_box()),
             ("players", "Players", self._build_players_box()),
             ("npcs", "NPCs", self._build_npcs_box()),
             ("rolls", "Rolls", self._build_rolls_box()),
@@ -142,13 +195,15 @@ class GMWindow(QMainWindow):
         for _key, _title, box in panels:
             strip_groupbox_caption(box)  # the block's title bar carries the name now
         sizes = {
-            "session": BlockSize(min_width=380, min_height=110),
             "players": BlockSize(min_width=250, min_height=130),
             "npcs": BlockSize(min_width=250, min_height=150),
             "rolls": BlockSize(min_width=660, min_height=260),
         }
-        default_rows = [["session"], ["players"], ["npcs"], ["rolls"]]
-        self._canvas = BlockCanvas(panels, sizes, default_rows)
+        default_rows = [["players"], ["npcs"], ["rolls"]]
+        # Only a handful of blocks, so a top-aligned stack would leave a wide gap
+        # under the last one; let the bottom block (the rolls board's history)
+        # stretch to fill the page instead.
+        self._canvas = BlockCanvas(panels, sizes, default_rows, fill_last=True)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -161,6 +216,9 @@ class GMWindow(QMainWindow):
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.addWidget(self._scroll, stretch=1)
+        # A persistent strip along the bottom, not a draggable block: the hosting
+        # status and the reachability advice, then a transient notice line.
+        central_layout.addWidget(self._build_status_strip())
         central_layout.addWidget(self._build_notice())
         self.setCentralWidget(central)
 
@@ -174,6 +232,11 @@ class GMWindow(QMainWindow):
         self._refresh_rolls()
         self._refresh_npcs()
 
+        # Hosting was chosen in the launch dialog, so start it now — the window
+        # comes up already reachable, with the join code a menu click away.
+        if autohost:
+            self.start_hosting(self._host_options)
+
     def _update_min_width(self) -> None:
         """Pin the page's min width to the widest docked row (blocks never squash)."""
         bar = self._scroll.verticalScrollBar()
@@ -181,7 +244,12 @@ class GMWindow(QMainWindow):
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extra + 2)
 
     def _build_menu(self) -> None:
-        """A View menu: one show/hide toggle per block, plus Reset Layout."""
+        """A Session menu (copy the join code) and a View menu (show/hide blocks)."""
+        session_menu = self.menuBar().addMenu("&Session")
+        self._copy_code_action = session_menu.addAction("Copy join code")
+        self._copy_code_action.setEnabled(False)
+        self._copy_code_action.triggered.connect(self._copy_code)
+
         view_menu = self.menuBar().addMenu("&View")
         self._block_actions: dict[str, object] = {}
         for key in self._canvas.block_keys():
@@ -245,55 +313,30 @@ class GMWindow(QMainWindow):
 
     # -- construction ------------------------------------------------------
 
-    def _build_session_box(self) -> QGroupBox:
-        """The compact session block: one button to start, the join code once hosting.
+    def _build_status_strip(self) -> _Notice:
+        """The bottom strip: the hosting status line and the reachability advice.
 
-        The connection knobs (port, relay, a typed tunnel address) live in
-        :class:`~mm_companion.ui.session_dialogs.HostSessionDialog`, reached through
-        the **Start a session…** button, so the always-visible surface is just a
-        status line, the join code and its Copy button, and the advice underneath.
+        Not a draggable block — the session controls moved to the launch dialog, so
+        all that stays on the board is this feedback: whether players can reach the
+        game, and the verbatim advice from ``discovery`` when they may not. The join
+        code itself is copied from **Session ▸ Copy join code**. It rides in a
+        dismissible :class:`_Notice` so it can be closed and fades on its own once
+        read, rather than sitting on the board for the whole session.
         """
-        box = QGroupBox("Session")
-        layout = QVBoxLayout(box)
+        notice = _Notice()
 
         self._status_label = _wrapped("")
         font = self._status_label.font()
         font.setBold(True)
         self._status_label.setFont(font)
-        layout.addWidget(self._status_label)
-
-        code_row = QHBoxLayout()
-        self._code_edit = QLineEdit()
-        self._code_edit.setReadOnly(True)
-        self._code_edit.setPlaceholderText("your join code appears here once you start hosting")
-        code_font = QFont(self._code_edit.font())
-        code_font.setStyleHint(QFont.StyleHint.Monospace)
-        code_font.setPointSize(code_font.pointSize() + 2)
-        self._code_edit.setFont(code_font)
-        code_row.addWidget(self._code_edit, stretch=1)
-
-        self._copy_button = QPushButton("Copy")
-        self._copy_button.setEnabled(False)
-        self._copy_button.clicked.connect(self._copy_code)
-        code_row.addWidget(self._copy_button)
-        layout.addLayout(code_row)
+        notice.add_widget(self._status_label)
 
         # One label per advice string, so each is rendered exactly as
         # ``discovery`` wrote it. They are player-facing sentences, not log lines.
         self._advice_layout = QVBoxLayout()
-        layout.addLayout(self._advice_layout)
-
-        buttons = QHBoxLayout()
-        self._host_button = QPushButton("Start a session…")
-        self._host_button.clicked.connect(self._toggle_hosting)
-        buttons.addWidget(self._host_button)
-
-        self._new_button = QPushButton("New session")
-        self._new_button.clicked.connect(self._new_session)
-        buttons.addWidget(self._new_button)
-        buttons.addStretch()
-        layout.addLayout(buttons)
-        return box
+        notice.add_layout(self._advice_layout)
+        self._status_notice = notice
+        return notice
 
     def _build_players_box(self) -> QGroupBox:
         box = QGroupBox("Players")
@@ -337,6 +380,9 @@ class GMWindow(QMainWindow):
         self._npc_container = FlowContainer()
         self._npc_flow = FlowLayout(self._npc_container)
         layout.addWidget(self._npc_container)
+        # A thin accent bar shown between cards while one is dragged, so the GM sees
+        # where it will land before letting go (the same widget the block canvas uses).
+        self._npc_drop_indicator = DropIndicator(self._npc_container)
         layout.addStretch()
         return box
 
@@ -369,9 +415,10 @@ class GMWindow(QMainWindow):
         layout.addWidget(self._history, stretch=1)
         return box
 
-    def _build_notice(self) -> QLabel:
-        self._notice = _wrapped("")
-        self._notice.hide()
+    def _build_notice(self) -> _Notice:
+        self._notice = _Notice()
+        self._notice_label = _wrapped("")
+        self._notice.add_widget(self._notice_label)
         return self._notice
 
     def _connect_bridge(self) -> None:
@@ -391,25 +438,11 @@ class GMWindow(QMainWindow):
         """The session this window drives — the seam later phases attach to."""
         return self._bridge
 
-    def _toggle_hosting(self) -> None:
-        if self._bridge.hosting:
-            self.stop_hosting()
-        else:
-            self._prompt_and_host()
-
-    def _prompt_and_host(self) -> None:
-        """Ask how to host (name + connection), then start with the chosen options."""
-        dialog = HostSessionDialog(self, session_name=self._state.name)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        self.start_hosting(dialog.options())
-
     def start_hosting(self, options: HostOptions) -> None:
-        """Begin hosting with *options* (from :class:`HostSessionDialog`) and publish.
+        """Begin hosting with *options* (from the launch dialog) and publish.
 
         The connection choices are held for the run so the relay fallback and the
-        reachability probe read the same values the GM picked, rather than any
-        always-visible field.
+        reachability probe read the same values the GM picked in the launch dialog.
         """
         manual_host, manual_port = "", 0
         if options.tunnel:
@@ -433,7 +466,6 @@ class GMWindow(QMainWindow):
         if not self._begin_hosting():
             return
 
-        self._set_hosting_widgets(True)
         self._set_status("Working out how players can reach you…", theme.ACCENT)
         self._clear_advice()
         self._bridge.publish(manual_host=manual_host, external_port=manual_port)
@@ -484,34 +516,19 @@ class GMWindow(QMainWindow):
         self._set_status("Trying the relay…", theme.ACCENT)
         self._bridge.stop()
         if not self._begin_hosting(relay) and not self._begin_hosting():
-            self._set_hosting_widgets(False)
             self._refresh_idle_status()
             return
-        self._set_hosting_widgets(True)
         self._bridge.publish()
 
     def stop_hosting(self) -> None:
         """Stop hosting, clear the join code and cards, and return to the idle state."""
         self._relay_attempted = False
         self._bridge.stop()
-        self._set_hosting_widgets(False)
-        self._code_edit.clear()
-        self._copy_button.setEnabled(False)
+        self._join_code = ""
+        self._copy_code_action.setEnabled(False)
         self._clear_advice()
         self._clear_cards()
         self._refresh_idle_status()
-
-    def _set_hosting_widgets(self, hosting: bool) -> None:
-        self._host_button.setText("Stop hosting" if hosting else "Start a session…")
-        # A new session cannot be started on top of a live one.
-        self._new_button.setEnabled(not hosting)
-
-    def _new_session(self) -> None:
-        self._state = new_session("Session")
-        self._clear_cards()
-        self._refresh_idle_status()
-        self._refresh_rolls()
-        self._refresh_npcs()
 
     def _refresh_rolls(self) -> None:
         """Point the history at the live session, or at the one on disk.
@@ -581,10 +598,10 @@ class GMWindow(QMainWindow):
 
     def _on_started(self, host: str, port: int) -> None:
         self._rename_session()
-        self._notice.hide()
+        self._notice.dismiss()
 
     def _on_stopped(self) -> None:
-        self._set_hosting_widgets(False)
+        self._copy_code_action.setEnabled(False)
         self._refresh_rolls()
 
     def _on_published(self, reachability: discovery.Reachability) -> None:
@@ -592,8 +609,8 @@ class GMWindow(QMainWindow):
             self._fall_back_to_relay()
             return
 
-        self._code_edit.setText(self._bridge.join_code())
-        self._copy_button.setEnabled(bool(self._code_edit.text()))
+        self._join_code = self._bridge.join_code()
+        self._copy_code_action.setEnabled(bool(self._join_code))
 
         if reachability.method == discovery.METHOD_RELAY:
             self._set_status(
@@ -674,6 +691,8 @@ class GMWindow(QMainWindow):
                 card.openSheetRequested.connect(self._open_player_sheet)
                 card.applyConditionRequested.connect(self._apply_condition)
                 card.removeConditionRequested.connect(self._remove_condition)
+                card.setHeroPointsRequested.connect(self._set_hero_points)
+                card.removePlayerRequested.connect(self._remove_player)
                 self._cards[player_id] = card
                 self._cards_flow.addWidget(card)
             card.set_roster(entry)
@@ -730,6 +749,34 @@ class GMWindow(QMainWindow):
             character.image_path = path
         return character
 
+    # -- removing a player --------------------------------------------------
+
+    def _remove_player(self, player_id: str) -> None:
+        """Kick a player out of the session, once the GM confirms it.
+
+        The kick drops the seat and closes the socket; the server broadcasts a new
+        roster without it, so :meth:`_show_roster` reconciles the card away. Any
+        read-only sheet the GM had open for that player is closed too.
+        """
+        card = self._cards.get(player_id)
+        name = card.display_name() if card is not None else "this player"
+        confirm = QMessageBox.question(
+            self,
+            "Remove player",
+            f"Remove {name} from the session? They will be disconnected.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        if not self._bridge.kick(player_id):
+            self._show_notice(f"{name} could not be removed.", theme.TINT_WORSE)
+            return
+        window = self._player_windows.pop(player_id, None)
+        if window is not None:
+            window.close()
+        self._show_notice(f"{name} was removed from the session.", theme.ACCENT)
+
     # -- fast-apply conditions ---------------------------------------------
 
     def _apply_condition(self, player_id: str, condition_id: str, parameter: object) -> None:
@@ -737,6 +784,21 @@ class GMWindow(QMainWindow):
 
     def _remove_condition(self, player_id: str, condition_id: str, parameter: object) -> None:
         self._send_condition("remove", player_id, condition_id, parameter)
+
+    def _set_hero_points(self, player_id: str, value: int) -> None:
+        """Order a player's hero-point total changed on their live sheet.
+
+        Like a condition, the GM only asks: the command goes down the player's
+        connection, their app writes the value, and the card's pips move only once
+        the snapshot comes back — so a command that did not land stays visible.
+        """
+        server = self._bridge.server
+        who = self._player_name(player_id)
+        if server is None or not server.set_hero_points(player_id, value):
+            self._show_notice(
+                f"{who} is not connected, so their hero points were not changed.",
+                theme.TINT_WORSE,
+            )
 
     def _send_condition(
         self, action: str, player_id: str, condition_id: str, parameter: object
@@ -844,7 +906,11 @@ class GMWindow(QMainWindow):
             pass  # an unwritable workspace is not worth a dialog mid-session
 
     def _refresh_npcs(self) -> None:
-        """Rebuild the NPC grid from the session's cast."""
+        """Rebuild the NPC grid from the session's cast.
+
+        Each NPC's model is loaded from disk, so a saved edit shows up here; the
+        transient initiative is carried over from the previous state by file name.
+        """
         while self._npc_flow.count():
             item = self._npc_flow.takeAt(0)
             widget = item.widget() if item is not None else None
@@ -853,13 +919,113 @@ class GMWindow(QMainWindow):
                 widget.deleteLater()
 
         summaries = self._npc_summaries()
+        previous = self._npc_state
+        self._npc_state = {}
         for summary in summaries:
-            card = CharacterCard(summary, removable=True)
-            card.clicked.connect(self._open_npc)
+            if summary.path is None:
+                continue
+            name = summary.path.name
+            character = library.load_character(summary.path)
+            initiative = previous[name].initiative if name in previous else None
+            self._npc_state[name] = _NpcEntry(
+                path=Path(summary.path),
+                summary=summary,
+                character=character,
+                initiative=initiative,
+            )
+
+        # Keep the manual order in step with the cast: drop the departed, append
+        # newcomers at the end of the un-rolled zone.
+        self._manual_order = [n for n in self._manual_order if n in self._npc_state]
+        self._manual_order += [n for n in self._npc_state if n not in self._manual_order]
+
+        for name in self._ordered_npcs():
+            entry = self._npc_state[name]
+            card = NPCCard(entry.character, entry.summary, self._data, initiative=entry.initiative)
+            card.openRequested.connect(self._open_npc)
             card.removeRequested.connect(self._remove_npc)
             card.deleteRequested.connect(self._delete_npc)
+            card.applyConditionRequested.connect(self._apply_npc_condition)
+            card.removeConditionRequested.connect(self._remove_npc_condition)
+            card.initiativeRolled.connect(self._on_npc_initiative)
+            card.copyRequested.connect(self._copy_npc)
+            card.reorderRequested.connect(self._reorder_npc)
+            card.reorderPreview.connect(self._show_npc_drop_indicator)
+            card.reorderPreviewEnded.connect(self._npc_drop_indicator.hide_indicator)
+            entry.card = card
             self._npc_flow.addWidget(card)
-        self._no_npcs.setVisible(not summaries)
+        self._no_npcs.setVisible(not self._npc_state)
+
+    def _ordered_npcs(self) -> list[str]:
+        """The cast in render order: rolled NPCs highest-initiative first, then the
+        un-rolled ones in their manual order."""
+        base = [n for n in self._manual_order if n in self._npc_state]
+        base += [n for n in self._npc_state if n not in base]
+        rolled = sorted(
+            (n for n in base if self._npc_state[n].initiative is not None),
+            key=lambda n: self._npc_state[n].initiative,  # type: ignore[arg-type,return-value]
+            reverse=True,
+        )
+        unrolled = [n for n in base if self._npc_state[n].initiative is None]
+        return rolled + unrolled
+
+    def _on_npc_initiative(self, name: str, total: int) -> None:
+        """Remember an NPC's rolled initiative and re-sort the grid around it."""
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        entry.initiative = total
+        self._refresh_npcs()
+
+    def _show_npc_drop_indicator(self, name: str, target_index: int) -> None:
+        """Position the drop bar before the card at *target_index* (after the last
+        when the drop is past every card)."""
+        count = self._npc_flow.count()
+        if count == 0:
+            self._npc_drop_indicator.hide_indicator()
+            return
+        index = max(0, min(target_index, count))
+        if index >= count:
+            item = self._npc_flow.itemAt(count - 1)
+            geo = item.widget().geometry()
+            rect = QRect(geo.right() + 1, geo.top(), 3, geo.height())
+        else:
+            item = self._npc_flow.itemAt(index)
+            geo = item.widget().geometry()
+            rect = QRect(geo.left() - 3, geo.top(), 3, geo.height())
+        self._npc_drop_indicator.move_to(rect)
+
+    def _reorder_npc(self, name: str, target_index: int) -> None:
+        """Move an NPC to a dropped slot, in the manual (un-rolled) zone.
+
+        A drag always drops into the manual zone, so the NPC's rolled initiative
+        (if any) is cleared; it then takes the target position among the un-rolled
+        cards. A drop inside the rolled block clamps to the top of the un-rolled
+        zone, since rolled NPCs always sort above it.
+
+        Dropping an *un-rolled* NPC in front of a rolled one is the GM saying it
+        should act before that NPC — but with no initiative to sort by, that is
+        impossible while the other keeps its roll. So both are dropped into the
+        manual zone: the neighbour loses its initiative too, and the GM orders the
+        pair by hand.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        order = self._ordered_npcs()
+        neighbour = order[target_index] if 0 <= target_index < len(order) else None
+        if (
+            entry.initiative is None
+            and neighbour is not None
+            and neighbour != name
+            and self._npc_state[neighbour].initiative is not None
+        ):
+            self._npc_state[neighbour].initiative = None
+        entry.initiative = None
+        order = [n for n in self._ordered_npcs() if n != name]
+        order.insert(max(0, min(target_index, len(order))), name)
+        self._manual_order = order
+        self._refresh_npcs()
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""
@@ -891,15 +1057,31 @@ class GMWindow(QMainWindow):
             self._set_npc_paths([*self._state.npc_paths, path.name])
         self._refresh_npcs()
 
-    def _open_npc(self, summary: library.CharacterSummary) -> None:
+    def _copy_npc(self, name: str) -> None:
+        """Duplicate an NPC into a new one, named ``Goon → Goon-2``.
+
+        A deep copy of the model (through its own serialization), renamed to the
+        next free ``<base>-<n>``, saved as its own file, and added to the cast.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        copy = Character.from_dict(entry.character.to_dict())
+        existing = {other.summary.name for other in self._npc_state.values()}
+        copy.profile["hero_name"] = _next_copy_name(entry.summary.name, existing)
+        path = library.save_character(copy, directory=self._npc_dir())
+        self._register_npc(path)
+
+    def _open_npc(self, name: str) -> None:
         """Open an NPC's sheet, or raise the one already open for it.
 
         Not replaced the way a player's read-only sheet is: this one is editable,
         so throwing it away could throw away work the GM has not saved yet.
         """
-        if summary.path is None:
+        entry = self._npc_state.get(name)
+        if entry is None:
             return
-        path = Path(summary.path)
+        path = entry.path
         existing = self._window_for(path)
         if existing is not None:
             existing.show()
@@ -928,30 +1110,78 @@ class GMWindow(QMainWindow):
             None,
         )
 
-    def _remove_npc(self, summary: library.CharacterSummary) -> None:
+    def _remove_npc(self, name: str) -> None:
         """Take an NPC out of this session, leaving the file where it is."""
-        if summary.path is None:
-            return
-        name = Path(summary.path).name
+        entry = self._npc_state.get(name)
+        display = entry.summary.name if entry is not None else name
         self._set_npc_paths([n for n in self._state.npc_paths if n != name])
         self._refresh_npcs()
-        self._show_notice(f"“{summary.name}” is no longer in this session.", theme.ACCENT)
+        self._show_notice(f"“{display}” is no longer in this session.", theme.ACCENT)
 
-    def _delete_npc(self, summary: library.CharacterSummary) -> None:
+    def _delete_npc(self, name: str) -> None:
         """Delete an NPC's file for good, once the GM confirms it."""
-        if summary.path is None:
+        entry = self._npc_state.get(name)
+        if entry is None:
             return
         confirm = QMessageBox.question(
             self,
             "Delete NPC",
-            f"Delete “{summary.name}”? This cannot be undone.",
+            f"Delete “{entry.summary.name}”? This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        library.delete_character(Path(summary.path))
-        self._remove_npc(summary)
+        library.delete_character(entry.path)
+        self._remove_npc(name)
+
+    # -- NPC conditions -----------------------------------------------------
+
+    def _apply_npc_condition(self, name: str, condition_id: str, parameter: object) -> None:
+        """Apply a condition straight onto the NPC's local model, and persist it."""
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        subject = str(parameter) if parameter else None
+        apply_condition(entry.character, condition_id, self._data, parameter=subject)
+        self._after_npc_condition_change(entry, condition_id, subject, applying=True)
+
+    def _remove_npc_condition(self, name: str, condition_id: str, parameter: object) -> None:
+        """Take one condition off the NPC's model again."""
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        subject = str(parameter) if parameter else None
+        applied = matching_condition(entry.character, condition_id, subject)
+        if applied is not None:
+            decrement_condition(entry.character, applied)
+        self._after_npc_condition_change(entry, condition_id, subject, applying=False)
+
+    def _after_npc_condition_change(
+        self, entry: _NpcEntry, condition_id: str, parameter: str | None, *, applying: bool
+    ) -> None:
+        """Restate the NPC's card and persist the change.
+
+        Unlike a player, an NPC is local — so the change is applied to the model
+        here rather than sent over the wire. If a sheet for this NPC is open, route
+        the same change through its conditions block so the open sheet stays in
+        sync and owns its own save; otherwise write the model to its file now.
+        """
+        window = self._window_for(entry.path)
+        if window is not None:
+            section = getattr(window.sheet, "conditions", None)
+            if section is not None:
+                if applying:
+                    section.apply_condition_by_id(condition_id, parameter)
+                else:
+                    section.remove_condition_by_id(condition_id, parameter)
+        else:
+            try:
+                library.save_character(entry.character, path=entry.path)
+            except OSError:
+                pass  # an unwritable workspace is not worth a dialog mid-session
+        if entry.card is not None:
+            entry.card.refresh_conditions()
 
     # -- small view helpers ------------------------------------------------
 
@@ -969,11 +1199,15 @@ class GMWindow(QMainWindow):
     def _set_status(self, text: str, colour: str) -> None:
         self._status_label.setText(text)
         self._status_label.setStyleSheet(f"color: {colour};" if colour else "")
+        self._status_notice.poke()
 
     def _show_advice(self, advice: tuple[str, ...]) -> None:
         self._clear_advice()
         for line in advice:
             self._advice_layout.addWidget(_wrapped(f"• {line}"))
+        # The advice belongs to the same card as the status it explains; bring it
+        # back to full opacity so a slow-appearing relay note isn't already fading.
+        self._status_notice.poke()
 
     def _clear_advice(self) -> None:
         while self._advice_layout.count():
@@ -983,17 +1217,19 @@ class GMWindow(QMainWindow):
                 widget.deleteLater()
 
     def _show_notice(self, text: str, colour: str) -> None:
-        self._notice.setText(text)
-        self._notice.setStyleSheet(f"color: {colour};" if colour else "")
-        self._notice.setVisible(bool(text))
+        self._notice_label.setText(text)
+        self._notice_label.setStyleSheet(f"color: {colour};" if colour else "")
+        if text:
+            self._notice.poke()
+        else:
+            self._notice.dismiss()
 
     def _copy_code(self) -> None:
-        code = self._code_edit.text()
-        if not code:
+        if not self._join_code:
             return
         clipboard = QApplication.clipboard()
         if clipboard is not None:
-            clipboard.setText(code)
+            clipboard.setText(self._join_code)
         self._show_notice("Join code copied — send it to your players.", theme.ACCENT)
 
     # -- lifecycle ---------------------------------------------------------
@@ -1029,3 +1265,87 @@ def _wrapped(text: str) -> QLabel:
     label.setWordWrap(True)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
     return label
+
+
+class _Notice(QFrame):
+    """A dismissible message card that clears itself out after a dwell.
+
+    The GM board's feedback — the hosting status, the reachability advice, and the
+    one-off notices ("Join code copied", "A player joined") — used to sit pinned to
+    the bottom forever. Each of these is now shown in a ``_Notice`` instead: it
+    carries an ``✕`` to dismiss it immediately, and if left alone it fades itself
+    out :data:`DWELL_MS` after it was last poked, with a slow tail so it dissolves
+    rather than blinks off. Updating its contents and calling :meth:`poke` again
+    brings it back to full opacity and restarts the countdown.
+    """
+
+    #: How long a message stays fully visible before it starts to fade.
+    DWELL_MS = 10_000
+    #: How long the fade-out itself takes — deliberately slow, so it eases away.
+    FADE_MS = 1_500
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("gmNotice")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 2, 2, 2)
+        row.setSpacing(4)
+        self._body = QVBoxLayout()
+        self._body.setContentsMargins(0, 0, 0, 0)
+        self._body.setSpacing(0)
+        row.addLayout(self._body, stretch=1)
+
+        self._close = QToolButton()
+        self._close.setText("✕")
+        self._close.setAutoRaise(True)
+        self._close.setToolTip("Dismiss this message")
+        self._close.setCursor(Qt.CursorShape.ArrowCursor)
+        self._close.clicked.connect(self.dismiss)
+        row.addWidget(self._close, alignment=Qt.AlignmentFlag.AlignTop)
+
+        # Opacity is driven by an effect so the whole card (text and ✕ alike) can
+        # ease out together; it stays attached, which is fine for a small strip.
+        self._effect = QGraphicsOpacityEffect(self)
+        self._effect.setOpacity(1.0)
+        self.setGraphicsEffect(self._effect)
+        self._fade = QPropertyAnimation(self._effect, b"opacity", self)
+        self._fade.setDuration(self.FADE_MS)
+        self._fade.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._fade.finished.connect(self._settle)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(self.DWELL_MS)
+        self._timer.timeout.connect(self._begin_fade)
+        self.hide()
+
+    def add_widget(self, widget: QWidget) -> None:
+        self._body.addWidget(widget)
+
+    def add_layout(self, layout: QVBoxLayout) -> None:
+        self._body.addLayout(layout)
+
+    def poke(self) -> None:
+        """Show the card at full opacity and restart the dwell-then-fade timer."""
+        self._fade.stop()
+        self._effect.setOpacity(1.0)
+        self.setVisible(True)
+        self._timer.start()
+
+    def dismiss(self) -> None:
+        """Retire the card at once — the ✕ button, or a caller clearing it."""
+        self._timer.stop()
+        self._fade.stop()
+        self._effect.setOpacity(1.0)
+        self.setVisible(False)
+
+    def _begin_fade(self) -> None:
+        self._fade.stop()
+        self._fade.setStartValue(self._effect.opacity())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+
+    def _settle(self) -> None:
+        if self._effect.opacity() <= 0.01:
+            self.setVisible(False)

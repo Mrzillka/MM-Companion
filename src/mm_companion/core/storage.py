@@ -72,6 +72,13 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # Join codes recently connected to, most recent first, as a convenience list in
     # the join dialog. Plain strings; the code itself carries host/port/token.
     "session_recent_codes": [],
+    # The player-side history of joined sessions, most recent first — the join
+    # dialog's "previous sessions" list. Each entry is a dict
+    # ``{"code", "session_id", "session_name", "display_name", "player_id",
+    # "player_token", "last_joined"}``: the code reconnects, and the player_id /
+    # player_token reclaim the same roster slot. See
+    # :mod:`mm_companion.ui.session_dialogs`.
+    "session_history": [],
     # The relay to fall back to when this machine cannot be reached directly —
     # ``relay.example.net``, ``host:port``, or a full ``mmrelay://…`` URL. Empty
     # by default: there is no blessed public instance yet, and a GM who runs their

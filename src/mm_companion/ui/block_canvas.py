@@ -171,12 +171,19 @@ class BlockCanvas(QWidget):
         block_sizes: dict[str, BlockSize],
         default_rows: list[list[str]],
         parent: QWidget | None = None,
+        *,
+        fill_last: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
 
         self._sizes = block_sizes
         self._default_rows = default_rows
+        # When set, the bottom row's growable blocks stretch to fill leftover
+        # height instead of a trailing spacer holding empty space beneath them.
+        # Used by boards with only a few blocks (GM Mode) where a top-aligned
+        # stack would leave a large dead gap at the bottom of the page.
+        self._fill_last = fill_last
         # One frame per block, created once and reparented as it moves.
         self._frames: dict[str, BlockFrame] = {}
         for key, title, section in panels:
@@ -265,6 +272,13 @@ class BlockCanvas(QWidget):
         while self._layout.count():
             self._layout.takeAt(0)
 
+        # Every block starts flush to its content; the fill block (if any) is
+        # promoted to Expanding below. Reset first so a block that used to be the
+        # bottom one — before a reorder or a float — doesn't stay stretchy.
+        for frame in self._frames.values():
+            frame.set_vertical_fill(False)
+
+        built: list[list[str]] = []
         for row_keys in self._rows:
             keys = [k for k in row_keys if k in self._frames]
             if not keys:
@@ -277,8 +291,19 @@ class BlockCanvas(QWidget):
             row.finalize()
             self._layout.addWidget(row)
             self._row_widgets.append(row)
+            built.append(keys)
 
-        self._layout.addStretch(1)
+        if self._fill_last and self._row_widgets:
+            # The bottom row soaks up the slack: its row widget grows, and its
+            # growable blocks grow inside it, so nothing is left empty below.
+            self._row_widgets[-1].setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+            for key in built[-1]:
+                if self._is_growable(key):
+                    self._frames[key].set_vertical_fill(True)
+        else:
+            self._layout.addStretch(1)
 
         # Free the old rows. Any frame not moved into a new row above (a block now
         # hidden or floating) is still parented to its old row; rescue it to the

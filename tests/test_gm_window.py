@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
@@ -33,11 +33,16 @@ from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
 from mm_companion.ui.gm_window import GMWindow
+from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
 from mm_companion.ui.session_bridge import active_session, set_active_session
-from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog
+from mm_companion.ui.session_dialogs import (
+    GMSessionLaunchDialog,
+    HostOptions,
+    HostSessionDialog,
+)
 from mm_companion.ui.start_window import StartWindow
 
 
@@ -100,7 +105,7 @@ def start_hosting(
     options.setdefault("name", window._state.name)
     window.start_hosting(host_options(**options))
     deadline = time.monotonic() + timeout
-    while not window._code_edit.text() and time.monotonic() < deadline:
+    while not window._join_code and time.monotonic() < deadline:
         qapp.processEvents()
         time.sleep(0.01)
     qapp.processEvents()
@@ -116,8 +121,9 @@ def advice_texts(window: GMWindow) -> list[str]:
 # -- the draggable blocks --------------------------------------------------
 
 
-def test_the_gm_window_has_the_four_session_blocks(window: GMWindow) -> None:
-    assert set(window._canvas.block_keys()) == {"session", "players", "npcs", "rolls"}
+def test_the_gm_window_has_the_three_board_blocks(window: GMWindow) -> None:
+    # The session block moved to the launch dialog; the board is players/npcs/rolls.
+    assert set(window._canvas.block_keys()) == {"players", "npcs", "rolls"}
 
 
 def test_the_view_menu_can_hide_and_show_a_block(window: GMWindow) -> None:
@@ -182,10 +188,11 @@ def test_reset_layout_brings_every_block_back(window: GMWindow) -> None:
 
 
 def test_the_window_starts_not_hosting(window: GMWindow) -> None:
+    # The fixture builds the window without autohosting; the launcher passes
+    # autohost=True so a real GM window comes up already hosting.
     assert window.bridge.hosting is False
-    assert window._host_button.text() == "Start a session…"
-    assert window._code_edit.text() == ""
-    assert window._copy_button.isEnabled() is False
+    assert window._join_code == ""
+    assert window._copy_code_action.isEnabled() is False
     assert "Not hosting" in window._status_label.text()
 
 
@@ -200,12 +207,6 @@ def test_renaming_the_session_retitles_the_window(window: GMWindow) -> None:
     assert "Wednesday Night" in window.windowTitle()
 
 
-def test_a_new_session_replaces_the_state(window: GMWindow) -> None:
-    first = window._state.id
-    window._new_session()
-    assert window._state.id != first
-
-
 # -- hosting ---------------------------------------------------------------
 
 
@@ -215,30 +216,19 @@ def test_hosting_shows_a_code_that_matches_the_session(
     start_hosting(qapp, window, canned())
 
     assert window.bridge.hosting is True
-    assert window._host_button.text() == "Stop hosting"
-    code = discovery.decode_join_code(window._code_edit.text())
+    code = discovery.decode_join_code(window._join_code)
     assert code.host == "192.168.0.5"
     assert code.token == window._state.host_token
-    assert window._copy_button.isEnabled() is True
+    assert window._copy_code_action.isEnabled() is True
 
 
-def test_hosting_locks_out_starting_a_new_session(qapp: QApplication, window: GMWindow) -> None:
+def test_stopping_clears_the_code(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
-    assert window._host_button.text() == "Stop hosting"
-    assert window._new_button.isEnabled() is False
-
-
-def test_stopping_clears_the_code_and_reopens_the_start_button(
-    qapp: QApplication, window: GMWindow
-) -> None:
-    start_hosting(qapp, window, canned())
-    window._host_button.click()
+    window.stop_hosting()
 
     assert window.bridge.hosting is False
-    assert window._code_edit.text() == ""
-    assert window._copy_button.isEnabled() is False
-    assert window._host_button.text() == "Start a session…"
-    assert window._new_button.isEnabled() is True
+    assert window._join_code == ""
+    assert window._copy_code_action.isEnabled() is False
     assert "Not hosting" in window._status_label.text()
 
 
@@ -258,7 +248,6 @@ def test_a_port_already_in_use_is_reported_not_raised(
 
     assert window.bridge.hosting is False
     assert "address in use" in warnings[0]
-    assert window._host_button.text() == "Start a session…"
 
 
 # -- what the GM is told about reachability --------------------------------
@@ -298,7 +287,7 @@ def test_a_reachable_session_reads_as_success(qapp: QApplication, window: GMWind
 def test_the_two_outcomes_do_not_look_alike(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
     lan_status = (window._status_label.text(), window._status_label.styleSheet())
-    window._host_button.click()  # stop
+    window.stop_hosting()
     start_hosting(
         qapp,
         window,
@@ -309,7 +298,7 @@ def test_the_two_outcomes_do_not_look_alike(qapp: QApplication, window: GMWindow
 
 def test_advice_from_an_earlier_host_does_not_linger(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
-    window._host_button.click()
+    window.stop_hosting()
     assert advice_texts(window) == []
 
 
@@ -326,14 +315,14 @@ def test_a_tunnel_address_becomes_the_join_code(qapp: QApplication, window: GMWi
     window.bridge._publish_session = fake
     window.start_hosting(host_options(tunnel="tunnel.example.net:12345", use_relay=False))
     deadline = time.monotonic() + 5.0
-    while not window._code_edit.text() and time.monotonic() < deadline:
+    while not window._join_code and time.monotonic() < deadline:
         qapp.processEvents()
         time.sleep(0.01)
     qapp.processEvents()
 
     assert calls[0]["manual_host"] == "tunnel.example.net"
     assert calls[0]["external_port"] == 12345
-    code = discovery.decode_join_code(window._code_edit.text())
+    code = discovery.decode_join_code(window._join_code)
     assert (code.host, code.port) == ("tunnel.example.net", 12345)
     assert "tunnel.example.net:12345" in window._status_label.text()
 
@@ -449,10 +438,46 @@ def test_a_seat_that_leaves_the_roster_loses_its_card(qapp: QApplication, window
     assert window._cards_flow.count() == 1
 
 
+def test_a_connected_player_card_offers_removal(qapp: QApplication, window: GMWindow) -> None:
+    card = player_card.PlayerCard(window._data)
+    card.set_roster({"player_id": "p0", "display_name": "Aria", "connected": True})
+    assert card._is_gm is False and card.player_id == "p0"
+    # The GM's own card never offers it, however the roster describes the seat.
+    gm = player_card.PlayerCard(window._data)
+    gm.set_roster({"player_id": "g0", "display_name": "GM", "is_gm": True, "connected": True})
+    assert gm._is_gm is True
+
+
+def test_removing_a_player_confirms_then_kicks(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    kicked: list[str] = []
+    monkeypatch.setattr(window._bridge, "kick", lambda pid, *a, **k: kicked.append(pid) or True)
+
+    window._remove_player("p0")
+    assert kicked == ["p0"]
+
+
+def test_removing_a_player_can_be_cancelled(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(
+        window._bridge, "kick", lambda *a, **k: pytest.fail("kick should not run on cancel")
+    )
+
+    window._remove_player("p0")
+
+
 def test_stopping_clears_the_cards(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
     window._show_roster(roster({"display_name": "Aria"}))
-    window._host_button.click()
+    window.stop_hosting()
 
     assert window._cards == {}
     assert window._no_players.isHidden() is False
@@ -489,9 +514,9 @@ def test_open_sheet_shows_the_character_read_only(qapp: QApplication, window: GM
 
 def test_copy_puts_the_code_on_the_clipboard(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
-    window._copy_button.click()
-    assert QApplication.clipboard().text() == window._code_edit.text()
-    assert window._notice.isVisible() or window._notice.text()
+    window._copy_code_action.trigger()
+    assert QApplication.clipboard().text() == window._join_code
+    assert window._notice.isVisible() or window._notice_label.text()
 
 
 def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
@@ -505,7 +530,7 @@ def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
     window.close()
     assert window.bridge.hosting is False
     assert active_session() is None
-    assert window._code_edit.text() == ""
+    assert window._join_code == ""
 
     window.show()
     assert active_session() is window.bridge
@@ -515,13 +540,61 @@ def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
 
 def test_a_refused_connection_is_shown_to_the_gm(qapp: QApplication, window: GMWindow) -> None:
     window._on_refused({"code": "bad_token", "message": "that join code is not for this session"})
-    assert "not for this session" in window._notice.text()
+    assert "not for this session" in window._notice_label.text()
+
+
+def test_a_notice_can_be_dismissed_with_its_close_button(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    window._show_notice("Join code copied — send it to your players.", "")
+    assert not window._notice.isHidden()
+    window._notice._close.click()
+    assert window._notice.isHidden()
+
+
+def test_a_notice_fades_itself_out_after_its_dwell(qapp: QApplication, window: GMWindow) -> None:
+    from PySide6.QtCore import QAbstractAnimation
+
+    notice = window._notice
+    window._show_notice("A player joined.", "")
+    assert not notice.isHidden()
+
+    # Driven directly rather than on the wall clock: the dwell elapsing kicks off
+    # the fade, and the fade reaching zero opacity retires the card.
+    notice._timer.timeout.emit()
+    assert notice._fade.state() == QAbstractAnimation.State.Running
+    notice._effect.setOpacity(0.0)
+    notice._fade.finished.emit()
+    assert notice.isHidden()
+
+
+def test_a_status_update_brings_the_faded_card_back(qapp: QApplication, window: GMWindow) -> None:
+    window._status_notice.dismiss()
+    assert window._status_notice.isHidden()
+    window._set_status("Players anywhere can join with this code.", "")
+    assert not window._status_notice.isHidden()
+    assert "Players anywhere" in window._status_label.text()
 
 
 # -- the launcher ----------------------------------------------------------
 
 
-def test_the_launcher_opens_gm_mode(qapp: QApplication) -> None:
+def _accept_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the GM launch dialog accept at once and the window skip real hosting.
+
+    The pre-stage is modal, and autohost would bind a real socket — neither is
+    wanted in a launcher test that only checks the window opened.
+    """
+    from mm_companion.ui import session_dialogs
+
+    monkeypatch.setattr(
+        session_dialogs.GMSessionLaunchDialog, "exec", lambda self: QDialog.DialogCode.Accepted
+    )
+    monkeypatch.setattr(gm_window_module.GMWindow, "start_hosting", lambda self, options: None)
+
+
+def test_the_launcher_opens_gm_mode(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    _accept_launch(monkeypatch)
     launcher = StartWindow()
     launcher.show()
     launcher._open_gm_mode()
@@ -533,7 +606,10 @@ def test_the_launcher_opens_gm_mode(qapp: QApplication) -> None:
         launcher._gm_window.bridge.stop()
 
 
-def test_reopening_gm_mode_reuses_the_same_window(qapp: QApplication) -> None:
+def test_reopening_gm_mode_reuses_the_same_window(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _accept_launch(monkeypatch)
     launcher = StartWindow()
     launcher._open_gm_mode()
     first = launcher._gm_window
@@ -571,7 +647,7 @@ def test_an_unreachable_machine_falls_back_to_the_relay(
 ) -> None:
     start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)), relay=relay_box.base)
 
-    code = discovery.decode_join_code(window._code_edit.text())
+    code = discovery.decode_join_code(window._join_code)
     assert code.host.startswith("mmrelay")
     assert code.host.endswith(window._state.id)
     assert window.bridge.relaying is True
@@ -591,7 +667,7 @@ def test_a_reachable_machine_never_touches_the_relay(
     )
 
     assert window.bridge.relaying is False
-    assert discovery.decode_join_code(window._code_edit.text()).host == "203.0.113.7"
+    assert discovery.decode_join_code(window._join_code).host == "203.0.113.7"
     assert relay_box.server.session_count() == 0
 
 
@@ -623,7 +699,7 @@ def test_the_relay_is_only_used_when_it_is_asked_for(
     )
 
     assert window.bridge.relaying is False
-    assert discovery.decode_join_code(window._code_edit.text()).host == "192.168.0.5"
+    assert discovery.decode_join_code(window._join_code).host == "192.168.0.5"
 
 
 def test_a_relay_that_cannot_be_reached_leaves_the_session_hosted(
@@ -638,17 +714,17 @@ def test_a_relay_that_cannot_be_reached_leaves_the_session_hosted(
 
     assert window.bridge.hosting is True
     assert window.bridge.relaying is False
-    assert discovery.ADVICE_RELAY_UNREACHABLE in window._notice.text()
+    assert discovery.ADVICE_RELAY_UNREACHABLE in window._notice_label.text()
 
 
 def test_the_host_dialog_remembers_the_relay_between_launches(qapp: QApplication) -> None:
     dialog = HostSessionDialog()
-    dialog._relay_edit.setText("relay.example.net")
+    dialog._form._relay_edit.setText("relay.example.net")
     dialog._on_accept()
 
     assert storage.relay_url() == "relay.example.net"
     # A fresh dialog pre-fills the field from the saved value.
-    assert HostSessionDialog()._relay_edit.text() == "relay.example.net"
+    assert HostSessionDialog()._form._relay_edit.text() == "relay.example.net"
 
 
 def test_the_host_dialog_defaults_to_automatic(qapp: QApplication) -> None:
@@ -660,8 +736,8 @@ def test_the_host_dialog_defaults_to_automatic(qapp: QApplication) -> None:
 
 def test_the_host_dialog_reads_back_a_tunnel_and_arms_no_relay(qapp: QApplication) -> None:
     dialog = HostSessionDialog()
-    dialog._via_tunnel.setChecked(True)
-    dialog._tunnel_edit.setText("1.2.3.4:5678")
+    dialog._form._via_tunnel.setChecked(True)
+    dialog._form._tunnel_edit.setText("1.2.3.4:5678")
     opts = dialog.options()
     assert opts.tunnel == "1.2.3.4:5678"
     assert opts.use_relay is False  # a typed address is taken at its word
@@ -672,9 +748,9 @@ def test_the_host_dialog_only_shows_the_tunnel_field_for_the_tunnel_method(
 ) -> None:
     dialog = HostSessionDialog()
     dialog.show()
-    assert dialog._tunnel_edit.isVisibleTo(dialog) is False
-    dialog._via_tunnel.setChecked(True)
-    assert dialog._tunnel_edit.isVisibleTo(dialog) is True
+    assert dialog._form._tunnel_edit.isVisibleTo(dialog) is False
+    dialog._form._via_tunnel.setChecked(True)
+    assert dialog._form._tunnel_edit.isVisibleTo(dialog) is True
 
 
 # -- fast-apply conditions -------------------------------------------------
@@ -733,7 +809,45 @@ def test_picking_a_condition_sends_it_to_that_player(
     window._cards["p0"]._choose_condition(a_condition("dazed"))
 
     assert sent == [("p0", "dazed", None)]
-    assert "Dazed" in window._notice.text()
+    assert "Dazed" in window._notice_label.text()
+
+
+def test_clicking_a_players_hero_points_sends_the_new_total(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        window.bridge.server, "set_hero_points", lambda *args: sent.append(args) or True
+    )
+
+    window._cards["p0"]._hero_points._on_click(2)  # fill three pips
+
+    assert sent == [("p0", 3)]
+
+
+def test_a_connected_players_hero_points_take_clicks(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(
+        roster(
+            {"display_name": "Aria"},
+            {"display_name": "Bex", "connected": False},
+        )
+    )
+    # A connected seat's pips are clickable; an offline one's are inert.
+    assert (
+        window._cards["p0"]._hero_points.testAttribute(
+            gm_window_module.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        is False
+    )
+    assert (
+        window._cards["p1"]._hero_points.testAttribute(
+            gm_window_module.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        is True
+    )
 
 
 def test_a_command_to_a_player_who_is_gone_says_so(qapp: QApplication, window: GMWindow) -> None:
@@ -743,7 +857,7 @@ def test_a_command_to_a_player_who_is_gone_says_so(qapp: QApplication, window: G
 
     window._cards["p0"]._choose_condition(a_condition("dazed"))
 
-    assert "not connected" in window._notice.text()
+    assert "not connected" in window._notice_label.text()
     assert window._cards["p0"].condition_names() == []
 
 
@@ -875,9 +989,28 @@ def npc_names(window: GMWindow) -> list[str]:
     ]
 
 
+def npc_cards(window: GMWindow) -> list[NPCCard]:
+    return [
+        window._npc_flow.itemAt(i).widget()  # type: ignore[return-value]
+        for i in range(window._npc_flow.count())
+    ]
+
+
 def test_a_session_starts_with_no_npcs(window: GMWindow) -> None:
     assert npc_names(window) == []
     assert window._no_npcs.isVisibleTo(window)
+
+
+def test_an_npc_renders_as_a_live_card_over_its_model(window: GMWindow) -> None:
+    window._register_npc(write_npc("Ogre", power_level=9))
+
+    (card,) = npc_cards(window)
+    assert isinstance(card, NPCCard)
+    assert card.display_name() == "Ogre"
+    # The card is backed by the loaded model, not just a summary.
+    assert card.character.profile["hero_name"] == "Ogre"
+    # And the GM window holds an entry keyed by the file name.
+    assert "ogre.json" in window._npc_state
 
 
 def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWindow) -> None:
@@ -940,7 +1073,7 @@ def test_removing_an_npc_leaves_its_file_where_it_is(window: GMWindow) -> None:
     path = write_npc("Ogre")
     window._register_npc(path)
 
-    window._remove_npc(library.list_saved_characters(window._npc_dir())[0])
+    window._remove_npc(path.name)
 
     assert window._state.npc_paths == []
     assert npc_names(window) == []
@@ -954,7 +1087,7 @@ def test_deleting_an_npc_takes_the_file_with_it(
     window._register_npc(path)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
 
-    window._delete_npc(library.list_saved_characters(window._npc_dir())[0])
+    window._delete_npc(path.name)
 
     assert window._state.npc_paths == []
     assert npc_names(window) == []
@@ -968,7 +1101,7 @@ def test_a_refused_deletion_changes_nothing(
     window._register_npc(path)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
 
-    window._delete_npc(library.list_saved_characters(window._npc_dir())[0])
+    window._delete_npc(path.name)
 
     assert window._state.npc_paths == ["ogre.json"]
     assert path.is_file()
@@ -986,25 +1119,16 @@ def test_an_npc_whose_file_vanished_drops_out_of_the_session(window: GMWindow) -
 
 
 def test_opening_the_same_npc_twice_raises_the_one_window(window: GMWindow) -> None:
-    window._register_npc(write_npc("Ogre"))
-    summary = library.list_saved_characters(window._npc_dir())[0]
+    path = write_npc("Ogre")
+    window._register_npc(path)
 
-    window._open_npc(summary)
+    window._open_npc(path.name)
     first = next(iter(window._npc_windows.values()))
-    window._open_npc(summary)
+    window._open_npc(path.name)
 
     # Reopening must not replace the sheet the way a player's read-only one is:
     # this one is editable, and a replacement would take unsaved work with it.
     assert list(window._npc_windows.values()) == [first]
-
-
-def test_a_new_session_starts_with_an_empty_cast(window: GMWindow) -> None:
-    window._register_npc(write_npc("Ogre"))
-
-    window._new_session()
-
-    assert window._state.npc_paths == []
-    assert npc_names(window) == []
 
 
 def test_an_npc_added_while_hosting_goes_through_the_server(
@@ -1019,3 +1143,249 @@ def test_an_npc_added_while_hosting_goes_through_the_server(
     # threads, so the write has to take the same lock every other mutation does.
     assert server.state.npc_paths == ["ogre.json"]
     assert store.load_session(window._state.id).npc_paths == ["ogre.json"]
+
+
+def test_applying_a_condition_to_an_npc_persists_and_shows_a_chip(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+
+    window._apply_npc_condition(path.name, "dazed", None)
+
+    # On the model, on disk, and on the card.
+    entry = window._npc_state[path.name]
+    assert [c.condition_id for c in entry.character.conditions] == ["dazed"]
+    assert [c.condition_id for c in library.load_character(path).conditions] == ["dazed"]
+    assert entry.card.condition_names() == ["Dazed"]
+
+
+def test_removing_a_condition_from_an_npc_takes_it_off(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._apply_npc_condition(path.name, "dazed", None)
+
+    window._remove_npc_condition(path.name, "dazed", None)
+
+    entry = window._npc_state[path.name]
+    assert entry.character.conditions == []
+    assert library.load_character(path).conditions == []
+    assert entry.card.condition_names() == []
+
+
+def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) -> None:
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._apply_npc_condition(path.name, "impaired", "Fortitude")
+    window._apply_npc_condition(path.name, "impaired", "Dodge")
+
+    window._remove_npc_condition(path.name, "impaired", "Fortitude")
+
+    entry = window._npc_state[path.name]
+    remaining = [(c.condition_id, c.parameter) for c in entry.character.conditions]
+    assert remaining == [("impaired", "Dodge")]
+
+
+def test_copying_an_npc_names_it_goon_2(window: GMWindow) -> None:
+    path = write_npc("Goon")
+    window._register_npc(path)
+
+    window._copy_npc(path.name)
+
+    assert sorted(npc_names(window)) == ["Goon", "Goon-2"]
+    # The copy is its own file in the session's cast.
+    assert "goon-2.json" in window._state.npc_paths
+
+
+def test_copying_twice_walks_up_the_numbers(window: GMWindow) -> None:
+    path = write_npc("Goon")
+    window._register_npc(path)
+
+    window._copy_npc("goon.json")
+    window._copy_npc("goon.json")
+
+    assert sorted(npc_names(window)) == ["Goon", "Goon-2", "Goon-3"]
+
+
+def test_copying_a_numbered_npc_keeps_the_base(window: GMWindow) -> None:
+    window._register_npc(write_npc("Goon"))
+    window._copy_npc("goon.json")  # -> Goon-2
+
+    window._copy_npc("goon-2.json")  # base is "Goon", not "Goon-2"
+
+    assert sorted(npc_names(window)) == ["Goon", "Goon-2", "Goon-3"]
+
+
+def test_next_copy_name_is_base_aware() -> None:
+    assert gm_window_module._next_copy_name("Goon", set()) == "Goon-2"
+    assert gm_window_module._next_copy_name("Goon", {"Goon-2"}) == "Goon-3"
+    assert gm_window_module._next_copy_name("Goon-2", {"Goon-2"}) == "Goon-3"
+    assert gm_window_module._next_copy_name("Goon-7", {"Goon-2", "Goon-3"}) == "Goon-4"
+
+
+def register_npcs(window: GMWindow, *names: str) -> None:
+    for name in names:
+        window._register_npc(write_npc(name))
+
+
+def test_rolled_npcs_sort_highest_initiative_first(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo", "Charlie")
+
+    window._on_npc_initiative("alpha.json", 12)
+    window._on_npc_initiative("bravo.json", 24)
+    window._on_npc_initiative("charlie.json", 18)
+
+    assert npc_names(window) == ["Bravo", "Charlie", "Alpha"]
+
+
+def test_unrolled_npcs_sit_below_rolled(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo")
+
+    window._on_npc_initiative("bravo.json", 15)
+
+    assert npc_names(window) == ["Bravo", "Alpha"]
+
+
+def test_manual_order_among_unrolled_is_honored(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo", "Charlie")
+
+    window._reorder_npc("charlie.json", 0)  # drag Charlie to the front
+
+    assert npc_names(window) == ["Charlie", "Alpha", "Bravo"]
+
+
+def test_dragging_a_rolled_card_clears_its_initiative(window: GMWindow) -> None:
+    register_npcs(window, "Alpha", "Bravo")
+    window._on_npc_initiative("alpha.json", 25)
+    assert npc_names(window) == ["Alpha", "Bravo"]
+
+    window._reorder_npc("alpha.json", 99)  # drag Alpha down into the manual zone
+
+    assert window._npc_state["alpha.json"].initiative is None
+    assert npc_names(window) == ["Bravo", "Alpha"]
+
+
+def test_the_hover_summary_shows_abilities_resistances_and_powers(window: GMWindow) -> None:
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    character = Character.new_default(load_game_data())
+    character.profile["hero_name"] = "Ogre"
+    character.abilities["STR"] = 6
+    character.powers.append(Power(effects=[PowerEffectInstance("damage", rank=8)], name="Smash"))
+    path = library.save_character(character, directory=storage.get_workspace().gm_characters_dir)
+    window._register_npc(path)
+
+    (card,) = npc_cards(window)
+    html = card.summary_html()
+
+    assert "Abilities" in html and "Strength +6" in html
+    assert "Resistances" in html
+    assert "Powers" in html and "Smash" in html
+
+
+def write_agile_npc(name: str, agility: int) -> Path:
+    """An NPC with a known Agility, so its initiative modifier is predictable."""
+    character = Character.new_default(load_game_data())
+    character.profile["hero_name"] = name
+    character.abilities["AGL"] = agility
+    return library.save_character(character, directory=storage.get_workspace().gm_characters_dir)
+
+
+def test_rolling_npc_initiative_uses_its_modifier_and_shows_a_badge(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_agile_npc("Ogre", agility=3)
+    window._register_npc(path)
+    from mm_companion.ui import npc_card as npc_card_module
+
+    monkeypatch.setattr(npc_card_module, "roll_d20", lambda *a, **k: 15)
+
+    (card,) = npc_cards(window)
+    total = card.roll_initiative()
+
+    assert total == 18  # d20 15 + Agility 3
+    assert card.initiative == 18
+    assert "18" in card._initiative_badge.text()
+    # The GM window remembered it for the ordering to come.
+    assert window._npc_state[path.name].initiative == 18
+
+
+def test_a_rolled_initiative_survives_a_refresh(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_agile_npc("Ogre", agility=0)
+    window._register_npc(path)
+    from mm_companion.ui import npc_card as npc_card_module
+
+    monkeypatch.setattr(npc_card_module, "roll_d20", lambda *a, **k: 12)
+    npc_cards(window)[0].roll_initiative()
+
+    window._refresh_npcs()
+
+    (card,) = npc_cards(window)
+    assert card.initiative == 12
+    assert "12" in card._initiative_badge.text()
+
+
+# --------------------------------------------------------------------------
+# Previous sessions (GM side)
+#
+# A GM can re-run any session they have ever hosted, not just the last one. The
+# choice is made in the launch dialog before the window opens: store.list_sessions
+# enumerates the workspace, and the chosen session is handed to the window as its
+# state. The old in-window session switcher is gone.
+# --------------------------------------------------------------------------
+
+
+def test_opening_a_session_as_the_window_state_resumes_its_cast(
+    qapp: QApplication,
+) -> None:
+    write_npc("Ghoul")  # the cast file the stored session names
+    other = new_session("Old Table")
+    other.npc_paths = ["ghoul.json"]
+    store.save_session(other, write_rolls=True)
+
+    resumed = GMWindow(bind="127.0.0.1", state=store.load_session(other.id))
+    try:
+        assert resumed._state.id == other.id
+        assert resumed._state.name == "Old Table"
+        assert npc_names(resumed) == ["Ghoul"]
+    finally:
+        resumed.bridge.stop()
+
+
+def test_the_launch_dialog_lists_previous_sessions_and_returns_the_chosen_id(
+    qapp: QApplication,
+) -> None:
+    a = new_session("A")
+    store.save_session(a)
+    store.save_session(new_session("B"))
+
+    dialog = GMSessionLaunchDialog()
+    assert dialog._table.rowCount() == 2
+
+    dialog._table.selectRow(next(i for i, s in enumerate(dialog._summaries) if s.id == a.id))
+    dialog._on_accept()
+    assert dialog.chosen_session_id() == a.id
+
+
+def test_the_launch_dialog_starts_a_new_session_when_none_is_chosen(qapp: QApplication) -> None:
+    store.save_session(new_session("A"))
+
+    dialog = GMSessionLaunchDialog()
+    dialog._start_new()  # clears any selection
+    dialog._on_accept()
+    assert dialog.chosen_session_id() is None
+
+
+def test_the_launch_dialog_deletes_a_session(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.save_session(new_session("A"))
+    store.save_session(new_session("B"))
+
+    dialog = GMSessionLaunchDialog()
+    dialog._table.selectRow(0)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    dialog._delete_selected()
+
+    assert dialog._table.rowCount() == 1
+    assert len(store.list_sessions()) == 1

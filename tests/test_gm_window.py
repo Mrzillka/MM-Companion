@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
@@ -38,7 +38,11 @@ from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
 from mm_companion.ui.session_bridge import active_session, set_active_session
-from mm_companion.ui.session_dialogs import HostOptions, HostSessionDialog, SessionPickerDialog
+from mm_companion.ui.session_dialogs import (
+    GMSessionLaunchDialog,
+    HostOptions,
+    HostSessionDialog,
+)
 from mm_companion.ui.start_window import StartWindow
 
 
@@ -101,7 +105,7 @@ def start_hosting(
     options.setdefault("name", window._state.name)
     window.start_hosting(host_options(**options))
     deadline = time.monotonic() + timeout
-    while not window._code_edit.text() and time.monotonic() < deadline:
+    while not window._join_code and time.monotonic() < deadline:
         qapp.processEvents()
         time.sleep(0.01)
     qapp.processEvents()
@@ -117,8 +121,9 @@ def advice_texts(window: GMWindow) -> list[str]:
 # -- the draggable blocks --------------------------------------------------
 
 
-def test_the_gm_window_has_the_four_session_blocks(window: GMWindow) -> None:
-    assert set(window._canvas.block_keys()) == {"session", "players", "npcs", "rolls"}
+def test_the_gm_window_has_the_three_board_blocks(window: GMWindow) -> None:
+    # The session block moved to the launch dialog; the board is players/npcs/rolls.
+    assert set(window._canvas.block_keys()) == {"players", "npcs", "rolls"}
 
 
 def test_the_view_menu_can_hide_and_show_a_block(window: GMWindow) -> None:
@@ -183,10 +188,11 @@ def test_reset_layout_brings_every_block_back(window: GMWindow) -> None:
 
 
 def test_the_window_starts_not_hosting(window: GMWindow) -> None:
+    # The fixture builds the window without autohosting; the launcher passes
+    # autohost=True so a real GM window comes up already hosting.
     assert window.bridge.hosting is False
-    assert window._host_button.text() == "Start a session…"
-    assert window._code_edit.text() == ""
-    assert window._copy_button.isEnabled() is False
+    assert window._join_code == ""
+    assert window._copy_code_action.isEnabled() is False
     assert "Not hosting" in window._status_label.text()
 
 
@@ -201,12 +207,6 @@ def test_renaming_the_session_retitles_the_window(window: GMWindow) -> None:
     assert "Wednesday Night" in window.windowTitle()
 
 
-def test_a_new_session_replaces_the_state(window: GMWindow) -> None:
-    first = window._state.id
-    window._new_session()
-    assert window._state.id != first
-
-
 # -- hosting ---------------------------------------------------------------
 
 
@@ -216,30 +216,19 @@ def test_hosting_shows_a_code_that_matches_the_session(
     start_hosting(qapp, window, canned())
 
     assert window.bridge.hosting is True
-    assert window._host_button.text() == "Stop hosting"
-    code = discovery.decode_join_code(window._code_edit.text())
+    code = discovery.decode_join_code(window._join_code)
     assert code.host == "192.168.0.5"
     assert code.token == window._state.host_token
-    assert window._copy_button.isEnabled() is True
+    assert window._copy_code_action.isEnabled() is True
 
 
-def test_hosting_locks_out_starting_a_new_session(qapp: QApplication, window: GMWindow) -> None:
+def test_stopping_clears_the_code(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
-    assert window._host_button.text() == "Stop hosting"
-    assert window._new_button.isEnabled() is False
-
-
-def test_stopping_clears_the_code_and_reopens_the_start_button(
-    qapp: QApplication, window: GMWindow
-) -> None:
-    start_hosting(qapp, window, canned())
-    window._host_button.click()
+    window.stop_hosting()
 
     assert window.bridge.hosting is False
-    assert window._code_edit.text() == ""
-    assert window._copy_button.isEnabled() is False
-    assert window._host_button.text() == "Start a session…"
-    assert window._new_button.isEnabled() is True
+    assert window._join_code == ""
+    assert window._copy_code_action.isEnabled() is False
     assert "Not hosting" in window._status_label.text()
 
 
@@ -259,7 +248,6 @@ def test_a_port_already_in_use_is_reported_not_raised(
 
     assert window.bridge.hosting is False
     assert "address in use" in warnings[0]
-    assert window._host_button.text() == "Start a session…"
 
 
 # -- what the GM is told about reachability --------------------------------
@@ -299,7 +287,7 @@ def test_a_reachable_session_reads_as_success(qapp: QApplication, window: GMWind
 def test_the_two_outcomes_do_not_look_alike(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
     lan_status = (window._status_label.text(), window._status_label.styleSheet())
-    window._host_button.click()  # stop
+    window.stop_hosting()
     start_hosting(
         qapp,
         window,
@@ -310,7 +298,7 @@ def test_the_two_outcomes_do_not_look_alike(qapp: QApplication, window: GMWindow
 
 def test_advice_from_an_earlier_host_does_not_linger(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
-    window._host_button.click()
+    window.stop_hosting()
     assert advice_texts(window) == []
 
 
@@ -327,14 +315,14 @@ def test_a_tunnel_address_becomes_the_join_code(qapp: QApplication, window: GMWi
     window.bridge._publish_session = fake
     window.start_hosting(host_options(tunnel="tunnel.example.net:12345", use_relay=False))
     deadline = time.monotonic() + 5.0
-    while not window._code_edit.text() and time.monotonic() < deadline:
+    while not window._join_code and time.monotonic() < deadline:
         qapp.processEvents()
         time.sleep(0.01)
     qapp.processEvents()
 
     assert calls[0]["manual_host"] == "tunnel.example.net"
     assert calls[0]["external_port"] == 12345
-    code = discovery.decode_join_code(window._code_edit.text())
+    code = discovery.decode_join_code(window._join_code)
     assert (code.host, code.port) == ("tunnel.example.net", 12345)
     assert "tunnel.example.net:12345" in window._status_label.text()
 
@@ -489,7 +477,7 @@ def test_removing_a_player_can_be_cancelled(
 def test_stopping_clears_the_cards(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
     window._show_roster(roster({"display_name": "Aria"}))
-    window._host_button.click()
+    window.stop_hosting()
 
     assert window._cards == {}
     assert window._no_players.isHidden() is False
@@ -526,9 +514,9 @@ def test_open_sheet_shows_the_character_read_only(qapp: QApplication, window: GM
 
 def test_copy_puts_the_code_on_the_clipboard(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned())
-    window._copy_button.click()
-    assert QApplication.clipboard().text() == window._code_edit.text()
-    assert window._notice.isVisible() or window._notice.text()
+    window._copy_code_action.trigger()
+    assert QApplication.clipboard().text() == window._join_code
+    assert window._notice.isVisible() or window._notice_label.text()
 
 
 def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
@@ -542,7 +530,7 @@ def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
     window.close()
     assert window.bridge.hosting is False
     assert active_session() is None
-    assert window._code_edit.text() == ""
+    assert window._join_code == ""
 
     window.show()
     assert active_session() is window.bridge
@@ -552,13 +540,61 @@ def test_closing_stops_hosting_and_the_window_reopens_onto_the_same_session(
 
 def test_a_refused_connection_is_shown_to_the_gm(qapp: QApplication, window: GMWindow) -> None:
     window._on_refused({"code": "bad_token", "message": "that join code is not for this session"})
-    assert "not for this session" in window._notice.text()
+    assert "not for this session" in window._notice_label.text()
+
+
+def test_a_notice_can_be_dismissed_with_its_close_button(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    window._show_notice("Join code copied — send it to your players.", "")
+    assert not window._notice.isHidden()
+    window._notice._close.click()
+    assert window._notice.isHidden()
+
+
+def test_a_notice_fades_itself_out_after_its_dwell(qapp: QApplication, window: GMWindow) -> None:
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    notice = window._notice
+    # Collapse the dwell and the fade so the whole cycle runs in one event pump.
+    notice._timer.setInterval(0)
+    notice._fade.setDuration(1)
+    window._show_notice("A player joined.", "")
+    assert not notice.isHidden()
+
+    loop = QEventLoop()
+    QTimer.singleShot(80, loop.quit)
+    loop.exec()
+    assert notice.isHidden()
+
+
+def test_a_status_update_brings_the_faded_card_back(qapp: QApplication, window: GMWindow) -> None:
+    window._status_notice.dismiss()
+    assert window._status_notice.isHidden()
+    window._set_status("Players anywhere can join with this code.", "")
+    assert not window._status_notice.isHidden()
+    assert "Players anywhere" in window._status_label.text()
 
 
 # -- the launcher ----------------------------------------------------------
 
 
-def test_the_launcher_opens_gm_mode(qapp: QApplication) -> None:
+def _accept_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the GM launch dialog accept at once and the window skip real hosting.
+
+    The pre-stage is modal, and autohost would bind a real socket — neither is
+    wanted in a launcher test that only checks the window opened.
+    """
+    from mm_companion.ui import session_dialogs
+
+    monkeypatch.setattr(
+        session_dialogs.GMSessionLaunchDialog, "exec", lambda self: QDialog.DialogCode.Accepted
+    )
+    monkeypatch.setattr(gm_window_module.GMWindow, "start_hosting", lambda self, options: None)
+
+
+def test_the_launcher_opens_gm_mode(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    _accept_launch(monkeypatch)
     launcher = StartWindow()
     launcher.show()
     launcher._open_gm_mode()
@@ -570,7 +606,10 @@ def test_the_launcher_opens_gm_mode(qapp: QApplication) -> None:
         launcher._gm_window.bridge.stop()
 
 
-def test_reopening_gm_mode_reuses_the_same_window(qapp: QApplication) -> None:
+def test_reopening_gm_mode_reuses_the_same_window(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _accept_launch(monkeypatch)
     launcher = StartWindow()
     launcher._open_gm_mode()
     first = launcher._gm_window
@@ -608,7 +647,7 @@ def test_an_unreachable_machine_falls_back_to_the_relay(
 ) -> None:
     start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)), relay=relay_box.base)
 
-    code = discovery.decode_join_code(window._code_edit.text())
+    code = discovery.decode_join_code(window._join_code)
     assert code.host.startswith("mmrelay")
     assert code.host.endswith(window._state.id)
     assert window.bridge.relaying is True
@@ -628,7 +667,7 @@ def test_a_reachable_machine_never_touches_the_relay(
     )
 
     assert window.bridge.relaying is False
-    assert discovery.decode_join_code(window._code_edit.text()).host == "203.0.113.7"
+    assert discovery.decode_join_code(window._join_code).host == "203.0.113.7"
     assert relay_box.server.session_count() == 0
 
 
@@ -660,7 +699,7 @@ def test_the_relay_is_only_used_when_it_is_asked_for(
     )
 
     assert window.bridge.relaying is False
-    assert discovery.decode_join_code(window._code_edit.text()).host == "192.168.0.5"
+    assert discovery.decode_join_code(window._join_code).host == "192.168.0.5"
 
 
 def test_a_relay_that_cannot_be_reached_leaves_the_session_hosted(
@@ -675,17 +714,17 @@ def test_a_relay_that_cannot_be_reached_leaves_the_session_hosted(
 
     assert window.bridge.hosting is True
     assert window.bridge.relaying is False
-    assert discovery.ADVICE_RELAY_UNREACHABLE in window._notice.text()
+    assert discovery.ADVICE_RELAY_UNREACHABLE in window._notice_label.text()
 
 
 def test_the_host_dialog_remembers_the_relay_between_launches(qapp: QApplication) -> None:
     dialog = HostSessionDialog()
-    dialog._relay_edit.setText("relay.example.net")
+    dialog._form._relay_edit.setText("relay.example.net")
     dialog._on_accept()
 
     assert storage.relay_url() == "relay.example.net"
     # A fresh dialog pre-fills the field from the saved value.
-    assert HostSessionDialog()._relay_edit.text() == "relay.example.net"
+    assert HostSessionDialog()._form._relay_edit.text() == "relay.example.net"
 
 
 def test_the_host_dialog_defaults_to_automatic(qapp: QApplication) -> None:
@@ -697,8 +736,8 @@ def test_the_host_dialog_defaults_to_automatic(qapp: QApplication) -> None:
 
 def test_the_host_dialog_reads_back_a_tunnel_and_arms_no_relay(qapp: QApplication) -> None:
     dialog = HostSessionDialog()
-    dialog._via_tunnel.setChecked(True)
-    dialog._tunnel_edit.setText("1.2.3.4:5678")
+    dialog._form._via_tunnel.setChecked(True)
+    dialog._form._tunnel_edit.setText("1.2.3.4:5678")
     opts = dialog.options()
     assert opts.tunnel == "1.2.3.4:5678"
     assert opts.use_relay is False  # a typed address is taken at its word
@@ -709,9 +748,9 @@ def test_the_host_dialog_only_shows_the_tunnel_field_for_the_tunnel_method(
 ) -> None:
     dialog = HostSessionDialog()
     dialog.show()
-    assert dialog._tunnel_edit.isVisibleTo(dialog) is False
-    dialog._via_tunnel.setChecked(True)
-    assert dialog._tunnel_edit.isVisibleTo(dialog) is True
+    assert dialog._form._tunnel_edit.isVisibleTo(dialog) is False
+    dialog._form._via_tunnel.setChecked(True)
+    assert dialog._form._tunnel_edit.isVisibleTo(dialog) is True
 
 
 # -- fast-apply conditions -------------------------------------------------
@@ -770,7 +809,45 @@ def test_picking_a_condition_sends_it_to_that_player(
     window._cards["p0"]._choose_condition(a_condition("dazed"))
 
     assert sent == [("p0", "dazed", None)]
-    assert "Dazed" in window._notice.text()
+    assert "Dazed" in window._notice_label.text()
+
+
+def test_clicking_a_players_hero_points_sends_the_new_total(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        window.bridge.server, "set_hero_points", lambda *args: sent.append(args) or True
+    )
+
+    window._cards["p0"]._hero_points._on_click(2)  # fill three pips
+
+    assert sent == [("p0", 3)]
+
+
+def test_a_connected_players_hero_points_take_clicks(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(
+        roster(
+            {"display_name": "Aria"},
+            {"display_name": "Bex", "connected": False},
+        )
+    )
+    # A connected seat's pips are clickable; an offline one's are inert.
+    assert (
+        window._cards["p0"]._hero_points.testAttribute(
+            gm_window_module.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        is False
+    )
+    assert (
+        window._cards["p1"]._hero_points.testAttribute(
+            gm_window_module.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        is True
+    )
 
 
 def test_a_command_to_a_player_who_is_gone_says_so(qapp: QApplication, window: GMWindow) -> None:
@@ -780,7 +857,7 @@ def test_a_command_to_a_player_who_is_gone_says_so(qapp: QApplication, window: G
 
     window._cards["p0"]._choose_condition(a_condition("dazed"))
 
-    assert "not connected" in window._notice.text()
+    assert "not connected" in window._notice_label.text()
     assert window._cards["p0"].condition_names() == []
 
 
@@ -1054,15 +1131,6 @@ def test_opening_the_same_npc_twice_raises_the_one_window(window: GMWindow) -> N
     assert list(window._npc_windows.values()) == [first]
 
 
-def test_a_new_session_starts_with_an_empty_cast(window: GMWindow) -> None:
-    window._register_npc(write_npc("Ogre"))
-
-    window._new_session()
-
-    assert window._state.npc_paths == []
-    assert npc_names(window) == []
-
-
 def test_an_npc_added_while_hosting_goes_through_the_server(
     qapp: QApplication, window: GMWindow
 ) -> None:
@@ -1260,57 +1328,64 @@ def test_a_rolled_initiative_survives_a_refresh(
 # --------------------------------------------------------------------------
 # Previous sessions (GM side)
 #
-# A GM can re-run any session they have ever hosted, not just the last one:
-# store.list_sessions enumerates the workspace, and switching loads the chosen
-# one's cast and roll log. Switching is blocked while hosting — the live session
-# belongs to the server's lock.
+# A GM can re-run any session they have ever hosted, not just the last one. The
+# choice is made in the launch dialog before the window opens: store.list_sessions
+# enumerates the workspace, and the chosen session is handed to the window as its
+# state. The old in-window session switcher is gone.
 # --------------------------------------------------------------------------
 
 
-def test_loading_a_previous_session_switches_to_it(window: GMWindow) -> None:
+def test_opening_a_session_as_the_window_state_resumes_its_cast(
+    qapp: QApplication,
+) -> None:
     write_npc("Ghoul")  # the cast file the stored session names
     other = new_session("Old Table")
     other.npc_paths = ["ghoul.json"]
     store.save_session(other, write_rolls=True)
 
-    window._load_session(other.id)
+    resumed = GMWindow(bind="127.0.0.1", state=store.load_session(other.id))
+    try:
+        assert resumed._state.id == other.id
+        assert resumed._state.name == "Old Table"
+        assert npc_names(resumed) == ["Ghoul"]
+    finally:
+        resumed.bridge.stop()
 
-    assert window._state.id == other.id
-    assert window._state.name == "Old Table"
-    assert npc_names(window) == ["Ghoul"]
-    assert storage.load_settings()["session_last_id"] == other.id
 
-
-def test_the_previous_sessions_button_is_disabled_while_hosting(
-    qapp: QApplication, window: GMWindow
+def test_the_launch_dialog_lists_previous_sessions_and_returns_the_chosen_id(
+    qapp: QApplication,
 ) -> None:
-    assert window._previous_button.isEnabled() is True
-    start_hosting(qapp, window, canned())
-    assert window._previous_button.isEnabled() is False
+    a = new_session("A")
+    store.save_session(a)
+    store.save_session(new_session("B"))
+
+    dialog = GMSessionLaunchDialog()
+    assert dialog._table.rowCount() == 2
+
+    dialog._table.selectRow(next(i for i, s in enumerate(dialog._summaries) if s.id == a.id))
+    dialog._on_accept()
+    assert dialog.chosen_session_id() == a.id
 
 
-def test_loading_a_session_is_blocked_while_hosting(qapp: QApplication, window: GMWindow) -> None:
-    other = new_session("Old Table")
-    store.save_session(other)
-    start_hosting(qapp, window, canned())
-    current = window._state.id
+def test_the_launch_dialog_starts_a_new_session_when_none_is_chosen(qapp: QApplication) -> None:
+    store.save_session(new_session("A"))
 
-    window._load_session(other.id)
-
-    assert window._state.id == current  # unchanged: the live session is untouched
+    dialog = GMSessionLaunchDialog()
+    dialog._start_new()  # clears any selection
+    dialog._on_accept()
+    assert dialog.chosen_session_id() is None
 
 
-def test_the_session_picker_lists_and_deletes(
-    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+def test_the_launch_dialog_deletes_a_session(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store.save_session(new_session("A"))
     store.save_session(new_session("B"))
 
-    dialog = SessionPickerDialog(current_id="")
-    assert dialog._list.count() == 2
-
+    dialog = GMSessionLaunchDialog()
+    dialog._table.selectRow(0)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     dialog._delete_selected()
 
-    assert dialog._list.count() == 1
+    assert dialog._table.rowCount() == 1
     assert len(store.list_sessions()) == 1

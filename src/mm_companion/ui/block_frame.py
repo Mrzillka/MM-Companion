@@ -192,6 +192,23 @@ class BlockFrame(QFrame):
             height = min(height, self._size.max_height)
         return QSize(max(hint.width(), self.minimumWidth()), height)
 
+    def set_vertical_fill(self, fill: bool) -> None:
+        """Let this block grow past its content to fill slack (or stop it).
+
+        The default vertical policy is ``Minimum`` — a block is exactly as tall as
+        its content and the page scrolls when blocks don't all fit. A canvas that
+        wants its bottom block to soak up leftover height (see
+        :class:`~mm_companion.ui.block_canvas.BlockCanvas` ``fill_last``) flips the
+        fill block to ``Expanding`` instead, so it stretches down to the window's
+        edge rather than leaving dead space below it.
+        """
+        policy = self.sizePolicy()
+        target = QSizePolicy.Policy.Expanding if fill else QSizePolicy.Policy.Minimum
+        if policy.verticalPolicy() == target:
+            return
+        policy.setVerticalPolicy(target)
+        self.setSizePolicy(policy)
+
     def set_locked(self, locked: bool) -> None:
         """Forward read-only view mode to the section; the title bar stays live."""
         self.section.set_locked(locked)

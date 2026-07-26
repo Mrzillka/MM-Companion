@@ -553,18 +553,18 @@ def test_a_notice_can_be_dismissed_with_its_close_button(
 
 
 def test_a_notice_fades_itself_out_after_its_dwell(qapp: QApplication, window: GMWindow) -> None:
-    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtCore import QAbstractAnimation
 
     notice = window._notice
-    # Collapse the dwell and the fade so the whole cycle runs in one event pump.
-    notice._timer.setInterval(0)
-    notice._fade.setDuration(1)
     window._show_notice("A player joined.", "")
     assert not notice.isHidden()
 
-    loop = QEventLoop()
-    QTimer.singleShot(80, loop.quit)
-    loop.exec()
+    # Driven directly rather than on the wall clock: the dwell elapsing kicks off
+    # the fade, and the fade reaching zero opacity retires the card.
+    notice._timer.timeout.emit()
+    assert notice._fade.state() == QAbstractAnimation.State.Running
+    notice._effect.setOpacity(0.0)
+    notice._fade.finished.emit()
     assert notice.isHidden()
 
 

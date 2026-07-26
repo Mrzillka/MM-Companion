@@ -73,6 +73,11 @@ class NPCCard(QFrame):
     #: drops the NPC into the manual (un-rolled) zone, so any rolled initiative is
     #: cleared by the handler.
     reorderRequested = Signal(str, int)
+    #: ``(file_name, target_index)`` — a drag is in progress and would currently
+    #: land at this slot. The GM window shows a drop indicator there.
+    reorderPreview = Signal(str, int)
+    #: The drag ended (dropped or cancelled) — hide the drop indicator.
+    reorderPreviewEnded = Signal()
 
     def __init__(
         self,
@@ -320,12 +325,22 @@ class NPCCard(QFrame):
             self._press_pos = event.pos()
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """While dragging, preview where the drop would land, so the GM sees it."""
+        if self._press_pos is not None:
+            moved = (event.pos() - self._press_pos).manhattanLength()
+            if moved >= DRAG_THRESHOLD:
+                target = self._drop_target_index(event.globalPosition().toPoint())
+                self.reorderPreview.emit(self.name_key, target)
+        super().mouseMoveEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
             moved = (event.pos() - self._press_pos).manhattanLength()
             self._press_pos = None
             if moved >= DRAG_THRESHOLD:
                 target = self._drop_target_index(event.globalPosition().toPoint())
+                self.reorderPreviewEnded.emit()
                 self.reorderRequested.emit(self.name_key, target)
             elif self.rect().contains(event.pos()):
                 self.openRequested.emit(self.name_key)

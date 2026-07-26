@@ -354,6 +354,17 @@ class SystemInfoSection(QGroupBox):
         self._character.characteristics["hero_points"] = value
         self._emit_edited()
 
+    def set_hero_points(self, value: int) -> None:
+        """Set the hero-point total from outside the sheet — a GM's session command.
+
+        Moves the pips, writes the model, and marks the sheet edited so the
+        snapshot pusher relays the new total back to the GM's card. (The widget's
+        own :meth:`~HeroPointsWidget.set_value` is deliberately silent, so this
+        does the model write and edit signal the click handler would.)
+        """
+        self._hero_points.set_value(value)
+        self._on_hero_points_changed(self._hero_points.value())
+
     def open_cost_config(self) -> None:
         """Open the homebrew cost-rate editor; a saved change refreshes the whole build.
 
@@ -451,9 +462,10 @@ class SystemInfoSection(QGroupBox):
         points on a thug, so the pool row would only ever be a number to ignore.
         In its place the row reads back an *estimated* Power Level derived from the
         NPC's traits — its Resistances and best attack (:meth:`refresh_estimated_pl`).
-        The Power Level field above it stays exactly as it was — that is the level
-        the NPC is *meant* to be, and what the PL caps are checked against; the
-        estimate underneath says what the traits actually add up to.
+        The editable Power Level field above it is dropped too: an NPC is not built
+        to a target level, so the single Estimated PL readout — what the traits
+        actually add up to — is the only Power Level the sheet shows. Hero points
+        are a player's currency, so that row goes as well.
         """
         self._npc = npc
         for widget in (self._pool_current, self._pool_separator, self._power_points):
@@ -462,9 +474,20 @@ class SystemInfoSection(QGroupBox):
         label = self._form.labelForField(self._points_row)
         if isinstance(label, QLabel):
             label.setText("Estimated PL:" if npc else "Power Points:")
+        # Drop the rows that only make sense for a budgeted player character: the
+        # bought Power Level (replaced by the estimate) and Hero Points.
+        self._set_row_visible(self._power_level, not npc)
+        self._set_row_visible(self._hero_points, not npc)
         self._refresh_cost_notice()
         if npc:
             self.refresh_estimated_pl()
+
+    def _set_row_visible(self, field: QWidget, visible: bool) -> None:
+        """Show or hide a whole form row — the field and its caption label."""
+        field.setVisible(visible)
+        label = self._form.labelForField(field)
+        if label is not None:
+            label.setVisible(visible)
 
     def refresh_derived(self) -> None:
         """Recompute the derived readouts: speed lines, initiative, effective size.

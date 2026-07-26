@@ -69,6 +69,9 @@ class PlayerCard(QFrame):
     applyConditionRequested = Signal(str, str, object)
     #: ``(player_id, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
+    #: ``(player_id, value)`` — set this player's hero-point total. Like a
+    #: condition, the GM only *asks*; the player's app applies it and pushes back.
+    setHeroPointsRequested = Signal(str, int)
     #: The player's id — the GM asked to remove this seat from the session.
     removePlayerRequested = Signal(str)
 
@@ -119,10 +122,16 @@ class PlayerCard(QFrame):
         self._hero_label = QLabel("HP")
         hero_row.addWidget(self._hero_label)
         self._hero_points = HeroPointsWidget()
-        # The GM watches these, they do not spend them: the widget renders exactly
-        # as it does on the sheet but takes no clicks. setEnabled(False) would grey
-        # the circles out, which reads as "this player has no hero points".
+        # The GM *grants and spends* a player's hero points by clicking these pips;
+        # the click is sent to the player's app, which applies it and pushes back.
+        # Clicks are gated to a commandable seat (see :meth:`set_roster`): a GM's
+        # own card and an offline seat take none. setEnabled(False) would grey the
+        # circles out, which reads as "this player has no hero points", so the
+        # widget is silenced with a mouse-transparency attribute instead.
         self._hero_points.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._hero_points.valueChanged.connect(
+            lambda value: self.setHeroPointsRequested.emit(self.player_id, value)
+        )
         hero_row.addWidget(self._hero_points)
         hero_row.addStretch()
         layout.addLayout(hero_row)
@@ -175,6 +184,10 @@ class PlayerCard(QFrame):
         self._is_gm = bool(entry.get("is_gm"))
         self._targetable = not self._is_gm and bool(entry.get("connected"))
         self._condition_button.setEnabled(self._targetable)
+        # Only a commandable seat takes hero-point clicks; the rest stay read-only.
+        self._hero_points.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, not self._targetable
+        )
         # A seat that just went offline (or came back) changes what the chips can
         # do, so they are restated even though the character has not moved.
         self._show_conditions()

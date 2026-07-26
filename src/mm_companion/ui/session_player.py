@@ -155,6 +155,7 @@ class ConditionReceiver(QObject):
         #: How many commands actually landed on the character.
         self.applied = 0
         bridge.conditionCommand.connect(self.handle)
+        bridge.heroPointsCommand.connect(self.handle_hero_points)
 
     def handle(self, action: str, payload: object) -> None:
         """Apply one ``("apply" | "remove", payload)`` command from the GM."""
@@ -174,6 +175,21 @@ class ConditionReceiver(QObject):
             changed = section.remove_condition_by_id(condition_id, parameter)
         if changed:
             self.applied += 1
+
+    def handle_hero_points(self, value: int) -> None:
+        """Set this sheet's hero-point total from the GM's command.
+
+        Like a condition command, the change lands on the player's own model
+        through the system-info section, and the snapshot pusher beside it bounces
+        the result back so the GM's card restates from the real value.
+        """
+        if not self._attached:
+            return
+        section = getattr(self._sheet, "system_info", None)
+        if section is None:
+            return
+        section.set_hero_points(value)
+        self.applied += 1
 
     def _is_for_us(self, player_id: str) -> bool:
         """The server only sends a command down its target's own connection, so

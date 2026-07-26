@@ -42,6 +42,7 @@ from .protocol import (
     RollRemoved,
     RollRequest,
     Roster,
+    SetHeroPoints,
     Welcome,
     sanitize_snapshot,
 )
@@ -54,6 +55,7 @@ EVENT_ROLL = "roll"  # one roll dict
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
 EVENT_APPLY_CONDITION = "apply_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_REMOVE_CONDITION = "remove_condition"  # {"player_id", "condition_id", "parameter"}
+EVENT_SET_HERO_POINTS = "set_hero_points"  # {"player_id", "value"}
 EVENT_ERROR = "error"  # {"code", "message"}
 EVENT_KICKED = "kicked"  # {"reason"}
 EVENT_PONG = "pong"  # {"nonce"}
@@ -291,6 +293,8 @@ class SessionClient:
             self._emit(EVENT_APPLY_CONDITION, message.to_dict())
         elif isinstance(message, RemoveCondition):
             self._emit(EVENT_REMOVE_CONDITION, message.to_dict())
+        elif isinstance(message, SetHeroPoints):
+            self._emit(EVENT_SET_HERO_POINTS, message.to_dict())
         elif isinstance(message, ErrorMessage):
             self._emit(EVENT_ERROR, {"code": message.code, "message": message.message})
         elif isinstance(message, Pong):

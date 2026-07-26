@@ -37,7 +37,7 @@ from typing import ClassVar
 #: Bumped whenever the message vocabulary changes incompatibly. A client whose
 #: version differs from the server's is refused at the handshake with a readable
 #: message instead of failing obscurely later.
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -302,6 +302,17 @@ class RemoveCondition(Message):
     player_id: str
     condition_id: str
     parameter: str | None = None
+
+
+@_register
+@dataclass(frozen=True)
+class SetHeroPoints(Message):
+    """A GM command setting one player's hero-point total on their live sheet."""
+
+    TYPE: ClassVar[str] = "set_hero_points"
+
+    player_id: str
+    value: int
 
 
 @_register

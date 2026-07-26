@@ -365,8 +365,8 @@ def test_the_dialog_lists_and_reclaims_a_previous_session(qapp: QApplication) ->
     )
     dialog = JoinSessionDialog()
 
-    assert dialog._history_list is not None and dialog._history_list.count() == 1
-    dialog._history_list.setCurrentRow(0)
+    assert dialog._history_table is not None and dialog._history_table.rowCount() == 1
+    dialog._history_table.selectRow(0)
     assert dialog.code_text() == "CODE1"
     assert dialog._name_edit.text() == "Aria"
     assert dialog.reclaim_ids() == ("p1", "t1")
@@ -375,7 +375,7 @@ def test_the_dialog_lists_and_reclaims_a_previous_session(qapp: QApplication) ->
 def test_typing_a_different_code_drops_the_reclaimed_seat(qapp: QApplication) -> None:
     record_session_history(code="CODE1", player_id="p1", player_token="t1")
     dialog = JoinSessionDialog()
-    dialog._history_list.setCurrentRow(0)
+    dialog._history_table.selectRow(0)
 
     dialog._code_edit.setText("SOMETHING-ELSE")
 
@@ -385,11 +385,11 @@ def test_typing_a_different_code_drops_the_reclaimed_seat(qapp: QApplication) ->
 def test_forgetting_from_the_dialog_removes_the_row(qapp: QApplication) -> None:
     record_session_history(code="CODE1", session_name="Wednesday")
     dialog = JoinSessionDialog()
-    dialog._history_list.setCurrentRow(0)
+    dialog._history_table.selectRow(0)
 
     dialog._forget_selected()
 
-    assert dialog._history_list.count() == 0
+    assert dialog._history_table.rowCount() == 0
     assert load_session_history() == []
 
 
@@ -543,6 +543,25 @@ def test_the_gm_can_take_a_condition_off_again(qapp: QApplication, table) -> Non
 
     assert wait_for(qapp, lambda: receiver.applied == 2)
     assert sheet.character.conditions == []
+
+
+def test_the_gm_can_set_a_players_hero_points(qapp: QApplication, table) -> None:
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    player_id = player.client.player_id
+
+    host.server.set_hero_points(player_id, 3)
+
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+    assert sheet.character.characteristics["hero_points"] == 3
+    # And it bounces back, so the GM's card shows the player's real total.
+    assert wait_for(
+        qapp,
+        lambda: (host.state.players[player_id].character.get("characteristics") or {}).get(
+            "hero_points"
+        )
+        == 3,
+    )
 
 
 def test_a_command_naming_somebody_else_is_ignored(qapp: QApplication, table) -> None:

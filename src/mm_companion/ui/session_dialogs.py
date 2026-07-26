@@ -1,10 +1,13 @@
 """Dialogs for starting or getting into a session.
 
-:class:`HostSessionDialog` is the GM's "start a session" step: a session name and
-one plain question — *how do players connect?* — with the networking knobs (port,
-relay, a typed tunnel address) tucked behind an **Advanced** group most tables
-never open. It only *collects* the choices; the GM window does the hosting and
-shows the join code, so the dialog stays a short form rather than a live console.
+:class:`HostOptionsForm` is the GM's connection choices — a session name and one
+plain question, *how do players connect?*, with the networking knobs (port, relay,
+a typed tunnel address) tucked behind an **Advanced** group most tables never open.
+It only *collects* the choices; the caller does the hosting. :class:`HostSessionDialog`
+wraps it as a standalone dialog, and :class:`GMSessionLaunchDialog` — the launcher's
+**Open GM Mode** pre-stage — pairs it with a table of previous sessions, so the GM
+picks which session to run (or starts a new one) and how to host it *before* the GM
+window opens; the window itself carries only a **Copy join code** action.
 
 :class:`JoinSessionDialog` asks for the three things a player supplies: the **join
 code** the GM sent them, the **name** they want on the GM's card, and **which saved
@@ -25,6 +28,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QComboBox,
     QDialog,
@@ -32,14 +36,15 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLayout,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -49,7 +54,7 @@ from mm_companion.core.library import list_saved_characters
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import hline_separator, make_spin_box
 
 #: How many codes the dialog offers back; the newest is pre-filled.
 RECENT_CODES = 5
@@ -155,24 +160,22 @@ class HostOptions:
     use_relay: bool
 
 
-class HostSessionDialog(QDialog):
-    """The GM's "start a session" form: a name and how players connect.
+class HostOptionsForm(QWidget):
+    """The GM's connection choices: a session name and how players connect.
 
     A short, opinionated form — *Automatic* is the default and needs nothing else
     filled in. Choosing a relay or a typed tunnel address reveals only the one field
-    that method needs; the port lives under **Advanced**. Read the result back with
-    :meth:`options` after the dialog is accepted.
+    that method needs; the port lives under **Advanced**. It only *collects* the
+    choices (:meth:`options`); the caller does the hosting. Shared by
+    :class:`HostSessionDialog` and :class:`GMSessionLaunchDialog`.
     """
 
     def __init__(self, parent: QWidget | None = None, *, session_name: str = "Session") -> None:
         super().__init__(parent)
-        self.setWindowTitle("Start a session")
-        self.setMinimumWidth(360)
-
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         # Grow and shrink to fit as the tunnel row appears/disappears, so revealing
-        # it never overlaps the Advanced group below (the dialog is re-fitted in
-        # _sync_method).
+        # it never overlaps the Advanced group below (re-fitted in _sync_method).
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         form = QFormLayout()
@@ -221,31 +224,28 @@ class HostSessionDialog(QDialog):
         advanced_form.addRow("Relay address", self._relay_edit)
         layout.addWidget(advanced)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Start hosting")
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
         self._method.idToggled.connect(lambda *_: self._sync_method())
         self._sync_method()
+
+    def set_name(self, name: str) -> None:
+        """Fill the name field (e.g. from a chosen previous session)."""
+        self._name_edit.setText(name)
 
     def _sync_method(self) -> None:
         """Show only the field the chosen method needs (the tunnel address, or none)."""
         self._tunnel_row.set_visible(self._via_tunnel.isChecked())
-        # Re-fit now that a row appeared or vanished, or the freed/needed space would
-        # leave the layout stale and the fields overlapping.
-        self.adjustSize()
+        # Re-fit the enclosing dialog now that a row appeared or vanished, or the
+        # freed/needed space would leave the layout stale and the fields overlapping.
+        window = self.window()
+        if window is not None:
+            window.adjustSize()
 
-    def _on_accept(self) -> None:
-        """Persist the relay for next time, then close; the GM window does the hosting."""
+    def persist_relay(self) -> None:
+        """Remember the relay address for next time; failing to is not worth raising."""
         try:
             storage.update_settings(session_relay_url=self._relay_edit.text().strip())
         except OSError:
             pass
-        self.accept()
 
     def connect_method(self) -> str:
         """Which of :data:`CONNECT_AUTOMATIC` / ``_RELAY`` / ``_TUNNEL`` is chosen."""
@@ -256,7 +256,7 @@ class HostSessionDialog(QDialog):
         return CONNECT_AUTOMATIC
 
     def options(self) -> HostOptions:
-        """The chosen host options; meaningful once the dialog was accepted.
+        """The chosen host options.
 
         A typed tunnel address is taken at the GM's word, so no relay fallback is
         armed for it; the automatic and relay methods both keep the relay as the last
@@ -271,6 +271,41 @@ class HostSessionDialog(QDialog):
             relay=self._relay_edit.text().strip(),
             use_relay=method != CONNECT_TUNNEL,
         )
+
+
+class HostSessionDialog(QDialog):
+    """The GM's "start a session" form as a standalone dialog around
+    :class:`HostOptionsForm`. Read the result back with :meth:`options`.
+    """
+
+    def __init__(self, parent: QWidget | None = None, *, session_name: str = "Session") -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Start a session")
+        self.setMinimumWidth(360)
+
+        layout = QVBoxLayout(self)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self._form = HostOptionsForm(self, session_name=session_name)
+        layout.addWidget(self._form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Start hosting")
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_accept(self) -> None:
+        """Persist the relay for next time, then close; the caller does the hosting."""
+        self._form.persist_relay()
+        self.accept()
+
+    def connect_method(self) -> str:
+        return self._form.connect_method()
+
+    def options(self) -> HostOptions:
+        return self._form.options()
 
 
 class _FormRow:
@@ -311,20 +346,29 @@ class JoinSessionDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # The list of sessions this player has joined before — pick one to rejoin
-        # (reclaiming the same seat), or delete one that has gone stale.
-        self._history_list: QListWidget | None = None
+        # The sessions this player has joined before — pick one to rejoin
+        # (reclaiming the same seat), or forget one that has gone stale. A table so
+        # the session, when it was last joined, and the name used all read cleanly.
+        self._history_table: QTableWidget | None = None
+        self._history = history
         if history:
             layout.addWidget(QLabel("Rejoin a previous session:"))
-            self._history_list = QListWidget()
-            for entry in history:
-                self._history_list.addItem(self._history_item(entry))
-            self._history_list.currentItemChanged.connect(
-                lambda current, _prev: self._on_history_selected(current)
-            )
-            self._history_list.itemDoubleClicked.connect(lambda _item: self._try_accept())
-            self._history_list.setMaximumHeight(150)
-            layout.addWidget(self._history_list)
+            self._history_table = QTableWidget(len(history), 3)
+            self._history_table.setHorizontalHeaderLabels(["Session", "Last joined", "Your name"])
+            self._history_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self._history_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            self._history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self._history_table.verticalHeader().setVisible(False)
+            table_header = self._history_table.horizontalHeader()
+            table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            for row, entry in enumerate(history):
+                self._fill_history_row(row, entry)
+            self._history_table.itemSelectionChanged.connect(self._on_history_selected)
+            self._history_table.itemDoubleClicked.connect(lambda _item: self._try_accept())
+            self._history_table.setMaximumHeight(160)
+            layout.addWidget(self._history_table)
 
             delete_row = QHBoxLayout()
             delete_row.addStretch()
@@ -408,20 +452,30 @@ class JoinSessionDialog(QDialog):
 
     # -- previous sessions -------------------------------------------------
 
-    @staticmethod
-    def _history_item(entry: dict) -> QListWidgetItem:
+    def _fill_history_row(self, row: int, entry: dict) -> None:
+        """Lay one previous session across the table's three columns."""
         name = entry.get("session_name") or "(unnamed session)"
         when = str(entry.get("last_joined", ""))[:16].replace("T", " ")
-        label = f"{name}   {when}".rstrip()
-        item = QListWidgetItem(label)
-        item.setData(Qt.ItemDataRole.UserRole, entry)
-        return item
+        who = str(entry.get("display_name", ""))
+        for col, text in enumerate((name, when, who)):
+            item = QTableWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, entry)  # the row's whole entry
+            self._history_table.setItem(row, col, item)
 
-    def _on_history_selected(self, item: QListWidgetItem | None) -> None:
+    def _selected_history_entry(self) -> dict | None:
+        if self._history_table is None:
+            return None
+        rows = self._history_table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        item = self._history_table.item(rows[0].row(), 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def _on_history_selected(self) -> None:
         """Fill the code and name from a chosen previous session, and arm reclaim."""
-        if item is None:
+        entry = self._selected_history_entry()
+        if entry is None:
             return
-        entry = item.data(Qt.ItemDataRole.UserRole) or {}
         code = str(entry.get("code", ""))
         self._code_edit.setText(code)
         if entry.get("display_name"):
@@ -434,15 +488,16 @@ class JoinSessionDialog(QDialog):
         self._reclaim_code = ""
 
     def _forget_selected(self) -> None:
-        """Remove the selected previous session from the list and from settings."""
-        if self._history_list is None:
+        """Remove the selected previous session from the table and from settings."""
+        if self._history_table is None:
             return
-        item = self._history_list.currentItem()
-        if item is None:
+        rows = self._history_table.selectionModel().selectedRows()
+        if not rows:
             return
-        entry = item.data(Qt.ItemDataRole.UserRole) or {}
+        row = rows[0].row()
+        entry = self._selected_history_entry() or {}
         remove_session_history(str(entry.get("code", "")))
-        self._history_list.takeItem(self._history_list.row(item))
+        self._history_table.removeRow(row)
 
     # -- validation --------------------------------------------------------
 
@@ -482,79 +537,119 @@ class JoinSessionDialog(QDialog):
             pass
 
 
-class SessionPickerDialog(QDialog):
-    """Pick one of the GM's previous sessions to re-run, or delete one.
+class GMSessionLaunchDialog(QDialog):
+    """The GM's pre-stage, opened from the launcher's **Open GM Mode**.
 
-    Reads the workspace's saved sessions (``store.list_sessions``) and hands back
-    the chosen id through :meth:`chosen_id`; deletion happens in place through
-    ``store.delete_session`` so the list a GM sees is always the disk truth.
+    Combines the list of previous sessions with the host form: the GM continues a
+    stored session (or starts a new one) and chooses how players connect, all
+    before the GM window opens. On accept the launcher opens the window on the
+    chosen session and starts hosting straight away — the window itself carries no
+    session controls, only a **Copy join code** action.
+
+    Read back :meth:`chosen_session_id` (``None`` for a new session) and
+    :meth:`options` after the dialog is accepted.
     """
 
-    def __init__(self, *, current_id: str = "", parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Previous sessions")
-        self.resize(460, 320)
-        self._current_id = current_id
+        self.setWindowTitle("Open GM Mode")
+        self.resize(500, 560)
         self._chosen_id: str | None = None
+        self._summaries: list[store.SessionSummary] = []
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Choose a session to run as GM:"))
+        layout.addWidget(QLabel("Continue a previous session, or start a new one:"))
 
-        self._list = QListWidget()
-        self._list.itemDoubleClicked.connect(lambda _item: self._accept_selection())
-        layout.addWidget(self._list)
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Session", "Last updated", "Players", "Rolls"])
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.itemSelectionChanged.connect(self._on_row_selected)
+        self._table.itemDoubleClicked.connect(lambda _item: self._on_accept())
+        layout.addWidget(self._table, stretch=1)
 
-        row = QHBoxLayout()
+        buttons_row = QHBoxLayout()
+        self._new_button = QPushButton("New session")
+        self._new_button.setToolTip("Start a fresh session instead of continuing one")
+        self._new_button.clicked.connect(self._start_new)
+        buttons_row.addWidget(self._new_button)
         self._delete_button = QPushButton("Delete")
+        self._delete_button.setToolTip("Delete the selected session and its roll history")
         self._delete_button.clicked.connect(self._delete_selected)
-        row.addWidget(self._delete_button)
-        row.addStretch()
-        layout.addLayout(row)
+        buttons_row.addWidget(self._delete_button)
+        buttons_row.addStretch()
+        layout.addLayout(buttons_row)
+
+        layout.addWidget(hline_separator())
+        self._form = HostOptionsForm(self)
+        layout.addWidget(self._form)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self._accept_selection)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Open")
+        buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
         self._reload()
 
-    def chosen_id(self) -> str | None:
-        """The id the GM chose to open, or ``None`` if they cancelled."""
+    # -- what the caller reads back ----------------------------------------
+
+    def chosen_session_id(self) -> str | None:
+        """The stored session to resume, or ``None`` to start a fresh one."""
         return self._chosen_id
 
+    def options(self) -> HostOptions:
+        """How to host, from the embedded :class:`HostOptionsForm`."""
+        return self._form.options()
+
+    # -- the previous-sessions table ---------------------------------------
+
     def _reload(self) -> None:
-        """(Re)fill the list from disk, keeping the current session marked."""
-        self._list.clear()
-        for summary in store.list_sessions():
+        self._summaries = store.list_sessions()
+        self._table.setRowCount(len(self._summaries))
+        for row, summary in enumerate(self._summaries):
             when = summary.updated_at[:16].replace("T", " ")
-            mark = "  — current" if summary.id == self._current_id else ""
-            label = (
-                f"{summary.name or 'Session'}"
-                f"   ({when} · {summary.player_count} player(s) · {summary.roll_count} roll(s))"
-                f"{mark}"
-            )
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, summary.id)
-            self._list.addItem(item)
-        if self._list.count():
-            self._list.setCurrentRow(0)
-        self._delete_button.setEnabled(self._list.count() > 0)
+            cells = [
+                summary.name or "Session",
+                when,
+                str(summary.player_count),
+                str(summary.roll_count),
+            ]
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setData(Qt.ItemDataRole.UserRole, summary.id)
+                self._table.setItem(row, col, item)
+        self._delete_button.setEnabled(bool(self._summaries))
 
-    def _selected_id(self) -> str | None:
-        item = self._list.currentItem()
-        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+    def _selected_summary(self) -> store.SessionSummary | None:
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        index = rows[0].row()
+        return self._summaries[index] if 0 <= index < len(self._summaries) else None
 
-    def _accept_selection(self) -> None:
-        session_id = self._selected_id()
-        if session_id:
-            self._chosen_id = session_id
-            self.accept()
+    def _on_row_selected(self) -> None:
+        """Continuing a session pre-fills the host form with its name."""
+        summary = self._selected_summary()
+        if summary is not None:
+            self._form.set_name(summary.name or "Session")
+
+    def _start_new(self) -> None:
+        """Drop any selection and name the form afresh — Open then makes a new session."""
+        self._table.clearSelection()
+        self._form.set_name("Session")
 
     def _delete_selected(self) -> None:
-        session_id = self._selected_id()
-        if not session_id:
+        summary = self._selected_summary()
+        if summary is None:
             return
         confirm = QMessageBox.question(
             self,
@@ -565,5 +660,12 @@ class SessionPickerDialog(QDialog):
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        store.delete_session(session_id)
+        store.delete_session(summary.id)
         self._reload()
+
+    def _on_accept(self) -> None:
+        """Take the selected session (or none), remember the relay, and close."""
+        summary = self._selected_summary()
+        self._chosen_id = summary.id if summary is not None else None
+        self._form.persist_relay()
+        self.accept()

@@ -42,11 +42,16 @@ class MainWindow(QMainWindow):
         path: Path | None = None,
         locked: bool = True,
         gm_view: bool = False,
+        npc: bool = False,
     ) -> None:
         super().__init__(parent)
         # A GM's read-only view of a player's snapshot: force-locked, with only the
         # View menu — no File/Settings/Tools/Session and no way to unlock or save.
         self._gm_view = gm_view
+        # An NPC sheet: the GM's working material, not a player's finished build.
+        # It keeps File/Settings but drops the play-time menus that only make sense
+        # for a player at the table — Session, Tools, and Cost config.
+        self._npc = npc
         if gm_view:
             locked = True
         # Comfortably fits Base Information's natural width; the blocks stay well
@@ -128,19 +133,24 @@ class MainWindow(QMainWindow):
         settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
         # Homebrew the non-power PP-cost rates for this character. Stays available even
         # in a locked (read-only) view — it is a config action, not a build edit.
-        self._cost_config_action = settings_menu.addAction("Cost config...")
-        self._cost_config_action.triggered.connect(self._open_cost_config)
+        # An NPC has no point build, so there is nothing to configure the cost of.
+        if not self._npc:
+            self._cost_config_action = settings_menu.addAction("Cost config...")
+            self._cost_config_action.triggered.connect(self._open_cost_config)
 
         self._lock_action = settings_menu.addAction("Lock")
         self._lock_action.setCheckable(True)
         self._lock_action.setChecked(locked)
         self._lock_action.toggled.connect(self._sheet.set_locked)
 
-        session_menu = menu_bar.addMenu("&Session")
-        session_menu.addAction("Join session...").triggered.connect(self._join_session)
+        # Joining a session and rolling dice are things a *player* does at the table;
+        # an NPC sheet is the GM's prep material, driven from the GM window instead.
+        if not self._npc:
+            session_menu = menu_bar.addMenu("&Session")
+            session_menu.addAction("Join session...").triggered.connect(self._join_session)
 
-        tools_menu = menu_bar.addMenu("&Tools")
-        tools_menu.addAction("Dice Roller...").triggered.connect(self._open_dice_roller)
+            tools_menu = menu_bar.addMenu("&Tools")
+            tools_menu.addAction("Dice Roller...").triggered.connect(self._open_dice_roller)
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""

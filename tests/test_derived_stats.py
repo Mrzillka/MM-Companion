@@ -119,6 +119,32 @@ def test_movement_mode_without_a_rate_still_lists_with_its_description() -> None
     assert line.description  # every option hints what it does
 
 
+def test_sense_qualities_are_not_movement_modes() -> None:
+    data = load_game_data()
+    char = _char(data)
+    # Enhanced Senses lays its qualities out with the same `allocation` field type,
+    # so only the effects that declare `affects: movement` may contribute a line.
+    char.powers = [
+        Power(
+            name="Spider Sense",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_senses",
+                    rank=4,
+                    config={
+                        "senses": [
+                            {"id": "danger_sense", "tier": 1},
+                            {"id": "direction_sense", "tier": 1},
+                        ]
+                    },
+                )
+            ],
+        )
+    ]
+
+    assert movement_mode_lines(char, data) == []
+
+
 def test_switched_off_power_grants_no_movement_modes() -> None:
     data = load_game_data()
     char = _char(data)

@@ -87,14 +87,27 @@ class MovementModeLine:
     description: str = ""
 
 
+#: The ``statIntegration.affects`` category marking an effect as one that changes how
+#: the character *moves*. Enhanced Senses lays its sense qualities out with the same
+#: ``allocation`` field type, so the field shape alone can't tell the two apart.
+MOVEMENT_AFFECTS = "movement"
+
+
+def _affects_movement(base) -> bool:
+    """Whether a base effect's ``statIntegration`` declares it a movement effect."""
+    boost = base.integration.trait_boost
+    return boost is not None and MOVEMENT_AFFECTS in boost.affects
+
+
 def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementModeLine]:
     """The specialised movement modes the character's active powers currently grant.
 
-    Walks every live effect's ``allocation`` config fields and yields one line per
-    chosen option, at the ground speed rank shifted by that option's tier
-    (``speed_rank_offsets`` — ``0`` full speed, ``-1`` half). Options that grant no
-    rate still list, so the block shows *every* way the character can move, not only
-    the ones with a number. Empty when nothing is switched on.
+    Walks the ``allocation`` config fields of every live effect that declares itself a
+    *movement* effect (:func:`_affects_movement`) and yields one line per chosen option,
+    at the ground speed rank shifted by that option's tier (``speed_rank_offsets`` —
+    ``0`` full speed, ``-1`` half). Options that grant no rate still list, so the block
+    shows *every* way the character can move, not only the ones with a number. Empty
+    when nothing is switched on.
     """
 
     ground = base_ground_speed_rank(char, game_data)
@@ -102,7 +115,7 @@ def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementMo
     for power in live_powers(char.powers):
         for effect in power.effects:
             base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-            if base is None:
+            if base is None or not _affects_movement(base):
                 continue
             if not effect_is_active(power, effect, base, game_data, char):
                 continue

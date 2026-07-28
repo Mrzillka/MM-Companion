@@ -96,3 +96,18 @@ def test_setting_a_new_resting_style_does_not_disturb_a_live_highlight(target) -
 
     target.clear()
     assert "solid black" in target._widget.styleSheet()
+
+
+def test_a_plain_widget_target_actually_paints_its_wash(qapp) -> None:
+    """ModifierGroup is a QWidget, which ignores a stylesheet background by default.
+
+    It paints itself before the style engine is consulted, so the rule is applied
+    and simply never drawn — which is how the extras/flaws group's drop highlight
+    was silently flat. WA_StyledBackground routes the background through the style.
+    """
+    from PySide6.QtCore import Qt
+
+    from mm_companion.ui.power_constructor.modifier_chip import ModifierGroup
+
+    group = ModifierGroup("Extras")
+    assert group.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)

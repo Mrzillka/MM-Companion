@@ -17,6 +17,12 @@ Screenshots land in ./_driver_shots/<target>.png by default (override with
 --out). The workspace is redirected to a throwaway temp dir so the driver never
 touches the user's real %APPDATA%\\MM-Companion (pass --keep-home to opt out).
 
+``--theme <id>`` renders under a given theme preset (``classic``, ``slate-dark``,
+``parchment-light``, or anything in the workspace ``themes/`` dir) and tags the
+filename with it, so the same surface can be compared across looks:
+
+    python .claude/skills/run-mm-companion/driver.py sheet --theme slate-dark
+
 To drive a NEW flow, add a branch in build() that constructs the window and
 pokes its real widgets before the screenshot — see the "sheet-demo" branch,
 which sets ability spin boxes through the section API so the derived PP totals
@@ -77,6 +83,18 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target == "focus":
+        # Put keyboard focus on an ability spin box, so the focus ring — the only
+        # visible sign that a wheel-guarded control now owns the scroll wheel —
+        # shows up in the screenshot.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        spin = win._sheet.abilities._abilities["AGL"]
+        spin.setValue(8)
+        spin.setFocus()
+        return win
     elif target == "constructor":
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
@@ -143,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet",
             "sheet-demo",
             "constructor",
+            "focus",
             "dice",
             "dice-demo",
             "gm",
@@ -157,6 +176,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use the real workspace instead of a throwaway temp dir",
     )
+    parser.add_argument(
+        "--theme",
+        default=None,
+        help="theme preset id to render under (default: whatever the workspace has)",
+    )
     args = parser.parse_args(argv)
 
     if not args.keep_home and "MM_COMPANION_HOME" not in os.environ:
@@ -167,11 +191,23 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
 
+    # The real entry point installs the theme before the first widget exists; do
+    # the same here, or every surface renders unstyled no matter what is saved.
+    from mm_companion.core.storage import ensure_workspace
+    from mm_companion.ui import theme
+
+    ensure_workspace()
+    if args.theme:
+        theme.set_active_theme(args.theme)
+    theme.apply(app)
+    suffix = f".{theme.active_theme().id}" if args.theme else ""
+    print(f"[driver] theme={theme.active_theme().id} ({theme.active_theme().chrome.mode})")
+
     targets = ["start", "sheet", "constructor"] if args.target == "all" else [args.target]
     for target in targets:
         win = build(target)
         _pump(app)
-        _shoot(win, args.out / f"{target}.png")
+        _shoot(win, args.out / f"{target}{suffix}.png")
         win.hide()
         win.deleteLater()
         _pump(app, rounds=2)

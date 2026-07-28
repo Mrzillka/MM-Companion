@@ -115,14 +115,23 @@ def _chrome_rules(theme: Theme) -> str:
 
     return "\n\n".join(
         (
-            # The window surface. QMainWindow/QDialog/QWidget-as-window only —
-            # a bare `QWidget` rule would repaint every child container too.
-            "/* window surfaces */\n"
-            f"QMainWindow, QDialog, #blockWindow {{ background: {window}; color: {text}; }}\n"
-            f"QMenuBar, QMenu {{ background: {window}; color: {text}; }}\n"
-            f"QMenu::item:selected {{ background: {c('accent')}; color: {c('text.on-badge')}; }}",
-            # One block: a titled frame on the block surface. The surface stops
-            # here — see rule 3 in the module docstring.
+            # The menu bar. Stated despite the palette because the native Windows
+            # style paints its menu chrome from the system theme and ignores the
+            # application palette, which leaves a light preset with a dark menu bar
+            # bolted to the top of it. These are top-level chrome classes, never
+            # nested inside a card, so they are not the container selectors the
+            # module docstring rules out.
+            "/* menus */\n"
+            f"QMenuBar {{ background: {window}; color: {text}; }}\n"
+            f"QMenuBar::item:selected {{ background: {titlebar}; }}\n"
+            f"QMenu {{ background: {block}; color: {text};"
+            f" border: {width}px solid {border}; }}\n"
+            f"QMenu::item:selected {{ background: {c('accent')};"
+            f" color: {c('text.on-badge')}; }}",
+            # One block: a titled frame on the block surface. Surfaces stop here —
+            # see rule 3 in the module docstring. Colours the palette already
+            # carries (window, text, selection) are deliberately absent: this
+            # sheet only says what a palette cannot, which is geometry.
             "/* sheet blocks */\n"
             f"#blockFrame {{\n"
             f"    background: {block};\n"
@@ -139,11 +148,11 @@ def _chrome_rules(theme: Theme) -> str:
             f"#blockCanvas {{ background: {window}; }}\n"
             f"#dropIndicator {{ background-color: {c('drop.indicator')}; }}",
             # Input chrome. Scoped to the concrete input classes, never to their
-            # containers, so nothing leaks into a card's labels.
+            # containers, so nothing leaks into a card's labels. The fill and text
+            # come from the palette's Base/Text; only the frame is stated here.
             "/* inputs */\n"
             f"QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox, QTextEdit, QPlainTextEdit {{\n"
             f"    background: {field};\n"
-            f"    color: {text};\n"
             f"    border: {width}px solid {border};\n"
             f"    border-radius: {radius_field}px;\n"
             f"    padding: 0 {pad}px;\n"
@@ -154,25 +163,36 @@ def _chrome_rules(theme: Theme) -> str:
             f"    border: none;\n"
             f"    padding: {m('space.xs')}px {pad}px;\n"
             f"    font-weight: bold;\n"
-            f"}}\n"
-            f"QTableWidget, QTableView, QListWidget {{\n"
-            f"    background: {block};\n"
-            f"    alternate-background-color: {c('surface.card', block)};\n"
-            f"    border: none;\n"
             f"}}",
+            # Tabs (the Power Constructor's Effects / Extras / Flaws palette).
+            # Stated for the same reason as the menus: the native style paints a
+            # tab from the system theme, which on a light preset over a dark OS
+            # leaves the *unselected* tabs' text near-invisible.
+            "/* tabs */\n"
+            f"QTabWidget::pane {{ background: {block};"
+            f" border: {width}px solid {border}; }}\n"
+            f"QTabBar::tab {{\n"
+            f"    background: {titlebar};\n"
+            f"    color: {muted};\n"
+            f"    border: {width}px solid {border};\n"
+            f"    border-bottom: none;\n"
+            f"    border-top-left-radius: {radius_field}px;\n"
+            f"    border-top-right-radius: {radius_field}px;\n"
+            f"    padding: {m('space.sm')}px {m('space.lg')}px;\n"
+            f"}}\n"
+            f"QTabBar::tab:selected {{ background: {block}; color: {text};"
+            f" font-weight: bold; }}\n"
+            f"QTabBar::tab:hover {{ color: {text}; }}",
             # Buttons. autoRaise tool buttons (the block title bar's ↗ and ✕) stay
             # flat until hovered, so the title bar keeps reading as one strip.
             "/* buttons */\n"
             f"QPushButton {{\n"
-            f"    background: {c('surface.card', block)};\n"
-            f"    color: {text};\n"
             f"    border: {width}px solid {border};\n"
             f"    border-radius: {radius_field}px;\n"
             f"    padding: {m('space.xs')}px {m('space.lg')}px;\n"
             f"}}\n"
             f"QPushButton:hover {{ border-color: {c('accent')}; }}\n"
-            f"QPushButton:disabled {{ color: {muted}; }}\n"
-            f"QToolButton {{ background: transparent; color: {text}; border: none; }}\n"
+            f"QToolButton {{ background: transparent; border: none; }}\n"
             f"QToolButton:hover {{ background: {c('surface.card', block)}; "
             f"border-radius: {radius_field}px; }}",
         )

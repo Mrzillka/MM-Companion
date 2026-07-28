@@ -41,11 +41,36 @@ def test_a_system_preset_with_the_ring_off_emits_nothing_at_all(presets) -> None
 
 
 @pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light"])
-def test_a_styled_preset_dresses_the_window(presets, theme_id: str) -> None:
+def test_a_styled_preset_dresses_the_blocks_and_the_native_chrome(presets, theme_id: str) -> None:
+    """The stylesheet states geometry, plus the chrome the native style paints itself.
+
+    Colour reaches ordinary widgets through the palette, not through here — see
+    :mod:`mm_companion.ui.theme.palette` for why. What is left for the sheet is
+    the object-named block chrome, and the menus and tabs, which the Windows
+    native style draws from the *system* theme and which therefore ignore the
+    application palette entirely.
+    """
     sheet = qss.build(presets[theme_id])
 
-    for expected in ("#blockFrame", "#blockTitleBar", "#blockCanvas", "QMainWindow"):
+    for expected in ("#blockFrame", "#blockTitleBar", "#blockCanvas", "QMenuBar", "QTabBar::tab"):
         assert expected in sheet
+
+
+@pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light"])
+def test_a_styled_preset_carries_its_colour_in_a_palette(presets, theme_id: str) -> None:
+    from mm_companion.ui.theme.palette import build_palette
+
+    palette = build_palette(presets[theme_id])
+    assert palette is not None
+    expected = presets[theme_id].colors["surface.window"]
+    assert palette.window().color().name() == expected
+
+
+def test_a_system_preset_installs_no_palette(presets) -> None:
+    """Classic keeps the OS palette, and with it the OS light/dark setting."""
+    from mm_companion.ui.theme.palette import build_palette
+
+    assert build_palette(presets["classic"]) is None
 
 
 @pytest.mark.parametrize("theme_id", BUNDLED)

@@ -392,14 +392,75 @@ The shape:
   OGL content. Verify with the fast, window-free files (`tests/test_session_*.py`,
   `tests/test_headless_server.py`); the GUI ones need `QT_QPA_PLATFORM=offscreen`.
 
+## The theme layer (matters whenever you write a colour or a size)
+
+**Never hardcode a colour, radius, border width, column minimum or font size in
+widget code.** All of them are named **tokens** read from the active theme
+preset — the same rule for the *look* that "no game rules in Python" is for the
+*content*. The shape:
+
+- `src/mm_companion/ui/theme/` — `tokens.py` (the `Theme`/`Chrome` records, plus
+  `rgba`/`contrast_ratio`; pure data, no Qt), `loader.py` (discovery, `extends`
+  resolution, caching), `qss.py` (builds the app stylesheet), `palette.py`
+  (builds the `QPalette`), and `__init__.py` (the API).
+- **Read a token where you use it**: `theme.color("tint.worse")`,
+  `theme.metric("radius.card")`, `theme.font_size("size.card-name")`,
+  `theme.wash("accent", 0.10)` (a translucent fill of the same hue),
+  `theme.box("card.margins")` (a 4-tuple). Never cache one in a module constant
+  — a preset switch would not reach it. An unknown name raises `UnknownToken`
+  with a did-you-mean.
+- Repeated snippets live in `ui/widgets.py`: `muted_style(italic=…)`,
+  `tinted_style(token, bold=…)`, `BOLD_STYLE`.
+- **Presets** are JSON: bundled in `ui/theme/themes/*.json`, plus anything in the
+  workspace `themes/` dir (which wins on an id clash, and whose parse failure is
+  skipped, never fatal). A preset may `extends` another and restate only what it
+  changes. `classic` is the default and reproduces the historical native look;
+  `slate-dark` and `parchment-light` are `chrome.mode: "styled"`.
+- **Three mechanisms, and which does what.** `theme.apply(app)` installs all
+  three, and mixing them up is the main way to break this:
+  1. **Palette** (`styled` only) — colour for ordinary widgets, reaching them
+     through Qt's own inheritance. It is also what any `palette(role)` token
+     value resolves against. A `system` preset installs none, so the app keeps
+     following the OS light/dark setting.
+  2. **Application font** — the family only. Sizes never go here.
+  3. **Stylesheet** — geometry, the object-named block chrome, and the menu/tab
+     classes the native Windows style paints from the *system* theme and which
+     therefore ignore the palette.
+- **Three rules, each guarded by a test in `tests/test_theme_qss.py`:**
+  1. Never select a bare `QFrame`/`QLabel`/`QGroupBox`/`QScrollArea` — every
+     nested separator and label inherits it. Use an object name or a class that
+     names a whole component.
+  2. Never set `font-size` in a stylesheet. It outranks the widget's `QFont`,
+     which is what the powers cards animate through; use
+     `QFont.setPointSizeF(theme.font_size(...))`.
+  3. A semantic tint must clear **3.0:1** against its background — for a
+     `system` preset that means against *both* a light and a dark window, since
+     it cannot know which it is on. `tests/test_theme.py` enforces it per preset.
+- A plain `QWidget` ignores a stylesheet `background` unless it sets
+  `WA_StyledBackground` (a `QFrame` honours it natively). If a wash you applied
+  doesn't paint, that is why.
+- `ui/drop_feedback.py` — `DropFeedback` gives one drop target its idle / accept
+  / **reject** styling from tokens. Use it in a `dragEnterEvent` instead of
+  open-coding a highlight, and call `show_reject()` on the else branch: a bare
+  `event.ignore()` is invisible whenever an ancestor accepts the drag.
+- `ui/block_sizes.json` is the *baseline* for block bounds; a preset's `blocks`
+  map overrides any bound. The GM window's blocks live there too, under `gm_`
+  keys.
+- Switching preset (`Settings ▸ Theme`, or the launcher's Theme button, both via
+  `ui/theme_menu.py`) re-applies all three mechanisms at once and then offers a
+  relaunch (`ui/app_restart.py`) for the widgets that styled themselves in their
+  constructors — the same bargain the Mod Manager strikes.
+
 ## Shared UI utilities and view modes (matters when adding widgets)
 
 The `ui/` package has a small support layer that section code is expected to go
 through rather than reinvent. When building new sheet widgets, use it:
 
 - `ui/widgets.py` — shared factories (`make_spin_box`, `readonly_item`,
-  `hline_separator`) that keep construction consistent and wheel-guarded. Build
-  spin boxes and read-only table cells through these, not by hand.
+  `hline_separator`) and the shared inline style snippets (`muted_style`,
+  `tinted_style`, `BOLD_STYLE`) that keep construction consistent and
+  wheel-guarded. Build spin boxes and read-only table cells through these, not
+  by hand.
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
   boxes, and inner tables from hijacking the page scroll: a guarded widget only
   reacts to the wheel once it has keyboard focus, otherwise the wheel is

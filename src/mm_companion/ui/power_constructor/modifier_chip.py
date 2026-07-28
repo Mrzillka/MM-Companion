@@ -300,6 +300,12 @@ class ModifierGroup(QWidget):
         super().__init__()
         self._chips: list[QWidget] = []
         self.setAcceptDrops(True)
+        # A plain QWidget ignores a stylesheet background entirely — it paints
+        # itself before the style engine gets a look in, so the rule is applied and
+        # simply never drawn. (The sibling drop targets are QFrames, which honour
+        # it, which is why only this one was silently flat.) This attribute routes
+        # the widget's background through the style, so its drop wash shows up.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # A wash with no outline: this group sits inside an effect card that draws
         # its own drop border, and two nested outlines would stack up.
         self._drops = DropFeedback(

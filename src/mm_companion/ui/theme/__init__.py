@@ -129,20 +129,52 @@ def set_active_theme(theme_id: str, app: QApplication | None = None) -> Theme:
 
 
 def apply(app: QApplication) -> None:
-    """Install the active preset's global stylesheet (and font family) on *app*.
+    """Dress *app* in the active preset: palette, font, then stylesheet.
 
-    The family goes on the application *font* rather than into the stylesheet, for
-    the same reason point sizes do: a QSS ``font-family`` would outrank each
-    widget's own ``QFont``, and the powers cards animate through that font.
+    Three mechanisms, each doing what only it can:
+
+    * The **palette** carries colour to every widget through Qt's own
+      inheritance, and is what the ``palette(role)`` expressions in the tokens
+      resolve against. A ``system`` preset installs none, keeping the OS palette
+      — and with it the OS light/dark setting. See
+      :mod:`mm_companion.ui.theme.palette`.
+    * The **font family** goes on the application font rather than into the
+      stylesheet, for the same reason point sizes do: a QSS ``font-family``
+      outranks each widget's own ``QFont``, which the powers cards animate.
+    * The **stylesheet** states only what the other two cannot — geometry, and
+      the object-named chrome of the blocks.
     """
+    from mm_companion.ui.theme import palette as palette_module
     from mm_companion.ui.theme import qss
+
+    theme = active_theme()
+
+    palette = palette_module.build_palette(theme)
+    if palette is not None:
+        app.setPalette(palette)
+    elif _palette_installed:
+        # Switching back to a system preset: hand the OS palette back, or the
+        # previous preset's colours would linger with nothing left to state them.
+        app.setPalette(app.style().standardPalette())
+    _remember_palette(palette is not None)
 
     family = font_family()
     if family:
         font = app.font()
         font.setFamily(family)
         app.setFont(font)
-    app.setStyleSheet(qss.build(active_theme()))
+
+    app.setStyleSheet(qss.build(theme))
+
+
+# Whether the last apply() installed a palette of our own, so switching back to a
+# system preset knows it has one to undo.
+_palette_installed = False
+
+
+def _remember_palette(installed: bool) -> None:
+    global _palette_installed
+    _palette_installed = installed
 
 
 def _lookup(group: str, name: str) -> object:

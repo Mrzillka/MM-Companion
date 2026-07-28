@@ -111,6 +111,7 @@ from mm_companion.core.rules import (
     powers_points_spent,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.theme import ACCENT, DICE_ACCENT, TINT_BETTER, TINT_WORSE, tint_rgba
 from mm_companion.ui.widgets import hline_separator
@@ -153,7 +154,10 @@ _GROUP_BORDER = "#8894b0"
 # The always-visible game-term table: deliberately small type, and short lines — two
 # label/value pairs per row, matching the Power Constructor's PowerTermsView.
 _TERM_POINT_SIZE = 8.0
-_TERM_PAIRS_PER_ROW = 2
+#: The card's copy of the terms grid recedes: small, unbolded type, so the numbers
+#: read as reference rather than as the point of the card. The size is set on the
+#: QFont (see TermsGridStyle) so it scales with a switched-off card's transition.
+_TERMS_STYLE = TermsGridStyle(point_size=_TERM_POINT_SIZE, bold_changed=False)
 # How an effect's row divides between what was bought (extras/flaws) and what it costs
 # at the table (the game terms).
 _MODIFIER_STRETCH = 1
@@ -1454,34 +1458,11 @@ class PowersSection(TitledSection):
         modifier changed keeps its green/red tint (with the base value on its tooltip),
         because that is the part worth noticing at a glance.
         """
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 1, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(0)
         attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
         rows = effect_stat_rows(effect, self._data, self._character, attack_bonus)
-        for index, stat in enumerate(rows):
-            grid_row, pair = divmod(index, _TERM_PAIRS_PER_ROW)
-            column = pair * 2
-            label = QLabel(f"{stat.label}:")
-            label.setStyleSheet("color: palette(placeholder-text);")
-            value = QLabel(stat.value)
-            value.setWordWrap(True)
-            tint = _TINTS.get(stat.change)
-            if tint:
-                value.setStyleSheet(f"color: {tint};")
-                value.setToolTip(f"Base: {stat.base}")
-            # The table's small size lives on the QFont rather than in the stylesheet,
-            # so it scales with the card when the power is switched off (a stylesheet
-            # font-size would override the card font and stay put).
-            for widget in (label, value):
-                small = widget.font()
-                small.setPointSizeF(_TERM_POINT_SIZE)
-                widget.setFont(small)
-            grid.addWidget(label, grid_row, column, Qt.AlignmentFlag.AlignTop)
-            grid.addWidget(value, grid_row, column + 1, Qt.AlignmentFlag.AlignTop)
-        for pair in range(_TERM_PAIRS_PER_ROW):
-            grid.setColumnStretch(pair * 2 + 1, 1)
+        grid = build_terms_grid(rows, _TERMS_STYLE)
+        grid.setContentsMargins(0, 1, 0, 0)
+        grid.setVerticalSpacing(0)
         return grid
 
     def _effect_title(self, effect: PowerEffectInstance) -> str:

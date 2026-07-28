@@ -265,10 +265,6 @@ class BlockWindow(QWidget):
         self.setWindowTitle(frame.title)
         self._scroll.setWidget(frame)
 
-    def take_frame(self) -> QWidget | None:
-        """Detach and return the hosted frame (before re-docking it)."""
-        return self._scroll.takeWidget()
-
     def verticalScrollBar_extent(self) -> int:  # noqa: N802 - matches Qt naming style
         """Width the vertical scrollbar occupies, to leave room for it in the min width."""
         return self._scroll.verticalScrollBar().sizeHint().width()

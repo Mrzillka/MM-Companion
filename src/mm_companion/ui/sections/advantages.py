@@ -50,7 +50,7 @@ from mm_companion.core.rules import (
     heroic_advantage_ranks,
     heroic_advantage_ranks_free,
 )
-from mm_companion.ui.sections.column_flow import column_count, even_split
+from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.stat_grid import CONDITION_TINT
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -61,11 +61,6 @@ RANK_MIN, RANK_MAX = 1, 20
 # Sort modes for the chosen-advantages list (UI-only state, not persisted).
 SORT_MANUAL, SORT_NAME, SORT_RANK, SORT_TYPE = "manual", "name", "rank", "type"
 
-# Spacing between the side-by-side advantage panels.
-TABLE_SPACING = 6
-# Dead-band (px) that stops the panel count from flipping when the page's vertical
-# scrollbar appears/disappears (which nudges the width by its own extent).
-COLUMN_HYSTERESIS = 24
 # Below this much room left for the combo box beside the picker controls, the
 # controls wrap onto their own row so the combo keeps enough width to read.
 PICKER_COMBO_MIN = 180
@@ -118,7 +113,7 @@ class _AutoHeightTable(QTableWidget):
         self.updateGeometry()
 
 
-class AdvantagesSection(TitledSection):
+class AdvantagesSection(ColumnFlowPanels, TitledSection):
     """A picker and table of advantages backed by the shared :class:`Character`.
 
     Emits :attr:`changed` whenever the point build changes, so the sheet can
@@ -225,14 +220,7 @@ class AdvantagesSection(TitledSection):
         self._selected: AdvantageSelection | None = None
         self._syncing_selection = False
         self._row_refs: list[tuple[_AutoHeightTable, int, AdvantageSelection]] = []
-        self._tables: list[_AutoHeightTable] = []
-        self._column_count = 0
-        self._tables_container = QWidget()
-        self._tables_layout = QHBoxLayout(self._tables_container)
-        self._tables_layout.setContentsMargins(0, 0, 0, 0)
-        self._tables_layout.setSpacing(TABLE_SPACING)
-        self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        outer.addWidget(self._tables_container)
+        self._init_flow_panels(outer)
         # Keep the content packed at the top: when this block is stretched taller than
         # its content (e.g. sharing a row with the much taller Skills block) the extra
         # height goes to this stretch instead of being spread between the rows above.
@@ -293,18 +281,6 @@ class AdvantagesSection(TitledSection):
         guard_wheel(table)
         return table
 
-    def _ensure_tables(self, count: int) -> None:
-        """Grow or shrink the pool of side-by-side panels to *count*."""
-
-        while len(self._tables) < count:
-            table = self._make_table()
-            self._tables_layout.addWidget(table, stretch=1)
-            self._tables.append(table)
-        while len(self._tables) > count:
-            table = self._tables.pop()
-            self._tables_layout.removeWidget(table)
-            table.deleteLater()
-
     def _rebuild(self) -> None:
         """Re-render every panel from the ordered advantage list.
 
@@ -314,14 +290,7 @@ class AdvantagesSection(TitledSection):
 
         self._row_refs.clear()
         selections = self._character.advantages
-        count = column_count(
-            self._available_width(),
-            self._min_col_width(),
-            TABLE_SPACING,
-            len(selections),
-            self._column_count,
-            COLUMN_HYSTERESIS,
-        )
+        count = self._flow_column_count()
         self._column_count = count
         self._ensure_tables(count)
         buckets = even_split([1] * len(selections), count)
@@ -443,11 +412,8 @@ class AdvantagesSection(TitledSection):
 
     # -- responsive panel count ---------------------------------------------
 
-    def _available_width(self) -> int:
-        """The width the panels have to share, net of the section's margins."""
-
-        margins = self.layout().contentsMargins()
-        return self.width() - margins.left() - margins.right()
+    def _flow_item_count(self) -> int:
+        return len(self._character.advantages)
 
     def _min_col_width(self) -> int:
         """Narrowest a panel may get before a row would clip.
@@ -502,29 +468,7 @@ class AdvantagesSection(TitledSection):
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
         self._apply_picker_mode(self._picker_prefers_narrow())
-        count = column_count(
-            self._available_width(),
-            self._min_col_width(),
-            TABLE_SPACING,
-            len(self._character.advantages),
-            self._column_count,
-            COLUMN_HYSTERESIS,
-        )
-        if count != self._column_count:
-            self._rebuild()
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Report a *single-column* minimum so the block can shrink to one panel.
-
-        When the block is wide it fans the advantages across several side-by-side
-        tables; left alone, that inflates the section's minimum to the full
-        multi-column width, which then pins the whole page (and window) wide and
-        clips the trailing panels. Capping the reported minimum at one column's
-        width lets the block — and the window — narrow, at which point
-        :meth:`resizeEvent` rebuilds to fewer columns and everything reconciles.
-        """
-        hint = super().minimumSizeHint()
-        return QSize(min(hint.width(), self._min_col_width()), hint.height())
+        self._sync_column_count()
 
     def _rank_ceiling(self, advantage: Advantage) -> int:
         """The highest rank the picker may offer for *advantage* right now.

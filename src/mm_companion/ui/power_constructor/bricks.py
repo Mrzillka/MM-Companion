@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.ui.power_constructor.common import CHIP_MIME, brick_tooltip
+from mm_companion.ui.power_constructor.common import _GROUP_HEADER, CHIP_MIME, brick_tooltip
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip
 from mm_companion.ui.theme import TINT_WORSE, tint_rgba
 
@@ -102,6 +102,110 @@ class BrickWidget(QFrame):
         """Clear the press point, so a click that never became a drag leaves none behind."""
         self._press_pos = None
         super().mouseReleaseEvent(event)
+
+
+class BrickList(QWidget):
+    """The scrollable body of a palette tab: bricks, optionally under group headers.
+
+    Owns everything the tab's search box and sort switch used to have threaded
+    through them as parallel arguments — the layout, the sections, the flat brick
+    list and the "No matches" note — and exposes the two operations over them:
+
+    - :meth:`filter_to` hides the bricks that don't match a query, along with any
+      section header left with nothing visible.
+    - :meth:`set_alphabetical` swaps between the grouped layout and one flat A-Z
+      list, re-applying the current filter so a query survives the toggle.
+
+    A flat tab (extras, flaws) is just the degenerate case: one unnamed section.
+    """
+
+    def __init__(
+        self,
+        groups: list[tuple[str | None, list[BrickWidget]]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._layout = QVBoxLayout(self)
+        self._layout.setSpacing(4)
+
+        self._sections: list[tuple[QLabel | None, list[BrickWidget]]] = []
+        self.bricks: list[BrickWidget] = []
+        self._alpha = False
+        self._query = ""
+
+        for title, group in groups:
+            header = self._build_header(title) if title is not None else None
+            if header is not None:
+                self._layout.addWidget(header)
+            for brick in group:
+                self._layout.addWidget(brick)
+            self._sections.append((header, group))
+            self.bricks.extend(group)
+
+        self._empty = QLabel("No matches")
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setEnabled(False)
+        self._empty.setVisible(False)
+        self._layout.addWidget(self._empty)
+        self._layout.addStretch()
+
+    @staticmethod
+    def _build_header(title: str) -> QLabel:
+        header = QLabel(title)
+        # Named so a header is addressable as one: a brick can share a group's name
+        # (the Attack extra vs. the Attack effect group), so selecting headers by
+        # their text alone would sweep bricks up too.
+        header.setObjectName(_GROUP_HEADER)
+        header.setStyleSheet(
+            "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
+        )
+        return header
+
+    def filter_to(self, text: str) -> None:
+        """Show only the bricks whose name contains *text* (case-insensitive)."""
+
+        self._query = text
+        needle = text.strip().lower()
+        for brick in self.bricks:
+            brick.setVisible(needle in brick.search_key)
+        # In the flat A-Z view the section headers stay hidden regardless of matches.
+        for header, group in self._sections:
+            if header is not None:
+                header.setVisible(not self._alpha and any(not b.isHidden() for b in group))
+        self._empty.setVisible(all(b.isHidden() for b in self.bricks))
+
+    def set_alphabetical(self, alpha: bool) -> None:
+        """Lay the bricks out in one flat A-Z list, or back under their group headers.
+
+        Headers and bricks are detached and re-inserted in the new order; the "No
+        matches" note and the trailing stretch stay put at the end.
+        """
+
+        self._alpha = alpha
+        for header, group in self._sections:
+            if header is not None:
+                self._layout.removeWidget(header)
+            for brick in group:
+                self._layout.removeWidget(brick)
+
+        at = 0
+        if alpha:
+            for header, _group in self._sections:
+                if header is not None:
+                    header.setVisible(False)
+            for brick in sorted(self.bricks, key=lambda b: b.search_key):
+                self._layout.insertWidget(at, brick)
+                at += 1
+        else:
+            for header, group in self._sections:
+                if header is not None:
+                    header.setVisible(True)
+                    self._layout.insertWidget(at, header)
+                    at += 1
+                for brick in group:
+                    self._layout.insertWidget(at, brick)
+                    at += 1
+        self.filter_to(self._query)
 
 
 class PaletteDropZone(QWidget):

@@ -188,7 +188,6 @@ class MovementModesWidget(QWidget):
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._data = data
-        self._labels: list[QLabel] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
@@ -201,7 +200,6 @@ class MovementModesWidget(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
-        self._labels = []
         for line in lines:
             text = f"{line.label}: {_compact(speed_columns(line.rank, self._data)[0])}/round"
             if line.note:
@@ -211,7 +209,6 @@ class MovementModesWidget(QWidget):
             if line.description:
                 label.setToolTip(line.description)
             layout.addWidget(label)
-            self._labels.append(label)
         self.setVisible(bool(lines))
 
 

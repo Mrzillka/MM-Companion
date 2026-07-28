@@ -5,7 +5,7 @@ one row per trait, with a green "→ total" label that appears only when a power
 enhances that trait. Both :class:`~mm_companion.ui.sections.abilities.AbilitiesSection`
 and :class:`~mm_companion.ui.sections.resistances.ResistancesSection` build their
 grids through :func:`build_stat_group` and refresh their enhancement labels through
-:func:`apply_enhancements`.
+:func:`apply_stat_effects`.
 """
 
 from __future__ import annotations
@@ -155,9 +155,3 @@ def apply_stat_effects(
         label.setStyleSheet(f"color: {tint}; font-weight: bold;")
         _set_label_strike(label, has_cond and effect.trait_lost)
         label.setVisible(True)
-
-
-def apply_enhancements(spins: dict, labels: dict, bonuses: dict) -> None:
-    """Back-compat shim: power boosts only, no condition overlay."""
-
-    apply_stat_effects(spins, labels, bonuses, None)

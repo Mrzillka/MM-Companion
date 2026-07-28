@@ -14,8 +14,8 @@ web just by declaring which topics it publishes/subscribes on its
 
 **All topics are argless.** Every base subscriber recomputes its view from the
 shared :class:`~mm_companion.core.character.Character` model rather than from a
-signal payload (e.g. the skills block's ``set_ability_value`` ignores its
-arguments and just refreshes its totals from the model), so a topic only needs
+signal payload (e.g. the skills block's ``refresh_totals`` takes no arguments and
+just recomputes from the model), so a topic only needs
 to say *that* something changed, not *what*. This keeps dispatch trivial and
 lets a Qt signal that carries arguments (``abilityChanged(str, int)``) publish an
 argless topic — the publisher adapter simply drops the arguments.

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -53,7 +53,7 @@ from mm_companion.core.rules import (
     skill_total,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.column_flow import column_count, even_split
+from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.stat_grid import (
     CONDITION_TINT,
     ENHANCED_TINT,
@@ -67,11 +67,6 @@ COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
 # Keep the numeric spin-box columns narrow so they don't hog horizontal space.
 SPIN_WIDTH = 56
-# Spacing between the side-by-side skill panels.
-TABLE_SPACING = 6
-# Dead-band (px) that stops the panel count from flipping when the page's vertical
-# scrollbar appears/disappears (which nudges the width by its own extent).
-COLUMN_HYSTERESIS = 24
 # Rough widths used to decide how many panels fit without clipping a name.
 # The numeric columns are near-fixed; the name column needs room for the widest
 # skill/focus/specialization label. Kept lean so a second column appears before a
@@ -100,7 +95,7 @@ class SkillRow(NamedTuple):
     name_item: QTableWidgetItem | None
 
 
-class SkillsSection(TitledSection):
+class SkillsSection(ColumnFlowPanels, TitledSection):
     """A table of skills whose total bonuses track the shared character model.
 
     Ranks and focuses are read from and written to the :class:`Character`; the "+"
@@ -141,17 +136,8 @@ class SkillsSection(TitledSection):
 
         layout = QVBoxLayout(self)
         # The skills fan out across a variable number of side-by-side panels; the
-        # count adapts to the block's width (see resizeEvent / _rebuild). The
-        # tables live in a container whose horizontal layout is rebuilt when the
-        # count changes.
-        self._tables_container = QWidget()
-        self._tables_layout = QHBoxLayout(self._tables_container)
-        self._tables_layout.setContentsMargins(0, 0, 0, 0)
-        self._tables_layout.setSpacing(TABLE_SPACING)
-        self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self._tables_container)
-        self._tables: list[QTableWidget] = []
-        self._column_count = 0
+        # count adapts to the block's width (see ColumnFlowPanels).
+        self._init_flow_panels(layout)
         self._rebuild()
 
     def _make_table(self) -> QTableWidget:
@@ -174,18 +160,6 @@ class SkillsSection(TitledSection):
         guard_wheel(table)
         return table
 
-    def _ensure_tables(self, count: int) -> None:
-        """Grow or shrink the pool of side-by-side panels to *count*."""
-
-        while len(self._tables) < count:
-            table = self._make_table()
-            self._tables_layout.addWidget(table, stretch=1)
-            self._tables.append(table)
-        while len(self._tables) > count:
-            table = self._tables.pop()
-            self._tables_layout.removeWidget(table)
-            table.deleteLater()
-
     @staticmethod
     def _fit_table_height(table: QTableWidget) -> None:
         """Fix the table's height to exactly show every row, so it never scrolls
@@ -201,14 +175,7 @@ class SkillsSection(TitledSection):
     def _rebuild(self) -> None:
         self._rows.clear()
         self._editable_spins.clear()
-        count = column_count(
-            self._available_width(),
-            self._min_col_width(),
-            TABLE_SPACING,
-            len(self._skills),
-            self._column_count,
-            COLUMN_HYSTERESIS,
-        )
+        count = self._flow_column_count()
         self._column_count = count
         self._ensure_tables(count)
         for table, skills in zip(self._tables, self._split_blocks(count), strict=True):
@@ -240,11 +207,8 @@ class SkillsSection(TitledSection):
 
     # -- responsive panel count ---------------------------------------------
 
-    def _available_width(self) -> int:
-        """The width the panels have to share, net of the section's margins."""
-
-        margins = self.layout().contentsMargins()
-        return self.width() - margins.left() - margins.right()
+    def _flow_item_count(self) -> int:
+        return len(self._skills)
 
     def _min_col_width(self) -> int:
         """Narrowest a panel may get before a skill name would clip.
@@ -269,28 +233,7 @@ class SkillsSection(TitledSection):
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
-        count = column_count(
-            self._available_width(),
-            self._min_col_width(),
-            TABLE_SPACING,
-            len(self._skills),
-            self._column_count,
-            COLUMN_HYSTERESIS,
-        )
-        if count != self._column_count:
-            self._rebuild()
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Report a *single-column* minimum so the block can shrink to one panel.
-
-        The side-by-side skill tables would otherwise inflate the section's
-        minimum to the full multi-column width, pinning the whole page wide and
-        forcing at least two columns. Capping the reported minimum at one
-        column's width lets the block narrow to a single column; the resize then
-        rebuilds to as many columns as fit (see :meth:`resizeEvent`).
-        """
-        hint = super().minimumSizeHint()
-        return QSize(min(hint.width(), self._min_col_width()), hint.height())
+        self._sync_column_count()
 
     def _expand(self, skills: list[Skill]) -> list[tuple]:
         """Flatten skills into per-row specs.
@@ -530,16 +473,6 @@ class SkillsSection(TitledSection):
         self.changed.emit()
 
     # -- totals --------------------------------------------------------------
-
-    def set_ability_value(self, key: str, value: int) -> None:
-        """Refresh skill totals after an ability changed on the shared model."""
-
-        self._refresh_totals()
-
-    def set_ability_values(self, values: dict[str, int]) -> None:
-        """Refresh skill totals (kept for the sheet's initial sync call)."""
-
-        self._refresh_totals()
 
     def refresh_totals(self) -> None:
         """Recompute every skill total — the sheet calls this when powers change,

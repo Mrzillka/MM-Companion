@@ -26,7 +26,6 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
 )
 from mm_companion.core.rules import (
-    HOMERULE_TINT,
     array_alternate_cost,
     array_base_index,
     effect_attack_skill_bonus,
@@ -35,7 +34,7 @@ from mm_companion.core.rules import (
     power_total_cost,
     resolve_stat_display,
 )
-from mm_companion.ui.theme import ACCENT, TINT_BETTER, TINT_WORSE
+from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, make_spin_box
 
@@ -72,11 +71,6 @@ class PowerTermsView(QWidget):
 
     # Tints for a modified stat's value; readable on both light and dark themes.
     # A homerule override reads in a distinct blue, apart from modifier better/worse.
-    _TINTS = {"better": TINT_BETTER, "worse": TINT_WORSE, HOMERULE_TINT: ACCENT}
-    # How many label/value pairs sit side by side per grid row, so the short stats
-    # pack across the width instead of stacking into a tall, scrolling column.
-    _PAIRS_PER_ROW = 2
-
     # Emitted when a Dev-mode override is edited in the table, so the window can
     # recompute cost/PL without rebuilding the table (which would drop the live widget).
     edited = Signal()
@@ -161,28 +155,9 @@ class PowerTermsView(QWidget):
 
         rows = effect_stat_rows(effect, game_data, char, attack_bonus)
         self.effect_rows.append(rows)
-        pairs = self._PAIRS_PER_ROW
-        grid = QGridLayout()
+        grid = build_terms_grid(rows)
         grid.setContentsMargins(12, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(1)
-        for index, stat in enumerate(rows):
-            grid_row, pair = divmod(index, pairs)
-            col = pair * 2
-            label = QLabel(f"{stat.label}:")
-            label.setStyleSheet("color: palette(placeholder-text);")
-            value = QLabel(stat.value)
-            value.setWordWrap(True)
-            tint = self._TINTS.get(stat.change)
-            if tint:
-                value.setStyleSheet(f"color: {tint}; font-weight: bold;")
-                value.setToolTip(f"Base: {stat.base}")
-            grid.addWidget(label, grid_row, col, Qt.AlignmentFlag.AlignTop)
-            grid.addWidget(value, grid_row, col + 1, Qt.AlignmentFlag.AlignTop)
-        # Let the value columns share the slack evenly so the pairs spread across
-        # the width rather than bunching at the left.
-        for pair in range(pairs):
-            grid.setColumnStretch(pair * 2 + 1, 1)
         self._layout.addLayout(grid)
 
     # -- Dev-mode editable table ------------------------------------------

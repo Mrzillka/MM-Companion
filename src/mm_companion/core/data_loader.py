@@ -205,13 +205,35 @@ class Advantage:
 # --- Conditions: the status catalog + its mechanical sub-records (parameters,
 #     debilitation, defense/attack/resistance mods, stacking, recovery). -------
 @dataclass(frozen=True)
+class ConditionParameterOption:
+    """One choice in a condition parameter's dropdown.
+
+    ``value`` is both the label shown and the text stored. The two flags mark the
+    choices that are not ordinary subjects, so the dialog recognises them from the
+    data rather than by matching their prose (which a reword or a translation would
+    silently break):
+
+    - ``unscoped`` — the choice means *no particular subject* (Disabled's
+      "All checks", Unaware's "All senses"), and is stored as no scope at all.
+    - ``specific_kind`` — the choice is a placeholder that opens a second dropdown of
+      concrete traits of that kind: ``"a specific skill"`` carries ``"skill"``.
+    """
+
+    value: str
+    unscoped: bool = False
+    specific_kind: str = ""
+
+
+@dataclass(frozen=True)
 class ConditionParameter:
     """The subject a condition must be qualified with when applied (§6).
 
     ``type`` is one of ``trait_select`` / ``sense_select`` / ``descriptor_text`` /
     ``character_ref`` and drives the UI control; ``options`` populates a combobox
-    (empty ⇒ free text). ``required`` gates whether the condition can be applied
-    before the subject is named — see ``docs/mm-conditions-design.md`` §6.
+    (empty ⇒ free text), with ``option_specs`` carrying the same choices plus the
+    per-choice flags described on :class:`ConditionParameterOption`. ``required``
+    gates whether the condition can be applied before the subject is named — see
+    ``docs/mm-conditions-design.md`` §6.
     """
 
     type: str
@@ -219,6 +241,7 @@ class ConditionParameter:
     label: str = ""
     help: str = ""
     options: tuple[str, ...] = ()
+    option_specs: tuple[ConditionParameterOption, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -329,6 +352,30 @@ class Condition:
     stacking_rule: StackingRule | None = None
     recovery_check: RecoveryCheck | None = None
     random_table: tuple[RandomActionRow, ...] = ()
+    #: Whether the trait this condition scopes to should read as lost — the sheet
+    #: strikes it through (Disabled, Debilitated). Not derivable from ``mechanisms``:
+    #: Disabled is a check penalty severe enough to count, Debilitated a real trait
+    #: removal, so the data says so outright.
+    trait_lost: bool = False
+
+
+@dataclass(frozen=True)
+class ConditionCategory:
+    """One group the Conditions block sorts its chips into, from ``conditions.json``.
+
+    ``category`` matches a :class:`Condition`'s ``category``; ``title`` is the heading
+    shown above that group; ``addable`` marks a group the "+" menu may apply from —
+    false for the object-damage ladder and the ``normal`` bookkeeping marker, which
+    are not statuses a player puts on a character.
+
+    In data (``_meta.sheetSections``) rather than in the widget so a mod that adds a
+    category gets a group of its own instead of having its conditions silently folded
+    into the general one.
+    """
+
+    category: str
+    title: str
+    addable: bool = True
 
 
 # --- Powers layer: base effects, modifiers (extras/flaws), and the config
@@ -1026,6 +1073,9 @@ class GameData:
     #: Data-described blocks a mod contributes via ``blocks.json`` (empty for the
     #: base ruleset, whose blocks are built-in Python widgets).
     blocks: tuple[BlockSpec, ...] = ()
+    #: How the Conditions block groups its chips, from ``conditions.json``'s
+    #: ``_meta.sheetSections`` — in display order.
+    condition_categories: tuple[ConditionCategory, ...] = ()
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1196,15 +1246,29 @@ def _parse_advantage(a: dict) -> Advantage:
     )
 
 
+def _parse_condition_parameter_option(raw) -> ConditionParameterOption:
+    """One ``options`` entry: a bare string, or an object carrying the per-choice flags."""
+
+    if isinstance(raw, dict):
+        return ConditionParameterOption(
+            value=str(raw.get("value", "")),
+            unscoped=bool(raw.get("unscoped", False)),
+            specific_kind=str(raw.get("specificKind", "")),
+        )
+    return ConditionParameterOption(value=str(raw))
+
+
 def _parse_condition_parameter(raw: dict | None) -> ConditionParameter | None:
     if not raw:
         return None
+    specs = tuple(_parse_condition_parameter_option(o) for o in raw.get("options", ()))
     return ConditionParameter(
         type=raw.get("type", ""),
         required=bool(raw.get("required", False)),
         label=raw.get("label", ""),
         help=raw.get("help", ""),
-        options=tuple(raw.get("options", ())),
+        options=tuple(spec.value for spec in specs),
+        option_specs=specs,
     )
 
 
@@ -1299,6 +1363,7 @@ def _parse_condition(c: dict) -> Condition:
             RandomActionRow(range=r.get("range", ""), outcome=r.get("outcome", ""))
             for r in c.get("randomTable", ())
         ),
+        trait_lost=bool(c.get("traitLost", False)),
     )
 
 
@@ -1558,6 +1623,30 @@ def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
     return result
 
 
+#: Used when ``conditions.json`` carries no ``_meta.sheetSections`` (an older file, or
+#: a mod's), so the Conditions block still groups the base categories sensibly.
+_DEFAULT_CONDITION_CATEGORIES = (
+    ConditionCategory("condition", "General", addable=True),
+    ConditionCategory("damage_condition", "Damage", addable=True),
+)
+
+
+def _parse_condition_categories(raw: dict) -> tuple[ConditionCategory, ...]:
+    sections = raw.get("_meta", {}).get("sheetSections")
+    if not isinstance(sections, list) or not sections:
+        return _DEFAULT_CONDITION_CATEGORIES
+    parsed = [
+        ConditionCategory(
+            category=str(entry["category"]),
+            title=str(entry.get("title", entry["category"])),
+            addable=bool(entry.get("addable", True)),
+        )
+        for entry in sections
+        if isinstance(entry, dict) and entry.get("category")
+    ]
+    return tuple(parsed) or _DEFAULT_CONDITION_CATEGORIES
+
+
 def _parse_costs(raw: dict) -> Costs:
     # Tolerate unknown keys (e.g. from a mod) so they can't crash the loader.
     trait_fields = {f.name for f in fields(TraitCosts)}
@@ -1796,6 +1885,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         skills=[_parse_skill(s) for s in skills_raw.get("skills", [])],
         advantages=[_parse_advantage(a) for a in advantages_raw.get("advantages", [])],
         conditions=[_parse_condition(c) for c in conditions_raw.get("conditions", [])],
+        condition_categories=_parse_condition_categories(conditions_raw),
         effects=[_parse_effect(e, system.ranged_distance) for e in effects_raw.get("effects", [])],
         modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),

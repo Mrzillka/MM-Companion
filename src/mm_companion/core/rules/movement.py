@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import GameData
+from .conditions import condition_speed_rank_mod
 from .powers_cost import effect_effective_rank
 from .runtime import effect_is_active, live_powers
 
@@ -19,10 +20,18 @@ class SpeedLine:
     ``label`` names the mode (``"Base"`` for ground movement, else the power's effect
     and rank, e.g. ``"Flight 2"``); ``rank`` is the speed rank the three distance
     columns derive from.
+
+    ``rank_mod`` and ``immobilised`` carry a condition overlay
+    (:func:`condition_speed_lines`): ``rank_mod`` is the penalty *already folded into*
+    ``rank``, kept alongside so the UI can say how much was lost and tint the line, and
+    ``immobilised`` marks a line a condition has zeroed outright. Both are inert on the
+    plain build lines :func:`speed_lines` returns.
     """
 
     label: str
     rank: int
+    rank_mod: int = 0
+    immobilised: bool = False
 
 
 def _size_speed_mod(char: Character, game_data: GameData) -> int:
@@ -68,6 +77,28 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
                 continue
             rank = effect_effective_rank(effect, game_data, char)
             lines.append(SpeedLine(f"{base.name} {rank}", rank))
+    return lines
+
+
+def condition_speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
+    """:func:`speed_lines` with the character's condition overlay resolved into them.
+
+    Conditions are a display overlay, not build math, and they only reach the *base*
+    (ground) line — a Hindered character's Flight is unaffected. Resolving it here
+    rather than in the widget keeps the arithmetic in one place, the way
+    :func:`~mm_companion.core.rules.resistance_condition_effect` and
+    :func:`~mm_companion.core.rules.condition_scope_penalty` already do for the grids.
+    """
+
+    lines = speed_lines(char, game_data)
+    mod = condition_speed_rank_mod(char, game_data)
+    if not lines or mod == 0:
+        return lines
+    base = lines[0]
+    if mod is None:  # Immobile / Prone zeroes ground movement outright
+        lines[0] = replace(base, immobilised=True)
+    else:
+        lines[0] = replace(base, rank=base.rank + mod, rank_mod=mod)
     return lines
 
 

@@ -676,3 +676,65 @@ def test_removing_by_id_can_take_off_a_bundled_member(qapp: QApplication) -> Non
 
     assert "dazed" not in _ids(char)
     assert "staggered" in _ids(char)
+
+
+# --- The sheet's condition presentation is data-driven, not keyed off ids -------
+
+
+def test_condition_categories_come_from_the_data() -> None:
+    """The Conditions block's chip groups are declared in conditions.json, so a mod
+    adding a category gets a group instead of being folded into 'General'."""
+    data = load_game_data()
+    sections = {c.category: c for c in data.condition_categories}
+
+    assert sections["condition"].title == "General"
+    assert sections["damage_condition"].title == "Damage"
+    # The object-damage ladder is tracked but is not a status a player applies.
+    assert sections["object_damage_condition"].addable is False
+    assert sections["condition"].addable is True
+
+    # Every addable category is one the catalog actually uses.
+    used = {c.category for c in data.conditions}
+    assert {c.category for c in data.condition_categories} <= used
+
+
+def test_trait_lost_is_declared_in_the_data() -> None:
+    """Disabled is a check penalty and Debilitated a trait removal — neither is
+    derivable from `mechanisms`, so the record says outright which read as lost."""
+    catalog = load_game_data().condition_catalog()
+    assert catalog["disabled"].trait_lost is True
+    assert catalog["debilitated"].trait_lost is True
+    assert catalog["impaired"].trait_lost is False
+    assert catalog["hindered"].trait_lost is False
+
+
+def test_condition_effect_reports_trait_lost() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+
+    apply_condition(char, "impaired", data, parameter="Attack")
+    effect = condition_scope_penalty(char, data, {"ATK", "Attack"})
+    assert effect.active and effect.trait_lost is False
+
+    apply_condition(char, "disabled", data, parameter="Attack")
+    effect = condition_scope_penalty(char, data, {"ATK", "Attack"})
+    assert effect.active and effect.trait_lost is True
+
+
+def test_unscoped_and_specific_options_are_flagged_in_the_data() -> None:
+    """The condition dialog reads these flags instead of matching the option's prose,
+    so rewording an option can't silently change what a choice stores."""
+    catalog = load_game_data().condition_catalog()
+
+    disabled = {o.value: o for o in catalog["disabled"].parameter.option_specs}
+    assert disabled["All checks"].unscoped is True
+    assert disabled["Attack"].unscoped is False
+    assert disabled["a specific skill"].specific_kind == "skill"
+
+    unaware = {o.value: o for o in catalog["unaware"].parameter.option_specs}
+    assert unaware["All senses"].unscoped is True
+    assert unaware["Sight"].unscoped is False
+
+    # The plain string form still parses, carrying no flags.
+    debilitated = {o.value: o for o in catalog["debilitated"].parameter.option_specs}
+    assert debilitated["Strength"] == debilitated["Strength"].__class__("Strength")

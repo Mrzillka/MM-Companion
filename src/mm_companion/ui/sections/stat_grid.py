@@ -26,8 +26,6 @@ STAT_SPIN_WIDTH = 80
 ENHANCED_TINT = TINT_BETTER
 # The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
 CONDITION_TINT = TINT_WORSE
-# Conditions rendered struck through on the stat they hit (a lost/near-lost trait).
-STRIKETHROUGH_CONDITIONS = frozenset({"disabled", "debilitated"})
 
 
 def add_stat_row(
@@ -125,8 +123,8 @@ def apply_stat_effects(
     The label reads ``→ N``, where ``N`` is the spin box's value plus any power boost,
     then a condition overlay (a Hit penalty on Toughness, a halved/zeroed active defense,
     a scoped check penalty). A pure power boost tints green; any condition tints it red,
-    struck through when a lost-trait condition (Disabled/Debilitated) is involved. A trait
-    with neither keeps its label hidden.
+    struck through when the overlay reports the trait lost (``ConditionEffect.trait_lost``
+    — Disabled/Debilitated in the base data). A trait with neither keeps its label hidden.
     """
 
     cond_effects = cond_effects or {}
@@ -155,7 +153,7 @@ def apply_stat_effects(
 
         tint = CONDITION_TINT if has_cond else ENHANCED_TINT
         label.setStyleSheet(f"color: {tint}; font-weight: bold;")
-        _set_label_strike(label, has_cond and bool(effect.condition_ids & STRIKETHROUGH_CONDITIONS))
+        _set_label_strike(label, has_cond and effect.trait_lost)
         label.setVisible(True)
 
 

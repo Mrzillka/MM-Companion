@@ -57,7 +57,6 @@ from mm_companion.ui.sections.column_flow import column_count, even_split
 from mm_companion.ui.sections.stat_grid import (
     CONDITION_TINT,
     ENHANCED_TINT,
-    STRIKETHROUGH_CONDITIONS,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -608,14 +607,14 @@ class SkillsSection(TitledSection):
         mod_item.setToolTip("\n".join(tips))
 
         mod_item.setForeground(QBrush(QColor(CONDITION_TINT if penalised else ENHANCED_TINT)))
-        font.setStrikeOut(bool(mod.condition.condition_ids & STRIKETHROUGH_CONDITIONS))
+        font.setStrikeOut(mod.condition.trait_lost)
         mod_item.setFont(font)
 
     @staticmethod
     def _style_condition(total_item, name_item, effect, base_total: int) -> None:
         """Tint the total red (and strike the row) while a condition scopes to it."""
 
-        struck = effect.active and bool(effect.condition_ids & STRIKETHROUGH_CONDITIONS)
+        struck = effect.active and effect.trait_lost
         for item in (total_item, name_item):
             if item is None:
                 continue

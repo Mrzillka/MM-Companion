@@ -7,6 +7,24 @@
       "object_damage_condition": "The object/equipment equivalent of a damage condition",
       "meta": "Not a real status — a bookkeeping marker (Normal = no conditions)"
     },
+    "sheetSectionsNote": "How the character sheet's Conditions block groups its chips, in display order. 'addable' marks a group the block's '+' menu may apply from — the object-damage ladder and the 'normal' marker are tracked but not applied to a character. A mod adding a category should add a section here so its conditions get a group of their own.",
+    "sheetSections": [
+      {
+        "category": "condition",
+        "title": "General",
+        "addable": true
+      },
+      {
+        "category": "damage_condition",
+        "title": "Damage",
+        "addable": true
+      },
+      {
+        "category": "object_damage_condition",
+        "title": "Object Damage",
+        "addable": false
+      }
+    ],
     "damageLadder": [
       "hit",
       "dazed",
@@ -288,6 +306,7 @@
     },
     {
       "id": "debilitated",
+      "traitLost": true,
       "name": "Debilitated",
       "tooltip": "Has effectively lost the use of a specific trait.",
       "category": "condition",
@@ -312,9 +331,18 @@
           "Attack",
           "Defense",
           "Initiative",
-          "a specific Skill",
-          "a specific Advantage",
-          "a specific Power"
+          {
+            "value": "a specific Skill",
+            "specificKind": "skill"
+          },
+          {
+            "value": "a specific Advantage",
+            "specificKind": "advantage"
+          },
+          {
+            "value": "a specific Power",
+            "specificKind": "power"
+          }
         ]
       },
       "debilitates": {
@@ -417,6 +445,7 @@
     },
     {
       "id": "disabled",
+      "traitLost": true,
       "name": "Disabled",
       "tooltip": "-5 penalty on all checks, or on a specific named category of checks.",
       "category": "condition",
@@ -434,12 +463,21 @@
         "label": "Scoped to checks",
         "help": "Leave blank for all checks, or name a category/trait (e.g. Attack, Fighting, Perception) — appended to the name as 'Attack Disabled', etc.",
         "options": [
-          "All checks",
+          {
+            "value": "All checks",
+            "unscoped": true
+          },
           "Attack",
           "Fighting",
           "Perception",
-          "a specific ability",
-          "a specific skill"
+          {
+            "value": "a specific ability",
+            "specificKind": "ability"
+          },
+          {
+            "value": "a specific skill",
+            "specificKind": "skill"
+          }
         ]
       },
       "debilitates": null,
@@ -677,12 +715,21 @@
         "label": "Scoped to checks",
         "help": "Leave blank for all checks, or name a category/trait (e.g. Attack, Fighting, Perception) — appended to the name as 'Attack Impaired', etc.",
         "options": [
-          "All checks",
+          {
+            "value": "All checks",
+            "unscoped": true
+          },
           "Attack",
           "Fighting",
           "Perception",
-          "a specific ability",
-          "a specific skill"
+          {
+            "value": "a specific ability",
+            "specificKind": "ability"
+          },
+          {
+            "value": "a specific skill",
+            "specificKind": "skill"
+          }
         ]
       },
       "debilitates": null,
@@ -950,12 +997,18 @@
         "label": "Scoped to sense",
         "help": "Leave blank for total unawareness, or name a sense — appended as 'Sight Unaware', 'Touch Unaware', etc.",
         "options": [
-          "All senses",
+          {
+            "value": "All senses",
+            "unscoped": true
+          },
           "Sight",
           "Hearing",
           "Touch",
           "Smell/Taste",
-          "a specific sense"
+          {
+            "value": "a specific sense",
+            "specificKind": "sense"
+          }
         ]
       },
       "debilitates": null,

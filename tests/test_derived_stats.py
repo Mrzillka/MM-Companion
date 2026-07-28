@@ -245,3 +245,49 @@ def test_growth_turned_off_returns_to_base_size() -> None:
 
     assert size_shift(char, data) == 0
     assert effective_size(char, data) == "Medium"
+
+
+# --- The condition overlay on speed is resolved in core, not in the widget ------
+
+
+def test_condition_speed_lines_slows_only_the_ground_line() -> None:
+    from mm_companion.core.rules import apply_condition, condition_speed_lines
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.powers.append(Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)]))
+
+    plain = condition_speed_lines(char, data)
+    assert [line.rank_mod for line in plain] == [0] * len(plain)
+    assert not any(line.immobilised for line in plain)
+
+    apply_condition(char, "hindered", data)
+    slowed = condition_speed_lines(char, data)
+    # The ground line arrives already reduced, carrying the penalty for the UI to show.
+    assert slowed[0].rank == plain[0].rank + slowed[0].rank_mod
+    assert slowed[0].rank_mod < 0
+    # Flight is untouched by a ground-speed condition.
+    assert slowed[1].rank == plain[1].rank
+    assert slowed[1].rank_mod == 0
+
+
+def test_condition_speed_lines_flags_immobilised() -> None:
+    from mm_companion.core.rules import apply_condition, condition_speed_lines
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    apply_condition(char, "immobile", data)
+
+    lines = condition_speed_lines(char, data)
+    assert lines[0].immobilised is True
+
+
+def test_speed_lines_itself_carries_no_condition_overlay() -> None:
+    """The plain build math stays condition-free — the overlay is a separate call."""
+    from mm_companion.core.rules import apply_condition
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    before = speed_lines(char, data)
+    apply_condition(char, "hindered", data)
+    assert speed_lines(char, data) == before

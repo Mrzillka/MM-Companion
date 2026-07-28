@@ -30,12 +30,10 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui.wheel_guard import guard_wheel
 
-# Option values that mean "no scope" rather than a real subject — normalized to None.
-UNSCOPED_VALUES = {"", "All checks", "All senses"}
-# The leading text of a placeholder option that opens a second combo of concrete
-# traits (e.g. "a specific ability", "a specific Skill") — matched case-insensitively.
-SPECIFIC_PREFIX = "a specific "
-# The nouns after that prefix that we can populate a concrete second combo for.
+# Which options mean "no scope" and which open a second combo is declared per option
+# in ``conditions.json`` (see :class:`ConditionParameterOption`), not matched against
+# their prose here — rewording an option in the data must not silently change what a
+# choice stores. The kinds below are just the ones this dialog knows how to list.
 _SPECIFIC_KINDS = frozenset({"ability", "skill", "advantage", "power"})
 
 
@@ -55,6 +53,8 @@ class ConditionParameterDialog(QDialog):
         self._param = param
         self._data = game_data
         self._character = character
+        # value -> its declared flags, for the two lookups below.
+        self._option_specs = {spec.value: spec for spec in param.option_specs}
         self.setWindowTitle(condition.name)
 
         layout = QVBoxLayout(self)
@@ -112,18 +112,17 @@ class ConditionParameterDialog(QDialog):
         self._sync_ok()
 
     def _specific_kind(self) -> str | None:
-        """The trait kind a "a specific …" primary option names (or ``None``).
+        """The trait kind the chosen option names as its ``specificKind`` (or ``None``).
 
-        Returns the lower-cased noun (``"ability"`` / ``"skill"`` / ``"advantage"`` /
-        ``"power"``) for a placeholder that should reveal the second combo.
+        Only the kinds this dialog can actually list concrete choices for count; a
+        placeholder naming anything else stays a plain free-text scope.
         """
 
-        choice = self._primary_value().lower()
-        if choice.startswith(SPECIFIC_PREFIX):
-            kind = choice[len(SPECIFIC_PREFIX) :].strip()
-            if kind in _SPECIFIC_KINDS:
-                return kind
-        return None
+        spec = self._option_specs.get(self._primary_value())
+        if spec is None or not spec.specific_kind:
+            return None
+        kind = spec.specific_kind.lower()
+        return kind if kind in _SPECIFIC_KINDS else None
 
     def _specific_options(self, kind: str) -> list[str]:
         """Concrete choices for a "a specific <kind>" pick, drawn from data/character."""
@@ -166,7 +165,10 @@ class ConditionParameterDialog(QDialog):
             chosen = self._specific.currentText().strip()
             return chosen or None
         primary = self._primary_value()
-        return None if primary in UNSCOPED_VALUES else primary
+        spec = self._option_specs.get(primary)
+        if not primary or (spec is not None and spec.unscoped):
+            return None
+        return primary
 
     def _sync_ok(self, *_: object) -> None:
         # A required parameter must resolve to a non-blank subject before OK is allowed.

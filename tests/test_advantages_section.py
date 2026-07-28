@@ -203,3 +203,30 @@ def test_edit_advantage_updates_rank_and_subject(qapp, monkeypatch) -> None:
 
     assert selection.parameter == "Fame"
     assert selection.rank == 3
+
+
+def test_heroic_ranks_free_backs_both_the_picker_cap_and_the_add_refusal() -> None:
+    """One helper, so the rank ceiling the picker offers and the limit the add
+    enforces cannot drift apart."""
+    from mm_companion.core.rules import (
+        HEROIC_TYPE,
+        heroic_advantage_budget,
+        heroic_advantage_ranks,
+        heroic_advantage_ranks_free,
+    )
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 10  # budget = 5
+
+    assert heroic_advantage_ranks_free(char, data) == heroic_advantage_budget(10)
+
+    heroic = next(a for a in data.advantages if HEROIC_TYPE in a.types and a.ranked)
+    char.advantages.append(AdvantageSelection(heroic.name, rank=3))
+    free = heroic_advantage_ranks_free(char, data)
+    assert free == heroic_advantage_budget(10) - heroic_advantage_ranks(char, data)
+    assert free == 2
+
+    # Over-budget reports negative rather than clamping — the callers decide.
+    char.advantages.append(AdvantageSelection(heroic.name, rank=9))
+    assert heroic_advantage_ranks_free(char, data) < 0

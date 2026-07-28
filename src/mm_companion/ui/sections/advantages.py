@@ -48,6 +48,7 @@ from mm_companion.core.rules import (
     debilitated_traits,
     heroic_advantage_budget,
     heroic_advantage_ranks,
+    heroic_advantage_ranks_free,
 )
 from mm_companion.ui.sections.column_flow import column_count, even_split
 from mm_companion.ui.sections.stat_grid import CONDITION_TINT
@@ -537,9 +538,7 @@ class AdvantagesSection(TitledSection):
         cap = advantage_rank_cap(advantage, self._character.power_level)
         ceiling = RANK_MAX if cap is None else cap
         if HEROIC_TYPE in advantage.types:
-            remaining = heroic_advantage_budget(
-                self._character.power_level
-            ) - heroic_advantage_ranks(self._character, self._data)
+            remaining = heroic_advantage_ranks_free(self._character, self._data)
             ceiling = min(ceiling, max(RANK_MIN, remaining))
         return ceiling
 
@@ -753,12 +752,14 @@ class AdvantagesSection(TitledSection):
             else ""
         )
         # Enforce the shared Heroic-advantage budget as a hard limit on the add.
-        if HEROIC_TYPE in advantage.types:
-            budget = heroic_advantage_budget(self._character.power_level)
-            prospective = heroic_advantage_ranks(self._character, self._data) + rank
-            if prospective > budget:
-                self._show_heroic_budget(prospective - rank, budget, blocked=True)
-                return
+        if HEROIC_TYPE in advantage.types and rank > heroic_advantage_ranks_free(
+            self._character, self._data
+        ):
+            spent = heroic_advantage_ranks(self._character, self._data)
+            self._show_heroic_budget(
+                spent, heroic_advantage_budget(self._character.power_level), blocked=True
+            )
+            return
         self._character.advantages.append(AdvantageSelection(advantage.name, rank, parameter))
         self._rebuild()
         self.refresh_cost()
@@ -811,7 +812,7 @@ class AdvantagesSection(TitledSection):
 
         suffix = "  — budget reached" if blocked else ""
         self._heroic_label.setText(f"Heroic advantages: {used} / {budget}{suffix}")
-        self._heroic_label.setStyleSheet("color: #c0392b;" if blocked else "")
+        self._heroic_label.setStyleSheet(f"color: {CONDITION_TINT};" if blocked else "")
 
     def set_locked(self, locked: bool) -> None:
         """Hide the advantage picker and sort/move controls while locked; the

@@ -102,9 +102,14 @@ def reset() -> None:
     Call after the ``theme`` setting changes, after a preset file is edited, or
     (in tests) after the workspace is pointed somewhere else.
     """
+    # Imported here, not at module scope: block_sizes reads the active theme, so
+    # importing it up top would close the loop.
+    from mm_companion.ui.block_sizes import clear_block_size_cache
+
     global _active
     _active = None
     clear_theme_cache()
+    clear_block_size_cache()
 
 
 def set_active_theme(theme_id: str, app: QApplication | None = None) -> Theme:

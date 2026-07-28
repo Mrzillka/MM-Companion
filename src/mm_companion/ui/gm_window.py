@@ -65,7 +65,7 @@ from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas, DropIndicator
-from mm_companion.ui.block_sizes import BlockSize
+from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
@@ -194,11 +194,11 @@ class GMWindow(QMainWindow):
         ]
         for _key, _title, box in panels:
             strip_groupbox_caption(box)  # the block's title bar carries the name now
-        sizes = {
-            "players": BlockSize(min_width=250, min_height=130),
-            "npcs": BlockSize(min_width=250, min_height=150),
-            "rolls": BlockSize(min_width=660, min_height=260),
-        }
+        # The GM blocks' bounds live in block_sizes.json alongside the sheet's, under
+        # gm_-prefixed keys, so a theme can retune them the same way (the canvas keys
+        # them without the prefix, since the GM window has its own block namespace).
+        shipped = load_block_sizes()
+        sizes = {key: shipped.get(f"gm_{key}", BlockSize()) for key, _title, _box in panels}
         default_rows = [["players"], ["npcs"], ["rolls"]]
         # Only a handful of blocks, so a top-aligned stack would leave a wide gap
         # under the last one; let the bottom block (the rolls board's history)

@@ -14,7 +14,8 @@
 
     "tint.better": "#30964e",
     "tint.worse": "#d15b5b",
-    "tint.warning": "#d1a01e",
+    "_tint.warning": "Was #d1a01e, which only ever existed as a literal in two widget files and so never went through the contrast pass the other tints did: it read at 2.10:1 on a light window, well under the 3.0 floor. Retuned to clear 3.48:1 on both, in the same band as its neighbours, and kept amber rather than orange so the PL-breach marker stays distinct from the red flaw tint beside it.",
+    "tint.warning": "#b47030",
     "tint.homerule": "#4488cf",
 
     "text.muted": "palette(placeholder-text)",

@@ -36,6 +36,7 @@ from mm_companion.core.session.client import SessionClientError
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.session_bridge import SessionBridge
+from mm_companion.ui.theme_menu import build_theme_menu
 
 CARD_IMAGE_SIZE = 120
 CHARACTER_FILTER = "Character files (*.json)"
@@ -164,6 +165,14 @@ class StartWindow(QMainWindow):
         mods_button = QPushButton("Manage Mods")
         mods_button.clicked.connect(self._manage_mods)
         column.addWidget(mods_button)
+
+        # The launcher has no menu bar, so the same Theme menu the sheet carries as a
+        # submenu hangs off a button here — the look is switchable before ever opening
+        # a character. Kept on self because setMenu does not take ownership.
+        self._theme_menu = build_theme_menu(None, self)
+        theme_button = QPushButton("Theme")
+        theme_button.setMenu(self._theme_menu)
+        column.addWidget(theme_button)
 
         dice_button = QPushButton("Dice Roller")
         dice_button.clicked.connect(self._open_dice_roller)

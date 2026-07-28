@@ -111,6 +111,7 @@ from mm_companion.core.rules import (
     powers_points_spent,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.theme import ACCENT, DICE_ACCENT, TINT_BETTER, TINT_WORSE, tint_rgba
 from mm_companion.ui.widgets import hline_separator
@@ -153,7 +154,10 @@ _GROUP_BORDER = "#8894b0"
 # The always-visible game-term table: deliberately small type, and short lines — two
 # label/value pairs per row, matching the Power Constructor's PowerTermsView.
 _TERM_POINT_SIZE = 8.0
-_TERM_PAIRS_PER_ROW = 2
+#: The card's copy of the terms grid recedes: small, unbolded type, so the numbers
+#: read as reference rather than as the point of the card. The size is set on the
+#: QFont (see TermsGridStyle) so it scales with a switched-off card's transition.
+_TERMS_STYLE = TermsGridStyle(point_size=_TERM_POINT_SIZE, bold_changed=False)
 # How an effect's row divides between what was bought (extras/flaws) and what it costs
 # at the table (the game terms).
 _MODIFIER_STRETCH = 1
@@ -508,11 +512,18 @@ class _DraggableCard(QFrame):
         to happen here. Whether the pointer is still inside it is read from the cursor
         rather than from ``underMouse()``, whose flag Qt may already have cleared by
         the time this child's Leave is delivered.
+
+        Inert ancestors are stepped over rather than stopped at: ``_set_hovered``
+        no-ops on a card that isn't clickable, so handing the highlight to one would
+        just drop it — and the clickable card further out, which is what a click there
+        would actually reach, would stay dark until the pointer left the group entirely.
         """
         super().leaveEvent(event)
         self._set_hovered(False)
         cursor = QCursor.pos()
         for ancestor in self._card_ancestors():
+            if not ancestor.is_clickable():
+                continue
             if ancestor.rect().contains(ancestor.mapFromGlobal(cursor)):
                 ancestor._set_hovered(True)
                 break
@@ -561,12 +572,18 @@ class _GroupHeader(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("groupHeader")
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(_POWER_MIME):
             event.acceptProposedAction()
-            self.setStyleSheet(f"background: {tint_rgba(_ACCENT, 0.25)}; border-radius: 4px;")
+            # Scoped to this widget by object name: a selector-less stylesheet applies
+            # to every child too, so the wash would also tint the group's name and its
+            # ✎/✕ and mode buttons rather than just the bar behind them.
+            self.setStyleSheet(
+                f"#groupHeader {{ background: {tint_rgba(_ACCENT, 0.25)}; border-radius: 4px; }}"
+            )
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if event.mimeData().hasFormat(_POWER_MIME):
@@ -844,8 +861,8 @@ class PowersSection(TitledSection):
         source_node, src_list, src_index, _ = source
         src_list.pop(src_index)
         target = self._locate(target_id)
-        if target is None:  # source and target were the same list and collapsed away
-            src_list.append(source_node)  # put it back; nothing to do
+        if target is None:  # defensive: the target should still be findable here
+            src_list.insert(src_index, source_node)  # put it back where it was
             return
         target_node, tgt_list, tgt_index, _ = target
         group = PowerGroup(
@@ -1093,8 +1110,13 @@ class PowersSection(TitledSection):
         has a runtime gate *and* a standing bonus.
 
         ``""`` — nothing to switch (a permanent ungated power, a pure-instant attack),
-        or the switch belongs to an ancestor: a member of a Linked group is driven by
+        or the switch belongs to an ancestor: anything under a Linked group is driven by
         that group's card, so its own card stays inert and lets the click bubble up.
+
+        The Linked test looks at the whole ancestor chain, not just the immediate
+        parent: a member may sit inside a sub-group (dragging one card onto another
+        always makes an *Independent* group) that is itself inside the Linked group, and
+        it still has to switch with its linked siblings rather than sprout its own switch.
         """
         if (
             isinstance(parent, PowerGroup)
@@ -1103,7 +1125,7 @@ class PowersSection(TitledSection):
             and any(self._node_has_standing(child) for child in parent.children)
         ):
             return "select"
-        if isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
+        if self._linked_ancestor(node) is not None:
             return ""
         if isinstance(node, PowerGroup):
             if (
@@ -1436,34 +1458,11 @@ class PowersSection(TitledSection):
         modifier changed keeps its green/red tint (with the base value on its tooltip),
         because that is the part worth noticing at a glance.
         """
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 1, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(0)
         attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
         rows = effect_stat_rows(effect, self._data, self._character, attack_bonus)
-        for index, stat in enumerate(rows):
-            grid_row, pair = divmod(index, _TERM_PAIRS_PER_ROW)
-            column = pair * 2
-            label = QLabel(f"{stat.label}:")
-            label.setStyleSheet("color: palette(placeholder-text);")
-            value = QLabel(stat.value)
-            value.setWordWrap(True)
-            tint = _TINTS.get(stat.change)
-            if tint:
-                value.setStyleSheet(f"color: {tint};")
-                value.setToolTip(f"Base: {stat.base}")
-            # The table's small size lives on the QFont rather than in the stylesheet,
-            # so it scales with the card when the power is switched off (a stylesheet
-            # font-size would override the card font and stay put).
-            for widget in (label, value):
-                small = widget.font()
-                small.setPointSizeF(_TERM_POINT_SIZE)
-                widget.setFont(small)
-            grid.addWidget(label, grid_row, column, Qt.AlignmentFlag.AlignTop)
-            grid.addWidget(value, grid_row, column + 1, Qt.AlignmentFlag.AlignTop)
-        for pair in range(_TERM_PAIRS_PER_ROW):
-            grid.setColumnStretch(pair * 2 + 1, 1)
+        grid = build_terms_grid(rows, _TERMS_STYLE)
+        grid.setContentsMargins(0, 1, 0, 0)
+        grid.setVerticalSpacing(0)
         return grid
 
     def _effect_title(self, effect: PowerEffectInstance) -> str:
@@ -1591,15 +1590,35 @@ class PowersSection(TitledSection):
     def _linked_activation_set(self, power: Power) -> list[Power]:
         """Every leaf power that switches on/off together with *power*.
 
-        Just ``[power]`` unless it sits directly inside a Linked group, in which case
-        all leaf powers under that group activate as one.
+        Just ``[power]`` unless it sits somewhere under a Linked group, in which case
+        all leaf powers under that group activate as one — including through any
+        intervening sub-group, and out to the *outermost* Linked group when they nest.
         """
-        located = self._locate(power.id)
-        if located is not None:
-            parent = located[3]
-            if isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
-                return self._leaf_powers(parent)
-        return [power]
+        linked = self._linked_ancestor(power)
+        return self._leaf_powers(linked) if linked is not None else [power]
+
+    def _ancestor_groups(self, node_id: str) -> list[PowerGroup]:
+        """Every group enclosing *node_id*, outermost first (empty at the top level)."""
+
+        def walk(nodes: list[PowerNode], trail: list[PowerGroup]) -> list[PowerGroup] | None:
+            for node in nodes:
+                if node.id == node_id:
+                    return trail
+                if isinstance(node, PowerGroup):
+                    found = walk(node.children, [*trail, node])
+                    if found is not None:
+                        return found
+            return None
+
+        return walk(self._character.powers, []) or []
+
+    def _linked_ancestor(self, node: PowerNode) -> PowerGroup | None:
+        """The outermost Linked group enclosing *node*, or ``None``.
+
+        Outermost rather than nearest: nested Linked groups all switch as one, so the
+        activation set is the widest of them.
+        """
+        return next((g for g in self._ancestor_groups(node.id) if g.mode == STRUCTURE_LINKED), None)
 
     @staticmethod
     def _leaf_powers(node: PowerNode) -> list[Power]:

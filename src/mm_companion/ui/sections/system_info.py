@@ -32,6 +32,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     condition_check_penalty,
+    condition_speed_lines,
     condition_speed_rank_mod,
     effective_size,
     estimated_power_level,
@@ -42,7 +43,6 @@ from mm_companion.core.rules import (
     power_level_for_points,
     reconcile_points_to_level,
     speed_columns,
-    speed_lines,
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
@@ -120,9 +120,6 @@ class SpeedWidget(QWidget):
         self._data = data
         self._metric = False
         self._lines: list = []
-        # A condition's net ground-speed rank change: 0 = none, a negative int = a
-        # slowing penalty (Hindered), None = immobilised (Immobile/Prone zeroes it).
-        self._speed_mod: int | None = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -139,34 +136,29 @@ class SpeedWidget(QWidget):
 
         self._sync_unit_button()
 
-    def render_lines(self, lines: list, speed_mod: int | None = 0) -> None:
-        """Redraw the speed lines from the given :class:`SpeedLine` list.
+    def render_lines(self, lines: list) -> None:
+        """Redraw from the given :class:`SpeedLine` list.
 
-        ``speed_mod`` is a condition's ground-speed overlay (see
-        :func:`~mm_companion.core.rules.condition_speed_rank_mod`): ``0`` leaves the
-        base line untouched, a negative rank slows it (and tints it red), and ``None``
-        marks the character immobilised. It only re-skins the *base* (ground) line —
-        the build math and the per-power movement lines are untouched.
+        Any condition overlay is already resolved into the lines by
+        :func:`~mm_companion.core.rules.condition_speed_lines` — a slowed line arrives
+        at its reduced rank carrying the penalty in ``rank_mod``, an immobilised one is
+        flagged. This widget only expands ranks into distance columns and tints.
         """
         self._lines = lines
-        self._speed_mod = speed_mod
         self._redraw()
 
     def _redraw(self) -> None:
         html_lines = []
-        for index, line in enumerate(self._lines):
-            is_base = index == 0
-            if is_base and self._speed_mod is None:
+        for line in self._lines:
+            if line.immobilised:
                 html_lines.append(
                     f'<span style="color: {TINT_WORSE};">{escape(line.label)}: immobilised</span>'
                 )
                 continue
-            slowed = is_base and bool(self._speed_mod)
-            rank = line.rank + (self._speed_mod or 0) if slowed else line.rank
-            walk, dash, run = speed_columns(rank, self._data, metric=self._metric)
+            walk, dash, run = speed_columns(line.rank, self._data, metric=self._metric)
             text = f"{line.label}: {_compact(walk)} / {_compact(dash)} / {_compact(run)}"
-            if slowed:
-                text += f" ({self._speed_mod:+d} rank)"
+            if line.rank_mod:
+                text += f" ({line.rank_mod:+d} rank)"
                 html_lines.append(f'<span style="color: {TINT_WORSE};">{escape(text)}</span>')
             else:
                 html_lines.append(escape(text))
@@ -196,7 +188,6 @@ class MovementModesWidget(QWidget):
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._data = data
-        self._labels: list[QLabel] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
@@ -209,7 +200,6 @@ class MovementModesWidget(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
-        self._labels = []
         for line in lines:
             text = f"{line.label}: {_compact(speed_columns(line.rank, self._data)[0])}/round"
             if line.note:
@@ -219,7 +209,6 @@ class MovementModesWidget(QWidget):
             if line.description:
                 label.setToolTip(line.description)
             layout.addWidget(label)
-            self._labels.append(label)
         self.setVisible(bool(lines))
 
 
@@ -546,9 +535,10 @@ class SystemInfoSection(QGroupBox):
         (a slowing/immobilising condition on ground speed, a check penalty on initiative)
         the same display-only way the stat grids show them — the build math is untouched.
         """
-        speed_mod = condition_speed_rank_mod(self._character, self._data)
-        self._speed.render_lines(speed_lines(self._character, self._data), speed_mod)
-        self._speed.setToolTip(_speed_condition_tooltip(speed_mod))
+        self._speed.render_lines(condition_speed_lines(self._character, self._data))
+        self._speed.setToolTip(
+            _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))
+        )
 
         modes = movement_mode_lines(self._character, self._data)
         self._movement_modes.render_lines(modes)

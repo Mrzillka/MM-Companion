@@ -132,6 +132,11 @@ class BlockFrame(QFrame):
         super().__init__(parent)
         self.key = key
         self.title = title
+        # The block's plain name, kept apart from `title` because a section may
+        # replace the latter with a live, priced caption ("Abilities — 24 PP").
+        # Anything naming the block rather than reporting on it (the View menu)
+        # wants this one, which never goes stale.
+        self.base_title = title
         self.section = section
         self._size = BlockSize()
         self.setObjectName("blockFrame")
@@ -157,9 +162,17 @@ class BlockFrame(QFrame):
         self._apply_size(size)
 
     def _set_title(self, text: str) -> None:
-        """Reflect a section's live title in both the title bar and window title."""
+        """Reflect a section's live title in both the title bar and window title.
+
+        A floated block's window title is snapshotted at float time, so it has to be
+        refreshed here too or it keeps whatever point subtotal was current when the
+        block was dragged out.
+        """
         self.title = text
         self.title_bar.set_title(text)
+        window = self.window()
+        if isinstance(window, BlockWindow):
+            window.setWindowTitle(text)
 
     def _apply_size(self, size: BlockSize) -> None:
         """Pin the block's size from its :class:`BlockSize` (see class docstring)."""
@@ -251,10 +264,6 @@ class BlockWindow(QWidget):
         """Host *frame*, giving the window the frame's title as its window title."""
         self.setWindowTitle(frame.title)
         self._scroll.setWidget(frame)
-
-    def take_frame(self) -> QWidget | None:
-        """Detach and return the hosted frame (before re-docking it)."""
-        return self._scroll.takeWidget()
 
     def verticalScrollBar_extent(self) -> int:  # noqa: N802 - matches Qt naming style
         """Width the vertical scrollbar occupies, to leave room for it in the min width."""

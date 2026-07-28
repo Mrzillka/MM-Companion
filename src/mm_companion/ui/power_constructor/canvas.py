@@ -198,8 +198,14 @@ class PowerCanvas(QFrame):
         self._mode_bar.set_structure(self._power.structure)
 
     def _remove_card(self, card: EffectCard) -> None:
-        if card.instance in self._power.effects:
-            self._power.effects.remove(card.instance)
+        # Match the instance by *identity*, not equality: two cards holding the same
+        # effect at the same rank are equal dataclasses, so ``list.remove`` would drop
+        # the first one and leave the surviving card bound to an orphaned instance.
+        index = next(
+            (i for i, effect in enumerate(self._power.effects) if effect is card.instance), None
+        )
+        if index is not None:
+            del self._power.effects[index]
         self._cards.remove(card)
         card.setParent(None)
         card.deleteLater()

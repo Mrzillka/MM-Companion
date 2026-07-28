@@ -8,7 +8,7 @@ be edited.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import QComboBox, QFrame, QLineEdit, QSpinBox, QTextEdit, QWidget
 
 _LOCKED_COMBO_STYLE = (
@@ -20,14 +20,20 @@ _LOCKED_COMBO_STYLE = (
 class _InteractionBlocker(QObject):
     """Event filter that swallows user-interaction events, so a widget shows its
     value normally but cannot be changed. Used for combo boxes, which have no
-    read-only mode of their own."""
+    read-only mode of their own.
+
+    The wheel is deliberately *not* in the list. Swallowing it here would beat the
+    wheel guard to the event (this filter is installed later, so Qt calls it first)
+    and the page would simply stop scrolling wherever the pointer happened to cross a
+    locked dropdown. Instead :func:`_set_combo_locked` makes the combo unfocusable,
+    which is what the guard reads to decide the wheel belongs to the page.
+    """
 
     _BLOCKED = frozenset(
         {
             QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonRelease,
             QEvent.Type.MouseButtonDblClick,
-            QEvent.Type.Wheel,
             QEvent.Type.KeyPress,
             QEvent.Type.KeyRelease,
         }
@@ -87,14 +93,25 @@ def _set_text_edit_locked(edit: QTextEdit, locked: bool) -> None:
 
 
 def _set_combo_locked(combo: QComboBox, locked: bool) -> None:
+    """Turn a combo box into a plain label while locked.
+
+    Besides the interaction filter and the flattened style, a locked combo gives up
+    its focus policy: it is a label now, so Tab should skip it, and — because the
+    wheel guard only lets a *focused* widget consume the wheel — being unfocusable is
+    what keeps the page scrolling when the pointer crosses it.
+    """
     if locked:
         if not hasattr(combo, "_lock_blocker"):
             blocker = _InteractionBlocker(combo)
             combo._lock_blocker = blocker
+            combo._lock_focus_policy = combo.focusPolicy()
             combo.installEventFilter(blocker)
+        combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         combo.setStyleSheet(_LOCKED_COMBO_STYLE)
     elif hasattr(combo, "_lock_blocker"):
         combo.removeEventFilter(combo._lock_blocker)
         combo._lock_blocker.deleteLater()
         del combo._lock_blocker
+        combo.setFocusPolicy(combo._lock_focus_policy)
+        del combo._lock_focus_policy
         combo.setStyleSheet("")

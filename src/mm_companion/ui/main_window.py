@@ -159,7 +159,9 @@ class MainWindow(QMainWindow):
         # reopened, plus a reset back to the default arrangement.
         self._block_actions: dict = {}
         for key in self._sheet.block_keys():
-            action = self._view_menu.addAction(self._sheet.block_frame(key).title)
+            # `base_title`, not `title`: the live one carries a point subtotal that
+            # was current when this menu was built and is never re-labelled.
+            action = self._view_menu.addAction(self._sheet.block_frame(key).base_title)
             action.setCheckable(True)
             action.setChecked(not self._sheet.is_block_hidden(key))
             action.toggled.connect(lambda visible, k=key: self._on_block_toggled(k, visible))
@@ -324,18 +326,22 @@ class MainWindow(QMainWindow):
         action.blockSignals(False)
 
     def _reset_layout(self) -> None:
-        """Restore the default arrangement and resync the View-menu toggles."""
+        """Restore the default arrangement.
+
+        The View-menu toggles resync themselves: ``reset_layout`` goes through
+        ``BlockCanvas.apply_arrangement``, which announces every block whose
+        visibility changed over ``block_visibility_changed``.
+        """
         self._sheet.reset_layout()
-        for key, action in self._block_actions.items():
-            action.blockSignals(True)
-            action.setChecked(not self._sheet.is_block_hidden(key))
-            action.blockSignals(False)
 
     def _on_edited(self) -> None:
-        """Mark the sheet dirty on the first user edit since the last save."""
-        if not self._dirty:
-            self._dirty = True
-            self._update_title()
+        """Mark the sheet dirty and refresh the title on any user edit.
+
+        The title carries the character's name, which an edit can *be* — so it is
+        rebuilt every time, not only on the first edit that flips the dirty flag.
+        """
+        self._dirty = True
+        self._update_title()
 
     def _update_title(self) -> None:
         name = library.display_name(self._sheet.character)

@@ -538,3 +538,71 @@ def test_homerule_power_shows_the_badge(qapp: QApplication) -> None:
     # Exactly one card (the homerule one) carries the badge.
     assert len(badges) == 1
     assert "homerule" in badges[0].toolTip().lower()
+
+
+def test_linked_group_drives_members_through_an_intervening_subgroup(
+    qapp: QApplication,
+) -> None:
+    """Dragging one card onto another always makes an *Independent* group, so a Linked
+    group's members are routinely one level deeper than the group. They must still
+    switch as one rather than sprouting their own switches."""
+    from mm_companion.core.powers import STRUCTURE_INDEPENDENT
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    shield = Power(name="Shield", effects=[PowerEffectInstance("protection", rank=6)])
+    inner = PowerGroup(mode=STRUCTURE_INDEPENDENT, children=[flight, shield])
+    glow = Power(name="Glow", effects=[PowerEffectInstance("protection", rank=2)])
+    linked = PowerGroup(mode=STRUCTURE_LINKED, children=[inner, glow])
+    char.powers.append(linked)
+    sec = _sheet_for(char).powers
+
+    # The group owns the switch; nothing beneath it does — not the sub-group and not
+    # the leaves inside the sub-group.
+    assert sec._activation_role(linked, None) == "toggle"
+    assert sec._activation_role(inner, linked) == ""
+    assert sec._activation_role(flight, inner) == ""
+    assert sec._activation_role(glow, linked) == ""
+
+    # And a nested leaf's activation set is every leaf under the linked group.
+    assert sorted(p.name for p in sec._linked_activation_set(flight)) == [
+        "Flight",
+        "Glow",
+        "Shield",
+    ]
+
+    # Flipping the group takes the nested members with it.
+    sec._set_group_active(linked, False)
+    assert not any(p.activated for p in (flight, shield, glow))
+
+
+def test_a_linked_group_nested_in_another_switches_from_the_outermost(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # Flight is sustained, so it carries a runtime gate and the group is switchable.
+    a = Power(name="A", effects=[PowerEffectInstance("flight", rank=2)])
+    b = Power(name="B", effects=[PowerEffectInstance("flight", rank=2)])
+    inner = PowerGroup(mode=STRUCTURE_LINKED, children=[a, b])
+    c = Power(name="C", effects=[PowerEffectInstance("flight", rank=2)])
+    outer = PowerGroup(mode=STRUCTURE_LINKED, children=[inner, c])
+    char.powers.append(outer)
+    sec = _sheet_for(char).powers
+
+    assert sec._activation_role(outer, None) == "toggle"
+    assert sec._activation_role(inner, outer) == ""  # the inner group defers outward
+    assert sorted(p.name for p in sec._linked_activation_set(a)) == ["A", "B", "C"]
+
+
+def test_a_top_level_power_keeps_its_own_switch(qapp: QApplication) -> None:
+    """The ancestor walk must not make an ungrouped power inert."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    char.powers.append(flight)
+    sec = _sheet_for(char).powers
+
+    assert sec._activation_role(flight, None) == "toggle"
+    assert sec._linked_activation_set(flight) == [flight]

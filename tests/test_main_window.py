@@ -132,3 +132,45 @@ def test_close_save_persists_then_accepts(
     assert event.isAccepted()
     assert win._path.is_file()
     assert library.load_character(win._path).abilities["STR"] == 4
+
+
+def test_restored_hidden_block_leaves_the_view_toggle_unchecked(qapp: QApplication) -> None:
+    """The View menu is built from the default arrangement, then the saved layout is
+    restored over it — so the restore has to announce what it hid, or the menu keeps
+    describing the arrangement it replaced and the first click on it does nothing."""
+    first = MainWindow(locked=False)
+    first._sheet.hide_block("powers")
+    first._persist_layout()
+
+    second = MainWindow(locked=False)
+    assert second._sheet.is_block_hidden("powers")
+    action = second._block_actions["powers"]
+    assert action.isChecked() is False
+
+    # One click brings it back (previously the first click was swallowed).
+    action.trigger()
+    assert second._sheet.is_block_hidden("powers") is False
+    assert action.isChecked() is True
+
+
+def test_view_menu_labels_are_plain_block_names(qapp: QApplication) -> None:
+    """The entries must not snapshot a section's live priced caption, which they never
+    re-read and which would sit at its build-time subtotal forever."""
+    win = MainWindow(locked=False)
+    win._sheet.abilities._abilities["STR"].setValue(6)
+
+    label = win._block_actions["abilities"].text()
+    assert "PP" not in label
+    assert "Abilities" in label
+    # The frame's own title does carry the running cost.
+    assert "PP" in win._sheet.block_frame("abilities").title
+
+
+def test_renaming_after_the_first_edit_updates_the_title(qapp: QApplication) -> None:
+    win = MainWindow(locked=False)
+    fields = win._sheet.base_info._profile_fields
+    fields["hero_name"].setText("Superman")
+    assert win.windowTitle() == "MM-Companion — *Superman"
+
+    fields["hero_name"].setText("Batman")
+    assert win.windowTitle() == "MM-Companion — *Batman"

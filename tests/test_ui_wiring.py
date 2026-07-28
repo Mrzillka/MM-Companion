@@ -440,3 +440,53 @@ def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
     sheet.conditions.conditionsChanged.emit()
 
     assert "immobilised" in sheet.system_info._speed._lines_label.text()
+
+
+def test_high_resistance_total_is_not_clamped_away(qapp: QApplication) -> None:
+    """A resistance spin box holds the *total*, which on a high-Stamina character runs
+    past an ability's ceiling. Clamping it would make the next edit recompute the
+    bought delta from the wrong number and silently refund points."""
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.character.resistances["TOUGHNESS"] = 10  # ten bought ranks
+    sheet.abilities._abilities["STA"].setValue(28)
+    sheet.resistances.refresh_bases()
+
+    spin = sheet.resistances._resistances["TOUGHNESS"]
+    assert spin.value() == 38  # 28 base + 10 bought, not clamped to 30
+
+    # One decrement moves the bought delta by exactly one, not down to a clamp remainder.
+    spin.setValue(spin.value() - 1)
+    assert sheet.character.resistances["TOUGHNESS"] == 9
+
+
+def test_resistance_range_comes_from_the_data(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    expected = data.costs.trait_range("resistance")
+    spin = sheet.resistances._resistances["TOUGHNESS"]
+    assert (spin.minimum(), spin.maximum()) == (expected.min, expected.max)
+    # Abilities keep their own, narrower range.
+    ability = data.costs.trait_range("ability")
+    assert sheet.abilities._abilities["STR"].maximum() == ability.max
+
+
+def test_cancelling_add_specialization_leaves_the_model_untouched(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancelled dialog must not seed an empty entry — ``_remove_specialization``
+    goes out of its way to keep those out of the model, and one would be saved."""
+    from PySide6.QtWidgets import QInputDialog
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    skill = next(s for s in data.skills if not s.focused)
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", False)))
+    sheet.skills._add_specialization(skill)
+    assert skill.name not in sheet.character.specializations
+
+    # An accepted dialog still records the specialization.
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Forgery", True)))
+    sheet.skills._add_specialization(skill)
+    assert sheet.character.specializations[skill.name] == ["Forgery"]

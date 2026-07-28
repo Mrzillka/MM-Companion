@@ -250,7 +250,9 @@ class ModifierChip(QFrame):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if self._press_pos is None:
+        # The left button has to still be down, or a later right-/middle-drag across
+        # the chip would start a left-button drag from a stale press point.
+        if self._press_pos is None or not (event.buttons() & Qt.MouseButton.LeftButton):
             return
         moved = (event.position().toPoint() - self._press_pos).manhattanLength()
         if moved < QApplication.startDragDistance():
@@ -262,6 +264,11 @@ class ModifierChip(QFrame):
         drag.setPixmap(self.grab())  # drag a ghost of the chip itself
         drag.exec(Qt.DropAction.MoveAction)
         self._press_pos = None
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Clear the press point, so a click that never became a drag leaves none behind."""
+        self._press_pos = None
+        super().mouseReleaseEvent(event)
 
 
 class ModifierGroup(QWidget):

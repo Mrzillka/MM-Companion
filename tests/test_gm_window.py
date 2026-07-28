@@ -111,6 +111,17 @@ def start_hosting(
     qapp.processEvents()
 
 
+def settle(qapp: QApplication, rounds: int = 12) -> None:
+    """Let pending layout work finish, the way a live event loop would.
+
+    A geometry change ripples out one level per pass — a chip resizes its card,
+    which re-wraps the grid, which re-measures the block — so a single
+    ``processEvents`` catches only the first step.
+    """
+    for _ in range(rounds):
+        qapp.processEvents()
+
+
 def advice_texts(window: GMWindow) -> list[str]:
     return [
         window._advice_layout.itemAt(i).widget().text()
@@ -1169,6 +1180,38 @@ def test_removing_a_condition_from_an_npc_takes_it_off(window: GMWindow) -> None
     assert entry.character.conditions == []
     assert library.load_character(path).conditions == []
     assert entry.card.condition_names() == []
+
+
+def test_an_npc_condition_leaves_the_other_blocks_where_they_were(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """A chip on an NPC card must cost the NPCs block room, and nothing else.
+
+    Two bugs used to make the *Players* block jump instead. The NPC card grid pinned
+    a minimum height it never lowered, so a chip that came and went left the block
+    permanently taller; and the grid advertised height-for-width, which Qt evaluates
+    at a single card's width — so two cards side by side claimed the height of two
+    rows, and the surplus went to whatever else shared the page.
+    """
+    window.show()
+    ogre = write_npc("Ogre")
+    window._register_npc(ogre)
+    window._register_npc(write_npc("Thug"))
+    settle(qapp)
+
+    players = window._canvas.block_frame("players")
+    players_height = players.minimumSizeHint().height()
+    npcs_height = window._npc_container.minimumHeight()
+
+    window._apply_npc_condition(ogre.name, "dazed", None)
+    settle(qapp)
+    assert window._npc_container.minimumHeight() > npcs_height  # room for the chip
+    assert players.minimumSizeHint().height() == players_height
+
+    window._remove_npc_condition(ogre.name, "dazed", None)
+    settle(qapp)
+    assert window._npc_container.minimumHeight() == npcs_height  # and given back
+    assert players.minimumSizeHint().height() == players_height
 
 
 def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) -> None:

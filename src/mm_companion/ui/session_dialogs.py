@@ -334,7 +334,7 @@ class JoinSessionDialog(QDialog):
         self.setWindowTitle("Join Session")
         # A comfortable floor so the join-code combo and character names are not
         # clipped and the dialog never opens cramped.
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(560)
         self._code: discovery.JoinCode | None = None
         self._character_box: QComboBox | None = None
         # The slot to reclaim if a history row is chosen and its code is unchanged.
@@ -553,7 +553,10 @@ class GMSessionLaunchDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Open GM Mode")
-        self.resize(500, 560)
+        # Wide enough that the session table's four columns and the connection
+        # options' explanatory prose both read without wrapping into a column.
+        self.setMinimumWidth(700)
+        self.resize(700, 620)
         self._chosen_id: str | None = None
         self._summaries: list[store.SessionSummary] = []
 

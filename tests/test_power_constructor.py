@@ -1516,3 +1516,30 @@ def test_editing_a_power_preserves_its_switched_off_runtime_state(qapp: QApplica
     # And the copy is genuinely deep: editing it leaves the original alone.
     window.power.effects[0].rank = 9
     assert power.effects[0].rank == 4
+
+
+def test_dev_mode_keeps_the_attack_skill_bonus_in_its_auto_values(qapp: QApplication) -> None:
+    """Ticking Dev mode must restate the same numbers the read-only panel showed. An
+    attack-skill link is not an override, so dropping it would make the by-the-book
+    value look like a homerule edit."""
+    char = _pl10_character()
+    char.abilities["ATK"] = 3
+    char.focuses["Close Combat"] = ["Blades"]
+    char.skill_ranks["Close Combat::Blades"] = 5  # focus total = ATK 3 + 5 = 8
+    window = PowerConstructorWindow(load_game_data(), character=char)
+
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(6)
+    card._attack_skill_check.setChecked(True)
+    index = card._attack_skill.findData("Close Combat::Blades")
+    card._attack_skill.setCurrentIndex(index)
+
+    read_only = {r.key: r.value for r in window._terms.effect_rows[0]}
+    assert read_only["check"] == "8 vs. Defense"
+
+    window._terms.set_editable(True)
+    dev_mode = {r.key: r.value for r in window._terms.effect_rows[0]}
+    assert dev_mode["check"] == read_only["check"]
+
+    # And nothing was recorded as an override just by opening the editor.
+    assert card.instance.overrides == {}

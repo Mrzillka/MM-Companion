@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -84,7 +85,6 @@ class CharacterImageSection(QGroupBox):
         self._loading = True
         self._data = data
         self._character = character
-        self._image_path: str | None = None
         self._locked = False
 
         layout = QVBoxLayout(self)
@@ -113,10 +113,21 @@ class CharacterImageSection(QGroupBox):
             self._set_image(path)
 
     def _set_image(self, path: str) -> None:
-        """Record a newly chosen image on the model and display it (a user edit)."""
+        """Record a newly chosen image on the model and display it (a user edit).
+
+        A file that isn't a readable image is *rejected*: the model keeps the portrait
+        it had and the block re-renders it, so the block never shows an empty frame
+        while the character still carries (and would re-save) the old picture.
+        """
         if not self._show_image(path):
+            QMessageBox.warning(
+                self,
+                "Invalid image",
+                f"{path}\n\nThis file could not be read as an image; "
+                "the previous portrait was kept.",
+            )
+            self._show_image(resolve_image_path(self._character.image_path))
             return
-        self._image_path = path
         self._character.image_path = path
         if not self._loading:
             self.edited.emit()

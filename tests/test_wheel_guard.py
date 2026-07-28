@@ -63,3 +63,40 @@ def test_focused_spin_box_reacts_to_wheel(qapp: QApplication) -> None:
 
     QApplication.sendEvent(spin, _wheel(spin))
     assert spin.value() != 5
+
+
+def test_locked_combo_still_lets_the_page_scroll(qapp: QApplication) -> None:
+    """A locked combo is a label, so it must not eat the wheel: the sheet opens locked
+    by default and the pointer crossing a dropdown would otherwise freeze the page."""
+    sheet, page = _sheet_in_page()
+    sheet.set_locked(True)
+    combo = sheet.system_info._size_combo
+
+    # Being unfocusable is what tells the wheel guard the wheel belongs to the page.
+    assert combo.focusPolicy() == Qt.FocusPolicy.NoFocus
+
+    page.verticalScrollBar().setValue(100)
+    before = page.verticalScrollBar().value()
+    QApplication.sendEvent(combo, _wheel(combo))
+    assert page.verticalScrollBar().value() > before
+
+
+def test_locked_combo_value_cannot_be_changed_by_the_wheel(qapp: QApplication) -> None:
+    sheet, page = _sheet_in_page()
+    sheet.set_locked(True)
+    combo = sheet.system_info._size_combo
+    combo.setCurrentIndex(1)
+
+    QApplication.sendEvent(combo, _wheel(combo))
+    assert combo.currentIndex() == 1
+    assert page
+
+
+def test_unlocking_restores_the_combo_focus_policy(qapp: QApplication) -> None:
+    sheet, _page = _sheet_in_page()
+    combo = sheet.system_info._size_combo
+    original = combo.focusPolicy()
+
+    sheet.set_locked(True)
+    sheet.set_locked(False)
+    assert combo.focusPolicy() == original

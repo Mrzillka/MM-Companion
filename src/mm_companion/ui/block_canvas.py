@@ -358,7 +358,13 @@ class BlockCanvas(QWidget):
 
     def apply_arrangement(self, model: dict) -> bool:
         """Replace the arrangement with *model*; returns False (leaving the current
-        arrangement) if it is invalid."""
+        arrangement) if it is invalid.
+
+        Wholesale replacement moves blocks in and out of hiding just as
+        :meth:`hide_block`/:meth:`show_block` do, so it announces those changes the
+        same way — otherwise a restored layout leaves the View menu's checkmarks
+        describing the arrangement this one replaced.
+        """
         parsed = self._validate(model)
         if parsed is None:
             return False
@@ -366,6 +372,7 @@ class BlockCanvas(QWidget):
 
         for key in list(self._windows):
             self._destroy_window(key)
+        was_hidden = self._hidden
         self._rows = rows
         self._hidden = set(hidden)
         self._anchors = anchors
@@ -373,6 +380,8 @@ class BlockCanvas(QWidget):
         for key, geom in floating.items():
             self._make_floating(key, geom)
 
+        for key in sorted(was_hidden ^ self._hidden):
+            self.block_visibility_changed.emit(key, key not in self._hidden)
         self.arrangement_changed.emit()
         return True
 

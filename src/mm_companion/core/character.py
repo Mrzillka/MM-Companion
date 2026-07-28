@@ -205,14 +205,31 @@ class Character:
 
     @classmethod
     def from_dict(cls, raw: dict) -> Character:
-        """Rebuild a character from :meth:`to_dict` output (tolerant of missing keys)."""
+        """Rebuild a character from :meth:`to_dict` output (tolerant of missing keys).
+
+        Power level and the point budget each live in two places — the dedicated
+        fields the rules read, and the ``characteristics`` entries the sheet's spin
+        boxes seed from — so they are reconciled here rather than left to drift. A
+        file that carries both keeps the dedicated field (that is what the last edit
+        wrote); one that carries only the characteristic (an older save, a mod, a
+        hand-edit) promotes it, so the sheet can't end up displaying one Power Level
+        while the PL caps are computed against another.
+        """
+
+        characteristics = dict(raw.get("characteristics", {}))
+        power_level = int(raw.get("power_level", characteristics.get("power_level", 10)))
+        power_points_total = int(
+            raw.get("power_points_total", characteristics.get("power_points", 150))
+        )
+        characteristics["power_level"] = power_level
+        characteristics["power_points"] = power_points_total
 
         return cls(
-            power_level=int(raw.get("power_level", 10)),
-            power_points_total=int(raw.get("power_points_total", 150)),
+            power_level=power_level,
+            power_points_total=power_points_total,
             image_path=raw.get("image_path"),
             profile=dict(raw.get("profile", {})),
-            characteristics=dict(raw.get("characteristics", {})),
+            characteristics=characteristics,
             abilities=dict(raw.get("abilities", {})),
             resistances=dict(raw.get("resistances", {})),
             skill_ranks=dict(raw.get("skill_ranks", {})),

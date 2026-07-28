@@ -83,7 +83,10 @@ class BrickWidget(QFrame):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if self._press_pos is None:
+        # The left button has to still be down: without this a later right- or
+        # middle-drag across the brick would start a left-button drag from a press
+        # point left over from an earlier click.
+        if self._press_pos is None or not (event.buttons() & Qt.MouseButton.LeftButton):
             return
         moved = (event.position().toPoint() - self._press_pos).manhattanLength()
         if moved < QApplication.startDragDistance():
@@ -94,6 +97,11 @@ class BrickWidget(QFrame):
         drag.setMimeData(mime)
         drag.exec(Qt.DropAction.CopyAction)
         self._press_pos = None
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Clear the press point, so a click that never became a drag leaves none behind."""
+        self._press_pos = None
+        super().mouseReleaseEvent(event)
 
 
 class PaletteDropZone(QWidget):

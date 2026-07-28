@@ -28,6 +28,7 @@ GM_CHARACTERS_DIRNAME = "gm_characters"
 IMAGES_DIRNAME = "images"
 MODS_DIRNAME = "mods"
 SESSIONS_DIRNAME = "sessions"
+THEMES_DIRNAME = "themes"
 
 # How the builder reacts to a power that breaks a Power Level cap. ``warn`` flags
 # it but still lets it through; ``block`` refuses the save. There is no settings UI
@@ -38,7 +39,10 @@ PL_ENFORCE_BLOCK = "block"
 
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
-    "theme": "system",
+    # Id of the visual theme preset (see :mod:`mm_companion.ui.theme`). "classic"
+    # is the native platform look. An older default of "system" means the same
+    # thing and is still accepted, so an existing workspace needs no migration.
+    "theme": "classic",
     "ruleset": "4e",
     "pl_enforcement": PL_ENFORCE_WARN,
     # Ids of workspace mods to layer on top of the base ruleset, in the order they
@@ -123,6 +127,10 @@ class Workspace:
     def sessions_dir(self) -> Path:
         return self.root / SESSIONS_DIRNAME
 
+    @property
+    def themes_dir(self) -> Path:
+        return self.root / THEMES_DIRNAME
+
 
 def _platform_data_root() -> Path:
     """The per-platform user data directory for the app (no override applied)."""
@@ -158,6 +166,7 @@ def ensure_workspace() -> Workspace:
     workspace.images_dir.mkdir(parents=True, exist_ok=True)
     workspace.mods_dir.mkdir(parents=True, exist_ok=True)
     workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
+    workspace.themes_dir.mkdir(parents=True, exist_ok=True)
     if not workspace.settings_file.exists():
         workspace.settings_file.write_text(
             json.dumps(DEFAULT_SETTINGS, indent=2) + "\n", encoding="utf-8"
@@ -203,6 +212,19 @@ def pl_enforcement() -> str:
     """
     value = load_settings().get("pl_enforcement", PL_ENFORCE_WARN)
     return value if value in (PL_ENFORCE_WARN, PL_ENFORCE_BLOCK) else PL_ENFORCE_WARN
+
+
+def theme_name() -> str:
+    """The id of the visual theme preset to use, or ``""`` to take the default.
+
+    The one seam the UI consults for "which look is in force". Deliberately does
+    not validate the id — ``core`` has no idea what presets exist, since those
+    are a ``ui`` concern (bundled files plus anything in the workspace ``themes``
+    dir); :func:`mm_companion.ui.theme.loader.resolve_id` maps an unknown or
+    legacy value onto a real preset.
+    """
+    value = load_settings().get("theme", "")
+    return value if isinstance(value, str) else ""
 
 
 def relay_url() -> str:

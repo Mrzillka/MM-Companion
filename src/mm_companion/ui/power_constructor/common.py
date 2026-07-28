@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.registry import Registry
-from mm_companion.ui.theme import ACCENT
 
 if TYPE_CHECKING:  # forward ref only — importing EffectCard here would cycle
     from mm_companion.ui.power_constructor.effect_card import EffectCard
@@ -92,11 +91,6 @@ RANK_MAX = 250
 # cost stays stable when that ability is enhanced or suppressed; a bought amount above
 # the wielder's actual ability is flagged as a warning, not repriced.
 STRENGTH_AMOUNT_MAX = 50
-
-# The accent used to light up a drop target while a compatible brick hovers over it.
-# Kept semi-transparent and paired with palette() roles so both borders and fills read
-# on light and dark themes alike.
-_ACCENT = ACCENT
 
 
 def _mime_id(mime: QMimeData, fmt: str) -> str:

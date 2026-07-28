@@ -22,10 +22,11 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     effective_ability,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import DropIndicator
+from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
-    _ACCENT,
     CHIP_MIME,
     RANK_MAX,
     STRENGTH_AMOUNT_MAX,
@@ -34,7 +35,6 @@ from mm_companion.ui.power_constructor.common import (
     _move_item,
     brick_tooltip,
 )
-from mm_companion.ui.theme import tint_rgba
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
@@ -72,8 +72,11 @@ class ModifierChip(QFrame):
         self._press_pos = None
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
-        tint = "#2e5e33" if modifier.category == "extra" else "#5e2e2e"
-        self.setStyleSheet(f"ModifierChip {{ background: {tint}; border-radius: 6px; }}")
+        tint = "badge.extra" if modifier.category == "extra" else "badge.flaw"
+        self.setStyleSheet(
+            f"ModifierChip {{ background: {theme.color(tint)};"
+            f" border-radius: {int(theme.metric('radius.chip'))}px; }}"
+        )
         # The same hover text the palette brick carries — a chip is a cramped label, so
         # what the modifier does still has to be one hover away once it is attached.
         # Set on the frame only; Qt walks up to it for children with no tooltip.
@@ -297,6 +300,11 @@ class ModifierGroup(QWidget):
         super().__init__()
         self._chips: list[QWidget] = []
         self.setAcceptDrops(True)
+        # A wash with no outline: this group sits inside an effect card that draws
+        # its own drop border, and two nested outlines would stack up.
+        self._drops = DropFeedback(
+            self, "ModifierGroup", radius="radius.chip", wash=0.12, border=False
+        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
@@ -388,7 +396,7 @@ class ModifierGroup(QWidget):
 
     def _end_drag(self) -> None:
         self._indicator.hide_indicator()
-        self.setStyleSheet("")
+        self._drops.clear()
 
     def _accepts(self, event) -> bool:
         return event.mimeData().hasFormat(CHIP_MIME) and event.source() in self._chips
@@ -398,10 +406,14 @@ class ModifierGroup(QWidget):
         # between the Extras and Flaws groups (that would change its category). A chip
         # dragged anywhere else falls through to the palette, which reads it as a removal.
         if self._accepts(event):
-            self.setStyleSheet(f"ModifierGroup {{ background: {tint_rgba(_ACCENT, 0.12)}; }}")
+            self._drops.show_accept()
             self._show_indicator(event.position().toPoint())
             event.acceptProposedAction()
         else:
+            # Most often a flaw dragged onto Extras (or the reverse): a move that
+            # would change the modifier's category, which is never allowed. Saying
+            # so beats looking identical to a drag the group simply missed.
+            self._drops.show_reject()
             event.ignore()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)

@@ -17,15 +17,15 @@ from PySide6.QtWidgets import QGridLayout, QLabel, QSpinBox, QWidget
 
 from mm_companion.core.data_loader import TraitRange
 from mm_companion.core.rules import ConditionEffect
-from mm_companion.ui.theme import TINT_BETTER, TINT_WORSE
-from mm_companion.ui.widgets import hline_separator, make_spin_box
+from mm_companion.ui import theme
+from mm_companion.ui.widgets import hline_separator, make_spin_box, tinted_style
 
-STAT_SPIN_WIDTH = 80
-
-# The green a power-boosted trait's "→ total" reads in, matching the summary tints.
-ENHANCED_TINT = TINT_BETTER
-# The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
-CONDITION_TINT = TINT_WORSE
+# Colour-token names, not values: resolved where they are used so a theme switch
+# reaches them (see :mod:`mm_companion.ui.theme`).
+#: The green a power-boosted trait's "→ total" reads in, matching the summary tints.
+ENHANCED_TINT = "tint.better"
+#: The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
+CONDITION_TINT = "tint.worse"
 
 
 def add_stat_row(
@@ -76,12 +76,12 @@ def build_stat_group(
             trait_range.max,
             value=values.get(entry.key, 0),
             buttons=False,
-            max_width=STAT_SPIN_WIDTH,
+            max_width=int(theme.metric("column.stat.spin")),
         )
         spin.valueChanged.connect(lambda value, key=entry.key: on_change(key, value))
         store[entry.key] = spin
         enh = QLabel()
-        enh.setStyleSheet(f"color: {ENHANCED_TINT}; font-weight: bold;")
+        enh.setStyleSheet(tinted_style(ENHANCED_TINT))
         enh.setVisible(False)
         enh_store[entry.key] = enh
         add_stat_row(grid, row, entry.name, entry.abbr, spin, enh)
@@ -151,7 +151,6 @@ def apply_stat_effects(
             tips.append(effect.tooltip)
         label.setToolTip("\n".join(tips))
 
-        tint = CONDITION_TINT if has_cond else ENHANCED_TINT
-        label.setStyleSheet(f"color: {tint}; font-weight: bold;")
+        label.setStyleSheet(tinted_style(CONDITION_TINT if has_cond else ENHANCED_TINT))
         _set_label_strike(label, has_cond and effect.trait_lost)
         label.setVisible(True)

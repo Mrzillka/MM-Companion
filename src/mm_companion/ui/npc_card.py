@@ -128,7 +128,7 @@ class NPCCard(QFrame):
         badge_font = self._initiative_badge.font()
         badge_font.setBold(True)
         self._initiative_badge.setFont(badge_font)
-        self._initiative_badge.setStyleSheet(f"color: {theme.ACCENT};")
+        self._initiative_badge.setStyleSheet(f"color: {theme.color('accent')};")
         pl_row.addWidget(self._initiative_badge)
         layout.addLayout(pl_row)
 

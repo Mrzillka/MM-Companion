@@ -36,7 +36,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import hline_separator, make_spin_box
+from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, make_spin_box, muted_style
 
 # The six standard game-term fields the Dev-mode override table edits directly, with
 # their labels and the matching :class:`~mm_companion.core.data_loader.Effect`
@@ -108,7 +108,7 @@ class PowerTermsView(QWidget):
             return
         if not power.effects:
             placeholder = QLabel("Game-term summary appears here as you add effects.")
-            placeholder.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
+            placeholder.setStyleSheet(muted_style(italic=True))
             placeholder.setWordWrap(True)
             self._layout.addWidget(placeholder)
             return
@@ -116,7 +116,7 @@ class PowerTermsView(QWidget):
         header = self._structure_header(power)
         if header:
             label = QLabel(header)
-            label.setStyleSheet("font-weight: bold;")
+            label.setStyleSheet(BOLD_STYLE)
             self._layout.addWidget(label)
         if self._editable:
             self._render_editable(power, game_data, self._char)
@@ -143,12 +143,12 @@ class PowerTermsView(QWidget):
         header = QHBoxLayout()
         header.setSpacing(6)
         name = QLabel(title)
-        name.setStyleSheet("font-weight: bold;")
+        name.setStyleSheet(BOLD_STYLE)
         header.addWidget(name)
         note = self._role_note(power, index, game_data, char)
         if note:
             role = QLabel(note)
-            role.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
+            role.setStyleSheet(muted_style(italic=True))
             header.addWidget(role)
         header.addStretch()
         self._layout.addLayout(header)

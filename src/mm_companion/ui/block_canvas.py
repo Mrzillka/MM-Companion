@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.ui import theme
 from mm_companion.ui.block_frame import BlockFrame, BlockWindow
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
 
@@ -100,7 +101,9 @@ class DropIndicator(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("dropIndicator")
-        self.setStyleSheet("#dropIndicator { background-color: palette(highlight); }")
+        self.setStyleSheet(
+            f"#dropIndicator {{ background-color: {theme.color('drop.indicator')}; }}"
+        )
         self._slide = QPropertyAnimation(self, b"geometry", self)
         self._slide.setDuration(self.SLIDE_MS)
         self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)

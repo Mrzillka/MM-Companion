@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import mods, storage
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import BOLD_STYLE, make_spin_box
 
 _MOD_ID_ROLE = Qt.ItemDataRole.UserRole
 
@@ -177,7 +177,7 @@ class ModsWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         self._detail_name = QLabel()
-        self._detail_name.setStyleSheet("font-weight: bold;")
+        self._detail_name.setStyleSheet(BOLD_STYLE)
         self._detail_version = QLabel()
         self._detail_version.setEnabled(False)
         self._detail_description = QLabel()

@@ -35,6 +35,7 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import muted_style
 
 #: Fewest text lines the description box shows before it starts growing.
 MIN_DESC_LINES = 2
@@ -133,7 +134,7 @@ class ComplicationsSection(QGroupBox):
 
         # An empty-state hint shown when there are no complications yet.
         self._empty_label = QLabel("No complications yet.")
-        self._empty_label.setStyleSheet("color: palette(mid);")
+        self._empty_label.setStyleSheet(muted_style())
         outer.addWidget(self._empty_label)
 
         outer.addStretch(1)

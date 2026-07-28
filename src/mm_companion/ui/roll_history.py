@@ -124,14 +124,17 @@ class SessionRollCard(QFrame):
         if hidden:
             heading = f"{HIDDEN_MARK} {heading}"
         if label:
-            heading += f" <span style='color:gray'>— {_escape(label)}</span>"
+            heading += (
+                f" <span style='color:{theme.color('text.muted.rich')}'>— {_escape(label)}</span>"
+            )
         name_line = QLabel(heading)
         name_line.setTextFormat(Qt.TextFormat.RichText)
         name_line.setWordWrap(True)
         info.addWidget(name_line)
 
         headline = (
-            f"<b>{die + modifier}</b> " f"<span style='color:gray'>(d20 {die} {modifier:+d})</span>"
+            f"<b>{die + modifier}</b> "
+            f"<span style='color:{theme.color('text.muted.rich')}'>(d20 {die} {modifier:+d})</span>"
         )
         if dc is not None:
             headline += f" vs DC {int(dc)}"
@@ -142,7 +145,7 @@ class SessionRollCard(QFrame):
 
         if degree is not None:
             outcome = QLabel(degree_label(int(degree), bool(roll.get("critical")), die))
-            colour = theme.TINT_BETTER if int(degree) > 0 else theme.TINT_WORSE
+            colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
             outcome.setStyleSheet(f"color: {colour};")
             info.addWidget(outcome)
 

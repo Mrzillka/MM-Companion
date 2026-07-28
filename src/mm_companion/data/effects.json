@@ -360,7 +360,6 @@
             { "id": "slithering", "label": "Slithering", "tiers": [1], "speeds": ["ground"], "description": "Move at your normal ground speed without limbs, and through gaps a body your size would not normally pass." },
             { "id": "space_travel", "label": "Space Travel", "tiers": [2, 4, 6], "description": "Cross interplanetary, then interstellar, then intergalactic distances." },
             { "id": "stable", "label": "Stable", "tiers": [1], "perNote": "per mode", "description": "Keep your footing on unstable ground: no penalty for moving over a surface that would normally unbalance you." },
-            { "id": "sure_footed", "label": "Sure-Footed", "tiers": [1, 2], "description": "Ignore difficult terrain — half of it at the first tier, all of it at the second." },
             { "id": "swinging", "label": "Swinging", "tiers": [2], "speeds": [2], "description": "Swing from anchor points at speed rank 2, given something overhead to catch." },
             { "id": "trackless", "label": "Trackless", "tiers": [1], "perNote": "per sense", "description": "Leave no trail one chosen sense can follow." },
             { "id": "wall_crawling", "label": "Wall-Crawling", "tiers": [2, 4], "speeds": ["ground-1", "ground"], "tierNotes": ["vulnerable while climbing", "not vulnerable"], "description": "Move across walls and ceilings — one rank slower than your ground speed and vulnerable while you climb, or at full ground speed and not vulnerable." },

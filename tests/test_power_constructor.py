@@ -1446,3 +1446,73 @@ def test_check_required_offers_derived_traits_the_boost_picker_hides(qapp: QAppl
     assert combo.findData("Acrobatics") > 0  # a skill
     assert combo.findData("AGL") > 0  # an ability
     assert combo.findData("initiative") > 0  # a derived stat, only in `all_traits`
+
+
+# --- Identity, not equality: the model is a list of plain dataclasses, so two
+#     copies of the same part compare equal and a value-based lookup drops the
+#     wrong one. ---------------------------------------------------------------
+
+
+def test_removing_one_of_two_identical_effects_keeps_the_other_card_live(
+    qapp: QApplication,
+) -> None:
+    """Two copies of an effect are equal dataclasses; removing the second must not
+    unbind the first from the power."""
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    second = window.canvas.add_effect("damage")
+    assert first.instance == second.instance  # equal by value...
+    assert first.instance is not second.instance  # ...but distinct objects
+
+    window.canvas._remove_card(second)
+
+    assert len(window.power.effects) == 1
+    assert window.power.effects[0] is first.instance
+
+    # The surviving card still writes through to the power, so what is saved is
+    # what the card shows.
+    first._rank.setValue(8)
+    assert window.power.effects[0].rank == 8
+
+
+def test_removing_one_of_two_identical_modifier_chips_keeps_the_other_live(
+    qapp: QApplication,
+) -> None:
+    """A modifier with config fields can be taken twice, and two fresh copies seed
+    identical configs — so chip removal has to match by identity."""
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("custom_extra")
+    card.attach_modifier("custom_extra")
+    assert len(card.instance.extras) == 2
+    first, second = card._chips[0], card._chips[1]
+    assert first.selection == second.selection
+
+    card._remove_chip(second)
+
+    assert len(card.instance.extras) == 1
+    assert card.instance.extras[0] is first.selection
+
+    # Removing the survivor too must not raise (the old code hit ValueError here).
+    card._remove_chip(first)
+    assert card.instance.extras == []
+
+
+def test_editing_a_power_preserves_its_switched_off_runtime_state(qapp: QApplication) -> None:
+    """The save format omits runtime state on purpose, so the edit copy must not be a
+    ``to_dict``/``from_dict`` round-trip — that would switch a powered-down power on."""
+    data = load_game_data()
+    power = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    power.activated = False
+    power.effects[0].toggled_on = False
+
+    window = PowerConstructorWindow(data, character=_pl10_character(), power=power)
+
+    assert window.power is not power  # still an isolated copy...
+    assert window.power.effects[0] is not power.effects[0]
+    assert window.power.activated is False  # ...that kept the runtime state
+    assert window.power.effects[0].toggled_on is False
+
+    # And the copy is genuinely deep: editing it leaves the original alone.
+    window.power.effects[0].rank = 9
+    assert power.effects[0].rank == 4

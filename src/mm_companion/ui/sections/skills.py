@@ -486,8 +486,14 @@ class SkillsSection(TitledSection):
     def _add_specialization(self, skill: Skill) -> None:
         name, ok = QInputDialog.getText(self, f"Add {skill.name} specialization", "Specialization:")
         name = name.strip()
+        if not ok or not name:
+            return
+        # Only reach for the list once the dialog was actually accepted: a bare
+        # ``setdefault`` on the cancel path leaves an empty entry on the model, which
+        # ``_remove_specialization`` goes out of its way to avoid and which would then
+        # ride along into the saved JSON.
         specs = self._specializations.setdefault(skill.name, [])
-        if ok and name and name not in specs:
+        if name not in specs:
             specs.append(name)
             self._rebuild()
             self.changed.emit()

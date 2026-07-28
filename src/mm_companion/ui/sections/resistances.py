@@ -29,7 +29,11 @@ from mm_companion.core.rules import (
     resistance_points_spent,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
+from mm_companion.ui.sections.stat_grid import (
+    apply_stat_effects,
+    build_stat_group,
+    set_stat_value,
+)
 from mm_companion.ui.sections.titled_section import TitledSection
 
 
@@ -57,6 +61,7 @@ class ResistancesSection(TitledSection):
             self._resistance_enh,
             character.resistances,
             self._on_resistance_changed,
+            data.costs.trait_range("resistance"),
         )
         layout.addWidget(grid)
 
@@ -92,7 +97,10 @@ class ResistancesSection(TitledSection):
 
         The model stores only the bought delta, so the displayed total is
         :func:`~mm_companion.core.rules.resistance_base` plus that delta. Signals are
-        blocked while re-seeding so following the base doesn't count as a fresh edit.
+        blocked while re-seeding so following the base doesn't count as a fresh edit,
+        and :func:`~mm_companion.ui.sections.stat_grid.set_stat_value` stretches the
+        spin box rather than let a total past its ceiling clamp — a clamped display
+        would make the next edit recompute the delta from the wrong number.
         """
         for res in self._data.resistances:
             spin = self._resistances.get(res.key)
@@ -101,7 +109,7 @@ class ResistancesSection(TitledSection):
             base = resistance_base(self._character, self._data, res.key)
             bought = self._character.resistances.get(res.key, 0)
             blocker = QSignalBlocker(spin)
-            spin.setValue(base + bought)
+            set_stat_value(spin, base + bought)
             del blocker
 
     def refresh_enhancements(self) -> None:

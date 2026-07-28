@@ -781,12 +781,19 @@ class EffectCard(QFrame):
                 self._build_chip(modifier, selection, is_flaw=True)
 
     def _remove_chip(self, chip: ModifierChip) -> None:
-        if chip.selection in self.instance.extras:
-            self.instance.extras.remove(chip.selection)
-            self._extras_group.remove_chip(chip)
-        else:
-            self.instance.flaws.remove(chip.selection)
-            self._flaws_group.remove_chip(chip)
+        # Find the selection by *identity*, not equality. A modifier with config fields
+        # can be taken more than once (see :meth:`attach_modifier`), and two fresh copies
+        # seed identical defaults — so they compare equal, and an ``in``/``remove`` pair
+        # would drop the wrong one and leave this chip editing an orphaned selection.
+        for bucket, group in (
+            (self.instance.extras, self._extras_group),
+            (self.instance.flaws, self._flaws_group),
+        ):
+            index = next((i for i, sel in enumerate(bucket) if sel is chip.selection), None)
+            if index is not None:
+                del bucket[index]
+                group.remove_chip(chip)
+                break
         self._chips.remove(chip)
         self._hint.setVisible(not self._chips)
         self._populate_config_form()  # removing a gating extra may downgrade a field

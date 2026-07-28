@@ -15,11 +15,11 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QSpinBox, QWidget
 
+from mm_companion.core.data_loader import TraitRange
 from mm_companion.core.rules import ConditionEffect
 from mm_companion.ui.theme import TINT_BETTER, TINT_WORSE
 from mm_companion.ui.widgets import hline_separator, make_spin_box
 
-STAT_MIN, STAT_MAX = -5, 30
 STAT_SPIN_WIDTH = 80
 
 # The green a power-boosted trait's "→ total" reads in, matching the summary tints.
@@ -50,15 +50,17 @@ def build_stat_group(
     enh_store: dict[str, QLabel],
     values: dict[str, int],
     on_change: Callable[[str, int], None],
+    trait_range: TraitRange,
 ) -> QWidget:
     """Build a frameless grid of stat spin boxes (abilities or resistances).
 
     Spin boxes are seeded from *values* (the model dict) and write back through
-    *on_change*. Each row also gets a green "→ total" label that stays hidden
-    until a power enhances that trait. A separator is inserted before the first
-    derived entry. *store* and *enh_store* are filled in place, keyed by each
-    entry's ``key``. The container is frameless — the hosting section's group box
-    carries the title and running cost.
+    *on_change*, and accept the data-driven *trait_range* for their trait family
+    (``costs.json``'s ``trait_ranges``). Each row also gets a green "→ total" label
+    that stays hidden until a power enhances that trait. A separator is inserted
+    before the first derived entry. *store* and *enh_store* are filled in place, keyed
+    by each entry's ``key``. The container is frameless — the hosting section's group
+    box carries the title and running cost.
     """
 
     container = QWidget()
@@ -72,8 +74,8 @@ def build_stat_group(
             row += 1
             separated = True
         spin = make_spin_box(
-            STAT_MIN,
-            STAT_MAX,
+            trait_range.min,
+            trait_range.max,
             value=values.get(entry.key, 0),
             buttons=False,
             max_width=STAT_SPIN_WIDTH,
@@ -87,6 +89,23 @@ def build_stat_group(
         add_stat_row(grid, row, entry.name, entry.abbr, spin, enh)
         row += 1
     return container
+
+
+def set_stat_value(spin: QSpinBox, value: int) -> None:
+    """Seed a stat spin box, widening its range first if *value* falls outside it.
+
+    A spin box silently clamps a value it can't represent, which is destructive here:
+    the resistance spins hold a *total* and the model stores only the bought delta, so a
+    clamped display would make the very next edit rewrite that delta from the wrong
+    number. Rather than lose ranks to a range that is too tight (a stingy mod's, or a
+    character built before a range was narrowed), stretch the range to fit.
+    """
+
+    if value < spin.minimum():
+        spin.setMinimum(value)
+    elif value > spin.maximum():
+        spin.setMaximum(value)
+    spin.setValue(value)
 
 
 def _set_label_strike(label: QLabel, struck: bool) -> None:

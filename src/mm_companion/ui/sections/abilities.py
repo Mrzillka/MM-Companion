@@ -54,6 +54,7 @@ class AbilitiesSection(TitledSection):
             self._ability_enh,
             character.abilities,
             self._on_ability_changed,
+            data.costs.trait_range("ability"),
         )
         layout.addWidget(grid)
 

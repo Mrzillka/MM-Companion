@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -69,8 +71,14 @@ class PowerConstructorWindow(QMainWindow):
         # Editing works on a deep copy so closing the window without saving leaves
         # the character's stored power untouched; the copy is what `powerSaved` hands
         # back, and the host section swaps it in for the original on save.
+        #
+        # The copy is a real ``deepcopy``, *not* a ``to_dict``/``from_dict`` round-trip:
+        # the save format deliberately omits runtime state (``activated``,
+        # ``item_present``, ``array_active``, ``toggled_on``, ``suppressed``) so a loaded
+        # character comes up all-active, which means a round-trip would quietly switch a
+        # power the player had turned off back on the moment they edited its description.
         self._editing = power is not None
-        self.power = Power.from_dict(power.to_dict()) if self._editing else Power()
+        self.power = deepcopy(power) if self._editing else Power()
         self.setWindowTitle("Edit Power" if self._editing else "Power Constructor")
         self.resize(1240, 660)
 

@@ -713,11 +713,42 @@ class PowerLevelRules:
 
 
 @dataclass(frozen=True)
+class TraitRange:
+    """The range a trait's sheet control accepts, from ``costs.json``'s ``trait_ranges``.
+
+    Kept in data so a high-power campaign can widen it without a code change. Note the
+    ranges are *not* the same for every trait family: an ability spin box holds the rank
+    the player bought, while a resistance spin box holds the **total** (derived base plus
+    bought delta), which runs much higher — a high-Stamina character's Toughness total
+    easily passes an ability's ceiling.
+    """
+
+    min: int = -5
+    max: int = 30
+
+
+#: Fallbacks for a ``costs.json`` (a mod's, or an older one) that omits ``trait_ranges``.
+DEFAULT_TRAIT_RANGES: dict[str, TraitRange] = {
+    "ability": TraitRange(min=-5, max=30),
+    "resistance": TraitRange(min=-5, max=60),
+}
+
+
+@dataclass(frozen=True)
 class Costs:
     """The parsed contents of ``costs.json``."""
 
     traits: TraitCosts
     power_level: PowerLevelRules
+    trait_ranges: dict[str, TraitRange] = field(default_factory=dict)
+
+    def trait_range(self, family: str) -> TraitRange:
+        """The spin-box range for a trait *family* (``"ability"``, ``"resistance"``, …),
+        falling back to :data:`DEFAULT_TRAIT_RANGES` and then to a plain default."""
+
+        if family in self.trait_ranges:
+            return self.trait_ranges[family]
+        return DEFAULT_TRAIT_RANGES.get(family, TraitRange())
 
 
 # --- System rules: the trait-key strings and paired caps the resolvers
@@ -1536,9 +1567,18 @@ def _parse_costs(raw: dict) -> Costs:
         name: PowerLevelCap(mult=int(cap["mult"]), add=int(cap["add"]))
         for name, cap in pl["caps"].items()
     }
+    ranges = {
+        family: TraitRange(
+            min=int(entry.get("min", DEFAULT_TRAIT_RANGES.get(family, TraitRange()).min)),
+            max=int(entry.get("max", DEFAULT_TRAIT_RANGES.get(family, TraitRange()).max)),
+        )
+        for family, entry in raw.get("trait_ranges", {}).items()
+        if isinstance(entry, dict)
+    }
     return Costs(
         traits=traits,
         power_level=PowerLevelRules(pp_per_level=int(pl["pp_per_level"]), caps=caps),
+        trait_ranges=ranges,
     )
 
 

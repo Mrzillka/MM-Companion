@@ -1317,3 +1317,132 @@ def test_edited_homerule_power_reopens_with_dev_mode_on(qapp: QApplication) -> N
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character(), power=power)
     assert window._dev_mode.isChecked()
     assert window._terms._editable
+
+
+# -- drag affordances: the reorder indicator and drag-to-remove -----------------
+
+
+def test_drop_indicator_tracks_the_insertion_point_between_chips(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")
+    card.attach_modifier("accurate")
+    group = card._extras_group
+    group.resize(320, 80)  # lay the chips out so they have real geometry
+    group.show()
+    qapp.processEvents()
+
+    before_first = group._indicator_rect(0)
+    at_end = group._indicator_rect(len(group._chips))
+    assert before_first.width() == group.INDICATOR_WIDTH
+    # The end marker sits to the right of the one before the first chip.
+    assert at_end.left() > before_first.left()
+
+    # isHidden (not isVisible): the card around the group is never shown in a
+    # headless test, so every descendant reports itself invisible regardless.
+    group._show_indicator(before_first.topLeft())
+    assert not group._indicator.isHidden()
+    group._end_drag()
+    assert group._indicator.isHidden()
+
+
+def test_indicator_stays_hidden_for_an_empty_group(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+
+    group = card._flaws_group  # nothing attached
+    assert group._indicator_rect(0).isEmpty()
+    group._show_indicator(group.rect().topLeft())
+    assert group._indicator.isHidden()
+
+
+def test_dropping_a_chip_on_the_palette_detaches_it(qapp: QApplication) -> None:
+    from mm_companion.ui.power_constructor.bricks import PaletteDropZone
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")
+    card.attach_modifier("accurate")
+    chip = card._chips[0]
+
+    # Removal is deferred past the drag's own event, so let the timer fire.
+    PaletteDropZone.remove_chip(chip)
+    qapp.processEvents()
+
+    assert [s.modifier_id for s in card.instance.extras] == ["accurate"]
+    assert len(card._chips) == 1
+
+
+def test_palette_accepts_only_chip_drags(qapp: QApplication) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QMimeData
+    from PySide6.QtWidgets import QWidget
+
+    from mm_companion.ui.power_constructor.common import CHIP_MIME, EFFECT_MIME
+
+    def drag(fmt: bytes, payload: bytes, source):
+        """The two things ``PaletteDropZone._accepts`` reads off a drag event."""
+        mime = QMimeData()
+        mime.setData(fmt, payload)
+        return SimpleNamespace(mimeData=lambda: mime, source=lambda: source)
+
+    window = PowerConstructorWindow(load_game_data())
+    zone = window.palette_zone
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")
+
+    # A palette brick dragged around inside the palette is not a removal.
+    assert not zone._accepts(drag(EFFECT_MIME, b"damage", QWidget()))
+    assert zone._accepts(drag(CHIP_MIME, b"1", card._chips[0]))
+
+
+# -- hover descriptions ---------------------------------------------------------
+
+
+def test_palette_bricks_hint_their_description(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    data = load_game_data()
+
+    _search, effect_bricks = window._search_tabs["effects"]
+    damage = next(b for b in effect_bricks if b.search_key == "damage")
+    record = next(e for e in data.effects if e.id == "damage")
+    assert record.description in damage.toolTip()
+    assert record.name in damage.toolTip()
+
+    _search, extra_bricks = window._search_tabs["extras"]
+    assert all(b.toolTip() for b in extra_bricks)  # every modifier ships a description
+
+
+def test_an_attached_chip_hints_the_same_description(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("accurate")
+
+    record = next(m for m in data.modifiers if m.id == "accurate")
+    assert record.description in card._chips[0].toolTip()
+
+
+def test_allocation_options_hint_what_each_mode_does(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_movement")
+
+    boxes = card.findChildren(QCheckBox)
+    wall_crawling = next(b for b in boxes if b.text().startswith("Wall-Crawling"))
+    assert "walls" in wall_crawling.toolTip()
+
+
+def test_check_required_offers_derived_traits_the_boost_picker_hides(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("check_required")
+
+    combo = card._chips[0].findChild(QComboBox)
+    assert combo.findData("Acrobatics") > 0  # a skill
+    assert combo.findData("AGL") > 0  # an ability
+    assert combo.findData("initiative") > 0  # a derived stat, only in `all_traits`

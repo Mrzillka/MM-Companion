@@ -471,6 +471,11 @@ class EffectCard(QFrame):
             label = option.label + (f" ({option.per_note})" if option.per_note else "")
             box = QCheckBox(label)
             box.setChecked(option.id in chosen)
+            # A checklist of two dozen bare names (Permeate, Trackless, Ultravision…)
+            # says nothing about what each does; the option's description hints it.
+            if option.description:
+                box.setToolTip(option.description)
+                row.setToolTip(option.description)  # also over the tier combo beside it
             row_layout.addWidget(box)
             combo = None
             if len(option.tiers) > 1:

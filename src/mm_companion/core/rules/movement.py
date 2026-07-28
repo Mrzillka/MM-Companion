@@ -71,6 +71,65 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
     return lines
 
 
+@dataclass(frozen=True)
+class MovementModeLine:
+    """One specialised way of moving an active power grants (Wall-Crawling, Permeate…).
+
+    Unlike a :class:`SpeedLine`, a mode is not a movement power of its own — it is one
+    allocation option chosen inside an effect such as Enhanced Movement, so it moves at
+    a rate derived from the character's ground speed rather than from the effect's rank.
+    ``rank`` is that rate's distance rank, or ``None`` for a mode that confers no rate
+    of its own (Safe Fall, Trackless). ``description`` is the option's hover text.
+    """
+
+    label: str
+    rank: int | None
+    description: str = ""
+
+
+def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementModeLine]:
+    """The specialised movement modes the character's active powers currently grant.
+
+    Walks every live effect's ``allocation`` config fields and yields one line per
+    chosen option, at the ground speed rank shifted by that option's tier
+    (``speed_rank_offsets`` — ``0`` full speed, ``-1`` half). Options that grant no
+    rate still list, so the block shows *every* way the character can move, not only
+    the ones with a number. Empty when nothing is switched on.
+    """
+
+    ground = base_ground_speed_rank(char, game_data)
+    lines: list[MovementModeLine] = []
+    for power in live_powers(char.powers):
+        for effect in power.effects:
+            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+            if base is None:
+                continue
+            if not effect_is_active(power, effect, base, game_data, char):
+                continue
+            for field in base.config_fields:
+                if field.type != "allocation":
+                    continue
+                chosen = {
+                    entry["id"]: int(entry.get("tier", 1))
+                    for entry in effect.config.get(field.key, [])
+                    if isinstance(entry, dict) and "id" in entry
+                }
+                for option in field.alloc_options:
+                    tier = chosen.get(option.id)
+                    if tier is None:
+                        continue
+                    offset = option.speed_rank_offset(tier)
+                    label = option.label + (f" {tier}" if len(option.tiers) > 1 else "")
+                    lines.append(
+                        MovementModeLine(
+                            label,
+                            None if offset is None else ground + offset,
+                            option.description,
+                        )
+                    )
+    return lines
+
+
 def speed_columns(rank: int, game_data: GameData, *, metric: bool = False) -> tuple[str, str, str]:
     """The walk / dash / run distances for a speed ``rank``.
 

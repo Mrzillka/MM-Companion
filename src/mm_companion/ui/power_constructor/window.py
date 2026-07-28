@@ -32,7 +32,7 @@ from mm_companion.core.rules import (
     power_strength_amount_violations,
     power_total_cost,
 )
-from mm_companion.ui.power_constructor.bricks import BrickWidget
+from mm_companion.ui.power_constructor.bricks import BrickWidget, PaletteDropZone
 from mm_companion.ui.power_constructor.canvas import PowerCanvas
 from mm_companion.ui.power_constructor.common import (
     _GROUP_HEADER,
@@ -72,7 +72,7 @@ class PowerConstructorWindow(QMainWindow):
         self._editing = power is not None
         self.power = Power.from_dict(power.to_dict()) if self._editing else Power()
         self.setWindowTitle("Edit Power" if self._editing else "Power Constructor")
-        self.resize(1150, 640)
+        self.resize(1240, 660)
 
         # Three columns: the brick palette, the build panel (the effect canvas the
         # player works in), and the read-only game-term summary. The summary lives in
@@ -85,7 +85,11 @@ class PowerConstructorWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([250, 580, 320])
+        # The palette opens wide enough for a brick's full cost subtitle, and can't be
+        # dragged shut — it is the only way to add anything, so a collapsed palette
+        # leaves the window with no visible way forward.
+        splitter.setSizes([330, 560, 340])
+        splitter.setCollapsible(0, False)
         self.setCentralWidget(splitter)
 
         if self._editing:
@@ -129,12 +133,16 @@ class PowerConstructorWindow(QMainWindow):
         # applied automatically from a power's structure, so they never appear as
         # draggable palette bricks — they stay in the catalog only for cost lookups.
         extras = [
-            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
+            BrickWidget(
+                m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat, description=m.description
+            )
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
             if m.category == "extra" and not m.hidden
         ]
         flaws = [
-            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
+            BrickWidget(
+                m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat, description=m.description
+            )
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
             if m.category == "flaw" and not m.hidden
         ]
@@ -148,13 +156,22 @@ class PowerConstructorWindow(QMainWindow):
         )
         tabs.addTab(self._build_search_tab("extras", "Search extras", bricks=extras), "Extras")
         tabs.addTab(self._build_search_tab("flaws", "Search flaws", bricks=flaws), "Flaws")
-        return tabs
+        tabs.setMinimumWidth(300)
+        # The palette is also where an attached chip is dragged to detach it.
+        self.palette_zone = PaletteDropZone(tabs)
+        return self.palette_zone
 
     def _effect_groups(self) -> list[tuple[str, list[BrickWidget]]]:
         """The effect bricks bucketed under their game-term type, in reading order."""
         by_type: dict[str, list[BrickWidget]] = {}
         for effect in sorted(self._data.effects, key=lambda e: e.name):
-            brick = BrickWidget(effect.name, effect.base_cost, EFFECT_MIME, effect.id)
+            brick = BrickWidget(
+                effect.name,
+                effect.base_cost,
+                EFFECT_MIME,
+                effect.id,
+                description=effect.description,
+            )
             by_type.setdefault(effect.effect_type, []).append(brick)
         ordered = [t for t in self._EFFECT_TYPE_ORDER if t in by_type]
         ordered += [t for t in by_type if t not in self._EFFECT_TYPE_ORDER]  # any stragglers

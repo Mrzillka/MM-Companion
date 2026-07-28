@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,14 +22,17 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     effective_ability,
 )
-from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.block_canvas import DropIndicator
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
     _ACCENT,
     CHIP_MIME,
     RANK_MAX,
     STRENGTH_AMOUNT_MAX,
+    TRAIT_SOURCES,
     _fill_trait_combo,
     _move_item,
+    brick_tooltip,
 )
 from mm_companion.ui.theme import tint_rgba
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -71,6 +74,10 @@ class ModifierChip(QFrame):
         self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
         tint = "#2e5e33" if modifier.category == "extra" else "#5e2e2e"
         self.setStyleSheet(f"ModifierChip {{ background: {tint}; border-radius: 6px; }}")
+        # The same hover text the palette brick carries — a chip is a cramped label, so
+        # what the modifier does still has to be one hover away once it is attached.
+        # Set on the frame only; Qt walks up to it for children with no tooltip.
+        self.setToolTip(brick_tooltip(modifier.name, modifier.cost_formula, modifier.description))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 2, 3, 2)
@@ -167,9 +174,16 @@ class ModifierChip(QFrame):
                 row.addWidget(spin)
             elif cfg.type == "select":
                 combo = QComboBox()
-                if cfg.source == "traits" and self._data is not None:
-                    # Data-driven trait list (Reduced Trait's "which trait goes down").
-                    _fill_trait_combo(combo, self._data, self.selection.config.get(cfg.key, ""))
+                if cfg.source in TRAIT_SOURCES and self._data is not None:
+                    # Data-driven trait list (Reduced Trait's "which trait goes down";
+                    # Check Required's "which check", which also offers the derived
+                    # stats a player can roll but not buy).
+                    _fill_trait_combo(
+                        combo,
+                        self._data,
+                        self.selection.config.get(cfg.key, ""),
+                        derived=cfg.source == "all_traits",
+                    )
                 else:
                     for option in cfg.options:
                         combo.addItem(option.label, option.value)
@@ -260,9 +274,17 @@ class ModifierGroup(QWidget):
     modifiers touch the same stat (later ones win). Reorder drops arrive as
     :attr:`reordered` ``(from_index, to_index)`` where ``to_index`` is an insertion
     point in the pre-move list.
+
+    A drag shows **where the chip will land**: an accent insertion bar tracks the drop
+    index down the gap the chip would fall into, so the order after the drop is legible
+    before letting go rather than a guess. Dropping anywhere else — most usefully back
+    on the palette — is a removal, handled by :class:`~.bricks.PaletteDropZone`.
     """
 
     reordered = Signal(int, int)
+
+    #: Width of the insertion bar, in pixels.
+    INDICATOR_WIDTH = 3
 
     def __init__(self, title: str) -> None:
         super().__init__()
@@ -274,9 +296,12 @@ class ModifierGroup(QWidget):
         header = QLabel(title)
         header.setStyleSheet("font-weight: bold;")
         layout.addWidget(header)
-        chip_area = QWidget()
-        self._chip_layout = FlowLayout(chip_area)
-        layout.addWidget(chip_area)
+        # A FlowContainer (not a bare QWidget) so a second, wrapped row of chips grows
+        # the group instead of painting over the config form below it.
+        self._chip_area = FlowContainer()
+        self._chip_layout = FlowLayout(self._chip_area)
+        layout.addWidget(self._chip_area)
+        self._indicator = DropIndicator(self)
         self.setVisible(False)
 
     def add_chip(self, chip: QWidget) -> None:
@@ -313,40 +338,78 @@ class ModifierGroup(QWidget):
 
     def _drop_index(self, pos) -> int:
         """The insertion index for a drop at ``pos`` — before the nearest chip, or
-        after it when the drop lands on its right half."""
+        after it when the drop lands on its right half.
+
+        ``pos`` is in this group's coordinates; chip geometries are in the chip area's,
+        which sits below the group's header, so the point is mapped across first —
+        otherwise the header's height skews which chip reads as nearest once the chips
+        wrap onto a second row.
+        """
         if not self._chips:
             return 0
+        local = self._chip_area.mapFrom(self, pos)
         nearest = min(
             range(len(self._chips)),
-            key=lambda i: (self._chips[i].geometry().center() - pos).manhattanLength(),
+            key=lambda i: (self._chips[i].geometry().center() - local).manhattanLength(),
         )
         center = self._chips[nearest].geometry().center()
-        return nearest + (1 if pos.x() > center.x() else 0)
+        return nearest + (1 if local.x() > center.x() else 0)
+
+    def _indicator_rect(self, index: int) -> QRect:
+        """The insertion bar's geometry, in this group's coordinates, for a drop at
+        ``index`` — in the gap before that chip, or past the right edge of the last one
+        when the drop lands at the end. Empty while the group holds no chips."""
+        if not self._chips:
+            return QRect()
+        gap = self._chip_layout.spacing() // 2
+        if index < len(self._chips):
+            geometry = self._chips[index].geometry()
+            x = geometry.left() - gap
+        else:
+            geometry = self._chips[-1].geometry()
+            x = geometry.right() + gap
+        top_left = self._chip_area.mapTo(self, QPoint(x, geometry.top()))
+        return QRect(top_left.x(), top_left.y(), self.INDICATOR_WIDTH, geometry.height())
+
+    def _show_indicator(self, pos) -> None:
+        """Track the insertion bar to the drop index for a drag at ``pos``."""
+        rect = self._indicator_rect(self._drop_index(pos))
+        if rect.isEmpty():
+            self._indicator.hide_indicator()
+        else:
+            self._indicator.move_to(rect)
+
+    def _end_drag(self) -> None:
+        self._indicator.hide_indicator()
+        self.setStyleSheet("")
 
     def _accepts(self, event) -> bool:
         return event.mimeData().hasFormat(CHIP_MIME) and event.source() in self._chips
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         # Only accept a chip dragged from this same group — a reorder, never a move
-        # between the Extras and Flaws groups (that would change its category).
+        # between the Extras and Flaws groups (that would change its category). A chip
+        # dragged anywhere else falls through to the palette, which reads it as a removal.
         if self._accepts(event):
             self.setStyleSheet(f"ModifierGroup {{ background: {tint_rgba(_ACCENT, 0.12)}; }}")
+            self._show_indicator(event.position().toPoint())
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if self._accepts(event):
+            self._show_indicator(event.position().toPoint())
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self.setStyleSheet("")
+        self._end_drag()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self.setStyleSheet("")
+        self._end_drag()
         source = event.source()
         if source not in self._chips:
             event.ignore()

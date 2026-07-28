@@ -12,6 +12,7 @@ from mm_companion.core.rules import (
     initiative_ability,
     initiative_advantage_bonus,
     initiative_modifier,
+    movement_mode_lines,
     size_shift,
     speed_columns,
     speed_lines,
@@ -61,6 +62,71 @@ def test_switched_off_movement_power_drops_its_speed_line() -> None:
     char.powers = [flight]
 
     assert [line.label for line in speed_lines(char, data)] == ["Base"]
+
+
+# -- specialised movement modes -------------------------------------------------
+
+
+def _wall_crawler(tier: int) -> Power:
+    return Power(
+        name="Spider",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_movement",
+                rank=4,
+                config={"modes": [{"id": "wall_crawling", "tier": tier}]},
+            )
+        ],
+    )
+
+
+def test_movement_mode_moves_at_full_ground_speed_at_its_top_tier() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [_wall_crawler(2)]
+
+    lines = movement_mode_lines(char, data)
+    # Tier 2 is full speed, so the mode's rank is the ground rank itself.
+    assert [(line.label, line.rank) for line in lines] == [("Wall-Crawling 2", 1)]
+
+
+def test_lower_tier_movement_mode_moves_at_half_speed() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [_wall_crawler(1)]
+
+    # Half speed is one distance rank down from the ground rank of 1.
+    assert [line.rank for line in movement_mode_lines(char, data)] == [0]
+
+
+def test_movement_mode_without_a_rate_still_lists_with_its_description() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [
+        Power(
+            name="Feather Fall",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_movement", rank=1, config={"modes": [{"id": "safe_fall", "tier": 1}]}
+                )
+            ],
+        )
+    ]
+
+    (line,) = movement_mode_lines(char, data)
+    assert line.label == "Safe Fall"
+    assert line.rank is None  # falling safely is not a speed
+    assert line.description  # every option hints what it does
+
+
+def test_switched_off_power_grants_no_movement_modes() -> None:
+    data = load_game_data()
+    char = _char(data)
+    power = _wall_crawler(2)
+    power.effects[0].toggled_on = False  # Enhanced Movement is a Sustained toggle
+    char.powers = [power]
+
+    assert movement_mode_lines(char, data) == []
 
 
 # -- initiative ----------------------------------------------------------------

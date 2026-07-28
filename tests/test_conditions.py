@@ -484,22 +484,56 @@ def test_confused_chip_records_a_roll(qapp2: QApplication) -> None:
     assert section._confused_rolls  # a rolled outcome was stored for the chip
 
 
-def test_flow_container_reports_wrapped_height(qapp2: QApplication) -> None:
+def make_flow_container(chips: int = 6):
+    """A container holding *chips* fixed 120×24 chips — several rows when narrow."""
     from PySide6.QtWidgets import QLabel
 
     from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 
     container = FlowContainer()
     flow = FlowLayout(container)
-    for _ in range(6):
+    for _ in range(chips):
         label = QLabel("wide-chip-xxxxx")
         label.setFixedSize(120, 24)
         flow.addWidget(label)
-    # Narrow enough that six 120px chips must wrap to several rows.
-    assert container.sizePolicy().hasHeightForWidth() is True
+    return container, flow
+
+
+def test_flow_container_reports_wrapped_height(qapp2: QApplication) -> None:
+    container, _flow = make_flow_container()
     one_row = container.heightForWidth(1000)
     many_rows = container.heightForWidth(200)
     assert many_rows > one_row
+
+
+def test_flow_container_does_not_advertise_height_for_width(qapp2: QApplication) -> None:
+    """Qt must not size the container by asking how tall it is at its *hint* width.
+
+    That width is a single chip's, so the answer is every chip in its own row — a
+    minimum height several times too large, which the enclosing block reserves and
+    the rest of the page then has to absorb.
+    """
+    container, flow = make_flow_container()
+    assert flow.hasHeightForWidth() is False
+    assert container.hasHeightForWidth() is False
+
+
+def test_flow_container_gives_height_back_when_chips_are_removed(qapp2: QApplication) -> None:
+    """The pinned minimum height has to follow the content down as well as up.
+
+    Removing chips fires no resize (the stale, taller minimum is what prevents one),
+    so without an explicit re-fit the container would ratchet: permanently as tall as
+    the most chips it ever held.
+    """
+    container, flow = make_flow_container()
+    container.resize(200, 400)  # narrow: the six chips wrap to several rows
+    tall = container.minimumHeight()
+    assert tall > 24
+
+    while flow.count() > 1:
+        item = flow.takeAt(0)
+        item.widget().setParent(None)
+    assert container.minimumHeight() < tall
 
 
 # --------------------------------------------------------------------------- #

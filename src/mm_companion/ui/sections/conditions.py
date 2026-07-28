@@ -169,7 +169,7 @@ class ConditionsSection(QGroupBox):
         # One titled sub-group of chips per category (General / Damage), each with a
         # header + rule, hidden until it holds a chip.
         self._category_flows: dict[str, FlowLayout] = {}
-        self._category_sections: dict[str, tuple[QLabel, QWidget, QWidget]] = {}
+        self._category_sections: dict[str, tuple[QLabel, QWidget, FlowContainer]] = {}
         for category, title in CONDITION_CATEGORY_SECTIONS:
             head = QLabel(title)
             head.setStyleSheet(
@@ -177,7 +177,7 @@ class ConditionsSection(QGroupBox):
             )
             rule = hline_separator()
             container = FlowContainer()
-            container.setMinimumHeight(CONDITIONS_ROW_HEIGHT)
+            container.set_minimum_row_height(CONDITIONS_ROW_HEIGHT)
             self._category_flows[category] = FlowLayout(container)
             outer.addWidget(head)
             outer.addWidget(rule)
@@ -289,21 +289,13 @@ class ConditionsSection(QGroupBox):
     def _refit_containers(self) -> None:
         """Re-fit each chip container to its current content.
 
-        ``FlowContainer`` only recomputes its ``minimumHeight`` on a resize event
-        (see :mod:`~mm_companion.ui.flow_layout`). Adding chips that wrap grows it,
-        but *removing* chips fires no resize, so a stale, taller minimum would stick
-        and the block would never shrink back. Recompute it here for every visible
-        container and let the geometry change bubble up so the enclosing
-        ``BlockFrame`` re-queries its size hint and the canvas row shrinks.
+        ``FlowContainer`` re-pins its own height as chips come and go, but a group
+        that was hidden while it changed had no width to measure at; re-pin here now
+        that visibility has been settled, and let the geometry change bubble up so
+        the enclosing ``BlockFrame`` re-queries its size hint.
         """
-        for category, flow in self._category_flows.items():
-            _head, _rule, container = self._category_sections[category]
-            if not container.isVisible():
-                continue
-            width = container.width()
-            height = flow.heightForWidth(width) if width > 0 else CONDITIONS_ROW_HEIGHT
-            container.setMinimumHeight(max(CONDITIONS_ROW_HEIGHT, height))
-            container.updateGeometry()
+        for _head, _rule, container in self._category_sections.values():
+            container.refresh_height()
         self.updateGeometry()
 
     def _build_condition_chip(self, applied: AppliedCondition, record: Condition | None) -> QFrame:

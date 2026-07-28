@@ -355,16 +355,16 @@
           "allocOptions": [
             { "id": "dimensional_travel", "label": "Dimensional Travel", "tiers": [2, 4, 6], "description": "Travel to another dimension: one fixed dimension, then any of a group, then any dimension at all." },
             { "id": "environmental_adaptation", "label": "Environmental Adaptation", "tiers": [1], "perNote": "per environment", "description": "Ignore the penalties one environment imposes on movement and checks (zero-g, underwater, extreme cold)." },
-            { "id": "permeate", "label": "Permeate", "tiers": [2, 4, 6], "speedRankOffsets": [-2, -1, 0], "description": "Move through solid matter at a quarter, half, then full speed." },
+            { "id": "permeate", "label": "Permeate", "tiers": [2, 4, 6], "speeds": [0, 1, "ground"], "description": "Move through solid matter — slowly at first, then quicker, and at the top tier as fast as you walk." },
             { "id": "safe_fall", "label": "Safe Fall", "tiers": [1], "description": "Fall any distance without harm, so long as you are free to move." },
-            { "id": "slithering", "label": "Slithering", "tiers": [1], "speedRankOffsets": [0], "description": "Move at full speed without limbs, and through gaps a body your size would not normally pass." },
+            { "id": "slithering", "label": "Slithering", "tiers": [1], "speeds": ["ground"], "description": "Move at your normal ground speed without limbs, and through gaps a body your size would not normally pass." },
             { "id": "space_travel", "label": "Space Travel", "tiers": [2, 4, 6], "description": "Cross interplanetary, then interstellar, then intergalactic distances." },
             { "id": "stable", "label": "Stable", "tiers": [1], "perNote": "per mode", "description": "Keep your footing on unstable ground: no penalty for moving over a surface that would normally unbalance you." },
-            { "id": "sure_footed", "label": "Sure-Footed", "tiers": [1, 2], "speedRankOffsets": [-1, 0], "description": "Ignore difficult terrain — at half speed, then at full speed." },
-            { "id": "swinging", "label": "Swinging", "tiers": [2], "speedRankOffsets": [0], "description": "Swing from anchor points at full speed, given something overhead to catch." },
+            { "id": "sure_footed", "label": "Sure-Footed", "tiers": [1, 2], "description": "Ignore difficult terrain — half of it at the first tier, all of it at the second." },
+            { "id": "swinging", "label": "Swinging", "tiers": [2], "speeds": [2], "description": "Swing from anchor points at speed rank 2, given something overhead to catch." },
             { "id": "trackless", "label": "Trackless", "tiers": [1], "perNote": "per sense", "description": "Leave no trail one chosen sense can follow." },
-            { "id": "wall_crawling", "label": "Wall-Crawling", "tiers": [1, 2], "speedRankOffsets": [-1, 0], "description": "Move across walls and ceilings — at half speed, then at full speed." },
-            { "id": "water_walking", "label": "Water-Walking", "tiers": [1, 2], "speedRankOffsets": [-1, 0], "description": "Walk on liquid surfaces — at half speed, then at full speed (the higher tier also carries any load you could normally bear)." }
+            { "id": "wall_crawling", "label": "Wall-Crawling", "tiers": [2, 4], "speeds": ["ground-1", "ground"], "tierNotes": ["vulnerable while climbing", "not vulnerable"], "description": "Move across walls and ceilings — one rank slower than your ground speed and vulnerable while you climb, or at full ground speed and not vulnerable." },
+            { "id": "water_walking", "label": "Water-Walking", "tiers": [1, 2], "speeds": ["ground", "ground"], "tierNotes": ["sinks if knocked prone", "stays up even when prone"], "description": "Walk on liquid surfaces at your normal ground speed. The lower tier sinks if you are knocked prone; the higher one does not." }
           ]
         }
       ],

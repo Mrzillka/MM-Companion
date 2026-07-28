@@ -86,37 +86,65 @@ def test_movement_mode_moves_at_full_ground_speed_at_its_top_tier() -> None:
     char.powers = [_wall_crawler(2)]
 
     lines = movement_mode_lines(char, data)
-    # Tier 2 is full speed, so the mode's rank is the ground rank itself.
+    # Tier 2 is full ground speed, so the mode's rank is the ground rank itself.
     assert [(line.label, line.rank) for line in lines] == [("Wall-Crawling 2", 1)]
+    assert lines[0].note == "not vulnerable"
 
 
-def test_lower_tier_movement_mode_moves_at_half_speed() -> None:
+def test_lower_tier_wall_crawling_is_a_rank_slower_and_leaves_you_vulnerable() -> None:
     data = load_game_data()
     char = _char(data)
     char.powers = [_wall_crawler(1)]
 
-    # Half speed is one distance rank down from the ground rank of 1.
-    assert [line.rank for line in movement_mode_lines(char, data)] == [0]
+    (line,) = movement_mode_lines(char, data)
+    assert line.rank == 0  # one distance rank below the ground rank of 1
+    assert line.note == "vulnerable while climbing"
 
 
-def test_movement_mode_without_a_rate_still_lists_with_its_description() -> None:
+def test_a_mode_with_a_flat_speed_ignores_the_characters_ground_speed() -> None:
     data = load_game_data()
     char = _char(data)
+    char.characteristics["size"] = "Huge"  # a size that shifts ground speed
     char.powers = [
         Power(
-            name="Feather Fall",
+            name="Web-Slinging",
             effects=[
                 PowerEffectInstance(
-                    "enhanced_movement", rank=1, config={"modes": [{"id": "safe_fall", "tier": 1}]}
+                    "enhanced_movement", rank=2, config={"modes": [{"id": "swinging", "tier": 1}]}
                 )
             ],
         )
     ]
 
-    (line,) = movement_mode_lines(char, data)
-    assert line.label == "Safe Fall"
-    assert line.rank is None  # falling safely is not a speed
-    assert line.description  # every option hints what it does
+    # Swinging is a flat speed rank 2, not a multiple of how fast the character walks.
+    assert [line.rank for line in movement_mode_lines(char, data)] == [2]
+
+
+def test_modes_that_grant_no_speed_stay_out_of_the_movement_readout() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [
+        Power(
+            name="Sure Feet",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_movement",
+                    rank=4,
+                    config={
+                        "modes": [
+                            {"id": "safe_fall", "tier": 1},
+                            {"id": "stable", "tier": 1},
+                            {"id": "trackless", "tier": 1},
+                            {"id": "slithering", "tier": 1},
+                        ]
+                    },
+                )
+            ],
+        )
+    ]
+
+    # Only Slithering is a speed; the other three are capabilities, not rates.
+    assert [line.label for line in movement_mode_lines(char, data)] == ["Slithering"]
 
 
 def test_sense_qualities_are_not_movement_modes() -> None:

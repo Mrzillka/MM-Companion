@@ -76,15 +76,17 @@ class MovementModeLine:
     """One specialised way of moving an active power grants (Wall-Crawling, Permeate…).
 
     Unlike a :class:`SpeedLine`, a mode is not a movement power of its own — it is one
-    allocation option chosen inside an effect such as Enhanced Movement, so it moves at
-    a rate derived from the character's ground speed rather than from the effect's rank.
-    ``rank`` is that rate's distance rank, or ``None`` for a mode that confers no rate
-    of its own (Safe Fall, Trackless). ``description`` is the option's hover text.
+    allocation option chosen inside an effect such as Enhanced Movement, so its rate
+    comes from the option's tier (often relative to the character's ground speed)
+    rather than from the effect's rank. ``rank`` is that rate's distance rank,
+    ``note`` an optional per-tier caveat ("vulnerable while climbing"), and
+    ``description`` the option's hover text.
     """
 
     label: str
-    rank: int | None
+    rank: int
     description: str = ""
+    note: str = ""
 
 
 #: The ``statIntegration.affects`` category marking an effect as one that changes how
@@ -100,13 +102,17 @@ def _affects_movement(base) -> bool:
 
 
 def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementModeLine]:
-    """The specialised movement modes the character's active powers currently grant.
+    """The specialised movement *speeds* the character's active powers currently grant.
 
     Walks the ``allocation`` config fields of every live effect that declares itself a
-    *movement* effect (:func:`_affects_movement`) and yields one line per chosen option,
-    at the ground speed rank shifted by that option's tier (``speed_rank_offsets`` —
-    ``0`` full speed, ``-1`` half). Options that grant no rate still list, so the block
-    shows *every* way the character can move, not only the ones with a number. Empty
+    *movement* effect (:func:`_affects_movement`) and yields one line per chosen option
+    at the rate its tier grants — a flat rank for a mode with a speed of its own
+    (Swinging), or one derived from the character's ground speed for a mode expressed
+    against it (Wall-Crawling).
+
+    Only options that actually confer a **rate** appear. Safe Fall, Stable, Trackless
+    and the like are real capabilities, but they are not speeds, so listing them under a
+    speed readout would say nothing; they stay on the power's own card instead. Empty
     when nothing is switched on.
     """
 
@@ -131,13 +137,16 @@ def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementMo
                     tier = chosen.get(option.id)
                     if tier is None:
                         continue
-                    offset = option.speed_rank_offset(tier)
+                    speed = option.speed(tier)
+                    if speed is None:
+                        continue  # a capability, not a speed — nothing to show here
                     label = option.label + (f" {tier}" if len(option.tiers) > 1 else "")
                     lines.append(
                         MovementModeLine(
                             label,
-                            None if offset is None else ground + offset,
+                            speed.rank(ground),
                             option.description,
+                            option.tier_note(tier),
                         )
                     )
     return lines

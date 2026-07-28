@@ -365,6 +365,27 @@ class ConfigOption:
 
 
 @dataclass(frozen=True)
+class SpeedRank:
+    """The rate one tier of a movement mode grants, as a distance rank.
+
+    Some modes move at a rate of their own regardless of how fast the character walks
+    (Swinging's flat rank 2, Permeate's slow lower tiers); others are expressed against
+    the character's ground speed (Wall-Crawling's "ground speed, minus one rank at the
+    lower tier"). ``from_ground`` picks which, and ``value`` is the flat rank or the
+    signed offset accordingly.
+
+    In JSON a tier is written as a bare number for a flat rank (``2``) or as a
+    ``"ground"`` expression for a relative one (``"ground"``, ``"ground-1"``).
+    """
+
+    value: int = 0
+    from_ground: bool = False
+
+    def rank(self, ground_rank: int) -> int:
+        return ground_rank + self.value if self.from_ground else self.value
+
+
+@dataclass(frozen=True)
 class AllocationOption:
     """One named sub-ability on a Tier-4 ``allocation`` field (Enhanced Senses etc.).
 
@@ -378,11 +399,12 @@ class AllocationOption:
     the constructor's checklist — a list of two dozen bare names (Permeate, Trackless,
     Ultravision) is otherwise unreadable without the rulebook open beside it.
 
-    ``speed_rank_offsets`` gives the movement *rate* each tier grants, as an offset
-    from the character's ground speed rank: ``0`` is full speed, ``-1`` half (one
-    distance rank down), and ``None`` marks a tier that grants no rate of its own.
-    One entry per tier, or empty for an option that is not a way of moving at all
-    (Safe Fall, Trackless). Read by :func:`mm_companion.core.rules.movement_mode_lines`.
+    ``speeds`` gives the movement *rate* each tier grants as a :class:`SpeedRank`, one
+    entry per tier. It is **empty for an option that is not a way of moving at all**
+    (Safe Fall, Trackless, Stable) — those confer no rate, so nothing lists them among
+    the character's movement speeds. ``tier_notes`` is an optional per-tier caveat shown
+    beside that rate (Wall-Crawling's "vulnerable while climbing"). Both are read by
+    :func:`mm_companion.core.rules.movement_mode_lines`.
     """
 
     id: str
@@ -390,13 +412,20 @@ class AllocationOption:
     tiers: tuple[int, ...] = (1,)
     per_note: str = ""
     description: str = ""
-    speed_rank_offsets: tuple[int | None, ...] = ()
+    speeds: tuple[SpeedRank | None, ...] = ()
+    tier_notes: tuple[str, ...] = ()
 
-    def speed_rank_offset(self, tier: int) -> int | None:
-        """The rate offset for a 1-based ``tier``, or ``None`` when it grants none."""
-        if 1 <= tier <= len(self.speed_rank_offsets):
-            return self.speed_rank_offsets[tier - 1]
+    def speed(self, tier: int) -> SpeedRank | None:
+        """The rate a 1-based ``tier`` grants, or ``None`` when it grants none."""
+        if 1 <= tier <= len(self.speeds):
+            return self.speeds[tier - 1]
         return None
+
+    def tier_note(self, tier: int) -> str:
+        """The caveat attached to a 1-based ``tier`` (``""`` when it has none)."""
+        if 1 <= tier <= len(self.tier_notes):
+            return self.tier_notes[tier - 1]
+        return ""
 
 
 @dataclass(frozen=True)
@@ -1242,6 +1271,23 @@ def _parse_condition(c: dict) -> Condition:
     )
 
 
+def _parse_speed_rank(raw) -> SpeedRank | None:
+    """One ``speeds`` entry: a flat rank (``2``) or a ground expression (``"ground-1"``).
+
+    ``None`` (or anything unparseable) means the tier grants no rate of its own.
+    """
+
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return SpeedRank(value=int(raw))
+    text = str(raw).strip().replace(" ", "")
+    if not text.startswith("ground"):
+        return SpeedRank(value=int(text)) if text.lstrip("+-").isdigit() else None
+    offset = text[len("ground") :]
+    return SpeedRank(value=int(offset) if offset else 0, from_ground=True)
+
+
 def _parse_config_field(c: dict) -> EffectConfigField:
     return EffectConfigField(
         key=c["key"],
@@ -1275,9 +1321,8 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 tiers=tuple(int(t) for t in o.get("tiers", (1,))),
                 per_note=o.get("perNote", ""),
                 description=o.get("description", ""),
-                speed_rank_offsets=tuple(
-                    None if s is None else int(s) for s in o.get("speedRankOffsets", ())
-                ),
+                speeds=tuple(_parse_speed_rank(s) for s in o.get("speeds", ())),
+                tier_notes=tuple(o.get("tierNotes", ())),
             )
             for o in c.get("allocOptions", [])
         ),

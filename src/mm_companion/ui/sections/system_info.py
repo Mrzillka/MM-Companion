@@ -182,13 +182,12 @@ class SpeedWidget(QWidget):
 
 
 class MovementModesWidget(QWidget):
-    """The specialised ways of moving the character's active powers grant.
+    """The specialised speeds the character's active powers grant.
 
-    One row per :class:`~mm_companion.core.rules.MovementModeLine` — a mode's name and
-    the speed it moves at, or just the name for a mode that confers no rate of its own
-    (Safe Fall). Unlike :class:`SpeedWidget`'s single rich-text label this builds a
-    label per row, because each mode carries its own hover description and a tooltip
-    cannot be applied to part of a label.
+    One row per :class:`~mm_companion.core.rules.MovementModeLine` — the mode's name,
+    the speed it moves at, and any per-tier caveat. Unlike :class:`SpeedWidget`'s single
+    rich-text label this builds a label per row, because each mode carries its own hover
+    description and a tooltip cannot be applied to part of a label.
 
     Hidden entirely while nothing grants a mode, so the block gains no empty row for
     the many characters that have none.
@@ -212,9 +211,9 @@ class MovementModesWidget(QWidget):
                 widget.deleteLater()
         self._labels = []
         for line in lines:
-            text = line.label
-            if line.rank is not None:
-                text += f": {_compact(speed_columns(line.rank, self._data)[0])}/round"
+            text = f"{line.label}: {_compact(speed_columns(line.rank, self._data)[0])}/round"
+            if line.note:
+                text += f" ({line.note})"
             label = QLabel(text)
             label.setWordWrap(True)
             if line.description:

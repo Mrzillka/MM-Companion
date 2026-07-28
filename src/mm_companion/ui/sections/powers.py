@@ -198,6 +198,9 @@ def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
         attack_bonus = effect_attack_skill_bonus(effect, character, data)
         rows = {r.key: r for r in effect_stat_rows(effect, data, character, attack_bonus)}
         rolls = []
+        # A Check Required flaw is rolled *before* the effect goes off, so it leads.
+        if "required_check" in rows:
+            rolls.append(rows["required_check"].value)
         if "check" in rows:
             rolls.append(rows["check"].value)
         if "resistance" in rows:

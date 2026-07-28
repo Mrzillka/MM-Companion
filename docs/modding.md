@@ -113,6 +113,30 @@ hides, and rearranges like any other.
 - A block id that collides with an existing block is **skipped** (additive only —
   a mod can't clobber a base block).
 
+### Built-in power readout kinds
+
+An `effect_readouts.json` entry can use any registered kind without a line of
+Python. The base ruleset ships these:
+
+| `kind` | Renders |
+| --- | --- |
+| `size_table` | a Growth/Shrinking rank as its Size Table row and modifiers |
+| `state` | the highest `byRank` entry the rank reaches (Insubstantial's state) |
+| `measure_offsets` | one measurement row per listed rank `offset` (Burrowing's terrains) |
+| `thresholds` | each row whose `minRank` the rank meets |
+| `config_flag` | `trueText`/`falseText` for a boolean config key |
+| `points_per_rank` | `rank × perRank` as a point total |
+| `capped_rank_bonus` | `+perRank` per rank, stopping at `cap`, applied to the subject named by the `fromConfig` field (Extra Limbs' +1 Grab-or-Stability, max +5). Falls back to `unchosenNote` when that field is deferred to use-time. |
+
+### Config-field `source` values
+
+A `select` field can fill itself from the game data instead of listing `options`:
+
+| `source` | Offers |
+| --- | --- |
+| `traits` | every trait a power can raise or lower — abilities, non-derived resistances, skills |
+| `all_traits` | the same plus the derived numeric stats from `system.json`'s `derived_traits` (Defence, Initiative) — for a field asking what the player *checks*, not what the power changes |
+
 ## Data + Python: register a new mechanic
 
 When a mod needs a genuinely new *mechanic* (not just new data), it ships one

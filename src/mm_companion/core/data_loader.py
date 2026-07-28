@@ -15,7 +15,7 @@ files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 
 from . import mods as mods_module
 from .components import Integration, TraitBoost
@@ -365,6 +365,27 @@ class ConfigOption:
 
 
 @dataclass(frozen=True)
+class SpeedRank:
+    """The rate one tier of a movement mode grants, as a distance rank.
+
+    Some modes move at a rate of their own regardless of how fast the character walks
+    (Swinging's flat rank 2, Permeate's slow lower tiers); others are expressed against
+    the character's ground speed (Wall-Crawling's "ground speed, minus one rank at the
+    lower tier"). ``from_ground`` picks which, and ``value`` is the flat rank or the
+    signed offset accordingly.
+
+    In JSON a tier is written as a bare number for a flat rank (``2``) or as a
+    ``"ground"`` expression for a relative one (``"ground"``, ``"ground-1"``).
+    """
+
+    value: int = 0
+    from_ground: bool = False
+
+    def rank(self, ground_rank: int) -> int:
+        return ground_rank + self.value if self.from_ground else self.value
+
+
+@dataclass(frozen=True)
 class AllocationOption:
     """One named sub-ability on a Tier-4 ``allocation`` field (Enhanced Senses etc.).
 
@@ -373,12 +394,38 @@ class AllocationOption:
     (``(2, 4, 6)`` = increasing scope). Picking the option consumes the chosen
     tier's cost from the effect's rank pool. ``per_note`` is an optional qualifier
     shown after the label (e.g. ``"per environment"``, ``"per sense"``).
+
+    ``description`` is a one-line summary of what the option does, shown on hover in
+    the constructor's checklist — a list of two dozen bare names (Permeate, Trackless,
+    Ultravision) is otherwise unreadable without the rulebook open beside it.
+
+    ``speeds`` gives the movement *rate* each tier grants as a :class:`SpeedRank`, one
+    entry per tier. It is **empty for an option that is not a way of moving at all**
+    (Safe Fall, Trackless, Stable) — those confer no rate, so nothing lists them among
+    the character's movement speeds. ``tier_notes`` is an optional per-tier caveat shown
+    beside that rate (Wall-Crawling's "vulnerable while climbing"). Both are read by
+    :func:`mm_companion.core.rules.movement_mode_lines`.
     """
 
     id: str
     label: str
     tiers: tuple[int, ...] = (1,)
     per_note: str = ""
+    description: str = ""
+    speeds: tuple[SpeedRank | None, ...] = ()
+    tier_notes: tuple[str, ...] = ()
+
+    def speed(self, tier: int) -> SpeedRank | None:
+        """The rate a 1-based ``tier`` grants, or ``None`` when it grants none."""
+        if 1 <= tier <= len(self.speeds):
+            return self.speeds[tier - 1]
+        return None
+
+    def tier_note(self, tier: int) -> str:
+        """The caveat attached to a 1-based ``tier`` (``""`` when it has none)."""
+        if 1 <= tier <= len(self.tier_notes):
+            return self.tier_notes[tier - 1]
+        return ""
 
 
 @dataclass(frozen=True)
@@ -524,6 +571,9 @@ class Effect:
     measure: Measure | None = None
     resistance_dc_base: int | None = None
     implicit_modifiers: tuple[str, ...] = ()
+    #: How far this effect reaches once its range resolves to Ranged. Seeded from the
+    #: system-wide default and overridden by the effect's own ``rangeDistance`` block.
+    range_distance: RangeDistance | None = None
 
 
 @dataclass(frozen=True)
@@ -607,12 +657,19 @@ class Modifier:
     check_note: str = ""
     step_field: str = ""
     step_by: int = 0
+    #: How many distance ranks each rank of this modifier adds to a Ranged effect's
+    #: reach (Extended Range's ``1``). Zero for every modifier that doesn't reach further.
+    distance_rank_bonus: int = 0
     adds_ability: str = ""
     gate: str = ""
     requires_effect_id: str = ""
     hidden: bool = False
     note_template: str = ""
     note_per_rank: int = 0
+    #: Using the effect first calls for an extra roll that can fail (Check Required).
+    #: Such a modifier gets its own game-term row and a line in the card's dice footer
+    #: rather than being buried in Notes — it is something someone has to roll.
+    requires_check: bool = False
     requires_any: tuple[str, ...] = ()
     config_fields: tuple[EffectConfigField, ...] = ()
     custom: bool = False
@@ -693,6 +750,43 @@ class PairedCap:
 
 
 @dataclass(frozen=True)
+class RangeDistance:
+    """How far a ranged effect reaches, as a distance rank plus its range increments.
+
+    An effect whose range resolves to ``range_value`` reaches distance rank
+    ``rank_source`` (the effect's own effective rank, or a fixed ``rank`` when the
+    effect doesn't scale that way) shifted by ``offset``. ``steps`` are the further
+    rank shifts of each range increment and ``step_labels`` names them — the default
+    ``(0, 1, 2)`` / short-medium-long is the ×1/×2/×4 progression, the same idiom
+    :func:`mm_companion.core.rules.speed_columns` uses for walk/dash/run.
+
+    The default lives in ``system.json``; an effect in ``effects.json`` may carry its
+    own ``rangeDistance`` block overriding whichever keys it names — the effects whose
+    reach isn't a function of their rank say so there rather than in code.
+    """
+
+    rank_source: str = "effect_rank"
+    rank: int | None = None
+    offset: int = 0
+    steps: tuple[int, ...] = (0, 1, 2)
+    step_labels: tuple[str, ...] = ("short", "medium", "long")
+    range_value: str = "Ranged"
+
+
+@dataclass(frozen=True)
+class DerivedTrait:
+    """A numeric stat a player can be asked to check that isn't a bought trait.
+
+    The abilities, resistances and skills are enumerated by their own data files;
+    these are the leftovers a check can still name — the derived Defence aggregate,
+    Initiative — listed in ``system.json`` rather than hardcoded in the picker.
+    """
+
+    key: str
+    label: str
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -708,6 +802,8 @@ class SystemRules:
     unscoped_scope_values: tuple[str, ...] = ("All checks",)
     alternate_effect_modifier: str = "alternate_effect"
     linked_modifier: str = "linked"
+    ranged_distance: RangeDistance = field(default_factory=RangeDistance)
+    derived_traits: tuple[DerivedTrait, ...] = ()
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -1175,6 +1271,23 @@ def _parse_condition(c: dict) -> Condition:
     )
 
 
+def _parse_speed_rank(raw) -> SpeedRank | None:
+    """One ``speeds`` entry: a flat rank (``2``) or a ground expression (``"ground-1"``).
+
+    ``None`` (or anything unparseable) means the tier grants no rate of its own.
+    """
+
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return SpeedRank(value=int(raw))
+    text = str(raw).strip().replace(" ", "")
+    if not text.startswith("ground"):
+        return SpeedRank(value=int(text)) if text.lstrip("+-").isdigit() else None
+    offset = text[len("ground") :]
+    return SpeedRank(value=int(offset) if offset else 0, from_ground=True)
+
+
 def _parse_config_field(c: dict) -> EffectConfigField:
     return EffectConfigField(
         key=c["key"],
@@ -1207,6 +1320,9 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 label=o.get("label", o["id"]),
                 tiers=tuple(int(t) for t in o.get("tiers", (1,))),
                 per_note=o.get("perNote", ""),
+                description=o.get("description", ""),
+                speeds=tuple(_parse_speed_rank(s) for s in o.get("speeds", ())),
+                tier_notes=tuple(o.get("tierNotes", ())),
             )
             for o in c.get("allocOptions", [])
         ),
@@ -1246,7 +1362,8 @@ def _parse_integration(raw: dict, configurable: bool) -> Integration:
     return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
 
 
-def _parse_effect(e: dict) -> Effect:
+def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
+    default_distance = ranged_distance or RangeDistance()
     return Effect(
         id=e["id"],
         name=e["name"],
@@ -1266,6 +1383,8 @@ def _parse_effect(e: dict) -> Effect:
         measure=_parse_measure(e.get("measure")),
         resistance_dc_base=e.get("resistanceDcBase"),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),
+        range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
+        or default_distance,
     )
 
 
@@ -1292,12 +1411,14 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         check_note=m.get("checkNote", ""),
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
+        distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
         adds_ability=m.get("addsAbility", ""),
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
         hidden=bool(m.get("hidden", False)),
         note_template=m.get("noteTemplate", ""),
         note_per_rank=int(m.get("notePerRank", 0)),
+        requires_check=bool(m.get("requiresCheck", False)),
         requires_any=tuple(m.get("requiresAny", ())),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         custom=bool(m.get("custom", False)),
@@ -1421,6 +1542,27 @@ def _parse_costs(raw: dict) -> Costs:
     )
 
 
+def _parse_range_distance(raw: dict | None, base: RangeDistance) -> RangeDistance | None:
+    """A ``rangeDistance`` block laid over ``base``, or ``None`` when there is none.
+
+    Only the keys the block actually names are overridden, so an effect that merely
+    reaches further than its rank suggests writes ``{"offset": 2}`` and inherits the
+    rest of the system-wide derivation.
+    """
+
+    if not raw:
+        return None
+    return replace(
+        base,
+        rank_source=raw.get("rankSource", base.rank_source),
+        rank=None if raw.get("rank") is None else int(raw["rank"]),
+        offset=int(raw.get("offset", base.offset)),
+        steps=tuple(int(s) for s in raw["steps"]) if "steps" in raw else base.steps,
+        step_labels=(tuple(raw["stepLabels"]) if "stepLabels" in raw else base.step_labels),
+        range_value=raw.get("rangeValue", base.range_value),
+    )
+
+
 def _parse_system(raw: dict) -> SystemRules:
     """Parse ``system.json`` into :class:`SystemRules`, tolerating unknown keys.
 
@@ -1456,6 +1598,12 @@ def _parse_system(raw: dict) -> SystemRules:
             "alternate_effect_modifier", defaults.alternate_effect_modifier
         ),
         linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+        ranged_distance=_parse_range_distance(sys.get("ranged_distance"), defaults.ranged_distance)
+        or defaults.ranged_distance,
+        derived_traits=tuple(
+            DerivedTrait(key=d["key"], label=d.get("label", d["key"]))
+            for d in sys.get("derived_traits", [])
+        ),
     )
 
 
@@ -1594,6 +1742,10 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     movement_raw = content.get("movement.json", {})
     blocks_raw = content.get("blocks.json", {})
 
+    # Parsed first: an effect's own ``rangeDistance`` block overrides only the keys it
+    # names, so it needs the system-wide default to lay itself over.
+    system = _parse_system(system_raw)
+
     return GameData(
         profile_fields=[_parse_field(f) for f in profile_raw.get("profile_fields", [])],
         characteristics=[
@@ -1604,7 +1756,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         skills=[_parse_skill(s) for s in skills_raw.get("skills", [])],
         advantages=[_parse_advantage(a) for a in advantages_raw.get("advantages", [])],
         conditions=[_parse_condition(c) for c in conditions_raw.get("conditions", [])],
-        effects=[_parse_effect(e) for e in effects_raw.get("effects", [])],
+        effects=[_parse_effect(e, system.ranged_distance) for e in effects_raw.get("effects", [])],
         modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
         costs=_parse_costs(costs_raw),
@@ -1613,7 +1765,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
-        system=_parse_system(system_raw),
+        system=system,
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
     )
 

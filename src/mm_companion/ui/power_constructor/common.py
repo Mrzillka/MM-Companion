@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from html import escape
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QMimeData, Qt
@@ -103,6 +104,25 @@ def _mime_id(mime: QMimeData, fmt: str) -> str:
     return bytes(mime.data(fmt)).decode("utf-8")
 
 
+def brick_tooltip(name: str, cost: str, description: str) -> str:
+    """The hover text for an effect or modifier — its name, cost, and description.
+
+    Module-level because a record reads the same wherever it is shown: the palette
+    brick you drag in and the chip it becomes once attached both hint through here,
+    so a modifier never explains itself one way in the list and another on the card.
+    Rich text, so Qt wraps the description instead of running it off the screen.
+    Every effect and modifier record carries a ``description``; the parts that are
+    empty are simply left out.
+    """
+
+    parts = [f"<b>{escape(name)}</b>"]
+    if cost:
+        parts.append(escape(cost))
+    if description:
+        parts.append(f"<br>{escape(description)}")
+    return "<br>".join(parts)
+
+
 def _move_item(seq: list, from_index: int, to_index: int) -> bool:
     """Move ``seq[from_index]`` so it lands at insertion point ``to_index``.
 
@@ -127,23 +147,41 @@ def _disable_section_headings(combo: QComboBox) -> None:
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
 
 
-def _fill_trait_combo(combo: QComboBox, game_data, current: str) -> None:
+#: Config-field ``source`` values the trait picker answers to. ``"traits"`` lists only
+#: the traits a power can *buy* up or down; ``"all_traits"`` adds the derived stats that
+#: can still be rolled, for a field asking what the player checks rather than what the
+#: power changes.
+TRAIT_SOURCES = ("traits", "all_traits")
+
+
+def _fill_trait_combo(combo: QComboBox, game_data, current: str, *, derived: bool = False) -> None:
     """Populate ``combo`` with the character's traits (abilities, resistances, skills)
     grouped under disabled headings, and select ``current``. Data-driven — the trait
     names come from the game data, never hardcoded. Shared by Enhanced Trait's "which
     trait goes up" picker and any modifier config field with ``source="traits"`` (the
-    Reduced Trait flaw's "which trait goes down")."""
+    Reduced Trait flaw's "which trait goes down").
+
+    With ``derived`` the list also covers the numeric stats that are computed rather
+    than bought — the derived Defence aggregate and the ``derived_traits`` named in
+    ``system.json`` (Initiative). Those can be *checked* but not raised, so they belong
+    in Check Required's "which check" picker and not in a trait-boosting one."""
     combo.addItem("— choose a trait —", "")
     combo.addItem("Abilities", None)  # a disabled section heading
     for ability in game_data.abilities:
         combo.addItem(f"  {ability.name}", ability.key)
     combo.addItem("Resistances", None)
     for res in game_data.resistances:
-        if not res.derived:  # skip the derived Defence aggregate
+        if derived or not res.derived:  # the derived Defence aggregate can't be bought
             combo.addItem(f"  {res.name}", res.key)
     combo.addItem("Skills", None)
     for skill in game_data.skills:
         combo.addItem(f"  {skill.name}", skill.name)
+    if derived:
+        extra = [d for d in game_data.system.derived_traits if combo.findData(d.key) < 0]
+        if extra:
+            combo.addItem("Other", None)
+            for trait in extra:
+                combo.addItem(f"  {trait.label}", trait.key)
     _disable_section_headings(combo)
     index = combo.findData(current)
     combo.setCurrentIndex(index if index >= 0 else 0)

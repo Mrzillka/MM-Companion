@@ -12,6 +12,7 @@ from mm_companion.core.rules import (
     initiative_ability,
     initiative_advantage_bonus,
     initiative_modifier,
+    movement_mode_lines,
     size_shift,
     speed_columns,
     speed_lines,
@@ -61,6 +62,125 @@ def test_switched_off_movement_power_drops_its_speed_line() -> None:
     char.powers = [flight]
 
     assert [line.label for line in speed_lines(char, data)] == ["Base"]
+
+
+# -- specialised movement modes -------------------------------------------------
+
+
+def _wall_crawler(tier: int) -> Power:
+    return Power(
+        name="Spider",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_movement",
+                rank=4,
+                config={"modes": [{"id": "wall_crawling", "tier": tier}]},
+            )
+        ],
+    )
+
+
+def test_movement_mode_moves_at_full_ground_speed_at_its_top_tier() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [_wall_crawler(2)]
+
+    lines = movement_mode_lines(char, data)
+    # Tier 2 is full ground speed, so the mode's rank is the ground rank itself.
+    assert [(line.label, line.rank) for line in lines] == [("Wall-Crawling 2", 1)]
+    assert lines[0].note == "not vulnerable"
+
+
+def test_lower_tier_wall_crawling_is_a_rank_slower_and_leaves_you_vulnerable() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [_wall_crawler(1)]
+
+    (line,) = movement_mode_lines(char, data)
+    assert line.rank == 0  # one distance rank below the ground rank of 1
+    assert line.note == "vulnerable while climbing"
+
+
+def test_a_mode_with_a_flat_speed_ignores_the_characters_ground_speed() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.characteristics["size"] = "Huge"  # a size that shifts ground speed
+    char.powers = [
+        Power(
+            name="Web-Slinging",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_movement", rank=2, config={"modes": [{"id": "swinging", "tier": 1}]}
+                )
+            ],
+        )
+    ]
+
+    # Swinging is a flat speed rank 2, not a multiple of how fast the character walks.
+    assert [line.rank for line in movement_mode_lines(char, data)] == [2]
+
+
+def test_modes_that_grant_no_speed_stay_out_of_the_movement_readout() -> None:
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [
+        Power(
+            name="Sure Feet",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_movement",
+                    rank=4,
+                    config={
+                        "modes": [
+                            {"id": "safe_fall", "tier": 1},
+                            {"id": "stable", "tier": 1},
+                            {"id": "trackless", "tier": 1},
+                            {"id": "slithering", "tier": 1},
+                        ]
+                    },
+                )
+            ],
+        )
+    ]
+
+    # Only Slithering is a speed; the other three are capabilities, not rates.
+    assert [line.label for line in movement_mode_lines(char, data)] == ["Slithering"]
+
+
+def test_sense_qualities_are_not_movement_modes() -> None:
+    data = load_game_data()
+    char = _char(data)
+    # Enhanced Senses lays its qualities out with the same `allocation` field type,
+    # so only the effects that declare `affects: movement` may contribute a line.
+    char.powers = [
+        Power(
+            name="Spider Sense",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_senses",
+                    rank=4,
+                    config={
+                        "senses": [
+                            {"id": "danger_sense", "tier": 1},
+                            {"id": "direction_sense", "tier": 1},
+                        ]
+                    },
+                )
+            ],
+        )
+    ]
+
+    assert movement_mode_lines(char, data) == []
+
+
+def test_switched_off_power_grants_no_movement_modes() -> None:
+    data = load_game_data()
+    char = _char(data)
+    power = _wall_crawler(2)
+    power.effects[0].toggled_on = False  # Enhanced Movement is a Sustained toggle
+    char.powers = [power]
+
+    assert movement_mode_lines(char, data) == []
 
 
 # -- initiative ----------------------------------------------------------------

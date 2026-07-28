@@ -38,6 +38,7 @@ from mm_companion.core.rules import (
     has_cost_overrides,
     initiative_ability,
     initiative_modifier,
+    movement_mode_lines,
     power_level_for_points,
     reconcile_points_to_level,
     speed_columns,
@@ -180,6 +181,48 @@ class SpeedWidget(QWidget):
         self._unit_button.setText("Show ft / round" if self._metric else "Show km / h")
 
 
+class MovementModesWidget(QWidget):
+    """The specialised speeds the character's active powers grant.
+
+    One row per :class:`~mm_companion.core.rules.MovementModeLine` — the mode's name,
+    the speed it moves at, and any per-tier caveat. Unlike :class:`SpeedWidget`'s single
+    rich-text label this builds a label per row, because each mode carries its own hover
+    description and a tooltip cannot be applied to part of a label.
+
+    Hidden entirely while nothing grants a mode, so the block gains no empty row for
+    the many characters that have none.
+    """
+
+    def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._data = data
+        self._labels: list[QLabel] = []
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        self.setVisible(False)
+
+    def render_lines(self, lines: list) -> None:
+        layout = self.layout()
+        while layout.count():  # rebuilt wholesale — a mode list is a handful of rows
+            widget = layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._labels = []
+        for line in lines:
+            text = f"{line.label}: {_compact(speed_columns(line.rank, self._data)[0])}/round"
+            if line.note:
+                text += f" ({line.note})"
+            label = QLabel(text)
+            label.setWordWrap(True)
+            if line.description:
+                label.setToolTip(line.description)
+            layout.addWidget(label)
+            self._labels.append(label)
+        self.setVisible(bool(lines))
+
+
 def _compact(label: str) -> str:
     """Shorten a distance label for the compact speed row (``"15 feet"`` → ``"15 ft"``)."""
     return label.replace(" feet", " ft").replace(" foot", " ft")
@@ -226,6 +269,8 @@ class SystemInfoSection(QGroupBox):
         form.addRow(self._build_cost_notice())
         form.addRow("Size:", self._build_size())
         form.addRow("Speed:", self._build_speed())
+        self._movement_row_label = QLabel("Movement:")
+        form.addRow(self._movement_row_label, self._build_movement_modes())
         form.addRow("Initiative:", self._build_initiative())
         form.addRow("Hero Points:", self._build_hero_points())
 
@@ -317,6 +362,10 @@ class SystemInfoSection(QGroupBox):
     def _build_speed(self) -> QWidget:
         self._speed = SpeedWidget(self._data)
         return self._speed
+
+    def _build_movement_modes(self) -> QWidget:
+        self._movement_modes = MovementModesWidget(self._data)
+        return self._movement_modes
 
     def _build_initiative(self) -> QWidget:
         self._initiative = QLabel("—")
@@ -500,6 +549,10 @@ class SystemInfoSection(QGroupBox):
         speed_mod = condition_speed_rank_mod(self._character, self._data)
         self._speed.render_lines(speed_lines(self._character, self._data), speed_mod)
         self._speed.setToolTip(_speed_condition_tooltip(speed_mod))
+
+        modes = movement_mode_lines(self._character, self._data)
+        self._movement_modes.render_lines(modes)
+        self._movement_row_label.setVisible(bool(modes))  # no modes, no row at all
 
         modifier = initiative_modifier(self._character, self._data)
         ability = initiative_ability(self._character, self._data)

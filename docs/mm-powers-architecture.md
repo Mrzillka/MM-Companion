@@ -276,6 +276,8 @@ Effect (from effects.json)
 ├── implicitModifiers: []                // modifier ids the effect carries by definition;
 │                                        // an attacking effect has ["attack"], which is what
 │                                        // supplies its check (so its own `check` is null)
+├── rangeDistance: {}                    // optional; overrides how far this effect reaches
+│                                        // once its range is Ranged (see §10)
 └── statIntegration: { pattern: "passive_permanent"|"passive_toggle"|"instant_action"|"resource_pool",
                         affects: "ability"|"skill"|"defense"|"resistance"|"movement"|"senses"|
                                  "none"|"special" }
@@ -285,6 +287,11 @@ Modifier (from modifiers.json)
 ├── overrides: { range?, action?, duration?, check?, resistance?, effectType? }
 ├── grantsAttack (bool)                  // gives the effect its attack roll
 ├── dropsCheck (bool)                    // removes it again (Perception Range)
+├── distanceRankBonus (int)              // distance ranks each rank adds to a Ranged
+│                                        // reach (Extended Range's 1) — see §10
+├── requiresCheck (bool)                 // using the effect calls for an extra roll first;
+│                                        // gets its own row and a dice-footer line, with
+│                                        // noteTemplate rendering it ("{trait} check, DC {dc}")
 ├── checkBonus, checkNote, stepField/stepBy, addsAbility, gate, hidden
 └── description
 
@@ -301,7 +308,32 @@ Power
 
 ---
 
-## 9. Out of scope for this file
+## 10. How far a Ranged effect reaches
+
+"Ranged" on its own says nothing about distance, so an effect whose *effective* range
+resolves to `Ranged` gets two further game-term rows after its Range row:
+
+```
+Range:                              Ranged
+Distance:                           rank 10          ← tinted better when bought up
+Measurements (short / medium / long): 1 mile / 2 miles / 4 miles
+```
+
+The reach is a **distance rank**, resolved by `rules.ranged_distance_ranks`:
+
+- the base rank comes from the effect's `rangeDistance` spec — by default the effect's
+  own *effective* rank, seeded system-wide from `system.json`'s `ranged_distance`;
+- an effect whose reach doesn't scale that way overrides only the keys it needs in its
+  own `rangeDistance` block (`{"rank": 4}` pins it, `{"offset": -2}` shifts it);
+- every attached modifier with a `distanceRankBonus` adds its ranks on top. That is
+  what makes **Extended Range** visible: it now moves the Distance row rather than
+  silently costing points, and so it drops out of the trailing Notes row.
+
+The range increments are `steps` further rank shifts from that rank — the default
+`[0, 1, 2]` is the ×1/×2/×4 short/medium/long progression, the same idiom
+`rules.speed_columns` uses for walk/dash/run. Measurements are imperial for now.
+
+## 11. Out of scope for this file
 
 Consistent with the earlier reference files, these are left for later / project-specific data
 rather than reproduced here:

@@ -9,7 +9,14 @@ be edited.
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtWidgets import QComboBox, QFrame, QLineEdit, QSpinBox, QTextEdit, QWidget
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QComboBox,
+    QFrame,
+    QLineEdit,
+    QTextEdit,
+    QWidget,
+)
 
 _LOCKED_COMBO_STYLE = (
     "QComboBox { border: none; background: transparent; }"
@@ -46,10 +53,10 @@ class _InteractionBlocker(QObject):
 def set_widget_locked(widget: QWidget, locked: bool) -> None:
     """Lock or unlock a single editable widget in place.
 
-    Handles the input widgets the sheet uses (``QSpinBox``, ``QLineEdit``,
+    Handles the input widgets the sheet uses (any spin box, ``QLineEdit``,
     ``QTextEdit``, ``QComboBox``); anything else is left untouched.
     """
-    if isinstance(widget, QSpinBox):
+    if isinstance(widget, QAbstractSpinBox):
         widget.setReadOnly(locked)
         widget.setFrame(not locked)
         _set_spin_buttons_hidden(widget, locked)
@@ -62,13 +69,13 @@ def set_widget_locked(widget: QWidget, locked: bool) -> None:
         _set_combo_locked(widget, locked)
 
 
-def _set_spin_buttons_hidden(spin: QSpinBox, hidden: bool) -> None:
+def _set_spin_buttons_hidden(spin: QAbstractSpinBox, hidden: bool) -> None:
     """Hide a spin box's up/down buttons while locked, restoring whatever style
     it was created with on unlock."""
     if hidden:
         if not hasattr(spin, "_orig_button_symbols"):
             spin._orig_button_symbols = spin.buttonSymbols()
-        spin.setButtonSymbols(QSpinBox.NoButtons)
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
     elif hasattr(spin, "_orig_button_symbols"):
         spin.setButtonSymbols(spin._orig_button_symbols)
         del spin._orig_button_symbols

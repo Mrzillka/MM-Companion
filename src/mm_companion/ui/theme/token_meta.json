@@ -1,0 +1,172 @@
+{
+  "_note": "Friendly names, help text and grouping for the Settings window's theme editor. Presentation only: this file never decides which tokens exist. Every token the active preset carries gets a row whether or not it is listed here (falling back to a name derived from the token itself), and an entry here for a token no preset defines is ignored. So it never has to be exhaustive, and a token added by a mod still appears.",
+
+  "_groups": "One entry per token group. 'order' lists the buckets (the segment before the first dot) in the order they should appear; buckets not listed follow alphabetically. A bucket holding only one token is folded into a trailing 'Other' group unless it is named in 'buckets' below.",
+  "groups": {
+    "colors": {
+      "label": "Colours",
+      "order": ["surface", "text", "accent", "tint", "border", "badge", "drop", "focus", "splash", "dice"]
+    },
+    "metrics": {
+      "label": "Sizes",
+      "order": ["radius", "border", "focus", "space", "card", "group", "column", "canvas", "opacity"]
+    },
+    "typography": {
+      "label": "Typography",
+      "order": ["family", "size", "scale"]
+    }
+  },
+
+  "_buckets": "Naming a bucket here also rescues a single-token one from the 'Other' group.",
+  "buckets": {
+    "surface": "Surfaces",
+    "text": "Text",
+    "accent": "Accent",
+    "tint": "Semantic tints",
+    "border": "Borders",
+    "badge": "Badges",
+    "drop": "Drag and drop",
+    "focus": "Focus ring",
+    "splash": "Splash screen",
+    "dice": "Dice",
+    "radius": "Corner radii",
+    "space": "Spacing steps",
+    "card": "Power cards",
+    "group": "Group boxes",
+    "column": "Column minimums",
+    "canvas": "Canvas",
+    "opacity": "Opacity",
+    "family": "Font family",
+    "size": "Point sizes",
+    "scale": "Scale factors"
+  },
+
+  "_tokens": "'washed' marks a colour a translucent fill is derived from, which therefore cannot be a palette() expression. 'text_on' marks one that styles text and is held to the contrast floor.",
+  "tokens": {
+    "accent": {
+      "label": "Accent",
+      "hint": "The app's one highlight colour: selection, a clickable card's edge, a live drop target.",
+      "washed": true,
+      "text_on": true
+    },
+    "accent.dice": {
+      "label": "Dice accent",
+      "hint": "The roll readouts and the dice roller's own highlight.",
+      "washed": true,
+      "text_on": true
+    },
+    "tint.better": {
+      "label": "Better",
+      "hint": "A number improved by an extra or a boost.",
+      "text_on": true
+    },
+    "tint.worse": {
+      "label": "Worse",
+      "hint": "A number limited by a flaw, a penalty, a rejected drop.",
+      "washed": true,
+      "text_on": true
+    },
+    "tint.warning": {
+      "label": "Warning",
+      "hint": "A Power Level breach or an over-spend: worth seeing, not an error.",
+      "text_on": true
+    },
+    "tint.homerule": {
+      "label": "Home rule",
+      "hint": "A cost or cap the group has changed from the printed rules.",
+      "text_on": true
+    },
+    "surface.window": {
+      "label": "Window",
+      "hint": "The page behind the sheet's blocks. Styled presets only.",
+      "text_on": false
+    },
+    "surface.block": {"label": "Block", "hint": "A sheet block's body."},
+    "surface.titlebar": {"label": "Block title bar", "hint": "The drag handle above each block."},
+    "surface.card": {"label": "Card", "hint": "A power card, a player card, a modifier chip."},
+    "surface.field": {"label": "Input field", "hint": "Behind a spin box, combo box or line edit."},
+    "text.primary": {"label": "Primary", "hint": "Ordinary body text. Styled presets only."},
+    "text.muted": {
+      "label": "Muted",
+      "hint": "A secondary line that recedes without vanishing. May be a palette() role."
+    },
+    "text.muted.rich": {
+      "label": "Muted (rich text)",
+      "hint": "The same shade for HTML labels, which cannot resolve a palette() role."
+    },
+    "text.on-badge": {"label": "On a badge", "hint": "Text sitting on one of the filled badges below."},
+    "border.card": {"label": "Card", "hint": "May be a palette() role so it follows the OS."},
+    "border.group": {"label": "Group box", "hint": "The frame around a titled group."},
+    "border.block": {"label": "Block", "hint": "Around a sheet block. Styled presets only."},
+    "border.empty": {"label": "Empty target", "hint": "The dashed outline of a canvas with nothing in it."},
+    "badge.extra": {"label": "Extra", "hint": "The chip for an extra bought onto an effect."},
+    "badge.flaw": {"label": "Flaw", "hint": "The chip for a flaw taken on an effect."},
+    "badge.flat": {"label": "Flat modifier", "hint": "A modifier costing flat points rather than per rank."},
+    "badge.role.base": {"label": "Base effect", "hint": "An array's paid-for effect."},
+    "badge.role.alternate": {"label": "Alternate effect", "hint": "An array's one-point alternate."},
+    "badge.role.linked": {"label": "Linked effect", "hint": "A member of a linked bundle."},
+    "drop.indicator": {"label": "Drop indicator", "hint": "The bar showing where a dragged block will land."},
+    "drop.reject": {
+      "label": "Rejected drop",
+      "hint": "Shown when a target refuses the payload over it.",
+      "washed": true
+    },
+    "focus.ring": {
+      "label": "Ring colour",
+      "hint": "The focused control's outline — the only visible sign that it will now take the scroll wheel."
+    },
+    "focus.width": {"label": "Ring width", "hint": "In pixels."},
+    "splash.background": {"label": "Background", "hint": "The startup splash screen."},
+    "splash.text": {"label": "Text", "hint": "On the splash screen."},
+    "dice.face": {"label": "Die face", "hint": "The rolled number in the dice roller."},
+    "radius.card": {"label": "Card", "hint": "Also the fallback for any radius a preset leaves unstated."},
+    "radius.group": {"label": "Group box"},
+    "radius.canvas": {"label": "Canvas"},
+    "radius.chip": {"label": "Modifier chip"},
+    "radius.badge": {"label": "Badge"},
+    "radius.header": {"label": "Card header"},
+    "radius.block": {"label": "Sheet block", "hint": "Styled presets only."},
+    "radius.field": {"label": "Input field", "hint": "Styled presets only."},
+    "border.width": {"label": "Standard", "hint": "In pixels."},
+    "border.width.emphasis": {"label": "Emphasised", "hint": "A highlighted or hovered edge."},
+    "border.width.accent-edge": {
+      "label": "Accent edge",
+      "hint": "The standing left edge that marks a power card as clickable."
+    },
+    "space.xs": {"label": "Extra small"},
+    "space.sm": {"label": "Small"},
+    "space.md": {"label": "Medium"},
+    "space.lg": {"label": "Large"},
+    "card.margins": {"label": "Margins", "hint": "Left, top, right, bottom — inside a live power card."},
+    "card.margins.off": {"label": "Margins (switched off)", "hint": "Tighter: a switched-off card sits a notch smaller."},
+    "card.spacing": {"label": "Spacing"},
+    "card.spacing.off": {"label": "Spacing (switched off)"},
+    "group.margins": {"label": "Margins", "hint": "Left, top, right, bottom."},
+    "group.margins.off": {"label": "Margins (switched off)"},
+    "opacity.inactive": {
+      "label": "Switched-off card",
+      "hint": "0 is invisible, 1 is fully lit. A card eases to this when switched off."
+    },
+    "canvas.hint.height": {"label": "Empty-canvas hint height", "hint": "In pixels."},
+    "column.stat.spin": {"label": "Ability / resistance spin box"},
+    "column.skill.name": {"label": "Skill name"},
+    "column.skill.spin": {"label": "Skill rank spin box"},
+    "column.skill.mod": {"label": "Skill modifier"},
+    "column.advantage.desc": {"label": "Advantage description"},
+    "column.advantage.combo": {"label": "Advantage picker"},
+    "column.settings.nav": {"label": "Settings nav", "hint": "This window's own left-hand list."},
+    "family": {
+      "label": "Font family",
+      "hint": "Leave on the platform default unless you have a reason; the app never sets a size in a stylesheet, so an unusual family can reflow a lot."
+    },
+    "size.card-name": {"label": "Power name"},
+    "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
+    "size.cost-total": {"label": "Cost total"},
+    "size.dice-face": {"label": "Die face"},
+    "size.roll-readout": {"label": "Roll readout"},
+    "scale.inactive": {
+      "label": "Switched-off card",
+      "hint": "How much a switched-off power card shrinks. 1.0 is no change."
+    }
+  }
+}

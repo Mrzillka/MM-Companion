@@ -53,7 +53,7 @@ version = { attr = "mm_companion.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-mm_companion = ["data/**/*.json", "data/**/*.yaml", "data/**/*.yml", "ui/*.json", "ui/theme/themes/*.json", "ui/assets/*.ico", "ui/assets/*.png"]
+mm_companion = ["data/**/*.json", "data/**/*.yaml", "data/**/*.yml", "ui/*.json", "ui/theme/*.json", "ui/theme/themes/*.json", "ui/assets/*.ico", "ui/assets/*.png"]
 
 [tool.black]
 line-length = 100

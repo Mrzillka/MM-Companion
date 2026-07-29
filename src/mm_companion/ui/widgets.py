@@ -10,7 +10,7 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QSpinBox, QTableWidgetItem
+from PySide6.QtWidgets import QDoubleSpinBox, QFrame, QSpinBox, QTableWidgetItem
 
 from mm_companion.ui import theme
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -38,6 +38,35 @@ def make_spin_box(
         spin.setValue(value)
     if not buttons:
         spin.setButtonSymbols(QSpinBox.NoButtons)
+    if max_width is not None:
+        spin.setMaximumWidth(max_width)
+    if guarded:
+        guard_wheel(spin)
+    return spin
+
+
+def make_double_spin_box(
+    minimum: float,
+    maximum: float,
+    *,
+    value: float | None = None,
+    decimals: int = 2,
+    step: float = 0.1,
+    max_width: int | None = None,
+    guarded: bool = True,
+) -> QDoubleSpinBox:
+    """Build a fractional spin box, wheel-guarded like its integer sibling.
+
+    Point sizes, opacities and scale factors are all fractional, so the theme
+    editor needs the same factory ``make_spin_box`` gives whole numbers — chiefly
+    for the wheel guard, which a long scrolling form cannot do without.
+    """
+    spin = QDoubleSpinBox()
+    spin.setDecimals(decimals)
+    spin.setRange(minimum, maximum)
+    spin.setSingleStep(step)
+    if value is not None:
+        spin.setValue(value)
     if max_width is not None:
         spin.setMaximumWidth(max_width)
     if guarded:

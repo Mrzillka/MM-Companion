@@ -64,12 +64,14 @@ from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
-from mm_companion.ui.block_canvas import BlockCanvas, DropIndicator
+from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
 from mm_companion.ui.dice_roller import DiceRollerPanel
+from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_window import NPCWindow
+from mm_companion.ui.pinned_panel import PinnedBoard
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
@@ -212,10 +214,15 @@ class GMWindow(QMainWindow):
         self._scroll.setWidget(self._canvas)
         self._canvas.set_scroll_area(self._scroll)
 
+        # The page and the pinned strip beside it — the GM keeps a block (the
+        # roll history, say) in view while the rest of the board scrolls.
+        self._board = PinnedBoard(self._scroll, self._canvas)
+        self._canvas.set_pinned_board(self._board)
+
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.addWidget(self._scroll, stretch=1)
+        central_layout.addWidget(self._board, stretch=1)
         # A persistent strip along the bottom, not a draggable block: the hosting
         # status and the reachability advice, then a transient notice line.
         central_layout.addWidget(self._build_status_strip())

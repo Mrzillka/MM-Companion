@@ -38,6 +38,7 @@ from mm_companion.ui.blocks import (
     sync_declarative_blocks,
 )
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
+from mm_companion.ui.pinned_panel import PinnedBoard
 
 
 class CharacterSheet(QWidget):
@@ -85,9 +86,15 @@ class CharacterSheet(QWidget):
         self._scroll.setWidget(self._canvas)
         self._canvas.set_scroll_area(self._scroll)
 
+        # The scrolling page and the pinned strip beside it. The strip starts
+        # empty — a thin bar with one icon on the right edge — so the sheet looks
+        # unchanged until a block is dragged onto it.
+        self._board = PinnedBoard(self._scroll, self._canvas)
+        self._canvas.set_pinned_board(self._board)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._scroll)
+        layout.addWidget(self._board)
 
         # Pin the page's minimum width to the widest docked row so it can never
         # shrink narrow enough to clip a block (the fixed-width Abilities /
@@ -125,6 +132,17 @@ class CharacterSheet(QWidget):
         """Dock a block into the arrangement at (row, slot)."""
         self._canvas.dock_block(key, row, slot, new_row=new_row)
 
+    def pin_block(self, key: str, index: int | None = None) -> None:
+        """Park a block in the strip that doesn't scroll with the page."""
+        self._canvas.pin_block(key, index)
+
+    def unpin_block(self, key: str) -> None:
+        """Send a pinned block back onto the scrolling page."""
+        self._canvas.unpin_block(key)
+
+    def is_block_pinned(self, key: str) -> bool:
+        return self._canvas.is_pinned(key)
+
     def show_block(self, key: str) -> None:
         self._canvas.show_block(key)
 
@@ -141,6 +159,11 @@ class CharacterSheet(QWidget):
     @property
     def canvas(self) -> BlockCanvas:
         return self._canvas
+
+    @property
+    def board(self) -> PinnedBoard:
+        """The page-plus-pinned-strip container the canvas renders into."""
+        return self._board
 
     @property
     def bus(self) -> SignalBus:

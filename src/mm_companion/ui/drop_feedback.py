@@ -40,8 +40,8 @@ from __future__ import annotations
 
 from weakref import WeakSet
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, QTimer
+from PySide6.QtWidgets import QFrame, QWidget
 
 from mm_companion.ui import theme
 
@@ -60,10 +60,19 @@ def clear_all(*, except_for: DropFeedback | None = None) -> None:
 
     Called whenever a target lights up, so exactly one target is ever dressed —
     the same "only one at a time" discipline the powers cards use for hover.
+
+    An instance whose widget has been destroyed is dropped rather than raising:
+    the registry is weak on the *feedback*, not on the Qt objects behind it, so a
+    closed window can leave one alive with a deleted C++ timer behind it — and one
+    dead entry must not stop the live targets from standing down.
     """
     for instance in list(_INSTANCES):
-        if instance is not except_for:
+        if instance is except_for:
+            continue
+        try:
             instance.clear()
+        except RuntimeError:
+            _INSTANCES.discard(instance)
 
 
 class DropFeedback:
@@ -158,3 +167,50 @@ class DropFeedback:
         self._widget.setStyleSheet(
             f"{self._selector} {{ {rules} border-radius: {radius}px; }}" if rules else ""
         )
+
+
+class DropIndicator(QFrame):
+    """A thin accent line showing where a dragged item will drop.
+
+    The insertion-point counterpart to :class:`DropFeedback`: that one dresses the
+    *target*, this one marks the *place* inside it. Shared by the block canvas, the
+    pinned strip, the GM's NPC list and the modifier chips, so an insert line looks
+    and moves the same everywhere.
+
+    It slides between drop slots instead of teleporting: :meth:`move_to` animates
+    the geometry over a short hop when the target stays the same orientation, and
+    snaps instantly on first appearance or when it flips between a row-boundary bar
+    (horizontal) and an in-row bar (vertical), where a slide would just morph oddly.
+    """
+
+    SLIDE_MS = 120
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("dropIndicator")
+        self.setStyleSheet(
+            f"#dropIndicator {{ background-color: {theme.color('drop.indicator')}; }}"
+        )
+        self._slide = QPropertyAnimation(self, b"geometry", self)
+        self._slide.setDuration(self.SLIDE_MS)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.hide()
+
+    def move_to(self, rect: QRect) -> None:
+        """Show the indicator at *rect*, sliding there when it makes sense."""
+        self._slide.stop()
+        current = self.geometry()
+        # Orientation = which dimension is the thin one; only slide within the same.
+        same_axis = (current.width() < current.height()) == (rect.width() < rect.height())
+        if self.isVisible() and same_axis and current != rect:
+            self._slide.setStartValue(current)
+            self._slide.setEndValue(rect)
+            self._slide.start()
+        else:
+            self.setGeometry(rect)
+        self.show()
+        self.raise_()
+
+    def hide_indicator(self) -> None:
+        self._slide.stop()
+        self.hide()

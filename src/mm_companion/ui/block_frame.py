@@ -1,15 +1,17 @@
 """One character-sheet block: a section wrapped in a draggable frame.
 
-Each block is a :class:`BlockFrame` — a title bar (the drag handle, plus float
-and close buttons) above one of the ``sections`` widgets. The frame never wraps
-its section in a scroll area, so the block is sized to its content and never
-scrolls on its own; the whole sheet scrolls as one page instead (see
+Each block is a :class:`BlockFrame` — a title bar (the drag handle, plus pin,
+float and close buttons) above one of the ``sections`` widgets. The frame never
+wraps its section in a scroll area, so the block is sized to its content and
+never scrolls on its own; the whole sheet scrolls as one page instead (see
 :class:`~mm_companion.ui.block_canvas.BlockCanvas`).
 
-A frame lives either inside the canvas or, when floated out, inside a
-:class:`BlockWindow` (a top-level window). Dragging the title bar in either place
-runs the same gesture, driven by the canvas's drag controller — so float-out,
-reorder, and drag-back-to-dock are one interaction.
+A frame lives in one of three places: inside the canvas, inside the pinned strip
+that doesn't scroll with the page (see
+:class:`~mm_companion.ui.pinned_panel.PinnedPanel`), or — when floated out —
+inside a :class:`BlockWindow` (a top-level window). Dragging the title bar runs
+the same gesture wherever it is, driven by the canvas's drag controller, so
+float-out, reorder, pin, and drag-back-to-dock are one interaction.
 
 The frame is deliberately dumb: it forwards title-bar mouse events and button
 clicks to a *controller* (the :class:`BlockCanvas`) and applies its size
@@ -44,14 +46,15 @@ class DragHost(Protocol):
     def title_bar_released(self, key: str, global_pos: QPoint) -> None: ...
     def request_float(self, key: str) -> None: ...
     def request_hide(self, key: str) -> None: ...
+    def request_pin(self, key: str) -> None: ...
 
 
 class TitleBar(QFrame):
-    """A block's header: the drag handle plus float and close buttons.
+    """A block's header: the drag handle plus pin, float and close buttons.
 
-    Left-drag on the bar drives the canvas drag gesture; the buttons pop the
-    block out into its own window or hide it. Clicks on the buttons are consumed
-    by them, so they never start a drag.
+    Left-drag on the bar drives the canvas drag gesture; the buttons park the
+    block in the pinned strip, pop it out into its own window, or hide it. Clicks
+    on the buttons are consumed by them, so they never start a drag.
     """
 
     def __init__(self, key: str, title: str, host: DragHost, parent: QWidget | None = None) -> None:
@@ -68,6 +71,20 @@ class TitleBar(QFrame):
         self._label = QLabel(title)
         self._label.setObjectName("blockTitleLabel")
         layout.addWidget(self._label, stretch=1)
+
+        self._pin_button = QToolButton()
+        # U+1F588 black pushpin, not U+1F4CC: the plain symbol keeps the title bar
+        # monochrome like its ↗ and ✕ neighbours, where the emoji pushpin would put
+        # a colour glyph in every block's header.
+        self._pin_button.setText("🖈")
+        self._pin_button.setAutoRaise(True)
+        self._pin_button.setToolTip(
+            "Pin this block to the fixed strip (or drag it there); "
+            "click again to send it back to the page"
+        )
+        self._pin_button.setCursor(Qt.CursorShape.ArrowCursor)
+        self._pin_button.clicked.connect(lambda: self._host.request_pin(self._key))
+        layout.addWidget(self._pin_button)
 
         self._float_button = QToolButton()
         self._float_button.setText("↗")  # north-east arrow: pop out

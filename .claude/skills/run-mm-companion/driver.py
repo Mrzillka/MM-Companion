@@ -83,6 +83,20 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target in ("sheet-pinned", "sheet-pinned-bottom"):
+        # The pinned strip with something in it: two blocks parked outside the
+        # scrolling page. The bottom variant also moves the strip to another edge,
+        # which flips the strip's stacking axis and the board's split.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        sheet = win._sheet
+        sheet.pin_block("conditions")
+        sheet.pin_block("abilities")
+        if target == "sheet-pinned-bottom":
+            sheet.canvas.set_pin_edge("bottom")
+        return win
     elif target == "focus":
         # Put keyboard focus on an ability spin box, so the focus ring — the only
         # visible sign that a wheel-guarded control now owns the scroll wheel —
@@ -202,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
             "start",
             "sheet",
             "sheet-demo",
+            "sheet-pinned",
+            "sheet-pinned-bottom",
             "constructor",
             "focus",
             "dice",

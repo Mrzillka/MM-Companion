@@ -7,6 +7,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.ui.block_canvas import SCHEMA_VERSION
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
@@ -202,7 +203,7 @@ def test_apply_arrangement_transitions_dont_destroy_frames(make_sheet) -> None:
 
     sheet = make_sheet()
     model = {
-        "version": 5,
+        "version": SCHEMA_VERSION,
         "rows": [
             ["base_info", "system_info", "character_image"],
             ["abilities", "resistances"],

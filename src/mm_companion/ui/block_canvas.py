@@ -437,7 +437,9 @@ class BlockCanvas(QWidget):
             len(within) == len(line) for within, line in zip(sizes, self._pinned, strict=False)
         )
         self._pin_line_sizes = sizes if matches else []
-        extent = self._board.extent()
+        # The thickness the strip was *asked* for, not the one its blocks forced on
+        # it — see PinnedBoard.desired_extent.
+        extent = self._board.desired_extent()
         if extent > 0:
             self._pin_extent = extent
 

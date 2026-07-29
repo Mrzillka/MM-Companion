@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -375,7 +375,20 @@ class PinnedPanel(QFrame):
             line = _PinnedLine(vertical, self._splitter)
             for frame in frames:
                 line.add_slot(_PinnedSlot(frame, vertical, align, line))
+            # A line whose every block pins its own size along the strip can't use
+            # more room than the longest of them; saying so stops the splitter
+            # handing it a band it would only leave empty, and gives the space to a
+            # line that can grow instead.
+            caps = [
+                (frame.maximumHeight() if vertical else frame.maximumWidth()) for frame in frames
+            ]
             self._splitter.addWidget(line)
+            # A line whose every block pins its own size along the strip can't use
+            # more room than it asks for, so let the slack go to a line that can
+            # grow. (A maximum on the line itself does not survive: a splitter
+            # manages its children's bounds, and clears what we set.)
+            growable = not caps or any(cap >= UNBOUNDED for cap in caps)
+            self._splitter.setStretchFactor(index, 1 if growable else 0)
             self._lines.append(line)
             within = line_sizes[index] if index < len(line_sizes) else []
             if len(within) == len(frames) and all(size > 0 for size in within):
@@ -701,11 +714,28 @@ class PinnedBoard(QWidget):
         self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self._splitter.setObjectName("pinnedBoardSplitter")
         self._splitter.setChildrenCollapsible(False)
+        # The one place the strip's thickness is *chosen*: this signal fires for a
+        # dragged handle and never for setSizes, so content that forces the strip
+        # open is not mistaken for a preference (see _remember_dragged_extent).
+        self._splitter.splitterMoved.connect(self._remember_dragged_extent)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._splitter)
+
+        # A rebuilt strip's minimum is not known until Qt has re-laid it out, and a
+        # splitter clamps the sizes it is given against the minimum *of the moment* —
+        # so an extent applied during the rebuild gets pinned to a stale, larger one
+        # (an edge change is the clear case: the strip keeps the old axis's minimum)
+        # and nothing brings it back down. So when a pass doesn't get the thickness
+        # it asked for, it tries again on a later turn — a few times, then gives up,
+        # because a minimum that is genuinely larger will never yield.
+        self._settle_tries = 0
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.timeout.connect(self._apply_extent)
+
         self._apply_edge()
 
     # -- the host's seam ------------------------------------------------------
@@ -724,7 +754,7 @@ class PinnedBoard(QWidget):
         line_sizes: list[list[int]],
     ) -> None:
         """Render the strip, re-laying the board out first when the edge changed."""
-        self._capture_extent()  # before the rebuild can disturb the splitter
+        self._fresh_settle()
         if edge != self._edge:
             self._edge = edge
             self._apply_edge()
@@ -739,15 +769,30 @@ class PinnedBoard(QWidget):
         """Set the strip's thickness — a restored layout, not a live drag."""
         if extent > 0:
             self._extent = extent
+        self._fresh_settle()
         self._apply_extent()
 
     def extent(self) -> int:
-        """The strip's live thickness, or 0 while it is empty."""
+        """The strip's live thickness, or 0 while it is empty.
+
+        This can be *more* than :meth:`desired_extent` when the pinned blocks force
+        the strip open — which is why it is not what gets remembered.
+        """
         if self.panel.is_empty():
             return 0
         sizes = self._splitter.sizes()
         index = self._panel_index()
         return sizes[index] if index < len(sizes) else 0
+
+    def desired_extent(self) -> int:
+        """The thickness the strip has been *asked* for, dragged or restored.
+
+        The value worth persisting. Reading the live thickness instead would bake
+        in whatever a block happened to force at the time, and the strip would keep
+        that width forever — leaving dead space beside a block that can't fill it
+        once the block that needed the room has moved or gone.
+        """
+        return self._extent
 
     def line_extents(self) -> list[int]:
         return self.panel.line_extents()
@@ -794,19 +839,27 @@ class PinnedBoard(QWidget):
         self._splitter.setStretchFactor(1 if panel_first else 0, 1)
         self._apply_extent()
 
-    def _capture_extent(self) -> None:
-        """Remember the thickness the user dragged the board's handle to.
+    def _remember_dragged_extent(self, _pos: int = 0, _index: int = 0) -> None:
+        """Take the thickness the user just dragged the handle to as the wanted one.
 
-        The splitter is dragged behind our back, so the live sizes are the truth;
-        without reading them back first, the next rebuild would snap the strip to
-        whatever thickness it was restored with.
+        Only a real drag reaches here: ``splitterMoved`` is emitted from the handle,
+        not from ``setSizes``. That distinction is the whole point — the strip is
+        also pushed wider by a block that needs the room, and treating *that* as a
+        choice left it stuck at that width afterwards.
         """
+        if self.panel.is_empty():
+            return  # an empty strip is its handle; there is no thickness to choose
         live = self.extent()
         if live > 0:
             self._extent = live
 
     def _apply_extent(self) -> None:
-        """Give the splitter the strip's thickness and the page the rest."""
+        """Give the splitter the strip's thickness and the page the rest.
+
+        Asks again on a later turn when it doesn't get the thickness it asked for,
+        which is how a size clamped against a not-yet-updated minimum converges
+        instead of sticking (see the ``_settle`` timer in ``__init__``).
+        """
         total = self._splitter.width() if is_vertical_strip(self._edge) else self._splitter.height()
         if total <= 0:
             # Not laid out yet; any ratio will do.
@@ -821,6 +874,23 @@ class PinnedBoard(QWidget):
         if self._panel_index() == 0:
             sizes.reverse()
         self._splitter.setSizes(sizes)
+        if not self.panel.is_empty() and self.extent() != strip:
+            self._ask_again()
+
+    #: How many turns the extent may spend converging, and how long each waits.
+    SETTLE_TRIES = 5
+    SETTLE_MS = 16
+
+    def _ask_again(self) -> None:
+        """Re-apply the extent on a later turn, a bounded number of times."""
+        if self._settle_tries >= self.SETTLE_TRIES:
+            return
+        self._settle_tries += 1
+        self._settle.start(self.SETTLE_MS)
+
+    def _fresh_settle(self) -> None:
+        """A new intent for the thickness: allow the retries again."""
+        self._settle_tries = 0
 
     # -- the edge-change gesture ----------------------------------------------
 

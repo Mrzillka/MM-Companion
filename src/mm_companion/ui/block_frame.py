@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -137,6 +137,10 @@ class BlockFrame(QFrame):
     max_width``); the other blocks grow wider than their min.
     """
 
+    #: How many turns the inner layout may spend recovering after a re-homing.
+    RELAYOUT_TRIES = 5
+    RELAYOUT_MS = 16
+
     def __init__(
         self,
         key: str,
@@ -160,6 +164,12 @@ class BlockFrame(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
         self.title_bar = TitleBar(key, title, host, self)
+
+        # Re-homing this block leaves its inner layout stale; see _refresh_layout.
+        self._relayout_tries = 0
+        self._relayout = QTimer(self)
+        self._relayout.setSingleShot(True)
+        self._relayout.timeout.connect(self._refresh_layout)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -206,6 +216,42 @@ class BlockFrame(QFrame):
         fixed_width = size.max_width < UNBOUNDED and size.max_width == size.min_width
         h_policy = QSizePolicy.Policy.Fixed if fixed_width else QSizePolicy.Policy.Expanding
         self.setSizePolicy(h_policy, QSizePolicy.Policy.Minimum)
+
+    def changeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Re-run the block's own layout after it is re-homed (see :meth:`_refresh_layout`)."""
+        if event.type() == QEvent.Type.ParentChange:
+            self._relayout.start(0)
+        super().changeEvent(event)
+
+    def _refresh_layout(self) -> None:
+        """Recompute the block's inner layout, and again until it is not degenerate.
+
+        A block moves between three hosts — a row on the page, a line of the pinned
+        strip, and its own floating window — and on the way it is briefly given
+        *zero height* by a container that has not been sized yet. Its layout
+        activates against that and caches a geometry a few pixels **negative**; the
+        block then reaches its real size while hidden, so no resize event follows,
+        Qt has no reason to run the layout again, and the block draws as an empty
+        framed box. Only nudging its size brought it back — which is why resizing
+        the strip appeared to fix it.
+
+        Re-activating on the turn *after* a re-homing catches it, once the container
+        has handed out real geometry; if the layout still looks degenerate (the
+        container needed more than one turn to settle), it tries again, bounded so
+        it cannot spin.
+        """
+        layout = self.layout()
+        if layout is None:
+            return
+        layout.invalidate()
+        layout.activate()
+        self.updateGeometry()
+        degenerate = layout.geometry().height() <= 0 < self.height()
+        if degenerate and self._relayout_tries < self.RELAYOUT_TRIES:
+            self._relayout_tries += 1
+            self._relayout.start(self.RELAYOUT_MS)
+        else:
+            self._relayout_tries = 0
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         """Never let a block shrink below its full content height.

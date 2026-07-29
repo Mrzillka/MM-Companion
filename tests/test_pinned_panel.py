@@ -6,6 +6,7 @@ import json
 
 import pytest
 from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QScrollArea, QSplitter
 
 from mm_companion.core.data_loader import load_game_data
@@ -45,6 +46,23 @@ def make_sheet(qapp: QApplication):
 def _settle(times: int = 5) -> None:
     for _ in range(times):
         QApplication.processEvents()
+
+
+def _wait(ms: int = 150) -> None:
+    """Let real time pass, for the timers the strip uses to converge its thickness."""
+    QTest.qWait(ms)
+
+
+def _drag(canvas, sheet: CharacterSheet, key: str, target: QPoint) -> None:
+    """Run the real drag gesture: tear *key* out and drop it at *target*."""
+    start = sheet.block_frame(key).title_bar.mapToGlobal(QPoint(10, 5))
+    canvas.title_bar_pressed(key, start)
+    canvas.title_bar_moved(key, start + QPoint(-30, -30))
+    _settle()
+    canvas.title_bar_moved(key, target)
+    _settle()
+    canvas.title_bar_released(key, target)
+    _settle()
 
 
 def _pinned(sheet: CharacterSheet) -> dict:
@@ -232,6 +250,52 @@ def test_moving_a_pinned_block_into_its_own_line_gives_it_a_fair_share(make_shee
         assert size >= line.minimumSizeHint().height()
 
 
+def test_the_strip_shrinks_back_when_the_block_needing_the_room_moves_away(make_sheet) -> None:
+    # Regression: pinning a wide block pushes the strip open, and the board recorded
+    # that width as if it had been dragged there. Move the block to a line of its
+    # own and the strip stayed wide, leaving dead space beside a block (Abilities is
+    # fixed at 280) that could not fill it — until the strip was resized by hand.
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    _settle()
+    narrow = sheet.board.panel.width()
+
+    sheet.pin_block("abilities", line=0, slot=1, new_line=False)
+    _settle()
+    assert sheet.board.panel.width() > narrow  # the pair really did force it open
+
+    sheet.pin_block("abilities", line=0, slot=0, new_line=True)  # move it up
+    _settle()
+
+    assert sheet.board.panel.width() == narrow
+    frame = sheet.block_frame("abilities")
+    slot = sheet.board.panel._lines[0].slots[0]
+    # Whatever room is left beside it is the strip's own minimum, not a stale width.
+    assert slot.width() - frame.width() == narrow - frame.maximumWidth()
+
+
+def test_a_thickness_the_user_dragged_to_is_kept(make_sheet) -> None:
+    # The other half of the same rule: a *chosen* thickness must survive the
+    # rearrangements that a forced one must not.
+    sheet = make_sheet()
+    sheet.resize(1700, 900)  # slack for the page to give up, or the drag can't land
+    sheet.pin_block("conditions")
+    _settle()
+    board = sheet.board
+    page, strip = board._splitter.sizes()
+    board._splitter.setSizes([page - 200, strip + 200])
+    board._splitter.splitterMoved.emit(page - 200, 1)  # what dragging the handle emits
+    _settle()
+    dragged = board.desired_extent()
+    assert dragged > strip  # the page gave up what it could spare
+
+    sheet.pin_block("complications")
+    _settle()
+
+    assert board.desired_extent() == dragged
+    assert sheet.arrangement()["pinned"]["extent"] == dragged
+
+
 def test_a_rebuilt_strip_starts_at_the_top(make_sheet, monkeypatch: pytest.MonkeyPatch) -> None:
     # The strip only scrolls when its blocks don't fit, and a stale offset would
     # show the new arrangement decapitated. Getting it to scroll at all means
@@ -324,6 +388,25 @@ def test_moving_the_strip_to_another_edge_re_lays_the_board_out(make_sheet) -> N
     assert splitter.orientation() == Qt.Orientation.Vertical
     assert splitter.indexOf(board.panel) == 0
     assert _pinned(sheet)["edge"] == "top"
+
+
+def test_moving_the_strip_to_another_edge_drops_the_old_axis_thickness(make_sheet) -> None:
+    # Regression: the strip's thickness is clamped against the panel's minimum *at
+    # the moment it is applied*, and right after an edge change that minimum is
+    # still the old axis's — so a 645px-wide side strip became a 645px-deep floor
+    # and nothing brought it back down.
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    sheet.pin_block("advantages", line=0, slot=1, new_line=False)
+    _settle()
+    panel = sheet.board.panel
+    side_thickness = panel.width()
+
+    sheet.canvas.set_pin_edge("bottom")
+    _wait()  # the thickness converges over a turn or two; see PinnedBoard._ask_again
+
+    assert panel.height() < side_thickness
+    assert panel.height() == panel.minimumSizeHint().height()
 
 
 def test_the_strip_stacks_its_blocks_along_its_own_axis(make_sheet) -> None:
@@ -470,6 +553,28 @@ def test_dragging_a_pinned_block_back_onto_the_page_docks_it(make_sheet) -> None
 
     assert not canvas.is_pinned("conditions")
     assert any("conditions" in row_keys for row_keys in sheet.arrangement()["rows"])
+
+
+def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -> None:
+    # Regression: on the way into the strip a block is briefly given zero height by
+    # a container that hasn't been sized yet; its inner layout cached that (a
+    # *negative* geometry) and, because a fixed-size block reaches its real size
+    # while hidden, no resize event ever made Qt run the layout again. The block
+    # drew as an empty framed box until the strip was resized by hand.
+    sheet = make_sheet()
+    canvas = sheet.canvas
+    panel = sheet.board.panel
+
+    _drag(canvas, sheet, "conditions", panel.mapToGlobal(panel.rect().center()))
+    line = panel._lines[0]
+    beside = line.mapToGlobal(QPoint(line.width() - 5, line.height() // 2))
+    _drag(canvas, sheet, "abilities", beside)
+    _wait()
+
+    frame = sheet.block_frame("abilities")
+    assert frame.layout().geometry().height() > 0
+    assert frame.title_bar.height() > 0
+    assert frame.section.height() > 0
 
 
 def test_dragging_one_pinned_block_beside_another_joins_its_line(make_sheet) -> None:

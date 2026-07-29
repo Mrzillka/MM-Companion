@@ -379,6 +379,34 @@ def test_dragging_a_block_onto_the_strip_pins_it(make_sheet) -> None:
     assert "conditions" not in sheet.arrangement()["floating"]
 
 
+def test_a_block_dragged_out_of_the_strip_and_left_floating_keeps_its_content(
+    make_sheet,
+) -> None:
+    # Regression: tearing a block out re-renders the strip, and the strip's teardown
+    # took every block back — including the one already moved into the floating
+    # window, which was left an empty frame.
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    sheet.pin_block("abilities")
+    _settle()
+    canvas = sheet.canvas
+    frame = sheet.block_frame("conditions")
+    start = frame.title_bar.mapToGlobal(QPoint(10, 5))
+
+    canvas.title_bar_pressed("conditions", start)
+    canvas.title_bar_moved("conditions", start + QPoint(-200, 150))
+    _settle()
+    assert frame.isVisible()  # it must not vanish mid-drag either
+    canvas.title_bar_released("conditions", QPoint(-5000, -5000))  # dropped nowhere
+    _settle()
+
+    window = canvas._windows["conditions"]
+    assert frame.window() is window
+    assert frame.isVisible() and frame.section.isVisible()
+    assert canvas.pinned_lines() == [["abilities"]]
+    assert sheet.block_frame("abilities").isVisible()
+
+
 def test_dragging_a_pinned_block_back_onto_the_page_docks_it(make_sheet) -> None:
     sheet = make_sheet()
     sheet.pin_block("conditions")
@@ -397,6 +425,30 @@ def test_dragging_a_pinned_block_back_onto_the_page_docks_it(make_sheet) -> None
 
     assert not canvas.is_pinned("conditions")
     assert any("conditions" in row_keys for row_keys in sheet.arrangement()["rows"])
+
+
+def test_dragging_one_pinned_block_beside_another_joins_its_line(make_sheet) -> None:
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    sheet.pin_block("abilities")
+    _settle()
+    canvas = sheet.canvas
+    frame = sheet.block_frame("abilities")
+    start = frame.title_bar.mapToGlobal(QPoint(10, 5))
+    first_line = sheet.board.panel._lines[0]
+    beside = first_line.mapToGlobal(QPoint(first_line.width() - 6, first_line.height() // 2))
+
+    canvas.title_bar_pressed("abilities", start)
+    canvas.title_bar_moved("abilities", start + QPoint(-40, -40))
+    _settle()
+    canvas.title_bar_moved("abilities", beside)
+    _settle()
+    canvas.title_bar_released("abilities", beside)
+    _settle()
+
+    assert canvas.pinned_lines() == [["conditions", "abilities"]]
+    assert canvas._windows == {}  # it landed; nothing left floating
+    assert frame.isVisible()
 
 
 def test_dragging_the_grip_into_an_edge_band_moves_the_strip(make_sheet) -> None:

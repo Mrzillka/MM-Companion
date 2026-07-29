@@ -385,12 +385,19 @@ class PinnedPanel(QFrame):
         self._apply_empty_state()
 
     def _clear(self) -> None:
-        """Empty the strip, handing every block back before its line is freed."""
+        """Empty the strip, handing back every block that is still ours.
+
+        Only the ones still parented to their slot: by the time a re-render gets
+        here, a block being dragged out has *already* been moved into its floating
+        window, and taking it back would empty that window out (the canvas guards
+        its own row teardown the same way).
+        """
         for line in self._lines:
             for slot in line.slots:
-                frame = slot.release_frame()
-                frame.setParent(self)
-                frame.hide()
+                if slot.frame.parentWidget() is slot:
+                    frame = slot.release_frame()
+                    frame.setParent(self)
+                    frame.hide()
                 slot.setParent(None)
                 slot.deleteLater()
             line.setParent(None)

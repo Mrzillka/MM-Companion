@@ -9,6 +9,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import power_points_spent, resistance_total, skill_total
+from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.powers import _DraggableCard
 
@@ -317,7 +318,9 @@ def test_skill_modifier_column_nets_a_condition_penalty_against_a_boost(
 
     stealth = next(r for r in sheet.skills._rows if r.row_id == "Stealth")
     assert stealth.mod_item.text() == "-2"
-    assert stealth.mod_item.foreground().color().name() == "#d15b5b"  # a penalty reads red
+    assert stealth.mod_item.foreground().color().name() == theme.color(
+        "tint.worse"
+    )  # a penalty reads red
     assert "Impaired" in stealth.mod_item.toolTip()
     assert stealth.total_item.text() == "3"  # 5 ranks - 2
     # The condition is scoped, so a different skill is untouched.
@@ -333,7 +336,9 @@ def test_skill_modifier_column_nets_a_condition_penalty_against_a_boost(
     sheet.skills.refresh_totals()
     stealth = next(r for r in sheet.skills._rows if r.row_id == "Stealth")
     assert stealth.mod_item.text() == "+4"  # +6 boost - 2 impaired
-    assert stealth.mod_item.foreground().color().name() == "#d15b5b"  # still penalised
+    assert stealth.mod_item.foreground().color().name() == theme.color(
+        "tint.worse"
+    )  # still penalised
     tip = stealth.mod_item.toolTip()
     assert "Cat's Grace" in tip and "Impaired" in tip
     assert stealth.total_item.text() == "9"  # 5 ranks + 6 boost - 2
@@ -393,7 +398,7 @@ def test_disabled_condition_lowers_the_initiative_readout(qapp: QApplication) ->
 
     text = sheet.system_info._initiative.text()
     assert "-1" in text  # +4 AGL - 5 = -1
-    assert "#d15b5b" in text  # the penalised value reads red
+    assert theme.color("tint.worse") in text  # the penalised value reads red
     assert "-5" in sheet.system_info._initiative.toolTip()
 
 
@@ -408,7 +413,7 @@ def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
 
     text = sheet.system_info._speed._lines_label.text()
     assert "-1 rank" in text
-    assert "#d15b5b" in text
+    assert theme.color("tint.worse") in text
     assert "slowed" in sheet.system_info._speed.toolTip()
 
 
@@ -423,7 +428,7 @@ def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplicatio
 
     text = sheet.system_info._speed._lines_label.text()
     assert "immobilised" in text
-    assert "#d15b5b" in text
+    assert theme.color("tint.worse") in text
 
 
 def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(

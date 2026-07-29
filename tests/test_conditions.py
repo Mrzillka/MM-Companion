@@ -24,6 +24,7 @@ from mm_companion.core.rules import (
     resistance_condition_effect,
     roll_confused_action,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.condition_dialog import ConditionParameterDialog
 from mm_companion.ui.sections.conditions import ConditionsSection
@@ -443,7 +444,7 @@ def test_scoped_impaired_reddens_skill_total_disabled_strikes(qapp2: QApplicatio
     apply_condition(char, "impaired", data, parameter="Stealth")
     sheet.skills.refresh_totals()
     assert stealth().total_item.text() == "4"  # 6 - 2, display only
-    assert stealth().total_item.foreground().color().name() == "#d15b5b"
+    assert stealth().total_item.foreground().color().name() == theme.color("tint.worse")
     assert stealth().total_item.font().strikeOut() is False
 
     apply_condition(char, "disabled", data, parameter="Stealth")  # supersedes impaired
@@ -587,7 +588,7 @@ def test_debilitated_advantage_row_struck_through(qapp2: QApplication) -> None:
     table, row, _ = sheet.advantages._row_refs[0]
     item = table.item(row, 0)
     assert item.font().strikeOut() is True
-    assert item.foreground().color().name() == "#d15b5b"
+    assert item.foreground().color().name() == theme.color("tint.worse")
 
     remove_condition(char, char.conditions[0])
     sheet.advantages.refresh_conditions()

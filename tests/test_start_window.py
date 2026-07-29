@@ -40,7 +40,7 @@ def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
         "Open GM Mode",
         "Join Session",
         "Manage Mods",
-        "Theme",
+        "Settings",
         "Dice Roller",
         "Exit",
     }

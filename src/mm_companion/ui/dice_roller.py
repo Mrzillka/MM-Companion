@@ -216,7 +216,9 @@ class RollCard(QFrame):
         layout = QHBoxLayout(self)
         info = QVBoxLayout()
 
-        headline = f"<b>{total}</b> <span style='color:gray'>(d20 {die} {modifier:+d})</span>"
+        # Rich text can't resolve a Qt palette() role, so this takes the literal token.
+        muted = theme.color("text.muted.rich")
+        headline = f"<b>{total}</b> <span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
         if dc is not None:
             headline += f" vs DC {dc}"
         title = QLabel(headline)
@@ -225,7 +227,7 @@ class RollCard(QFrame):
         info.addWidget(title)
 
         if result is not None:
-            color = "green" if result.success else "red"
+            color = theme.color("tint.better" if result.success else "tint.worse")
             degree = QLabel(degree_text(result))
             degree.setStyleSheet(f"color: {color};")
             info.addWidget(degree)
@@ -370,10 +372,10 @@ class DiceRollerPanel(QWidget):
         self._face.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._face.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         font = QFont()
-        font.setPointSize(40)
+        font.setPointSizeF(theme.font_size("size.dice-face"))
         font.setBold(True)
         self._face.setFont(font)
-        self._face.setStyleSheet("color: white;")
+        self._face.setStyleSheet(f"color: {theme.color('dice.face')};")
 
         grid.addWidget(self._die_button, 0, 0)
         grid.addWidget(self._face, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -541,7 +543,7 @@ class DiceRollerPanel(QWidget):
         self._pending = None
         self._disconnect_session()
         self._face.setText("?")
-        self._readout.setText(f"<span style='color:{theme.TINT_WORSE}'>{message}</span>")
+        self._readout.setText(f"<span style='color:{theme.color('tint.worse')}'>{message}</span>")
         self._unlock_inputs()
 
     def _disconnect_session(self) -> None:
@@ -573,17 +575,20 @@ class DiceRollerPanel(QWidget):
         hidden: bool = False,
     ) -> None:
         total = die + modifier
+        muted = theme.color("text.muted.rich")
         html = (
-            f"<span style='font-size:16pt'><b>{total}</b></span> "
-            f"<span style='color:gray'>(d20 {die} {modifier:+d})</span>"
+            f"<span style='font-size:{theme.font_size('size.roll-readout')}pt'>"
+            f"<b>{total}</b></span> "
+            f"<span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
         )
         if dc is not None:
             html += f" vs DC {dc}"
         if degree is not None:
-            color = "green" if degree > 0 else "red"
+            color = theme.color("tint.better" if degree > 0 else "tint.worse")
             html += f"<br><span style='color:{color}'>{degree_label(degree, critical, die)}</span>"
         if hidden:
-            html += f"<br><span style='color:gray'>{HIDDEN_MARK} only you can see this roll</span>"
+            note = f"{HIDDEN_MARK} only you can see this roll"
+            html += f"<br><span style='color:{muted}'>{note}</span>"
         self._readout.setText(html)
 
     # -- quick rolls ---------------------------------------------------------

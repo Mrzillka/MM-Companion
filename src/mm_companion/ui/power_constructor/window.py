@@ -34,6 +34,7 @@ from mm_companion.core.rules import (
     power_strength_amount_violations,
     power_total_cost,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.power_constructor.bricks import BrickList, BrickWidget, PaletteDropZone
 from mm_companion.ui.power_constructor.canvas import PowerCanvas
 from mm_companion.ui.power_constructor.common import (
@@ -43,6 +44,7 @@ from mm_companion.ui.power_constructor.common import (
 )
 from mm_companion.ui.power_constructor.terms_view import PowerTermsView
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import BOLD_STYLE, tinted_style
 
 
 class PowerConstructorWindow(QMainWindow):
@@ -263,11 +265,16 @@ class PowerConstructorWindow(QMainWindow):
         # the power is within caps, naming the breach on its tooltip when it isn't).
         cost_row = QHBoxLayout()
         self._cost = QLabel()
-        self._cost.setStyleSheet("font-size: 12pt; font-weight: bold;")
+        self._cost.setStyleSheet(BOLD_STYLE)
+        # Size on the QFont, never in the stylesheet: a QSS font-size outranks the
+        # widget font, which is the mechanism the sheet's power cards animate.
+        cost_font = self._cost.font()
+        cost_font.setPointSizeF(theme.font_size("size.cost-total"))
+        self._cost.setFont(cost_font)
         cost_row.addWidget(self._cost)
         cost_row.addStretch()
         self._warning = QLabel()
-        self._warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
+        self._warning.setStyleSheet(tinted_style("tint.warning"))
         self._warning.setVisible(False)
         cost_row.addWidget(self._warning)
         layout.addLayout(cost_row)
@@ -308,7 +315,7 @@ class PowerConstructorWindow(QMainWindow):
 
         head_row = QHBoxLayout()
         heading = QLabel("Game terms")
-        heading.setStyleSheet("font-weight: bold;")
+        heading.setStyleSheet(BOLD_STYLE)
         head_row.addWidget(heading)
         head_row.addStretch()
         self._dev_mode = QCheckBox("Dev mode (homerule)")

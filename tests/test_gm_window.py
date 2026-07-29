@@ -277,7 +277,7 @@ def test_an_unreachable_session_says_so_and_reads_as_a_warning(
 ) -> None:
     start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
     assert "Only players on this network" in window._status_label.text()
-    assert gm_window_module.theme.TINT_WORSE in window._status_label.styleSheet()
+    assert gm_window_module.theme.color("tint.worse") in window._status_label.styleSheet()
 
 
 def test_a_reachable_session_reads_as_success(qapp: QApplication, window: GMWindow) -> None:
@@ -292,7 +292,7 @@ def test_a_reachable_session_reads_as_success(qapp: QApplication, window: GMWind
         ),
     )
     assert "Players anywhere can join" in window._status_label.text()
-    assert gm_window_module.theme.TINT_BETTER in window._status_label.styleSheet()
+    assert gm_window_module.theme.color("tint.better") in window._status_label.styleSheet()
 
 
 def test_the_two_outcomes_do_not_look_alike(qapp: QApplication, window: GMWindow) -> None:

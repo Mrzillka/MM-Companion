@@ -30,9 +30,10 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_ability,
 )
+from mm_companion.ui import theme
+from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.power_constructor.common import (
-    _ACCENT,
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
     RANK_MAX,
@@ -41,17 +42,13 @@ from mm_companion.ui.power_constructor.common import (
     _move_item,
 )
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
-from mm_companion.ui.theme import TINT_WORSE, tint_rgba
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
-# Effect card chrome — a rounded, padded panel. The drag state swaps to an accent
-# border + faint fill so a hovering modifier clearly lands "on this card".
-_CARD_STYLE = "EffectCard { border: 1px solid palette(mid); border-radius: 8px; }"
-_CARD_STYLE_DRAG = (
-    f"EffectCard {{ border: 2px solid {_ACCENT}; border-radius: 8px;"
-    f" background: {tint_rgba(_ACCENT, 0.10)}; }}"
-)
+
+def _idle_card_rules() -> str:
+    """The effect card's resting chrome — a rounded, padded panel."""
+    return f"border: {int(theme.metric('border.width'))}px solid {theme.color('border.card')};"
 
 
 class EffectCard(QFrame):
@@ -86,7 +83,8 @@ class EffectCard(QFrame):
         # rebuilt with the config form and fired when the effect's rank changes.
         self._alloc_updaters: list = []
         self.setObjectName("EffectCard")
-        self.setStyleSheet(_CARD_STYLE)
+        self._drops = DropFeedback(self, "EffectCard", radius="radius.canvas")
+        self._drops.set_idle(_idle_card_rules())
         self.setAcceptDrops(True)
 
         effect = self._effect()
@@ -453,7 +451,8 @@ class EffectCard(QFrame):
             used = effect_allocation_used(self.instance, self._data)
             rank = self._rank.value()
             label.setText(f"Allocated {used} / {rank} ranks")
-            label.setStyleSheet(f"color: {TINT_WORSE}; font-weight: bold;" if used > rank else "")
+            over = f"color: {theme.color('tint.worse')}; font-weight: bold;"
+            label.setStyleSheet(over if used > rank else "")
 
         return update_total
 
@@ -731,17 +730,19 @@ class EffectCard(QFrame):
     # -- drops ------------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.mimeData().hasFormat(MODIFIER_MIME):
-            self.setStyleSheet(_CARD_STYLE_DRAG)  # light up as a drop target
+            self._drops.show_accept()  # light up as a drop target
             event.acceptProposedAction()
         else:
+            # An effect brick dragged onto a card, say: only modifiers attach here.
+            self._drops.show_reject()
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self.setStyleSheet(_CARD_STYLE)
+        self._drops.clear()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self.setStyleSheet(_CARD_STYLE)
+        self._drops.clear()
         self.attach_modifier(_mime_id(event.mimeData(), MODIFIER_MIME))
         event.acceptProposedAction()
 
@@ -873,20 +874,19 @@ class EffectCard(QFrame):
         cost) so the badge shows the number without this widget hardcoding it.
         """
 
-        palette = {
-            "base": ("Base", "#3a5f8a"),
-            "alternate": ("Alternate", "#7a5c1e"),
-            "linked": ("Linked", "#3a6f4a"),
-        }
-        if role not in palette:
+        labels = {"base": "Base", "alternate": "Alternate", "linked": "Linked"}
+        if role not in labels:
             self._role_badge.clear()
             self._role_badge.setVisible(False)
             return
-        text, color = palette[role]
+        text = labels[role]
         if note:
             text = f"{text} · {note}"
         self._role_badge.setText(text)
         self._role_badge.setStyleSheet(
-            f"background: {color}; color: white; border-radius: 6px; padding: 0 6px;"
+            f"background: {theme.color(f'badge.role.{role}')};"
+            f" color: {theme.color('text.on-badge')};"
+            f" border-radius: {int(theme.metric('radius.badge'))}px;"
+            f" padding: 0 {int(theme.metric('space.md'))}px;"
         )
         self._role_badge.setVisible(True)

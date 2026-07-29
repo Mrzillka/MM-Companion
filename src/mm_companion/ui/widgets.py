@@ -1,14 +1,18 @@
-"""Small shared widget factories used across the character-sheet sections.
+"""Small shared widget factories and style snippets used across the sections.
 
 These keep widget construction consistent (and wheel-guarded) in one place,
-rather than each section rolling its own spin boxes and table items.
+rather than each section rolling its own spin boxes and table items. The style
+helpers at the bottom do the same for the two or three inline stylesheets the
+sheet repeats everywhere — a muted secondary line, a tinted emphasis — so those
+resolve their theme tokens in one place instead of a dozen f-strings.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QSpinBox, QTableWidgetItem
+from PySide6.QtWidgets import QDoubleSpinBox, QFrame, QSpinBox, QTableWidgetItem
 
+from mm_companion.ui import theme
 from mm_companion.ui.wheel_guard import guard_wheel
 
 
@@ -41,6 +45,35 @@ def make_spin_box(
     return spin
 
 
+def make_double_spin_box(
+    minimum: float,
+    maximum: float,
+    *,
+    value: float | None = None,
+    decimals: int = 2,
+    step: float = 0.1,
+    max_width: int | None = None,
+    guarded: bool = True,
+) -> QDoubleSpinBox:
+    """Build a fractional spin box, wheel-guarded like its integer sibling.
+
+    Point sizes, opacities and scale factors are all fractional, so the theme
+    editor needs the same factory ``make_spin_box`` gives whole numbers — chiefly
+    for the wheel guard, which a long scrolling form cannot do without.
+    """
+    spin = QDoubleSpinBox()
+    spin.setDecimals(decimals)
+    spin.setRange(minimum, maximum)
+    spin.setSingleStep(step)
+    if value is not None:
+        spin.setValue(value)
+    if max_width is not None:
+        spin.setMaximumWidth(max_width)
+    if guarded:
+        guard_wheel(spin)
+    return spin
+
+
 def readonly_item(text: str, *, center: bool = False) -> QTableWidgetItem:
     """A table item that displays *text* but cannot be edited in place."""
     item = QTableWidgetItem(text)
@@ -63,3 +96,33 @@ def hline_separator() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
+
+
+# -- inline style snippets ------------------------------------------------------
+# Built fresh on each call rather than cached in a module constant, so a theme
+# switch reaches a widget the next time it is styled.
+
+
+def muted_style(*, italic: bool = False) -> str:
+    """A secondary line — a description, a role note — that recedes without vanishing.
+
+    Reads on light and dark alike: the ``text.muted`` token is a ``palette()``
+    role in the system preset, and a chosen shade in a styled one.
+    """
+    tail = " font-style: italic;" if italic else ""
+    return f"color: {theme.color('text.muted')};{tail}"
+
+
+def tinted_style(token: str, *, bold: bool = True) -> str:
+    """Foreground in the semantic colour token *token*, bold by default.
+
+    The sheet's one way of saying "this number is not the plain one": green for a
+    boost, red for a penalty or breach, amber for a warning, blue for a homerule.
+    """
+    tail = " font-weight: bold;" if bold else ""
+    return f"color: {theme.color(token)};{tail}"
+
+
+#: "This label is the important one." A bare weight with no colour, so it works
+#: on any surface — the one style snippet with nothing to theme.
+BOLD_STYLE = "font-weight: bold;"

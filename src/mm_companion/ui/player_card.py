@@ -177,7 +177,7 @@ class PlayerCard(QFrame):
             self._name_label.setStyleSheet("")
         elif not entry.get("connected"):
             self._name_label.setText(f"{name} — offline")
-            self._name_label.setStyleSheet(f"color: {theme.TINT_WORSE};")
+            self._name_label.setStyleSheet(f"color: {theme.color('tint.worse')};")
         else:
             self._name_label.setText(name)
             self._name_label.setStyleSheet("")
@@ -305,9 +305,10 @@ class _ConditionChip(QFrame):
     def __init__(self, text: str, *, tooltip: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setStyleSheet(
-            f"border: 1px solid {theme.TINT_WORSE};"
-            f"background: {theme.tint_rgba(theme.TINT_WORSE, 0.12)};"
-            "border-radius: 6px;"
+            f"border: {int(theme.metric('border.width'))}px solid"
+            f" {theme.color('tint.worse')};"
+            f"background: {theme.wash('tint.worse', 0.12)};"
+            f"border-radius: {int(theme.metric('radius.chip'))}px;"
         )
         if tooltip:
             self.setToolTip(tooltip)

@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.ui import theme
 from mm_companion.ui.power_constructor.common import _GROUP_HEADER, CHIP_MIME, brick_tooltip
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip
-from mm_companion.ui.theme import TINT_WORSE, tint_rgba
+from mm_companion.ui.widgets import BOLD_STYLE
 
 
 class BrickWidget(QFrame):
@@ -57,14 +58,17 @@ class BrickWidget(QFrame):
         header = QHBoxLayout()
         header.setSpacing(4)
         name = QLabel(title)
-        name.setStyleSheet("font-weight: bold;")
+        name.setStyleSheet(BOLD_STYLE)
         header.addWidget(name)
         header.addStretch()
         if flat:
             # A flat modifier costs a one-time add/subtract rather than per rank.
             badge = QLabel("flat")
             badge.setStyleSheet(
-                "background: #555; color: white; border-radius: 4px; padding: 0 4px;"
+                f"background: {theme.color('badge.flat')};"
+                f" color: {theme.color('text.on-badge')};"
+                f" border-radius: {int(theme.metric('radius.header'))}px;"
+                f" padding: 0 {int(theme.metric('space.sm'))}px;"
             )
             header.addWidget(badge)
         layout.addLayout(header)
@@ -157,7 +161,8 @@ class BrickList(QWidget):
         # their text alone would sweep bricks up too.
         header.setObjectName(_GROUP_HEADER)
         header.setStyleSheet(
-            "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
+            f"font-weight: bold; color: {theme.color('text.muted')};"
+            f" padding-top: {int(theme.metric('space.sm'))}px;"
         )
         return header
 
@@ -233,8 +238,11 @@ class PaletteDropZone(QWidget):
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._hint.setStyleSheet(
-            f"background: {tint_rgba(TINT_WORSE, 0.35)}; color: white;"
-            f" font-weight: bold; border: 2px solid {TINT_WORSE}; border-radius: 6px;"
+            f"background: {theme.wash('tint.worse', 0.35)};"
+            f" color: {theme.color('text.on-badge')}; font-weight: bold;"
+            f" border: {int(theme.metric('border.width.emphasis'))}px solid"
+            f" {theme.color('tint.worse')};"
+            f" border-radius: {int(theme.metric('radius.chip'))}px;"
         )
         self._hint.hide()
 
@@ -253,6 +261,10 @@ class PaletteDropZone(QWidget):
             self._show_hint(True)
             event.acceptProposedAction()
         else:
+            # Deliberately silent, unlike the other drop targets. What gets refused
+            # here is an *effect* brick dragged back over the palette it came from —
+            # a cancelled drag, not a mistake, and flashing a reject outline over the
+            # drag's own origin would read as an error where none was made.
             event.ignore()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)

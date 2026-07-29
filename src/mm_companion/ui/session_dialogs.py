@@ -405,7 +405,7 @@ class JoinSessionDialog(QDialog):
 
         self._problem = QLabel("")
         self._problem.setWordWrap(True)
-        self._problem.setStyleSheet(f"color: {theme.TINT_WORSE};")
+        self._problem.setStyleSheet(f"color: {theme.color('tint.worse')};")
         self._problem.hide()
         layout.addWidget(self._problem)
 

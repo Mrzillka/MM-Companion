@@ -67,6 +67,8 @@ class MainWindow(QMainWindow):
         self._child_windows: list[MainWindow] = []
         # The mod manager window, kept referenced while open for the same reason.
         self._mods_window: QWidget | None = None
+        # The settings window, likewise kept referenced while open.
+        self._settings_window: QWidget | None = None
         # The dice roller window, likewise kept referenced while open.
         self._dice_window: QWidget | None = None
 
@@ -129,7 +131,8 @@ class MainWindow(QMainWindow):
             return
 
         settings_menu = menu_bar.addMenu("&Settings")
-        self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
+        self._add_placeholder_actions(settings_menu, ["Rules"])
+        settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
         settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
         # Homebrew the non-power PP-cost rates for this character. Stays available even
         # in a locked (read-only) view — it is a config action, not a build edit.
@@ -237,6 +240,14 @@ class MainWindow(QMainWindow):
 
         window = ModsWindow()
         self._mods_window = window
+        window.show()
+
+    def _open_settings(self) -> None:
+        """Open the Settings window (Settings ▸ Preferences)."""
+        from mm_companion.ui.settings import SettingsWindow
+
+        window = SettingsWindow()
+        self._settings_window = window
         window.show()
 
     # -- persistence ---------------------------------------------------------

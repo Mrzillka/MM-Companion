@@ -50,24 +50,34 @@ from mm_companion.core.rules import (
     heroic_advantage_ranks,
     heroic_advantage_ranks_free,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.stat_grid import CONDITION_TINT
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import make_spin_box, tinted_style
 
 RANK_MIN, RANK_MAX = 1, 20
 
 # Sort modes for the chosen-advantages list (UI-only state, not persisted).
 SORT_MANUAL, SORT_NAME, SORT_RANK, SORT_TYPE = "manual", "name", "rank", "type"
 
-# Below this much room left for the combo box beside the picker controls, the
-# controls wrap onto their own row so the combo keeps enough width to read.
-PICKER_COMBO_MIN = 180
-# Rough widths used to decide how many panels fit without clipping a row. The
-# Name and Type columns size to content; the Description wraps but still wants a
-# readable minimum. These are UI heuristics, easy to retune.
-MIN_DESC_WIDTH = 180
+# Rough widths used to decide how many panels fit without clipping a row. The Name
+# and Type columns size to content; the Description wraps but still wants a readable
+# minimum. Both minimums are theme metrics — a denser preset narrows them — while the
+# paddings below stay fixed heuristics.
+
+
+def picker_combo_min() -> int:
+    """Room the picker combo insists on before the controls wrap to their own row."""
+    return int(theme.metric("column.advantage.combo"))
+
+
+def min_desc_width() -> int:
+    """Readable minimum for the wrapping Description column."""
+    return int(theme.metric("column.advantage.desc"))
+
+
 NAME_PADDING = 24
 TYPE_PADDING = 24
 FRAME_PADDING = 24
@@ -257,7 +267,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             font.setStrikeOut(struck)
             item.setFont(font)
             if struck:
-                item.setForeground(QBrush(QColor(CONDITION_TINT)))
+                item.setForeground(QBrush(QColor(theme.color(CONDITION_TINT))))
                 item.setToolTip(f"Debilitated — {selection.name} is effectively lost")
             else:
                 item.setData(Qt.ItemDataRole.ForegroundRole, None)
@@ -437,7 +447,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             types = ", ".join(advantage.types) if advantage else ""
             type_width = max(type_width, fm.horizontalAdvance(types))
         return (
-            name_width + NAME_PADDING + type_width + TYPE_PADDING + MIN_DESC_WIDTH + FRAME_PADDING
+            name_width + NAME_PADDING + type_width + TYPE_PADDING + min_desc_width() + FRAME_PADDING
         )
 
     def _apply_picker_mode(self, narrow: bool) -> None:
@@ -460,9 +470,10 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             self._picker_row1.addWidget(self._advantage_controls)
 
     def _picker_prefers_narrow(self) -> bool:
-        """Whether the combo would be squeezed below :data:`PICKER_COMBO_MIN` on one row."""
+        """Whether the combo would be squeezed below :func:`picker_combo_min` on one row."""
         return (
-            self._available_width() - self._advantage_controls.sizeHint().width() < PICKER_COMBO_MIN
+            self._available_width() - self._advantage_controls.sizeHint().width()
+            < picker_combo_min()
         )
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
@@ -756,7 +767,9 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
 
         suffix = "  — budget reached" if blocked else ""
         self._heroic_label.setText(f"Heroic advantages: {used} / {budget}{suffix}")
-        self._heroic_label.setStyleSheet(f"color: {CONDITION_TINT};" if blocked else "")
+        self._heroic_label.setStyleSheet(
+            tinted_style(CONDITION_TINT, bold=False) if blocked else ""
+        )
 
     def set_locked(self, locked: bool) -> None:
         """Hide the advantage picker and sort/move controls while locked; the

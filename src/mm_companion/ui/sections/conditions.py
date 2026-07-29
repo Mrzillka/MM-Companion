@@ -36,6 +36,7 @@ from mm_companion.core.rules import (
     decrement_condition,
     roll_confused_action,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.widgets import hline_separator
@@ -185,7 +186,8 @@ class ConditionsSection(QGroupBox):
             category, title = section.category, section.title
             head = QLabel(title)
             head.setStyleSheet(
-                "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
+                f"font-weight: bold; color: {theme.color('text.muted')};"
+                f" padding-top: {int(theme.metric('space.sm'))}px;"
             )
             rule = hline_separator()
             container = FlowContainer()

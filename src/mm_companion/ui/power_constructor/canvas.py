@@ -24,18 +24,21 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
 )
-from mm_companion.ui.power_constructor.common import _ACCENT, EFFECT_MIME, _mime_id
+from mm_companion.ui import theme
+from mm_companion.ui.drop_feedback import DropFeedback
+from mm_companion.ui.power_constructor.common import EFFECT_MIME, _mime_id
 from mm_companion.ui.power_constructor.effect_card import EffectCard
-from mm_companion.ui.theme import tint_rgba
 
-# Canvas chrome — dashed while empty (a "drop here" affordance), solid once it holds
-# cards, and an accent dashed border while an effect brick hovers.
-_CANVAS_STYLE_EMPTY = "PowerCanvas { border: 2px dashed palette(mid); border-radius: 8px; }"
-_CANVAS_STYLE_FILLED = "PowerCanvas { border: 1px solid palette(mid); border-radius: 8px; }"
-_CANVAS_STYLE_DRAG = (
-    f"PowerCanvas {{ border: 2px dashed {_ACCENT}; border-radius: 8px;"
-    f" background: {tint_rgba(_ACCENT, 0.08)}; }}"
-)
+
+def _idle_canvas_rules(filled: bool) -> str:
+    """The canvas's resting border: dashed while empty, solid once it holds cards.
+
+    The dash is the "drop here" affordance — an empty canvas is asking for an
+    effect, a filled one is just a container.
+    """
+    width = int(theme.metric("border.width" if filled else "border.width.emphasis"))
+    style = "solid" if filled else "dashed"
+    return f"border: {width}px {style} {theme.color('border.empty')};"
 
 
 class PowerModeBar(QWidget):
@@ -123,6 +126,7 @@ class PowerCanvas(QFrame):
         self._cards: list[EffectCard] = []
         self.setObjectName("PowerCanvas")
         self.setAcceptDrops(True)
+        self._drops = DropFeedback(self, "PowerCanvas", radius="radius.canvas", wash=0.08)
 
         self._layout = QVBoxLayout(self)
         # The structure switch sits above the cards; it reveals itself only once a
@@ -134,33 +138,31 @@ class PowerCanvas(QFrame):
         self._hint = QLabel("＋\nDrag an effect here to start building your power")
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setEnabled(False)
-        self._hint.setMinimumHeight(120)
+        self._hint.setMinimumHeight(int(theme.metric("canvas.hint.height")))
         self._layout.addWidget(self._hint)
         self._layout.addStretch()
         self._update_canvas_style()
 
-    def _update_canvas_style(self, drag_over: bool = False) -> None:
-        """Pick the frame chrome for the current state: accent while a brick hovers,
-        dashed while empty (a drop affordance), solid once it holds cards."""
-        if drag_over:
-            self.setStyleSheet(_CANVAS_STYLE_DRAG)
-        elif self._cards:
-            self.setStyleSheet(_CANVAS_STYLE_FILLED)
-        else:
-            self.setStyleSheet(_CANVAS_STYLE_EMPTY)
+    def _update_canvas_style(self) -> None:
+        """Refresh the canvas's resting border for whether it now holds cards."""
+        self._drops.set_idle(_idle_canvas_rules(bool(self._cards)))
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.mimeData().hasFormat(EFFECT_MIME):
-            self._update_canvas_style(drag_over=True)
+            self._drops.show_accept()
             event.acceptProposedAction()
         else:
+            # Only effect bricks build a power; a modifier dragged onto the bare
+            # canvas (rather than onto a card) now says so instead of nothing.
+            self._drops.show_reject()
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self._update_canvas_style()
+        self._drops.clear()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._drops.clear()
         self.add_effect(_mime_id(event.mimeData(), EFFECT_MIME))
         self._update_canvas_style()
         event.acceptProposedAction()

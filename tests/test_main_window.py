@@ -62,6 +62,40 @@ def test_saving_clears_dirty(qapp: QApplication) -> None:
     assert "*" not in win.windowTitle()
 
 
+def _menu_labels(win: MainWindow, title: str) -> list[str]:
+    """The entries of one menu bar menu.
+
+    Read inside this scope rather than handing the ``QMenu`` back: PySide ties the
+    returned wrapper's lifetime to the ``QAction`` it came from, so a menu that
+    outlives the loop reports its C++ object as already deleted.
+    """
+    for action in win.menuBar().actions():
+        if action.text() == title:
+            return [entry.text() for entry in action.menu().actions()]
+    raise AssertionError(f"no {title} menu")
+
+
+def _trigger(win: MainWindow, title: str, entry_text: str) -> None:
+    for action in win.menuBar().actions():
+        if action.text() == title:
+            for entry in action.menu().actions():
+                if entry.text() == entry_text:
+                    entry.trigger()
+                    return
+    raise AssertionError(f"no {entry_text!r} in {title}")
+
+
+def test_settings_menu_opens_the_settings_window(qapp: QApplication) -> None:
+    """The Theme submenu is gone; the whole look lives in the Settings window now."""
+    win = MainWindow(locked=False)
+    assert "Theme" not in _menu_labels(win, "&Settings")
+
+    _trigger(win, "&Settings", "Preferences...")
+
+    assert win._settings_window is not None
+    win._settings_window.close()
+
+
 def test_view_menu_hides_and_shows_a_block(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
     action = win._block_actions["advantages"]

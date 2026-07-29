@@ -127,6 +127,8 @@ class StartWindow(QMainWindow):
         self._child_windows: list[MainWindow] = []
         # The mod manager window, kept referenced while open for the same reason.
         self._mods_window: QWidget | None = None
+        # The settings window, likewise kept referenced while open.
+        self._settings_window: QWidget | None = None
         # The dice roller window, likewise kept referenced while open.
         self._dice_window: QWidget | None = None
         # The GM window. Only one may exist — it owns the hosted session — so a
@@ -164,6 +166,13 @@ class StartWindow(QMainWindow):
         mods_button = QPushButton("Manage Mods")
         mods_button.clicked.connect(self._manage_mods)
         column.addWidget(mods_button)
+
+        # The launcher has no menu bar, so the Settings window the sheet reaches
+        # through its Settings menu hangs off a button here — the look is
+        # changeable before ever opening a character.
+        settings_button = QPushButton("Settings")
+        settings_button.clicked.connect(self._open_settings)
+        column.addWidget(settings_button)
 
         dice_button = QPushButton("Dice Roller")
         dice_button.clicked.connect(self._open_dice_roller)
@@ -272,6 +281,14 @@ class StartWindow(QMainWindow):
 
         window = ModsWindow()
         self._mods_window = window
+        window.show()
+
+    def _open_settings(self) -> None:
+        """Open the Settings window."""
+        from mm_companion.ui.settings import SettingsWindow
+
+        window = SettingsWindow()
+        self._settings_window = window
         window.show()
 
     def _open_dice_roller(self) -> None:

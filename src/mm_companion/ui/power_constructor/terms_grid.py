@@ -21,11 +21,17 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel
 
 from mm_companion.core.rules import HOMERULE_TINT
-from mm_companion.ui.theme import ACCENT, TINT_BETTER, TINT_WORSE
+from mm_companion.ui import theme
 
-#: How a changed value is tinted: an extra improved it (green), a flaw limited it
-#: (red), a Dev-mode override replaced it (a distinct blue).
-TINTS = {"better": TINT_BETTER, "worse": TINT_WORSE, HOMERULE_TINT: ACCENT}
+#: How a changed value is tinted, as colour-token names: an extra improved it
+#: (green), a flaw limited it (red), a Dev-mode override replaced it (a distinct
+#: blue). Names rather than values, so the tokens are resolved at render time and
+#: a theme switch reaches them.
+TINT_TOKENS = {
+    "better": "tint.better",
+    "worse": "tint.worse",
+    HOMERULE_TINT: "tint.homerule",
+}
 
 #: How many label/value pairs sit side by side per grid row, so the short stats pack
 #: across the width instead of stacking into a tall column.
@@ -56,18 +62,18 @@ def build_terms_grid(rows: list, style: TermsGridStyle | None = None) -> QGridLa
 
     style = style or TermsGridStyle()
     grid = QGridLayout()
-    grid.setHorizontalSpacing(8)
+    grid.setHorizontalSpacing(int(theme.metric("space.lg")))
     for index, stat in enumerate(rows):
         grid_row, pair = divmod(index, PAIRS_PER_ROW)
         column = pair * 2
         label = QLabel(f"{stat.label}:")
-        label.setStyleSheet("color: palette(placeholder-text);")
+        label.setStyleSheet(f"color: {theme.color('text.muted')};")
         value = QLabel(stat.value)
         value.setWordWrap(True)
-        tint = TINTS.get(stat.change)
-        if tint:
+        token = TINT_TOKENS.get(stat.change)
+        if token:
             weight = " font-weight: bold;" if style.bold_changed else ""
-            value.setStyleSheet(f"color: {tint};{weight}")
+            value.setStyleSheet(f"color: {theme.color(token)};{weight}")
             value.setToolTip(f"Base: {stat.base}")
         if style.point_size is not None:
             for widget in (label, value):

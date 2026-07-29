@@ -1,0 +1,98 @@
+{
+  "id": "classic",
+  "name": "Classic",
+  "description": "The native platform look, with MM-Companion's own semantic tints. Follows the operating system's light/dark setting.",
+  "chrome": {
+    "mode": "system",
+    "focus_ring": true
+  },
+
+  "_colors": "Values reading 'palette(role)' are Qt stylesheet expressions resolved at paint time from the OS palette — that is how this preset stays light/dark aware without naming a single surface colour. A wash cannot be derived from one (see theme.wash), so any token a translucent fill is taken from must be a literal #rrggbb.",
+  "colors": {
+    "accent": "#4488cf",
+    "accent.dice": "#6784bf",
+
+    "tint.better": "#30964e",
+    "tint.worse": "#d15b5b",
+    "_tint.warning": "Was #d1a01e, which only ever existed as a literal in two widget files and so never went through the contrast pass the other tints did: it read at 2.10:1 on a light window, well under the 3.0 floor. Retuned to clear 3.48:1 on both, in the same band as its neighbours, and kept amber rather than orange so the PL-breach marker stays distinct from the red flaw tint beside it.",
+    "tint.warning": "#b47030",
+    "tint.homerule": "#4488cf",
+
+    "text.muted": "palette(placeholder-text)",
+    "text.muted.rich": "gray",
+    "text.on-badge": "#ffffff",
+
+    "border.card": "palette(mid)",
+    "border.group": "#8894b0",
+    "border.empty": "palette(mid)",
+
+    "badge.extra": "#2e5e33",
+    "badge.flaw": "#5e2e2e",
+    "badge.flat": "#555555",
+    "badge.role.base": "#3a5f8a",
+    "badge.role.alternate": "#7a5c1e",
+    "badge.role.linked": "#3a6f4a",
+
+    "drop.indicator": "palette(highlight)",
+    "drop.reject": "#d15b5b",
+    "focus.ring": "#4488cf",
+
+    "splash.background": "#2b2b3a",
+    "splash.text": "#ffffff",
+    "dice.face": "#ffffff"
+  },
+
+  "_metrics": "Pixels unless noted. A four-number value is a (left, top, right, bottom) box, read via theme.box().",
+  "metrics": {
+    "radius.card": 4,
+    "radius.group": 6,
+    "radius.canvas": 8,
+    "radius.chip": 6,
+    "radius.badge": 6,
+    "radius.header": 4,
+
+    "border.width": 1,
+    "border.width.emphasis": 2,
+    "border.width.accent-edge": 3,
+    "focus.width": 2,
+
+    "space.xs": 2,
+    "space.sm": 4,
+    "space.md": 6,
+    "space.lg": 8,
+
+    "canvas.hint.height": 120,
+
+    "card.margins": [8, 6, 8, 6],
+    "card.margins.off": [5, 3, 5, 3],
+    "card.spacing": 4,
+    "card.spacing.off": 2,
+    "group.margins": [6, 4, 6, 6],
+    "group.margins.off": [4, 2, 4, 3],
+    "opacity.inactive": 0.5,
+
+    "column.stat.spin": 80,
+    "column.skill.name": 100,
+    "column.skill.spin": 56,
+    "column.skill.mod": 36,
+    "column.advantage.desc": 180,
+    "column.advantage.combo": 180,
+    "column.settings.nav": 160,
+    "column.settings.label": 230,
+    "column.settings.value": 220
+  },
+
+  "_typography": "Point sizes, applied with QFont.setPointSizeF — never as a stylesheet font-size, which would outrank the widget font and break the power card's switched-off transition. A null family keeps the platform default.",
+  "typography": {
+    "family": null,
+    "size.card-name": 11.0,
+    "size.terms": 8.0,
+    "size.cost-total": 12.0,
+    "size.dice-face": 40.0,
+    "size.roll-readout": 16.0,
+    "scale.inactive": 0.9
+  },
+
+  "_blocks": "Per-block size overrides layered over ui/block_sizes.json. Empty here: Classic keeps the shipped sizes.",
+  "blocks": {}
+}

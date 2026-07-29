@@ -65,7 +65,7 @@ from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas, DropIndicator
-from mm_companion.ui.block_sizes import BlockSize
+from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
@@ -194,11 +194,11 @@ class GMWindow(QMainWindow):
         ]
         for _key, _title, box in panels:
             strip_groupbox_caption(box)  # the block's title bar carries the name now
-        sizes = {
-            "players": BlockSize(min_width=250, min_height=130),
-            "npcs": BlockSize(min_width=250, min_height=150),
-            "rolls": BlockSize(min_width=660, min_height=260),
-        }
+        # The GM blocks' bounds live in block_sizes.json alongside the sheet's, under
+        # gm_-prefixed keys, so a theme can retune them the same way (the canvas keys
+        # them without the prefix, since the GM window has its own block namespace).
+        shipped = load_block_sizes()
+        sizes = {key: shipped.get(f"gm_{key}", BlockSize()) for key, _title, _box in panels}
         default_rows = [["players"], ["npcs"], ["rolls"]]
         # Only a handful of blocks, so a top-aligned stack would leave a wide gap
         # under the last one; let the bottom block (the rolls board's history)
@@ -466,7 +466,7 @@ class GMWindow(QMainWindow):
         if not self._begin_hosting():
             return
 
-        self._set_status("Working out how players can reach you…", theme.ACCENT)
+        self._set_status("Working out how players can reach you…", theme.color("accent"))
         self._clear_advice()
         self._bridge.publish(manual_host=manual_host, external_port=manual_port)
 
@@ -484,7 +484,9 @@ class GMWindow(QMainWindow):
             if relay:
                 # The relay is a fallback, so its failure is a notice and a
                 # return to the direct connection, not a dead end.
-                self._show_notice(f"{discovery.ADVICE_RELAY_UNREACHABLE} ({exc})", theme.TINT_WORSE)
+                self._show_notice(
+                    f"{discovery.ADVICE_RELAY_UNREACHABLE} ({exc})", theme.color("tint.worse")
+                )
                 return False
             QMessageBox.warning(
                 self,
@@ -495,7 +497,9 @@ class GMWindow(QMainWindow):
             )
             return False
         except ValueError as exc:  # an unreadable relay address
-            self._show_notice(f"That relay address cannot be used: {exc}", theme.TINT_WORSE)
+            self._show_notice(
+                f"That relay address cannot be used: {exc}", theme.color("tint.worse")
+            )
             return False
         # Not on the ``started`` signal: the server emits that from inside its own
         # ``start()``, before the bridge has taken ownership of it, so ``hosting``
@@ -513,7 +517,7 @@ class GMWindow(QMainWindow):
         """
         self._relay_attempted = True
         relay = self._host_options.relay
-        self._set_status("Trying the relay…", theme.ACCENT)
+        self._set_status("Trying the relay…", theme.color("accent"))
         self._bridge.stop()
         if not self._begin_hosting(relay) and not self._begin_hosting():
             self._refresh_idle_status()
@@ -616,24 +620,24 @@ class GMWindow(QMainWindow):
             self._set_status(
                 "Players anywhere can join with this code — this session is going "
                 "through the relay.",
-                theme.TINT_BETTER,
+                theme.color("tint.better"),
             )
         elif reachability.method == discovery.METHOD_MANUAL:
             self._set_status(
                 f"This code points at {reachability.host}:{reachability.port}. "
                 "Anyone who can reach that address can join.",
-                theme.ACCENT,
+                theme.color("accent"),
             )
         elif reachability.internet_reachable:
             self._set_status(
                 "Players anywhere can join with this code.",
-                theme.TINT_BETTER,
+                theme.color("tint.better"),
             )
         else:
             self._set_status(
                 "Only players on this network can join with this code — "
                 "nothing outside it can reach this machine yet.",
-                theme.TINT_WORSE,
+                theme.color("tint.worse"),
             )
         self._show_advice(reachability.advice)
 
@@ -655,16 +659,16 @@ class GMWindow(QMainWindow):
     def _on_player_joined(self, payload: dict) -> None:
         player = payload.get("player", {})
         name = str(player.get("display_name", "")) or "A player"
-        self._show_notice(f"{name} joined.", theme.TINT_BETTER)
+        self._show_notice(f"{name} joined.", theme.color("tint.better"))
 
     def _on_refused(self, payload: dict) -> None:
         self._show_notice(
             f"A connection was refused: {payload.get('message') or payload.get('code', '')}",
-            theme.TINT_WORSE,
+            theme.color("tint.worse"),
         )
 
     def _on_error(self, code: str, message: str) -> None:
-        self._show_notice(f"{message or code}", theme.TINT_WORSE)
+        self._show_notice(f"{message or code}", theme.color("tint.worse"))
 
     # -- player cards ------------------------------------------------------
 
@@ -770,12 +774,12 @@ class GMWindow(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         if not self._bridge.kick(player_id):
-            self._show_notice(f"{name} could not be removed.", theme.TINT_WORSE)
+            self._show_notice(f"{name} could not be removed.", theme.color("tint.worse"))
             return
         window = self._player_windows.pop(player_id, None)
         if window is not None:
             window.close()
-        self._show_notice(f"{name} was removed from the session.", theme.ACCENT)
+        self._show_notice(f"{name} was removed from the session.", theme.color("accent"))
 
     # -- fast-apply conditions ---------------------------------------------
 
@@ -797,7 +801,7 @@ class GMWindow(QMainWindow):
         if server is None or not server.set_hero_points(player_id, value):
             self._show_notice(
                 f"{who} is not connected, so their hero points were not changed.",
-                theme.TINT_WORSE,
+                theme.color("tint.worse"),
             )
 
     def _send_condition(
@@ -821,11 +825,11 @@ class GMWindow(QMainWindow):
             sent = send(player_id, condition_id, subject)
         if not sent:
             self._show_notice(
-                f"{who} is not connected, so “{name}” was not sent.", theme.TINT_WORSE
+                f"{who} is not connected, so “{name}” was not sent.", theme.color("tint.worse")
             )
             return
         verb = "Applied" if action == "apply" else "Removed"
-        self._show_notice(f"{verb} “{name}” on {who}.", theme.ACCENT)
+        self._show_notice(f"{verb} “{name}” on {who}.", theme.color("accent"))
 
     def _condition_name(self, condition_id: str, parameter: str | None) -> str:
         """The condition as the GM picked it, named the way a chip names it."""
@@ -1116,7 +1120,7 @@ class GMWindow(QMainWindow):
         display = entry.summary.name if entry is not None else name
         self._set_npc_paths([n for n in self._state.npc_paths if n != name])
         self._refresh_npcs()
-        self._show_notice(f"“{display}” is no longer in this session.", theme.ACCENT)
+        self._show_notice(f"“{display}” is no longer in this session.", theme.color("accent"))
 
     def _delete_npc(self, name: str) -> None:
         """Delete an NPC's file for good, once the GM confirms it."""
@@ -1230,7 +1234,7 @@ class GMWindow(QMainWindow):
         clipboard = QApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(self._join_code)
-        self._show_notice("Join code copied — send it to your players.", theme.ACCENT)
+        self._show_notice("Join code copied — send it to your players.", theme.color("accent"))
 
     # -- lifecycle ---------------------------------------------------------
 

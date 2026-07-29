@@ -44,12 +44,12 @@ from mm_companion.core.rules import (
     reconcile_points_to_level,
     speed_columns,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
-from mm_companion.ui.theme import ACCENT, TINT_WORSE
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
 HERO_POINT_CIRCLES = 5
 
@@ -148,18 +148,20 @@ class SpeedWidget(QWidget):
         self._redraw()
 
     def _redraw(self) -> None:
+        # Rich text can't use a Qt palette() role, so a condition-affected line takes
+        # the literal tint colour. Resolved once per redraw rather than per line.
+        worse = theme.color("tint.worse")
         html_lines = []
         for line in self._lines:
             if line.immobilised:
-                html_lines.append(
-                    f'<span style="color: {TINT_WORSE};">{escape(line.label)}: immobilised</span>'
-                )
+                label = escape(line.label)
+                html_lines.append(f'<span style="color: {worse};">{label}: immobilised</span>')
                 continue
             walk, dash, run = speed_columns(line.rank, self._data, metric=self._metric)
             text = f"{line.label}: {_compact(walk)} / {_compact(dash)} / {_compact(run)}"
             if line.rank_mod:
                 text += f" ({line.rank_mod:+d} rank)"
-                html_lines.append(f'<span style="color: {TINT_WORSE};">{escape(text)}</span>')
+                html_lines.append(f'<span style="color: {worse};">{escape(text)}</span>')
             else:
                 html_lines.append(escape(text))
         self._lines_label.setText("<br>".join(html_lines))
@@ -318,7 +320,7 @@ class SystemInfoSection(QGroupBox):
 
     def _build_cost_notice(self) -> QWidget:
         self._cost_notice = QLabel("⌂ Homebrew PP costs")
-        self._cost_notice.setStyleSheet(f"color: {ACCENT}; font-weight: bold;")
+        self._cost_notice.setStyleSheet(tinted_style("tint.homerule"))
         self._cost_notice.setToolTip(
             "Homebrew PP cost changed — this character uses non-default point costs "
             "(Settings ▸ Cost config)."
@@ -341,7 +343,7 @@ class SystemInfoSection(QGroupBox):
         guard_wheel(self._size_combo)
         # Effective size when an active Growth/Shrinking shifts it away from the base.
         self._size_effective = QLabel()
-        self._size_effective.setStyleSheet("color: palette(placeholder-text);")
+        self._size_effective.setStyleSheet(muted_style())
         row.addWidget(self._size_combo)
         row.addWidget(self._size_effective)
         row.addStretch()
@@ -549,9 +551,8 @@ class SystemInfoSection(QGroupBox):
         penalty = condition_check_penalty(self._character, self._data)
         net = modifier + penalty
         if penalty:
-            self._initiative.setText(
-                f'<span style="color: {TINT_WORSE};">{net:+d}</span> ({ability})'
-            )
+            worse = theme.color("tint.worse")
+            self._initiative.setText(f'<span style="color: {worse};">{net:+d}</span> ({ability})')
             self._initiative.setToolTip(
                 f"{modifier:+d} base {penalty:+d} from an active condition on all checks"
             )

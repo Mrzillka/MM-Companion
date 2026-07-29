@@ -52,6 +52,7 @@ from mm_companion.core.rules import (
     skill_points_spent,
     skill_total,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.stat_grid import (
@@ -65,19 +66,31 @@ from mm_companion.ui.widgets import make_spin_box, readonly_item
 RANK_MIN, RANK_MAX = 0, 20
 COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
-# Keep the numeric spin-box columns narrow so they don't hog horizontal space.
-SPIN_WIDTH = 56
-# Rough widths used to decide how many panels fit without clipping a name.
-# The numeric columns are near-fixed; the name column needs room for the widest
+# Rough widths used to decide how many panels fit without clipping a name. The
+# numeric columns are near-fixed; the name column needs room for the widest
 # skill/focus/specialization label. Kept lean so a second column appears before a
-# lone one stretches wide and leaves a big gap between names and their numbers —
-# these are UI heuristics, easy to retune.
-NAME_MIN_WIDTH = 100
+# lone one stretches wide and leaves a big gap between names and their numbers.
+# The three that set the block's density are theme metrics — a denser preset wants
+# narrower ones — and are read through spin_width()/name_min_width()/mod_width().
 NAME_PADDING = 16
-NUMERIC_WIDTH = 40 + SPIN_WIDTH + 24  # ABL + rank spin + Total
-# The derived "+" column's share, added only while it is shown.
-MOD_WIDTH = 36
 FRAME_PADDING = 16
+# The fixed share of the ABL and Total columns, either side of the rank spin box.
+NUMERIC_PADDING = 40 + 24
+
+
+def spin_width() -> int:
+    """Width cap for the numeric spin-box columns, so they don't hog the row."""
+    return int(theme.metric("column.skill.spin"))
+
+
+def name_min_width() -> int:
+    """Floor for the skill-name column, before the widest label widens it."""
+    return int(theme.metric("column.skill.name"))
+
+
+def mod_width() -> int:
+    """The derived "+" column's share, added only while that column is shown."""
+    return int(theme.metric("column.skill.mod"))
 
 
 class SkillRow(NamedTuple):
@@ -227,9 +240,10 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             for spec in self._specializations.get(skill.name, []):
                 label = f"    {skill.name}: {spec} (specialized)"
                 longest = max(longest, fm.horizontalAdvance(label))
-        name_width = max(NAME_MIN_WIDTH, longest + NAME_PADDING)
-        mod_width = MOD_WIDTH if self._show_mods else 0
-        return name_width + NUMERIC_WIDTH + mod_width + FRAME_PADDING
+        name_width = max(name_min_width(), longest + NAME_PADDING)
+        mods = mod_width() if self._show_mods else 0
+        numeric = NUMERIC_PADDING + spin_width()
+        return name_width + numeric + mods + FRAME_PADDING
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
@@ -331,7 +345,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             RANK_MAX,
             value=self._ranks.get(row_id, 0),
             buttons=False,
-            max_width=SPIN_WIDTH,
+            max_width=spin_width(),
         )
         ranks_spin.valueChanged.connect(lambda value, rid=row_id: self._on_rank_changed(rid, value))
         table.setCellWidget(row, COL_RANKS, ranks_spin)
@@ -539,7 +553,9 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             tips.append(mod.condition.tooltip)
         mod_item.setToolTip("\n".join(tips))
 
-        mod_item.setForeground(QBrush(QColor(CONDITION_TINT if penalised else ENHANCED_TINT)))
+        mod_item.setForeground(
+            QBrush(QColor(theme.color(CONDITION_TINT if penalised else ENHANCED_TINT)))
+        )
         font.setStrikeOut(mod.condition.trait_lost)
         mod_item.setFont(font)
 
@@ -555,7 +571,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             font.setStrikeOut(struck)
             item.setFont(font)
             if effect.active:
-                item.setForeground(QBrush(QColor(CONDITION_TINT)))
+                item.setForeground(QBrush(QColor(theme.color(CONDITION_TINT))))
             else:
                 item.setData(Qt.ItemDataRole.ForegroundRole, None)
         if effect.active:

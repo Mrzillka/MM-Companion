@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QSplashScreen
 
 from mm_companion.core.mods import initialize_mods
 from mm_companion.core.storage import ensure_workspace
+from mm_companion.ui import theme
 from mm_companion.ui.app_icon import app_icon
 from mm_companion.ui.start_window import StartWindow
 
@@ -22,12 +23,12 @@ from mm_companion.ui.start_window import StartWindow
 def _make_splash() -> QSplashScreen:
     """A minimal loading screen shown while the workspace is prepared."""
     pixmap = QPixmap(420, 220)
-    pixmap.fill(QColor("#2b2b3a"))
+    pixmap.fill(QColor(theme.color("splash.background")))
     splash = QSplashScreen(pixmap)
     splash.showMessage(
         "MM-Companion\nPreparing workspace…",
         Qt.AlignmentFlag.AlignCenter,
-        QColor("white"),
+        QColor(theme.color("splash.text")),
     )
     return splash
 
@@ -56,6 +57,9 @@ def main() -> int:
     # The application icon is Qt's default for every top-level window, so no
     # window needs to set it individually.
     app.setWindowIcon(app_icon())
+    # Install the theme's stylesheet before the first widget exists, so nothing —
+    # not even the splash — is ever painted in the wrong look and re-dressed.
+    theme.apply(app)
 
     # Hide first-run setup (creating the APPDATA workspace, default settings,
     # character directories) behind a loading screen.

@@ -49,7 +49,7 @@ from mm_companion.core.rules.costs import (
     RESISTANCES_CATEGORY,
     SKILLS_CATEGORY,
 )
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import make_spin_box, muted_style
 
 #: The editable category rates, in display order: ``(override key, label, unit suffix)``.
 #: Every key but ``pp_per_level`` is a field of ``TraitCosts``.
@@ -156,7 +156,7 @@ class CostConfigDialog(QDialog):
 
         note = QLabel(_FOCUSED_NOTE)
         note.setWordWrap(True)
-        note.setStyleSheet("color: palette(placeholder-text);")
+        note.setStyleSheet(muted_style())
         body.addWidget(note)
         body.addStretch()
 
@@ -196,10 +196,10 @@ class CostConfigDialog(QDialog):
             box.setContentsMargins(0, 0, 0, 0)
             box.addWidget(spin)
             unit_label = QLabel(unit)
-            unit_label.setStyleSheet("color: palette(placeholder-text);")
+            unit_label.setStyleSheet(muted_style())
             box.addWidget(unit_label)
             hint = QLabel(f"(default: {default})")
-            hint.setStyleSheet("color: palette(placeholder-text);")
+            hint.setStyleSheet(muted_style())
             box.addWidget(hint)
             box.addStretch()
             form.addRow(f"{label}:", row)
@@ -214,7 +214,7 @@ class CostConfigDialog(QDialog):
         grid.setColumnStretch(0, 1)
 
         header = QLabel(f"Cost ({unit})")
-        header.setStyleSheet("color: palette(placeholder-text);")
+        header.setStyleSheet(muted_style())
         grid.addWidget(QLabel(title.rstrip("s")), 0, 0)
         grid.addWidget(header, 0, 1, 1, 2)
 
@@ -223,7 +223,7 @@ class CostConfigDialog(QDialog):
             global_key = category_key_of(item)
             spin = make_spin_box(1, 9999, value=int(rate_of(item)))
             hint = QLabel(f"(cat: {self._spins[global_key].value()})")
-            hint.setStyleSheet("color: palette(placeholder-text);")
+            hint.setStyleSheet(muted_style())
 
             grid.addWidget(QLabel(name_of(item)), row, 0)
             grid.addWidget(spin, row, 1)

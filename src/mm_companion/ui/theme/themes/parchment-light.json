@@ -1,0 +1,64 @@
+{
+  "id": "parchment-light",
+  "name": "Parchment Light",
+  "description": "A warm, printed-page look: paper surfaces, near-square rules, and ink-brown accents. Does not follow the operating system's light/dark setting.",
+  "extends": "classic",
+  "chrome": {
+    "mode": "styled",
+    "focus_ring": true
+  },
+
+  "_note": "Only what differs from Classic is listed. Knowing its own light surfaces, this preset can take the tints darker than Classic's both-themes compromise allows — every one clears WCAG AA for normal text here, not just for bold.",
+  "colors": {
+    "surface.window": "#e8e1d3",
+    "surface.block": "#f4efe4",
+    "surface.titlebar": "#e0d7c5",
+    "surface.card": "#faf6ee",
+    "surface.field": "#fffdf8",
+
+    "text.primary": "#33291d",
+    "text.muted": "#7a6b57",
+    "text.muted.rich": "#7a6b57",
+    "text.on-badge": "#fffdf8",
+
+    "border.block": "#c3b699",
+    "border.card": "#c3b699",
+    "border.group": "#a8987a",
+    "border.empty": "#c3b699",
+
+    "accent": "#8a5a2b",
+    "accent.dice": "#7a5230",
+    "tint.better": "#2f6b3c",
+    "tint.worse": "#a33232",
+    "tint.warning": "#8a6516",
+    "tint.homerule": "#8a5a2b",
+
+    "badge.extra": "#2f6b3c",
+    "badge.flaw": "#a33232",
+    "badge.flat": "#7a6b57",
+    "badge.role.base": "#3a5f8a",
+    "badge.role.alternate": "#8a6516",
+    "badge.role.linked": "#2f6b3c",
+
+    "drop.indicator": "#8a5a2b",
+    "drop.reject": "#a33232",
+    "focus.ring": "#8a5a2b",
+
+    "splash.background": "#e8e1d3",
+    "splash.text": "#33291d"
+  },
+
+  "_metrics": "Near-square corners and hairline rules, so the blocks read as ruled boxes on a page rather than as cards.",
+  "metrics": {
+    "radius.block": 2,
+    "radius.card": 2,
+    "radius.group": 2,
+    "radius.canvas": 2,
+    "radius.chip": 2,
+    "radius.badge": 2,
+    "radius.header": 2,
+    "radius.field": 2,
+    "card.margins": [7, 5, 7, 5],
+    "group.margins": [5, 3, 5, 5]
+  }
+}

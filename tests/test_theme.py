@@ -105,6 +105,20 @@ def test_a_bad_chrome_mode_is_rejected(isolated_workspace) -> None:
     assert "odd" not in loader.available_themes()
 
 
+def test_an_inline_comment_key_is_not_a_token() -> None:
+    """A preset documents itself inline; those notes must not arrive as tokens.
+
+    ``classic.json`` explains its retuned amber in a ``"_tint.warning"`` key
+    sitting inside ``colors``. Anything iterating the map — the Settings editor
+    above all — would otherwise render a colour row whose value is prose.
+    """
+    preset = loader.available_themes()["classic"]
+
+    assert "_tint.warning" not in preset.colors
+    for group in (preset.colors, preset.metrics, preset.typography, preset.blocks):
+        assert not [key for key in group if key.startswith("_")]
+
+
 def test_a_self_referential_extends_does_not_recurse(isolated_workspace) -> None:
     write_preset(
         isolated_workspace,
@@ -224,26 +238,10 @@ def test_classic_keeps_the_platform_font() -> None:
 SEMANTIC_TINTS = ("tint.better", "tint.worse", "tint.warning", "accent", "accent.dice")
 
 
-def _backgrounds(preset) -> list[str]:
-    """What a preset's tints are read against.
-
-    A ``system`` preset inherits the OS window colour and so must clear the bar on
-    a light *and* a dark one; a ``styled`` preset declares its own surfaces and is
-    measured against those.
-    """
-    if not preset.styled:
-        return [tokens.SYSTEM_LIGHT_WINDOW, tokens.SYSTEM_DARK_WINDOW]
-    return [
-        preset.colors[key]
-        for key in ("surface.window", "surface.block", "surface.card")
-        if tokens.is_literal_color(preset.colors.get(key, ""))
-    ]
-
-
 @pytest.mark.parametrize("theme_id", ["classic", "slate-dark", "parchment-light"])
 def test_every_preset_keeps_its_tints_legible(theme_id: str) -> None:
     preset = loader.available_themes()[theme_id]
-    backgrounds = _backgrounds(preset)
+    backgrounds = tokens.measurement_backdrops(preset)
     assert backgrounds, f"{theme_id} declares no surfaces to measure against"
 
     for token in SEMANTIC_TINTS:

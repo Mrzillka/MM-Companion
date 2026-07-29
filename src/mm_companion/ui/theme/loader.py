@@ -130,8 +130,21 @@ def _merged_tokens(theme_id: str, sources: dict[str, dict[str, Any]]) -> dict[st
     merged: dict[str, Any] = {group: {} for group in _TOKEN_GROUPS}
     for raw in reversed(chain):  # parents first, so the child overwrites
         for group in _TOKEN_GROUPS:
-            merged[group].update(raw.get(group) or {})
+            merged[group].update(_without_comments(raw.get(group) or {}))
     return merged
+
+
+def _without_comments(group: dict[str, Any]) -> dict[str, Any]:
+    """One token map with its ``_``-prefixed comment keys dropped.
+
+    A preset file documents itself inline — ``classic.json`` explains why
+    ``tint.warning`` was retuned in a ``"_tint.warning"`` key sitting right next to
+    it. Without this those notes arrive as tokens whose value is a paragraph of
+    prose, which anything iterating the map (the Settings editor, most obviously)
+    would render as a real setting. Same convention as
+    :func:`mm_companion.ui.block_sizes._baseline`.
+    """
+    return {key: value for key, value in group.items() if not key.startswith("_")}
 
 
 def _build(theme_id: str, sources: dict[str, dict[str, Any]]) -> Theme:

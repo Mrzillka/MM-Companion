@@ -87,6 +87,31 @@ class Theme:
         return self.chrome.mode == CHROME_STYLED
 
 
+#: The surfaces a ``styled`` preset's text is read against, in the order they are
+#: measured. Only those it actually declares as literals count.
+_STYLED_BACKDROPS = ("surface.window", "surface.block", "surface.card")
+
+
+def measurement_backdrops(theme: Theme) -> tuple[str, ...]:
+    """The background colours *theme*'s tints have to stay legible against.
+
+    A ``system`` preset inherits the OS window colour and cannot know which it
+    got, so it is held to the bar on a light *and* a dark one. A ``styled``
+    preset declares its own surfaces and is measured against those instead.
+
+    One definition because two callers need to agree: ``tests/test_theme.py``
+    enforces the floor per preset, and the Settings window warns the user in the
+    moment they pick a colour that would fail it.
+    """
+    if not theme.styled:
+        return (SYSTEM_LIGHT_WINDOW, SYSTEM_DARK_WINDOW)
+    return tuple(
+        theme.colors[key]
+        for key in _STYLED_BACKDROPS
+        if is_literal_color(str(theme.colors.get(key, "")))
+    )
+
+
 class UnknownToken(KeyError):
     """A token was asked for that no theme in the chain defines.
 

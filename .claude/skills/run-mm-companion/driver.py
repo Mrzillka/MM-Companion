@@ -148,9 +148,16 @@ def build(target: str):
                     page._editor.draft(), theme_module.available_themes()["slate-dark"]
                 )
             )
-            page._editor._set_color("accent", "#c0693c")
+            # Through the row itself, the way the colour picker does it, so the
+            # swatch and the field show the new colour and not just the draft.
+            row = page._editor._color_rows["accent"]
+            row.set_value("#c0693c")
+            row.valueChanged.emit("#c0693c")
             page._on_edited()
             page._preview_now()
+            # And filter down to the tokens the demo actually changed, so the shot
+            # shows what the filter box is for rather than the top of a long form.
+            page._filter_field.setText("accent")
     elif target == "gm":
         # GM Mode with a cast already in it, so the NPC panel is not an empty
         # state: two NPCs are written into the workspace gm_characters/ dir and

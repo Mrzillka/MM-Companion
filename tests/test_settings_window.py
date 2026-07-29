@@ -150,6 +150,14 @@ def test_picking_a_preset_persists_it_at_once(page) -> None:
     assert theme.color("accent") == "#5b9ee0"
 
 
+def test_the_filter_box_narrows_the_form(page) -> None:
+    """Sixty-odd rows is a long scroll; the box above them is how you skip it."""
+    page._filter_field.setText("accent")
+
+    assert page._editor._filter == "accent"
+    assert page._scroll.verticalScrollBar().value() == 0
+
+
 def test_a_bundled_preset_is_shown_but_not_edited(page) -> None:
     assert page._name_field.isReadOnly()
     assert not page._delete_button.isEnabled()

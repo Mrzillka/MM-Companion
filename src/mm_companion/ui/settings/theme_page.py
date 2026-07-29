@@ -74,6 +74,7 @@ class ThemePage(SettingsPage):
         column = QVBoxLayout(self)
         column.addLayout(self._build_picker())
         column.addWidget(self._build_header())
+        column.addLayout(self._build_filter())
         column.addWidget(self._build_form(), stretch=1)
         column.addLayout(self._build_actions())
         column.addWidget(self._build_status())
@@ -123,6 +124,23 @@ class ThemePage(SettingsPage):
         row.addWidget(self._id_label)
         column.addLayout(row)
         return panel
+
+    def _build_filter(self) -> QHBoxLayout:
+        """A filter over the form, which is sixty-odd rows long by design.
+
+        Sits outside the scroll area rather than at the top of it, so it stays put
+        while the thing it filters scrolls underneath.
+        """
+        row = QHBoxLayout()
+        label = QLabel("Filter")
+        label.setStyleSheet(BOLD_STYLE)
+        row.addWidget(label)
+        self._filter_field = QLineEdit()
+        self._filter_field.setPlaceholderText("accent, radius, font size, tint…")
+        self._filter_field.setClearButtonEnabled(True)
+        self._filter_field.textChanged.connect(self._on_filter_changed)
+        row.addWidget(self._filter_field, stretch=1)
+        return row
 
     def _build_form(self) -> QWidget:
         self._editor = TokenEditor()
@@ -262,6 +280,12 @@ class ThemePage(SettingsPage):
             self._banner.setText("Your own theme. Edits preview live and are saved on Save.")
 
     # -- editing ----------------------------------------------------------------
+
+    def _on_filter_changed(self, text: str) -> None:
+        self._editor.set_filter(text)
+        # A filter shortens the form, so whatever was scrolled to is gone; start
+        # the shortened list from the top rather than somewhere in its middle.
+        self._scroll.verticalScrollBar().setValue(0)
 
     def _on_edited(self) -> None:
         if self._loading:

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from PySide6.QtCore import Signal
@@ -143,6 +143,46 @@ def _metric_range(name: str) -> tuple[int, int]:
     return _METRIC_DEFAULT_RANGE
 
 
+@dataclass
+class _Row:
+    """One form row, and the text a filter matches it against."""
+
+    form: QFormLayout
+    index: int
+    haystack: str
+
+    def matches(self, needle: str) -> bool:
+        return not needle or all(word in self.haystack for word in needle.split())
+
+
+@dataclass
+class _Section:
+    """A group box, its own rows, and any group boxes nested inside it.
+
+    Only exists so filtering can fold up: a box whose every row is filtered out
+    should disappear rather than sit there as an empty frame with a heading.
+    """
+
+    box: QGroupBox
+    rows: list[_Row] = field(default_factory=list)
+    children: list[_Section] = field(default_factory=list)
+
+    def add_row(self, form: QFormLayout, haystack: str) -> None:
+        self.rows.append(_Row(form, form.rowCount() - 1, haystack.lower()))
+
+    def apply_filter(self, needle: str) -> bool:
+        """Show only what matches *needle*; whether anything here survived."""
+        surviving = False
+        for row in self.rows:
+            visible = row.matches(needle)
+            row.form.setRowVisible(row.index, visible)
+            surviving = surviving or visible
+        for child in self.children:
+            surviving = child.apply_filter(needle) or surviving
+        self.box.setVisible(surviving)
+        return surviving
+
+
 class TokenEditor(QWidget):
     """The generated form. Load a theme, read the draft back, listen for changes."""
 
@@ -159,9 +199,13 @@ class TokenEditor(QWidget):
         self._loading = False
         self._color_rows: dict[str, ColorRow] = {}
         self._inputs: list[QWidget] = []
+        self._sections: list[_Section] = []
+        self._filter = ""
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(int(theme.metric("space.lg")))
+        # Rebuilt with the form, since _clear deletes everything the layout holds.
+        self._empty_note = _note("")
 
     # -- the draft --------------------------------------------------------------
 
@@ -183,6 +227,20 @@ class TokenEditor(QWidget):
         do not need a second path for the header fields.
         """
         self._apply(**changes)
+
+    def set_filter(self, text: str) -> None:
+        """Show only the rows matching every word of *text*; ``""`` shows all.
+
+        Matched against the token's own name as well as its label and help text,
+        so both "what is it called in a preset file" and "what does it do" find
+        it. Kept across a reload, or picking a preset would silently widen the
+        form back out under a filter box that still reads ``accent``.
+        """
+        self._filter = text.strip().lower()
+        surviving = False
+        for section in self._sections:
+            surviving = section.apply_filter(self._filter) or surviving
+        self._empty_note.setVisible(bool(self._filter) and not surviving)
 
     def set_locked(self, locked: bool) -> None:
         """Read-only view: a bundled preset is shown, not edited.
@@ -206,20 +264,26 @@ class TokenEditor(QWidget):
             _clear(self._layout)
             self._color_rows.clear()
             self._inputs.clear()
-            self._layout.addWidget(self._build_chrome())
-            for group in TOKEN_GROUPS:
-                self._layout.addWidget(self._build_group(group))
-            self._layout.addWidget(self._build_blocks())
+            self._sections = [self._build_chrome()]
+            self._sections += [self._build_group(group) for group in TOKEN_GROUPS]
+            self._sections.append(self._build_blocks())
+            for section in self._sections:
+                self._layout.addWidget(section.box)
+            self._empty_note = _note("Nothing matches that.")
+            self._empty_note.hide()
+            self._layout.addWidget(self._empty_note)
             self._layout.addStretch()
         finally:
             self._loading = False
         self._revalidate_colors()
         self.set_locked(self._locked)
+        self.set_filter(self._filter)
 
-    def _build_chrome(self) -> QWidget:
+    def _build_chrome(self) -> _Section:
         draft = self.draft()
         box = QGroupBox("Chrome")
         form = QFormLayout(box)
+        section = _Section(box)
 
         combo = QComboBox()
         for mode in CHROME_MODES:
@@ -235,6 +299,7 @@ class TokenEditor(QWidget):
             _field_label("Mode", "Whether the theme dresses the widgets, or the OS does."),
             combo,
         )
+        section.add_row(form, "chrome mode system styled widgets os")
 
         ring = QCheckBox("Draw one")
         ring.setChecked(draft.chrome.focus_ring)
@@ -248,31 +313,42 @@ class TokenEditor(QWidget):
             ),
             ring,
         )
-        return box
+        section.add_row(form, "chrome focus ring focused accent outline")
+        return section
 
-    def _build_group(self, group: str) -> QWidget:
+    def _build_group(self, group: str) -> _Section:
         meta = meta_module.token_meta()
         tokens = getattr(self.draft(), group)
         box = QGroupBox(meta.group_label(group))
         column = QVBoxLayout(box)
+        section = _Section(box)
         names = [name for name in tokens if not name.startswith("_")]
         for bucket, members in meta_module.grouped(group, names):
-            column.addWidget(self._build_bucket(group, bucket, members))
+            child = self._build_bucket(group, bucket, members)
+            section.children.append(child)
+            column.addWidget(child.box)
         if not names:  # pragma: no cover - every bundled preset states some tokens
             column.addWidget(_note("This theme states nothing in this group."))
-        return box
+        return section
 
-    def _build_bucket(self, group: str, bucket: str, names: list[str]) -> QWidget:
+    def _build_bucket(self, group: str, bucket: str, names: list[str]) -> _Section:
         meta = meta_module.token_meta()
         box = QGroupBox(meta.bucket_label(bucket))
         form = QFormLayout(box)
+        section = _Section(box)
         for name in names:
             value = getattr(self.draft(), group)[name]
             form.addRow(
                 _field_label(meta.label(name), meta.hint(name)),
                 self._build_editor(group, name, value),
             )
-        return box
+            # The token's own dotted name as well as its prose, so both "what is
+            # this called in a preset file" and "what does it do" find the row.
+            section.add_row(
+                form,
+                f"{group} {name} {meta.bucket_label(bucket)} {meta.label(name)} {meta.hint(name)}",
+            )
+        return section
 
     def _build_editor(self, group: str, name: str, value: Any) -> QWidget:
         """One widget for one token, chosen by the shape of its value."""
@@ -398,7 +474,7 @@ class TokenEditor(QWidget):
         self._inputs.append(field)
         return field
 
-    def _build_blocks(self) -> QWidget:
+    def _build_blocks(self) -> _Section:
         """Per-block size overrides — a theme parameter, but a sharp one.
 
         Every bundled preset leaves this empty, so iterating it would render an
@@ -417,12 +493,14 @@ class TokenEditor(QWidget):
                 "Setting a maximum equal to a minimum pins that block's size."
             )
         )
+        section = _Section(box)
         effective = block_sizes.load_block_sizes()
         form = QFormLayout()
         for key in sorted(set(effective) | set(draft.blocks)):
             form.addRow(_field_label(key.replace("_", " ").title(), ""), self._build_block_row(key))
+            section.add_row(form, f"block size {key}")
         column.addLayout(form)
-        return box
+        return section
 
     def _build_block_row(self, key: str) -> QWidget:
         current = self.draft().blocks.get(key) or {}

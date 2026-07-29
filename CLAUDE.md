@@ -468,7 +468,11 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   never a hardcoded list, so a token added later or by a mod appears on its own.
   Each edit previews live through `theme.set_preview(draft, app)`, debounced;
   nothing is written until Save, and `closeEvent` always calls `discard()` so a
-  preview never outlives its window. Then the usual relaunch offer
+  preview never outlives its window. A filter box above the form
+  (`TokenEditor.set_filter`) matches every word against the token's own dotted
+  name *and* its label and hint, folding away any group box it empties; it
+  survives a reload, so picking a preset does not silently widen the form back
+  out under a filter that still reads `accent`. Then the usual relaunch offer
   (`ui/app_restart.py`) for widgets that styled themselves in their constructors —
   the same bargain the Mod Manager strikes.
 - Bundled presets are shown **locked** (`ui/lock.py`) rather than hidden — they

@@ -198,6 +198,80 @@ def test_seeding_the_form_does_not_count_as_an_edit(qapp) -> None:
     assert seen == []
 
 
+# -- filtering ------------------------------------------------------------------
+
+
+def visible_labels(editor) -> set[str]:
+    """The field labels a user can actually see right now."""
+    editor.show()  # visibility only resolves once the top-level is shown
+    return {label for _box, label in rows(editor) if rows(editor)[(_box, label)].isVisible()}
+
+
+def visible_boxes(editor) -> set[str]:
+    editor.show()
+    return {box.title() for box in editor.findChildren(QGroupBox) if box.isVisible()}
+
+
+def test_a_filter_keeps_only_the_matching_rows(editor) -> None:
+    editor.set_filter("accent")
+
+    labels = visible_labels(editor)
+    assert "Accent" in labels
+    assert "Worse" not in labels  # a tint, not an accent
+
+
+def test_a_filter_folds_up_the_boxes_it_empties(editor) -> None:
+    """An empty frame with a heading is worse than no frame at all."""
+    editor.set_filter("accent")
+
+    boxes = visible_boxes(editor)
+    assert "Accent" in boxes
+    assert "Semantic tints" not in boxes
+    assert "Block sizes" not in boxes
+
+
+def test_a_filter_matches_the_token_name_as_well_as_the_prose(editor) -> None:
+    """Both "what is it called in a preset file" and "what does it do" find it."""
+    editor.set_filter("tint.worse")
+    assert "Worse" in visible_labels(editor)
+
+    editor.set_filter("flaw")  # only in the hint
+    assert "Worse" in visible_labels(editor)
+
+
+def test_every_word_of_a_filter_has_to_match(editor) -> None:
+    editor.set_filter("card radius")
+
+    labels = visible_labels(editor)
+    assert "Card" in labels  # radius.card
+    assert "Margins" not in labels  # card.margins is a card, but not a radius
+
+
+def test_clearing_the_filter_brings_everything_back(editor) -> None:
+    editor.set_filter("accent")
+
+    editor.set_filter("")
+
+    assert {"Accent", "Worse", "Margins"} <= visible_labels(editor)
+
+
+def test_a_filter_matching_nothing_says_so(editor) -> None:
+    editor.set_filter("chartreuse")
+
+    assert visible_labels(editor) == set()
+    assert editor._empty_note.isVisible()
+
+
+def test_a_filter_survives_a_reload(editor) -> None:
+    """Picking another preset must not silently widen the form back out."""
+    editor.set_filter("accent")
+
+    editor.load(SAMPLE)
+
+    assert "Worse" not in visible_labels(editor)
+    assert editor._filter == "accent"
+
+
 # -- the guards -----------------------------------------------------------------
 
 

@@ -16,6 +16,7 @@ import threading
 from dataclasses import dataclass
 
 import pytest
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.session.relay import RELAY_SCHEME_PLAIN
@@ -77,3 +78,8 @@ def _close_top_level_widgets():
         widget.hide()
         widget.deleteLater()
     app.processEvents()
+    # processEvents() does not run deferred deletions — Qt holds those until the
+    # event loop that posted them unwinds, and a test never starts one. Without
+    # this the widgets above are only *scheduled* to die and in fact pile up all
+    # session, which is the very thing this fixture exists to prevent.
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)

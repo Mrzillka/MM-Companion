@@ -68,8 +68,47 @@ _CHROME_LABELS = {
     "styled": "Styled — the theme dresses the window itself",
 }
 
-#: The colours a styled preset has to declare before it can dress anything.
-STYLED_REQUIRED = ("surface.window", "surface.block", "surface.titlebar", "surface.field")
+#: The colours ``qss._chrome_rules`` reads with no fallback, and which Classic
+#: therefore does not have. A theme cannot go ``styled`` until it states them.
+STYLED_REQUIRED = (
+    "surface.window",
+    "surface.block",
+    "surface.titlebar",
+    "surface.field",
+    "surface.card",
+    "text.primary",
+    "border.block",
+)
+
+#: Sizes a styled preset usually restates as well. Copied alongside the colours
+#: when seeding, but their absence is survivable — the stylesheet falls back to
+#: ``radius.card`` for both.
+STYLED_OPTIONAL_METRICS = ("radius.block", "radius.field")
+
+
+def seed_styled_surfaces(draft: Theme, source: Theme) -> Theme:
+    """*draft* with the tokens a styled stylesheet needs taken from *source*.
+
+    Only the ones it is missing, and only those the stylesheet actually requires —
+    the point is to make ``styled`` legal, not to import somebody else's look.
+    Taking them from a shipped preset rather than writing literals here is also
+    what keeps this file free of hardcoded colours.
+    """
+    colors = dict(draft.colors)
+    for name in STYLED_REQUIRED:
+        if not is_literal_color(str(colors.get(name, ""))) and name in source.colors:
+            colors[name] = source.colors[name]
+    metrics = dict(draft.metrics)
+    for name in STYLED_OPTIONAL_METRICS:
+        if name not in metrics and name in source.metrics:
+            metrics[name] = source.metrics[name]
+    return replace(
+        draft,
+        colors=colors,
+        metrics=metrics,
+        chrome=replace(draft.chrome, mode=CHROME_STYLED),
+    )
+
 
 #: Sensible bounds per kind of metric, chosen by the token's own name. Generous
 #: rather than exact — the point is to stop a typo becoming a 90,000px margin, not
@@ -126,6 +165,14 @@ class TokenEditor(QWidget):
         """Show *preset* and edit from there, discarding any previous draft."""
         self._draft = preset
         self._rebuild()
+
+    def update_draft(self, **changes: Any) -> None:
+        """Change something about the draft that has no row of its own — its name.
+
+        Announces the change like any other, so the page's dirty flag and preview
+        do not need a second path for the header fields.
+        """
+        self._apply(**changes)
 
     def set_locked(self, locked: bool) -> None:
         """Read-only view: a bundled preset is shown, not edited.
@@ -503,4 +550,10 @@ def _clear(layout: QVBoxLayout) -> None:
             widget.deleteLater()
 
 
-__all__ = ["STYLED_REQUIRED", "TOKEN_GROUPS", "TokenEditor"]
+__all__ = [
+    "STYLED_OPTIONAL_METRICS",
+    "STYLED_REQUIRED",
+    "TOKEN_GROUPS",
+    "TokenEditor",
+    "seed_styled_surfaces",
+]

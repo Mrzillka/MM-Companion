@@ -93,7 +93,10 @@ def build(target: str):
         win.show()
         sheet = win._sheet
         sheet.pin_block("conditions")
-        sheet.pin_block("abilities")
+        # Beside the first one, in the same line, so the shot shows the strip
+        # arranging blocks in both directions rather than as one stack.
+        sheet.pin_block("abilities", line=0, slot=1, new_line=False)
+        sheet.pin_block("resistances")
         if target == "sheet-pinned-bottom":
             sheet.canvas.set_pin_edge("bottom")
         return win

@@ -6,22 +6,29 @@ scrolls away as soon as you read further down. The strip is the place that
 doesn't move: a region along one edge of the window (left, right, top or bottom)
 holding blocks that stay put while the page scrolls behind them.
 
-Three widgets, in the order they nest:
+The strip is a small canvas, not a single stack. It holds **lines** along its
+length, each line holding one or more blocks **across** it, so two pinned blocks
+can sit beside each other exactly as two docked blocks share a row. Splitters
+give both directions: drag the handle between two lines, or between two blocks
+within a line.
+
+Four widgets, in the order they nest:
 
 * :class:`PinnedBoard` — what a host puts in its layout in place of the bare page
   scroll area. A splitter holding the page and the strip; its orientation and the
   order of those two children *are* the strip's edge, and dragging its handle
   sets the strip's thickness.
-* :class:`PinnedPanel` — the strip itself. A grip (drag it to another edge,
-  right-click it for the menu) beside a splitter of pinned blocks. Empty, it
-  collapses to a thin bar showing one small pin icon, which is the drop target
-  that gets the first block in.
-* :class:`_PinnedSlot` — one pinned block, positioned across the strip according
-  to the current alignment.
+* :class:`PinnedPanel` — the strip itself: the pin handle plus a splitter of
+  lines. The handle is always there — it is the icon an empty strip shows, the
+  thing the whole strip is dragged to another edge by, and the button that opens
+  its menu.
+* :class:`_PinnedLine` — one line: a splitter of blocks across the strip.
+* :class:`_PinnedSlot` — one pinned block, placed within its cell by the current
+  alignment.
 
 Two invariants shape the code:
 
-* **A pinned block always shows all of its content.** The splitter is
+* **A pinned block always shows all of its content.** Every splitter is
   non-collapsible and every :class:`~mm_companion.ui.block_frame.BlockFrame`
   already reports its full content size as its minimum, so a handle can be
   dragged only as far as the neighbouring block's content allows, and
@@ -64,14 +71,16 @@ from mm_companion.ui.pinned import (
     DEFAULT_EXTENT,
     PIN_ALIGNMENTS,
     PIN_EDGES,
+    PinSlot,
     is_vertical_strip,
 )
 
-#: Thickness of the strip while nothing is pinned — just enough for its icon.
+#: Floor for the strip's thickness while nothing is pinned. The handle's own size
+#: hint wins when it is bigger, so a preset with larger type can't clip its icon.
 EMPTY_EXTENT = 34
 
-#: Thickness of the grip bar the strip is dragged to another edge by.
-GRIP_EXTENT = 12
+#: Band along a line's edge where a drop makes a *new* line instead of joining it.
+LINE_GAP = 10
 
 #: Width of the drop-zone band along each edge of the board while the strip is
 #: being dragged to a new edge.
@@ -94,13 +103,13 @@ class PinHost(Protocol):
     def pin_align(self) -> str: ...
 
 
-def _cross_alignment(vertical_strip: bool, align: str) -> Qt.AlignmentFlag | None:
-    """The layout flag putting a block at *align* across the strip (None = fill).
+def _cell_alignment(vertical_strip: bool, align: str) -> Qt.AlignmentFlag | None:
+    """The flag placing a block at *align* within its cell (None = fill).
 
-    "Across" is the axis the strip is thin in: the horizontal one for a left/right
-    strip, the vertical one for a top/bottom strip. Only that axis is constrained,
-    so a block still fills the strip along its length — which is the axis the
-    splitter handles govern.
+    The axis is the one a *line* runs along — horizontal on a side strip, vertical
+    on a top/bottom one. It only bites when the block cannot fill its cell (a
+    fixed-width block in a wide strip); anything growable fills either way, which
+    is what makes the splitter handles worth dragging.
     """
     if align == "fill":
         return None
@@ -128,12 +137,11 @@ def _usable_screen(widget: QWidget) -> QSize:
 
 
 class _PinnedSlot(QWidget):
-    """One pinned block, aligned across the strip.
+    """One pinned block, placed within its cell.
 
     A wrapper rather than putting the frame in the splitter directly: a splitter
-    always stretches its children to the full thickness of the strip, which is
-    exactly what the ``fill`` alignment wants and exactly what the other three
-    do not.
+    always stretches its children to the whole cell, which is exactly what the
+    ``fill`` alignment wants and exactly what the other three do not.
     """
 
     def __init__(
@@ -148,15 +156,25 @@ class _PinnedSlot(QWidget):
         layout = QHBoxLayout(self) if vertical_strip else QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        flags = _cross_alignment(vertical_strip, align) or Qt.AlignmentFlag(0)
-        # A block that pins its own size along the strip (Abilities caps its
-        # height) can't take the space its splitter band gives it, and a box layout
-        # would centre it there — a block adrift with a gap above and below. Anchor
-        # it to the start of its band instead; every other block still fills, so a
-        # handle drag visibly resizes it.
-        capped = (frame.maximumHeight() if vertical_strip else frame.maximumWidth()) < UNBOUNDED
-        if capped:
-            flags |= Qt.AlignmentFlag.AlignTop if vertical_strip else Qt.AlignmentFlag.AlignLeft
+        flags = _cell_alignment(vertical_strip, align) or Qt.AlignmentFlag(0)
+        # A block that pins its own size (Abilities is fixed both ways) can't take
+        # the cell the splitters give it, and a box layout would centre it there —
+        # a block adrift with a gap on either side. Anchor it to the start of the
+        # cell instead, which is what a docked row does with its fixed-width blocks.
+        # Only where the user hasn't asked for something else: an explicit
+        # alignment across the line is theirs to set, "fill" is not.
+        start = Qt.AlignmentFlag.AlignTop if vertical_strip else Qt.AlignmentFlag.AlignLeft
+        across = Qt.AlignmentFlag.AlignLeft if vertical_strip else Qt.AlignmentFlag.AlignTop
+        capped_along = (
+            frame.maximumHeight() if vertical_strip else frame.maximumWidth()
+        ) < UNBOUNDED
+        capped_across = (
+            frame.maximumWidth() if vertical_strip else frame.maximumHeight()
+        ) < UNBOUNDED
+        if capped_along:
+            flags |= start
+        if capped_across and align == "fill":
+            flags |= across
         if flags:
             layout.addWidget(frame, alignment=flags)
         else:
@@ -176,13 +194,31 @@ class _PinnedSlot(QWidget):
         return self.frame
 
 
-class PinnedGrip(QFrame):
-    """The strip's handle: drag it to another edge, right-click it for the menu.
+class _PinnedLine(QSplitter):
+    """One line of the strip: blocks side by side across it, each resizable."""
 
-    Deliberately dumb, like a block's title bar: it forwards the gesture to the
-    panel, which forwards it to the board — the only widget that knows where the
-    window's edges are. The drag only *starts* once the cursor has travelled the
-    platform's drag distance, so a plain click opens nothing.
+    def __init__(self, vertical_strip: bool, parent: QWidget | None = None) -> None:
+        # A line runs *across* the strip: horizontally on a side strip.
+        super().__init__(
+            Qt.Orientation.Horizontal if vertical_strip else Qt.Orientation.Vertical, parent
+        )
+        self.setObjectName("pinnedLine")
+        self.setChildrenCollapsible(False)
+        self.slots: list[_PinnedSlot] = []
+
+    def add_slot(self, slot: _PinnedSlot) -> None:
+        self.addWidget(slot)
+        self.slots.append(slot)
+
+
+class PinnedHandle(QToolButton):
+    """The strip's pin icon: its drop target, its drag handle, and its menu.
+
+    Always visible, empty strip or not, because it is the only thing that is
+    *always* the strip — a block can be dragged onto it, the whole strip is
+    dragged to another edge by it, and a click on it opens the strip's menu. The
+    drag only starts once the cursor has travelled the platform's drag distance,
+    so a plain click still reads as a click.
     """
 
     drag_started = Signal()
@@ -192,13 +228,15 @@ class PinnedGrip(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("pinnedGrip")
-        # A raised panel so the handle is visible even under a preset that dresses
-        # nothing (Classic paints the native frame and no stylesheet reaches here).
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setFrameShadow(QFrame.Shadow.Raised)
+        self.setObjectName("pinnedHandle")
+        self.setText("📌")
+        self.setAutoRaise(True)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setToolTip("Drag to move the pinned strip to another edge")
+        self.setToolTip(
+            "The pinned strip — blocks here stay put while the page scrolls.\n"
+            "Drag a block onto it to pin it, drag this pin to move the strip to\n"
+            "another edge, or click for options."
+        )
         self._press: QPoint | None = None
         self._dragging = False
 
@@ -206,8 +244,6 @@ class PinnedGrip(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self._press = event.globalPosition().toPoint()
             self._dragging = False
-            event.accept()
-            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -217,7 +253,7 @@ class PinnedGrip(QFrame):
         position = event.globalPosition().toPoint()
         if not self._dragging:
             if (position - self._press).manhattanLength() < QApplication.startDragDistance():
-                event.accept()
+                super().mouseMoveEvent(event)
                 return
             self._dragging = True
             self.drag_started.emit()
@@ -225,12 +261,14 @@ class PinnedGrip(QFrame):
         event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self._press is not None:
-            dragging, self._dragging, self._press = self._dragging, False, None
-            if dragging:
-                self.drag_finished.emit(event.globalPosition().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._dragging = False
+            self._press = None
+            self.setDown(False)  # ending a drag is not a click
+            self.drag_finished.emit(event.globalPosition().toPoint())
             event.accept()
             return
+        self._press = None
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
@@ -239,9 +277,9 @@ class PinnedGrip(QFrame):
 
 
 class PinnedPanel(QFrame):
-    """The strip: a grip, then the pinned blocks — or one icon while it is empty."""
+    """The strip: its pin handle, then the lines of pinned blocks."""
 
-    #: Forwarded from the grip so the board can run the edge-change gesture.
+    #: Forwarded from the handle so the board can run the edge-change gesture.
     edge_drag_started = Signal()
     edge_drag_moved = Signal(QPoint)
     edge_drag_finished = Signal(QPoint)
@@ -253,18 +291,19 @@ class PinnedPanel(QFrame):
         self._host = host
         self._edge = DEFAULT_EDGE
         self._align = DEFAULT_ALIGN
-        self._keys: list[str] = []
-        self._slots: list[_PinnedSlot] = []
+        # What is currently rendered, so an unrelated re-render is a no-op. None
+        # means "assume nothing": the next render rebuilds (see invalidate).
+        self._keys: list[list[str]] | None = []
+        self._lines: list[_PinnedLine] = []
 
-        self._grip = PinnedGrip(self)
-        self._grip.drag_started.connect(self.edge_drag_started)
-        self._grip.drag_moved.connect(self.edge_drag_moved)
-        self._grip.drag_finished.connect(self.edge_drag_finished)
-        self._grip.menu_requested.connect(self.open_menu)
+        self._handle = PinnedHandle(self)
+        self._handle.drag_started.connect(self.edge_drag_started)
+        self._handle.drag_moved.connect(self.edge_drag_moved)
+        self._handle.drag_finished.connect(self.edge_drag_finished)
+        self._handle.menu_requested.connect(self.open_menu)
+        self._handle.clicked.connect(lambda: self.open_menu(self._handle_menu_pos()))
 
-        # The splitter is what makes a pinned block resizable: non-collapsible,
-        # and each frame's minimum is its whole content, so a handle stops where
-        # the content does.
+        # The outer splitter runs along the strip and holds the lines.
         self._splitter = QSplitter(Qt.Orientation.Vertical, self)
         self._splitter.setObjectName("pinnedSplitter")
         self._splitter.setChildrenCollapsible(False)
@@ -277,18 +316,8 @@ class PinnedPanel(QFrame):
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setWidget(self._splitter)
 
-        self._empty = QToolButton(self)
-        self._empty.setObjectName("pinnedEmpty")
-        self._empty.setText("📌")
-        self._empty.setAutoRaise(True)
-        self._empty.setToolTip(
-            "The pinned strip — drag a block onto this icon to keep it in view "
-            "while the page scrolls. Click for options."
-        )
-        self._empty.clicked.connect(lambda: self.open_menu(self._empty_menu_pos()))
-
         # A grid rather than a box layout so the edge can be changed by re-placing
-        # three widgets: a QWidget's layout can't be swapped out once installed.
+        # two widgets: a QWidget's layout can't be swapped out once installed.
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(0)
@@ -302,14 +331,31 @@ class PinnedPanel(QFrame):
 
     # -- rendering (driven by the canvas) ------------------------------------
 
-    def set_blocks(self, frames: list[BlockFrame], edge: str, align: str, sizes: list[int]) -> None:
-        """Render *frames* along the strip, skipping the rebuild when nothing moved.
+    def invalidate(self) -> None:
+        """Force the next render to rebuild even if the blocks look unchanged.
+
+        A restored layout carries sizes as well as blocks, and those sizes are only
+        read on a rebuild. Without this, restoring a layout whose strip holds the
+        same blocks it already does would keep the proportions on screen and
+        silently drop the ones being restored.
+        """
+        self._keys = None
+
+    def set_blocks(
+        self,
+        lines: list[list[BlockFrame]],
+        edge: str,
+        align: str,
+        sizes: list[int],
+        line_sizes: list[list[int]],
+    ) -> None:
+        """Render *lines* along the strip, skipping the rebuild when nothing moved.
 
         The canvas re-renders on every structural change, most of which are about
         the page rather than the strip; rebuilding regardless would throw the
         proportions the user dragged away each time they reordered a docked row.
         """
-        keys = [frame.key for frame in frames]
+        keys = [[frame.key for frame in line] for line in lines]
         if keys == self._keys and edge == self._edge and align == self._align:
             return
 
@@ -325,66 +371,64 @@ class PinnedPanel(QFrame):
         self._splitter.setOrientation(
             Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
         )
-        for frame in frames:
-            slot = _PinnedSlot(frame, vertical, align, self._splitter)
-            self._splitter.addWidget(slot)
-            self._slots.append(slot)
-        if len(sizes) == len(frames) and all(size > 0 for size in sizes):
+        for index, frames in enumerate(lines):
+            line = _PinnedLine(vertical, self._splitter)
+            for frame in frames:
+                line.add_slot(_PinnedSlot(frame, vertical, align, line))
+            self._splitter.addWidget(line)
+            self._lines.append(line)
+            within = line_sizes[index] if index < len(line_sizes) else []
+            if len(within) == len(frames) and all(size > 0 for size in within):
+                line.setSizes(within)
+        if len(sizes) == len(lines) and all(size > 0 for size in sizes):
             self._splitter.setSizes(sizes)
         self._apply_empty_state()
 
     def _clear(self) -> None:
-        """Empty the splitter, handing every block back before its slot is freed."""
-        for slot in self._slots:
-            frame = slot.release_frame()
-            frame.setParent(self)
-            frame.hide()
-            slot.setParent(None)
-            slot.deleteLater()
-        self._slots = []
+        """Empty the strip, handing every block back before its line is freed."""
+        for line in self._lines:
+            for slot in line.slots:
+                frame = slot.release_frame()
+                frame.setParent(self)
+                frame.hide()
+                slot.setParent(None)
+                slot.deleteLater()
+            line.setParent(None)
+            line.deleteLater()
+        self._lines = []
 
     def _apply_edge(self) -> None:
-        """Put the grip on the strip's leading side and the content beside it."""
+        """Put the handle at the strip's leading corner and the lines beside it."""
         vertical = is_vertical_strip(self._edge)
-        for widget in (self._grip, self._scroll, self._empty):
+        for widget in (self._handle, self._scroll):
             self._grid.removeWidget(widget)
-        if vertical:
-            self._grip.setFixedHeight(GRIP_EXTENT)
-            self._grip.setMinimumWidth(0)
-            self._grip.setMaximumWidth(UNBOUNDED)
-            content_row, content_col = 1, 0
-        else:
-            self._grip.setFixedWidth(GRIP_EXTENT)
-            self._grip.setMinimumHeight(0)
-            self._grip.setMaximumHeight(UNBOUNDED)
-            content_row, content_col = 0, 1
-        self._grid.addWidget(self._grip, 0, 0)
-        # The scroll area and the empty-state icon share the content cell; only
-        # one of them is ever visible, and a hidden widget takes no part in the
-        # layout.
+        content_row, content_col = (1, 0) if vertical else (0, 1)
+        self._grid.addWidget(self._handle, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
         self._grid.addWidget(self._scroll, content_row, content_col)
-        self._grid.addWidget(
-            self._empty, content_row, content_col, alignment=Qt.AlignmentFlag.AlignCenter
-        )
-        for row in (0, 1):
-            self._grid.setRowStretch(row, 1 if row == content_row else 0)
-            self._grid.setColumnStretch(row, 1 if row == content_col else 0)
+        for index in (0, 1):
+            self._grid.setRowStretch(index, 1 if index == content_row else 0)
+            self._grid.setColumnStretch(index, 1 if index == content_col else 0)
 
     def _apply_empty_state(self) -> None:
-        """Collapse to the icon when nothing is pinned, expand when something is."""
-        empty = not self._slots
+        """Collapse to the handle when nothing is pinned, expand when something is."""
+        empty = not self._lines
         self._scroll.setVisible(not empty)
-        self._empty.setVisible(empty)
         self.setMinimumSize(0, 0)
         self.setMaximumSize(UNBOUNDED, UNBOUNDED)
         if empty:
             # A strip the user could drag wide while it holds nothing would just be
-            # a dead margin, so an empty one is pinned to the width of its icon.
+            # a dead margin, so an empty one is pinned to the size of its handle.
             if is_vertical_strip(self._edge):
-                self.setFixedWidth(EMPTY_EXTENT)
+                self.setFixedWidth(self.empty_extent())
             else:
-                self.setFixedHeight(EMPTY_EXTENT)
+                self.setFixedHeight(self.empty_extent())
         self.updateGeometry()
+
+    def empty_extent(self) -> int:
+        """How thick the strip is with nothing pinned: its handle, and no more."""
+        hint = self._handle.sizeHint()
+        along_thickness = hint.width() if is_vertical_strip(self._edge) else hint.height()
+        return max(EMPTY_EXTENT, along_thickness + 4)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         """The room the pinned blocks need, so the *window* keeps them whole.
@@ -397,12 +441,13 @@ class PinnedPanel(QFrame):
         scroll area does take over.
         """
         base = super().minimumSizeHint()
-        if not self._slots:
+        if not self._lines:
             return base
         content = self._splitter.minimumSizeHint()
+        handle = self._handle.sizeHint()
         vertical = is_vertical_strip(self._edge)
-        width = content.width() + (0 if vertical else GRIP_EXTENT)
-        height = content.height() + (GRIP_EXTENT if vertical else 0)
+        width = content.width() + (0 if vertical else handle.width())
+        height = content.height() + (handle.height() if vertical else 0)
         cap = _usable_screen(self)
         return QSize(
             max(base.width(), min(width, cap.width())),
@@ -412,7 +457,7 @@ class PinnedPanel(QFrame):
     # -- queries the canvas and the board ask ---------------------------------
 
     def is_empty(self) -> bool:
-        return not self._slots
+        return not self._lines
 
     def edge(self) -> str:
         return self._edge
@@ -420,59 +465,108 @@ class PinnedPanel(QFrame):
     def align(self) -> str:
         return self._align
 
-    def block_sizes(self) -> list[int]:
-        """The splitter's current sizes — the proportions the user dragged."""
-        return list(self._splitter.sizes()) if self._slots else []
+    def line_extents(self) -> list[int]:
+        """The outer splitter's sizes — how the lines share the strip's length."""
+        return list(self._splitter.sizes()) if self._lines else []
 
-    def frames(self) -> list[BlockFrame]:
-        return [slot.frame for slot in self._slots]
+    def block_sizes(self) -> list[list[int]]:
+        """Each line's own splitter sizes — how its blocks share its thickness."""
+        return [list(line.sizes()) for line in self._lines]
+
+    def frames(self) -> list[list[BlockFrame]]:
+        return [[slot.frame for slot in line.slots] for line in self._lines]
 
     # -- drop target ----------------------------------------------------------
 
-    def drop_index(self, global_pos: QPoint) -> int | None:
-        """Which slot a block dropped at *global_pos* would take, or None if off it."""
+    def drop_slot(self, global_pos: QPoint) -> PinSlot | None:
+        """Where a block dropped at *global_pos* would land, or None if off the strip.
+
+        Mirrors the page canvas's hit test: inside a line's core it joins that
+        line beside its blocks, and in the band at either end of a line it makes a
+        new one — so a block goes beside another as easily as under it.
+        """
         if not self.isVisible():
             return None
         local = self.mapFromGlobal(global_pos)
         if not self.rect().contains(local):
             return None
-        if not self._slots:
-            return 0
-        vertical = is_vertical_strip(self._edge)
-        point = local.y() if vertical else local.x()
-        for index, slot in enumerate(self._slots):
-            center = slot.mapTo(self, slot.rect().center())
-            if point < (center.y() if vertical else center.x()):
-                return index
-        return len(self._slots)
+        if not self._lines:
+            return PinSlot(True, 0, 0)
 
-    def show_drop(self, index: int) -> None:
+        vertical = is_vertical_strip(self._edge)
+        along = local.y() if vertical else local.x()
+        geoms = [self._line_geometry(line) for line in self._lines]
+        for index, geo in enumerate(geoms):
+            low, high = (geo.top(), geo.bottom()) if vertical else (geo.left(), geo.right())
+            if low + LINE_GAP <= along <= high - LINE_GAP:
+                return PinSlot(False, index, self._slot_in_line(index, local))
+
+        boundaries = self._line_boundaries(geoms)
+        nearest = min(range(len(boundaries)), key=lambda i: abs(along - boundaries[i]))
+        return PinSlot(True, nearest, 0)
+
+    def _line_geometry(self, line: _PinnedLine) -> QRect:
+        return QRect(line.mapTo(self, QPoint(0, 0)), line.size())
+
+    def _line_boundaries(self, geoms: list[QRect]) -> list[int]:
+        """The insert positions between lines, along the strip."""
+        vertical = is_vertical_strip(self._edge)
+        low = [geo.top() if vertical else geo.left() for geo in geoms]
+        high = [geo.bottom() if vertical else geo.right() for geo in geoms]
+        bounds = [low[0]]
+        bounds += [(high[i - 1] + low[i]) // 2 for i in range(1, len(geoms))]
+        bounds.append(high[-1])
+        return bounds
+
+    def _slot_in_line(self, index: int, local: QPoint) -> int:
+        """Which place within line *index* a point falls at (by block midpoints)."""
+        line = self._lines[index]
+        vertical = is_vertical_strip(self._edge)
+        across = local.x() if vertical else local.y()
+        for slot_index, slot in enumerate(line.slots):
+            center = slot.mapTo(self, slot.rect().center())
+            if across < (center.x() if vertical else center.y()):
+                return slot_index
+        return len(line.slots)
+
+    def show_drop(self, slot: PinSlot) -> None:
         """Light the strip up and mark where the block would land."""
         self._drops.show_accept()
-        if not self._slots:
+        if not self._lines:
             self._indicator.hide_indicator()
             return
-        self._indicator.move_to(self._boundary_rect(index))
+        self._indicator.move_to(self._indicator_rect(slot))
 
     def hide_drop(self) -> None:
         self._drops.clear()
         self._indicator.hide_indicator()
 
-    def _boundary_rect(self, index: int) -> QRect:
-        """The insert line between two pinned blocks, in panel coordinates."""
-        geoms = [QRect(slot.mapTo(self, QPoint(0, 0)), slot.size()) for slot in self._slots]
+    def _indicator_rect(self, slot: PinSlot) -> QRect:
+        """The insert line: across the strip for a new line, along it within one."""
         vertical = is_vertical_strip(self._edge)
-        if index <= 0:
-            position = geoms[0].top() if vertical else geoms[0].left()
-        elif index >= len(geoms):
-            position = geoms[-1].bottom() if vertical else geoms[-1].right()
-        elif vertical:
-            position = (geoms[index - 1].bottom() + geoms[index].top()) // 2
-        else:
-            position = (geoms[index - 1].right() + geoms[index].left()) // 2
+        geoms = [self._line_geometry(line) for line in self._lines]
+        if slot.new_line:
+            position = self._line_boundaries(geoms)[max(0, min(slot.line, len(geoms)))]
+            if vertical:
+                return QRect(2, position - 1, max(0, self.width() - 4), 3)
+            return QRect(position - 1, 2, 3, max(0, self.height() - 4))
+
+        line = self._lines[max(0, min(slot.line, len(self._lines) - 1))]
+        geo = geoms[self._lines.index(line)]
+        position = self._slot_boundary(line, slot.slot, geo)
         if vertical:
-            return QRect(2, position - 1, max(0, self.width() - 4), 3)
-        return QRect(position - 1, 2, 3, max(0, self.height() - 4))
+            return QRect(position - 1, geo.top(), 3, geo.height())
+        return QRect(geo.left(), position - 1, geo.width(), 3)
+
+    def _slot_boundary(self, line: _PinnedLine, slot: int, geo: QRect) -> int:
+        """Where the insert line sits within *line*, in panel coordinates."""
+        vertical = is_vertical_strip(self._edge)
+        if not line.slots or slot <= 0:
+            return geo.left() if vertical else geo.top()
+        if slot >= len(line.slots):
+            return geo.right() if vertical else geo.bottom()
+        corner = line.slots[slot].mapTo(self, QPoint(0, 0))
+        return corner.x() if vertical else corner.y()
 
     # -- the menu -------------------------------------------------------------
 
@@ -501,20 +595,20 @@ class PinnedPanel(QFrame):
             action.triggered.connect(lambda _checked=False, a=align: self._host.set_pin_align(a))
         menu.addSeparator()
         unpin = menu.addAction("Unpin all")
-        unpin.setEnabled(bool(self._slots))
+        unpin.setEnabled(bool(self._lines))
         unpin.triggered.connect(lambda: self._host.unpin_all())
         return menu
 
-    def _empty_menu_pos(self) -> QPoint:
-        return self._empty.mapToGlobal(self._empty.rect().bottomLeft())
+    def _handle_menu_pos(self) -> QPoint:
+        return self._handle.mapToGlobal(self._handle.rect().bottomLeft())
 
 
 class EdgeZoneOverlay(QWidget):
     """The four drop zones shown while the strip is dragged to another edge.
 
-    Transparent to the mouse: the gesture is driven by the grip's own move events
-    (the button is still held down over there), so the overlay must never become
-    the widget under the cursor.
+    Transparent to the mouse: the gesture is driven by the handle's own move
+    events (the button is still held down over there), so the overlay must never
+    become the widget under the cursor.
     """
 
     def __init__(self, parent: QWidget) -> None:
@@ -608,16 +702,28 @@ class PinnedBoard(QWidget):
 
     # -- what the canvas drives ----------------------------------------------
 
-    def set_blocks(self, frames: list[BlockFrame], edge: str, align: str, sizes: list[int]) -> None:
+    def set_blocks(
+        self,
+        lines: list[list[BlockFrame]],
+        edge: str,
+        align: str,
+        sizes: list[int],
+        line_sizes: list[list[int]],
+    ) -> None:
         """Render the strip, re-laying the board out first when the edge changed."""
+        self._capture_extent()  # before the rebuild can disturb the splitter
         if edge != self._edge:
             self._edge = edge
             self._apply_edge()
-        self.panel.set_blocks(frames, edge, align, sizes)
+        self.panel.set_blocks(lines, edge, align, sizes, line_sizes)
         self._apply_extent()
 
+    def invalidate(self) -> None:
+        """Make the next render rebuild the strip (see :meth:`PinnedPanel.invalidate`)."""
+        self.panel.invalidate()
+
     def set_extent(self, extent: int) -> None:
-        """Set the strip's thickness (an empty strip keeps its own thin width)."""
+        """Set the strip's thickness — a restored layout, not a live drag."""
         if extent > 0:
             self._extent = extent
         self._apply_extent()
@@ -630,14 +736,17 @@ class PinnedBoard(QWidget):
         index = self._panel_index()
         return sizes[index] if index < len(sizes) else 0
 
-    def block_sizes(self) -> list[int]:
+    def line_extents(self) -> list[int]:
+        return self.panel.line_extents()
+
+    def block_sizes(self) -> list[list[int]]:
         return self.panel.block_sizes()
 
-    def drop_index(self, global_pos: QPoint) -> int | None:
-        return self.panel.drop_index(global_pos)
+    def drop_slot(self, global_pos: QPoint) -> PinSlot | None:
+        return self.panel.drop_slot(global_pos)
 
-    def show_drop(self, index: int) -> None:
-        self.panel.show_drop(index)
+    def show_drop(self, slot: PinSlot) -> None:
+        self.panel.show_drop(slot)
 
     def hide_drop(self) -> None:
         self.panel.hide_drop()
@@ -672,14 +781,29 @@ class PinnedBoard(QWidget):
         self._splitter.setStretchFactor(1 if panel_first else 0, 1)
         self._apply_extent()
 
+    def _capture_extent(self) -> None:
+        """Remember the thickness the user dragged the board's handle to.
+
+        The splitter is dragged behind our back, so the live sizes are the truth;
+        without reading them back first, the next rebuild would snap the strip to
+        whatever thickness it was restored with.
+        """
+        live = self.extent()
+        if live > 0:
+            self._extent = live
+
     def _apply_extent(self) -> None:
         """Give the splitter the strip's thickness and the page the rest."""
-        if self.panel.is_empty():
-            return  # the panel pins its own thin width; there is nothing to divide
         total = self._splitter.width() if is_vertical_strip(self._edge) else self._splitter.height()
         if total <= 0:
-            total = self._extent * 3  # not laid out yet; any ratio will do
-        strip = max(1, min(self._extent, total - 1))
+            # Not laid out yet; any ratio will do.
+            total = max(self._extent, self.panel.empty_extent()) * 3
+        # An empty strip is its handle and nothing else. It has to be re-split
+        # explicitly: the panel pinning its own thin size doesn't move a splitter
+        # that has already been given sizes, so the strip would keep the width it
+        # had when its last block left until the handle was nudged.
+        wanted = self.panel.empty_extent() if self.panel.is_empty() else self._extent
+        strip = max(1, min(wanted, total - 1))
         sizes = [total - strip, strip]
         if self._panel_index() == 0:
             sizes.reverse()

@@ -148,10 +148,10 @@ def _chrome_rules(theme: Theme) -> str:
             f"#blockCanvas {{ background: {window}; }}\n"
             f"#dropIndicator {{ background-color: {c('drop.indicator')}; }}\n"
             # The pinned strip: the same window surface as the page it sits
-            # beside, divided from it by one border along its inner edge, and a
-            # title-bar-coloured grip to drag it by.
+            # beside, with its pin handle picked out in the title-bar colour so it
+            # reads as something to grab.
             f"#pinnedPanel {{ background: {window}; }}\n"
-            f"#pinnedGrip {{ background: {titlebar};"
+            f"#pinnedHandle {{ background: {titlebar}; color: {text};"
             f" border: {width}px solid {border}; border-radius: {radius_field}px; }}",
             # Input chrome. Scoped to the concrete input classes, never to their
             # containers, so nothing leaks into a card's labels. The fill and text

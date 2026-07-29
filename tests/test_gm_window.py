@@ -199,7 +199,7 @@ def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
     QApplication.processEvents()
 
     assert window._canvas.is_pinned("rolls") is True
-    assert window._board.panel.frames()[0].key == "rolls"
+    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
     assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
 
     window._persist_layout()

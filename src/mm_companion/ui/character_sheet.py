@@ -132,9 +132,15 @@ class CharacterSheet(QWidget):
         """Dock a block into the arrangement at (row, slot)."""
         self._canvas.dock_block(key, row, slot, new_row=new_row)
 
-    def pin_block(self, key: str, index: int | None = None) -> None:
-        """Park a block in the strip that doesn't scroll with the page."""
-        self._canvas.pin_block(key, index)
+    def pin_block(
+        self, key: str, line: int | None = None, slot: int = 0, new_line: bool = True
+    ) -> None:
+        """Park a block in the strip that doesn't scroll with the page.
+
+        Defaults to a new line at the end of the strip; pass a line and slot to put
+        it beside a block already there.
+        """
+        self._canvas.pin_block(key, line, slot, new_line=new_line)
 
     def unpin_block(self, key: str) -> None:
         """Send a pinned block back onto the scrolling page."""

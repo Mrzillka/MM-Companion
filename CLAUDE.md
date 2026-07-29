@@ -173,18 +173,25 @@ clean (see Licensing below).
   behind them. `PinnedBoard` is what the host puts in its layout in place of the
   bare page scroll area — a splitter holding the page and a `PinnedPanel`, whose
   orientation and child order *are* the strip's edge (left/right/top/bottom) and
-  whose handle sets the strip's thickness. Inside the panel, the pinned blocks sit
-  in a non-collapsible splitter, so dragging a handle trades space between two of
-  them but can never squash one below its content; `PinnedPanel.minimumSizeHint`
-  reports that content minimum so it holds the *window* open rather than clipping
-  (capped at the usable screen, past which the strip scrolls as a last resort). A
-  cross-axis `align` (`fill`/`start`/`center`/`end`) places a block across the
-  strip. Empty, the strip is a thin bar with one pin icon that is itself the drop
-  target. A block gets there by being dragged onto the strip or by its title
-  bar's 📌 button; the strip is moved to another edge by dragging its grip, which
-  lights up four `EdgeZoneOverlay` bands. **The canvas still owns the model** —
-  the panel is a view, like `RowWidget`, and holds no arrangement state. The GM
-  window gets the same strip, since it hosts the same canvas.
+  whose handle sets the strip's thickness. The strip is a **small canvas, not a
+  stack**: it holds `_PinnedLine`s along its length, each an inner splitter of
+  blocks *across* it, so two pinned blocks sit side by side as readily as one
+  under the other (a drop names a `PinSlot(new_line, line, slot)`, mirroring the
+  page's `DropSlot`). Every splitter is non-collapsible and a `BlockFrame`'s
+  minimum is its whole content, so a handle drag can never squash a block;
+  `PinnedPanel.minimumSizeHint` reports that content minimum so it holds the
+  *window* open rather than clipping (capped at the usable screen, past which the
+  strip scrolls as a last resort). `align` (`fill`/`start`/`center`/`end`) places
+  a block within its cell — a block that can't fill anchors to the start, the way
+  a docked row left-aligns its fixed-width blocks. The **`PinnedHandle` (📌) is
+  always visible**: it is the empty strip's whole content, the drop target that
+  gets the first block in, the grip the strip is dragged to another edge by
+  (lighting four `EdgeZoneOverlay` bands), and the button that opens the strip's
+  Position/Alignment/Unpin-all menu. A block also pins from its title bar's 🖈.
+  **The canvas still owns the model** — the panel is a view, like `RowWidget`,
+  and holds no arrangement state; `_relayout` renders the strip *first* so the
+  rows are the last to claim a frame. The GM window gets the same strip, since it
+  hosts the same canvas.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
   `QScrollArea` → `BlockCanvas`) → nine blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
@@ -234,7 +241,7 @@ clean (see Licensing below).
 - `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
   arrangement — `_rows` (an ordered list of rows, each an ordered list of block
   keys), `_windows` (floated blocks), `_hidden` (closed blocks), and `_pinned`
-  (the strip, with its `_pin_edge`/`_pin_align`/sizes). It renders a
+  (the strip's lines, with its `_pin_edge`/`_pin_align`/sizes). It renders a
   `RowWidget` per row (fixed-width blocks keep their size, growable blocks stretch)
   and owns the drag controller: `title_bar_pressed/moved/released` run one manual
   gesture (float-out at drag start, `_hit_test` → a `DropIndicator`, dock-on-drop,
@@ -249,7 +256,8 @@ clean (see Licensing below).
   Conditions, Advantages, Skills, Powers — with an empty strip on the right.
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
-  `{version, rows, floating, hidden, hidden_anchors, pinned}`) to the `layout` key
+  `{version, rows, floating, hidden, hidden_anchors, pinned{edge, lines, align,
+  sizes, line_sizes, extent}}`) to the `layout` key
   in `settings.json` on close, and restores on open (`_restore_layout`).
   `restore_layout` validates (schema `SCHEMA_VERSION`; every block placed exactly
   once across rows/floating/hidden/pinned) and returns False to fall back to the

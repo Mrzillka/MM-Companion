@@ -400,9 +400,13 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
 *content*. The shape:
 
 - `src/mm_companion/ui/theme/` — `tokens.py` (the `Theme`/`Chrome` records, plus
-  `rgba`/`contrast_ratio`; pure data, no Qt), `loader.py` (discovery, `extends`
-  resolution, caching), `qss.py` (builds the app stylesheet), `palette.py`
-  (builds the `QPalette`), and `__init__.py` (the API).
+  `rgba`/`contrast_ratio`/`measurement_backdrops`; pure data, no Qt), `loader.py`
+  (discovery, `extends` resolution, caching, *and* the workspace store —
+  `theme_to_dict`/`save_workspace_theme`/`delete_workspace_theme`/
+  `unique_theme_id`/`is_workspace_theme`/`shadows_bundled`), `qss.py` (builds the
+  app stylesheet), `palette.py` (builds the `QPalette`), `token_meta.py` +
+  `token_meta.json` (friendly labels/hints/grouping for the editor — presentation
+  only, never a gate on which tokens exist), and `__init__.py` (the API).
 - **Read a token where you use it**: `theme.color("tint.worse")`,
   `theme.metric("radius.card")`, `theme.font_size("size.card-name")`,
   `theme.wash("accent", 0.10)` (a translucent fill of the same hue),
@@ -415,7 +419,12 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   workspace `themes/` dir (which wins on an id clash, and whose parse failure is
   skipped, never fatal). A preset may `extends` another and restate only what it
   changes. `classic` is the default and reproduces the historical native look;
-  `slate-dark` and `parchment-light` are `chrome.mode: "styled"`.
+  `slate-dark` and `parchment-light` are `chrome.mode: "styled"`. A `_`-prefixed
+  key inside a token map is an inline comment and is dropped, not parsed as a
+  token. A preset the Settings window writes is a **full snapshot** (every
+  resolved token, no `extends`) so it stays portable; the price is that it cannot
+  inherit a token added later, which `theme._lookup` pays by falling back to the
+  default preset's value before raising.
 - **Three mechanisms, and which does what.** `theme.apply(app)` installs all
   three, and mixing them up is the main way to break this:
   1. **Palette** (`styled` only) — colour for ordinary widgets, reaching them
@@ -446,20 +455,45 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
 - `ui/block_sizes.json` is the *baseline* for block bounds; a preset's `blocks`
   map overrides any bound. The GM window's blocks live there too, under `gm_`
   keys.
-- Switching preset (`Settings ▸ Theme`, or the launcher's Theme button, both via
-  `ui/theme_menu.py`) re-applies all three mechanisms at once and then offers a
-  relaunch (`ui/app_restart.py`) for the widgets that styled themselves in their
-  constructors — the same bargain the Mod Manager strikes.
+- The look is changed in the **Settings window** (`ui/settings/`, opened from a
+  sheet's `Settings ▸ Preferences…` or the launcher's Settings button): a
+  `QListWidget` nav over a `QStackedWidget`, whose pages come from
+  `window.PAGES` — one entry today, `ThemePage`. Adding a second area of settings
+  is an entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
+  `is_dirty`, `save`, `discard`, `needs_restart`).
+- The Themes page separates two things on purpose. **Picking** a preset writes
+  through at once (`set_active_theme`), as the old menu did. **Editing** one is a
+  draft: `TokenEditor` (`ui/settings/token_editor.py`) generates a form by walking
+  the preset's token maps and choosing a widget from the *shape of each value* —
+  never a hardcoded list, so a token added later or by a mod appears on its own.
+  Each edit previews live through `theme.set_preview(draft, app)`, debounced;
+  nothing is written until Save, and `closeEvent` always calls `discard()` so a
+  preview never outlives its window. Then the usual relaunch offer
+  (`ui/app_restart.py`) for widgets that styled themselves in their constructors —
+  the same bargain the Mod Manager strikes.
+- Bundled presets are shown **locked** (`ui/lock.py`) rather than hidden — they
+  are the readable documentation of what each token is for — and Duplicate is how
+  you get an editable one. `unique_theme_id` treats bundled ids as taken so a copy
+  never accidentally shadows a built-in; a workspace file that deliberately does
+  is still supported and the page labels its button "Revert to built-in".
+- Two guards worth knowing before adding a token: a colour a `theme.wash(...)` is
+  derived from must be a literal (mark it `"washed": true` in `token_meta.json`, or
+  the editor will let a `palette(role)` through and it will raise inside a card's
+  paint path), and `qss._chrome_rules` requires the `surface.*`/`text.primary`/
+  `border.block` colours with no fallback, so flipping a Classic-derived draft to
+  `styled` offers to borrow them from a shipped preset rather than raising.
+- Screenshot it with `driver.py settings` / `settings-demo` (see the
+  `run-mm-companion` skill).
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 
 The `ui/` package has a small support layer that section code is expected to go
 through rather than reinvent. When building new sheet widgets, use it:
 
-- `ui/widgets.py` — shared factories (`make_spin_box`, `readonly_item`,
-  `hline_separator`) and the shared inline style snippets (`muted_style`,
-  `tinted_style`, `BOLD_STYLE`) that keep construction consistent and
-  wheel-guarded. Build spin boxes and read-only table cells through these, not
+- `ui/widgets.py` — shared factories (`make_spin_box`, `make_double_spin_box`,
+  `readonly_item`, `hline_separator`) and the shared inline style snippets
+  (`muted_style`, `tinted_style`, `BOLD_STYLE`) that keep construction consistent
+  and wheel-guarded. Build spin boxes and read-only table cells through these, not
   by hand.
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
   boxes, and inner tables from hijacking the page scroll: a guarded widget only
@@ -475,6 +509,16 @@ through rather than reinvent. When building new sheet widgets, use it:
   have no native read-only mode, so it installs an event-filter interaction
   blocker.
 - `ui/flow_layout.py` — a reflowing layout for wrapping widget rows.
+- A word-wrapped `QLabel` inside a composite widget will be sized for one line
+  and clipped: `heightForWidth` only reaches it if every layout in between agrees
+  to ask, and `QFormLayout` does not reliably ask. Pin the column to a width token
+  and set the label's minimum height from `label.heightForWidth(width)` — see
+  `ui/settings/token_editor.py::_field_label`.
+- Tests build real windows, and `conftest.py` tears them down after each one.
+  `processEvents()` alone does **not** run deferred deletions, so the teardown also
+  sends `QEvent.Type.DeferredDelete` explicitly — without it every window built all
+  session stays alive and each new application stylesheet re-polishes all of them,
+  which is quietly quadratic.
 
 The Lock pattern is threaded top-down: `MainWindow` owns the checkable Lock menu
 action, `CharacterSheet.set_locked(bool)` fans out to each section's

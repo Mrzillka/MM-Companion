@@ -43,9 +43,14 @@ Single surfaces:
 python .claude/skills/run-mm-companion/driver.py start        # the launcher
 python .claude/skills/run-mm-companion/driver.py sheet        # blank editable character sheet
 python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+python .claude/skills/run-mm-companion/driver.py settings     # the Settings window (Themes page)
 python .claude/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)
 python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
 ```
+
+`settings-demo` goes further: it duplicates the active preset, borrows Slate
+Dark's surface colours, and recolours the accent, so the **live preview** is
+visible in the screenshot — the window wears the unsaved draft it is editing.
 
 **Then open the PNG and actually look at it** — a blank or error frame means you
 are not done.

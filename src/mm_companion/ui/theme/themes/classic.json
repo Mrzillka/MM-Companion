@@ -77,7 +77,9 @@
     "column.skill.mod": 36,
     "column.advantage.desc": 180,
     "column.advantage.combo": 180,
-    "column.settings.nav": 160
+    "column.settings.nav": 160,
+    "column.settings.label": 230,
+    "column.settings.value": 220
   },
 
   "_typography": "Point sizes, applied with QFont.setPointSizeF — never as a stylesheet font-size, which would outrank the widget font and break the power card's switched-off transition. A null family keeps the platform default.",

@@ -116,6 +116,41 @@ def build(target: str):
             win._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
             win._dc_check.setChecked(False)
             win._finish_roll()
+    elif target in ("settings", "settings-demo"):
+        from mm_companion.ui.settings import SettingsWindow
+
+        win = SettingsWindow()
+        if target == "settings-demo":
+            # Duplicate the active preset, dress it in Slate Dark's surfaces, and
+            # recolour the accent — driven through the page's own handlers, so the
+            # draft, the live preview and the dirty state all move exactly as they
+            # would under a mouse. The window is previewing an unsaved theme.
+            from mm_companion.ui import theme as theme_module
+            from mm_companion.ui.settings.token_editor import seed_styled_surfaces
+
+            page = win._pages[0]
+            source = page._editor.draft()
+            copy = source.__class__(
+                **{
+                    **source.__dict__,
+                    "id": "driver-demo",
+                    "name": "Driver Demo",
+                    "description": f"Based on {source.name}.",
+                }
+            )
+            from mm_companion.ui.theme import loader as theme_loader
+
+            theme_loader.save_workspace_theme(copy)
+            theme_module.reset()
+            page._reload_presets(select="driver-demo")
+            page._editor.load(
+                seed_styled_surfaces(
+                    page._editor.draft(), theme_module.available_themes()["slate-dark"]
+                )
+            )
+            page._editor._set_color("accent", "#c0693c")
+            page._on_edited()
+            page._preview_now()
     elif target == "gm":
         # GM Mode with a cast already in it, so the NPC panel is not an empty
         # state: two NPCs are written into the workspace gm_characters/ dir and
@@ -164,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
             "focus",
             "dice",
             "dice-demo",
+            "settings",
+            "settings-demo",
             "gm",
             "npc",
             "all",

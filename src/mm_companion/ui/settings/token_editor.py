@@ -64,8 +64,8 @@ TOKEN_GROUPS = ("colors", "metrics", "typography")
 
 #: Chrome modes, in the order the combo box offers them, with what they mean.
 _CHROME_LABELS = {
-    "system": "System — follow the OS widget style",
-    "styled": "Styled — the theme dresses the window itself",
+    "system": "System (follow the OS)",
+    "styled": "Styled (dress the window)",
 }
 
 #: The colours ``qss._chrome_rules`` reads with no fallback, and which Classic
@@ -124,6 +124,16 @@ _BOX_EDGES = ("left", "top", "right", "bottom")
 
 #: The bounds a block-size override can set.
 _BLOCK_BOUNDS = ("min_width", "min_height", "max_width", "max_height")
+
+
+def _compact_width() -> int:
+    """Width for a spin box that shares its row with three others.
+
+    A quarter of the value column: four of them then take about as much room as
+    one ordinary field, which is what keeps a margins row from being the widest
+    thing on the page and dragging a horizontal scrollbar in behind it.
+    """
+    return max(48, int(theme.metric("column.settings.value")) // 4)
 
 
 def _metric_range(name: str) -> tuple[int, int]:
@@ -215,6 +225,7 @@ class TokenEditor(QWidget):
         for mode in CHROME_MODES:
             combo.addItem(_CHROME_LABELS.get(mode, mode), mode)
         combo.setCurrentIndex(max(0, combo.findData(draft.chrome.mode)))
+        combo.setMaximumWidth(int(theme.metric("column.settings.value")))
         combo.currentIndexChanged.connect(
             lambda _i, c=combo: self._set_chrome_mode(c.currentData())
         )
@@ -225,14 +236,18 @@ class TokenEditor(QWidget):
             combo,
         )
 
-        ring = QCheckBox("Ring the focused control in the accent colour")
+        ring = QCheckBox("Draw one")
         ring.setChecked(draft.chrome.focus_ring)
-        ring.setToolTip(
-            "The only visible sign that a spin box has taken the scroll wheel from the page."
-        )
         ring.toggled.connect(self._set_focus_ring)
         self._inputs.append(ring)
-        form.addRow(_field_label("Focus ring", ""), ring)
+        form.addRow(
+            _field_label(
+                "Focus ring",
+                "An accent outline on the focused control — the only visible sign "
+                "that it has taken the scroll wheel from the page.",
+            ),
+            ring,
+        )
         return box
 
     def _build_group(self, group: str) -> QWidget:
@@ -271,7 +286,9 @@ class TokenEditor(QWidget):
             return self._build_flag(group, name, value)
         if isinstance(value, int):
             low, high = _metric_range(name)
-            spin = make_spin_box(low, high, value=value)
+            spin = make_spin_box(
+                low, high, value=value, max_width=int(theme.metric("column.settings.value"))
+            )
             spin.valueChanged.connect(lambda v, g=group, n=name: self._set_token(g, n, v))
             self._inputs.append(spin)
             return spin
@@ -288,15 +305,24 @@ class TokenEditor(QWidget):
         return row
 
     def _build_fraction(self, group: str, name: str, value: float) -> QWidget:
+        width = int(theme.metric("column.settings.value"))
         if "opacity" in name:
-            spin = make_double_spin_box(0.0, 1.0, value=value, decimals=2, step=0.05)
+            spin = make_double_spin_box(
+                0.0, 1.0, value=value, decimals=2, step=0.05, max_width=width
+            )
         elif "scale" in name:
-            spin = make_double_spin_box(0.1, 3.0, value=value, decimals=2, step=0.05)
+            spin = make_double_spin_box(
+                0.1, 3.0, value=value, decimals=2, step=0.05, max_width=width
+            )
         elif group == "typography":
-            spin = make_double_spin_box(4.0, 96.0, value=value, decimals=1, step=0.5)
+            spin = make_double_spin_box(
+                4.0, 96.0, value=value, decimals=1, step=0.5, max_width=width
+            )
         else:
             low, high = _metric_range(name)
-            spin = make_double_spin_box(low, high, value=value, decimals=1, step=0.5)
+            spin = make_double_spin_box(
+                low, high, value=value, decimals=1, step=0.5, max_width=width
+            )
         spin.valueChanged.connect(lambda v, g=group, n=name: self._set_token(g, n, v))
         self._inputs.append(spin)
         return spin
@@ -310,7 +336,7 @@ class TokenEditor(QWidget):
         low, high = _metric_range(name)
         spins = []
         for index, edge in enumerate(_BOX_EDGES):
-            spin = make_spin_box(low, high, value=int(value[index]))
+            spin = make_spin_box(low, high, value=int(value[index]), max_width=_compact_width())
             spin.setToolTip(edge.title())
             spin.valueChanged.connect(
                 lambda _v, g=group, n=name: self._set_token(g, n, [s.value() for s in spins])
@@ -410,7 +436,12 @@ class TokenEditor(QWidget):
         toggle.setChecked(bool(current))
         spins = {}
         for bound in _BLOCK_BOUNDS:
-            spin = make_spin_box(0, block_sizes.UNBOUNDED, value=int(getattr(size, bound)))
+            spin = make_spin_box(
+                0,
+                block_sizes.UNBOUNDED,
+                value=int(getattr(size, bound)),
+                max_width=_compact_width(),
+            )
             spin.setToolTip(bound.replace("_", " ").title())
             spin.setEnabled(toggle.isChecked())
             spins[bound] = spin
@@ -520,16 +551,29 @@ def _contrast_warning(value: str, backdrops: Sequence[str]) -> str:
 
 
 def _field_label(text: str, hint: str) -> QWidget:
-    """A form label, with its help text under it when there is any."""
+    """A form label, with its help text wrapped underneath when there is any.
+
+    The column is pinned to a fixed width and the wrapped height then measured
+    outright. Left to negotiate, a word-wrapped label inside a composite widget
+    gets sized for one line by the enclosing form and the rest of the sentence is
+    clipped by the row below — ``heightForWidth`` only reaches it when every
+    layout in between agrees to ask, and the form does not reliably ask.
+    """
+    width = int(theme.metric("column.settings.label"))
     holder = QWidget()
+    holder.setFixedWidth(width)
     column = QVBoxLayout(holder)
     column.setContentsMargins(0, 0, 0, 0)
     column.setSpacing(0)
     name = QLabel(text)
     name.setStyleSheet(BOLD_STYLE)
+    name.setWordWrap(True)
+    name.setMinimumHeight(name.heightForWidth(width))
     column.addWidget(name)
     if hint:
-        column.addWidget(_note(hint))
+        note = _note(hint)
+        note.setMinimumHeight(note.heightForWidth(width))
+        column.addWidget(note)
     return holder
 
 

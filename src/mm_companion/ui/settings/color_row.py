@@ -61,6 +61,10 @@ class ColorRow(QWidget):
 
         self._field = QLineEdit(value)
         self._field.setPlaceholderText("#rrggbb")
+        # Capped, or a form of these would demand more width than the window has
+        # and push a horizontal scrollbar under a page that only wants to scroll
+        # down. The warning beside it takes whatever is left.
+        self._field.setMaximumWidth(int(theme.metric("column.settings.value")))
         self._field.editingFinished.connect(self._commit_text)
         layout.addWidget(self._field, stretch=1)
 

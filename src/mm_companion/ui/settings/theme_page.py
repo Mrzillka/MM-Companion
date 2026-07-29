@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui import theme
+from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.settings.page import SettingsPage
 from mm_companion.ui.settings.token_editor import TokenEditor, seed_styled_surfaces
 from mm_companion.ui.theme import loader
@@ -239,7 +240,9 @@ class ThemePage(SettingsPage):
         shadow = loader.shadows_bundled(theme_id)
 
         self._editor.set_locked(not editable)
-        self._name_field.setReadOnly(not editable)
+        # Through the shared helper, not setReadOnly: a locked field also sheds its
+        # frame, so it reads as a label like every other locked field in the app.
+        set_widget_locked(self._name_field, not editable)
         self._save_button.setEnabled(editable and self._dirty)
         self._revert_button.setEnabled(editable and self._dirty)
         self._delete_button.setEnabled(editable)

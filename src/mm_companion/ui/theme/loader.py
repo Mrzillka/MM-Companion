@@ -22,8 +22,10 @@ changes about ``classic`` instead of restating a hundred tokens it agrees with.
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 from mm_companion.core import storage
@@ -189,3 +191,111 @@ def resolve_id(theme_id: str | None) -> str:
 def clear_theme_cache() -> None:
     """Drop the cached scan so the next read picks up new or edited presets."""
     available_themes.cache_clear()
+
+
+# -- the workspace store --------------------------------------------------------
+#
+# Writing lives here rather than in the Settings window because the reading half
+# already does: this module owns where a preset file goes, and owns the cache a
+# write has to invalidate. None of it touches Qt.
+
+
+def workspace_theme_path(theme_id: str) -> Path:
+    """Where a workspace preset with *theme_id* is, or would be, written."""
+    return storage.get_workspace().themes_dir / f"{theme_id}.json"
+
+
+def bundled_ids() -> frozenset[str]:
+    """The ids that ship inside the install and can never be edited in place."""
+    return frozenset(name for name, _text in _bundled_texts())
+
+
+def is_workspace_theme(theme_id: str) -> bool:
+    """Whether *theme_id* is backed by an editable file in the workspace."""
+    return workspace_theme_path(theme_id).is_file()
+
+
+def shadows_bundled(theme_id: str) -> bool:
+    """Whether a workspace file is standing in front of a bundled preset.
+
+    Deleting one of these doesn't remove a theme — it hands the built-in version
+    back, which is a different thing to tell the user than "this will be gone".
+    """
+    return is_workspace_theme(theme_id) and theme_id in bundled_ids()
+
+
+def theme_to_dict(theme: Theme) -> dict[str, Any]:
+    """*theme* as a self-contained snapshot: every resolved token, no ``extends``.
+
+    Deliberately not a diff against a parent. A snapshot survives being copied to
+    another machine whose bundled presets have moved on, and it is the format a
+    user can read and hand-edit without having to resolve a chain first. The cost
+    — that it cannot inherit a token added later — is paid by the default-preset
+    fallback in :func:`mm_companion.ui.theme._lookup`.
+
+    ``chrome`` is always written out, never left to a default: :func:`_build`
+    reads chrome from the preset's *own* raw dict, so an omitted one would come
+    back as ``system`` and quietly undress a styled theme.
+    """
+    return {
+        "id": theme.id,
+        "name": theme.name,
+        "description": theme.description,
+        "chrome": {"mode": theme.chrome.mode, "focus_ring": theme.chrome.focus_ring},
+        "colors": _without_comments(dict(theme.colors)),
+        "metrics": _without_comments(dict(theme.metrics)),
+        "typography": _without_comments(dict(theme.typography)),
+        "blocks": {
+            key: dict(value)
+            for key, value in theme.blocks.items()
+            if not key.startswith("_") and isinstance(value, dict)
+        },
+    }
+
+
+def save_workspace_theme(theme: Theme) -> Path:
+    """Write *theme* into the workspace ``themes/`` dir and drop the cached scan.
+
+    Does not reset the module-level active preset — that lives one layer up in
+    :mod:`mm_companion.ui.theme` and importing it here would close the loop. The
+    caller calls ``theme.reset()``.
+    """
+    path = workspace_theme_path(theme.id)
+    # A workspace created before themes/ existed won't have the directory.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(theme_to_dict(theme), indent=2, ensure_ascii=False)
+    path.write_text(payload + "\n", encoding="utf-8")
+    clear_theme_cache()
+    return path
+
+
+def delete_workspace_theme(theme_id: str) -> bool:
+    """Remove the workspace file for *theme_id*; whether there was one to remove.
+
+    A bundled id with no workspace file is a no-op returning ``False`` rather than
+    an error — there is nothing on disk to delete, and nothing went wrong.
+    """
+    path = workspace_theme_path(theme_id)
+    existed = path.is_file()
+    path.unlink(missing_ok=True)
+    if existed:
+        clear_theme_cache()
+    return existed
+
+
+def unique_theme_id(display_name: str) -> str:
+    """A filesystem-safe id from *display_name* that no known preset is using.
+
+    ``"My Theme"`` becomes ``"my-theme"``, then ``"my-theme-2"`` and so on.
+    Bundled ids count as taken: a workspace file shadowing a built-in preset is a
+    deliberate override, never something a Duplicate should produce by accident.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", display_name.strip().lower()).strip("-")
+    slug = slug or "custom-theme"
+    taken = set(available_themes()) | bundled_ids()
+    if slug not in taken:
+        return slug
+    suffix = 2
+    while f"{slug}-{suffix}" in taken:
+        suffix += 1
+    return f"{slug}-{suffix}"

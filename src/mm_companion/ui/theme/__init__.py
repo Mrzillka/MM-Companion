@@ -46,8 +46,16 @@ from mm_companion.core import storage
 from mm_companion.ui.theme.loader import (
     DEFAULT_THEME_ID,
     available_themes,
+    bundled_ids,
     clear_theme_cache,
+    delete_workspace_theme,
+    is_workspace_theme,
     resolve_id,
+    save_workspace_theme,
+    shadows_bundled,
+    theme_to_dict,
+    unique_theme_id,
+    workspace_theme_path,
 )
 from mm_companion.ui.theme.tokens import (
     Chrome,
@@ -70,18 +78,26 @@ __all__ = [
     "available_themes",
     "apply",
     "box",
+    "bundled_ids",
     "color",
     "contrast_ratio",
+    "delete_workspace_theme",
     "font_family",
     "font_size",
     "is_literal_color",
+    "is_workspace_theme",
     "metric",
     "preview_theme",
     "reset",
+    "save_workspace_theme",
     "set_active_theme",
     "set_preview",
+    "shadows_bundled",
+    "theme_to_dict",
     "tint_rgba",
+    "unique_theme_id",
     "wash",
+    "workspace_theme_path",
 ]
 
 # The resolved active preset. Cached because token lookups happen once per widget

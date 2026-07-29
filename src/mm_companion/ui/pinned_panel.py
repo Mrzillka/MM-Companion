@@ -383,6 +383,12 @@ class PinnedPanel(QFrame):
         if len(sizes) == len(lines) and all(size > 0 for size in sizes):
             self._splitter.setSizes(sizes)
         self._apply_empty_state()
+        # The strip only scrolls when its blocks genuinely don't fit, and its
+        # contents have just changed — so start from the top rather than leaving
+        # the offset the old arrangement was scrolled to, which would show the new
+        # one decapitated.
+        self._scroll.verticalScrollBar().setValue(0)
+        self._scroll.horizontalScrollBar().setValue(0)
 
     def _clear(self) -> None:
         """Empty the strip, handing back every block that is still ours.

@@ -183,7 +183,12 @@ clean (see Licensing below).
   *window* open rather than clipping (capped at the usable screen, past which the
   strip scrolls as a last resort). `align` (`fill`/`start`/`center`/`end`) places
   a block within its cell — a block that can't fill anchors to the start, the way
-  a docked row left-aligns its fixed-width blocks. The **`PinnedHandle` (📌) is
+  a docked row left-aligns its fixed-width blocks. The remembered proportions are
+  **live pixel sizes, true only of the shape they were measured in**, so a block
+  *arriving* clears them along the axis it joins and lets the splitter lay that
+  axis out from the blocks' own hints; sizes are kept when a block leaves (the
+  survivors' values still came from one layout). Mixing a live size with a
+  newcomer's natural hint is what once handed a moved block a sliver of the strip. The **`PinnedHandle` (📌) is
   always visible**: it is the empty strip's whole content, the drop target that
   gets the first block in, the grip the strip is dragged to another edge by
   (lighting four `EdgeZoneOverlay` bands), and the button that opens the strip's

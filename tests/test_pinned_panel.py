@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtWidgets import QApplication, QScrollArea, QSplitter
 
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.ui import pinned_panel
 from mm_companion.ui.block_canvas import SCHEMA_VERSION, RowWidget
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.pinned import PinSlot
@@ -207,6 +208,50 @@ def test_a_drop_in_the_middle_of_a_line_joins_it_instead_of_starting_one(make_sh
 
     assert slot is not None and slot.new_line is False
     assert slot.line == 0
+
+
+def test_moving_a_pinned_block_into_its_own_line_gives_it_a_fair_share(make_sheet) -> None:
+    # Regression: the remembered proportions are live pixel sizes, only true of the
+    # shape they were measured in. A line alone in the strip is recorded as the
+    # strip's whole length, so slotting the newcomer's natural size in beside that
+    # number handed it a sliver — a block filling a fraction of its band until the
+    # strip was resized and Qt redistributed.
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    sheet.pin_block("advantages", line=0, slot=1, new_line=False)
+    _settle()
+
+    sheet.pin_block("advantages", line=0, slot=0, new_line=True)  # move it up
+    _settle()
+
+    assert sheet.canvas.pinned_lines() == [["advantages"], ["conditions"]]
+    moved = sheet.block_frame("advantages")
+    assert moved.height() >= moved.sizeHint().height()
+    panel = sheet.board.panel
+    for line, size in zip(panel._lines, panel._splitter.sizes(), strict=True):
+        assert size >= line.minimumSizeHint().height()
+
+
+def test_a_rebuilt_strip_starts_at_the_top(make_sheet, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The strip only scrolls when its blocks don't fit, and a stale offset would
+    # show the new arrangement decapitated. Getting it to scroll at all means
+    # shrinking the screen it caps its demand at — otherwise it just holds the
+    # window open.
+    monkeypatch.setattr(pinned_panel, "_usable_screen", lambda _widget: QSize(1920, 320))
+    sheet = make_sheet()
+    sheet.resize(1100, 320)  # shorter than the two blocks below need
+    _settle()
+    sheet.pin_block("conditions")
+    sheet.pin_block("advantages")
+    _settle()
+    bar = sheet.board.panel._scroll.verticalScrollBar()
+    assert bar.maximum() > 0  # it really is scrollable, so the assertion below bites
+    bar.setValue(bar.maximum())
+
+    sheet.pin_block("complications")
+    _settle()
+
+    assert bar.value() == 0
 
 
 def test_emptying_the_strip_collapses_it_at_once(make_sheet) -> None:

@@ -51,7 +51,6 @@ from mm_companion.ui.pinned import (
     PIN_ALIGNMENTS,
     PIN_EDGES,
     PinSlot,
-    is_vertical_strip,
 )
 
 if TYPE_CHECKING:  # the board is the canvas's *view* for pinned blocks, not a dependency
@@ -262,6 +261,10 @@ class BlockCanvas(QWidget):
         self._pinned: list[list[str]] = []
         self._pin_edge = DEFAULT_EDGE
         self._pin_align = DEFAULT_ALIGN
+        # The proportions the user dragged, as live pixel sizes. They only mean
+        # anything against the shape they were measured in, so a block arriving
+        # somewhere clears the sizes on that axis rather than trying to slot a
+        # value in beside them (see pin_block).
         self._pin_sizes: list[int] = []  # how the lines share the strip's length
         self._pin_line_sizes: list[list[int]] = []  # within each line
         self._pin_extent = DEFAULT_EXTENT
@@ -746,6 +749,15 @@ class BlockCanvas(QWidget):
 
         Does nothing without a board: a host that offers no strip has nowhere to
         put the block, and losing it off the page would be worse than refusing.
+
+        A block arriving **forgets the dragged proportions along the axis it joins**,
+        leaving the splitter to lay that axis out from the blocks' own size hints.
+        The remembered sizes are live pixel values, true only of the shape they were
+        measured in: a line that was alone in the strip is recorded as the strip's
+        whole length, and slotting a newcomer's natural size in beside that number
+        hands it a sliver of the space. Sizes taken away are still kept (they are
+        all live values from one layout, so the survivors' proportions hold and the
+        freed space is shared out between them).
         """
         if self._board is None:
             return
@@ -754,12 +766,6 @@ class BlockCanvas(QWidget):
         # rebuild below would restore whatever sizes predated the last handle drag.
         self._sync_from_board()
         self._hidden.discard(key)
-        # The block's natural size, so joining the strip doesn't redistribute the
-        # blocks already there away from the sizes they were dragged to.
-        hint = self._frames[key].sizeHint()
-        vertical = is_vertical_strip(self._pin_edge)
-        along = max(1, hint.height() if vertical else hint.width())
-        across = max(1, hint.width() if vertical else hint.height())
         # Remember where it sat, so unpinning can put it back there.
         anchor = self._anchor_for(key, self._rows)
         # Taking the block out can collapse the line it was in, shifting every
@@ -774,34 +780,23 @@ class BlockCanvas(QWidget):
             if from_line < line:
                 line -= 1
         at = len(self._pinned) if line is None else max(0, min(line, len(self._pinned)))
+        # Arriving somewhere forgets the sizes on that axis — see _forget_sizes.
         if new_line or line is None or not self._pinned:
             self._pinned.insert(at, [key])
-            self._insert_size(self._pin_sizes, at, along, len(self._pinned) - 1)
+            self._pin_sizes = []
             if len(self._pin_line_sizes) == len(self._pinned) - 1:
-                self._pin_line_sizes.insert(at, [])
+                self._pin_line_sizes.insert(at, [])  # its blocks will lay themselves out
+            else:
+                self._pin_line_sizes = []
         else:
             at = min(at, len(self._pinned) - 1)
             target = self._pinned[at]
             index = max(0, min(slot, len(target)))
             target.insert(index, key)
             if at < len(self._pin_line_sizes):
-                self._insert_size(self._pin_line_sizes[at], index, across, len(target) - 1)
+                self._pin_line_sizes[at] = []
         self._relayout()
         self.arrangement_changed.emit()
-
-    @staticmethod
-    def _insert_size(sizes: list[int], at: int, value: int, expected: int) -> None:
-        """Keep a size list in step with the list it describes, or clear it.
-
-        A size list is only usable when it has exactly one entry per thing; if it
-        has drifted (the strip was rebuilt without one), emptying it lets the
-        splitter distribute rather than applying the wrong sizes to the wrong
-        blocks.
-        """
-        if len(sizes) == expected:
-            sizes.insert(at, value)
-        else:
-            sizes.clear()
 
     def unpin_block(self, key: str) -> None:
         """Take *key* out of the strip and dock it back onto the page.

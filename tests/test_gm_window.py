@@ -188,6 +188,28 @@ def test_an_offline_roll_can_be_removed_before_any_session(
     assert window._history.cards() == []
 
 
+def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    # The GM board hosts the same canvas as a character sheet, so it gets the same
+    # pinned strip: the roll history stays put while the rest of the board scrolls.
+    assert window._board.panel.is_empty()
+
+    window._canvas.pin_block("rolls")
+    QApplication.processEvents()
+
+    assert window._canvas.is_pinned("rolls") is True
+    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
+    assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
+
+    window._persist_layout()
+    reopened = GMWindow(bind="127.0.0.1")
+    try:
+        assert reopened._canvas.pinned_keys() == ["rolls"]
+    finally:
+        reopened.bridge.stop()
+
+
 def test_reset_layout_brings_every_block_back(window: GMWindow) -> None:
     window._canvas.hide_block("npcs")
     window._reset_layout()

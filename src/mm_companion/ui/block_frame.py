@@ -1,15 +1,17 @@
 """One character-sheet block: a section wrapped in a draggable frame.
 
-Each block is a :class:`BlockFrame` — a title bar (the drag handle, plus float
-and close buttons) above one of the ``sections`` widgets. The frame never wraps
-its section in a scroll area, so the block is sized to its content and never
-scrolls on its own; the whole sheet scrolls as one page instead (see
+Each block is a :class:`BlockFrame` — a title bar (the drag handle, plus pin,
+float and close buttons) above one of the ``sections`` widgets. The frame never
+wraps its section in a scroll area, so the block is sized to its content and
+never scrolls on its own; the whole sheet scrolls as one page instead (see
 :class:`~mm_companion.ui.block_canvas.BlockCanvas`).
 
-A frame lives either inside the canvas or, when floated out, inside a
-:class:`BlockWindow` (a top-level window). Dragging the title bar in either place
-runs the same gesture, driven by the canvas's drag controller — so float-out,
-reorder, and drag-back-to-dock are one interaction.
+A frame lives in one of three places: inside the canvas, inside the pinned strip
+that doesn't scroll with the page (see
+:class:`~mm_companion.ui.pinned_panel.PinnedPanel`), or — when floated out —
+inside a :class:`BlockWindow` (a top-level window). Dragging the title bar runs
+the same gesture wherever it is, driven by the canvas's drag controller, so
+float-out, reorder, pin, and drag-back-to-dock are one interaction.
 
 The frame is deliberately dumb: it forwards title-bar mouse events and button
 clicks to a *controller* (the :class:`BlockCanvas`) and applies its size
@@ -20,7 +22,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -44,14 +46,15 @@ class DragHost(Protocol):
     def title_bar_released(self, key: str, global_pos: QPoint) -> None: ...
     def request_float(self, key: str) -> None: ...
     def request_hide(self, key: str) -> None: ...
+    def request_pin(self, key: str) -> None: ...
 
 
 class TitleBar(QFrame):
-    """A block's header: the drag handle plus float and close buttons.
+    """A block's header: the drag handle plus pin, float and close buttons.
 
-    Left-drag on the bar drives the canvas drag gesture; the buttons pop the
-    block out into its own window or hide it. Clicks on the buttons are consumed
-    by them, so they never start a drag.
+    Left-drag on the bar drives the canvas drag gesture; the buttons park the
+    block in the pinned strip, pop it out into its own window, or hide it. Clicks
+    on the buttons are consumed by them, so they never start a drag.
     """
 
     def __init__(self, key: str, title: str, host: DragHost, parent: QWidget | None = None) -> None:
@@ -68,6 +71,20 @@ class TitleBar(QFrame):
         self._label = QLabel(title)
         self._label.setObjectName("blockTitleLabel")
         layout.addWidget(self._label, stretch=1)
+
+        self._pin_button = QToolButton()
+        # U+1F588 black pushpin, not U+1F4CC: the plain symbol keeps the title bar
+        # monochrome like its ↗ and ✕ neighbours, where the emoji pushpin would put
+        # a colour glyph in every block's header.
+        self._pin_button.setText("🖈")
+        self._pin_button.setAutoRaise(True)
+        self._pin_button.setToolTip(
+            "Pin this block to the fixed strip (or drag it there); "
+            "click again to send it back to the page"
+        )
+        self._pin_button.setCursor(Qt.CursorShape.ArrowCursor)
+        self._pin_button.clicked.connect(lambda: self._host.request_pin(self._key))
+        layout.addWidget(self._pin_button)
 
         self._float_button = QToolButton()
         self._float_button.setText("↗")  # north-east arrow: pop out
@@ -120,6 +137,10 @@ class BlockFrame(QFrame):
     max_width``); the other blocks grow wider than their min.
     """
 
+    #: How many turns the inner layout may spend recovering after a re-homing.
+    RELAYOUT_TRIES = 5
+    RELAYOUT_MS = 16
+
     def __init__(
         self,
         key: str,
@@ -143,6 +164,12 @@ class BlockFrame(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
         self.title_bar = TitleBar(key, title, host, self)
+
+        # Re-homing this block leaves its inner layout stale; see _refresh_layout.
+        self._relayout_tries = 0
+        self._relayout = QTimer(self)
+        self._relayout.setSingleShot(True)
+        self._relayout.timeout.connect(self._refresh_layout)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -189,6 +216,42 @@ class BlockFrame(QFrame):
         fixed_width = size.max_width < UNBOUNDED and size.max_width == size.min_width
         h_policy = QSizePolicy.Policy.Fixed if fixed_width else QSizePolicy.Policy.Expanding
         self.setSizePolicy(h_policy, QSizePolicy.Policy.Minimum)
+
+    def changeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Re-run the block's own layout after it is re-homed (see :meth:`_refresh_layout`)."""
+        if event.type() == QEvent.Type.ParentChange:
+            self._relayout.start(0)
+        super().changeEvent(event)
+
+    def _refresh_layout(self) -> None:
+        """Recompute the block's inner layout, and again until it is not degenerate.
+
+        A block moves between three hosts — a row on the page, a line of the pinned
+        strip, and its own floating window — and on the way it is briefly given
+        *zero height* by a container that has not been sized yet. Its layout
+        activates against that and caches a geometry a few pixels **negative**; the
+        block then reaches its real size while hidden, so no resize event follows,
+        Qt has no reason to run the layout again, and the block draws as an empty
+        framed box. Only nudging its size brought it back — which is why resizing
+        the strip appeared to fix it.
+
+        Re-activating on the turn *after* a re-homing catches it, once the container
+        has handed out real geometry; if the layout still looks degenerate (the
+        container needed more than one turn to settle), it tries again, bounded so
+        it cannot spin.
+        """
+        layout = self.layout()
+        if layout is None:
+            return
+        layout.invalidate()
+        layout.activate()
+        self.updateGeometry()
+        degenerate = layout.geometry().height() <= 0 < self.height()
+        if degenerate and self._relayout_tries < self.RELAYOUT_TRIES:
+            self._relayout_tries += 1
+            self._relayout.start(self.RELAYOUT_MS)
+        else:
+            self._relayout_tries = 0
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         """Never let a block shrink below its full content height.

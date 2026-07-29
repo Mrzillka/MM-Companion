@@ -168,6 +168,35 @@ clean (see Licensing below).
   free-form drag/float/redock is done by hand instead. Each block shows **all** of
   its content and never scrolls on its own; the page scrolls vertically when the
   blocks don't all fit. `MainWindow` opens at 1000×860.
+- Beside that page is the **pinned strip** (`ui/pinned_panel.py`), the one place
+  that does *not* scroll: blocks parked there stay in view while the page moves
+  behind them. `PinnedBoard` is what the host puts in its layout in place of the
+  bare page scroll area — a splitter holding the page and a `PinnedPanel`, whose
+  orientation and child order *are* the strip's edge (left/right/top/bottom) and
+  whose handle sets the strip's thickness. The strip is a **small canvas, not a
+  stack**: it holds `_PinnedLine`s along its length, each an inner splitter of
+  blocks *across* it, so two pinned blocks sit side by side as readily as one
+  under the other (a drop names a `PinSlot(new_line, line, slot)`, mirroring the
+  page's `DropSlot`). Every splitter is non-collapsible and a `BlockFrame`'s
+  minimum is its whole content, so a handle drag can never squash a block;
+  `PinnedPanel.minimumSizeHint` reports that content minimum so it holds the
+  *window* open rather than clipping (capped at the usable screen, past which the
+  strip scrolls as a last resort). `align` (`fill`/`start`/`center`/`end`) places
+  a block within its cell — a block that can't fill anchors to the start, the way
+  a docked row left-aligns its fixed-width blocks. The remembered proportions are
+  **live pixel sizes, true only of the shape they were measured in**, so a block
+  *arriving* clears them along the axis it joins and lets the splitter lay that
+  axis out from the blocks' own hints; sizes are kept when a block leaves (the
+  survivors' values still came from one layout). Mixing a live size with a
+  newcomer's natural hint is what once handed a moved block a sliver of the strip. The **`PinnedHandle` (📌) is
+  always visible**: it is the empty strip's whole content, the drop target that
+  gets the first block in, the grip the strip is dragged to another edge by
+  (lighting four `EdgeZoneOverlay` bands), and the button that opens the strip's
+  Position/Alignment/Unpin-all menu. A block also pins from its title bar's 🖈.
+  **The canvas still owns the model** — the panel is a view, like `RowWidget`,
+  and holds no arrangement state; `_relayout` renders the strip *first* so the
+  rows are the last to claim a frame. The GM window gets the same strip, since it
+  hosts the same canvas.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
   `QScrollArea` → `BlockCanvas`) → nine blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
@@ -210,30 +239,36 @@ clean (see Licensing below).
   `data/movement.json`; the km/h conversion reads `Measurements.distance_m`. Hero points
   render as five clickable circles.
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
-  handle, plus float `↗` and close `✕` buttons) above the section, no inner scroll
-  area, sized to its content. A floated block moves into a `BlockWindow` (a
-  top-level window owned by the sheet); its title bar reuses the same drag gesture,
-  so you drag it back onto the page to re-dock.
+  handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
+  inner scroll area, sized to its content. A floated block moves into a
+  `BlockWindow` (a top-level window owned by the sheet); its title bar reuses the
+  same drag gesture, so you drag it back onto the page to re-dock.
 - `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
   arrangement — `_rows` (an ordered list of rows, each an ordered list of block
-  keys), `_windows` (floated blocks), and `_hidden` (closed blocks). It renders a
+  keys), `_windows` (floated blocks), `_hidden` (closed blocks), and `_pinned`
+  (the strip's lines, with its `_pin_edge`/`_pin_align`/sizes). It renders a
   `RowWidget` per row (fixed-width blocks keep their size, growable blocks stretch)
   and owns the drag controller: `title_bar_pressed/moved/released` run one manual
-  gesture (float-out at drag start, `_hit_test` → a `DropIndicator`, dock-on-drop
-  or leave-floating), plus edge auto-scroll. Structural ops `float_block`,
-  `dock_block`, `show_block`/`hide_block`, `arrangement`, `apply_arrangement`,
-  `default_arrangement` are the headless-testable seams (drag outcomes without
-  synthetic mouse events). The default arrangement is supplied by the sheet from the
-  block registry's `default_rows()` (grouping descriptors by their default row/col):
-  the Name & Details block beside the Character Image, then the System / Power Level
-  block full width, the Abilities | Resistances pair, then Conditions, Advantages,
-  Skills, Powers.
+  gesture (float-out at drag start, `_hit_test` → a `DropIndicator`, dock-on-drop,
+  pin-on-drop over the strip, or leave-floating), plus edge auto-scroll. Structural
+  ops `float_block`, `dock_block`, `show_block`/`hide_block`,
+  `pin_block`/`unpin_block`/`set_pin_edge`/`set_pin_align`, `arrangement`,
+  `apply_arrangement`, `default_arrangement` are the headless-testable seams (drag
+  outcomes without synthetic mouse events). The default arrangement is supplied by
+  the sheet from the block registry's `default_rows()` (grouping descriptors by
+  their default row/col): the Name & Details block beside the Character Image, then
+  the System / Power Level block full width, the Abilities | Resistances pair, then
+  Conditions, Advantages, Skills, Powers — with an empty strip on the right.
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
-  `{version, rows, floating, hidden}`) to the `layout` key in `settings.json` on
-  close, and restores on open (`_restore_layout`). `restore_layout` validates
-  (schema `SCHEMA_VERSION`; every block placed exactly once) and returns False to
-  fall back to the default. A **View** menu has a checkable show/hide toggle per
+  `{version, rows, floating, hidden, hidden_anchors, pinned{edge, lines, align,
+  sizes, line_sizes, extent}}`) to the `layout` key
+  in `settings.json` on close, and restores on open (`_restore_layout`).
+  `restore_layout` validates (schema `SCHEMA_VERSION`; every block placed exactly
+  once across rows/floating/hidden/pinned) and returns False to fall back to the
+  default. Where a block *lives* is validated strictly (an unknown key or edge
+  rejects the whole layout); the cosmetic numbers — the strip's sizes and
+  thickness, a hidden block's anchor — degrade to defaults instead. A **View** menu has a checkable show/hide toggle per
   block (kept in sync via `BlockCanvas.block_visibility_changed`) and a **Reset
   Layout** action (`CharacterSheet.reset_layout()`). Cross-block wiring is
   object-to-object Qt signals, so it keeps working when a block is floated out.
@@ -451,7 +486,9 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
 - `ui/drop_feedback.py` — `DropFeedback` gives one drop target its idle / accept
   / **reject** styling from tokens. Use it in a `dragEnterEvent` instead of
   open-coding a highlight, and call `show_reject()` on the else branch: a bare
-  `event.ignore()` is invisible whenever an ancestor accepts the drag.
+  `event.ignore()` is invisible whenever an ancestor accepts the drag. Its
+  counterpart `DropIndicator` (same module) is the thin accent insert line —
+  dress the *target* with the first, mark the *place* with the second.
 - `ui/block_sizes.json` is the *baseline* for block bounds; a preset's `blocks`
   map overrides any bound. The GM window's blocks live there too, under `gm_`
   keys.

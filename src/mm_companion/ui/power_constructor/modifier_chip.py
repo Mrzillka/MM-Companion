@@ -23,8 +23,7 @@ from mm_companion.core.rules import (
     effective_ability,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.block_canvas import DropIndicator
-from mm_companion.ui.drop_feedback import DropFeedback
+from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
     CHIP_MIME,

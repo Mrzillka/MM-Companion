@@ -76,8 +76,10 @@ __all__ = [
     "font_size",
     "is_literal_color",
     "metric",
+    "preview_theme",
     "reset",
     "set_active_theme",
+    "set_preview",
     "tint_rgba",
     "wash",
 ]
@@ -87,27 +89,61 @@ __all__ = [
 # every time a label picks its colour. Cleared by reset().
 _active: Theme | None = None
 
+# An unsaved draft being previewed live, from the Settings window. While set it
+# stands in front of _active for every lookup — deliberately without touching the
+# `theme` setting or _active itself, so reverting is set_preview(None) and costs
+# neither a disk read nor a re-resolve. Cleared by reset() too: that call means
+# "forget everything", and a preview outliving it would be a lie.
+_preview: Theme | None = None
+
 
 def active_theme() -> Theme:
-    """The preset currently in force, from the ``theme`` setting."""
+    """The preset currently in force: a live preview if one is set, else the setting."""
     global _active
+    if _preview is not None:
+        return _preview
     if _active is None:
         _active = available_themes()[resolve_id(storage.theme_name())]
     return _active
 
 
-def reset() -> None:
-    """Forget the cached preset and the on-disk scan.
+def preview_theme() -> Theme | None:
+    """The unsaved draft currently being previewed, or ``None``."""
+    return _preview
 
-    Call after the ``theme`` setting changes, after a preset file is edited, or
-    (in tests) after the workspace is pointed somewhere else.
+
+def set_preview(draft: Theme | None, app: QApplication | None = None) -> None:
+    """Dress *app* in an unsaved *draft*, or hand it back to the saved preset.
+
+    The one seam the Settings window's live preview goes through. Whoever opens a
+    preview owns closing it: a window that leaves one set has the app wearing a
+    theme that exists nowhere on disk until it restarts.
+    """
+    from mm_companion.ui.block_sizes import clear_block_size_cache
+
+    global _preview
+    _preview = draft
+    # Block bounds are cached per theme *id*, and a draft carries the id of the
+    # preset it is editing — so the cached entry is the wrong one both on the way
+    # in and on the way back out.
+    clear_block_size_cache()
+    if app is not None:
+        apply(app)
+
+
+def reset() -> None:
+    """Forget the cached preset, any live preview, and the on-disk scan.
+
+    Call after the ``theme`` setting changes, after a preset file is written or
+    deleted, or (in tests) after the workspace is pointed somewhere else.
     """
     # Imported here, not at module scope: block_sizes reads the active theme, so
     # importing it up top would close the loop.
     from mm_companion.ui.block_sizes import clear_block_size_cache
 
-    global _active
+    global _active, _preview
     _active = None
+    _preview = None
     clear_theme_cache()
     clear_block_size_cache()
 

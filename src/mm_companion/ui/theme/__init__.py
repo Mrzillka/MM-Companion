@@ -178,12 +178,26 @@ def _remember_palette(installed: bool) -> None:
 
 
 def _lookup(group: str, name: str) -> object:
+    """The value of token *name* in *group*, from the active preset or the default.
+
+    The fallback is what makes a hand-written or Settings-saved preset survive an
+    upgrade. Those are written as full snapshots with no ``extends``, so a token
+    the app grows *after* one was saved is simply absent from it — and without a
+    fallback the first widget to ask for it would raise, on the user's machine,
+    because of a file they wrote months earlier. Take Classic's value instead: the
+    look is slightly off in one place rather than the app being unusable.
+
+    A genuine typo in widget code still raises, since Classic won't have it either.
+    """
     theme = active_theme()
     tokens = getattr(theme, group)
-    try:
+    if name in tokens:
         return tokens[name]
-    except KeyError:
-        raise UnknownToken(group, name, tokens) from None
+    if theme.id != DEFAULT_THEME_ID:
+        backing = getattr(available_themes().get(DEFAULT_THEME_ID), group, {})
+        if name in backing:
+            return backing[name]
+    raise UnknownToken(group, name, tokens)
 
 
 def color(name: str) -> str:

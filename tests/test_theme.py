@@ -142,6 +142,27 @@ def test_an_unknown_token_names_itself_and_suggests_neighbours() -> None:
     assert "tint.worse" in message  # the did-you-mean found it
 
 
+def test_a_preset_missing_a_token_falls_back_to_the_default(isolated_workspace) -> None:
+    """A snapshot written before a token existed must not crash the app.
+
+    Presets saved from the Settings window are full snapshots with no ``extends``,
+    so a token the app grows later is simply absent from them. Classic backs it.
+    """
+    write_preset(
+        isolated_workspace,
+        "sparse",
+        {"id": "sparse", "name": "Sparse", "colors": {"accent": "#111111"}},
+    )
+    theme.set_active_theme("sparse")
+
+    assert theme.color("accent") == "#111111"  # its own value still wins
+    assert theme.color("tint.worse") == "#d15b5b"  # absent: Classic's
+    assert theme.metric("radius.card") == 4  # and across groups
+
+    with pytest.raises(theme.UnknownToken):
+        theme.color("no.such.token")  # a real typo still raises
+
+
 def test_a_wash_refuses_a_palette_expression() -> None:
     """``palette(mid)`` is resolved by Qt at paint time and has no channels here."""
     assert not theme.is_literal_color(theme.color("border.card"))

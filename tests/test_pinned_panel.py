@@ -296,6 +296,43 @@ def test_a_thickness_the_user_dragged_to_is_kept(make_sheet) -> None:
     assert sheet.arrangement()["pinned"]["extent"] == dragged
 
 
+def test_a_scrolling_strip_makes_room_for_its_own_scrollbar(
+    make_sheet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: a strip long enough to scroll lost a scrollbar's width out of its
+    # viewport, leaving the blocks a dozen pixels short — so Qt put up a *second*,
+    # crossways bar to cover the difference. A scrollbar caused by a scrollbar.
+    monkeypatch.setattr(pinned_panel, "_usable_screen", lambda _widget: QSize(1920, 320))
+    sheet = make_sheet()
+    sheet.resize(1400, 320)  # room to widen, not enough to fit the blocks' length
+    _settle()
+    sheet.pin_block("conditions")
+    sheet.pin_block("advantages")
+    _settle()
+    _wait()
+    panel = sheet.board.panel
+
+    assert panel._scroll.verticalScrollBar().isVisible()  # it really is scrolling
+    assert not panel._scroll.horizontalScrollBar().isVisible()
+    assert panel.width() > panel._splitter.width()  # the bar's width was asked for
+
+
+def test_the_strip_scrolls_sideways_only_when_it_cannot_be_widened(
+    make_sheet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other half: where the room genuinely isn't there, a crossways bar is the
+    # right answer — better than clipping a block.
+    monkeypatch.setattr(pinned_panel, "_usable_screen", lambda _widget: QSize(200, 1080))
+    sheet = make_sheet()
+    sheet.pin_block("conditions")  # needs ~340, and cannot have it
+    _settle()
+    _wait()
+    panel = sheet.board.panel
+
+    assert panel.width() < panel._splitter.minimumSizeHint().width()
+    assert panel._scroll.horizontalScrollBar().isVisible()
+
+
 def test_a_rebuilt_strip_starts_at_the_top(make_sheet, monkeypatch: pytest.MonkeyPatch) -> None:
     # The strip only scrolls when its blocks don't fit, and a stale offset would
     # show the new arrangement decapitated. Getting it to scroll at all means

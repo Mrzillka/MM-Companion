@@ -471,13 +471,31 @@ class PinnedPanel(QFrame):
             return base
         content = self._splitter.minimumSizeHint()
         handle = self._handle.sizeHint()
+        bars = self._scrollbar_allowance()
         vertical = is_vertical_strip(self._edge)
-        width = content.width() + (0 if vertical else handle.width())
-        height = content.height() + (handle.height() if vertical else 0)
+        width = content.width() + bars.width() + (0 if vertical else handle.width())
+        height = content.height() + bars.height() + (handle.height() if vertical else 0)
         cap = _usable_screen(self)
         return QSize(
             max(base.width(), min(width, cap.width())),
             max(base.height(), min(height, cap.height())),
+        )
+
+    def _scrollbar_allowance(self) -> QSize:
+        """What the strip's own scrollbars take out of its viewport right now.
+
+        A bar along the strip's length eats into its *thickness*, so a strip asked
+        for exactly its content's width comes up a scrollbar short — and Qt covers
+        that by adding a second bar crossways, which is a scrollbar appearing purely
+        because of another scrollbar. Counting the visible bars into the minimum
+        asks for those pixels instead; the crossways bar then only turns up when the
+        window genuinely cannot spare them.
+        """
+        vertical_bar = self._scroll.verticalScrollBar()
+        horizontal_bar = self._scroll.horizontalScrollBar()
+        return QSize(
+            vertical_bar.sizeHint().width() if vertical_bar.isVisible() else 0,
+            horizontal_bar.sizeHint().height() if horizontal_bar.isVisible() else 0,
         )
 
     # -- queries the canvas and the board ask ---------------------------------

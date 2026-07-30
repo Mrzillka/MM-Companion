@@ -39,6 +39,7 @@ directly (no game rules live here) and persists quick rolls through
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from functools import lru_cache
 from importlib.resources import as_file, files
 
@@ -288,7 +289,14 @@ class RollCard(QFrame):
             info.addWidget(degree)
 
         for widget in chain_widgets(
-            spec, None if result is None else result.degree, self.rollFollowUp.emit
+            spec,
+            die=die,
+            degree=None if result is None else result.degree,
+            on_follow_up=self.rollFollowUp.emit,
+            # Every card in the private history is one's own, and off the air the
+            # roller is usually running both sides — so never assume the sheet in
+            # front of us is the target's.
+            localize=False,
         ):
             info.addWidget(widget)
 
@@ -364,6 +372,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # What the sheet asked to roll, if anything — see :meth:`load_spec`. Sticky:
         # it survives the roll so the sliders can be nudged and the die thrown again.
         self._spec: RollSpec | None = None
+        # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
+        self._localizer: Callable[[RollSpec], RollSpec] | None = None
         self._quick_rolls: list[dict] = self._load_quick_rolls()
 
         # The three reflowing parts, in order. The layout's *direction* is what the
@@ -587,6 +597,20 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """The trait currently loaded, or ``None`` for a plain manual roll."""
         return self._spec
 
+    def set_localizer(self, localizer: Callable[[RollSpec], RollSpec] | None) -> None:
+        """Install a last pass over every spec on its way in.
+
+        A spec can arrive from three directions — a double-clicked stat, a power's
+        🎲, or a follow-up chip on a history card, which may be *another player's*
+        card. Only one of those is worth adjusting (a save that knows which
+        resistance it is but not this character's number for it), but all three end
+        up here, so the adjustment is installed once on the panel rather than
+        threaded down every path. See
+        :meth:`~mm_companion.ui.sections.dice.DiceSection.perform_roll`, which
+        supplies it; a panel with no sheet behind it (GM Mode's) installs none.
+        """
+        self._localizer = localizer
+
     def load_spec(self, spec: RollSpec | None) -> None:
         """Load *spec* as the thing this panel rolls, or ``None`` to go back to manual.
 
@@ -596,6 +620,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         will roll against is visible rather than implied; a spec without one leaves
         the box exactly as the player left it.
         """
+        if spec is not None and self._localizer is not None:
+            spec = self._localizer(spec)
         self._spec = spec
         if spec is not None and spec.dc is not None:
             self._dc_check.setChecked(True)
@@ -675,7 +701,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._pending = None
         bridge.rollAdded.connect(self._on_session_roll)
         sent = bridge.request_roll(
-            label=self._roll_label(), bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
+            label=self._roll_label(),
+            bonus=bonus,
+            penalty=penalty,
+            dc=dc,
+            hidden=hidden,
+            # What is being rolled travels with it, so the *other* seats can act on
+            # it: the target's player sees the attack land and clicks the save off
+            # its card. The server echoes it back on the record.
+            spec=None if self._spec is None else self._spec.to_dict(),
         )
         if not sent:
             self._abandon_roll(NOT_SENT)
@@ -753,7 +787,6 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._rolling = False
         self._awaiting = False
         self._pending = None
-        spec = self._spec
         self._disconnect_session()
 
         die = int(roll.get("die", 0))
@@ -772,10 +805,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
         )
         self._unlock_inputs()
         # The die has settled — a paired history panel can now show this own roll.
-        # The spec rides along in a *copy*: it is local knowledge (the follow-up roll
-        # and the outcome ladder mean nothing to the other players, and never went
-        # over the wire), and the original dict is shared with every other listener.
-        self.sessionRollRevealed.emit({**roll, "spec": spec} if spec is not None else roll)
+        # The spec is already on the record (the server recorded what we sent and
+        # broadcast it), so this is the same dict every other seat is reading.
+        self.sessionRollRevealed.emit(roll)
 
     def _abandon_roll(self, message: str) -> None:
         """Give up on a session roll that never came back."""

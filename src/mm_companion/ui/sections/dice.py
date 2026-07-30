@@ -15,14 +15,14 @@ vertically to suit a narrow strip.
 
 Two things about it are deliberately unlike its neighbours:
 
-* It is **not a view over the character**. It takes the usual
-  ``(data, character)`` block arguments and uses neither: the roller drives
+* It is **barely** a view over the character. The roller drives
   :mod:`mm_companion.core.dice` directly and keeps its quick rolls in
-  :mod:`mm_companion.core.storage`, so there is nothing of the character in it.
-  It therefore publishes nothing on the bus — a roll is not an edit and must
-  never mark the sheet dirty. It does **serve** one topic, though: every other
-  block sends what it wants rolled to :meth:`DiceSection.perform_roll` over the
-  bus's payload channel, which is the one thing here that faces the sheet.
+  :mod:`mm_companion.core.storage`, so it reads nothing off the build and
+  publishes nothing on the bus — a roll is not an edit and must never mark the
+  sheet dirty. It does **serve** one topic: every other block sends what it wants
+  rolled to :meth:`DiceSection.perform_roll` over the bus's payload channel, and
+  that method is the one thing here that touches the character — it fills this
+  sheet's own resistance into a save somebody else's attack asked for.
 * :meth:`DiceSection.set_locked` does nothing. Rolling is a mid-play action, not
   a build edit, so it stays available in the locked read-only view — the same
   reasoning that keeps a power's on/off switch live there.
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import RollSpec
+from mm_companion.core.rules import RollSpec, localize_spec
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 
@@ -51,6 +51,9 @@ class DiceSection(QGroupBox):
         self._character = character
 
         self.view = DiceRollerView()
+        # Every spec that reaches the roller — from the bus, or from a follow-up chip
+        # on a history card — passes through here on its way in.
+        self.view.panel.set_localizer(self._localize)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
@@ -59,6 +62,16 @@ class DiceSection(QGroupBox):
     def panel(self):
         """The roll column itself (settings, die, readout, quick rolls)."""
         return self.view.panel
+
+    def _localize(self, spec: RollSpec) -> RollSpec:
+        """Fill this character's own number into a spec that came from someone else.
+
+        The save an attack forced knows which resistance it is but not the target's
+        value for it — the attacker's sheet could not see that. Clicked on the
+        target's sheet, this is where their number goes in. The one thing on this
+        block that reads the character, and why it is given one.
+        """
+        return localize_spec(spec, self._character, self._data)
 
     def perform_roll(self, spec: object) -> None:
         """Roll what another block asked for — the ``roll-requested`` topic's handler.

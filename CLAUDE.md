@@ -356,20 +356,46 @@ number*.
   passes its name the same way. Rolling stays available in the locked read-only
   sheet and emits neither `changed` nor `edited` — it is a play action, like a
   power's on/off switch.
-- **The chain.** An attack spec carries the save it forces as its `follow_up`, so
-  the history card for a hit offers a `🎲 Toughness vs. 18` button that primes that
-  save with its DC filled in; a save that *fails* states the outcome
-  ("Incapacitated!") from its `outcomes` ladder. Both are built by
-  `roll_history.chain_widgets` and are **local knowledge** — the ladder and the next
-  roll are read off this app's game data and never go on the wire, so the spec rides
-  along in a local-only `"spec"` key the panel adds to a *copy* of its own roll dict.
-  Other players see the named roll and its degrees, not the outcome sentence.
+- **The chain, and why it is on the wire.** An attack spec carries the save it
+  forces as its `follow_up`, so the history card for a hit offers a
+  `🎲 Toughness vs. 18` button, and a resolved save states its outcome. Both are
+  built by `roll_history.chain_widgets` — **on every card, not just one's own**,
+  which is the entire point: the player rolls the attack, and the *target's* player,
+  reading the same shared history, clicks the save straight off it. So the spec
+  travels: `RollSpec.to_dict()` → `RollRequest.spec` → `RollRecord.spec` → every
+  client. An earlier version kept it local "because it's derived data", which left
+  the chip in front of the one person who had no use for it.
+- The server stays **rules-free**. It validates the spec's *shape*
+  (`protocol.sanitize_spec` — a key whitelist, text/ladder caps, a `follow_up` depth
+  cap, since this is client-supplied data rendered on other people's screens) and
+  records it opaquely. The crit adjustment and the ladder lookup happen **client-side**
+  from the broadcast `die`/`degree`, which are deterministic — so every screen
+  derives the same chip and the same sentence, and `python -m mm_companion.server`
+  still needs no game data. Never import `core.rules` into `core/session/`.
+- **Criticals** (`follow_up_for_result`): a natural 20 raises the forced save's DC by
+  `system.critical_effect_bonus`; a natural 1 that still hits gives the *target*
+  `system.critical_miss_resistance_bonus` on their check (a bonus to them, not a cut
+  to the DC — same arithmetic, honest description). The reason is written into the
+  follow-up's label, so a DC box reading 23 where the card said 18 explains itself.
+- **Auto-fill.** A save spec carries `trait_key`, so clicking the chip on someone
+  else's card rolls with *your own* resistance already in (`localize_spec`, installed
+  on the panel via `set_localizer` — one seam, so the bus path and the chip path both
+  get it; GM Mode's roller has no sheet and installs none). Off on your **own** card:
+  you are not the target of your own attack, and `chain_widgets(localize=False)` drops
+  the trait key rather than presenting a confident wrong number.
 - Outcome ladders are **data**: an effect's optional `resistanceOutcomes` in
   `effects.json` (parsed into `ResistanceOutcome` records), one rung per degree of
-  failure, the last rung covering every deeper one. A rung either names
+  failure, the last rung covering every deeper one — plus an optional `success` rung,
+  because a *made* Toughness save is not "nothing happened": the target still takes a
+  Hit unless Hardened/Impervious/Impenetrable, a caveat only the rung's `note` can
+  carry since this app cannot see the target's sheet. A rung either names
   `conditions` (ids from `conditions.json` — Damage's `hit`/`dazed`/… ladder) or a
   `configKey` reading the ids off the *instance* (Affliction's `degree1`/`2`/`3`,
   which the player chose when building the power). No degree ladder in Python.
+- A power card puts a 🎲 only on the lines **the wielder rolls**. A resistance line
+  (`RollSpec.rolled_by_target`) is written down and indented but unbuttoned — the
+  wielder never makes their own target's save, and that roll reaches the person who
+  does as the follow-up chip.
 - `ui/roll_click.py::attach_roll_click(widget, factory, sink, *, enabled=…)` is the
   one way a widget becomes double-clickable; use it rather than open-coding an event
   filter. The factory builds the spec **at click time** (a spec captured when the row

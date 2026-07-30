@@ -58,6 +58,32 @@ def _shoot(widget, path: Path) -> None:
     print(f"[driver] wrote {path}  ({pixmap.width()}x{pixmap.height()})")
 
 
+def _app():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance()
+
+
+def _fixed_rng(value: int):
+    """A stand-in RNG that always rolls *value* — the server owns the die, so a
+    reproducible screenshot has to force it there."""
+    import random
+
+    rng = random.Random()
+    rng.randint = lambda _a, _b: value  # type: ignore[method-assign]
+    return rng
+
+
+def _guest_seat(bridge, display_name: str) -> str:
+    """A second seat at a hosted session, so a roll can come from somebody else.
+
+    The screenshot needs an attack that this window did *not* make — that is the
+    whole point of the chain — and adding a roster slot is cheaper than running a
+    second app.
+    """
+    return bridge.server.state.add_player(display_name).player_id
+
+
 def build(target: str):
     """Construct and show the window for ``target``; return it."""
     from mm_companion.core.storage import ensure_workspace
@@ -141,11 +167,16 @@ def build(target: str):
             panel._dc_check.setChecked(False)
             panel._bonus_spin.setValue(4)
             panel._finish_roll()
-    elif target == "roll-demo":
-        # Rolling straight off the sheet. A power's attack is rolled through the
-        # same path a card's 🎲 uses, against a typed-in target Defense, and then
-        # the save it forced is rolled from the follow-up chip on its own history
-        # card — so the shot shows the whole chain, ending in the outcome line.
+    elif target in ("roll-demo", "roll-demo-table"):
+        # Rolling straight off the sheet. "roll-demo" is the solo case: a power's
+        # attack goes through the same path a card's 🎲 uses, against a typed-in
+        # target Defense, and the save it forced is rolled from the follow-up chip
+        # on its own history card — the whole chain, ending in the outcome line.
+        #
+        # "roll-demo-table" is what the feature is actually for: a real loopback
+        # session with two seats, where the *attacker* is somebody else and this
+        # window is the target's. Its card carries the chip because the spec came
+        # over the wire, and clicking it fills in this sheet's own Toughness.
         from mm_companion.core.powers import Power, PowerEffectInstance
         from mm_companion.ui import dice_roller as dice_module
         from mm_companion.ui.main_window import MainWindow
@@ -162,7 +193,40 @@ def build(target: str):
 
         panel = sheet.dice.panel
         attack, _save = sheet.powers._rolls(sheet.character.powers[0])
-        panel.load_spec(attack)
+
+        if target == "roll-demo-table":
+            from PySide6.QtWidgets import QPushButton
+
+            from mm_companion.core.session.model import new_session
+            from mm_companion.ui.session_bridge import SessionBridge, set_active_session
+
+            bridge = SessionBridge()
+            bridge.host(new_session("The Table"), port=0, bind="127.0.0.1")
+            set_active_session(bridge)
+            sheet.sync_session()
+            # The server rolls, so the die is forced there rather than in the panel.
+            bridge.server._rng = _fixed_rng(20)
+            # Somebody else's attack lands, and it is a critical hit: the save it
+            # forces is at +5 DC, and the spec travels with the roll so this window
+            # — the target's — can act on it.
+            bridge.server.roll(
+                label=attack.label,
+                bonus=attack.modifier,
+                dc=12,
+                spec=attack.to_dict(),
+                player_id=_guest_seat(bridge, "Ada"),
+            )
+            _pump(_app())
+            # Answer it from this sheet: the chip fills in our own Toughness (5).
+            card = sheet.dice.view._session_history.cards()[0]
+            chip = next(b for b in card.findChildren(QPushButton) if b.text().startswith("🎲"))
+            bridge.server._rng = _fixed_rng(6)  # and the save fails
+            dice_module.ROLL_DURATION_MS = 0  # no tumble, so the shot is deterministic
+            chip.click()
+            _pump(_app())
+            win._driver_bridge = bridge  # keep it alive for the screenshot
+            return win
+
         panel._dc_check.setChecked(True)
         panel._dc_spin.setValue(12)  # the target's Defense
         dice_module.roll_d20 = lambda *a, **k: 14  # a hit, deterministically
@@ -292,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
             "dice",
             "dice-demo",
             "roll-demo",
+            "roll-demo-table",
             "dice-bottom",
             "dice-bottom-demo",
             "settings",

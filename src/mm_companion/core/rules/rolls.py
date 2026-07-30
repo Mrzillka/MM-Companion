@@ -56,6 +56,21 @@ KIND_POWER_CHECK = "power-check"
 KIND_POWER_SAVE = "power-save"
 
 
+def _as_int(value: object) -> int | None:
+    """*value* as an int, or ``None`` if it is missing or isn't one.
+
+    For :meth:`RollSpec.from_dict`, which parses another player's data and must not
+    raise on a field that arrived as prose.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class RollSpec:
     """One named d20 roll, ready to hand to the dice roller.
@@ -65,10 +80,21 @@ class RollSpec:
     says", which is the normal case for a trait check.
 
     ``follow_up`` is the roll this one *provokes* — an attack that lands makes its
-    target save, so the attack spec carries the save spec and the roller offers it as
-    a chip once the attack succeeds. ``outcomes`` is the degree-of-failure ladder for
-    a save (see :func:`resistance_outcome`), which is what turns a failed roll into
-    "Incapacitated!" instead of a bare number.
+    target save, so the attack spec carries the save spec and whoever is resisting
+    gets it as a chip on the attack's history card. ``outcomes`` is the
+    degree-of-failure ladder for a save and ``success_outcome`` what making it still
+    costs (see :func:`resistance_outcome`), which is what turns a rolled number into
+    "Incapacitated!" or "Hit".
+
+    Two fields exist because a save is rolled by **the other side of the table**:
+    ``rolled_by_target`` marks a spec the wielder never rolls (so a power card shows
+    the line without a 🎲 — the follow-up chip is where it belongs), and
+    ``trait_key`` names the resistance it is, so whoever's sheet the chip is clicked
+    on can fill in their own number (:func:`localize_spec`).
+
+    A spec is plain, JSON-serializable data (:meth:`to_dict`) because it **travels**:
+    it rides along with the roll so every screen at the table renders the same chain
+    (see ``docs/mm-session-architecture.md``).
     """
 
     label: str
@@ -78,11 +104,72 @@ class RollSpec:
     hint: str = ""
     follow_up: RollSpec | None = None
     outcomes: tuple[str, ...] = ()
+    success_outcome: str = ""
+    rolled_by_target: bool = False
+    trait_key: str = ""
 
     def with_follow_up(self, follow_up: RollSpec | None) -> RollSpec:
         """A copy of this spec that provokes *follow_up* when it succeeds."""
 
         return replace(self, follow_up=follow_up)
+
+    def to_dict(self) -> dict:
+        """This spec as plain JSON data, nested ``follow_up`` and all.
+
+        Only the non-default fields are written, so the common case (a trait check:
+        a label and a modifier) is a two-key dict on the wire rather than ten.
+        """
+
+        raw: dict = {"label": self.label}
+        if self.modifier:
+            raw["modifier"] = self.modifier
+        if self.dc is not None:
+            raw["dc"] = self.dc
+        if self.kind:
+            raw["kind"] = self.kind
+        if self.hint:
+            raw["hint"] = self.hint
+        if self.outcomes:
+            raw["outcomes"] = list(self.outcomes)
+        if self.success_outcome:
+            raw["success_outcome"] = self.success_outcome
+        if self.rolled_by_target:
+            raw["rolled_by_target"] = True
+        if self.trait_key:
+            raw["trait_key"] = self.trait_key
+        if self.follow_up is not None:
+            raw["follow_up"] = self.follow_up.to_dict()
+        return raw
+
+    @classmethod
+    def from_dict(cls, raw: object) -> RollSpec | None:
+        """Rebuild a spec from :meth:`to_dict`, or ``None`` for anything unusable.
+
+        Defensive on purpose: this parses data that arrived from another player. It
+        never raises — a malformed spec costs the chain on one card, not the history
+        panel. (The *server* has already run it through
+        :func:`~mm_companion.core.session.protocol.sanitize_spec`, which is what caps
+        its size; this only has to survive what gets through.)
+        """
+
+        if not isinstance(raw, dict):
+            return None
+        label = str(raw.get("label", ""))
+        if not label:
+            return None
+        outcomes = raw.get("outcomes")
+        return cls(
+            label=label,
+            modifier=_as_int(raw.get("modifier")) or 0,
+            dc=_as_int(raw.get("dc")),
+            kind=str(raw.get("kind", "")),
+            hint=str(raw.get("hint", "")),
+            follow_up=cls.from_dict(raw.get("follow_up")),
+            outcomes=tuple(str(o) for o in outcomes) if isinstance(outcomes, list) else (),
+            success_outcome=str(raw.get("success_outcome", "")),
+            rolled_by_target=bool(raw.get("rolled_by_target", False)),
+            trait_key=str(raw.get("trait_key", "")),
+        )
 
 
 # -- trait rolls -------------------------------------------------------------
@@ -210,22 +297,53 @@ def effect_outcome_ladder(
     return rungs if any(rungs) else ()
 
 
-def resistance_outcome(spec: RollSpec, degree: int | None) -> str:
-    """What a failed save on *spec* did to the target, or ``""`` when nothing did.
+def effect_success_outcome(
+    effect: PowerEffectInstance, game_data: GameData, base_effect: Effect | None = None
+) -> str:
+    """What *making* this effect's resistance check still costs the target.
 
-    The ladder's last rung covers every deeper failure, so a four-degree rout on a
-    three-rung ladder still answers. A success, an ungraded roll (``degree`` of
-    ``None``, meaning no DC was set) and a spec with no ladder all return ``""``.
+    Usually nothing, and then this is ``""``. Damage is the exception the rules make
+    a point of: a made Toughness save still leaves a Hit unless the target's
+    Toughness is Hardened, Impervious or Impenetrable — a caveat that rides along in
+    the rung's note, since this app can only see the *attacker's* sheet.
+    """
+
+    if base_effect is None:
+        base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None or base_effect.resistance_success is None:
+        return ""
+    return _rung_text(base_effect.resistance_success, effect, game_data)
+
+
+def resistance_outcome(spec: RollSpec, degree: int | None) -> str:
+    """What the save on *spec* did to the target, or ``""`` when nothing did.
+
+    A failure reads off the ladder, whose last rung covers every deeper failure — so
+    a four-degree rout on a three-rung ladder still answers. A *success* reads
+    :attr:`~RollSpec.success_outcome`, which is how a made Toughness save still
+    reports its Hit instead of going silent on the commonest result of an attack. An
+    ungraded roll (``degree`` of ``None``, meaning no DC was set) returns ``""``:
+    nothing was decided, so there is nothing to state.
 
     Takes the bare degree rather than a :class:`~mm_companion.core.dice.CheckResult`
     because a roll that came back from a session is a plain dict off the wire, and
-    both paths must read the same ladder.
+    every screen must read the same ladder from the same numbers.
     """
 
-    if degree is None or not spec.outcomes or degree > 0:
+    if degree is None:
+        return ""
+    if degree > 0:
+        return spec.success_outcome
+    if not spec.outcomes:
         return ""
     degrees = max(1, abs(degree))
     return spec.outcomes[min(degrees, len(spec.outcomes)) - 1]
+
+
+def outcome_is_failure(degree: int | None) -> bool:
+    """Whether an outcome line describes a failed check (which tints it as harm)."""
+
+    return degree is not None and degree <= 0
 
 
 def follow_up_offered(spec: RollSpec, degree: int | None) -> bool:
@@ -238,6 +356,90 @@ def follow_up_offered(spec: RollSpec, degree: int | None) -> bool:
     """
 
     return spec.follow_up is not None and (degree is None or degree > 0)
+
+
+def follow_up_for_result(
+    spec: RollSpec, die: int, degree: int | None, game_data: GameData
+) -> RollSpec | None:
+    """*spec*'s follow-up as the roll that just happened leaves it, or ``None``.
+
+    The die matters, not just whether the attack hit:
+
+    * a **natural 20** is a critical hit, and the effect it lands gains
+      ``critical_effect_bonus`` to the DC its save must beat;
+    * a **natural 1** that still hits is a graze, and the *target* resists at
+      ``critical_miss_resistance_bonus`` — a bonus on their check rather than a cut
+      to the DC, which is the same arithmetic but the honest description.
+
+    Both numbers come from ``system.json``. The adjustment is named in the
+    follow-up's label rather than silently folded into its number, so a DC box
+    reading 23 where the card said 18 explains itself. A critical states the DC it
+    *arrives at* rather than the ``+5`` it added, because the chip already shows a
+    modifier of its own and two adjacent ``+5``s would read as one thing twice.
+
+    Deterministic in the die and the degree, which is what lets every client at the
+    table compute the same chip from the same broadcast roll without the server
+    knowing any of these rules.
+    """
+
+    if not follow_up_offered(spec, degree):
+        return None
+    follow_up = spec.follow_up
+    if die == 20:
+        bonus = game_data.system.critical_effect_bonus
+        if bonus and follow_up.dc is not None:
+            raised = follow_up.dc + bonus
+            return replace(
+                follow_up,
+                dc=raised,
+                label=f"{follow_up.label} — critical hit, DC {raised}",
+            )
+    elif die == 1:
+        bonus = game_data.system.critical_miss_resistance_bonus
+        if bonus:
+            return replace(
+                follow_up,
+                modifier=follow_up.modifier + bonus,
+                label=f"{follow_up.label} — natural 1, +{bonus} to resist",
+            )
+    return follow_up
+
+
+def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -> RollSpec:
+    """Fill in what *this* sheet knows about a spec that came from someone else.
+
+    A save spec is built by the attacker, who cannot see the target's resistance —
+    so it travels with a modifier of 0 and a :attr:`~RollSpec.trait_key` naming which
+    resistance it is. When the chip is clicked on the resisting character's sheet,
+    this swaps in their own number, so a save is one click rather than a click and a
+    look-up.
+
+    A spec naming no trait, or arriving somewhere with no character (the GM window's
+    roller), comes back unchanged — the Bonus slider is then the answer, as before.
+    """
+
+    if char is None or not spec.trait_key:
+        return spec
+    if not any(r.key == spec.trait_key for r in game_data.resistances):
+        return spec
+    own = resistance_roll(char, game_data, spec.trait_key)
+    return replace(spec, modifier=spec.modifier + own.modifier)
+
+
+def _resistance_key(phrase: str, game_data: GameData) -> str:
+    """The resistance key a rendered save phrase names, or ``""``.
+
+    The phrase is prose the game-term rows built (``"Toughness vs. 18"``,
+    ``"Will vs. DC 16"``), and the resistance it names always leads it — so this
+    matches the catalog's names against the front of the string rather than trying
+    to parse the sentence. Data-driven: a mod's own resistance is found the same way.
+    """
+
+    text = phrase.strip().lower()
+    for resistance in game_data.resistances:
+        if text.startswith(resistance.name.lower()):
+            return resistance.key
+    return ""
 
 
 def _effect_rolls(
@@ -266,8 +468,11 @@ def _effect_rolls(
             label=named(resistance_row.value),
             dc=numbers.dc,
             kind=KIND_POWER_SAVE,
-            hint="The target's own resistance goes in the Bonus slider.",
+            hint="Rolled by the target — click it on their card.",
             outcomes=effect_outcome_ladder(effect, game_data, base_effect),
+            success_outcome=effect_success_outcome(effect, game_data, base_effect),
+            rolled_by_target=True,
+            trait_key=_resistance_key(resistance_row.value, game_data),
         )
 
     specs: list[RollSpec] = []

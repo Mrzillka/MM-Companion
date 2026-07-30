@@ -1463,8 +1463,14 @@ class PowersSection(TitledSection):
         gets no footer at all rather than a line saying so: the absence *is* the answer,
         and a placeholder on every passive power is pure noise.
 
-        Each line's ``🎲`` is a real :class:`QPushButton`, and that is the whole
-        trick: a button consumes its own press, so the click never reaches
+        A line the *wielder* rolls gets a ``🎲``; a resistance line does not, because
+        the wielder never makes their own target's save. That roll reaches the person
+        who does make it as the follow-up chip on the attack's history card. The line
+        still reads (it is what the power does), indented to keep the column of text
+        straight.
+
+        Each ``🎲`` is a real :class:`QPushButton`, and that is the whole trick: a
+        button consumes its own press, so the click never reaches
         :meth:`_DraggableCard.mousePressEvent` and rolling a power can't be mistaken
         for switching it on. (The same reason the grip, ✎ and ✕ are buttons.) A label
         would have let the press through and toggled the card.
@@ -1481,22 +1487,28 @@ class PowersSection(TitledSection):
         return host
 
     def _roll_line(self, spec) -> QWidget:
-        """One dice-footer line: the ``🎲`` button that rolls it, then its text."""
+        """One dice-footer line: its ``🎲`` button, if the wielder rolls it, then its text."""
         row = QWidget()
         line = QHBoxLayout(row)
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(int(theme.metric("space.sm")))
+        button_width = int(theme.metric("column.roll-button"))
 
-        button = QPushButton("🎲")
-        button.setFlat(True)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setFixedWidth(int(theme.metric("column.roll-button")))
-        button.setToolTip(spec.hint or f"Roll {spec.label}")
-        button.clicked.connect(lambda _=False, s=spec: self.rollRequested.emit(s))
-        line.addWidget(button, alignment=Qt.AlignmentFlag.AlignTop)
+        if spec.rolled_by_target:
+            # No button, but the same indent, so the lines read as one column.
+            line.addSpacing(button_width)
+        else:
+            button = QPushButton("🎲")
+            button.setFlat(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedWidth(button_width)
+            button.setToolTip(spec.hint or f"Roll {spec.label}")
+            button.clicked.connect(lambda _=False, s=spec: self.rollRequested.emit(s))
+            line.addWidget(button, alignment=Qt.AlignmentFlag.AlignTop)
 
         label = QLabel(spec.label)
         label.setWordWrap(True)
+        label.setToolTip(spec.hint)
         label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
         line.addWidget(label, stretch=1)
         return row

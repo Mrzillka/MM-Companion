@@ -208,12 +208,24 @@ def test_a_power_card_rolls_from_a_button_so_the_click_never_toggles_it(
     dirty: list[int] = []
     sheet.edited.connect(lambda: dirty.append(1))
 
+    # Only the attack: the wielder never rolls their own target's save, so that line
+    # is written down without a button (it arrives as the follow-up chip instead).
     buttons = [b for b in sheet.powers.findChildren(QPushButton) if b.text() == "🎲"]
-    assert len(buttons) == 2  # the attack and the save it forces
+    assert len(buttons) == 1
     buttons[0].click()
 
     assert seen[0].modifier == 7
     assert dirty == []  # a roll is not an edit
+
+
+def test_the_resistance_line_is_written_down_but_not_buttoned(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = _hero(data)
+    char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=8)]))
+    sheet = CharacterSheet(data, char)
+
+    texts = [lb.text() for lb in sheet.powers.findChildren(QLabel)]
+    assert any(t.startswith("Toughness vs. ") for t in texts)
 
 
 # -- the sliders, the DC, and the wire ---------------------------------------
@@ -339,15 +351,166 @@ def test_a_failed_save_says_what_it_did_to_the_target(qapp: QApplication) -> Non
     assert "Staggered!" in lines
 
 
-def test_a_save_that_held_states_no_outcome(qapp: QApplication) -> None:
+def test_a_save_that_held_still_reports_the_hit_it_cost(qapp: QApplication) -> None:
+    """A made Toughness save is not "nothing happened" — the target still takes a Hit.
+
+    The commonest result of an attack is the one the app used to go silent on.
+    """
     sheet = _sheet()
     panel = sheet.dice.panel
     history = sheet.dice.view._local_history
 
     panel._bonus_spin.setValue(20)  # cannot fail
-    panel.load_spec(RollSpec(label="Toughness vs. 18", dc=18, outcomes=("Dazed",)))
+    panel.load_spec(
+        RollSpec(
+            label="Toughness vs. 18",
+            dc=18,
+            outcomes=("Dazed",),
+            success_outcome="Hit (unless Impervious)",
+        )
+    )
+    panel._start_roll()
+    panel._finish_roll()
+
+    lines = [lb.text() for lb in history.cards()[0].findChildren(QLabel)]
+    assert "Hit (unless Impervious)!" in lines
+
+
+def test_a_save_with_nothing_to_say_on_a_success_says_nothing(qapp: QApplication) -> None:
+    sheet = _sheet()
+    panel = sheet.dice.panel
+    history = sheet.dice.view._local_history
+
+    panel._bonus_spin.setValue(20)  # cannot fail
+    panel.load_spec(RollSpec(label="Will vs. 16", dc=16, outcomes=("Dazed",)))
     panel._start_roll()
     panel._finish_roll()
 
     lines = [lb.text() for lb in history.cards()[0].findChildren(QLabel)]
     assert not any(line.endswith("!") for line in lines)
+
+
+# -- criticals ----------------------------------------------------------------
+
+
+def _attack_with_die(sheet: CharacterSheet, die: int, *, dc: int = 12):
+    """Roll the sheet's first power's attack on a given die, and return its card."""
+    panel = sheet.dice.panel
+    panel.load_spec(sheet.powers._rolls(sheet.character.powers[0])[0])
+    panel._dc_check.setChecked(True)
+    panel._dc_spin.setValue(dc)
+    dice_roller.roll_d20 = lambda *a, **k: die
+    panel._start_roll()
+    panel._finish_roll()
+    return sheet.dice.view._local_history.cards()[0]
+
+
+def _blasting_sheet() -> CharacterSheet:
+    data = load_game_data()
+    char = _hero(data)
+    char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=8)]))
+    return CharacterSheet(data, char)
+
+
+def test_a_natural_20_raises_the_dc_of_the_save_it_forces(qapp: QApplication) -> None:
+    sheet = _blasting_sheet()
+    chain = _chain_buttons(_attack_with_die(sheet, 20))
+
+    # 18 + the system's critical_effect_bonus, and the chip says why.
+    assert chain[0].text() == "🎲 Toughness vs. 18 — critical hit, DC 23"
+    chain[0].click()
+    assert sheet.dice.panel._dc_spin.value() == 23
+
+
+def test_a_natural_1_that_still_hits_helps_the_target_resist(qapp: QApplication) -> None:
+    # A natural 1 costs a degree of its own, so the attack has to beat the Defense by
+    # two to survive it: 1 + 7 = 8 against a Defense of 3 is two degrees, then one.
+    sheet = _blasting_sheet()
+    chain = _chain_buttons(_attack_with_die(sheet, 1, dc=3))
+
+    assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist"
+    chain[0].click()
+    assert sheet.dice.panel.current_spec().modifier == 5
+    assert sheet.dice.panel._dc_spin.value() == 18  # the DC is untouched
+
+
+def test_a_natural_1_that_misses_forces_no_save_at_all(qapp: QApplication) -> None:
+    sheet = _blasting_sheet()
+    assert _chain_buttons(_attack_with_die(sheet, 1, dc=40)) == []
+
+
+# -- the chain across the table ----------------------------------------------
+
+
+def test_the_spec_travels_with_the_roll(qapp: QApplication, hosting: SessionBridge) -> None:
+    """The chain is worthless if only the roller can see it — so it goes on the wire."""
+    sheet = _blasting_sheet()
+    sheet.sync_session()
+    attack = sheet.powers._rolls(sheet.character.powers[0])[0]
+    sheet.powers.rollRequested.emit(attack)
+    qapp.processEvents()
+
+    recorded = hosting.server.state.rolls[0]
+    assert recorded.spec is not None
+    assert recorded.spec["follow_up"]["dc"] == 18
+    assert recorded.spec["follow_up"]["trait_key"] == "TOUGHNESS"
+    assert recorded.spec["follow_up"]["outcomes"][0].startswith("Hit + Dazed")
+
+
+def test_another_players_card_offers_the_save_with_their_own_toughness(
+    qapp: QApplication,
+) -> None:
+    """The whole point: the attack lands on *my* screen and I click to resist it.
+
+    A card built from somebody else's roll carries the chip, and rolling it fills in
+    this sheet's Toughness — so the target's player answers with one click.
+    """
+    sheet = _sheet()  # Stamina 5, so Toughness 5
+    save = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS", rolled_by_target=True)
+    theirs = {
+        "seq": 1,
+        "player_id": "someone-else",
+        "player_name": "Ada",
+        "die": 14,
+        "bonus": 7,
+        "dc": 12,
+        "degree": 2,
+        "label": "7 vs. Defense",
+        "spec": RollSpec(label="7 vs. Defense", modifier=7, follow_up=save).to_dict(),
+    }
+    history = sheet.dice.view._session_history
+    history.add_roll(theirs)
+
+    chain = _chain_buttons(history.cards()[0])
+    assert chain[0].text() == "🎲 Toughness vs. 18"
+
+    chain[0].click()
+    assert sheet.dice.panel.current_spec().modifier == 5
+    assert sheet.dice.panel._dc_spin.value() == 18
+
+
+def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -> None:
+    """You are not the target of your own attack.
+
+    The chip is still there — a GM running both sides needs it — but quietly using
+    the attacker's Toughness for the defender would be a confident wrong number.
+    """
+    sheet = _sheet()
+    save = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS", rolled_by_target=True)
+    mine = {
+        "seq": 1,
+        "player_id": "me",
+        "player_name": "Me",
+        "die": 14,
+        "bonus": 7,
+        "dc": 12,
+        "degree": 2,
+        "spec": RollSpec(label="7 vs. Defense", modifier=7, follow_up=save).to_dict(),
+    }
+    history = sheet.dice.view._session_history
+    history._own_id = "me"
+    # One's own roll is held until the die settles, then released — the real path.
+    history.release_roll(mine)
+
+    _chain_buttons(history.cards()[0])[0].click()
+    assert sheet.dice.panel.current_spec().modifier == 0

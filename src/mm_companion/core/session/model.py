@@ -123,6 +123,13 @@ class RollRecord:
 
     ``hidden`` marks a GM roll that is stored but never broadcast; ``seq`` is the
     session-wide ordering, assigned by :meth:`SessionState.record_roll`.
+
+    ``spec`` is the sheet's description of the roll (a serialized
+    :class:`~mm_companion.core.rules.RollSpec`), carried verbatim from the request
+    and validated on the way in by
+    :func:`~mm_companion.core.session.protocol.sanitize_spec`. It is what lets
+    *another* player's screen offer the save an attack forced, and read the same
+    outcome off the same ladder. Opaque here — this module never interprets it.
     """
 
     seq: int
@@ -136,6 +143,7 @@ class RollRecord:
     critical: bool = False
     label: str = ""
     hidden: bool = False
+    spec: dict | None = None
     timestamp: str = field(default_factory=utc_now)
 
     @property
@@ -161,6 +169,7 @@ class RollRecord:
             "critical": self.critical,
             "label": self.label,
             "hidden": self.hidden,
+            "spec": self.spec,
             "timestamp": self.timestamp,
         }
 
@@ -180,6 +189,7 @@ class RollRecord:
             critical=bool(raw.get("critical", False)),
             label=str(raw.get("label", "")),
             hidden=bool(raw.get("hidden", False)),
+            spec=raw.get("spec") if isinstance(raw.get("spec"), dict) else None,
             timestamp=str(raw.get("timestamp", "")) or utc_now(),
         )
 
@@ -196,6 +206,7 @@ class RollRecord:
         result: CheckResult | None = None,
         label: str = "",
         hidden: bool = False,
+        spec: dict | None = None,
     ) -> RollRecord:
         """Build a record from a resolved check (``None`` when no DC was set)."""
         return cls(
@@ -210,6 +221,7 @@ class RollRecord:
             critical=die in (1, 20) if result is None else result.critical,
             label=label,
             hidden=hidden,
+            spec=spec,
         )
 
 
@@ -301,6 +313,7 @@ class SessionState:
         result: CheckResult | None = None,
         label: str = "",
         hidden: bool = False,
+        spec: dict | None = None,
     ) -> RollRecord:
         """Build a :class:`RollRecord` from a resolved check and append it.
 
@@ -317,6 +330,7 @@ class SessionState:
             result=result,
             label=label,
             hidden=hidden,
+            spec=spec,
         )
         self.rolls.append(record)
         self.touch()

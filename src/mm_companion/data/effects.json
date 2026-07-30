@@ -302,7 +302,11 @@
       "description": "A direct harmful attack — the basis for most offensive powers.",
       "resistanceDcBase": 10,
       "resistanceOutcomes": {
-        "note": "The damage condition ladder (docs/mm-core-mechanics.md §9). A successful resistance check still leaves a Hit unless the target's resistance is Impervious against the attack; only the failure rungs are listed here.",
+        "note": "The damage condition ladder (docs/mm-core-mechanics.md §9).",
+        "success": {
+          "conditions": ["hit"],
+          "note": "unless the target's Toughness is Hardened, Impervious or Impenetrable against this attack"
+        },
         "degrees": [
           {
             "conditions": ["hit", "dazed"],

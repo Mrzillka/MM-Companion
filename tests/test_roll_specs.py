@@ -19,8 +19,12 @@ from mm_companion.core.rules import (
     ability_roll,
     apply_condition,
     effect_outcome_ladder,
+    effect_success_outcome,
+    follow_up_for_result,
     follow_up_offered,
     initiative_roll,
+    localize_spec,
+    outcome_is_failure,
     power_roll_lines,
     power_rolls,
     resistance_outcome,
@@ -193,11 +197,26 @@ def test_the_last_rung_answers_every_deeper_failure() -> None:
     assert resistance_outcome(spec, -7) == "Incapacitated"
 
 
-def test_a_save_that_held_has_no_outcome() -> None:
-    spec = RollSpec(label="Toughness", dc=18, outcomes=("Dazed",))
+def test_a_made_toughness_save_still_reports_its_hit(hero, data) -> None:
+    """The commonest result of an attack, and the one the app used to go silent on."""
+    _attack, save = power_rolls(_blast(), hero, data)
+    made = resistance_outcome(save, 2)
+    assert made.startswith("Hit")
+    assert "Impervious" in made  # the caveat this app cannot check for itself
+    assert outcome_is_failure(2) is False
+
+
+def test_a_made_save_with_nothing_to_report_says_nothing() -> None:
+    # Only some effects cost the target something on a success; Will saves do not.
+    spec = RollSpec(label="Will", dc=18, outcomes=("Dazed",))
     assert resistance_outcome(spec, 2) == ""
-    # No DC was set, so the roll was never graded — there is no outcome to state.
+    # And no DC was set, so nothing was graded — there is no outcome either way.
     assert resistance_outcome(spec, None) == ""
+
+
+def test_an_affliction_costs_a_made_save_nothing(data) -> None:
+    effect = PowerEffectInstance("affliction", rank=6, config={"degree1": "dazed"})
+    assert effect_success_outcome(effect, data) == ""
 
 
 def test_a_follow_up_is_offered_on_a_hit_or_an_ungraded_roll() -> None:
@@ -209,3 +228,88 @@ def test_a_follow_up_is_offered_on_a_hit_or_an_ungraded_roll() -> None:
     assert follow_up_offered(attack, -2) is False
     # A roll that provokes nothing never offers anything.
     assert follow_up_offered(save, 1) is False
+
+
+# -- criticals ----------------------------------------------------------------
+
+
+def test_a_natural_20_raises_the_dc_of_the_save_it_forces(hero, data) -> None:
+    attack, _save = power_rolls(_blast(), hero, data)
+    crit = follow_up_for_result(attack, die=20, degree=2, game_data=data)
+
+    assert crit.dc == 18 + data.system.critical_effect_bonus
+    # Named, not silently folded in: a DC box reading 23 explains itself. It states
+    # the DC it arrives at rather than the +5 it added — the chip carries a modifier
+    # of its own, and two adjacent "+5"s read as one thing said twice.
+    assert crit.label.endswith("— critical hit, DC 23")
+
+
+def test_a_natural_1_that_still_hits_helps_the_target_resist(hero, data) -> None:
+    attack, _save = power_rolls(_blast(), hero, data)
+    graze = follow_up_for_result(attack, die=1, degree=1, game_data=data)
+
+    # The *target* gets the bonus, which is what was asked for — not a cut to the DC.
+    assert graze.modifier == data.system.critical_miss_resistance_bonus
+    assert graze.dc == 18
+    assert "natural 1" in graze.label
+
+
+def test_an_ordinary_hit_leaves_the_save_alone(hero, data) -> None:
+    attack, save = power_rolls(_blast(), hero, data)
+    assert follow_up_for_result(attack, die=14, degree=2, game_data=data) == save
+
+
+def test_a_miss_forces_no_save_at_all(hero, data) -> None:
+    attack, _save = power_rolls(_blast(), hero, data)
+    assert follow_up_for_result(attack, die=7, degree=-2, game_data=data) is None
+
+
+# -- travelling -------------------------------------------------------------
+
+
+def test_a_spec_round_trips_through_its_dict(hero, data) -> None:
+    attack, _save = power_rolls(_blast(), hero, data)
+    assert RollSpec.from_dict(attack.to_dict()) == attack
+    # And the nested chain came with it, which is the whole reason it travels.
+    assert attack.to_dict()["follow_up"]["dc"] == 18
+
+
+def test_a_spec_writes_only_what_it_has() -> None:
+    # A trait check is two keys on the wire, not ten empty ones.
+    assert RollSpec(label="Athletics", modifier=9).to_dict() == {
+        "label": "Athletics",
+        "modifier": 9,
+    }
+
+
+def test_a_malformed_spec_costs_a_chain_not_an_exception() -> None:
+    # It is parsed from another player's data, so it never raises.
+    assert RollSpec.from_dict(None) is None
+    assert RollSpec.from_dict({"no": "label"}) is None
+    assert RollSpec.from_dict("a string") is None
+    salvaged = RollSpec.from_dict({"label": "x", "modifier": "lots", "outcomes": "nope"})
+    assert salvaged == RollSpec(label="x")
+
+
+# -- localizing -------------------------------------------------------------
+
+
+def test_a_save_names_the_resistance_it_is(hero, data) -> None:
+    _attack, save = power_rolls(_blast(), hero, data)
+    assert save.trait_key == "TOUGHNESS"
+    assert save.rolled_by_target is True
+
+
+def test_localizing_fills_in_this_sheets_own_resistance(hero, data) -> None:
+    # The attacker could not see the target's Toughness, so the save travels at 0.
+    _attack, save = power_rolls(_blast(), hero, data)
+    assert save.modifier == 0
+    assert localize_spec(save, hero, data).modifier == 5  # Stamina 5
+
+
+def test_localizing_leaves_alone_what_it_cannot_answer(hero, data) -> None:
+    plain = RollSpec(label="Athletics", modifier=9)
+    assert localize_spec(plain, hero, data) is plain
+    # No sheet behind the roller (GM Mode) — the Bonus slider is the answer.
+    _attack, save = power_rolls(_blast(), hero, data)
+    assert localize_spec(save, None, data) is save

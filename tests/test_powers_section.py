@@ -381,26 +381,28 @@ def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> No
     sec = _sheet_for(char).powers
     cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
 
-    def dice(card: _DraggableCard) -> list[str]:
-        """The dice footer's lines — the 🎲 is a button beside each, not in its text."""
+    def rolled(card: _DraggableCard) -> list[str]:
+        """The lines this card offers a 🎲 for — the button sits beside the text."""
         lines = []
         for button in card.findChildren(QPushButton):
             if button.text() != "🎲":
                 continue
-            label = button.parent().findChild(QLabel)
-            lines.append(label.text())
+            lines.append(button.parent().findChild(QLabel).text())
         return lines
 
     # Nothing to roll, so nothing is said about it — no placeholder line, and no rule
     # above the footer that is not there.
-    assert dice(cards[armor.id]) == []
+    assert rolled(cards[armor.id]) == []
     assert sec._rolls_lines(armor) == []
 
     # An attack and the save it forces are two rolls, made by two people: a line each.
     attack, save = sec._rolls_lines(blast)
     assert attack == "0 vs. Defense"
     assert save.startswith("Toughness vs. ")
-    assert set(dice(cards[blast.id])) == {attack, save}
+
+    # But only the attack is the wielder's to roll. The save is written down and left
+    # unbuttoned — it reaches whoever makes it as a chip on the attack's history card.
+    assert rolled(cards[blast.id]) == [attack]
 
 
 def test_an_effects_terms_sit_beside_its_modifiers(qapp: QApplication) -> None:

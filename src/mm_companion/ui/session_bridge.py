@@ -183,6 +183,7 @@ class SessionBridge(QObject):
         penalty: int = 0,
         dc: int | None = None,
         hidden: bool = False,
+        spec: dict | None = None,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -193,14 +194,19 @@ class SessionBridge(QObject):
         live session to roll in.
 
         ``hidden`` is honoured only for the host; the server ignores the flag on a
-        player's request rather than trusting it.
+        player's request rather than trusting it. ``spec`` is the sheet's
+        description of the roll (a serialized
+        :class:`~mm_companion.core.rules.RollSpec`), which travels so that the
+        *other* seats can act on it — see ``docs/mm-session-architecture.md``.
         """
         if self._server is not None:
-            self._server.roll(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden)
+            self._server.roll(
+                label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+            )
             return True
         if self._client is not None:
             return self._client.request_roll(
-                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
+                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
             )
         return False
 

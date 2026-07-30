@@ -229,10 +229,11 @@ class SessionClient:
         penalty: int = 0,
         dc: int | None = None,
         hidden: bool = False,
+        spec: dict | None = None,
     ) -> bool:
         """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`."""
         return self.send(
-            RollRequest(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden)
+            RollRequest(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec)
         )
 
     def request_remove_roll(self, seq: int) -> bool:

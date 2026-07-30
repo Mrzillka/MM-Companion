@@ -41,7 +41,6 @@ def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
         "Join Session",
         "Manage Mods",
         "Settings",
-        "Dice Roller",
         "Exit",
     }
 

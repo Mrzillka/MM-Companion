@@ -3,7 +3,8 @@
 The sheet is a scrolling page: a :class:`QScrollArea` hosting a
 :class:`~mm_companion.ui.block_canvas.BlockCanvas` that arranges the blocks the
 registry supplies (Base Information, Abilities, Resistances, Conditions,
-Advantages, Complications, Skills, Powers, …). The user
+Advantages, Complications, Skills, Powers, …), plus the ones it declares
+``default_pinned`` — the Dice block — parked in the strip beside the page. The user
 can drag a block to reorder it, put blocks side by side, tear one out into its
 own window, and drag that window back to re-dock it — all while the whole page
 scrolls vertically and each block shows its full content (no per-block scroll).
@@ -34,6 +35,7 @@ from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
     SignalBus,
     block_descriptors,
+    default_pin_lines,
     default_rows,
     sync_declarative_blocks,
 )
@@ -77,7 +79,9 @@ class CharacterSheet(QWidget):
             self._sections_by_key[descriptor.key] = section
             panels.append((descriptor.key, descriptor.title, section))
             sizes[descriptor.key] = descriptor.size
-        self._canvas = BlockCanvas(panels, sizes, default_rows())
+        self._canvas = BlockCanvas(
+            panels, sizes, default_rows(), default_pinned=default_pin_lines()
+        )
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -86,9 +90,9 @@ class CharacterSheet(QWidget):
         self._scroll.setWidget(self._canvas)
         self._canvas.set_scroll_area(self._scroll)
 
-        # The scrolling page and the pinned strip beside it. The strip starts
-        # empty — a thin bar with one icon on the right edge — so the sheet looks
-        # unchanged until a block is dragged onto it.
+        # The scrolling page and the pinned strip beside it. The strip starts with
+        # whatever the registry declared `default_pinned` — the Dice block — and
+        # collapses to a thin bar with one icon once the user unpins everything.
         self._board = PinnedBoard(self._scroll, self._canvas)
         self._canvas.set_pinned_board(self._board)
 
@@ -258,6 +262,22 @@ class CharacterSheet(QWidget):
         self._locked = locked
         for section in self._sections():
             section.set_locked(locked)
+
+    def sync_session(self) -> None:
+        """Tell any block that cares that the session changed (joined, or ended).
+
+        Duck-typed and fanned out like :meth:`set_npc_mode`, so this needs no
+        knowledge of *which* blocks care: the Dice block swaps its private roll
+        history for the table's shared one, and a mod block can join in by exposing
+        the same method. Called by
+        :func:`~mm_companion.ui.session_player.attach_player_session` at both ends
+        of a session — the blocks are built with the sheet, so nothing about them is
+        re-shown when a player joins a table.
+        """
+        for section in self._sections():
+            handler = getattr(section, "sync_session", None)
+            if callable(handler):
+                handler()
 
     def set_npc_mode(self, npc: bool) -> None:
         """Simplify the sheet for a GM's NPC: no point budget, an estimated PL.

@@ -413,14 +413,25 @@ class GMWindow(QMainWindow):
         layout.addWidget(self._roller)
 
         self._history = RollHistoryPanel(gm=True)
-        self._history.saveRequested.connect(self._roller.save_quick_roll)
+        self._history.saveToggled.connect(self._roller.toggle_quick_roll)
         self._history.rollRemovedLocally.connect(self._on_local_roll_removed)
+        # A card's star shows whether that roll is already in the roller's strip, so
+        # it has to hear about every chip that comes or goes — and once up front, since
+        # the strip is restored from settings with whatever was saved last time.
+        self._roller.quickRollsChanged.connect(self._sync_quick_roll_state)
+        self._sync_quick_roll_state()
         self._history.setMinimumHeight(240)
         # Hold the GM's own roll until its die stops tumbling; the roller cues it.
         self._history.set_defer_own(True)
         self._roller.sessionRollRevealed.connect(self._history.release_roll)
         layout.addWidget(self._history, stretch=1)
         return box
+
+    def _sync_quick_roll_state(self) -> None:
+        """Push the roller's quick-roll strip into the history's stars."""
+        self._history.set_quick_roll_state(
+            self._roller.quick_roll_keys(), not self._roller.quick_rolls_full()
+        )
 
     def _build_notice(self) -> _Notice:
         self._notice = _Notice()

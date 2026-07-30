@@ -23,15 +23,24 @@ def qapp() -> QApplication:
 
 @pytest.fixture
 def make_sheet(qapp: QApplication):
-    """Laid-out character sheets with no on-screen window (see test_block_canvas)."""
+    """Laid-out character sheets with an **empty** strip (see test_block_canvas).
+
+    A fresh sheet starts with the Dice block pinned, but almost every test below is
+    about what the strip does as blocks arrive in and leave it — which is far easier
+    to state from empty. So the fixture empties it, and the couple of tests that are
+    about the *default* strip build their sheet themselves (see ``_raw_sheet``).
+    """
     sheets: list[CharacterSheet] = []
 
-    def _make() -> CharacterSheet:
+    def _make(*, empty_strip: bool = True) -> CharacterSheet:
         sheet = CharacterSheet(load_game_data())
         sheet.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
         sheet.resize(1100, 900)
         sheet.show()
         _settle()
+        if empty_strip:
+            sheet.canvas.unpin_all()
+            _settle()
         sheets.append(sheet)
         return sheet
 
@@ -72,8 +81,19 @@ def _pinned(sheet: CharacterSheet) -> dict:
 # -- what the strip holds ---------------------------------------------------
 
 
-def test_a_fresh_sheet_has_an_empty_strip_showing_its_icon(make_sheet) -> None:
-    sheet = make_sheet()
+def test_a_fresh_sheet_starts_with_the_dice_block_pinned(make_sheet) -> None:
+    # The strip is not empty out of the box: the roller's descriptor declares
+    # default_pinned, so the die is in view beside the page from the first launch.
+    sheet = make_sheet(empty_strip=False)
+
+    assert _pinned(sheet)["lines"] == [["dice"]]
+    assert sheet.is_block_pinned("dice")
+    assert not sheet.board.panel.is_empty()
+    assert all("dice" not in row for row in sheet.arrangement()["rows"])
+
+
+def test_an_emptied_strip_still_shows_its_icon(make_sheet) -> None:
+    sheet = make_sheet()  # the fixture unpins everything
     panel = sheet.board.panel
 
     assert panel.is_empty()
@@ -177,7 +197,7 @@ def test_unpin_all_empties_the_strip(make_sheet) -> None:
     assert {"conditions", "abilities"} <= set(placed)
 
 
-def test_reset_layout_empties_the_strip(make_sheet) -> None:
+def test_reset_layout_restores_the_default_strip(make_sheet) -> None:
     sheet = make_sheet()
     sheet.pin_block("conditions")
     sheet.canvas.set_pin_edge("bottom")
@@ -186,14 +206,17 @@ def test_reset_layout_empties_the_strip(make_sheet) -> None:
     sheet.reset_layout()
     _settle()
 
-    assert _pinned(sheet) == {
-        "edge": "right",
-        "lines": [],
-        "align": "fill",
-        "sizes": [],
-        "line_sizes": [],
-        "extent": 320,
-    }
+    # Back to the default strip — the Dice block, on the right edge, filling it —
+    # and the block this test pinned returned to the page. The live pixel sizes are
+    # whatever the one rendered line measures, so they are not part of the default.
+    pinned = _pinned(sheet)
+    assert (pinned["edge"], pinned["lines"], pinned["align"], pinned["extent"]) == (
+        "right",
+        [["dice"]],
+        "fill",
+        320,
+    )
+    assert any("conditions" in row for row in sheet.arrangement()["rows"])
 
 
 def test_two_blocks_can_share_a_line_across_the_strip(make_sheet) -> None:
@@ -720,7 +743,7 @@ def test_the_strip_survives_a_save_and_restore(make_sheet) -> None:
 
     sheet.reset_layout()
     _settle()
-    assert _pinned(sheet)["lines"] == []
+    assert _pinned(sheet)["lines"] == [["dice"]]  # back to the default strip
 
     assert sheet.restore_layout(blob) is True
     _settle()

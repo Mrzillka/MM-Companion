@@ -198,16 +198,20 @@ clean (see Licensing below).
   rows are the last to claim a frame. The GM window gets the same strip, since it
   hosts the same canvas.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
-  `QScrollArea` → `BlockCanvas`) → nine blocks, each a section `QGroupBox` wrapped
+  `QScrollArea` → `BlockCanvas`) → eleven blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
-  `SkillsSection`, `PowersSection`. The block set is **not** hardcoded in the sheet:
+  `ComplicationsSection`, `SkillsSection`, `PowersSection`, `DiceSection`. The block
+  set is **not** hardcoded in the sheet:
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
-  block (key, dock title, widget factory, `BlockSize`, default row/col), held in an
-  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The nine
+  block (key, dock title, widget factory, `BlockSize`, default row/col, and
+  `default_pinned` for a block that starts in the strip instead of a row), held in an
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The eleven
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
-  cross-block wiring still reaches it) and passes `default_rows()` to the canvas. A
+  cross-block wiring still reaches it) and passes `default_rows()` plus
+  `default_pin_lines()` to the canvas — the page and the strip, which between them
+  must cover every block exactly once. A
   mod's Python module can `register_block(BlockDescriptor)` to add a block without
   editing the sheet. A **data-only** mod can add a block with no Python at all: it
   ships a `blocks.json` (parsed into `GameData.blocks` as `BlockSpec`/`BlockFieldSpec`
@@ -238,6 +242,73 @@ clean (see Licensing below).
   call when abilities/advantages/powers/conditions change. Movement constants live in
   `data/movement.json`; the km/h conversion reads `Measurements.distance_m`. Hero points
   render as five clickable circles.
+- `DiceSection` (`ui/sections/dice.py`) is the d20 roller **as a block**, and it is the
+  one block whose descriptor sets `default_pinned` — a die that scrolls away with the
+  page is no use mid-fight, so it starts in the strip. There is no standalone roller
+  window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` now offers
+  `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`),
+  `LocalRollHistory` (the private list of one's own rolls), and `DiceRollerView` (a
+  panel plus **whichever history is right** — the private one alone, the table's shared
+  `RollHistoryPanel` in a session), which is what the block hosts. Two ways it is
+  unlike its neighbours: it is **not a view over the character** (it drives `core.dice`
+  and `core.storage` directly), so it publishes nothing on the bus — a roll must never
+  mark the sheet dirty — and its `set_locked` is a **no-op**, since rolling is a
+  mid-play action like a power's on/off switch. Its history keeps an inner scroll area,
+  the same deliberate exception the GM window's `gm_rolls` block makes, with a
+  `MIN_HISTORY_WIDTH` **and** `MIN_HISTORY_HEIGHT` floor (a scroll area asks for nothing
+  on its own, so without them a history is squeezed to an unreadable sliver, or to the
+  one card that fits in whatever height is left over). A session can be joined long
+  after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
+  `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
+  a session.
+- **Quick rolls** are capped at `MAX_QUICK_ROLLS` (6). The cap is a layout constraint,
+  not a preference: the strip shares the block with the controls and the die, so an
+  unbounded chip list ratchets the block — and the pinned strip holding it — ever
+  taller. A history card carries no "Save" button, only a `QuickRollStar`: `☆` muted
+  (not saved), `★` washed in `accent.dice` (saved — a click takes it *out* again), or
+  `☆` disabled (the strip is full). Three consequences worth knowing. The star is a
+  **two-way switch**, so a card reports the click on `saveToggled` and the panel —
+  which owns the strip — decides whether that was a save or an unsave
+  (`toggle_quick_roll`). Identity is `quick_roll_key` (`bonus`/`penalty`/`dc` alone,
+  **ignoring `name`**), so one star answers for a chip however it was later renamed;
+  comparing whole entries is the old bug where a named chip and its unnamed twin were
+  two rolls. And because a card cannot reach the panel (`roll_history` is the *lower*
+  module — `dice_roller` imports it, never the reverse), the state is **pushed down**:
+  `quickRollsChanged` → `set_quick_roll_state(keys, room)`, which both histories
+  remember so a card built later starts out agreeing. Naming moved off the save path
+  onto the chip's own right-click ▸ Rename… — saving is one click with no dialog.
+- The Dice block **reflows to the shape of the space it is given** (`ui/reflow.py`),
+  which is what lets one block work both in the tall narrow right-hand strip and in a
+  short wide **bottom** one. Two nested levels, each deciding from its own width:
+  `DiceRollerView` turns its splitter (roll panel vs history) and `DiceRollerPanel`
+  flips its `QBoxLayout` (settings / die+readout / quick rolls). That yields three
+  shapes as the room grows — one column of four, then `[panel][history]`, then one row
+  of four. Three things make it work, and all three are load-bearing: `prefers_row`
+  carries a **hysteresis** dead-band (a flip changes the height, which toggles a
+  scrollbar, which changes the width back — an endless relayout otherwise);
+  `init_reflow` sets `SetNoConstraint` on the layout, because a layout otherwise
+  *imposes* its minimum on its widget and a widget in a row could then never be made
+  narrow enough to leave it; and `minimumSizeHint` reports the **column** width always,
+  so the widget can shrink by reflowing instead of pinning the window open. It is the
+  sibling of `ui/sections/column_flow.py` (a *variable* number of panels for a list)
+  and borrows that module's lessons; reuse it for any block with the same problem.
+  Note `DiceRollerView._row_sizes`: the panel carries no splitter stretch, so what the
+  view hands it decides whether *it* can reflow too — hence the deferred `_divide_row`
+  re-run, since the strip converges its thickness over several turns and a division
+  computed mid-flight is stale with no further resize coming.
+- That same zero stretch is why **a change in what the panel contains must re-divide the
+  splitter explicitly** (`_redivide`, which handles either axis via `_row_sizes` /
+  `_column_sizes`). A splitter child with no stretch keeps the pixels it was given: when
+  the panel's minimum *shrinks* the splitter simply leaves it where it was, and Qt sends
+  no resize — a minimum going down provokes nothing. Removing a quick roll used to leave
+  a permanent gap above the strip for exactly this reason. So `_rebuild_quick_strip`
+  emits `quickRollsChanged` and calls `updateGeometry` (what makes the `BlockFrame` ask
+  again), and the view re-divides **twice** — now, and on the next turn, since the
+  dropped chips are `deleteLater`'d and the size hint only tells the truth once they are
+  gone. A split the user dragged is still left alone (`_user_sized`).
+- A block's `min_width` in `ui/block_sizes.json` is what sets the **strip's** thickness
+  for a pinned block (a page row is wide enough for anything), so `dice` is 360 — under
+  that its column arrangement clips in a side strip.
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
   inner scroll area, sized to its content. A floated block moves into a
@@ -258,7 +329,11 @@ clean (see Licensing below).
   the sheet from the block registry's `default_rows()` (grouping descriptors by
   their default row/col): the Name & Details block beside the Character Image, then
   the System / Power Level block full width, the Abilities | Resistances pair, then
-  Conditions, Advantages, Skills, Powers — with an empty strip on the right.
+  Conditions, Advantages, Complications, Skills, Powers — plus the registry's
+  `default_pin_lines()`, which parks the **Dice Roller** block in the strip on the
+  right. A block is in *either* the rows or the strip, never both: the arrangement
+  model requires every block exactly once, so `default_arrangement()` excludes the
+  pinned keys from the rows (including its trailing sweep over unplaced blocks).
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
   `{version, rows, floating, hidden, hidden_anchors, pinned{edge, lines, align,

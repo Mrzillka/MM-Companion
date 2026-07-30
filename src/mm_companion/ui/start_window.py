@@ -129,8 +129,6 @@ class StartWindow(QMainWindow):
         self._mods_window: QWidget | None = None
         # The settings window, likewise kept referenced while open.
         self._settings_window: QWidget | None = None
-        # The dice roller window, likewise kept referenced while open.
-        self._dice_window: QWidget | None = None
         # The GM window. Only one may exist — it owns the hosted session — so a
         # second "Open GM Mode" raises this one instead of building another.
         self._gm_window: QWidget | None = None
@@ -173,10 +171,6 @@ class StartWindow(QMainWindow):
         settings_button = QPushButton("Settings")
         settings_button.clicked.connect(self._open_settings)
         column.addWidget(settings_button)
-
-        dice_button = QPushButton("Dice Roller")
-        dice_button.clicked.connect(self._open_dice_roller)
-        column.addWidget(dice_button)
 
         exit_button = QPushButton("Exit")
         exit_button.clicked.connect(self.close)
@@ -289,14 +283,6 @@ class StartWindow(QMainWindow):
 
         window = SettingsWindow()
         self._settings_window = window
-        window.show()
-
-    def _open_dice_roller(self) -> None:
-        """Open the standalone Dice Roller window."""
-        from mm_companion.ui.dice_roller import DiceRollerWindow
-
-        window = DiceRollerWindow()
-        self._dice_window = window
         window.show()
 
     def _join_session(self) -> None:

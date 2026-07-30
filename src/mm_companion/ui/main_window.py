@@ -46,11 +46,11 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         # A GM's read-only view of a player's snapshot: force-locked, with only the
-        # View menu — no File/Settings/Tools/Session and no way to unlock or save.
+        # View menu — no File/Settings/Session and no way to unlock or save.
         self._gm_view = gm_view
         # An NPC sheet: the GM's working material, not a player's finished build.
         # It keeps File/Settings but drops the play-time menus that only make sense
-        # for a player at the table — Session, Tools, and Cost config.
+        # for a player at the table — Session and Cost config.
         self._npc = npc
         if gm_view:
             locked = True
@@ -69,8 +69,6 @@ class MainWindow(QMainWindow):
         self._mods_window: QWidget | None = None
         # The settings window, likewise kept referenced while open.
         self._settings_window: QWidget | None = None
-        # The dice roller window, likewise kept referenced while open.
-        self._dice_window: QWidget | None = None
 
         self._sheet = CharacterSheet(character=character)
         self._build_menu_bar(locked)
@@ -110,7 +108,7 @@ class MainWindow(QMainWindow):
         """Build the top menu bar.
 
         A GM's read-only view (:attr:`_gm_view`) gets only the **View** menu — no
-        File/Settings/Tools/Session, and no Lock toggle — so a player's snapshot
+        File/Settings/Session, and no Lock toggle — so a player's snapshot
         can be looked at and rearranged but never edited, saved, or unlocked.
         """
         menu_bar = self.menuBar()
@@ -146,14 +144,13 @@ class MainWindow(QMainWindow):
         self._lock_action.setChecked(locked)
         self._lock_action.toggled.connect(self._sheet.set_locked)
 
-        # Joining a session and rolling dice are things a *player* does at the table;
-        # an NPC sheet is the GM's prep material, driven from the GM window instead.
+        # Joining a session is something a *player* does at the table; an NPC sheet
+        # is the GM's prep material, driven from the GM window instead. (Rolling
+        # dice used to have a Tools menu here; it is the Dice block now — see
+        # mm_companion.ui.sections.dice.)
         if not self._npc:
             session_menu = menu_bar.addMenu("&Session")
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
-
-            tools_menu = menu_bar.addMenu("&Tools")
-            tools_menu.addAction("Dice Roller...").triggered.connect(self._open_dice_roller)
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""
@@ -221,14 +218,6 @@ class MainWindow(QMainWindow):
             player_token=client.player_token,
         )
         attach_player_session(self, bridge)
-
-    def _open_dice_roller(self) -> None:
-        """Open the standalone Dice Roller window."""
-        from mm_companion.ui.dice_roller import DiceRollerWindow
-
-        window = DiceRollerWindow()
-        self._dice_window = window
-        window.show()
 
     def _open_cost_config(self) -> None:
         """Open the per-character homebrew cost-config editor (Settings ▸ Cost config)."""

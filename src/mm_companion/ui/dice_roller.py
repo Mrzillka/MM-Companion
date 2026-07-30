@@ -1,4 +1,4 @@
-"""A standalone dice-roller window for Mutants & Masterminds checks.
+"""The dice roller for Mutants & Masterminds checks.
 
 Set a bonus and a penalty (each a labeled slider linked to a spin box) and,
 optionally, a Difficulty Class, then click the big D20 to play a short roll
@@ -7,9 +7,22 @@ of success/failure. Past rolls stack up in a history panel (each card can be
 removed or saved); a saved roll can be named, dragged to reorder, and lives in a
 persistent "quick rolls" strip pinned to the bottom for one-click reuse.
 
-The roll column is a reusable :class:`DiceRollerPanel`;
-:class:`DiceRollerWindow` is a thin window around one, and GM Mode embeds the
-same panel with its "Hidden roll" option turned on.
+Three widgets, smallest first:
+
+* :class:`DiceRollerPanel` — the roll controls alone (settings, die + readout,
+  quick rolls). GM Mode embeds one directly, with its "Hidden roll" option on.
+* :class:`LocalRollHistory` — the private list of what *this* app rolled, each
+  card removable and saveable.
+* :class:`DiceRollerView` — a panel plus **whichever history is the right one**
+  (see below). This is what the sheet's Dice block
+  (:mod:`mm_companion.ui.sections.dice`) puts on screen; there is no standalone
+  roller window any more.
+
+Both composites **reflow to the space they are given** (see
+:mod:`mm_companion.ui.reflow`), each deciding from its own width, which is what
+lets the one Dice block suit the tall narrow right-hand pinned strip *and* a short
+wide bottom one: a column of four parts, ``[panel][history]``, or one row of four
+as the room grows.
 
 **In a session the panel does not roll.** It asks the session — the server
 resolves every roll and broadcasts the result, so nobody reports their own
@@ -18,7 +31,7 @@ number — and the answer arrives back on
 animation covers the round trip, which is why it is a fixed 1.4 s rather than
 instant. Outside a session the panel rolls locally, exactly as before.
 
-The window owns no character state — it drives :mod:`mm_companion.core.dice`
+Nothing here owns character state — it drives :mod:`mm_companion.core.dice`
 directly (no game rules live here) and persists quick rolls through
 :mod:`mm_companion.core.storage`.
 """
@@ -29,9 +42,10 @@ import random
 from functools import lru_cache
 from importlib.resources import as_file, files
 
-from PySide6.QtCore import QElapsedTimer, QMimeData, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QMimeData, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QCheckBox,
     QFrame,
     QGridLayout,
@@ -39,7 +53,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QMainWindow,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -52,7 +66,17 @@ from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.roll_history import HIDDEN_MARK, RollHistoryPanel, degree_label
+from mm_companion.ui.reflow import ReflowBox
+from mm_companion.ui.roll_history import (
+    HIDDEN_MARK,
+    MAX_QUICK_ROLLS,
+    MIN_HISTORY_HEIGHT,
+    MIN_HISTORY_WIDTH,
+    QuickRollStar,
+    RollHistoryPanel,
+    degree_label,
+    quick_roll_key,
+)
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
@@ -191,9 +215,12 @@ class QuickRollStrip(FlowContainer):
 
 class RollCard(QFrame):
     """One history entry: the die, the modifier breakdown, and (with a DC) the
-    degree of success — plus buttons to save its parameters or drop it."""
+    degree of success — plus a star to save its parameters and a ``−`` to drop it."""
 
-    saveRequested = Signal(dict)
+    #: This card's star was clicked — see
+    #: :attr:`~mm_companion.ui.roll_history.SessionRollCard.saveToggled`, which is
+    #: the same contract from the shared history's card.
+    saveToggled = Signal(dict)
     removeRequested = Signal()
 
     def __init__(
@@ -234,10 +261,9 @@ class RollCard(QFrame):
 
         layout.addLayout(info, stretch=1)
 
-        save_button = QPushButton("★ Save")
-        save_button.setToolTip("Save these parameters to the quick rolls strip")
-        save_button.clicked.connect(lambda: self.saveRequested.emit(dict(self._params)))
-        layout.addWidget(save_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.star = QuickRollStar()
+        self.star.clicked.connect(lambda: self.saveToggled.emit(dict(self._params)))
+        layout.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         remove_button = QPushButton("−")
         remove_button.setFixedWidth(24)
@@ -245,18 +271,31 @@ class RollCard(QFrame):
         remove_button.clicked.connect(self.removeRequested.emit)
         layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
 
+    def parameters(self) -> dict:
+        """The quick-roll parameters this card would save."""
+        return dict(self._params)
 
-class DiceRollerPanel(QWidget):
-    """The roll column: the settings, the die, the readout, and the quick rolls.
+    def set_save_state(self, saved_keys: set, room: bool) -> None:
+        """Light this card's star if its roll is among *saved_keys*."""
+        self.star.set_state(quick_roll_key(self._params) in saved_keys, room)
 
-    Reusable on its own — :class:`DiceRollerWindow` puts one beside a history
-    panel, and GM Mode embeds one with ``hidden_option=True`` so the GM can roll
-    without it reaching anybody's history.
+
+class DiceRollerPanel(ReflowBox, QWidget):
+    """The roll controls: the settings, the die with its readout, and the quick rolls.
+
+    Reusable on its own — :class:`DiceRollerView` puts one beside a history panel,
+    and GM Mode embeds one with ``hidden_option=True`` so the GM can roll without
+    it reaching anybody's history.
+
+    Its three parts **reflow to the space it is given** (see
+    :mod:`mm_companion.ui.reflow`): a column when it is narrow, a row once there is
+    width for all three side by side. That is what lets the Dice block work in a
+    short, wide bottom strip as well as in the tall, narrow right-hand one.
 
     Where the roll *comes from* depends on the session: with one live the panel
     asks the server and waits for the broadcast (see the module docstring);
     without one it rolls locally and reports it on :attr:`localRoll`, which is
-    what the standalone window's own history renders.
+    what a paired :class:`LocalRollHistory` renders.
     """
 
     #: A roll resolved locally, with no session to route it through:
@@ -268,6 +307,12 @@ class DiceRollerPanel(QWidget):
     #: cue a paired :class:`~mm_companion.ui.roll_history.RollHistoryPanel` waits on
     #: so one's own card lands as the die settles, not the instant the server answers.
     sessionRollRevealed = Signal(object)
+
+    #: The quick-roll strip gained, lost or renamed a chip. Two consequences, both
+    #: outside this panel: a paired history's stars have to be re-lit, and the space
+    #: this panel was given no longer matches what it needs (see
+    #: :meth:`DiceRollerView._redivide`).
+    quickRollsChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
@@ -285,29 +330,74 @@ class DiceRollerPanel(QWidget):
         self._roll_clock = QElapsedTimer()
         self._quick_rolls: list[dict] = self._load_quick_rolls()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._build_roll_settings())
-        layout.addWidget(self._build_die(), alignment=Qt.AlignmentFlag.AlignHCenter)
+        # The three reflowing parts, in order. The layout's *direction* is what the
+        # reflow changes, so the parts are added once and never re-parented.
+        self._settings_part = self._build_roll_settings()
+        self._die_part = self._build_die()
+        self._quick_part = self._build_quick_rolls()
 
-        self._readout = QLabel("Click the die to roll.")
-        self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._readout.setWordWrap(True)
-        self._readout.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(self._readout)
-
-        # The stretch sits above the quick-roll strip so the strip stays pinned to
-        # the bottom — the readout growing a degree line no longer nudges it around.
-        layout.addStretch()
-        layout.addWidget(self._build_quick_rolls())
+        self._box = QBoxLayout(QBoxLayout.Direction.TopToBottom, self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._box.setSpacing(self.REFLOW_SPACING)
+        for part in self.reflow_parts():
+            self._box.addWidget(part)
 
         self._rebuild_quick_strip()
+        self.init_reflow()
 
     # -- construction --------------------------------------------------------
+
+    def reflow_parts(self) -> tuple[QWidget, QWidget, QWidget]:
+        """The parts the reflow arranges: roll settings, the die, the quick rolls."""
+        return (self._settings_part, self._die_part, self._quick_part)
+
+    def apply_reflow(self, row: bool) -> None:
+        """Put the three parts in a row or a column.
+
+        Only the layout's direction and its spacers change — the parts themselves
+        stay where they are, so nothing is rebuilt or re-parented.
+
+        The trailing stretch belongs to the **column** alone: there it holds the
+        quick-roll strip down at the bottom so a readout growing a degree line
+        doesn't nudge it about. In a row that same stretch would shove the quick
+        rolls off to the right-hand edge, so it is taken out again.
+        """
+        self._box.setDirection(
+            QBoxLayout.Direction.LeftToRight if row else QBoxLayout.Direction.TopToBottom
+        )
+        # Drop any stretch from the previous arrangement (the parts are widgets, so
+        # every non-widget item in the layout is a spacer we put there).
+        for index in reversed(range(self._box.count())):
+            if self._box.itemAt(index).widget() is None:
+                self._box.takeAt(index)
+        if row:
+            # Across a row the die keeps its fixed 180px and the other two share the
+            # slack. Each part is also top-aligned, so a short one (the Roll grid is
+            # 108px tall) sits at the top of a tall strip instead of having its rows
+            # spread down the whole height. Note this is per *item*: the one-argument
+            # setAlignment places the layout inside its widget, which is not the same
+            # thing and would leave the parts stretched.
+            for part, stretch in zip(self.reflow_parts(), (1, 0, 1), strict=True):
+                self._box.setStretchFactor(part, stretch)
+                self._box.setAlignment(part, Qt.AlignmentFlag.AlignTop)
+        else:
+            for part in self.reflow_parts():
+                self._box.setStretchFactor(part, 0)
+                self._box.setAlignment(part, Qt.AlignmentFlag(0))
+            self._box.insertStretch(self._box.indexOf(self._quick_part))
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        self.sync_reflow()
 
     def _build_roll_settings(self) -> QGroupBox:
         group = QGroupBox("Roll")
         grid = QGridLayout(group)
+        # The sliders are the only thing here worth widening, so give their column
+        # all the slack. Without this the grid shares spare width equally between the
+        # labels, the sliders and the spin boxes, which leaves each slider a few
+        # pixels above its 15px minimum — a groove too short to aim at, let alone drag.
+        grid.setColumnStretch(1, 1)
 
         self._bonus_slider, self._bonus_spin = self._make_slider_spin(0, 20)
         self._penalty_slider, self._penalty_spin = self._make_slider_spin(0, 20)
@@ -324,7 +414,10 @@ class DiceRollerPanel(QWidget):
         self._dc_spin = make_spin_box(0, 60, value=15)
         self._dc_spin.setEnabled(False)
         self._dc_check.toggled.connect(self._dc_spin.setEnabled)
-        grid.addWidget(self._dc_check, 2, 0)
+        # Spanning the label *and* slider columns: on its own in column 0 this
+        # checkbox's caption is by far the widest thing there and would hold that
+        # column open to its width, stealing the room from the sliders beside it.
+        grid.addWidget(self._dc_check, 2, 0, 1, 2)
         grid.addWidget(self._dc_spin, 2, 2)
 
         self._hidden_check = QCheckBox("Hidden roll")
@@ -349,6 +442,15 @@ class DiceRollerPanel(QWidget):
         return slider, spin
 
     def _build_die(self) -> QWidget:
+        """The die and the number it rolled — one part, since the two belong together.
+
+        The readout used to be a sibling of the die in the panel's column; it lives
+        inside now so the reflow moves the two as a unit.
+        """
+        part = QWidget()
+        column = QVBoxLayout(part)
+        column.setContentsMargins(0, 0, 0, 0)
+
         container = QWidget()
         grid = QGridLayout(container)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -379,7 +481,14 @@ class DiceRollerPanel(QWidget):
 
         grid.addWidget(self._die_button, 0, 0)
         grid.addWidget(self._face, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
-        return container
+        column.addWidget(container, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        self._readout = QLabel("Click the die to roll.")
+        self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._readout.setWordWrap(True)
+        self._readout.setTextFormat(Qt.TextFormat.RichText)
+        column.addWidget(self._readout)
+        return part
 
     def _build_quick_rolls(self) -> QGroupBox:
         group = QGroupBox("Quick rolls")
@@ -595,32 +704,49 @@ class DiceRollerPanel(QWidget):
 
     def _load_quick_rolls(self) -> list[dict]:
         stored = storage.load_settings().get(QUICK_ROLLS_KEY) or []
-        return [dict(entry) for entry in stored]
+        # Truncated to the cap, so a settings file written before there was one (or
+        # by hand) cannot hold the strip open past it.
+        return [dict(entry) for entry in stored[:MAX_QUICK_ROLLS]]
 
     def _persist_quick_rolls(self) -> None:
         storage.update_settings(**{QUICK_ROLLS_KEY: self._quick_rolls})
 
-    def save_quick_roll(self, params: dict) -> None:
-        """Prompt for an optional name, then save the roll as a quick roll.
+    def quick_roll_keys(self) -> set[tuple[int, int, int | None]]:
+        """What the strip holds, as :func:`quick_roll_key` tuples — for the stars."""
+        return {quick_roll_key(entry) for entry in self._quick_rolls}
 
-        Public because it is what a history card's "★ Save" ends up in, and the
-        history — local or shared — is a sibling of this panel, not part of it.
+    def quick_rolls_full(self) -> bool:
+        """Whether the strip has reached :data:`MAX_QUICK_ROLLS` and holds no more."""
+        return len(self._quick_rolls) >= MAX_QUICK_ROLLS
+
+    def toggle_quick_roll(self, params: dict) -> None:
+        """Save *params* as a quick roll, or take it back out if it is already one.
+
+        Public because it is what a history card's star ends up in, and the history —
+        local or shared — is a sibling of this panel, not part of it. The star is a
+        two-way switch, so this is one slot rather than a save and an unsave: the card
+        reports the click and the panel, which owns the strip, decides which it was.
+
+        A saved roll is matched by :func:`quick_roll_key`, so a click takes out the
+        chip with these numbers whatever it has since been renamed to.
         """
-        name, ok = QInputDialog.getText(
-            self,
-            "Save quick roll",
-            f"Name for {_params_label(params)} (optional):",
-        )
-        if not ok:
-            return
-        self._add_quick_roll(params, name=name.strip() or None)
+        saved = self._find_quick_roll(params)
+        if saved is None:
+            self._add_quick_roll(params)
+        else:
+            self._remove_quick_roll(saved)
 
     def _add_quick_roll(self, params: dict, name: str | None = None) -> None:
-        """Save a roll's parameters (optionally named) as a quick roll (de-duplicated)."""
+        """Save a roll's parameters (optionally named) as a quick roll.
+
+        Refused when the strip already holds the same numbers — by
+        :func:`quick_roll_key`, so a name does not make a second chip of one roll —
+        or when it is full.
+        """
         entry = {"bonus": params["bonus"], "penalty": params["penalty"], "dc": params.get("dc")}
         if name:
             entry["name"] = name
-        if entry in self._quick_rolls:
+        if self._find_quick_roll(entry) is not None or self.quick_rolls_full():
             return
         self._quick_rolls.append(entry)
         self._persist_quick_rolls()
@@ -631,6 +757,43 @@ class DiceRollerPanel(QWidget):
             self._quick_rolls.remove(entry)
             self._persist_quick_rolls()
             self._rebuild_quick_strip()
+
+    def _rename_quick_roll(self, entry: dict) -> None:
+        """Ask for this chip's caption; an empty answer puts its numbers back.
+
+        The one place a quick roll is named. Saving is a single click on a star with no
+        dialog in the way, so the name comes afterwards, from the chip itself.
+
+        The stored entry is looked up by :func:`quick_roll_key` rather than written
+        through *entry*: only the dict a chip's own lambda closed over is the one in the
+        list, and this is reachable from anywhere with a matching set of numbers.
+        """
+        stored = self._find_quick_roll(entry)
+        if stored is None:
+            return
+        name, ok = QInputDialog.getText(
+            self,
+            "Rename quick roll",
+            f"Name for {_params_label(stored)} (leave empty for none):",
+            text=str(stored.get("name", "")),
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if name:
+            stored["name"] = name
+        else:
+            stored.pop("name", None)
+        self._persist_quick_rolls()
+        self._rebuild_quick_strip()
+
+    def _find_quick_roll(self, params: dict) -> dict | None:
+        """The stored entry loading the same inputs as *params*, if there is one."""
+        key = quick_roll_key(params)
+        for entry in self._quick_rolls:
+            if quick_roll_key(entry) == key:
+                return entry
+        return None
 
     def _reorder_quick_roll(self, source: int, insert_index: int) -> None:
         """Move the quick roll at *source* to *insert_index* (a drop position)."""
@@ -657,6 +820,15 @@ class DiceRollerPanel(QWidget):
         self._start_roll()
 
     def _rebuild_quick_strip(self) -> None:
+        """Render one chip per quick roll, and report that the strip changed.
+
+        The report matters as much as the render. A chip coming or going changes what
+        this panel's minimum is, and two things have to hear about it: the stars in a
+        paired history (which roll is saved), and whatever is dividing space with this
+        panel — :meth:`DiceRollerView._redivide`. ``updateGeometry`` is what makes the
+        enclosing :class:`~mm_companion.ui.block_frame.BlockFrame` ask again, since a
+        minimum that has just *shrunk* provokes no resize of its own.
+        """
         while self._quick_flow.count():
             item = self._quick_flow.takeAt(0)
             widget = item.widget() if item else None
@@ -664,10 +836,18 @@ class DiceRollerPanel(QWidget):
                 widget.deleteLater()
         for index, entry in enumerate(self._quick_rolls):
             self._quick_flow.addWidget(self._make_quick_chip(entry, index))
+        self.updateGeometry()
+        self.quickRollsChanged.emit()
 
     def _make_quick_chip(self, entry: dict, index: int) -> QWidget:
         chip = QFrame()
         chip.setFrameShape(QFrame.Shape.StyledPanel)
+        # Right-click is where a chip is named. Set on the frame alone: a child button
+        # leaves a context-menu event unhandled, so it propagates up to here.
+        chip.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        chip.customContextMenuRequested.connect(
+            lambda pos, c=chip, e=entry: self._show_chip_menu(c, pos, e)
+        )
         layout = QHBoxLayout(chip)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
@@ -688,38 +868,276 @@ class DiceRollerPanel(QWidget):
         layout.addWidget(remove_button)
         return chip
 
+    def _show_chip_menu(self, chip: QWidget, pos: QPoint, entry: dict) -> None:
+        """The chip's own menu: name it, or throw it away."""
+        menu = QMenu(chip)
+        menu.addAction("Rename…").triggered.connect(lambda: self._rename_quick_roll(entry))
+        menu.addAction("Remove").triggered.connect(lambda: self._remove_quick_roll(entry))
+        menu.exec(chip.mapToGlobal(pos))
 
-class DiceRollerWindow(QMainWindow):
-    """A standalone d20 roller: the roll panel on the left, the history on the right.
 
-    Which history depends on the session. On its own the window keeps its own
-    list of what *this* app rolled, each card removable and saveable. In a session
-    that list is replaced by the table's shared one — every roll here is resolved
-    and broadcast by the server anyway, so a private copy beside it would be the
-    same rolls twice, minus everyone else's.
+class LocalRollHistory(QWidget):
+    """The private list of what *this* app rolled, newest first.
+
+    The counterpart of :class:`~mm_companion.ui.roll_history.RollHistoryPanel`:
+    that one is a view of a log the whole table shares, this one is a scratch list
+    of one's own rolls that only exists while there is no session. Each card can
+    be thrown away or saved to the quick-roll strip.
     """
+
+    #: A card's star — the roll's parameters, for the roller to save or unsave.
+    saveToggled = Signal(dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Dice Roller")
-        self.resize(880, 520)
+        # What the roller's quick-roll strip holds, mirrored here so every card's
+        # star agrees; see :meth:`set_quick_roll_state`.
+        self._saved_keys: set = set()
+        self._quick_room = True
 
-        self.panel = DiceRollerPanel()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._container = QWidget()
+        self._layout = QVBoxLayout(self._container)
+        self._layout.addStretch()
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setWidget(self._container)
+        # The same two floors the shared history pins, and for the same reason: these
+        # cards carry the same headline and star, and a scroll area asks for nothing on
+        # its own — so without them the history is squeezed to a sliver, or to the one
+        # card that fits in whatever height is left over.
+        self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
+        self._scroll.setMinimumHeight(MIN_HISTORY_HEIGHT)
+        layout.addWidget(self._scroll)
+
+    def set_quick_roll_state(self, saved_keys: set, room: bool) -> None:
+        """Tell every card what the quick-roll strip holds, so its star can show it.
+
+        The counterpart of
+        :meth:`RollHistoryPanel.set_quick_roll_state
+        <mm_companion.ui.roll_history.RollHistoryPanel.set_quick_roll_state>` — the
+        two histories take the same instruction, so whichever one is showing can be
+        driven by the same wiring.
+        """
+        self._saved_keys = set(saved_keys)
+        self._quick_room = bool(room)
+        for card in self.cards():
+            card.set_save_state(self._saved_keys, self._quick_room)
+
+    def add_roll(self, roll: object) -> None:
+        """Record a roll this app made on its own — the session was not involved."""
+        if not isinstance(roll, dict):
+            return
+        card = RollCard(
+            die=int(roll["die"]),
+            bonus=int(roll["bonus"]),
+            penalty=int(roll["penalty"]),
+            dc=roll["dc"],
+            result=roll["result"],
+        )
+        card.set_save_state(self._saved_keys, self._quick_room)
+        card.saveToggled.connect(self.saveToggled)
+        card.removeRequested.connect(lambda c=card: self._remove_card(c))
+        # Newest on top: insert above every existing card (the stretch is last).
+        self._layout.insertWidget(0, card)
+
+    def cards(self) -> list[RollCard]:
+        """The cards on screen, newest first."""
+        found = []
+        for index in range(self._layout.count()):
+            item = self._layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, RollCard):
+                found.append(widget)
+        return found
+
+    def _remove_card(self, card: RollCard) -> None:
+        self._layout.removeWidget(card)
+        card.setParent(None)
+        card.deleteLater()
+
+
+class DiceRollerView(ReflowBox, QWidget):
+    """A roll panel plus whichever history is the right one, on whichever axis fits.
+
+    Which history depends on the session. On its own the view keeps a private
+    :class:`LocalRollHistory` of what *this* app rolled. In a session that list is
+    replaced by the table's shared one — every roll here is resolved and broadcast
+    by the server anyway, so a private copy beside it would be the same rolls
+    twice, minus everyone else's.
+
+    The two sit in a splitter whose orientation **follows the space available**
+    (:mod:`mm_companion.ui.reflow`), and the panel reflows its own three parts
+    inside that. The two levels decide independently from their own widths, which
+    gives three natural shapes as the room grows:
+
+    1. one column of four — the narrow right-hand pinned strip;
+    2. ``[settings / die / quick rolls] [history]`` — a medium block;
+    3. one row of four — a short, wide bottom strip.
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        hidden_option: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self.panel = DiceRollerPanel(hidden_option=hidden_option)
         self.panel.localRoll.connect(self._add_local_card)
         # Held so the same object can be disconnected again; a fresh lambda per
         # sync would leave the old one attached and stack up.
         self._session_bridge: SessionBridge | None = None
         self._on_session_end = lambda *_: self._sync_session()
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self.panel)
-        splitter.addWidget(self._build_history_panel())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([520, 340])
-        self.setCentralWidget(splitter)
+        self._history_part = self._build_history_panel()
+        # Connected only now that the histories exist for it to reach.
+        self.panel.quickRollsChanged.connect(self._on_quick_rolls_changed)
+        self._splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self._splitter.setChildrenCollapsible(False)
+        for part in self.reflow_parts():
+            self._splitter.addWidget(part)
+        self._splitter.setStretchFactor(0, 0)  # the panel is sized by its content...
+        self._splitter.setStretchFactor(1, 1)  # ...and the history takes the slack
+        # Whether the handle has been dragged since the last flip. Only a real drag
+        # emits splitterMoved (never setSizes), which is the same distinction
+        # PinnedBoard._remember_dragged_extent relies on — and it is what lets the
+        # row keep re-dividing itself on resize without overriding a chosen split.
+        self._user_sized = False
+        self._splitter.splitterMoved.connect(self._on_handle_dragged)
+        # A resize arrives before the parts' own minimums have settled — the pinned
+        # strip converges its thickness over several deferred turns — and the division
+        # computed mid-flight is stale, with no further resize coming to correct it.
+        # So the row is divided again on the turn *after* the dust settles, the same
+        # trick BlockFrame._refresh_layout plays for the same reason.
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.timeout.connect(self._redivide)
 
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._splitter)
+
+        self.init_reflow()
         self._sync_session()
+        self._sync_quick_roll_state()  # the strip may have been restored with chips in it
+
+    # -- the reflow ----------------------------------------------------------
+
+    def reflow_parts(self) -> tuple[QWidget, QWidget]:
+        """The two halves the reflow arranges: the roll panel and the history."""
+        return (self.panel, self._history_part)
+
+    def apply_reflow(self, row: bool) -> None:
+        """Turn the splitter along the axis that fits, forgetting its old sizes.
+
+        The sizes a handle was dragged to are live pixel values, true only of the
+        axis they were measured on — a panel given 200 px of *height* means nothing
+        as a *width*. So a flip clears them and lets the splitter lay both children
+        out afresh, exactly the rule
+        :meth:`~mm_companion.ui.block_canvas.BlockCanvas.set_pin_edge` applies to the
+        pinned strip's own remembered sizes.
+        """
+        self._user_sized = False  # a flip is a fresh axis; nothing has been chosen on it
+        self._splitter.setOrientation(Qt.Orientation.Horizontal if row else Qt.Orientation.Vertical)
+        self._splitter.setSizes(self._row_sizes() if row else self._column_sizes())
+
+    def _on_handle_dragged(self, _pos: int = 0, _index: int = 0) -> None:
+        """The split is the user's from here until the axis flips again."""
+        self._user_sized = True
+
+    def _column_sizes(self) -> list[int]:
+        """How the panel and the history share the height, stacked.
+
+        Each takes what it asks for — the panel is exactly as tall as its controls,
+        the die and however many quick-roll chips there are, and the history's stretch
+        gives it the rest. Which is also why this has to be *re-applied* rather than
+        set once at the flip: the panel carries no stretch, so a chip going away leaves
+        it holding the height it was pushed to and the strip keeps a gap where the chip
+        was. See :meth:`_redivide`.
+        """
+        return [part.sizeHint().height() or 1 for part in self.reflow_parts()]
+
+    def _row_sizes(self) -> list[int]:
+        """How the panel and the history share the width, side by side.
+
+        The panel carries no stretch, so whatever it is handed here is what it keeps
+        — and that decides whether it can reflow *its own* three parts into a row too.
+        That is what produces the one-row-of-four arrangement in a wide bottom strip
+        rather than a narrow column of three beside a very wide history.
+
+        So offer the panel its natural row width, and settle for less only as the
+        space runs out: down to the width its row needs plus the reflow's dead-band
+        (at exactly the threshold it would refuse to flip), and below that back to a
+        column, leaving the history its own minimum throughout. The history takes
+        whatever is left, which is the lion's share of a wide strip.
+        """
+        available = self.reflow_available_width()
+        floor = self.panel.row_minimum_width() + self.REFLOW_HYSTERESIS
+        spare = available - self._history_part.minimumSizeHint().width()
+        if spare < floor:
+            return [self.panel.column_minimum_width(), max(1, available)]
+        natural = self.panel.row_natural_width()
+        # A quarter of whatever is left over beyond the panel's natural width, so its
+        # controls get a little air (a slider worth dragging, a caption that isn't
+        # elided) while the history — which is what actually benefits from length —
+        # still keeps the greater part of a wide strip.
+        wanted = natural + max(0, spare - natural) // 4
+        wanted = max(floor, min(wanted, spare))
+        return [wanted, max(1, available - wanted)]
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Reflow, and re-divide a row as it grows.
+
+        The axis only changes at the threshold, but the panel's *share* of a row has
+        to be recomputed as the width changes: the panel carries no stretch, so
+        without this it would keep whatever it was given at the moment of the flip —
+        which is the threshold width, the narrowest a row ever is — and could never
+        widen enough to reflow its own parts. A split the user chose is left alone.
+        """
+        super().resizeEvent(event)
+        self.sync_reflow()
+        self._divide_row()
+        self._settle.start(0)  # and again once everything has settled
+
+    def _divide_row(self) -> None:
+        """Re-divide a row between the panel and the history (a no-op otherwise)."""
+        if self.is_row and not self._user_sized:
+            self._splitter.setSizes(self._row_sizes())
+
+    def _redivide(self) -> None:
+        """Share the space out again on whichever axis is in use.
+
+        A splitter child with no stretch keeps the pixels it was given, so neither axis
+        gives space back on its own when the panel needs less of it — the panel's
+        minimum drops, and the splitter simply leaves it where it was. So any change to
+        what the panel *contains* has to divide the space again explicitly. A split the
+        user dragged is still left alone.
+        """
+        if self._user_sized:
+            return
+        self._splitter.setSizes(self._row_sizes() if self.is_row else self._column_sizes())
+
+    def _on_quick_rolls_changed(self) -> None:
+        """A chip came, went or was renamed: re-light the stars and re-divide.
+
+        The re-division runs twice, and needs to: the chips just dropped are deleted
+        later, so the panel's size hint only tells the truth on the following turn —
+        the same reason the deferred :attr:`_settle` pass exists for a resize.
+        """
+        self._sync_quick_roll_state()
+        self._redivide()
+        self._settle.start(0)
+
+    def _sync_quick_roll_state(self) -> None:
+        """Push the strip's contents into whichever history is on screen."""
+        keys = self.panel.quick_roll_keys()
+        room = not self.panel.quick_rolls_full()
+        self._local_history.set_quick_roll_state(keys, room)
+        self._session_history.set_quick_roll_state(keys, room)
 
     # -- construction --------------------------------------------------------
 
@@ -730,19 +1148,15 @@ class DiceRollerWindow(QMainWindow):
 
         self._local_box = QGroupBox("History")
         local_layout = QVBoxLayout(self._local_box)
-        self._history_container = QWidget()
-        self._history_layout = QVBoxLayout(self._history_container)
-        self._history_layout.addStretch()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self._history_container)
-        local_layout.addWidget(scroll)
+        self._local_history = LocalRollHistory()
+        self._local_history.saveToggled.connect(self.panel.toggle_quick_roll)
+        local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
         self._session_box = QGroupBox("Session rolls")
         session_layout = QVBoxLayout(self._session_box)
         self._session_history = RollHistoryPanel()
-        self._session_history.saveRequested.connect(self.panel.save_quick_roll)
+        self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
         # Hold this app's own roll until its die stops tumbling; the roller cues it.
         self._session_history.set_defer_own(True)
         self.panel.sessionRollRevealed.connect(self._session_history.release_roll)
@@ -753,12 +1167,18 @@ class DiceRollerWindow(QMainWindow):
 
     # -- the session ---------------------------------------------------------
 
-    def _sync_session(self) -> None:
+    def sync_session(self) -> None:
         """Show whichever history is the right one right now.
 
-        Re-run whenever the answer could have changed — the window may well have
-        been opened before the session was joined, and it outlives one ending.
+        Public because a session can be joined (or left) long after this view was
+        built: the sheet's Dice block is constructed with the sheet, so nothing
+        about it is re-shown when the player joins a table. ``attach_player_session``
+        calls through :meth:`~mm_companion.ui.character_sheet.CharacterSheet.sync_session`
+        at both ends of a session.
         """
+        self._sync_session()
+
+    def _sync_session(self) -> None:
         bridge = live_session()
         if bridge is not self._session_bridge:
             self._follow(bridge)
@@ -782,33 +1202,15 @@ class DiceRollerWindow(QMainWindow):
     # -- the local history ---------------------------------------------------
 
     def _add_local_card(self, roll: object) -> None:
-        """Record a roll this app made on its own — the session was not involved."""
-        if not isinstance(roll, dict):
-            return
-        card = RollCard(
-            die=int(roll["die"]),
-            bonus=int(roll["bonus"]),
-            penalty=int(roll["penalty"]),
-            dc=roll["dc"],
-            result=roll["result"],
-        )
-        card.saveRequested.connect(self.panel.save_quick_roll)
-        card.removeRequested.connect(lambda c=card: self._remove_history_card(c))
-        # Newest on top: insert above every existing card (the stretch is last).
-        self._history_layout.insertWidget(0, card)
-
-    def _remove_history_card(self, card: RollCard) -> None:
-        self._history_layout.removeWidget(card)
-        card.setParent(None)
-        card.deleteLater()
+        self._local_history.add_roll(roll)
 
     # -- lifecycle -----------------------------------------------------------
+
+    def detach(self) -> None:
+        """Let go of the session — the host block or window is going away."""
+        self._session_history.detach()
+        self._follow(None)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt override)
         self._sync_session()
         super().showEvent(event)
-
-    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self._session_history.detach()
-        self._follow(None)
-        super().closeEvent(event)

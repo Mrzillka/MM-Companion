@@ -56,6 +56,12 @@ class BlockDescriptor:
     blocks sharing a ``default_row`` sit side by side in that row, ordered by
     ``default_col``; rows stack in ascending ``default_row`` order.
 
+    ``default_pinned`` moves the block off the page entirely: it starts in the
+    pinned strip (the region that does not scroll) rather than in a row, on its own
+    line, ordered against the other pinned blocks by the same ``default_row`` /
+    ``default_col`` fields. A block is in *either* the rows or the strip, never
+    both — the arrangement model requires every block exactly once.
+
     ``publishes`` and ``subscribes`` describe the block's place on the topic
     signal bus (:mod:`mm_companion.ui.blocks.bus`). ``publishes`` maps the name of
     one of the block's Qt signals to the tuple of topics firing it raises;
@@ -69,5 +75,6 @@ class BlockDescriptor:
     size: BlockSize = BlockSize()
     default_row: int = 0
     default_col: int = 0
+    default_pinned: bool = False
     publishes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     subscribes: Mapping[str, str] = field(default_factory=dict)

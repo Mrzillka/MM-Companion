@@ -5,11 +5,12 @@ the block set that used to be spelled out in three hardcoded places (the sheet's
 ``panels`` list, its ``_sections()`` tuple, and the canvas's ``DEFAULT_ROWS``).
 :class:`~mm_companion.ui.character_sheet.CharacterSheet` iterates
 :func:`block_descriptors` to build its blocks, and the canvas takes
-:func:`default_rows` for its default arrangement.
+:func:`default_rows` plus :func:`default_pin_lines` for its default arrangement —
+the page and the pinned strip respectively.
 
 The registry reuses the generic :class:`~mm_companion.core.registry.Registry`, so
 it keeps insertion order and rejects a duplicate key unless ``replace=True`` — a
-mod overriding a base block is explicit. The ten base blocks register at import;
+mod overriding a base block is explicit. The eleven base blocks register at import;
 a mod's Python module can :func:`register_block` a new one (its size table entry
 travels on the descriptor, so no separate JSON edit is needed).
 """
@@ -41,6 +42,7 @@ from mm_companion.ui.sections import (
     CharacterImageSection,
     ComplicationsSection,
     ConditionsSection,
+    DiceSection,
     PowersSection,
     ResistancesSection,
     SkillsSection,
@@ -71,12 +73,28 @@ def default_rows() -> list[list[str]]:
     """The default arrangement as rows of block keys, derived from the descriptors.
 
     Blocks are grouped by ``default_row`` and ordered within a row by
-    ``default_col``; rows come out in ascending ``default_row`` order.
+    ``default_col``; rows come out in ascending ``default_row`` order. A
+    ``default_pinned`` block is not in a row at all — see :func:`default_pin_lines`.
     """
     rows: dict[int, list[BlockDescriptor]] = defaultdict(list)
     for descriptor in block_descriptors():
+        if descriptor.default_pinned:
+            continue
         rows[descriptor.default_row].append(descriptor)
     return [[d.key for d in sorted(rows[row], key=lambda d: d.default_col)] for row in sorted(rows)]
+
+
+def default_pin_lines() -> list[list[str]]:
+    """The blocks that start in the pinned strip, one per line along it.
+
+    The complement of :func:`default_rows`: together the two cover every
+    registered block exactly once, which is what the arrangement model requires.
+    Ordered by ``default_row``/``default_col`` like the rows are, so a second
+    pinned block lands under the first predictably.
+    """
+    pinned = [d for d in block_descriptors() if d.default_pinned]
+    pinned.sort(key=lambda d: (d.default_row, d.default_col))
+    return [[d.key] for d in pinned]
 
 
 # One row per base block: (key, dock title, factory, default_row, default_col,
@@ -195,11 +213,28 @@ _BASE_BLOCKS = [
         },
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
     ),
+    (
+        "dice",
+        "Dice Roller",
+        DiceSection,
+        6,
+        0,
+        # A roll is not a character edit and must never mark the sheet dirty, and
+        # the roller reads nothing off the build — so it sits out the bus entirely.
+        {},
+        {},
+    ),
 ]
+
+# Blocks that start in the pinned strip instead of in a row (see
+# ``BlockDescriptor.default_pinned``). The strip is the one region that does not
+# scroll with the page, which is exactly where a die belongs: it stays in view
+# through a fight rather than scrolling away under the sheet.
+_PINNED_BY_DEFAULT = frozenset({"dice"})
 
 
 def register_base_blocks(*, replace: bool = False) -> None:
-    """Register the ten base M&M blocks (called once at import)."""
+    """Register the eleven base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
     for key, title, factory, row, col, publishes, subscribes in _BASE_BLOCKS:
         register_block(
@@ -210,6 +245,7 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 sizes.get(key, BlockSize()),
                 row,
                 col,
+                key in _PINNED_BY_DEFAULT,
                 publishes,
                 subscribes,
             ),
@@ -270,8 +306,8 @@ def sync_declarative_blocks(data: GameData) -> None:
                 _block_size(spec),
                 spec.row,
                 spec.col,
-                {"edited": (EDITED,)},
-                {},
+                publishes={"edited": (EDITED,)},
+                subscribes={},
             )
         )
         _declarative_keys.add(spec.id)

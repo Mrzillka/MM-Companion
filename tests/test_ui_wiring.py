@@ -238,9 +238,13 @@ def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
         "complications",
         "skills",
         "powers",
+        "dice",
     }
-    # Every block is placed exactly once across the arrangement's rows.
-    placed = [key for row in sheet.arrangement()["rows"] for key in row]
+    # Every block is placed exactly once across the arrangement — the rows on the
+    # page plus the pinned strip, which the Dice block starts in.
+    arrangement = sheet.arrangement()
+    placed = [key for row in arrangement["rows"] for key in row]
+    placed += [key for line in arrangement["pinned"]["lines"] for key in line]
     assert sorted(placed) == sorted(sheet.block_keys())
 
 

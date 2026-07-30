@@ -809,6 +809,10 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
   - **`ui/dice_roller.py` split.** The roll column is now `DiceRollerPanel(QWidget)`
     — settings, die, readout, quick-roll strip — and `DiceRollerWindow` is a thin
     window around one. GM Mode embeds the same panel with `hidden_option=True`.
+    *(Since superseded: `DiceRollerWindow` is gone. The panel-plus-history composite
+    is `DiceRollerView`, hosted by the sheet's `DiceSection` block — pinned in the
+    strip by default. Everything below about how the two histories swap still
+    holds, on the view rather than the window.)*
     The window's private history stays exactly as it was (`RollCard`, save and
     remove buttons); the panel reports a local roll on **`localRoll`** rather than
     building the card itself, since the history is now a sibling, not part of it.

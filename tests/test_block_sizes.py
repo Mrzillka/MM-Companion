@@ -81,6 +81,25 @@ def test_abilities_and_resistances_frames_are_fixed_and_equal(qapp: QApplication
     assert ability_frame.minimumSizeHint() == resistance_frame.minimumSizeHint()
 
 
+def test_a_long_title_does_not_widen_its_block(qapp: QApplication) -> None:
+    """A caption describes its block; it does not get to decide how wide it is.
+
+    A section's live title grows with its point cost ("Abilities — 24 PP"), and a
+    plain label would report that string's whole width as a minimum — pushing a
+    fixed-width block past its own ``max_width``, and thickening the pinned strip
+    beyond the ``min_width`` that is meant to set it. The title elides instead.
+    """
+    sheet = CharacterSheet(load_game_data())
+    frame = sheet.block_frame("abilities")
+    before = frame.minimumSizeHint().width()
+
+    frame.title_bar.set_title("Abilities — 248 PP, and then some more words besides")
+
+    assert frame.minimumSizeHint().width() == before
+    # Nothing is lost: the caption still reads in full, just not necessarily on screen.
+    assert frame.title_bar.title_text() == "Abilities — 248 PP, and then some more words besides"
+
+
 def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     sizes = load_block_sizes()

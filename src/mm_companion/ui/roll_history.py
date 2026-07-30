@@ -48,6 +48,13 @@ MAX_CARDS = 200
 
 EMPTY_TEXT = "No rolls yet — every roll at this table shows up here."
 
+#: Narrowest a roll history may get. A card carries a name, a headline and a
+#: "★ Save" button; below this its buttons truncate. Both histories pin this as a
+#: floor — a scroll area asks for almost nothing on its own, so without it a
+#: history is squeezed to a sliver by whatever it shares its space with (and, for
+#: the Dice block, a reflow would read that sliver as "a row fits here").
+MIN_HISTORY_WIDTH = 260
+
 
 def degree_label(degree: int | None, critical: bool, die: int) -> str:
     """Human-readable degree of success from the graded numbers themselves.
@@ -210,10 +217,7 @@ class RollHistoryPanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
-        # A card carries a name, a headline and (for one's own) a "★ Save" button;
-        # below this the buttons truncate. Pin a floor so the column never squashes
-        # them, whatever it shares its row with.
-        self._scroll.setMinimumWidth(260)
+        self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
         layout.addWidget(self._scroll)
 
     # -- the feed ----------------------------------------------------------

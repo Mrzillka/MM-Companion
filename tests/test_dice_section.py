@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core import storage
@@ -75,6 +76,72 @@ def test_hiding_and_reopening_the_dice_block(qapp: QApplication) -> None:
 
     sheet.show_block("dice")
     assert not sheet.is_block_hidden("dice")
+
+
+# -- reflowing to the strip it is in -----------------------------------------
+
+
+def _laid_out(qapp: QApplication, sheet: CharacterSheet) -> CharacterSheet:
+    """Show *sheet* with real geometry but no on-screen window (see test_block_canvas)."""
+    sheet.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    sheet.resize(1400, 900)
+    sheet.show()
+    _settle(qapp)
+    return sheet
+
+
+def _settle(qapp: QApplication, times: int = 25) -> None:
+    for _ in range(times):
+        qapp.processEvents()
+
+
+def test_a_bottom_strip_gets_a_row_and_stays_thin(qapp: QApplication) -> None:
+    """The regression this reflow exists for.
+
+    A bottom strip is short and wide. Before the reflow the block stacked its parts
+    regardless, so its ~500px content minimum forced the strip open to well over
+    half the window height, with everything stretched across its width.
+    """
+    sheet = _laid_out(qapp, _sheet(qapp))
+    view = sheet.dice.view
+    assert view.is_row is False  # the default right-hand strip: a column
+
+    sheet.canvas.set_pin_edge("bottom")
+    _settle(qapp)
+
+    assert view.is_row is True
+    assert view.panel.is_row is True  # both levels, so it is one row of four
+    # The strip keeps roughly its default 320px thickness rather than ballooning.
+    assert sheet.board.panel.height() < 420
+
+
+def test_returning_to_a_side_strip_restores_the_column(qapp: QApplication) -> None:
+    sheet = _laid_out(qapp, _sheet(qapp))
+    view = sheet.dice.view
+
+    sheet.canvas.set_pin_edge("bottom")
+    _settle(qapp)
+    assert view.is_row is True
+
+    sheet.canvas.set_pin_edge("right")
+    _settle(qapp)
+
+    assert view.is_row is False
+    assert view.panel.is_row is False
+
+
+def test_the_block_is_never_clipped_in_either_strip(qapp: QApplication) -> None:
+    # Whichever arrangement it lands in, the frame must be given at least what that
+    # arrangement needs — the strip's minimum is what holds the window open.
+    sheet = _laid_out(qapp, _sheet(qapp))
+    frame = sheet.block_frame("dice")
+
+    for edge in ("right", "bottom", "left", "top"):
+        sheet.canvas.set_pin_edge(edge)
+        _settle(qapp)
+        needed = frame.minimumSizeHint()
+        assert frame.width() >= needed.width(), edge
+        assert frame.height() >= needed.height(), edge
 
 
 # -- a roll is not an edit ---------------------------------------------------

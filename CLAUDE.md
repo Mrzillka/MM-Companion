@@ -246,7 +246,7 @@ clean (see Licensing below).
   one block whose descriptor sets `default_pinned` — a die that scrolls away with the
   page is no use mid-fight, so it starts in the strip. There is no standalone roller
   window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` now offers
-  `DiceRollerPanel` (the roll column — GM Mode embeds one with `hidden_option=True`),
+  `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`),
   `LocalRollHistory` (the private list of one's own rolls), and `DiceRollerView` (a
   panel plus **whichever history is right** — the private one alone, the table's shared
   `RollHistoryPanel` in a session), which is what the block hosts. Two ways it is
@@ -254,12 +254,34 @@ clean (see Licensing below).
   and `core.storage` directly), so it publishes nothing on the bus — a roll must never
   mark the sheet dirty — and its `set_locked` is a **no-op**, since rolling is a
   mid-play action like a power's on/off switch. Its history keeps an inner scroll area,
-  the same deliberate exception the GM window's `gm_rolls` block makes. A session can be
-  joined long after the block was built, so `CharacterSheet.sync_session()` fans a
-  duck-typed `sync_session` out to the blocks and `attach_player_session` calls it at
-  both ends of a session. Note that a block's `min_width` in `ui/block_sizes.json` is
-  what sets the **strip's** thickness for a pinned block (a page row is wide enough for
-  anything), so `dice` is 360 — under that its content clips in the strip.
+  the same deliberate exception the GM window's `gm_rolls` block makes, with a
+  `MIN_HISTORY_WIDTH` floor (a scroll area asks for nothing on its own, so without it
+  a history is squeezed to an unreadable sliver). A session can be joined long after
+  the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
+  `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
+  a session.
+- The Dice block **reflows to the shape of the space it is given** (`ui/reflow.py`),
+  which is what lets one block work both in the tall narrow right-hand strip and in a
+  short wide **bottom** one. Two nested levels, each deciding from its own width:
+  `DiceRollerView` turns its splitter (roll panel vs history) and `DiceRollerPanel`
+  flips its `QBoxLayout` (settings / die+readout / quick rolls). That yields three
+  shapes as the room grows — one column of four, then `[panel][history]`, then one row
+  of four. Three things make it work, and all three are load-bearing: `prefers_row`
+  carries a **hysteresis** dead-band (a flip changes the height, which toggles a
+  scrollbar, which changes the width back — an endless relayout otherwise);
+  `init_reflow` sets `SetNoConstraint` on the layout, because a layout otherwise
+  *imposes* its minimum on its widget and a widget in a row could then never be made
+  narrow enough to leave it; and `minimumSizeHint` reports the **column** width always,
+  so the widget can shrink by reflowing instead of pinning the window open. It is the
+  sibling of `ui/sections/column_flow.py` (a *variable* number of panels for a list)
+  and borrows that module's lessons; reuse it for any block with the same problem.
+  Note `DiceRollerView._row_sizes`: the panel carries no splitter stretch, so what the
+  view hands it decides whether *it* can reflow too — hence the deferred `_divide_row`
+  re-run, since the strip converges its thickness over several turns and a division
+  computed mid-flight is stale with no further resize coming.
+- A block's `min_width` in `ui/block_sizes.json` is what sets the **strip's** thickness
+  for a pinned block (a page row is wide enough for anything), so `dice` is 360 — under
+  that its column arrangement clips in a side strip.
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
   inner scroll area, sized to its content. A floated block moves into a

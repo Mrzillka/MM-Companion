@@ -20,7 +20,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton
 
 from mm_companion.core import storage
 from mm_companion.core.dice import resolve_check
@@ -196,6 +197,102 @@ def test_removing_a_history_card(qapp: QApplication, monkeypatch: pytest.MonkeyP
     qapp.processEvents()
 
     assert view._local_history.cards() == []
+
+
+# -- reflowing to the space available ----------------------------------------
+
+
+def _settled(qapp: QApplication, view: DiceRollerView, width: int, height: int) -> None:
+    """Resize *view* and let the deferred re-division settle (see `_divide_row`)."""
+    view.resize(width, height)
+    for _ in range(8):
+        qapp.processEvents()
+
+
+def test_a_narrow_tall_roller_stacks_its_parts(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
+
+    assert view.is_row is False
+    assert view.panel.is_row is False
+    assert view._splitter.orientation() is Qt.Orientation.Vertical
+    assert view.panel._box.direction() is QBoxLayout.Direction.TopToBottom
+
+
+def test_a_short_wide_roller_puts_every_part_in_one_row(qapp: QApplication) -> None:
+    # The case that prompted the whole thing: a bottom strip is short and wide, and
+    # a column there forces the strip open to half the window.
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 1500, 300)
+
+    assert view.is_row is True
+    assert view.panel.is_row is True  # both levels, so it is one row of four
+    assert view._splitter.orientation() is Qt.Orientation.Horizontal
+    assert view.panel._box.direction() is QBoxLayout.Direction.LeftToRight
+
+
+def test_the_arrangement_follows_the_shape_back_and_forth(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 1500, 300)
+    assert (view.is_row, view.panel.is_row) == (True, True)
+
+    _settled(qapp, view, 360, 800)
+    assert (view.is_row, view.panel.is_row) == (False, False)
+
+    _settled(qapp, view, 1500, 300)
+    assert (view.is_row, view.panel.is_row) == (True, True)
+
+
+def test_a_row_reports_a_shorter_minimum_than_a_column(qapp: QApplication) -> None:
+    # This is *why* the reflow fixes the bottom strip: the strip's thickness is
+    # driven by the block's minimum height, and the row's is far smaller.
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 360, 800)
+    tall = view.minimumSizeHint().height()
+    _settled(qapp, view, 1500, 300)
+    short = view.minimumSizeHint().height()
+
+    assert short < tall
+
+
+def test_going_wide_never_raises_the_minimum_width(qapp: QApplication) -> None:
+    # A row's real width minimum would pin the window open at it; the widget can
+    # always narrow again by reflowing, so it must keep reporting the column width.
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 360, 800)
+    narrow = view.minimumSizeHint().width()
+    _settled(qapp, view, 1500, 300)
+
+    assert view.minimumSizeHint().width() <= narrow
+    assert view.minimumSizeHint().width() < view.row_minimum_width()
+
+
+def test_a_dragged_split_is_left_alone_until_the_axis_flips(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+    _settled(qapp, view, 1500, 300)
+
+    # What dragging the handle emits (setSizes never does — the same distinction
+    # PinnedBoard._remember_dragged_extent relies on).
+    view._splitter.setSizes([900, 580])
+    view._splitter.splitterMoved.emit(900, 1)
+    _settled(qapp, view, 1400, 300)
+
+    assert view._user_sized is True
+    assert view._splitter.sizes()[0] > view._row_sizes()[0]  # our division did not win
+
+    _settled(qapp, view, 360, 800)  # a flip is a fresh axis, so the choice is dropped
+    assert view._user_sized is False
 
 
 # -- rolling in a session ----------------------------------------------------

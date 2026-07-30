@@ -136,6 +136,27 @@ def build(target: str):
             panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
             panel._dc_check.setChecked(False)
             panel._finish_roll()
+    elif target in ("dice-bottom", "dice-bottom-demo"):
+        # The Dice block in a *bottom* strip — short and wide, so its four parts
+        # reflow into one row instead of the column the right-hand strip gets.
+        # Nothing else is pinned, so the shot is of the roller alone.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        sheet = win._sheet
+        sheet.canvas.set_pin_edge("bottom")
+        if target == "dice-bottom-demo":
+            panel = sheet.dice.panel
+            panel._bonus_spin.setValue(5)
+            panel._penalty_spin.setValue(1)
+            panel._dc_check.setChecked(True)
+            panel._dc_spin.setValue(15)
+            panel._finish_roll()
+            panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
+            panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+            panel._finish_roll()
+        return win
     elif target in ("settings", "settings-demo"):
         from mm_companion.ui.settings import SettingsWindow
 
@@ -228,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
             "focus",
             "dice",
             "dice-demo",
+            "dice-bottom",
+            "dice-bottom-demo",
             "settings",
             "settings-demo",
             "gm",

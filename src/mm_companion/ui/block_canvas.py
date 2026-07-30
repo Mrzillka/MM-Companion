@@ -226,12 +226,16 @@ class BlockCanvas(QWidget):
         parent: QWidget | None = None,
         *,
         fill_last: bool = False,
+        default_pinned: list[list[str]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
 
         self._sizes = block_sizes
         self._default_rows = default_rows
+        # Blocks the default arrangement parks in the strip rather than on the page
+        # (the sheet's Dice block). A host that offers no strip passes none.
+        self._default_pinned = default_pinned or []
         # When set, the bottom row's growable blocks stretch to fill leftover
         # height instead of a trailing spacer holding empty space beneath them.
         # Used by boards with only a few blocks (GM Mode) where a top-aligned
@@ -446,12 +450,23 @@ class BlockCanvas(QWidget):
     # -- arrangement model ---------------------------------------------------
 
     def default_arrangement(self) -> dict:
-        """The default layout as a persistence model (see the block registry's ``default_rows``)."""
+        """The default layout as a persistence model.
+
+        The page's rows come from the block registry's ``default_rows`` and the
+        strip's lines from its ``default_pin_lines`` (see
+        :mod:`mm_companion.ui.blocks.registry`). A block named in neither trails as
+        a row of its own, so a mod block that declares no position still appears —
+        but a *pinned* block must be excluded from that sweep as well, or it would
+        be placed twice and the exactly-once check in :meth:`_validate` would reject
+        the whole arrangement.
+        """
         present = set(self._frames)
+        pinned = [[k for k in line if k in present] for line in self._default_pinned]
+        pinned = [line for line in pinned if line]
+        used: set[str] = {key for line in pinned for key in line}
         rows: list[list[str]] = []
-        used: set[str] = set()
         for row in self._default_rows:
-            keys = [k for k in row if k in present]
+            keys = [k for k in row if k in present and k not in used]
             used.update(keys)
             if keys:
                 rows.append(keys)
@@ -461,7 +476,7 @@ class BlockCanvas(QWidget):
             "rows": rows,
             "floating": {},
             "hidden": [],
-            "pinned": default_pin_model(),
+            "pinned": default_pin_model() | {"lines": pinned},
         }
 
     def arrangement(self) -> dict:

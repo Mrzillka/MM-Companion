@@ -117,22 +117,25 @@ def build(target: str):
 
         win = PowerConstructorWindow()
     elif target in ("dice", "dice-demo"):
-        from mm_companion.ui.dice_roller import DiceRollerWindow
+        # The roller is a sheet block now, pinned in the strip by default, so the
+        # shot is of the sheet — there is no standalone roller window.
+        from mm_companion.ui.main_window import MainWindow
 
-        win = DiceRollerWindow()
+        win = MainWindow(locked=False)
         if target == "dice-demo":
             # Drive a couple of rolls straight through the resolve path (skipping
-            # the 2s animation) so the readout, a couple of history cards, and a
+            # the tumble animation) so the readout, a couple of history cards, and a
             # saved quick roll are all populated in the screenshot.
-            win._bonus_spin.setValue(5)
-            win._penalty_spin.setValue(1)
-            win._dc_check.setChecked(True)
-            win._dc_spin.setValue(15)
-            win._finish_roll()
-            win._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
-            win._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
-            win._dc_check.setChecked(False)
-            win._finish_roll()
+            panel = win._sheet.dice.panel
+            panel._bonus_spin.setValue(5)
+            panel._penalty_spin.setValue(1)
+            panel._dc_check.setChecked(True)
+            panel._dc_spin.setValue(15)
+            panel._finish_roll()
+            panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
+            panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+            panel._dc_check.setChecked(False)
+            panel._finish_roll()
     elif target in ("settings", "settings-demo"):
         from mm_companion.ui.settings import SettingsWindow
 

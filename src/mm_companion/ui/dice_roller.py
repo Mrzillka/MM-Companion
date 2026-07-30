@@ -1,4 +1,4 @@
-"""A standalone dice-roller window for Mutants & Masterminds checks.
+"""The dice roller for Mutants & Masterminds checks.
 
 Set a bonus and a penalty (each a labeled slider linked to a spin box) and,
 optionally, a Difficulty Class, then click the big D20 to play a short roll
@@ -7,9 +7,16 @@ of success/failure. Past rolls stack up in a history panel (each card can be
 removed or saved); a saved roll can be named, dragged to reorder, and lives in a
 persistent "quick rolls" strip pinned to the bottom for one-click reuse.
 
-The roll column is a reusable :class:`DiceRollerPanel`;
-:class:`DiceRollerWindow` is a thin window around one, and GM Mode embeds the
-same panel with its "Hidden roll" option turned on.
+Three widgets, smallest first:
+
+* :class:`DiceRollerPanel` — the roll column alone (settings, die, readout, quick
+  rolls). GM Mode embeds one directly, with its "Hidden roll" option turned on.
+* :class:`LocalRollHistory` — the private list of what *this* app rolled, each
+  card removable and saveable.
+* :class:`DiceRollerView` — a panel plus **whichever history is the right one**
+  (see below). This is what the sheet's Dice block
+  (:mod:`mm_companion.ui.sections.dice`) puts on screen; there is no standalone
+  roller window any more.
 
 **In a session the panel does not roll.** It asks the session — the server
 resolves every roll and broadcasts the result, so nobody reports their own
@@ -18,7 +25,7 @@ number — and the answer arrives back on
 animation covers the round trip, which is why it is a fixed 1.4 s rather than
 instant. Outside a session the panel rolls locally, exactly as before.
 
-The window owns no character state — it drives :mod:`mm_companion.core.dice`
+Nothing here owns character state — it drives :mod:`mm_companion.core.dice`
 directly (no game rules live here) and persists quick rolls through
 :mod:`mm_companion.core.storage`.
 """
@@ -39,7 +46,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QMainWindow,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -689,35 +695,103 @@ class DiceRollerPanel(QWidget):
         return chip
 
 
-class DiceRollerWindow(QMainWindow):
-    """A standalone d20 roller: the roll panel on the left, the history on the right.
+class LocalRollHistory(QWidget):
+    """The private list of what *this* app rolled, newest first.
 
-    Which history depends on the session. On its own the window keeps its own
-    list of what *this* app rolled, each card removable and saveable. In a session
-    that list is replaced by the table's shared one — every roll here is resolved
-    and broadcast by the server anyway, so a private copy beside it would be the
-    same rolls twice, minus everyone else's.
+    The counterpart of :class:`~mm_companion.ui.roll_history.RollHistoryPanel`:
+    that one is a view of a log the whole table shares, this one is a scratch list
+    of one's own rolls that only exists while there is no session. Each card can
+    be thrown away or saved to the quick-roll strip.
     """
+
+    #: A card's "★ Save" — the roll's parameters, for the roller's quick strip.
+    saveRequested = Signal(dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Dice Roller")
-        self.resize(880, 520)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        self.panel = DiceRollerPanel()
+        self._container = QWidget()
+        self._layout = QVBoxLayout(self._container)
+        self._layout.addStretch()
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setWidget(self._container)
+        layout.addWidget(self._scroll)
+
+    def add_roll(self, roll: object) -> None:
+        """Record a roll this app made on its own — the session was not involved."""
+        if not isinstance(roll, dict):
+            return
+        card = RollCard(
+            die=int(roll["die"]),
+            bonus=int(roll["bonus"]),
+            penalty=int(roll["penalty"]),
+            dc=roll["dc"],
+            result=roll["result"],
+        )
+        card.saveRequested.connect(self.saveRequested)
+        card.removeRequested.connect(lambda c=card: self._remove_card(c))
+        # Newest on top: insert above every existing card (the stretch is last).
+        self._layout.insertWidget(0, card)
+
+    def cards(self) -> list[RollCard]:
+        """The cards on screen, newest first."""
+        found = []
+        for index in range(self._layout.count()):
+            item = self._layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, RollCard):
+                found.append(widget)
+        return found
+
+    def _remove_card(self, card: RollCard) -> None:
+        self._layout.removeWidget(card)
+        card.setParent(None)
+        card.deleteLater()
+
+
+class DiceRollerView(QWidget):
+    """A roll panel plus whichever history is the right one.
+
+    Which history depends on the session. On its own the view keeps a private
+    :class:`LocalRollHistory` of what *this* app rolled. In a session that list is
+    replaced by the table's shared one — every roll here is resolved and broadcast
+    by the server anyway, so a private copy beside it would be the same rolls
+    twice, minus everyone else's.
+
+    *orientation* is how the two are arranged: ``Vertical`` (the default) stacks
+    the history under the panel, which is what fits the sheet's Dice block in a
+    narrow pinned strip; ``Horizontal`` puts them side by side.
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        orientation: Qt.Orientation = Qt.Orientation.Vertical,
+        hidden_option: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self.panel = DiceRollerPanel(hidden_option=hidden_option)
         self.panel.localRoll.connect(self._add_local_card)
         # Held so the same object can be disconnected again; a fresh lambda per
         # sync would leave the old one attached and stack up.
         self._session_bridge: SessionBridge | None = None
         self._on_session_end = lambda *_: self._sync_session()
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = QSplitter(orientation, self)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(self.panel)
         splitter.addWidget(self._build_history_panel())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([520, 340])
-        self.setCentralWidget(splitter)
+        splitter.setStretchFactor(0, 0)  # the panel is sized by its content...
+        splitter.setStretchFactor(1, 1)  # ...and the history takes the slack
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(splitter)
 
         self._sync_session()
 
@@ -730,13 +804,9 @@ class DiceRollerWindow(QMainWindow):
 
         self._local_box = QGroupBox("History")
         local_layout = QVBoxLayout(self._local_box)
-        self._history_container = QWidget()
-        self._history_layout = QVBoxLayout(self._history_container)
-        self._history_layout.addStretch()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self._history_container)
-        local_layout.addWidget(scroll)
+        self._local_history = LocalRollHistory()
+        self._local_history.saveRequested.connect(self.panel.save_quick_roll)
+        local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
         self._session_box = QGroupBox("Session rolls")
@@ -753,12 +823,18 @@ class DiceRollerWindow(QMainWindow):
 
     # -- the session ---------------------------------------------------------
 
-    def _sync_session(self) -> None:
+    def sync_session(self) -> None:
         """Show whichever history is the right one right now.
 
-        Re-run whenever the answer could have changed — the window may well have
-        been opened before the session was joined, and it outlives one ending.
+        Public because a session can be joined (or left) long after this view was
+        built: the sheet's Dice block is constructed with the sheet, so nothing
+        about it is re-shown when the player joins a table. ``attach_player_session``
+        calls through :meth:`~mm_companion.ui.character_sheet.CharacterSheet.sync_session`
+        at both ends of a session.
         """
+        self._sync_session()
+
+    def _sync_session(self) -> None:
         bridge = live_session()
         if bridge is not self._session_bridge:
             self._follow(bridge)
@@ -782,33 +858,15 @@ class DiceRollerWindow(QMainWindow):
     # -- the local history ---------------------------------------------------
 
     def _add_local_card(self, roll: object) -> None:
-        """Record a roll this app made on its own — the session was not involved."""
-        if not isinstance(roll, dict):
-            return
-        card = RollCard(
-            die=int(roll["die"]),
-            bonus=int(roll["bonus"]),
-            penalty=int(roll["penalty"]),
-            dc=roll["dc"],
-            result=roll["result"],
-        )
-        card.saveRequested.connect(self.panel.save_quick_roll)
-        card.removeRequested.connect(lambda c=card: self._remove_history_card(c))
-        # Newest on top: insert above every existing card (the stretch is last).
-        self._history_layout.insertWidget(0, card)
-
-    def _remove_history_card(self, card: RollCard) -> None:
-        self._history_layout.removeWidget(card)
-        card.setParent(None)
-        card.deleteLater()
+        self._local_history.add_roll(roll)
 
     # -- lifecycle -----------------------------------------------------------
+
+    def detach(self) -> None:
+        """Let go of the session — the host block or window is going away."""
+        self._session_history.detach()
+        self._follow(None)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt override)
         self._sync_session()
         super().showEvent(event)
-
-    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self._session_history.detach()
-        self._follow(None)
-        super().closeEvent(event)

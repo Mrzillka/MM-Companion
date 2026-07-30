@@ -198,16 +198,20 @@ clean (see Licensing below).
   rows are the last to claim a frame. The GM window gets the same strip, since it
   hosts the same canvas.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
-  `QScrollArea` → `BlockCanvas`) → nine blocks, each a section `QGroupBox` wrapped
+  `QScrollArea` → `BlockCanvas`) → eleven blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
-  `SkillsSection`, `PowersSection`. The block set is **not** hardcoded in the sheet:
+  `ComplicationsSection`, `SkillsSection`, `PowersSection`, `DiceSection`. The block
+  set is **not** hardcoded in the sheet:
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
-  block (key, dock title, widget factory, `BlockSize`, default row/col), held in an
-  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The nine
+  block (key, dock title, widget factory, `BlockSize`, default row/col, and
+  `default_pinned` for a block that starts in the strip instead of a row), held in an
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The eleven
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
-  cross-block wiring still reaches it) and passes `default_rows()` to the canvas. A
+  cross-block wiring still reaches it) and passes `default_rows()` plus
+  `default_pin_lines()` to the canvas — the page and the strip, which between them
+  must cover every block exactly once. A
   mod's Python module can `register_block(BlockDescriptor)` to add a block without
   editing the sheet. A **data-only** mod can add a block with no Python at all: it
   ships a `blocks.json` (parsed into `GameData.blocks` as `BlockSpec`/`BlockFieldSpec`
@@ -238,6 +242,24 @@ clean (see Licensing below).
   call when abilities/advantages/powers/conditions change. Movement constants live in
   `data/movement.json`; the km/h conversion reads `Measurements.distance_m`. Hero points
   render as five clickable circles.
+- `DiceSection` (`ui/sections/dice.py`) is the d20 roller **as a block**, and it is the
+  one block whose descriptor sets `default_pinned` — a die that scrolls away with the
+  page is no use mid-fight, so it starts in the strip. There is no standalone roller
+  window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` now offers
+  `DiceRollerPanel` (the roll column — GM Mode embeds one with `hidden_option=True`),
+  `LocalRollHistory` (the private list of one's own rolls), and `DiceRollerView` (a
+  panel plus **whichever history is right** — the private one alone, the table's shared
+  `RollHistoryPanel` in a session), which is what the block hosts. Two ways it is
+  unlike its neighbours: it is **not a view over the character** (it drives `core.dice`
+  and `core.storage` directly), so it publishes nothing on the bus — a roll must never
+  mark the sheet dirty — and its `set_locked` is a **no-op**, since rolling is a
+  mid-play action like a power's on/off switch. Its history keeps an inner scroll area,
+  the same deliberate exception the GM window's `gm_rolls` block makes. A session can be
+  joined long after the block was built, so `CharacterSheet.sync_session()` fans a
+  duck-typed `sync_session` out to the blocks and `attach_player_session` calls it at
+  both ends of a session. Note that a block's `min_width` in `ui/block_sizes.json` is
+  what sets the **strip's** thickness for a pinned block (a page row is wide enough for
+  anything), so `dice` is 360 — under that its content clips in the strip.
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
   inner scroll area, sized to its content. A floated block moves into a
@@ -258,7 +280,11 @@ clean (see Licensing below).
   the sheet from the block registry's `default_rows()` (grouping descriptors by
   their default row/col): the Name & Details block beside the Character Image, then
   the System / Power Level block full width, the Abilities | Resistances pair, then
-  Conditions, Advantages, Skills, Powers — with an empty strip on the right.
+  Conditions, Advantages, Complications, Skills, Powers — plus the registry's
+  `default_pin_lines()`, which parks the **Dice Roller** block in the strip on the
+  right. A block is in *either* the rows or the strip, never both: the arrangement
+  model requires every block exactly once, so `default_arrangement()` excludes the
+  pinned keys from the rows (including its trailing sweep over unplaced blocks).
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
   `{version, rows, floating, hidden, hidden_anchors, pinned{edge, lines, align,

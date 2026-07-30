@@ -38,7 +38,7 @@ from mm_companion.core.session.protocol import (
 from mm_companion.ui import dice_roller
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.dice_roller import DiceRollerWindow
+from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
 from mm_companion.ui.session_dialogs import (
     NO_CHARACTER,
@@ -620,40 +620,40 @@ def test_a_players_roll_is_resolved_by_the_gm_and_shared(
     host, player = table
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     set_active_session(player)
-    window = DiceRollerWindow()
-    window.panel._bonus_spin.setValue(7)
-    window.panel._dc_check.setChecked(True)
-    window.panel._dc_spin.setValue(12)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(7)
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(12)
 
-    window.panel._start_roll()
+    view.panel._start_roll()
     assert wait_for(qapp, lambda: len(host.server.state.rolls) == 1)
 
     recorded = host.server.state.rolls[0]
     assert recorded.player_name == "Aria"
     assert (recorded.bonus, recorded.dc) == (7, 12)
     # The number on the player's screen is the server's, not one of its own.
-    assert wait_for(qapp, lambda: str(recorded.total) in window.panel._readout.text())
-    assert wait_for(qapp, lambda: len(window._session_history.cards()) == 1)
+    assert wait_for(qapp, lambda: str(recorded.total) in view.panel._readout.text())
+    assert wait_for(qapp, lambda: len(view._session_history.cards()) == 1)
 
 
 def test_a_players_roller_shows_the_gms_rolls_too(qapp: QApplication, table) -> None:
     host, player = table
     set_active_session(player)
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
     host.server.roll(label="the GM's own", bonus=1)
 
-    assert wait_for(qapp, lambda: len(window._session_history.cards()) == 1)
+    assert wait_for(qapp, lambda: len(view._session_history.cards()) == 1)
 
 
 def test_a_players_roller_never_receives_a_hidden_roll(qapp: QApplication, table) -> None:
     host, player = table
     set_active_session(player)
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
     host.server.roll(label="behind the screen", hidden=True)
     host.server.roll(label="in the open")
 
-    assert wait_for(qapp, lambda: len(window._session_history.cards()) == 1)
-    labels = window._session_history.cards()[0].findChildren(QLabel)
+    assert wait_for(qapp, lambda: len(view._session_history.cards()) == 1)
+    labels = view._session_history.cards()[0].findChildren(QLabel)
     assert any("in the open" in label.text() for label in labels)

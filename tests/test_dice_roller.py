@@ -1,11 +1,15 @@
 """The dice roller presents results, records history, and persists quick rolls.
 
+The subject is :class:`DiceRollerView` — the roll panel plus whichever history is
+the right one — which is what the sheet's Dice block puts on screen. There is no
+standalone roller window any more.
+
 Two modes, and the difference is the point. On its own the panel rolls locally
-and its cards land in the window's own history. In a session it rolls *nothing*
-— it asks the server and waits for the broadcast — so the tests below drive a
-real loopback session and check that the number on screen is the server's, that
-the shared history replaces the private one, and that a session which never
-answers releases the inputs instead of locking the die forever.
+and its cards land in the view's own private history. In a session it rolls
+*nothing* — it asks the server and waits for the broadcast — so the tests below
+drive a real loopback session and check that the number on screen is the
+server's, that the shared history replaces the private one, and that a session
+which never answers releases the inputs instead of locking the die forever.
 
 The tumble is zeroed (``ROLL_DURATION_MS``) wherever a test would otherwise wait
 1.4 s for an animation.
@@ -22,7 +26,7 @@ from mm_companion.core import storage
 from mm_companion.core.dice import resolve_check
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
-from mm_companion.ui.dice_roller import DiceRollerWindow, RollCard, degree_text
+from mm_companion.ui.dice_roller import DiceRollerView, degree_text
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 
@@ -94,17 +98,17 @@ def test_roll_without_dc_shows_total_and_records_history(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
-    window = DiceRollerWindow()
-    window.panel._bonus_spin.setValue(4)
-    window.panel._penalty_spin.setValue(1)  # net modifier +3
-    window.panel._dc_check.setChecked(False)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(4)
+    view.panel._penalty_spin.setValue(1)  # net modifier +3
+    view.panel._dc_check.setChecked(False)
 
-    window.panel._finish_roll()
+    view.panel._finish_roll()
 
-    cards = window._history_container.findChildren(RollCard)
+    cards = view._local_history.cards()
     assert len(cards) == 1
     assert cards[0]._params == {"bonus": 4, "penalty": 1, "dc": None}
-    text = window.panel._readout.text()
+    text = view.panel._readout.text()
     assert "15" in text  # die 12 + net modifier 3
     assert "Success" not in text and "Failure" not in text  # no DC → no degree
 
@@ -113,97 +117,95 @@ def test_roll_with_dc_shows_degree_of_success(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 20)
-    window = DiceRollerWindow()
-    window.panel._bonus_spin.setValue(5)
-    window.panel._penalty_spin.setValue(0)
-    window.panel._dc_check.setChecked(True)
-    window.panel._dc_spin.setValue(15)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(5)
+    view.panel._penalty_spin.setValue(0)
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(15)
 
-    window.panel._finish_roll()
+    view.panel._finish_roll()
 
-    assert "Success" in window.panel._readout.text()
-    assert "Nat 20" in window.panel._readout.text()
+    assert "Success" in view.panel._readout.text()
+    assert "Nat 20" in view.panel._readout.text()
 
 
 def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
-    window.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None})
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None})
 
-    assert window.panel._quick_flow.count() == 1
+    assert view.panel._quick_flow.count() == 1
     assert storage.load_settings()["quick_rolls"] == [{"bonus": 4, "penalty": 1, "dc": None}]
 
     # De-duplicated: the same params don't stack a second chip.
-    window.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None})
-    assert window.panel._quick_flow.count() == 1
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None})
+    assert view.panel._quick_flow.count() == 1
 
 
 def test_quick_rolls_persist_across_windows(qapp: QApplication) -> None:
-    first = DiceRollerWindow()
+    first = DiceRollerView()
     first.panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 15})
 
-    second = DiceRollerWindow()
+    second = DiceRollerView()
     assert second.panel._quick_flow.count() == 1
     assert second.panel._quick_rolls == [{"bonus": 2, "penalty": 0, "dc": 15}]
 
 
 def test_removing_a_quick_roll_persists(qapp: QApplication) -> None:
-    window = DiceRollerWindow()
+    view = DiceRollerView()
     entry = {"bonus": 3, "penalty": 0, "dc": None}
-    window.panel._add_quick_roll(entry)
+    view.panel._add_quick_roll(entry)
 
-    window.panel._remove_quick_roll(entry)
+    view.panel._remove_quick_roll(entry)
 
-    assert window.panel._quick_flow.count() == 0
+    assert view.panel._quick_flow.count() == 0
     assert storage.load_settings()["quick_rolls"] == []
 
 
 def test_named_quick_roll_shows_its_name(qapp: QApplication) -> None:
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
-    window.panel._add_quick_roll({"bonus": 1, "penalty": 0, "dc": None}, name="Perception")
+    view.panel._add_quick_roll({"bonus": 1, "penalty": 0, "dc": None}, name="Perception")
 
-    assert window.panel._quick_rolls == [
-        {"bonus": 1, "penalty": 0, "dc": None, "name": "Perception"}
-    ]
-    labels = {b.text() for b in window.panel._quick_container.findChildren(QPushButton)}
+    assert view.panel._quick_rolls == [{"bonus": 1, "penalty": 0, "dc": None, "name": "Perception"}]
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
     assert "Perception" in labels
 
 
 def test_reordering_moves_and_persists(qapp: QApplication) -> None:
-    window = DiceRollerWindow()
+    view = DiceRollerView()
     first = {"bonus": 1, "penalty": 0, "dc": None}
     second = {"bonus": 2, "penalty": 0, "dc": None}
-    window.panel._add_quick_roll(first)
-    window.panel._add_quick_roll(second)
+    view.panel._add_quick_roll(first)
+    view.panel._add_quick_roll(second)
 
     # Drop the second chip (index 1) before the first (insertion index 0).
-    window.panel._reorder_quick_roll(1, 0)
+    view.panel._reorder_quick_roll(1, 0)
 
-    assert window.panel._quick_rolls == [second, first]
+    assert view.panel._quick_rolls == [second, first]
     assert storage.load_settings()["quick_rolls"] == [second, first]
 
 
 def test_removing_a_history_card(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 7)
-    window = DiceRollerWindow()
-    window.panel._finish_roll()
-    card = window._history_container.findChildren(RollCard)[0]
+    view = DiceRollerView()
+    view.panel._finish_roll()
+    card = view._local_history.cards()[0]
 
     card.removeRequested.emit()
     qapp.processEvents()
 
-    assert window._history_container.findChildren(RollCard) == []
+    assert view._local_history.cards() == []
 
 
 # -- rolling in a session ----------------------------------------------------
 
 
 def test_a_session_replaces_the_private_history(qapp: QApplication, hosting: SessionBridge) -> None:
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
-    assert window._session_box.isVisibleTo(window)
-    assert not window._local_box.isVisibleTo(window)
+    assert view._session_box.isVisibleTo(view)
+    assert not view._local_box.isVisibleTo(view)
 
 
 def test_the_roll_comes_from_the_server_not_the_panel(
@@ -212,53 +214,53 @@ def test_the_roll_comes_from_the_server_not_the_panel(
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     # Any local roll would use this; the server has its own rng.
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 1)
-    window = DiceRollerWindow()
-    window.panel._bonus_spin.setValue(4)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(4)
 
-    window.panel._start_roll()
+    view.panel._start_roll()
     qapp.processEvents()
 
     recorded = hosting.server.state.rolls
     assert len(recorded) == 1
     assert recorded[0].bonus == 4
-    assert str(recorded[0].total) in window.panel._readout.text()
+    assert str(recorded[0].total) in view.panel._readout.text()
     # The card is the shared one; nothing landed in the private list.
-    assert len(window._session_history.cards()) == 1
-    assert window._history_container.findChildren(RollCard) == []
+    assert len(view._session_history.cards()) == 1
+    assert view._local_history.cards() == []
 
 
 def test_the_session_roll_is_graded_against_the_dc(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
 ) -> None:
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
-    window = DiceRollerWindow()
-    window.panel._dc_check.setChecked(True)
-    window.panel._dc_spin.setValue(10)
-    window.panel._bonus_spin.setValue(20)  # cannot fail
+    view = DiceRollerView()
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(10)
+    view.panel._bonus_spin.setValue(20)  # cannot fail
 
-    window.panel._start_roll()
+    view.panel._start_roll()
     qapp.processEvents()
 
-    assert "Success" in window.panel._readout.text()
-    assert "DC 10" in window.panel._readout.text()
+    assert "Success" in view.panel._readout.text()
+    assert "DC 10" in view.panel._readout.text()
 
 
 def test_someone_elses_roll_does_not_end_ours(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
 ) -> None:
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
-    window = DiceRollerWindow()
+    view = DiceRollerView()
     # Nothing answers our request, so the panel stays waiting.
     monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
-    window.panel._start_roll()
+    view.panel._start_roll()
 
     other = hosting.server.state.add_player("Bo")
     hosting.server.roll(player_id=other.player_id, label="not ours")
     qapp.processEvents()
 
-    assert window.panel._awaiting is True
-    assert window.panel._rolling is True
-    window.panel._abandon_roll("done")  # release the timer chain
+    assert view.panel._awaiting is True
+    assert view.panel._rolling is True
+    view.panel._abandon_roll("done")  # release the timer chain
 
 
 def test_a_session_that_never_answers_releases_the_die(
@@ -267,13 +269,13 @@ def test_a_session_that_never_answers_releases_the_die(
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     monkeypatch.setattr(dice_roller, "SESSION_ROLL_TIMEOUT_MS", 0)
     monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
-    window.panel._start_roll()
+    view.panel._start_roll()
 
-    assert dice_roller.NO_ANSWER in window.panel._readout.text()
-    assert window.panel._die_button.isEnabled()
-    assert window.panel._bonus_spin.isEnabled()
+    assert dice_roller.NO_ANSWER in view.panel._readout.text()
+    assert view.panel._die_button.isEnabled()
+    assert view.panel._bonus_spin.isEnabled()
 
 
 def test_a_roll_that_cannot_be_sent_says_so(
@@ -281,33 +283,33 @@ def test_a_roll_that_cannot_be_sent_says_so(
 ) -> None:
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     monkeypatch.setattr(hosting, "request_roll", lambda **kw: False)
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
-    window.panel._start_roll()
+    view.panel._start_roll()
 
-    assert dice_roller.NOT_SENT in window.panel._readout.text()
-    assert window.panel._die_button.isEnabled()
+    assert dice_roller.NOT_SENT in view.panel._readout.text()
+    assert view.panel._die_button.isEnabled()
 
 
 def test_leaving_the_session_brings_the_private_history_back(
     qapp: QApplication, hosting: SessionBridge
 ) -> None:
-    window = DiceRollerWindow()
+    view = DiceRollerView()
 
     hosting.stop()
     set_active_session(None)
-    window._sync_session()
+    view._sync_session()
 
-    assert window._local_box.isVisibleTo(window)
-    assert not window._session_box.isVisibleTo(window)
+    assert view._local_box.isVisibleTo(view)
+    assert not view._session_box.isVisibleTo(view)
 
 
 # -- the hidden-roll option --------------------------------------------------
 
 
 def test_the_hidden_option_is_off_by_default(qapp: QApplication) -> None:
-    window = DiceRollerWindow()
-    assert window.panel._hidden_check.isVisibleTo(window.panel) is False
+    view = DiceRollerView()
+    assert view.panel._hidden_check.isVisibleTo(view.panel) is False
 
 
 def test_a_hidden_roll_never_reaches_the_wire(

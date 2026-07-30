@@ -216,6 +216,10 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     The single seam both entry points share: the launcher's "Join Session" (with a
     freshly loaded character) and a sheet's own ``Session ▸ Join session…`` (with
     the character already open) both call this after ``bridge.join(...)`` succeeds.
+
+    It is also where the sheet's blocks are told a session began or ended, through
+    :meth:`~mm_companion.ui.character_sheet.CharacterSheet.sync_session` — the Dice
+    block swaps its private roll history for the table's shared one off that.
     """
     pusher = SnapshotPusher(window.sheet, bridge, parent=window)
     receiver = ConditionReceiver(window.sheet, bridge, parent=window)
@@ -225,6 +229,7 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
         receiver.detach()
         bridge.stop()
         set_active_session(None)
+        window.sheet.sync_session()
 
     window.closed.connect(leave)
     bridge.disconnected.connect(
@@ -235,6 +240,10 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
             f"The GM removed you from the session: {reason}", 10000
         )
     )
+    # The blocks were built before the session existed, so tell them it does now.
+    # (A session *ending* reaches them on its own: the Dice block follows the
+    # bridge's disconnected/stopped/kicked signals once it has one.)
+    window.sheet.sync_session()
     window.statusBar().showMessage(f"Joined “{bridge.client.session_name}”.", 10000)
     # Keep the wires alive for the window's lifetime.
     window._session_pusher = pusher

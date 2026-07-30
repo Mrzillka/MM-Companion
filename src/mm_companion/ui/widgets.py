@@ -9,8 +9,15 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDoubleSpinBox, QFrame, QSpinBox, QTableWidgetItem
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtWidgets import (
+    QDoubleSpinBox,
+    QFrame,
+    QLabel,
+    QSpinBox,
+    QTableWidgetItem,
+    QWidget,
+)
 
 from mm_companion.ui import theme
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -88,6 +95,56 @@ def title_with_cost(title: str, points: int) -> str:
     ``"Abilities — 24 PP"`` — kept in one place so every section reads the same."""
 
     return f"{title} — {points} PP"
+
+
+class ElidingLabel(QLabel):
+    """A one-line label that gives way to its layout instead of dictating a width.
+
+    A plain ``QLabel`` reports the full width of its text as its minimum, so a
+    long caption becomes a floor the container can never go under — which is
+    wrong for a *caption*: it describes the widget it sits on, it does not decide
+    how wide that widget must be. This one asks for room for an ellipsis and
+    shows the text elided to whatever width it is given, keeping the full string
+    as its :meth:`text` and offering it as the tooltip while it doesn't fit.
+
+    The elision is done by swapping the displayed string, not by painting the
+    text ourselves, so the label keeps being drawn by Qt with whatever the
+    stylesheet gives it (``#blockTitleLabel`` has its own colour and weight).
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt override
+        self._full_text = text
+        self._elide()
+
+    def text(self) -> str:
+        """The whole caption, even while a narrower one is on screen."""
+        return self._full_text
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Room for the ellipsis alone — measured, not a magic pixel count."""
+        return QSize(self.fontMetrics().horizontalAdvance("…"), super().minimumSizeHint().height())
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        metrics = self.fontMetrics()
+        width = self.contentsRect().width()
+        fits = metrics.horizontalAdvance(self._full_text) <= width
+        # Re-entrant through resizeEvent, but idempotent: the same text and width
+        # yield the same string, and QLabel.setText returns early on no change.
+        super().setText(
+            self._full_text
+            if fits
+            else metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, width)
+        )
+        self.setToolTip("" if fits else self._full_text)
 
 
 def hline_separator() -> QFrame:

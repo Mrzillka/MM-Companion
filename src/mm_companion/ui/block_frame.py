@@ -27,7 +27,6 @@ from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
-    QLabel,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.widgets import ElidingLabel
 
 
 class DragHost(Protocol):
@@ -68,7 +68,12 @@ class TitleBar(QFrame):
         layout.setContentsMargins(8, 2, 4, 2)
         layout.setSpacing(2)
 
-        self._label = QLabel(title)
+        # An eliding label, so a block's width comes from its content and not from
+        # the length of its caption: a section's live title grows ("Abilities — 24
+        # PP"), and a plain label would make that string a minimum width — pushing
+        # a fixed-width block past its own max_width, or thickening the pinned
+        # strip beyond the min_width that is supposed to set it.
+        self._label = ElidingLabel(title)
         self._label.setObjectName("blockTitleLabel")
         layout.addWidget(self._label, stretch=1)
 
@@ -105,6 +110,10 @@ class TitleBar(QFrame):
     def set_title(self, text: str) -> None:
         """Update the drag handle's caption (a section reports its live title here)."""
         self._label.setText(text)
+
+    def title_text(self) -> str:
+        """The caption in full, even when the bar is too narrow to show all of it."""
+        return self._label.text()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

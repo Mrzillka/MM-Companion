@@ -412,13 +412,18 @@ def test_reset_layout_puts_a_pinned_block_back_in_one_go(make_sheet) -> None:
 
 
 def test_the_strips_thickness_survives_an_unrelated_rearrangement(make_sheet) -> None:
-    # The board splitter is dragged behind the model's back, so the live sizes are
-    # the truth; a page-side change must not snap the strip back to a stale width.
+    # A page-side change must not snap the strip back to the width it had before
+    # the user dragged its handle wider.
     sheet = make_sheet()
     sheet.pin_block("conditions")
     _settle()
     board = sheet.board
+    # Standing in for a handle drag, which both resizes the splitter *and* emits
+    # splitterMoved — the signal being the whole way the board tells a chosen
+    # thickness from one the pinned blocks merely forced (see
+    # PinnedBoard._remember_dragged_extent). setSizes alone is the latter.
     board._splitter.setSizes([600, 380])
+    board._splitter.splitterMoved.emit(600, 1)
     _settle()
     dragged = board.extent()
 

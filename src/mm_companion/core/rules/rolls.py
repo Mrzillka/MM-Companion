@@ -29,7 +29,6 @@ from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import Effect, GameData, ResistanceOutcome
-from ..dice import CheckResult
 from ..powers import Power, PowerEffectInstance
 from .conditions import (
     condition_check_penalty,
@@ -130,9 +129,7 @@ def skill_row_label(row_id: str) -> str:
     return f"{base} ({spec})" if sep else row_id
 
 
-def skill_roll(
-    char: Character, game_data: GameData, row_id: str, *, label: str = ""
-) -> RollSpec:
+def skill_roll(char: Character, game_data: GameData, row_id: str, *, label: str = "") -> RollSpec:
     """Roll a skill check: the row's total, with any condition penalty applied.
 
     *label* overrides the derived name so a section can pass the exact text it
@@ -181,9 +178,7 @@ def _condition_names(game_data: GameData, ids: object) -> list[str]:
     return names
 
 
-def _rung_text(
-    rung: ResistanceOutcome, effect: PowerEffectInstance, game_data: GameData
-) -> str:
+def _rung_text(rung: ResistanceOutcome, effect: PowerEffectInstance, game_data: GameData) -> str:
     """One ladder rung rendered for this effect instance (see :class:`ResistanceOutcome`)."""
 
     if rung.config_key:
@@ -215,18 +210,34 @@ def effect_outcome_ladder(
     return rungs if any(rungs) else ()
 
 
-def resistance_outcome(spec: RollSpec, result: CheckResult | None) -> str:
+def resistance_outcome(spec: RollSpec, degree: int | None) -> str:
     """What a failed save on *spec* did to the target, or ``""`` when nothing did.
 
     The ladder's last rung covers every deeper failure, so a four-degree rout on a
-    three-rung ladder still answers. A success, an ungraded roll (no DC) and a spec
-    with no ladder all return ``""``.
+    three-rung ladder still answers. A success, an ungraded roll (``degree`` of
+    ``None``, meaning no DC was set) and a spec with no ladder all return ``""``.
+
+    Takes the bare degree rather than a :class:`~mm_companion.core.dice.CheckResult`
+    because a roll that came back from a session is a plain dict off the wire, and
+    both paths must read the same ladder.
     """
 
-    if result is None or not spec.outcomes or result.degree > 0:
+    if degree is None or not spec.outcomes or degree > 0:
         return ""
-    degrees = max(1, abs(result.degree))
+    degrees = max(1, abs(degree))
     return spec.outcomes[min(degrees, len(spec.outcomes)) - 1]
+
+
+def follow_up_offered(spec: RollSpec, degree: int | None) -> bool:
+    """Whether *spec*'s follow-up roll is now due.
+
+    A save is only forced by an attack that landed — but an attack rolled with no
+    DC set (nobody typed the target's Defense) is *ungraded*, not a miss, and the
+    player is the one judging it. So an unknown outcome offers the follow-up too
+    and lets them decide; only a roll that visibly failed withholds it.
+    """
+
+    return spec.follow_up is not None and (degree is None or degree > 0)
 
 
 def _effect_rolls(

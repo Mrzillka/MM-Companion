@@ -75,6 +75,7 @@ from mm_companion.ui.roll_history import (
     MIN_HISTORY_WIDTH,
     QuickRollStar,
     RollHistoryPanel,
+    chain_widgets,
     degree_label,
     escape_rich_text,
     quick_roll_key,
@@ -236,6 +237,10 @@ class RollCard(QFrame):
     saveToggled = Signal(dict)
     removeRequested = Signal()
 
+    #: A chain button on this card was pressed — see
+    #: :func:`~mm_companion.ui.roll_history.chain_widgets`.
+    rollFollowUp = Signal(object)
+
     def __init__(
         self,
         *,
@@ -245,6 +250,7 @@ class RollCard(QFrame):
         dc: int | None,
         result: CheckResult | None,
         label: str = "",
+        spec: object = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -280,6 +286,11 @@ class RollCard(QFrame):
             degree = QLabel(degree_text(result))
             degree.setStyleSheet(f"color: {color};")
             info.addWidget(degree)
+
+        for widget in chain_widgets(
+            spec, None if result is None else result.degree, self.rollFollowUp.emit
+        ):
+            info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
 
@@ -1026,6 +1037,9 @@ class LocalRollHistory(QWidget):
     #: A card's star — the roll's parameters, for the roller to save or unsave.
     saveToggled = Signal(dict)
 
+    #: A card's follow-up button — the next roll in the chain, for the roller to make.
+    rollFollowUp = Signal(object)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         # What the roller's quick-roll strip holds, mirrored here so every card's
@@ -1076,9 +1090,11 @@ class LocalRollHistory(QWidget):
             dc=roll["dc"],
             result=roll["result"],
             label=str(roll.get("label", "")),
+            spec=roll.get("spec"),
         )
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)
+        card.rollFollowUp.connect(self.rollFollowUp)
         card.removeRequested.connect(lambda c=card: self._remove_card(c))
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
@@ -1289,6 +1305,9 @@ class DiceRollerView(ReflowBox, QWidget):
         local_layout = QVBoxLayout(self._local_box)
         self._local_history = LocalRollHistory()
         self._local_history.saveToggled.connect(self.panel.toggle_quick_roll)
+        # A chain button on a card puts the next roll back into the panel it came
+        # from — an attack's card offers the save it forced.
+        self._local_history.rollFollowUp.connect(self.panel.roll_spec)
         local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
@@ -1296,6 +1315,7 @@ class DiceRollerView(ReflowBox, QWidget):
         session_layout = QVBoxLayout(self._session_box)
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
+        self._session_history.rollFollowUp.connect(self.panel.roll_spec)
         # Hold this app's own roll until its die stops tumbling; the roller cues it.
         self._session_history.set_defer_own(True)
         self.panel.sessionRollRevealed.connect(self._session_history.release_roll)

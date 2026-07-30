@@ -37,6 +37,19 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 | `discovery.py` | Getting reachable: join-code encode/decode, UPnP/IGD port mapping and external-IP discovery (SSDP + SOAP, stdlib only), a manual-address fallback, `publish_session()` → a `Reachability` carrying the address **and finished advice prose**, and the `transports` registry / `transport_for()` seam a relay plugs into. |
 | `relay.py` | `RelayTransport` — reach a session through a relay by dialling *out* to it. Registered into `discovery.transports` under `mmrelay://` (TLS) and `mmrelay+tcp://` (plaintext), so a relay join code just works: `server.py`/`client.py` are untouched. |
 
+### What a roll is called
+
+`RollRequest.label` / `RollRecord.label` carry the **name** of what was rolled
+("Athletics", "Blast: 7 vs. Defense"). The field was designed in from the start
+and sat empty until rolling from the character sheet landed; the dice roller now
+fills it from the loaded `RollSpec` (see CLAUDE.md, "Rolling from the sheet"), so
+a shared history reads as who rolled *what*. No protocol change was needed.
+
+The *follow-up* roll a spec provokes, and the outcome ladder a failed save reads,
+stay local to the roller — both are derived from this app's game data rather than
+sent — so another player sees the named roll and its degrees, not the outcome
+sentence.
+
 ### The handshake
 
 A joiner sends `Hello` (protocol version, host token, display name, app version,

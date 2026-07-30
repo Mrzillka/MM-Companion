@@ -54,9 +54,7 @@ from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
 HERO_POINT_CIRCLES = 5
-INITIATIVE_TIP = (
-    f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
-)
+INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
 
 
 class HeroPointsWidget(QWidget):

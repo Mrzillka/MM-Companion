@@ -21,6 +21,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
+    ROLL_REQUESTED,
     SignalBus,
 )
 
@@ -35,6 +36,8 @@ BASE_TOPICS = {
     COST_RATES_CHANGED,
     EDITED,
 }
+
+REQUEST_TOPICS = {ROLL_REQUESTED}
 
 
 # -- bus mechanics -----------------------------------------------------------
@@ -78,6 +81,42 @@ def test_topics_lists_only_subscribed_topics() -> None:
     assert bus.topics() == ["live"]
 
 
+# -- the request (payload) channel -------------------------------------------
+
+
+def test_a_request_carries_its_payload_to_every_server() -> None:
+    bus = SignalBus()
+    seen: list[object] = []
+    bus.serve("t", seen.append)
+    bus.serve("t", seen.append)
+    bus.publish_request("t", "roll me")
+    assert seen == ["roll me", "roll me"]
+
+
+def test_make_requester_forwards_the_signals_first_argument() -> None:
+    bus = SignalBus()
+    seen: list[object] = []
+    bus.serve(ROLL_REQUESTED, seen.append)
+    bus.make_requester(ROLL_REQUESTED)("a spec")
+    assert seen == ["a spec"]
+
+
+def test_the_two_channels_do_not_cross() -> None:
+    # An argless subscriber must never be handed a payload, and a server must never
+    # be woken by a plain notification — that separation is the whole point of the
+    # second channel.
+    bus = SignalBus()
+    fired: list[str] = []
+    bus.subscribe("shared", lambda: fired.append("notified"))
+    bus.serve("shared", lambda payload: fired.append(f"served {payload}"))
+
+    bus.publish("shared")
+    assert fired == ["notified"]
+
+    bus.publish_request("shared", 7)
+    assert fired == ["notified", "served 7"]
+
+
 # -- descriptor pub/sub contract ---------------------------------------------
 
 
@@ -86,9 +125,9 @@ def test_descriptor_signals_and_methods_exist_on_their_blocks() -> None:
     # every subscribed method name must be a real attribute on that class.
     for descriptor in block_descriptors():
         block = descriptor.factory
-        for signal_name in descriptor.publishes:
+        for signal_name in (*descriptor.publishes, *descriptor.requests):
             assert hasattr(block, signal_name), f"{descriptor.key}.{signal_name} missing"
-        for method_name in descriptor.subscribes.values():
+        for method_name in (*descriptor.subscribes.values(), *descriptor.serves.values()):
             assert hasattr(block, method_name), f"{descriptor.key}.{method_name} missing"
 
 
@@ -97,6 +136,22 @@ def test_descriptors_only_use_known_topics() -> None:
         for topics in descriptor.publishes.values():
             assert set(topics) <= BASE_TOPICS
         assert set(descriptor.subscribes) <= BASE_TOPICS
+        for topics in descriptor.requests.values():
+            assert set(topics) <= REQUEST_TOPICS
+        assert set(descriptor.serves) <= REQUEST_TOPICS
+
+
+def test_every_requested_topic_is_served_and_vice_versa() -> None:
+    # The same dead-wiring check the notification channel gets: a request nobody
+    # answers, or a server nobody asks, is a mistake either way.
+    requested: set[str] = set()
+    served: set[str] = set()
+    for descriptor in block_descriptors():
+        for topics in descriptor.requests.values():
+            requested.update(topics)
+        served.update(descriptor.serves)
+    assert requested == REQUEST_TOPICS
+    assert served == REQUEST_TOPICS
 
 
 def test_every_published_topic_has_a_subscriber_and_vice_versa() -> None:

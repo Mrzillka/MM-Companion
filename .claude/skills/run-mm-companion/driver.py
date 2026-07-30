@@ -141,6 +141,43 @@ def build(target: str):
             panel._dc_check.setChecked(False)
             panel._bonus_spin.setValue(4)
             panel._finish_roll()
+    elif target == "roll-demo":
+        # Rolling straight off the sheet. A power's attack is rolled through the
+        # same path a card's 🎲 uses, against a typed-in target Defense, and then
+        # the save it forced is rolled from the follow-up chip on its own history
+        # card — so the shot shows the whole chain, ending in the outcome line.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui import dice_roller as dice_module
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=True)  # the play view: rolling works locked
+        win.show()
+        sheet = win._sheet
+        for key, value in {"STR": 4, "STA": 5, "AGL": 3, "ATK": 7}.items():
+            sheet.abilities._abilities[key].setValue(value)
+        sheet.character.powers.append(
+            Power(name="Force Blast", effects=[PowerEffectInstance("damage", rank=8)])
+        )
+        sheet.powers.refresh()
+
+        panel = sheet.dice.panel
+        attack, _save = sheet.powers._rolls(sheet.character.powers[0])
+        panel.load_spec(attack)
+        panel._dc_check.setChecked(True)
+        panel._dc_spin.setValue(12)  # the target's Defense
+        dice_module.roll_d20 = lambda *a, **k: 14  # a hit, deterministically
+        panel._finish_roll()
+
+        # The chip the hit put on the card: roll the save it forced.
+        card = sheet.dice.view._local_history.cards()[0]
+        from PySide6.QtWidgets import QPushButton
+
+        chip = next(b for b in card.findChildren(QPushButton) if b.text().startswith("🎲"))
+        chip.click()
+        panel._bonus_spin.setValue(4)  # the target's Toughness
+        dice_module.roll_d20 = lambda *a, **k: 6  # and it fails
+        panel._finish_roll()
+        return win
     elif target in ("dice-bottom", "dice-bottom-demo"):
         # The Dice block in a *bottom* strip — short and wide, so its four parts
         # reflow into one row instead of the column the right-hand strip gets.
@@ -254,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
             "focus",
             "dice",
             "dice-demo",
+            "roll-demo",
             "dice-bottom",
             "dice-bottom-demo",
             "settings",

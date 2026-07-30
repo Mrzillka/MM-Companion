@@ -23,6 +23,8 @@ about, and grading is plain arithmetic over the roll dict.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -34,8 +36,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.rules import RollSpec, follow_up_offered, resistance_outcome
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
+from mm_companion.ui.widgets import tinted_style
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
@@ -183,6 +187,44 @@ class QuickRollStar(QPushButton):
         )
 
 
+def chain_widgets(
+    spec: object, degree: int | None, on_follow_up: Callable[[RollSpec], None]
+) -> list[QWidget]:
+    """What a rolled :class:`RollSpec` adds under its history card: the chain.
+
+    Two things, either or neither:
+
+    * a **follow-up button** when the roll provoked another one and landed — an
+      attack that hit makes its target save, and the button primes that save with
+      its DC already filled in (:func:`~mm_companion.core.rules.follow_up_offered`);
+    * an **outcome line** when a save *failed* and the effect ships a degree ladder
+      — "Incapacitated!" rather than a bare "3 degrees of failure".
+
+    Both are local knowledge: the ladder and the next roll are read off this app's
+    game data and never went over the wire, so only the player who rolled sees
+    them. Everyone else sees the named roll and its degrees, which is what the
+    protocol carries.
+    """
+
+    if not isinstance(spec, RollSpec):
+        return []
+    widgets: list[QWidget] = []
+    if follow_up_offered(spec, degree):
+        follow_up = spec.follow_up
+        button = QPushButton(f"🎲 {follow_up.label}")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setToolTip(follow_up.hint or f"Roll {follow_up.label}")
+        button.clicked.connect(lambda _=False, s=follow_up: on_follow_up(s))
+        widgets.append(button)
+    outcome = resistance_outcome(spec, degree)
+    if outcome:
+        line = QLabel(f"{escape_rich_text(outcome)}!")
+        line.setWordWrap(True)
+        line.setStyleSheet(tinted_style("tint.worse", bold=True))
+        widgets.append(line)
+    return widgets
+
+
 class SessionRollCard(QFrame):
     """One roll in the shared history: who rolled it, what it was, how it went.
 
@@ -198,6 +240,11 @@ class SessionRollCard(QFrame):
     #: owns the strip), so the card only reports the click and its parameters.
     saveToggled = Signal(dict)
     removeRequested = Signal(int)
+
+    #: A chain button on this card was pressed — roll the spec it carries. Only ever
+    #: on one's own card, since a follow-up is read off local game data (see
+    #: :func:`chain_widgets`).
+    rollFollowUp = Signal(object)
 
     def __init__(
         self,
@@ -259,6 +306,14 @@ class SessionRollCard(QFrame):
             outcome.setStyleSheet(f"color: {colour};")
             info.addWidget(outcome)
 
+        # The chain, when the roller attached a spec to its own card. ``spec`` is a
+        # local-only key the panel adds on the way past — it is never on the wire, so
+        # another player's card simply has none.
+        for widget in chain_widgets(
+            roll.get("spec"), None if degree is None else int(degree), self.rollFollowUp.emit
+        ):
+            info.addWidget(widget)
+
         layout.addLayout(info, stretch=1)
 
         # Only for a roll of one's own: saving someone else's modifiers into your
@@ -297,6 +352,9 @@ class RollHistoryPanel(QWidget):
     #: A roll the GM struck with no live session to remove it from — so an owner
     #: (the GM window) can drop it from a persisted, off-air session too.
     rollRemovedLocally = Signal(int)
+
+    #: A card's follow-up button was pressed — roll this spec (see :func:`chain_widgets`).
+    rollFollowUp = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, *, gm: bool = False) -> None:
         super().__init__(parent)
@@ -448,6 +506,7 @@ class RollHistoryPanel(QWidget):
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)
         card.removeRequested.connect(self._request_remove)
+        card.rollFollowUp.connect(self.rollFollowUp)
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()

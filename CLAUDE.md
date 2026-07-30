@@ -255,11 +255,28 @@ clean (see Licensing below).
   mark the sheet dirty — and its `set_locked` is a **no-op**, since rolling is a
   mid-play action like a power's on/off switch. Its history keeps an inner scroll area,
   the same deliberate exception the GM window's `gm_rolls` block makes, with a
-  `MIN_HISTORY_WIDTH` floor (a scroll area asks for nothing on its own, so without it
-  a history is squeezed to an unreadable sliver). A session can be joined long after
-  the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
+  `MIN_HISTORY_WIDTH` **and** `MIN_HISTORY_HEIGHT` floor (a scroll area asks for nothing
+  on its own, so without them a history is squeezed to an unreadable sliver, or to the
+  one card that fits in whatever height is left over). A session can be joined long
+  after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
+- **Quick rolls** are capped at `MAX_QUICK_ROLLS` (6). The cap is a layout constraint,
+  not a preference: the strip shares the block with the controls and the die, so an
+  unbounded chip list ratchets the block — and the pinned strip holding it — ever
+  taller. A history card carries no "Save" button, only a `QuickRollStar`: `☆` muted
+  (not saved), `★` washed in `accent.dice` (saved — a click takes it *out* again), or
+  `☆` disabled (the strip is full). Three consequences worth knowing. The star is a
+  **two-way switch**, so a card reports the click on `saveToggled` and the panel —
+  which owns the strip — decides whether that was a save or an unsave
+  (`toggle_quick_roll`). Identity is `quick_roll_key` (`bonus`/`penalty`/`dc` alone,
+  **ignoring `name`**), so one star answers for a chip however it was later renamed;
+  comparing whole entries is the old bug where a named chip and its unnamed twin were
+  two rolls. And because a card cannot reach the panel (`roll_history` is the *lower*
+  module — `dice_roller` imports it, never the reverse), the state is **pushed down**:
+  `quickRollsChanged` → `set_quick_roll_state(keys, room)`, which both histories
+  remember so a card built later starts out agreeing. Naming moved off the save path
+  onto the chip's own right-click ▸ Rename… — saving is one click with no dialog.
 - The Dice block **reflows to the shape of the space it is given** (`ui/reflow.py`),
   which is what lets one block work both in the tall narrow right-hand strip and in a
   short wide **bottom** one. Two nested levels, each deciding from its own width:
@@ -279,6 +296,16 @@ clean (see Licensing below).
   view hands it decides whether *it* can reflow too — hence the deferred `_divide_row`
   re-run, since the strip converges its thickness over several turns and a division
   computed mid-flight is stale with no further resize coming.
+- That same zero stretch is why **a change in what the panel contains must re-divide the
+  splitter explicitly** (`_redivide`, which handles either axis via `_row_sizes` /
+  `_column_sizes`). A splitter child with no stretch keeps the pixels it was given: when
+  the panel's minimum *shrinks* the splitter simply leaves it where it was, and Qt sends
+  no resize — a minimum going down provokes nothing. Removing a quick roll used to leave
+  a permanent gap above the strip for exactly this reason. So `_rebuild_quick_strip`
+  emits `quickRollsChanged` and calls `updateGeometry` (what makes the `BlockFrame` ask
+  again), and the view re-divides **twice** — now, and on the next turn, since the
+  dropped chips are `deleteLater`'d and the size hint only tells the truth once they are
+  gone. A split the user dragged is still left alone (`_user_sized`).
 - A block's `min_width` in `ui/block_sizes.json` is what sets the **strip's** thickness
   for a pinned block (a page row is wide enough for anything), so `dice` is 360 — under
   that its column arrangement clips in a side strip.

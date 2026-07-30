@@ -28,6 +28,7 @@ from mm_companion.core.dice import resolve_check
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.dice_roller import DiceRollerView, degree_text
+from mm_companion.ui.roll_history import MAX_QUICK_ROLLS, MIN_HISTORY_HEIGHT
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 
@@ -138,8 +139,10 @@ def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
     assert view.panel._quick_flow.count() == 1
     assert storage.load_settings()["quick_rolls"] == [{"bonus": 4, "penalty": 1, "dc": None}]
 
-    # De-duplicated: the same params don't stack a second chip.
+    # De-duplicated by the numbers alone, so a *name* doesn't make a second chip of
+    # the same roll — which is what lets one star answer for both.
     view.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None})
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None}, name="Attack")
     assert view.panel._quick_flow.count() == 1
 
 
@@ -185,6 +188,113 @@ def test_reordering_moves_and_persists(qapp: QApplication) -> None:
 
     assert view.panel._quick_rolls == [second, first]
     assert storage.load_settings()["quick_rolls"] == [second, first]
+
+
+def test_the_strip_holds_no_more_than_the_cap(qapp: QApplication) -> None:
+    # An unbounded strip ratchets the whole Dice block (and the pinned strip holding
+    # it) taller and taller, which is the point of the cap.
+    view = DiceRollerView()
+
+    for bonus in range(MAX_QUICK_ROLLS + 3):
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
+
+    assert view.panel._quick_flow.count() == MAX_QUICK_ROLLS
+    assert view.panel.quick_rolls_full() is True
+    assert len(storage.load_settings()["quick_rolls"]) == MAX_QUICK_ROLLS
+
+
+def test_a_settings_file_over_the_cap_is_truncated_on_load(qapp: QApplication) -> None:
+    # Written before there was a cap, or by hand — either way it must not hold the
+    # strip open past it.
+    stored = [{"bonus": b, "penalty": 0, "dc": None} for b in range(MAX_QUICK_ROLLS + 4)]
+    storage.update_settings(quick_rolls=stored)
+
+    view = DiceRollerView()
+
+    assert len(view.panel._quick_rolls) == MAX_QUICK_ROLLS
+    assert view.panel._quick_flow.count() == MAX_QUICK_ROLLS
+
+
+def test_a_star_saves_then_unsaves_the_same_roll(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    params = {"bonus": 3, "penalty": 0, "dc": 15}
+
+    view.panel.toggle_quick_roll(params)
+    assert view.panel._quick_flow.count() == 1
+
+    view.panel.toggle_quick_roll(params)
+    assert view.panel._quick_flow.count() == 0
+    assert storage.load_settings()["quick_rolls"] == []
+
+
+def test_a_stars_click_takes_out_the_chip_however_it_was_renamed(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    entry = {"bonus": 3, "penalty": 0, "dc": None}
+    view.panel._add_quick_roll(entry, name="Perception")
+
+    # The card knows only its numbers; the name came later, on the chip.
+    view.panel.toggle_quick_roll({"bonus": 3, "penalty": 0, "dc": None})
+
+    assert view.panel._quick_rolls == []
+
+
+def test_a_history_cards_star_follows_the_strip(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(2)
+    view.panel._finish_roll()
+    star = view._local_history.cards()[0].star
+
+    assert star.is_saved() is False
+
+    # Saving that roll lights its card, with no rebuild of the card in between.
+    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0, "dc": None})
+    assert star.is_saved() is True
+
+    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0, "dc": None})
+    assert star.is_saved() is False
+
+
+def test_a_full_strip_disables_an_unsaved_cards_star(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(20)  # not a roll any of the chips below match
+    view.panel._finish_roll()
+
+    for bonus in range(MAX_QUICK_ROLLS):
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
+
+    star = view._local_history.cards()[0].star
+    assert star.is_saved() is False
+    assert star.isEnabled() is False
+
+
+def test_renaming_a_chip_persists_and_recaptions_it(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    view = DiceRollerView()
+    entry = {"bonus": 1, "penalty": 0, "dc": None}
+    view.panel._add_quick_roll(entry)
+    monkeypatch.setattr(
+        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True))
+    )
+
+    view.panel._rename_quick_roll(entry)
+
+    assert storage.load_settings()["quick_rolls"] == [dict(entry, name="Perception")]
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    assert "Perception" in labels
+
+    # And an empty answer puts the numbers back.
+    monkeypatch.setattr(
+        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("  ", True))
+    )
+    view.panel._rename_quick_roll(view.panel._quick_rolls[0])
+    assert "name" not in view.panel._quick_rolls[0]
 
 
 def test_removing_a_history_card(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,6 +385,35 @@ def test_going_wide_never_raises_the_minimum_width(qapp: QApplication) -> None:
 
     assert view.minimumSizeHint().width() <= narrow
     assert view.minimumSizeHint().width() < view.row_minimum_width()
+
+
+def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> None:
+    # The panel carries no splitter stretch, so it keeps whatever height the chips
+    # pushed it to unless the space is divided again — which used to leave a growing
+    # gap above the strip as chips were removed.
+    view = DiceRollerView()
+    view.show()
+    for bonus in range(MAX_QUICK_ROLLS):
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
+    _settled(qapp, view, 360, 800)
+
+    full_panel, full_history = view._splitter.sizes()
+
+    for entry in list(view.panel._quick_rolls):
+        view.panel._remove_quick_roll(entry)
+    for _ in range(8):
+        qapp.processEvents()
+
+    empty_panel, empty_history = view._splitter.sizes()
+    assert empty_panel < full_panel
+    assert empty_history > full_history
+
+
+def test_the_history_is_never_squeezed_below_two_cards(qapp: QApplication) -> None:
+    view = DiceRollerView()
+
+    assert view._local_history._scroll.minimumHeight() == MIN_HISTORY_HEIGHT
+    assert view._session_history._scroll.minimumHeight() == MIN_HISTORY_HEIGHT
 
 
 def test_a_dragged_split_is_left_alone_until_the_axis_flips(qapp: QApplication) -> None:

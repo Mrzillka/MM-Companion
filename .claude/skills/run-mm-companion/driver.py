@@ -123,9 +123,11 @@ def build(target: str):
 
         win = MainWindow(locked=False)
         if target == "dice-demo":
-            # Drive a couple of rolls straight through the resolve path (skipping
-            # the tumble animation) so the readout, a couple of history cards, and a
-            # saved quick roll are all populated in the screenshot.
+            # Drive a couple of rolls straight through the resolve path (skipping the
+            # tumble animation) so the readout and a couple of history cards are
+            # populated, and fill the quick-roll strip to one short of MAX_QUICK_ROLLS
+            # so the shot shows both star states: the first roll's card is lit (it *is*
+            # a quick roll), the second's is muted (it is not, and there is room).
             panel = win._sheet.dice.panel
             panel._bonus_spin.setValue(5)
             panel._penalty_spin.setValue(1)
@@ -134,7 +136,10 @@ def build(target: str):
             panel._finish_roll()
             panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
             panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+            for bonus in (3, 7, 11):
+                panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
             panel._dc_check.setChecked(False)
+            panel._bonus_spin.setValue(4)
             panel._finish_roll()
     elif target in ("dice-bottom", "dice-bottom-demo"):
         # The Dice block in a *bottom* strip — short and wide, so its four parts

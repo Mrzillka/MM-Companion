@@ -23,8 +23,11 @@ from mm_companion.core.session.model import new_session
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
     MAX_CARDS,
+    MIN_HISTORY_HEIGHT,
+    MIN_HISTORY_WIDTH,
     RollHistoryPanel,
     degree_label,
+    quick_roll_key,
     roll_parameters,
 )
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
@@ -199,13 +202,49 @@ def test_only_your_own_roll_can_be_saved(panel: RollHistoryPanel) -> None:
 
 def test_saving_reports_the_parameters(panel: RollHistoryPanel) -> None:
     seen: list[dict] = []
-    panel.saveRequested.connect(seen.append)
+    panel.saveToggled.connect(seen.append)
     panel._own_id = "p1"
     panel.add_roll(roll())
 
-    panel.findChildren(QPushButton)[0].click()
+    panel.cards()[0].star.click()
 
     assert seen == [{"bonus": 6, "penalty": 0, "dc": 15}]
+
+
+def test_a_saved_rolls_star_is_lit_and_a_full_strip_disables_the_rest(
+    panel: RollHistoryPanel,
+) -> None:
+    panel._own_id = "p1"
+    panel.add_roll(roll(seq=1, player_id="p1"))  # +6 vs DC 15
+    star = panel.cards()[0].star
+
+    assert star.is_saved() is False
+    assert star.isEnabled() is True
+
+    # That roll is now in the strip, so its star lights up...
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0, "dc": 15})}, True)
+    assert star.is_saved() is True
+
+    # ...and with the strip full, a card that is *not* in it cannot be saved.
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 1, "penalty": 0, "dc": None})}, False)
+    assert star.is_saved() is False
+    assert star.isEnabled() is False
+
+
+def test_a_card_built_after_the_strip_was_told_starts_out_lit(panel: RollHistoryPanel) -> None:
+    # The state is remembered, not just applied: a roll arriving later has to agree
+    # with the chips already in the strip.
+    panel._own_id = "p1"
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0, "dc": 15})}, True)
+
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    assert panel.cards()[0].star.is_saved() is True
+
+
+def test_the_history_is_never_squeezed_below_two_cards(panel: RollHistoryPanel) -> None:
+    assert panel._scroll.minimumWidth() == MIN_HISTORY_WIDTH
+    assert panel._scroll.minimumHeight() == MIN_HISTORY_HEIGHT
 
 
 # -- deferring one's own roll until the die settles -------------------------

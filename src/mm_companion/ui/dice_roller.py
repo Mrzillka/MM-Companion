@@ -42,7 +42,7 @@ import random
 from functools import lru_cache
 from importlib.resources import as_file, files
 
-from PySide6.QtCore import QElapsedTimer, QMimeData, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QMimeData, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -68,9 +69,13 @@ from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
+    MAX_QUICK_ROLLS,
+    MIN_HISTORY_HEIGHT,
     MIN_HISTORY_WIDTH,
+    QuickRollStar,
     RollHistoryPanel,
     degree_label,
+    quick_roll_key,
 )
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -210,9 +215,12 @@ class QuickRollStrip(FlowContainer):
 
 class RollCard(QFrame):
     """One history entry: the die, the modifier breakdown, and (with a DC) the
-    degree of success — plus buttons to save its parameters or drop it."""
+    degree of success — plus a star to save its parameters and a ``−`` to drop it."""
 
-    saveRequested = Signal(dict)
+    #: This card's star was clicked — see
+    #: :attr:`~mm_companion.ui.roll_history.SessionRollCard.saveToggled`, which is
+    #: the same contract from the shared history's card.
+    saveToggled = Signal(dict)
     removeRequested = Signal()
 
     def __init__(
@@ -253,16 +261,23 @@ class RollCard(QFrame):
 
         layout.addLayout(info, stretch=1)
 
-        save_button = QPushButton("★ Save")
-        save_button.setToolTip("Save these parameters to the quick rolls strip")
-        save_button.clicked.connect(lambda: self.saveRequested.emit(dict(self._params)))
-        layout.addWidget(save_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.star = QuickRollStar()
+        self.star.clicked.connect(lambda: self.saveToggled.emit(dict(self._params)))
+        layout.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         remove_button = QPushButton("−")
         remove_button.setFixedWidth(24)
         remove_button.setToolTip("Remove this roll from history")
         remove_button.clicked.connect(self.removeRequested.emit)
         layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+    def parameters(self) -> dict:
+        """The quick-roll parameters this card would save."""
+        return dict(self._params)
+
+    def set_save_state(self, saved_keys: set, room: bool) -> None:
+        """Light this card's star if its roll is among *saved_keys*."""
+        self.star.set_state(quick_roll_key(self._params) in saved_keys, room)
 
 
 class DiceRollerPanel(ReflowBox, QWidget):
@@ -292,6 +307,12 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: cue a paired :class:`~mm_companion.ui.roll_history.RollHistoryPanel` waits on
     #: so one's own card lands as the die settles, not the instant the server answers.
     sessionRollRevealed = Signal(object)
+
+    #: The quick-roll strip gained, lost or renamed a chip. Two consequences, both
+    #: outside this panel: a paired history's stars have to be re-lit, and the space
+    #: this panel was given no longer matches what it needs (see
+    #: :meth:`DiceRollerView._redivide`).
+    quickRollsChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
@@ -683,32 +704,49 @@ class DiceRollerPanel(ReflowBox, QWidget):
 
     def _load_quick_rolls(self) -> list[dict]:
         stored = storage.load_settings().get(QUICK_ROLLS_KEY) or []
-        return [dict(entry) for entry in stored]
+        # Truncated to the cap, so a settings file written before there was one (or
+        # by hand) cannot hold the strip open past it.
+        return [dict(entry) for entry in stored[:MAX_QUICK_ROLLS]]
 
     def _persist_quick_rolls(self) -> None:
         storage.update_settings(**{QUICK_ROLLS_KEY: self._quick_rolls})
 
-    def save_quick_roll(self, params: dict) -> None:
-        """Prompt for an optional name, then save the roll as a quick roll.
+    def quick_roll_keys(self) -> set[tuple[int, int, int | None]]:
+        """What the strip holds, as :func:`quick_roll_key` tuples — for the stars."""
+        return {quick_roll_key(entry) for entry in self._quick_rolls}
 
-        Public because it is what a history card's "★ Save" ends up in, and the
-        history — local or shared — is a sibling of this panel, not part of it.
+    def quick_rolls_full(self) -> bool:
+        """Whether the strip has reached :data:`MAX_QUICK_ROLLS` and holds no more."""
+        return len(self._quick_rolls) >= MAX_QUICK_ROLLS
+
+    def toggle_quick_roll(self, params: dict) -> None:
+        """Save *params* as a quick roll, or take it back out if it is already one.
+
+        Public because it is what a history card's star ends up in, and the history —
+        local or shared — is a sibling of this panel, not part of it. The star is a
+        two-way switch, so this is one slot rather than a save and an unsave: the card
+        reports the click and the panel, which owns the strip, decides which it was.
+
+        A saved roll is matched by :func:`quick_roll_key`, so a click takes out the
+        chip with these numbers whatever it has since been renamed to.
         """
-        name, ok = QInputDialog.getText(
-            self,
-            "Save quick roll",
-            f"Name for {_params_label(params)} (optional):",
-        )
-        if not ok:
-            return
-        self._add_quick_roll(params, name=name.strip() or None)
+        saved = self._find_quick_roll(params)
+        if saved is None:
+            self._add_quick_roll(params)
+        else:
+            self._remove_quick_roll(saved)
 
     def _add_quick_roll(self, params: dict, name: str | None = None) -> None:
-        """Save a roll's parameters (optionally named) as a quick roll (de-duplicated)."""
+        """Save a roll's parameters (optionally named) as a quick roll.
+
+        Refused when the strip already holds the same numbers — by
+        :func:`quick_roll_key`, so a name does not make a second chip of one roll —
+        or when it is full.
+        """
         entry = {"bonus": params["bonus"], "penalty": params["penalty"], "dc": params.get("dc")}
         if name:
             entry["name"] = name
-        if entry in self._quick_rolls:
+        if self._find_quick_roll(entry) is not None or self.quick_rolls_full():
             return
         self._quick_rolls.append(entry)
         self._persist_quick_rolls()
@@ -719,6 +757,43 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._quick_rolls.remove(entry)
             self._persist_quick_rolls()
             self._rebuild_quick_strip()
+
+    def _rename_quick_roll(self, entry: dict) -> None:
+        """Ask for this chip's caption; an empty answer puts its numbers back.
+
+        The one place a quick roll is named. Saving is a single click on a star with no
+        dialog in the way, so the name comes afterwards, from the chip itself.
+
+        The stored entry is looked up by :func:`quick_roll_key` rather than written
+        through *entry*: only the dict a chip's own lambda closed over is the one in the
+        list, and this is reachable from anywhere with a matching set of numbers.
+        """
+        stored = self._find_quick_roll(entry)
+        if stored is None:
+            return
+        name, ok = QInputDialog.getText(
+            self,
+            "Rename quick roll",
+            f"Name for {_params_label(stored)} (leave empty for none):",
+            text=str(stored.get("name", "")),
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if name:
+            stored["name"] = name
+        else:
+            stored.pop("name", None)
+        self._persist_quick_rolls()
+        self._rebuild_quick_strip()
+
+    def _find_quick_roll(self, params: dict) -> dict | None:
+        """The stored entry loading the same inputs as *params*, if there is one."""
+        key = quick_roll_key(params)
+        for entry in self._quick_rolls:
+            if quick_roll_key(entry) == key:
+                return entry
+        return None
 
     def _reorder_quick_roll(self, source: int, insert_index: int) -> None:
         """Move the quick roll at *source* to *insert_index* (a drop position)."""
@@ -745,6 +820,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._start_roll()
 
     def _rebuild_quick_strip(self) -> None:
+        """Render one chip per quick roll, and report that the strip changed.
+
+        The report matters as much as the render. A chip coming or going changes what
+        this panel's minimum is, and two things have to hear about it: the stars in a
+        paired history (which roll is saved), and whatever is dividing space with this
+        panel — :meth:`DiceRollerView._redivide`. ``updateGeometry`` is what makes the
+        enclosing :class:`~mm_companion.ui.block_frame.BlockFrame` ask again, since a
+        minimum that has just *shrunk* provokes no resize of its own.
+        """
         while self._quick_flow.count():
             item = self._quick_flow.takeAt(0)
             widget = item.widget() if item else None
@@ -752,10 +836,18 @@ class DiceRollerPanel(ReflowBox, QWidget):
                 widget.deleteLater()
         for index, entry in enumerate(self._quick_rolls):
             self._quick_flow.addWidget(self._make_quick_chip(entry, index))
+        self.updateGeometry()
+        self.quickRollsChanged.emit()
 
     def _make_quick_chip(self, entry: dict, index: int) -> QWidget:
         chip = QFrame()
         chip.setFrameShape(QFrame.Shape.StyledPanel)
+        # Right-click is where a chip is named. Set on the frame alone: a child button
+        # leaves a context-menu event unhandled, so it propagates up to here.
+        chip.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        chip.customContextMenuRequested.connect(
+            lambda pos, c=chip, e=entry: self._show_chip_menu(c, pos, e)
+        )
         layout = QHBoxLayout(chip)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
@@ -776,6 +868,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
         layout.addWidget(remove_button)
         return chip
 
+    def _show_chip_menu(self, chip: QWidget, pos: QPoint, entry: dict) -> None:
+        """The chip's own menu: name it, or throw it away."""
+        menu = QMenu(chip)
+        menu.addAction("Rename…").triggered.connect(lambda: self._rename_quick_roll(entry))
+        menu.addAction("Remove").triggered.connect(lambda: self._remove_quick_roll(entry))
+        menu.exec(chip.mapToGlobal(pos))
+
 
 class LocalRollHistory(QWidget):
     """The private list of what *this* app rolled, newest first.
@@ -786,11 +885,16 @@ class LocalRollHistory(QWidget):
     be thrown away or saved to the quick-roll strip.
     """
 
-    #: A card's "★ Save" — the roll's parameters, for the roller's quick strip.
-    saveRequested = Signal(dict)
+    #: A card's star — the roll's parameters, for the roller to save or unsave.
+    saveToggled = Signal(dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        # What the roller's quick-roll strip holds, mirrored here so every card's
+        # star agrees; see :meth:`set_quick_roll_state`.
+        self._saved_keys: set = set()
+        self._quick_room = True
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -801,11 +905,27 @@ class LocalRollHistory(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
-        # The same floor the shared history pins, and for the same reason: these
-        # cards carry the same headline and "★ Save" button, and a scroll area asks
-        # for nothing on its own — so without it the history is squeezed to a sliver.
+        # The same two floors the shared history pins, and for the same reason: these
+        # cards carry the same headline and star, and a scroll area asks for nothing on
+        # its own — so without them the history is squeezed to a sliver, or to the one
+        # card that fits in whatever height is left over.
         self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
+        self._scroll.setMinimumHeight(MIN_HISTORY_HEIGHT)
         layout.addWidget(self._scroll)
+
+    def set_quick_roll_state(self, saved_keys: set, room: bool) -> None:
+        """Tell every card what the quick-roll strip holds, so its star can show it.
+
+        The counterpart of
+        :meth:`RollHistoryPanel.set_quick_roll_state
+        <mm_companion.ui.roll_history.RollHistoryPanel.set_quick_roll_state>` — the
+        two histories take the same instruction, so whichever one is showing can be
+        driven by the same wiring.
+        """
+        self._saved_keys = set(saved_keys)
+        self._quick_room = bool(room)
+        for card in self.cards():
+            card.set_save_state(self._saved_keys, self._quick_room)
 
     def add_roll(self, roll: object) -> None:
         """Record a roll this app made on its own — the session was not involved."""
@@ -818,7 +938,8 @@ class LocalRollHistory(QWidget):
             dc=roll["dc"],
             result=roll["result"],
         )
-        card.saveRequested.connect(self.saveRequested)
+        card.set_save_state(self._saved_keys, self._quick_room)
+        card.saveToggled.connect(self.saveToggled)
         card.removeRequested.connect(lambda c=card: self._remove_card(c))
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
@@ -873,6 +994,8 @@ class DiceRollerView(ReflowBox, QWidget):
         self._on_session_end = lambda *_: self._sync_session()
 
         self._history_part = self._build_history_panel()
+        # Connected only now that the histories exist for it to reach.
+        self.panel.quickRollsChanged.connect(self._on_quick_rolls_changed)
         self._splitter = QSplitter(Qt.Orientation.Vertical, self)
         self._splitter.setChildrenCollapsible(False)
         for part in self.reflow_parts():
@@ -892,7 +1015,7 @@ class DiceRollerView(ReflowBox, QWidget):
         # trick BlockFrame._refresh_layout plays for the same reason.
         self._settle = QTimer(self)
         self._settle.setSingleShot(True)
-        self._settle.timeout.connect(self._divide_row)
+        self._settle.timeout.connect(self._redivide)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -900,6 +1023,7 @@ class DiceRollerView(ReflowBox, QWidget):
 
         self.init_reflow()
         self._sync_session()
+        self._sync_quick_roll_state()  # the strip may have been restored with chips in it
 
     # -- the reflow ----------------------------------------------------------
 
@@ -919,15 +1043,23 @@ class DiceRollerView(ReflowBox, QWidget):
         """
         self._user_sized = False  # a flip is a fresh axis; nothing has been chosen on it
         self._splitter.setOrientation(Qt.Orientation.Horizontal if row else Qt.Orientation.Vertical)
-        if not row:
-            hints = [part.sizeHint().height() or 1 for part in self.reflow_parts()]
-            self._splitter.setSizes(hints)
-            return
-        self._splitter.setSizes(self._row_sizes())
+        self._splitter.setSizes(self._row_sizes() if row else self._column_sizes())
 
     def _on_handle_dragged(self, _pos: int = 0, _index: int = 0) -> None:
         """The split is the user's from here until the axis flips again."""
         self._user_sized = True
+
+    def _column_sizes(self) -> list[int]:
+        """How the panel and the history share the height, stacked.
+
+        Each takes what it asks for — the panel is exactly as tall as its controls,
+        the die and however many quick-roll chips there are, and the history's stretch
+        gives it the rest. Which is also why this has to be *re-applied* rather than
+        set once at the flip: the panel carries no stretch, so a chip going away leaves
+        it holding the height it was pushed to and the strip keeps a gap where the chip
+        was. See :meth:`_redivide`.
+        """
+        return [part.sizeHint().height() or 1 for part in self.reflow_parts()]
 
     def _row_sizes(self) -> list[int]:
         """How the panel and the history share the width, side by side.
@@ -976,6 +1108,37 @@ class DiceRollerView(ReflowBox, QWidget):
         if self.is_row and not self._user_sized:
             self._splitter.setSizes(self._row_sizes())
 
+    def _redivide(self) -> None:
+        """Share the space out again on whichever axis is in use.
+
+        A splitter child with no stretch keeps the pixels it was given, so neither axis
+        gives space back on its own when the panel needs less of it — the panel's
+        minimum drops, and the splitter simply leaves it where it was. So any change to
+        what the panel *contains* has to divide the space again explicitly. A split the
+        user dragged is still left alone.
+        """
+        if self._user_sized:
+            return
+        self._splitter.setSizes(self._row_sizes() if self.is_row else self._column_sizes())
+
+    def _on_quick_rolls_changed(self) -> None:
+        """A chip came, went or was renamed: re-light the stars and re-divide.
+
+        The re-division runs twice, and needs to: the chips just dropped are deleted
+        later, so the panel's size hint only tells the truth on the following turn —
+        the same reason the deferred :attr:`_settle` pass exists for a resize.
+        """
+        self._sync_quick_roll_state()
+        self._redivide()
+        self._settle.start(0)
+
+    def _sync_quick_roll_state(self) -> None:
+        """Push the strip's contents into whichever history is on screen."""
+        keys = self.panel.quick_roll_keys()
+        room = not self.panel.quick_rolls_full()
+        self._local_history.set_quick_roll_state(keys, room)
+        self._session_history.set_quick_roll_state(keys, room)
+
     # -- construction --------------------------------------------------------
 
     def _build_history_panel(self) -> QWidget:
@@ -986,14 +1149,14 @@ class DiceRollerView(ReflowBox, QWidget):
         self._local_box = QGroupBox("History")
         local_layout = QVBoxLayout(self._local_box)
         self._local_history = LocalRollHistory()
-        self._local_history.saveRequested.connect(self.panel.save_quick_roll)
+        self._local_history.saveToggled.connect(self.panel.toggle_quick_roll)
         local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
         self._session_box = QGroupBox("Session rolls")
         session_layout = QVBoxLayout(self._session_box)
         self._session_history = RollHistoryPanel()
-        self._session_history.saveRequested.connect(self.panel.save_quick_roll)
+        self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
         # Hold this app's own roll until its die stops tumbling; the roller cues it.
         self._session_history.set_defer_own(True)
         self.panel.sessionRollRevealed.connect(self._session_history.release_roll)

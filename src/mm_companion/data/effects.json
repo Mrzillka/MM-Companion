@@ -137,7 +137,15 @@
         }
       ],
       "description": "Inflicts an escalating condition on a target instead of damage.",
-      "resistanceDcBase": 10
+      "resistanceDcBase": 10,
+      "resistanceOutcomes": {
+        "note": "Affliction's rungs are the conditions the player picked when building the power, so each degree reads its own config field rather than a fixed list.",
+        "degrees": [
+          { "configKey": "degree1" },
+          { "configKey": "degree2" },
+          { "configKey": "degree3" }
+        ]
+      }
     },
     {
       "id": "burrowing",
@@ -292,7 +300,21 @@
         }
       ],
       "description": "A direct harmful attack — the basis for most offensive powers.",
-      "resistanceDcBase": 10
+      "resistanceDcBase": 10,
+      "resistanceOutcomes": {
+        "note": "The damage condition ladder (docs/mm-core-mechanics.md §9). A successful resistance check still leaves a Hit unless the target's resistance is Impervious against the attack; only the failure rungs are listed here.",
+        "degrees": [
+          {
+            "conditions": ["hit", "dazed"],
+            "note": "Stunned instead of Dazed if already Dazed"
+          },
+          { "conditions": ["hit", "stunned", "staggered"] },
+          {
+            "conditions": ["hit", "staggered", "incapacitated"],
+            "note": "further failed checks escalate to Dying, then Dead"
+          }
+        ]
+      }
     },
     {
       "id": "deflect",

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import QEvent, QPointF, QVariantAnimation
 from PySide6.QtGui import QEnterEvent
-from PySide6.QtWidgets import QApplication, QGridLayout, QLabel
+from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -382,7 +382,14 @@ def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> No
     cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
 
     def dice(card: _DraggableCard) -> list[str]:
-        return [lb.text() for lb in card.findChildren(QLabel) if lb.text().startswith("🎲")]
+        """The dice footer's lines — the 🎲 is a button beside each, not in its text."""
+        lines = []
+        for button in card.findChildren(QPushButton):
+            if button.text() != "🎲":
+                continue
+            label = button.parent().findChild(QLabel)
+            lines.append(label.text())
+        return lines
 
     # Nothing to roll, so nothing is said about it — no placeholder line, and no rule
     # above the footer that is not there.
@@ -390,9 +397,10 @@ def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> No
     assert sec._rolls_lines(armor) == []
 
     # An attack and the save it forces are two rolls, made by two people: a line each.
-    attack, save = dice(cards[blast.id])
-    assert attack == "🎲 0 vs. Defense"
-    assert save.startswith("🎲 Toughness vs. ")
+    attack, save = sec._rolls_lines(blast)
+    assert attack == "0 vs. Defense"
+    assert save.startswith("Toughness vs. ")
+    assert set(dice(cards[blast.id])) == {attack, save}
 
 
 def test_an_effects_terms_sit_beside_its_modifiers(qapp: QApplication) -> None:

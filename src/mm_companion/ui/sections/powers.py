@@ -106,6 +106,8 @@ from mm_companion.core.rules import (
     power_has_custom_modifier,
     power_has_standing_effect,
     power_pl_violations,
+    power_roll_lines,
+    power_rolls,
     power_runtime_gates,
     powers_points_spent,
 )
@@ -156,37 +158,15 @@ def _lerp(start: float, end: float, progress: float) -> float:
 
 
 def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
-    """One entry per die roll a power calls for, read from its game-term rows;
-    effect-prefixed for a multi-effect power.
+    """One entry per die roll a power calls for; effect-prefixed for a multi-effect power.
 
-    Module-level so both the power card's dice footer and the GM's NPC hover
-    summary read the same lines. An attack check and the save it forces are
-    separate rolls made by different people, so they get a line each rather than
-    sharing one.
+    Module-level so both the power card's dice footer and the GM's NPC hover summary
+    read the same lines. The lines are the labels of :func:`~mm_companion.core.rules.
+    power_rolls`, which is also what the card's 🎲 buttons roll — so what is written
+    and what is rolled can never drift apart.
     """
-    multi = len(power.effects) > 1
-    lines: list[str] = []
-    for effect in power.effects:
-        attack_bonus = effect_attack_skill_bonus(effect, character, data)
-        rows = {r.key: r for r in effect_stat_rows(effect, data, character, attack_bonus)}
-        rolls = []
-        # A Check Required flaw is rolled *before* the effect goes off, so it leads.
-        if "required_check" in rows:
-            rolls.append(rows["required_check"].value)
-        if "check" in rows:
-            rolls.append(rows["check"].value)
-        if "resistance" in rows:
-            rolls.append(rows["resistance"].value)
-        elif "effect_dc" in rows:  # a save DC with no shown check/resistance phrase
-            rolls.append(rows["effect_dc"].value)
-        if not rolls:
-            continue
-        if multi:
-            base = next((e for e in data.effects if e.id == effect.effect_id), None)
-            name = base.name if base else effect.effect_id
-            rolls = [f"{name}: {roll}" for roll in rolls]
-        lines.extend(rolls)
-    return lines
+
+    return power_roll_lines(power, character, data)
 
 
 class _DragHandle(QLabel):
@@ -697,6 +677,10 @@ class PowersSection(TitledSection):
     # not mark the character dirty — the sheet wires this to the same refreshes as
     # ``changed`` minus the unsaved-changes flag.
     runtimeChanged = Signal()
+    #: A card's 🎲 was pressed — roll that line. Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`. Neither a build change nor a
+    #: runtime one: rolling a power changes nothing about the power.
+    rollRequested = Signal(object)
 
     #: How long a card takes to ease between its live and switched-off looks. A class
     #: attribute so tests can zero it and assert on the resting state without waiting
@@ -1478,20 +1462,49 @@ class PowersSection(TitledSection):
         A power that resolves without dice — a Protection, a permanent Enhanced Trait —
         gets no footer at all rather than a line saying so: the absence *is* the answer,
         and a placeholder on every passive power is pure noise.
+
+        Each line's ``🎲`` is a real :class:`QPushButton`, and that is the whole
+        trick: a button consumes its own press, so the click never reaches
+        :meth:`_DraggableCard.mousePressEvent` and rolling a power can't be mistaken
+        for switching it on. (The same reason the grip, ✎ and ✕ are buttons.) A label
+        would have let the press through and toggled the card.
         """
-        lines = self._rolls_lines(power)
-        if not lines:
+        specs = self._rolls(power)
+        if not specs:
             return None
         host = QWidget()
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        for line in lines:
-            label = QLabel(f"🎲 {line}")
-            label.setWordWrap(True)
-            label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
-            layout.addWidget(label)
+        for spec in specs:
+            layout.addWidget(self._roll_line(spec))
         return host
+
+    def _roll_line(self, spec) -> QWidget:
+        """One dice-footer line: the ``🎲`` button that rolls it, then its text."""
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(int(theme.metric("space.sm")))
+
+        button = QPushButton("🎲")
+        button.setFlat(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFixedWidth(int(theme.metric("column.roll-button")))
+        button.setToolTip(spec.hint or f"Roll {spec.label}")
+        button.clicked.connect(lambda _=False, s=spec: self.rollRequested.emit(s))
+        line.addWidget(button, alignment=Qt.AlignmentFlag.AlignTop)
+
+        label = QLabel(spec.label)
+        label.setWordWrap(True)
+        label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
+        line.addWidget(label, stretch=1)
+        return row
+
+    def _rolls(self, power: Power):
+        """Every roll the power calls for, as specs; see :func:`~mm_companion.core.
+        rules.power_rolls`."""
+        return power_rolls(power, self._character, self._data)
 
     def _rolls_lines(self, power: Power) -> list[str]:
         """One entry per die roll the power calls for; see module-level

@@ -33,6 +33,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
+    ROLL_REQUESTED,
 )
 from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.sections import (
@@ -97,15 +98,21 @@ def default_pin_lines() -> list[list[str]]:
     return [[d.key] for d in pinned]
 
 
+# Every block whose lines can be rolled says so the same way: one `rollRequested`
+# signal carrying the RollSpec. Named once so the five tables below stay readable
+# and a sixth requester is a one-word addition.
+_ROLLS = {"rollRequested": (ROLL_REQUESTED,)}
+
 # One row per base block: (key, dock title, factory, default_row, default_col,
-# publishes, subscribes). Listed in construction order; the row/col fields drive
-# the default layout (see default_rows). Sizes are read from block_sizes.json at
-# registration so that config stays tweakable. `publishes` maps a section Qt
-# signal to the bus topics it raises; `subscribes` maps a topic to the section
-# method that recomputes on it — together they reproduce the old hand-wired
-# cross-block signal web (see mm_companion.ui.blocks.bus for the topic table).
+# publishes, subscribes, requests, serves). Listed in construction order; the
+# row/col fields drive the default layout (see default_rows). Sizes are read from
+# block_sizes.json at registration so that config stays tweakable. `publishes` maps
+# a section Qt signal to the bus topics it raises; `subscribes` maps a topic to the
+# section method that recomputes on it — together they reproduce the old hand-wired
+# cross-block signal web. `requests`/`serves` are the same pair on the bus's payload
+# channel, which today carries only "roll this" (see mm_companion.ui.blocks.bus).
 _BASE_BLOCKS = [
-    ("base_info", "Name & Details", BaseInfoSection, 0, 0, {"edited": (EDITED,)}, {}),
+    ("base_info", "Name & Details", BaseInfoSection, 0, 0, {"edited": (EDITED,)}, {}, {}, {}),
     (
         "system_info",
         "Power Level & System",
@@ -118,8 +125,20 @@ _BASE_BLOCKS = [
             "edited": (EDITED,),
         },
         {DERIVED_CHANGED: "refresh_derived"},
+        _ROLLS,  # the Initiative readout
+        {},
     ),
-    ("character_image", "Character Image", CharacterImageSection, 0, 2, {"edited": (EDITED,)}, {}),
+    (
+        "character_image",
+        "Character Image",
+        CharacterImageSection,
+        0,
+        2,
+        {"edited": (EDITED,)},
+        {},
+        {},
+        {},
+    ),
     (
         "abilities",
         "Abilities",
@@ -131,6 +150,8 @@ _BASE_BLOCKS = [
             "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {ENHANCEMENTS_CHANGED: "refresh_enhancements", COST_RATES_CHANGED: "refresh_cost"},
+        _ROLLS,
+        {},
     ),
     (
         "resistances",
@@ -144,6 +165,8 @@ _BASE_BLOCKS = [
             ENHANCEMENTS_CHANGED: "refresh_enhancements",
             COST_RATES_CHANGED: "refresh_cost",
         },
+        _ROLLS,
+        {},
     ),
     (
         "conditions",
@@ -162,6 +185,8 @@ _BASE_BLOCKS = [
             "edited": (EDITED,),
         },
         {},
+        {},
+        {},
     ),
     (
         "advantages",
@@ -176,6 +201,8 @@ _BASE_BLOCKS = [
             FACTS_CHANGED: "refresh_power_options",
             COST_RATES_CHANGED: "refresh_cost",
         },
+        {},
+        {},
     ),
     (
         "complications",
@@ -184,6 +211,8 @@ _BASE_BLOCKS = [
         3,
         0,
         {"edited": (EDITED,)},
+        {},
+        {},
         {},
     ),
     (
@@ -198,6 +227,8 @@ _BASE_BLOCKS = [
             ENHANCEMENTS_CHANGED: "refresh_totals",
             COST_RATES_CHANGED: "refresh_totals",
         },
+        _ROLLS,
+        {},
     ),
     (
         "powers",
@@ -212,6 +243,8 @@ _BASE_BLOCKS = [
             "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED),
         },
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
+        _ROLLS,  # the 🎲 beside each of a power card's roll lines
+        {},
     ),
     (
         "dice",
@@ -220,9 +253,12 @@ _BASE_BLOCKS = [
         6,
         0,
         # A roll is not a character edit and must never mark the sheet dirty, and
-        # the roller reads nothing off the build — so it sits out the bus entirely.
+        # the roller reads nothing off the build — so it publishes and subscribes
+        # nothing. It is, however, the block that *answers* a roll request.
         {},
         {},
+        {},
+        {ROLL_REQUESTED: "perform_roll"},
     ),
 ]
 
@@ -236,7 +272,7 @@ _PINNED_BY_DEFAULT = frozenset({"dice"})
 def register_base_blocks(*, replace: bool = False) -> None:
     """Register the eleven base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
-    for key, title, factory, row, col, publishes, subscribes in _BASE_BLOCKS:
+    for key, title, factory, row, col, publishes, subscribes, requests, serves in _BASE_BLOCKS:
         register_block(
             BlockDescriptor(
                 key,
@@ -248,6 +284,8 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 key in _PINNED_BY_DEFAULT,
                 publishes,
                 subscribes,
+                requests,
+                serves,
             ),
             replace=replace,
         )

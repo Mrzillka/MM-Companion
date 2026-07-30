@@ -39,6 +39,7 @@ from mm_companion.core.rules import (
     has_cost_overrides,
     initiative_ability,
     initiative_modifier,
+    initiative_roll,
     movement_mode_lines,
     power_level_for_points,
     reconcile_points_to_level,
@@ -46,12 +47,16 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
 HERO_POINT_CIRCLES = 5
+INITIATIVE_TIP = (
+    f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
+)
 
 
 class HeroPointsWidget(QWidget):
@@ -240,6 +245,9 @@ class SystemInfoSection(QGroupBox):
     #: Raised when a homebrew PP-cost rate changes, so every priced block re-titles
     #: its subtotal (the pool total already recomputes off ``changed``).
     costRatesChanged = Signal()
+    #: The Initiative readout was double-clicked — roll it. Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
+    rollRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -360,7 +368,16 @@ class SystemInfoSection(QGroupBox):
 
     def _build_initiative(self) -> QWidget:
         self._initiative = QLabel("—")
-        self._initiative.setToolTip("Agility (or an Alternate Initiative ability) plus advantages")
+        self._initiative.setToolTip(INITIATIVE_TIP)
+        # The one readout on this block that is a die roll rather than a fact. Its
+        # tooltip is rewritten on every refresh, so the "double-click to roll" hint
+        # is folded into that text rather than left to attach_roll_click.
+        attach_roll_click(
+            self._initiative,
+            lambda: initiative_roll(self._character, self._data),
+            self.rollRequested.emit,
+            tooltip=False,
+        )
         return self._initiative
 
     def _build_hero_points(self) -> QWidget:
@@ -555,12 +572,11 @@ class SystemInfoSection(QGroupBox):
             self._initiative.setText(f'<span style="color: {worse};">{net:+d}</span> ({ability})')
             self._initiative.setToolTip(
                 f"{modifier:+d} base {penalty:+d} from an active condition on all checks"
+                f"\n{ROLL_TOOLTIP}"
             )
         else:
             self._initiative.setText(f"{net:+d} ({ability})")
-            self._initiative.setToolTip(
-                "Agility (or an Alternate Initiative ability) plus advantages"
-            )
+            self._initiative.setToolTip(INITIATIVE_TIP)
 
         effective = effective_size(self._character, self._data)
         base = str(self._character.characteristics.get("size", "Medium"))

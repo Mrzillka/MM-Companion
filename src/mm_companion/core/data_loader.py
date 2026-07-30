@@ -568,6 +568,29 @@ class Measure:
 
 
 @dataclass(frozen=True)
+class ResistanceOutcome:
+    """One rung of an effect's degree-of-failure ladder (``resistanceOutcomes``).
+
+    Failing a resistance check does something specific to the target, and *how*
+    specific depends on the effect. Damage's rungs are fixed by the rules
+    (``conditions`` naming ids from ``conditions.json``); Affliction's are whatever
+    the player chose when building the power, so its rungs carry a ``config_key``
+    naming the instance config field to read the ids out of instead. ``text`` is the
+    escape hatch for a rung the condition catalog can't express, and ``note`` is a
+    short qualifier shown after the conditions ("Stunned instead if already Dazed").
+
+    The ladder is indexed by degree of failure — index 0 is one degree — and its last
+    rung covers every deeper failure, so a three-rung ladder answers a five-degree
+    rout without inventing rungs.
+    """
+
+    conditions: tuple[str, ...] = ()
+    config_key: str = ""
+    text: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``docs/mm-powers-architecture.md``).
 
@@ -617,6 +640,10 @@ class Effect:
     config_fields: tuple[EffectConfigField, ...] = ()
     measure: Measure | None = None
     resistance_dc_base: int | None = None
+    #: What failing this effect's resistance check does to the target, one rung per
+    #: degree of failure (see :class:`ResistanceOutcome`). Empty for an effect whose
+    #: outcome is a GM call rather than a table.
+    resistance_outcomes: tuple[ResistanceOutcome, ...] = ()
     implicit_modifiers: tuple[str, ...] = ()
     #: How far this effect reaches once its range resolves to Ranged. Seeded from the
     #: system-wide default and overridden by the effect's own ``rangeDistance`` block.
@@ -1458,6 +1485,36 @@ def _parse_integration(raw: dict, configurable: bool) -> Integration:
     return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
 
 
+def _parse_resistance_outcomes(raw: object) -> tuple[ResistanceOutcome, ...]:
+    """Parse an effect's ``resistanceOutcomes`` ladder (see :class:`ResistanceOutcome`).
+
+    Accepts the ladder either as a bare list of rungs or wrapped in an object with a
+    ``degrees`` list, so a mod can hang its own documentation off the block. A rung
+    given as a plain string is shorthand for that ``text``.
+    """
+
+    if isinstance(raw, dict):
+        raw = raw.get("degrees", ())
+    if not isinstance(raw, list):
+        return ()
+    rungs = []
+    for entry in raw:
+        if isinstance(entry, str):
+            rungs.append(ResistanceOutcome(text=entry))
+            continue
+        if not isinstance(entry, dict):
+            continue
+        rungs.append(
+            ResistanceOutcome(
+                conditions=tuple(entry.get("conditions", ())),
+                config_key=entry.get("configKey", ""),
+                text=entry.get("text", ""),
+                note=entry.get("note", ""),
+            )
+        )
+    return tuple(rungs)
+
+
 def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
     default_distance = ranged_distance or RangeDistance()
     return Effect(
@@ -1478,6 +1535,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
         measure=_parse_measure(e.get("measure")),
         resistance_dc_base=e.get("resistanceDcBase"),
+        resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),
         range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
         or default_distance,

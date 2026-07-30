@@ -315,6 +315,10 @@ class BlockCanvas(QWidget):
     def block_frame(self, key: str) -> BlockFrame:
         return self._frames[key]
 
+    def block_window(self, key: str):
+        """The :class:`BlockWindow` block *key* is floated in, or ``None`` if docked."""
+        return self._windows.get(key)
+
     def content_minimum_width(self) -> int:
         """The widest docked row's minimum width, including the canvas margins.
 

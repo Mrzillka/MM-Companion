@@ -229,12 +229,13 @@ class SessionRollCard(QFrame):
 
         who = str(roll.get("player_name", "")) or "Someone"
         label = str(roll.get("label", ""))
-        heading = f"<b>{_escape(who)}</b>"
+        heading = f"<b>{escape_rich_text(who)}</b>"
         if hidden:
             heading = f"{HIDDEN_MARK} {heading}"
         if label:
             heading += (
-                f" <span style='color:{theme.color('text.muted.rich')}'>— {_escape(label)}</span>"
+                f" <span style='color:{theme.color('text.muted.rich')}'>"
+                f"— {escape_rich_text(label)}</span>"
             )
         name_line = QLabel(heading)
         name_line.setTextFormat(Qt.TextFormat.RichText)
@@ -515,10 +516,12 @@ class RollHistoryPanel(QWidget):
             widget.deleteLater()
 
 
-def _escape(text: str) -> str:
-    """Escape a player-supplied string for the rich-text labels above.
+def escape_rich_text(text: str) -> str:
+    """Escape a player-supplied string for a rich-text label.
 
     Display names and roll labels come off the wire, and these labels render
     HTML — an unescaped ``<`` would let a peer restyle someone else's history.
+    Public because the private history's cards (:mod:`mm_companion.ui.dice_roller`)
+    render the same strings and must escape them the same way.
     """
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

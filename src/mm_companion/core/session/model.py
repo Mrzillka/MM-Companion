@@ -234,11 +234,19 @@ class SessionState:
     ``gm_characters/`` dir (GM-only, never sent to a player); ``rolls`` is the
     full history *including* hidden GM rolls, which are filtered out on the way
     to the wire by :meth:`visible_rolls`.
+
+    The **gm token** is the second, quieter secret. Where the host token opens a
+    seat to anyone holding the join code, this one claims *the GM's* seat, with
+    the powers that go with it — a hidden roll, a struck roll, a condition laid
+    on a player. It is deliberately not in the join code: everyone at the table
+    has that. It goes to one person, once, and it is what lets the GM drive a
+    session hosted on a machine that is not theirs.
     """
 
     id: str = field(default_factory=new_id)
     name: str = "Session"
     host_token: str = field(default_factory=new_token)
+    gm_token: str = field(default_factory=new_token)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     players: dict[str, PlayerSlot] = field(default_factory=dict)
@@ -365,6 +373,7 @@ class SessionState:
             "id": self.id,
             "name": self.name,
             "host_token": self.host_token,
+            "gm_token": self.gm_token,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "players": [slot.to_dict() for slot in self.players.values()],
@@ -381,6 +390,10 @@ class SessionState:
             id=str(raw.get("id", "")) or new_id(),
             name=str(raw.get("name", "Session")),
             host_token=str(raw.get("host_token", "")) or new_token(),
+            # A session written before gm tokens existed simply gets one now. It
+            # cannot be recovered from anywhere, so minting is the only option;
+            # the GM reads the new one off the server the next time they connect.
+            gm_token=str(raw.get("gm_token", "")) or new_token(),
             created_at=str(raw.get("created_at", "")) or utc_now(),
             updated_at=str(raw.get("updated_at", "")) or utc_now(),
             players={slot.player_id: slot for slot in players},

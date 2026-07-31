@@ -152,6 +152,11 @@ class Hello(Message):
     :class:`Welcome` to reclaim the same roster slot on a reconnect.
     ``mod_fingerprint`` lets the server warn about mod skew (a GM running content
     the player lacks means condition and effect ids do not match).
+
+    ``gm_token`` claims the GM's seat rather than a player's. Empty for everyone
+    at the table; a wrong one is refused outright rather than quietly seating the
+    claimant as a player, because a GM who joined without their powers would only
+    find out halfway through a fight.
     """
 
     TYPE: ClassVar[str] = "hello"
@@ -163,6 +168,7 @@ class Hello(Message):
     mod_fingerprint: str = ""
     player_id: str = ""
     player_token: str = ""
+    gm_token: str = ""
 
 
 @_register
@@ -223,6 +229,46 @@ class RemoveRollRequest(Message):
 
 @_register
 @dataclass(frozen=True)
+class KickRequest(Message):
+    """A GM request to remove a player from the session outright.
+
+    Unlike a disconnect this drops the slot, so the player does not reclaim their
+    seat with their old token. Honored only for the GM.
+    """
+
+    TYPE: ClassVar[str] = "kick_request"
+
+    player_id: str
+    reason: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class SetSessionName(Message):
+    """A GM request to rename the session. Honored only for the GM."""
+
+    TYPE: ClassVar[str] = "set_session_name"
+
+    name: str
+
+
+@_register
+@dataclass(frozen=True)
+class SetNpcPaths(Message):
+    """A GM request to store the session's NPC cast list. Honored only for the GM.
+
+    The paths are filenames under the GM's own workspace and mean nothing to
+    anyone else, which is exactly why they are only ever stored and handed back
+    to the GM — they are never broadcast.
+    """
+
+    TYPE: ClassVar[str] = "set_npc_paths"
+
+    paths: list[str] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
 class Ping(Message):
     """Keepalive; the server answers :class:`Pong` with the same ``nonce``."""
 
@@ -246,6 +292,11 @@ class Welcome(Message):
     :meth:`~.model.PlayerSlot.roster_dict`). ``history`` is the recent slice of
     the visible roll log (:data:`~.server.WELCOME_HISTORY_ROLLS`) — hidden GM
     rolls are omitted here as well as from every later broadcast.
+
+    ``is_gm`` tells the client which seat it got, and ``npc_paths`` is filled
+    **only for the GM** — empty for every player. The cast list names files in
+    the GM's own workspace; it is kept on the server so a GM picking the session
+    up from another machine still has it, and it means nothing to anyone else.
     """
 
     TYPE: ClassVar[str] = "welcome"
@@ -257,6 +308,8 @@ class Welcome(Message):
     protocol_version: int = PROTOCOL_VERSION
     roster: list[dict] = field(default_factory=list)
     history: list[dict] = field(default_factory=list)
+    is_gm: bool = False
+    npc_paths: list[str] = field(default_factory=list)
 
 
 @_register
@@ -267,6 +320,25 @@ class Roster(Message):
     TYPE: ClassVar[str] = "roster"
 
     players: list[dict] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
+class PlayerSnapshot(Message):
+    """One player's character, forwarded to a **remote GM only**.
+
+    The roster deliberately carries no characters — re-broadcasting the table's
+    combined sheets on every change would blow past
+    :data:`MAX_MESSAGE_BYTES`. A GM in the hosting process reads them straight off
+    :class:`~.model.SessionState`; a GM dialled in over a socket cannot, so their
+    connection alone is sent this. It goes to the GM seat and nowhere else: no
+    player needs another player's sheet.
+    """
+
+    TYPE: ClassVar[str] = "player_snapshot"
+
+    player_id: str
+    character: dict
 
 
 @_register

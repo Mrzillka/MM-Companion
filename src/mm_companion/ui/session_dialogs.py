@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLayout,
     QLineEdit,
@@ -52,9 +53,10 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.core.library import list_saved_characters
 from mm_companion.core.session import discovery, store
+from mm_companion.core.session.hub_client import HubClient, HubClientError
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
-from mm_companion.ui.widgets import hline_separator, make_spin_box
+from mm_companion.ui.widgets import hline_separator, make_spin_box, muted_style, tinted_style
 
 #: How many codes the dialog offers back; the newest is pre-filled.
 RECENT_CODES = 5
@@ -559,9 +561,17 @@ class GMSessionLaunchDialog(QDialog):
         self.resize(700, 620)
         self._chosen_id: str | None = None
         self._summaries: list[store.SessionSummary] = []
+        # Server mode. ``_client`` is a live control channel and ``_catalog`` the
+        # sessions it reported; both None means the local, host-it-yourself mode
+        # this dialog has always had.
+        self._client: HubClient | None = None
+        self._catalog: list[dict] | None = None
+        self._chosen_entry: dict | None = None
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Continue a previous session, or start a new one:"))
+        layout.addWidget(self._build_server_box())
+        self._list_caption = QLabel("Continue a previous session, or start a new one:")
+        layout.addWidget(self._list_caption)
 
         self._table = QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(["Session", "Last updated", "Players", "Rolls"])
@@ -582,6 +592,11 @@ class GMSessionLaunchDialog(QDialog):
         self._new_button.setToolTip("Start a fresh session instead of continuing one")
         self._new_button.clicked.connect(self._start_new)
         buttons_row.addWidget(self._new_button)
+        self._rename_button = QPushButton("Rename")
+        self._rename_button.setToolTip("Rename the selected session on the server")
+        self._rename_button.clicked.connect(self._rename_selected)
+        self._rename_button.setVisible(False)
+        buttons_row.addWidget(self._rename_button)
         self._delete_button = QPushButton("Delete")
         self._delete_button.setToolTip("Delete the selected session and its roll history")
         self._delete_button.clicked.connect(self._delete_selected)
@@ -589,7 +604,8 @@ class GMSessionLaunchDialog(QDialog):
         buttons_row.addStretch()
         layout.addLayout(buttons_row)
 
-        layout.addWidget(hline_separator())
+        self._form_rule = hline_separator()
+        layout.addWidget(self._form_rule)
         self._form = HostOptionsForm(self)
         layout.addWidget(self._form)
 
@@ -602,12 +618,115 @@ class GMSessionLaunchDialog(QDialog):
         layout.addWidget(buttons)
 
         self._reload()
+        # A GM who has a server almost always wants it, so connect on open rather
+        # than making them press a button every evening.
+        if self._server_field.text().strip() and self._secret_field.text():
+            self._connect_to_server()
+
+    # -- the session server ------------------------------------------------
+
+    def _build_server_box(self) -> QGroupBox:
+        """Address and credential for the box the GM's sessions live on.
+
+        Optional: left empty, this dialog behaves exactly as it always did and the
+        GM hosts from this machine. Filled in, the session list below becomes the
+        server's, and hosting stops being this app's problem.
+        """
+        box = QGroupBox("Session server")
+        form = QFormLayout(box)
+        server, secret = storage.session_server()
+
+        self._server_field = QLineEdit(server)
+        self._server_field.setPlaceholderText("mmcompanion.example.org — leave empty to host here")
+        form.addRow("Address", self._server_field)
+
+        self._secret_field = QLineEdit(secret)
+        self._secret_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self._secret_field.setPlaceholderText("the server's admin secret")
+        form.addRow("Admin secret", self._secret_field)
+
+        row = QHBoxLayout()
+        self._connect_button = QPushButton("Connect")
+        self._connect_button.clicked.connect(self._connect_to_server)
+        row.addWidget(self._connect_button)
+        self._server_status = QLabel("Not connected — sessions below are on this computer.")
+        self._server_status.setWordWrap(True)
+        self._server_status.setStyleSheet(muted_style())
+        row.addWidget(self._server_status, stretch=1)
+        form.addRow("", row)
+        return box
+
+    def _connect_to_server(self) -> None:
+        """Open the control channel and swap the list over to the server's."""
+        server = self._server_field.text().strip()
+        secret = self._secret_field.text().strip()
+        if not server or not secret:
+            self._set_server_status(
+                "Enter the server's address and admin secret.", theme.color("tint.worse")
+            )
+            return
+        self._disconnect_from_server()
+        client = HubClient(server, secret)
+        try:
+            catalog = client.connect()
+        except HubClientError as exc:
+            self._set_server_status(str(exc), theme.color("tint.worse"))
+            return
+        self._client = client
+        self._catalog = catalog
+        storage.update_settings(session_server_url=server, session_admin_secret=secret)
+        self._set_server_status(f"Connected to {server}.", theme.color("accent"))
+        self._sync_mode()
+        self._reload()
+
+    def _disconnect_from_server(self) -> None:
+        client, self._client = self._client, None
+        self._catalog = None
+        if client is not None:
+            client.close()
+
+    def _set_server_status(self, text: str, color: str = "") -> None:
+        self._server_status.setText(text)
+        self._server_status.setStyleSheet(tinted_style(color) if color else muted_style())
+
+    @property
+    def _on_server(self) -> bool:
+        return self._catalog is not None
+
+    def _sync_mode(self) -> None:
+        """Show the connection ladder only when this app is the one hosting.
+
+        A session on a server is reached by dialling out to its relay, so there is
+        no port to forward and no tunnel to name — asking would be offering a
+        choice that does nothing.
+        """
+        local = not self._on_server
+        self._form.setVisible(local)
+        self._form_rule.setVisible(local)
+        self._rename_button.setVisible(self._on_server)
+        self._list_caption.setText(
+            "Sessions on this server — players can join them whether or not you are here:"
+            if self._on_server
+            else "Continue a previous session, or start a new one:"
+        )
 
     # -- what the caller reads back ----------------------------------------
 
     def chosen_session_id(self) -> str | None:
         """The stored session to resume, or ``None`` to start a fresh one."""
         return self._chosen_id
+
+    def chosen_server_entry(self) -> dict | None:
+        """The chosen session's catalog row when it lives on a server, else ``None``.
+
+        Carries the join code and the gm token, which is everything GM Mode needs
+        to take its seat. ``None`` means the old path: host it on this machine.
+        """
+        return self._chosen_entry
+
+    def server_label(self) -> str:
+        """The server the chosen session is on, for the GM window's status line."""
+        return self._server_field.text().strip() if self._chosen_entry else ""
 
     def options(self) -> HostOptions:
         """How to host, from the embedded :class:`HostOptionsForm`."""
@@ -616,59 +735,147 @@ class GMSessionLaunchDialog(QDialog):
     # -- the previous-sessions table ---------------------------------------
 
     def _reload(self) -> None:
-        self._summaries = store.list_sessions()
-        self._table.setRowCount(len(self._summaries))
-        for row, summary in enumerate(self._summaries):
-            when = summary.updated_at[:16].replace("T", " ")
-            cells = [
-                summary.name or "Session",
-                when,
-                str(summary.player_count),
-                str(summary.roll_count),
+        rows = (
+            [
+                (
+                    str(e.get("name") or "Session"),
+                    str(e.get("updated_at", ""))[:16].replace("T", " "),
+                    str(e.get("player_count", 0)),
+                    str(e.get("roll_count", 0)),
+                    str(e.get("id", "")),
+                )
+                for e in (self._catalog or [])
             ]
-            for col, text in enumerate(cells):
+            if self._on_server
+            else [
+                (
+                    summary.name or "Session",
+                    summary.updated_at[:16].replace("T", " "),
+                    str(summary.player_count),
+                    str(summary.roll_count),
+                    summary.id,
+                )
+                for summary in store.list_sessions()
+            ]
+        )
+        if not self._on_server:
+            self._summaries = store.list_sessions()
+        self._table.setRowCount(len(rows))
+        for row, cells in enumerate(rows):
+            for col, text in enumerate(cells[:4]):
                 item = QTableWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, summary.id)
+                item.setData(Qt.ItemDataRole.UserRole, cells[4])
                 self._table.setItem(row, col, item)
-        self._delete_button.setEnabled(bool(self._summaries))
+        self._delete_button.setEnabled(bool(rows))
+        self._rename_button.setEnabled(bool(rows))
 
-    def _selected_summary(self) -> store.SessionSummary | None:
+    def _selected_id(self) -> str | None:
         rows = self._table.selectionModel().selectedRows()
         if not rows:
             return None
-        index = rows[0].row()
-        return self._summaries[index] if 0 <= index < len(self._summaries) else None
+        item = self._table.item(rows[0].row(), 0)
+        return None if item is None else str(item.data(Qt.ItemDataRole.UserRole))
+
+    def _selected_entry(self) -> dict | None:
+        """The selected server catalog row, or ``None``."""
+        session_id = self._selected_id()
+        return next((e for e in (self._catalog or []) if e.get("id") == session_id), None)
+
+    def _selected_summary(self) -> store.SessionSummary | None:
+        session_id = self._selected_id()
+        return next((s for s in self._summaries if s.id == session_id), None)
+
+    def _selected_name(self) -> str:
+        if self._on_server:
+            entry = self._selected_entry()
+            return str(entry.get("name") or "Session") if entry else "Session"
+        summary = self._selected_summary()
+        return (summary.name or "Session") if summary is not None else "Session"
 
     def _on_row_selected(self) -> None:
         """Continuing a session pre-fills the host form with its name."""
-        summary = self._selected_summary()
-        if summary is not None:
-            self._form.set_name(summary.name or "Session")
+        if not self._on_server:
+            self._form.set_name(self._selected_name())
 
     def _start_new(self) -> None:
-        """Drop any selection and name the form afresh — Open then makes a new session."""
-        self._table.clearSelection()
-        self._form.set_name("Session")
+        """Start a fresh session.
+
+        On a server that means asking the server to make one now, so the GM sees
+        it in the list with its join code before opening it. Locally it only
+        clears the selection: the session is minted when the window opens.
+        """
+        if not self._on_server:
+            self._table.clearSelection()
+            self._form.set_name("Session")
+            return
+        name, ok = QInputDialog.getText(self, "New session", "Name this session:", text="Session")
+        if not ok or not name.strip():
+            return
+        self._with_client(lambda client: client.create(name.strip()))
+
+    def _rename_selected(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            return
+        name, ok = QInputDialog.getText(
+            self, "Rename session", "New name:", text=str(entry.get("name", ""))
+        )
+        if not ok or not name.strip():
+            return
+        self._with_client(lambda client: client.rename(str(entry["id"]), name.strip()))
 
     def _delete_selected(self) -> None:
-        summary = self._selected_summary()
-        if summary is None:
+        session_id = self._selected_id()
+        if session_id is None:
             return
+        where = "on the server" if self._on_server else ""
         confirm = QMessageBox.question(
             self,
             "Delete session",
-            "Delete this session and its roll history? This cannot be undone.",
+            f"Delete “{self._selected_name()}” {where} and its roll history? "
+            "This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        store.delete_session(summary.id)
+        if self._on_server:
+            self._with_client(lambda client: client.delete(session_id))
+            return
+        store.delete_session(session_id)
+        self._reload()
+
+    def _with_client(self, action) -> None:
+        """Run one control request, refresh the list, and report a refusal."""
+        client = self._client
+        if client is None:
+            return
+        try:
+            self._catalog = action(client)
+        except HubClientError as exc:
+            self._set_server_status(str(exc), theme.color("tint.worse"))
+            return
         self._reload()
 
     def _on_accept(self) -> None:
-        """Take the selected session (or none), remember the relay, and close."""
-        summary = self._selected_summary()
-        self._chosen_id = summary.id if summary is not None else None
-        self._form.persist_relay()
+        """Take the selected session, remember the relay, and close."""
+        if self._on_server:
+            entry = self._selected_entry()
+            if entry is None:
+                self._set_server_status(
+                    "Pick a session, or make one with New session.", theme.color("tint.worse")
+                )
+                return
+            self._chosen_entry = entry
+            self._chosen_id = str(entry.get("id", ""))
+            storage.remember_gm_token(self._chosen_id, str(entry.get("gm_token", "")))
+        else:
+            summary = self._selected_summary()
+            self._chosen_id = summary.id if summary is not None else None
+            self._form.persist_relay()
+        self._disconnect_from_server()
         self.accept()
+
+    def reject(self) -> None:  # noqa: D102 - Qt override
+        self._disconnect_from_server()
+        super().reject()

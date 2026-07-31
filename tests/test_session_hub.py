@@ -15,9 +15,11 @@ from pathlib import Path
 import pytest
 
 from mm_companion.core import storage
+from mm_companion.core.session import hub_client as hub_client_mod
 from mm_companion.core.session import store
 from mm_companion.core.session.client import SessionClient, SessionClientError
 from mm_companion.core.session.discovery import decode_join_code
+from mm_companion.core.session.hub_client import HubClient, HubClientError
 from mm_companion.core.session.net import TcpTransport
 from mm_companion.core.session.protocol import (
     ERROR_BAD_TOKEN,
@@ -431,6 +433,86 @@ def test_stopping_the_hub_stops_every_session(hub) -> None:
     instance.stop()
 
     assert all(not server.running for server in servers)
+
+
+# -- the app's side of the control channel ---------------------------------
+
+
+def hub_client(instance: SessionHub, transports: LoopbackTransports, secret: str = SECRET):
+    """A HubClient pointed at the loopback stand-in for the relay."""
+    host, port = transports.address(instance.control_id)
+    client = HubClient(
+        "relay.example.net:47332",
+        secret,
+        control_id=instance.control_id,
+        transport=_FixedTransport(host, port),
+    )
+    return client
+
+
+class _FixedTransport(TcpTransport):
+    """Dials one known address whatever it is asked for — the relay's job."""
+
+    def __init__(self, host: str, port: int) -> None:
+        super().__init__()
+        self._host = host
+        self._port = port
+
+    def connect(self, host: str = "", port: int = 0, *, timeout: float = TIMEOUT):
+        return super().connect(self._host, self._port, timeout=timeout)
+
+
+def test_the_hub_client_reads_the_catalog(hub) -> None:
+    instance, transports = hub()
+    instance.create("Friday Game")
+
+    with hub_client(instance, transports) as client:
+        assert [e["name"] for e in client.sessions] == ["Friday Game"]
+
+
+def test_the_hub_client_creates_renames_and_deletes(hub) -> None:
+    instance, transports = hub()
+
+    with hub_client(instance, transports) as client:
+        created = client.create("Friday Game")
+        session_id = created[0]["id"]
+        assert client.rename(session_id, "Saturday Game")[0]["name"] == "Saturday Game"
+        assert client.delete(session_id) == []
+
+
+def test_the_hub_client_reports_a_bad_secret_in_one_sentence(hub) -> None:
+    instance, transports = hub()
+    client = hub_client(instance, transports, secret="guess")
+
+    with pytest.raises(HubClientError) as excinfo:
+        client.connect(timeout=TIMEOUT)
+
+    assert excinfo.value.code == ERROR_BAD_TOKEN
+    assert "admin secret" in str(excinfo.value)
+
+
+def test_the_hub_client_survives_a_refused_request(hub) -> None:
+    # A refused create must not poison the channel: the GM should be able to try
+    # again with a different name rather than reconnect.
+    instance, transports = hub(max_sessions=1)
+
+    with hub_client(instance, transports) as client:
+        client.create("One")
+        with pytest.raises(HubClientError):
+            client.create("Two")
+        assert [e["name"] for e in client.refresh()] == ["One"]
+
+
+def test_an_unreachable_server_is_one_readable_error() -> None:
+    client = HubClient("relay.example.net:47332", SECRET, transport=_FixedTransport("127.0.0.1", 1))
+    with pytest.raises(HubClientError, match="could not reach"):
+        client.connect(timeout=1.0)
+
+
+def test_the_control_url_names_the_channel_on_the_relay() -> None:
+    url = hub_client_mod.control_url("mmcompanion.duckdns.org")
+    assert url.startswith("mmrelay://mmcompanion.duckdns.org")
+    assert url.endswith("/mm-control")
 
 
 def _wait(predicate, message: str, timeout: float = TIMEOUT) -> None:

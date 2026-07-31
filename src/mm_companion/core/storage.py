@@ -89,6 +89,19 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # own (``python -m mm_companion.relay``) points at it here. See
     # :mod:`mm_companion.core.session.relay`.
     "session_relay_url": "",
+    # The session server this GM's tables live on — the box running
+    # ``python -m mm_companion.server --hub``. Empty for a GM who hosts from their
+    # own machine. See :mod:`mm_companion.core.session.hub_client`.
+    "session_server_url": "",
+    # That server's admin secret: the credential that may list, create and delete
+    # sessions on it. Not any session's join token — this is the one that makes
+    # "only a GM creates sessions" true, and it is remembered here so a GM types
+    # it once rather than every evening.
+    "session_admin_secret": "",
+    # Per-session GM tokens, ``{session_id: token}``, as the server's catalog
+    # handed them out. Kept so reopening GM Mode takes the GM's seat back without
+    # another trip to the catalog.
+    "session_gm_tokens": {},
     # The GM window's block arrangement + geometry, mirroring ``layout`` for the
     # character sheet: ``{"window_geometry": base64, "dock_state": json}``. Its own
     # key because the GM window has a different block set. See
@@ -235,3 +248,38 @@ def relay_url() -> str:
     """
     value = load_settings().get("session_relay_url", "")
     return value.strip() if isinstance(value, str) else ""
+
+
+def session_server() -> tuple[str, str]:
+    """The configured session server and its admin secret, or two empty strings.
+
+    The one seam for "does this GM keep their sessions on a server", so the
+    launcher and GM Mode ask in one place rather than each reading settings.
+    """
+    settings = load_settings()
+    url = settings.get("session_server_url", "")
+    secret = settings.get("session_admin_secret", "")
+    return (
+        url.strip() if isinstance(url, str) else "",
+        secret.strip() if isinstance(secret, str) else "",
+    )
+
+
+def gm_token_for(session_id: str) -> str:
+    """The remembered GM token for a session on the server, or ``""``."""
+    tokens = load_settings().get("session_gm_tokens", {})
+    if not isinstance(tokens, dict):
+        return ""
+    value = tokens.get(session_id, "")
+    return value if isinstance(value, str) else ""
+
+
+def remember_gm_token(session_id: str, token: str) -> None:
+    """Keep a session's GM token so the seat can be reclaimed without the catalog."""
+    tokens = load_settings().get("session_gm_tokens", {})
+    tokens = dict(tokens) if isinstance(tokens, dict) else {}
+    if token:
+        tokens[session_id] = token
+    else:
+        tokens.pop(session_id, None)
+    update_settings(session_gm_tokens=tokens)

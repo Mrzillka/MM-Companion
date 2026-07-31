@@ -362,16 +362,33 @@ class StartWindow(QMainWindow):
             return
         options = dialog.options()
         session_id = dialog.chosen_session_id()
-        state = None
-        if session_id:
-            try:
-                state = load_session(session_id)
-            except SessionStoreError:
-                state = None
-        if state is None:
-            state = new_session(options.name)
 
-        self._gm_window = GMWindow(state=state, host_options=options, autohost=True)
+        entry = dialog.chosen_server_entry()
+        if entry is not None:
+            # The session lives on a server: nothing to host, nothing to load off
+            # this disk. The window dials in and takes the GM's seat.
+            self._gm_window = GMWindow(host_options=options, autohost=False)
+            if not self._gm_window.connect_to_server(entry, dialog.server_label()):
+                QMessageBox.warning(
+                    self,
+                    "Could not open the session",
+                    "The server did not let this app in. Check that it is still running "
+                    "and that the session is still there, then try again.",
+                )
+                self._gm_window.close()
+                self._gm_window = None
+                return
+        else:
+            state = None
+            if session_id:
+                try:
+                    state = load_session(session_id)
+                except SessionStoreError:
+                    state = None
+            if state is None:
+                state = new_session(options.name)
+            self._gm_window = GMWindow(state=state, host_options=options, autohost=True)
+
         self._gm_window.show()
         self._gm_window.raise_()
         self._gm_window.activateWindow()

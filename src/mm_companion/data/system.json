@@ -4,6 +4,9 @@
     "default_initiative_ability": "AGL",
     "defense_dc_base": 10,
     "heroic_budget_divisor": 2,
+    "_criticals": "A natural 20 on an attack is a critical hit: the effect it lands gains criticalEffectBonus to its resistance DC. A natural 1 that still hits is a graze, and the target resists at criticalMissResistanceBonus.",
+    "criticalEffectBonus": 5,
+    "criticalMissResistanceBonus": 5,
     "trait_keys": {
       "attack": "ATK",
       "defense": "DEF",
@@ -24,6 +27,17 @@
     ],
     "unscoped_scope_values": ["All checks"],
     "alternate_effect_modifier": "alternate_effect",
-    "linked_modifier": "linked"
+    "linked_modifier": "linked",
+    "derived_traits": [
+      { "key": "DEF", "label": "Defence" },
+      { "key": "initiative", "label": "Initiative" }
+    ],
+    "ranged_distance": {
+      "rangeValue": "Ranged",
+      "rankSource": "effect_rank",
+      "offset": 0,
+      "steps": [0, 1, 2],
+      "stepLabels": ["short", "medium", "long"]
+    }
   }
 }

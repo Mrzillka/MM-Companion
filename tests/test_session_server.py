@@ -32,6 +32,7 @@ from mm_companion.core.session.client import (
     EVENT_ROLL,
     EVENT_ROLL_REMOVED,
     EVENT_ROSTER,
+    EVENT_SNAPSHOT,
     SessionClient,
     SessionClientError,
 )
@@ -650,6 +651,66 @@ def test_absurd_modifiers_are_clamped(running_server, connect) -> None:
     assert len(roll["label"]) == server_mod.MAX_LABEL_CHARS
 
 
+# --------------------------------------------------------------------------
+# Notes — the history's other kind of entry
+# --------------------------------------------------------------------------
+
+
+def test_a_note_reaches_every_player(running_server, connect) -> None:
+    srv = running_server(rng=Random(11))
+    first, first_events = connect(srv, "Volt")
+    _second, second_events = connect(srv, "Mesa")
+
+    first.post_note("spent a hero point — 2 left")
+
+    for events in (first_events, second_events):
+        note = events.next_of(EVENT_ROLL)
+        assert note["kind"] == "note"
+        assert note["text"] == "spent a hero point — 2 left"
+        # Attributed to the seat it came from, not to anything the text claims.
+        assert note["player_name"] == "Volt"
+
+
+def test_a_note_shares_the_sequence_with_the_rolls(running_server, connect) -> None:
+    """One log, one counter — which is what lets the GM strike a note like a roll."""
+    srv = running_server(rng=Random(4))
+    client, events = connect(srv, "Volt")
+
+    client.request_roll("One", dc=10)
+    events.next_of(EVENT_ROLL)
+    client.post_note("gained a hero point — 3 left")
+    seq = events.next_of(EVENT_ROLL)["seq"]
+
+    assert [entry.seq for entry in srv.state.rolls] == [1, 2]
+    assert [entry.kind for entry in srv.state.rolls] == ["roll", "note"]
+
+    assert srv.remove_roll(seq) is True
+    assert events.next_of(EVENT_ROLL_REMOVED)["seq"] == seq
+    assert [entry.seq for entry in srv.state.rolls] == [1]
+
+
+def test_a_note_is_persisted_and_reloads_as_a_note(running_server, connect) -> None:
+    srv = running_server(rng=Random(6))
+    client, _events = connect(srv, "Volt")
+
+    client.post_note("spent a hero point — 0 left")
+    wait_for(lambda: len(srv.state.rolls) == 1, message="the note was recorded")
+
+    reloaded = store.load_rolls(srv.state.id)
+    assert [entry.kind for entry in reloaded] == ["note"]
+    assert reloaded[0].text == "spent a hero point — 0 left"
+    assert reloaded[0].die == 0
+
+
+def test_an_absurdly_long_note_is_capped(running_server, connect) -> None:
+    srv = running_server(rng=Random(9))
+    client, events = connect(srv, "Volt")
+
+    client.post_note("x" * 5000)
+
+    assert len(events.next_of(EVENT_ROLL)["text"]) == server_mod.MAX_NOTE_CHARS
+
+
 def test_the_gm_can_remove_a_roll_for_everyone(running_server, connect) -> None:
     srv = running_server(rng=Random(8))
     client, events = connect(srv, "Volt")
@@ -969,3 +1030,244 @@ def test_closing_a_never_connected_client_emits_nothing() -> None:
     client = SessionClient("127.0.0.1", 1, token="x", display_name="Nobody", on_event=events)
     client.close()
     assert events.kinds() == []
+
+
+# --------------------------------------------------------------------------
+# The remote GM
+#
+# A GM whose session lives on an always-on box drives it over the same socket
+# every player uses. What separates them is one secret deliberately kept out of
+# the join code — everyone at the table has that one.
+# --------------------------------------------------------------------------
+
+
+def gm_connect(srv: SessionServer, name: str = "GM", **kwargs):
+    """A client that claims the GM seat with the session's gm token."""
+    events = kwargs.pop("events", None) or Events()
+    host, port = srv.address
+    client = SessionClient(
+        host,
+        port,
+        token=srv.state.host_token,
+        display_name=name,
+        gm_token=srv.state.gm_token,
+        on_event=events,
+        **kwargs,
+    )
+    client.connect(timeout=TIMEOUT)
+    return client, events
+
+
+def test_the_gm_token_seats_a_remote_client_in_the_gm_slot(running_server) -> None:
+    srv = running_server(gm_in_process=False)
+    client, _ = gm_connect(srv)
+    try:
+        assert client.is_gm
+        assert client.player_id == srv.gm_slot().player_id
+    finally:
+        client.close()
+
+
+def test_a_wrong_gm_token_is_refused_rather_than_seated_as_a_player(running_server) -> None:
+    # The dangerous failure is not refusal, it is a quiet downgrade: a GM seated
+    # as a player only finds out when a hidden roll reaches the table.
+    srv = running_server(gm_in_process=False)
+    host, port = srv.address
+    client = SessionClient(
+        host, port, token=srv.state.host_token, display_name="Impostor", gm_token="nope"
+    )
+    with pytest.raises(SessionClientError) as excinfo:
+        client.connect(timeout=TIMEOUT)
+
+    assert excinfo.value.code == ERROR_BAD_TOKEN
+    assert [s for s in srv.state.players.values() if not s.is_gm] == []
+
+
+def test_the_join_code_alone_does_not_confer_gm(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    client, _ = connect(srv, "Volt")
+
+    assert not client.is_gm
+    assert not srv.state.players[client.player_id].is_gm
+
+
+def test_a_remote_gm_rolls_hidden_and_players_never_see_it(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    player, player_events = connect(srv, "Volt")
+    gm, gm_events = gm_connect(srv)
+    try:
+        gm.request_roll("Ambush check", hidden=True)
+        gm.request_roll("In the open")
+
+        # The player's history skips the hidden roll and arrives at the next one.
+        assert player_events.next_of(EVENT_ROLL)["label"] == "In the open"
+        assert all(not roll.get("hidden") for roll in player.history)
+        # It is recorded all the same.
+        assert [r.label for r in srv.state.rolls] == ["Ambush check", "In the open"]
+        assert gm_events.next_of(EVENT_ROLL)["label"] == "Ambush check"
+    finally:
+        gm.close()
+
+
+def test_a_players_hidden_flag_is_still_ignored(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    player, _ = connect(srv, "Volt")
+    _watcher, watcher_events = connect(srv, "Watcher")
+
+    player.request_roll("Sneaky", hidden=True)
+
+    assert watcher_events.next_of(EVENT_ROLL)["label"] == "Sneaky"
+    assert not srv.state.rolls[-1].hidden
+
+
+def test_a_players_sheet_reaches_a_remote_gm(running_server, connect) -> None:
+    # The roster deliberately carries no characters, so without this forward a
+    # remote GM would have no way to see a sheet at all.
+    srv = running_server(gm_in_process=False)
+    gm, gm_events = gm_connect(srv)
+    try:
+        player, _ = connect(srv, "Volt")
+        player.send_snapshot({"power_level": 10, "profile": {"hero_name": "Volt"}})
+
+        payload = gm_events.next_of(EVENT_SNAPSHOT)
+        assert payload["player_id"] == player.player_id
+        assert payload["character"]["power_level"] == 10
+    finally:
+        gm.close()
+
+
+def test_a_snapshot_is_not_forwarded_to_other_players(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    player, _ = connect(srv, "Volt")
+    _watcher, watcher_events = connect(srv, "Watcher")
+
+    player.send_snapshot({"power_level": 10})
+    # A roster still arrives; a sheet does not.
+    watcher_events.next_of(EVENT_ROSTER)
+    assert EVENT_SNAPSHOT not in watcher_events.kinds()
+
+
+def test_a_remote_gm_applies_a_condition_to_a_player(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    player, player_events = connect(srv, "Volt")
+    gm, _ = gm_connect(srv)
+    try:
+        gm.apply_condition(player.player_id, "dazed")
+
+        assert player_events.next_of(EVENT_APPLY_CONDITION)["condition_id"] == "dazed"
+    finally:
+        gm.close()
+
+
+def test_a_player_cannot_apply_a_condition(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    attacker, _ = connect(srv, "Volt")
+    victim, victim_events = connect(srv, "Target")
+
+    attacker.apply_condition(victim.player_id, "dazed")
+    # Provoke a message that *is* answered, so "nothing arrived" is an
+    # observation rather than a race with the network.
+    attacker.request_roll("proof of life")
+    assert victim_events.next_of(EVENT_ROLL)["label"] == "proof of life"
+    assert EVENT_APPLY_CONDITION not in victim_events.kinds()
+
+
+def test_a_remote_gm_kicks_a_player(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    player, player_events = connect(srv, "Volt")
+    gm, _ = gm_connect(srv)
+    try:
+        gm.request_kick(player.player_id, "wandered off")
+
+        assert player_events.next_of(EVENT_KICKED)["reason"] == "wandered off"
+        wait_for(lambda: player.player_id not in srv.state.players, message="slot dropped")
+    finally:
+        gm.close()
+
+
+def test_a_gm_cannot_kick_themselves(running_server) -> None:
+    srv = running_server(gm_in_process=False)
+    gm, gm_events = gm_connect(srv)
+    try:
+        gm.request_kick(gm.player_id)
+        gm.request_roll("still here")
+
+        assert gm_events.next_of(EVENT_ROLL)["label"] == "still here"
+        assert gm.player_id in srv.state.players
+    finally:
+        gm.close()
+
+
+def test_a_remote_gm_renames_the_session_and_sets_the_cast(running_server) -> None:
+    srv = running_server(gm_in_process=False)
+    gm, _ = gm_connect(srv)
+    try:
+        gm.set_session_name("Friday Game")
+        gm.set_npc_paths(["thug.json"])
+        wait_for(lambda: srv.state.name == "Friday Game", message="renamed")
+        wait_for(lambda: srv.state.npc_paths == ["thug.json"], message="cast stored")
+    finally:
+        gm.close()
+
+    # The cast follows the session, so a GM picking it up elsewhere still has it.
+    again, _ = gm_connect(srv)
+    try:
+        assert again.npc_paths == ["thug.json"]
+    finally:
+        again.close()
+
+
+def test_the_cast_list_is_never_sent_to_a_player(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    srv.set_npc_paths(["boss.json"])
+    player, _ = connect(srv, "Volt")
+
+    assert player.npc_paths == []
+
+
+def test_a_headless_session_shows_no_gm_until_one_connects(running_server) -> None:
+    srv = running_server(gm_in_process=False)
+    assert not srv.gm_slot().connected
+
+    gm, _ = gm_connect(srv)
+    try:
+        wait_for(lambda: srv.gm_slot().connected, message="gm seated")
+    finally:
+        gm.close()
+    wait_for(lambda: not srv.gm_slot().connected, message="gm left")
+
+
+def test_an_in_process_gm_is_connected_from_the_start(running_server) -> None:
+    assert running_server().gm_slot().connected
+
+
+def test_a_resumed_session_still_shows_its_in_process_gm(running_server) -> None:
+    # store.load_session clears every connected flag, so a resumed GM used to
+    # show offline for the rest of the session's life.
+    first = running_server(gm_name="Boss")
+    first.stop()
+
+    resumed = running_server(state=store.load_session(first.state.id), gm_name="Boss")
+
+    gm = resumed.gm_slot()
+    assert gm.connected and gm.display_name == "Boss"
+
+
+def test_the_gm_seat_does_not_eat_a_player_slot(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False, max_clients=2)
+    gm, _ = gm_connect(srv)
+    try:
+        connect(srv, "One")
+        connect(srv, "Two")  # refused if the GM counted against the cap
+    finally:
+        gm.close()
+
+
+def test_the_gm_token_is_never_broadcast(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    client, events = connect(srv, "Volt")
+
+    secret = srv.state.gm_token
+    assert secret
+    assert secret not in json.dumps(events.next_of(EVENT_CONNECTED))
+    assert secret not in json.dumps(client.roster)

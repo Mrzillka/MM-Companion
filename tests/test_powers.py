@@ -1790,3 +1790,121 @@ def test_resolve_stat_display_fills_in_the_numbers() -> None:
     # Fields without a numeric form come back unchanged.
     assert resolve_stat_display(effect, data, "effect_type", "Attack") == "Attack"
     assert resolve_stat_display(effect, data, "action", "Standard") == "Standard"
+
+
+# -- ranged reach (docs/mm-powers-architecture.md §10) ---------------------------
+
+
+def _rows_by_key(effect, data, char=None) -> dict:
+    return {row.key: row for row in effect_stat_rows(effect, data, char)}
+
+
+def test_ranged_effect_states_its_distance_rank_and_increments() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")])
+
+    rows = _rows_by_key(effect, data)
+    assert rows["distance_rank"].value == "rank 8"
+    assert rows["distance_rank"].change == ""  # nothing bought it up
+    # Short / medium / long are distance ranks 8 / 9 / 10 — the x1/x2/x4 progression.
+    assert rows["distance"].value == "short 1,800 feet / medium 1/2 mile / long 1 mile"
+
+
+def test_close_effect_has_no_distance_rows() -> None:
+    data = load_game_data()
+    rows = _rows_by_key(PowerEffectInstance("damage", rank=8), data)
+    assert "distance_rank" not in rows
+    assert "distance" not in rows
+
+
+def test_extended_range_raises_the_distance_rank_and_leaves_the_notes_row() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "damage",
+        rank=8,
+        extras=[ModifierSelection("ranged"), ModifierSelection("extended_range", rank=2)],
+    )
+
+    rows = _rows_by_key(effect, data)
+    assert rows["distance_rank"].base == "rank 8"
+    assert rows["distance_rank"].value == "rank 10"
+    assert rows["distance_rank"].change == "better"
+    # It now shows in a stat cell, so it is no longer listed as an invisible Note.
+    assert "Extended Range" not in (rows["notes"].value if "notes" in rows else "")
+
+
+def test_extended_range_on_a_close_effect_shows_no_distance() -> None:
+    data = load_game_data()
+    # No Ranged extra, so there is no reach for Extended Range to extend.
+    effect = PowerEffectInstance(
+        "damage", rank=8, extras=[ModifierSelection("extended_range", rank=2)]
+    )
+    assert "distance_rank" not in _rows_by_key(effect, data)
+
+
+def test_ranged_distance_ranks_returns_none_without_a_ranged_range() -> None:
+    from mm_companion.core.rules import ranged_distance_ranks
+
+    data = load_game_data()
+    assert ranged_distance_ranks(PowerEffectInstance("damage", rank=4), data) is None
+    ranged = PowerEffectInstance("damage", rank=4, extras=[ModifierSelection("ranged")])
+    assert ranged_distance_ranks(ranged, data) == (4, 4)
+
+
+# -- Extra Limbs' capped bonus --------------------------------------------------
+
+
+def test_extra_limbs_bonus_climbs_per_rank_and_stops_at_the_cap() -> None:
+    data = load_game_data()
+    at_three = PowerEffectInstance("extra_limbs", rank=3, config={"appliesTo": "grab"})
+    assert _rows_by_key(at_three, data)["bonus"].value == "+3 Grab"
+
+    at_seven = PowerEffectInstance("extra_limbs", rank=7, config={"appliesTo": "stability"})
+    assert _rows_by_key(at_seven, data)["bonus"].value == "+5 Stability (capped)"
+
+
+def test_extra_limbs_with_variable_defers_the_subject_to_use_time() -> None:
+    data = load_game_data()
+    # The Variable extra gates the picker (hiddenWith), so no subject is stored.
+    effect = PowerEffectInstance(
+        "extra_limbs", rank=4, extras=[ModifierSelection("variable_extra_limbs")]
+    )
+    assert _rows_by_key(effect, data)["bonus"].value == ("+4 (Grab or Stability, chosen each turn)")
+
+
+# -- Check Required -------------------------------------------------------------
+
+
+def test_check_required_names_the_check_and_its_dc() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "damage",
+        rank=6,
+        flaws=[ModifierSelection("check_required", rank=3, config={"trait": "Acrobatics"})],
+    )
+    # DC is the system's base 10 plus the flaw's rank.
+    assert _rows_by_key(effect, data)["required_check"].value == "Acrobatics check, DC 13"
+
+
+def test_check_required_renders_a_trait_key_by_its_name() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "damage",
+        rank=6,
+        flaws=[ModifierSelection("check_required", rank=2, config={"trait": "AGL"})],
+    )
+    assert _rows_by_key(effect, data)["required_check"].value == "Agility check, DC 12"
+
+
+def test_unconfigured_check_required_still_reads_as_a_sentence() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "damage", rank=6, flaws=[ModifierSelection("check_required", rank=1)]
+    )
+    assert _rows_by_key(effect, data)["required_check"].value == "Check, DC 11"
+
+
+def test_deflect_no_longer_carries_its_own_limited_to_row() -> None:
+    data = load_game_data()
+    # The general Limited flaw already asks for this, so the duplicate config went away.
+    assert "limitedCategory" not in _rows_by_key(PowerEffectInstance("deflect", rank=5), data)

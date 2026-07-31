@@ -5,11 +5,12 @@ the block set that used to be spelled out in three hardcoded places (the sheet's
 ``panels`` list, its ``_sections()`` tuple, and the canvas's ``DEFAULT_ROWS``).
 :class:`~mm_companion.ui.character_sheet.CharacterSheet` iterates
 :func:`block_descriptors` to build its blocks, and the canvas takes
-:func:`default_rows` for its default arrangement.
+:func:`default_rows` plus :func:`default_pin_lines` for its default arrangement —
+the page and the pinned strip respectively.
 
 The registry reuses the generic :class:`~mm_companion.core.registry.Registry`, so
 it keeps insertion order and rejects a duplicate key unless ``replace=True`` — a
-mod overriding a base block is explicit. The ten base blocks register at import;
+mod overriding a base block is explicit. The eleven base blocks register at import;
 a mod's Python module can :func:`register_block` a new one (its size table entry
 travels on the descriptor, so no separate JSON edit is needed).
 """
@@ -32,6 +33,8 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
+    NOTE_REQUESTED,
+    ROLL_REQUESTED,
 )
 from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.sections import (
@@ -41,6 +44,7 @@ from mm_companion.ui.sections import (
     CharacterImageSection,
     ComplicationsSection,
     ConditionsSection,
+    DiceSection,
     PowersSection,
     ResistancesSection,
     SkillsSection,
@@ -71,23 +75,45 @@ def default_rows() -> list[list[str]]:
     """The default arrangement as rows of block keys, derived from the descriptors.
 
     Blocks are grouped by ``default_row`` and ordered within a row by
-    ``default_col``; rows come out in ascending ``default_row`` order.
+    ``default_col``; rows come out in ascending ``default_row`` order. A
+    ``default_pinned`` block is not in a row at all — see :func:`default_pin_lines`.
     """
     rows: dict[int, list[BlockDescriptor]] = defaultdict(list)
     for descriptor in block_descriptors():
+        if descriptor.default_pinned:
+            continue
         rows[descriptor.default_row].append(descriptor)
     return [[d.key for d in sorted(rows[row], key=lambda d: d.default_col)] for row in sorted(rows)]
 
 
+def default_pin_lines() -> list[list[str]]:
+    """The blocks that start in the pinned strip, one per line along it.
+
+    The complement of :func:`default_rows`: together the two cover every
+    registered block exactly once, which is what the arrangement model requires.
+    Ordered by ``default_row``/``default_col`` like the rows are, so a second
+    pinned block lands under the first predictably.
+    """
+    pinned = [d for d in block_descriptors() if d.default_pinned]
+    pinned.sort(key=lambda d: (d.default_row, d.default_col))
+    return [[d.key] for d in pinned]
+
+
+# Every block whose lines can be rolled says so the same way: one `rollRequested`
+# signal carrying the RollSpec. Named once so the five tables below stay readable
+# and a sixth requester is a one-word addition.
+_ROLLS = {"rollRequested": (ROLL_REQUESTED,)}
+
 # One row per base block: (key, dock title, factory, default_row, default_col,
-# publishes, subscribes). Listed in construction order; the row/col fields drive
-# the default layout (see default_rows). Sizes are read from block_sizes.json at
-# registration so that config stays tweakable. `publishes` maps a section Qt
-# signal to the bus topics it raises; `subscribes` maps a topic to the section
-# method that recomputes on it — together they reproduce the old hand-wired
-# cross-block signal web (see mm_companion.ui.blocks.bus for the topic table).
+# publishes, subscribes, requests, serves). Listed in construction order; the
+# row/col fields drive the default layout (see default_rows). Sizes are read from
+# block_sizes.json at registration so that config stays tweakable. `publishes` maps
+# a section Qt signal to the bus topics it raises; `subscribes` maps a topic to the
+# section method that recomputes on it — together they reproduce the old hand-wired
+# cross-block signal web. `requests`/`serves` are the same pair on the bus's payload
+# channel, which today carries only "roll this" (see mm_companion.ui.blocks.bus).
 _BASE_BLOCKS = [
-    ("base_info", "Name & Details", BaseInfoSection, 0, 0, {"edited": (EDITED,)}, {}),
+    ("base_info", "Name & Details", BaseInfoSection, 0, 0, {"edited": (EDITED,)}, {}, {}, {}),
     (
         "system_info",
         "Power Level & System",
@@ -100,8 +126,21 @@ _BASE_BLOCKS = [
             "edited": (EDITED,),
         },
         {DERIVED_CHANGED: "refresh_derived"},
+        # the Initiative readout, plus the note a hero-point change writes
+        {**_ROLLS, "noteRequested": (NOTE_REQUESTED,)},
+        {},
     ),
-    ("character_image", "Character Image", CharacterImageSection, 0, 2, {"edited": (EDITED,)}, {}),
+    (
+        "character_image",
+        "Character Image",
+        CharacterImageSection,
+        0,
+        2,
+        {"edited": (EDITED,)},
+        {},
+        {},
+        {},
+    ),
     (
         "abilities",
         "Abilities",
@@ -113,6 +152,8 @@ _BASE_BLOCKS = [
             "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {ENHANCEMENTS_CHANGED: "refresh_enhancements", COST_RATES_CHANGED: "refresh_cost"},
+        _ROLLS,
+        {},
     ),
     (
         "resistances",
@@ -126,6 +167,8 @@ _BASE_BLOCKS = [
             ENHANCEMENTS_CHANGED: "refresh_enhancements",
             COST_RATES_CHANGED: "refresh_cost",
         },
+        _ROLLS,
+        {},
     ),
     (
         "conditions",
@@ -144,6 +187,8 @@ _BASE_BLOCKS = [
             "edited": (EDITED,),
         },
         {},
+        {},
+        {},
     ),
     (
         "advantages",
@@ -158,6 +203,8 @@ _BASE_BLOCKS = [
             FACTS_CHANGED: "refresh_power_options",
             COST_RATES_CHANGED: "refresh_cost",
         },
+        {},
+        {},
     ),
     (
         "complications",
@@ -166,6 +213,8 @@ _BASE_BLOCKS = [
         3,
         0,
         {"edited": (EDITED,)},
+        {},
+        {},
         {},
     ),
     (
@@ -180,6 +229,8 @@ _BASE_BLOCKS = [
             ENHANCEMENTS_CHANGED: "refresh_totals",
             COST_RATES_CHANGED: "refresh_totals",
         },
+        _ROLLS,
+        {},
     ),
     (
         "powers",
@@ -194,14 +245,37 @@ _BASE_BLOCKS = [
             "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED),
         },
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
+        _ROLLS,  # the 🎲 beside each of a power card's roll lines
+        {},
+    ),
+    (
+        "dice",
+        "Dice Roller",
+        DiceSection,
+        6,
+        0,
+        # A roll is not a character edit and must never mark the sheet dirty, and
+        # the roller reads nothing off the build — so it publishes and subscribes
+        # nothing. It is, however, the block that *answers* a roll request, and the
+        # one that owns a history for a note to be written in.
+        {},
+        {},
+        {},
+        {ROLL_REQUESTED: "perform_roll", NOTE_REQUESTED: "post_note"},
     ),
 ]
 
+# Blocks that start in the pinned strip instead of in a row (see
+# ``BlockDescriptor.default_pinned``). The strip is the one region that does not
+# scroll with the page, which is exactly where a die belongs: it stays in view
+# through a fight rather than scrolling away under the sheet.
+_PINNED_BY_DEFAULT = frozenset({"dice"})
+
 
 def register_base_blocks(*, replace: bool = False) -> None:
-    """Register the ten base M&M blocks (called once at import)."""
+    """Register the eleven base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
-    for key, title, factory, row, col, publishes, subscribes in _BASE_BLOCKS:
+    for key, title, factory, row, col, publishes, subscribes, requests, serves in _BASE_BLOCKS:
         register_block(
             BlockDescriptor(
                 key,
@@ -210,8 +284,11 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 sizes.get(key, BlockSize()),
                 row,
                 col,
+                key in _PINNED_BY_DEFAULT,
                 publishes,
                 subscribes,
+                requests,
+                serves,
             ),
             replace=replace,
         )
@@ -270,8 +347,8 @@ def sync_declarative_blocks(data: GameData) -> None:
                 _block_size(spec),
                 spec.row,
                 spec.col,
-                {"edited": (EDITED,)},
-                {},
+                publishes={"edited": (EDITED,)},
+                subscribes={},
             )
         )
         _declarative_keys.add(spec.id)

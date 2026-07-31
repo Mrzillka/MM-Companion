@@ -168,6 +168,22 @@ def test_a_roll_carries_the_resolved_check() -> None:
     assert not record.critical
 
 
+def test_a_rolls_spec_survives_the_round_trip_to_disk() -> None:
+    """The chain has to outlive a restart: a resumed session still offers the save.
+
+    The record carries the spec opaquely — the store never reads it — so this is
+    really a check that it is written and read back untouched.
+    """
+    state = new_session("Table")
+    spec = {"label": "7 vs. Defense", "follow_up": {"label": "Toughness vs. 18", "dc": 18}}
+    save_session(state)
+    append_roll(state.id, state.record_roll(player_id="p1", player_name="Alex", die=9, spec=spec))
+
+    restored = load_session(state.id)
+
+    assert restored.rolls[0].spec == spec
+
+
 def test_a_roll_with_no_dc_is_ungraded() -> None:
     record = new_session().record_roll(player_id="p1", player_name="Alex", die=20)
 

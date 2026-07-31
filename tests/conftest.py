@@ -16,10 +16,13 @@ import threading
 from dataclasses import dataclass
 
 import pytest
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 
+from mm_companion.core import storage
 from mm_companion.core.session.relay import RELAY_SCHEME_PLAIN
 from mm_companion.relay import RelayServer
+from mm_companion.ui import theme
 from mm_companion.ui.sections.powers import PowersSection
 
 
@@ -45,6 +48,28 @@ def relay_box():
     yield RelayBox(server, f"{RELAY_SCHEME_PLAIN}://{host}:{port}")
     server.stop()
     thread.join(timeout=5.0)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_workspace(tmp_path, monkeypatch):
+    """Give every test a throwaway workspace, and a clean theme cache around it.
+
+    Otherwise a test reads — and writes — the developer's real workspace. Both
+    directions bite: ``library.save_character`` leaves files in their actual
+    ``characters/`` dir, and a preset they happen to have chosen decides what
+    colour the sheet paints a penalty, so an assertion about a tint passes or
+    fails depending on who runs it. Neither shows up on CI, where the workspace
+    is always empty, which is exactly what makes it worth pinning here.
+
+    A test file wanting its own workspace still sets the variable itself; a
+    module-level autouse fixture runs after this one and wins. This is the floor.
+    """
+    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path / "workspace"))
+    # The active preset is cached, so moving the workspace has to invalidate it on
+    # the way in and on the way back out.
+    theme.reset()
+    yield
+    theme.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -77,3 +102,8 @@ def _close_top_level_widgets():
         widget.hide()
         widget.deleteLater()
     app.processEvents()
+    # processEvents() does not run deferred deletions — Qt holds those until the
+    # event loop that posted them unwinds, and a test never starts one. Without
+    # this the widgets above are only *scheduled* to die and in fact pile up all
+    # session, which is the very thing this fixture exists to prevent.
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)

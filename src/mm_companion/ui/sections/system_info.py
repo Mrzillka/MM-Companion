@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from html import escape
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -32,77 +33,126 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     condition_check_penalty,
+    condition_speed_lines,
     condition_speed_rank_mod,
     effective_size,
     estimated_power_level,
     has_cost_overrides,
     initiative_ability,
     initiative_modifier,
+    initiative_roll,
+    movement_mode_lines,
     power_level_for_points,
     reconcile_points_to_level,
     speed_columns,
-    speed_lines,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
+from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
-from mm_companion.ui.theme import ACCENT, TINT_WORSE
+from mm_companion.ui.svg_assets import hero_point_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
-HERO_POINT_CIRCLES = 5
+HERO_POINT_PIPS = 5
+INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
 
 
 class HeroPointsWidget(QWidget):
-    """A row of five circles; clicking one spends or gains hero points.
+    """Five hero-point pips, each its own switch; the count is how many are lit.
 
-    Clicking a circle sets the count to that circle's position, except clicking the
-    last filled circle empties it (so the count can be lowered back to zero). Filled
-    circles are ``●``, empty ones ``○``. Emits :attr:`valueChanged` on a user click.
-    Hero points stay clickable even when the sheet is locked — they are spent during
-    play, not a build value — so this widget has no locked state.
+    A pip toggles on its own — light the fourth and leave the rest dark if that is
+    how you like to read your row. A held point shows the lit drawing, a spent one
+    the dimmed twin; which pair of the bundled ones (:mod:`~mm_companion.ui.svg_assets`)
+    is the theme's ``assets.hero-point`` choice. Emits :attr:`valueChanged` on a
+    user click.
+
+    **Which** pips are lit is cosmetic: the character carries a count, so
+    :meth:`set_value` — a load, or a GM's command — can only say *how many*. It
+    reconciles rather than redraws (see there), which keeps an arrangement the
+    player made wherever the new count still allows it.
+
+    Hero points stay clickable even when the sheet is locked — they are spent
+    during play, not a build value — so this widget has no locked state.
     """
 
     valueChanged = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._value = 0
+        self._lit: set[int] = set()
         self._buttons: list[QPushButton] = []
+        self._pip_size = int(theme.metric("column.hero-point"))
+        self.setToolTip("Click a pip to spend or gain a hero point")
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(2)
-        for i in range(HERO_POINT_CIRCLES):
-            button = QPushButton("○")
+        row.setSpacing(int(theme.metric("space.xs")))
+        # The pip is the artwork edge to edge: a button frame or padding would
+        # scale it down inside its own cell. The hover wash stands in for the
+        # button chrome that goes with them.
+        style = (
+            "QPushButton { border: none; padding: 0; background: transparent; }"
+            f"QPushButton:hover {{ background: {theme.wash('accent', 0.18)};"
+            f" border-radius: {self._pip_size // 2}px; }}"
+        )
+        for i in range(HERO_POINT_PIPS):
+            button = QPushButton()
             button.setFlat(True)
-            button.setFixedWidth(22)
+            button.setFixedSize(self._pip_size, self._pip_size)
+            button.setIconSize(QSize(self._pip_size, self._pip_size))
+            button.setStyleSheet(style)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _=False, index=i: self._on_click(index))
             self._buttons.append(button)
             row.addWidget(button)
         row.addStretch()
+        self._render()
 
     def value(self) -> int:
-        return self._value
+        return len(self._lit)
 
     def set_value(self, value: int) -> None:
-        """Set the count (clamped to 0…5) without emitting :attr:`valueChanged`."""
-        self._value = max(0, min(HERO_POINT_CIRCLES, int(value)))
+        """Set the count (clamped to 0…5) without emitting :attr:`valueChanged`.
+
+        The caller has a number, not an arrangement, so this *reconciles* to it:
+        spending puts out the right-most lit pips, gaining lights the left-most
+        dark ones. A player who lit only the fourth pip and then spends a point
+        still ends up where they expect, and a load with nothing to preserve
+        settles on the left-most ``value`` pips.
+        """
+        target = max(0, min(HERO_POINT_PIPS, int(value)))
+        while len(self._lit) > target:
+            self._lit.discard(max(self._lit))
+        while len(self._lit) < target:
+            self._lit.add(min(set(range(HERO_POINT_PIPS)) - self._lit))
         self._render()
 
     def _on_click(self, index: int) -> None:
-        # Clicking the last filled circle empties it; otherwise fill up to the click.
-        new_value = index if self._value == index + 1 else index + 1
-        if new_value == self._value:
-            return
-        self._value = new_value
+        """Flip one pip. Each is independent — no filling up to the click."""
+        if index in self._lit:
+            self._lit.discard(index)
+        else:
+            self._lit.add(index)
         self._render()
-        self.valueChanged.emit(self._value)
+        self.valueChanged.emit(self.value())
+
+    def changeEvent(self, event: QEvent) -> None:
+        # Dragged to a screen of a different scaling, the pips are re-rasterised at
+        # that screen's ratio rather than left as a stretched copy of the old one.
+        if event.type() == QEvent.Type.DevicePixelRatioChange:
+            self._render()
+        super().changeEvent(event)
 
     def _render(self) -> None:
+        ratio = self.devicePixelRatioF()
+        # The variant is read here rather than kept from __init__, so a widget
+        # rebuilt after a preset switch draws the new artwork.
+        variant = theme.asset("hero-point")
         for i, button in enumerate(self._buttons):
-            button.setText("●" if i < self._value else "○")
+            pixmap = hero_point_pixmap(i in self._lit, self._pip_size, ratio, variant)
+            button.setIcon(QIcon(pixmap))
 
 
 class SpeedWidget(QWidget):
@@ -119,9 +169,6 @@ class SpeedWidget(QWidget):
         self._data = data
         self._metric = False
         self._lines: list = []
-        # A condition's net ground-speed rank change: 0 = none, a negative int = a
-        # slowing penalty (Hindered), None = immobilised (Immobile/Prone zeroes it).
-        self._speed_mod: int | None = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -138,35 +185,32 @@ class SpeedWidget(QWidget):
 
         self._sync_unit_button()
 
-    def render_lines(self, lines: list, speed_mod: int | None = 0) -> None:
-        """Redraw the speed lines from the given :class:`SpeedLine` list.
+    def render_lines(self, lines: list) -> None:
+        """Redraw from the given :class:`SpeedLine` list.
 
-        ``speed_mod`` is a condition's ground-speed overlay (see
-        :func:`~mm_companion.core.rules.condition_speed_rank_mod`): ``0`` leaves the
-        base line untouched, a negative rank slows it (and tints it red), and ``None``
-        marks the character immobilised. It only re-skins the *base* (ground) line —
-        the build math and the per-power movement lines are untouched.
+        Any condition overlay is already resolved into the lines by
+        :func:`~mm_companion.core.rules.condition_speed_lines` — a slowed line arrives
+        at its reduced rank carrying the penalty in ``rank_mod``, an immobilised one is
+        flagged. This widget only expands ranks into distance columns and tints.
         """
         self._lines = lines
-        self._speed_mod = speed_mod
         self._redraw()
 
     def _redraw(self) -> None:
+        # Rich text can't use a Qt palette() role, so a condition-affected line takes
+        # the literal tint colour. Resolved once per redraw rather than per line.
+        worse = theme.color("tint.worse")
         html_lines = []
-        for index, line in enumerate(self._lines):
-            is_base = index == 0
-            if is_base and self._speed_mod is None:
-                html_lines.append(
-                    f'<span style="color: {TINT_WORSE};">{escape(line.label)}: immobilised</span>'
-                )
+        for line in self._lines:
+            if line.immobilised:
+                label = escape(line.label)
+                html_lines.append(f'<span style="color: {worse};">{label}: immobilised</span>')
                 continue
-            slowed = is_base and bool(self._speed_mod)
-            rank = line.rank + (self._speed_mod or 0) if slowed else line.rank
-            walk, dash, run = speed_columns(rank, self._data, metric=self._metric)
+            walk, dash, run = speed_columns(line.rank, self._data, metric=self._metric)
             text = f"{line.label}: {_compact(walk)} / {_compact(dash)} / {_compact(run)}"
-            if slowed:
-                text += f" ({self._speed_mod:+d} rank)"
-                html_lines.append(f'<span style="color: {TINT_WORSE};">{escape(text)}</span>')
+            if line.rank_mod:
+                text += f" ({line.rank_mod:+d} rank)"
+                html_lines.append(f'<span style="color: {worse};">{escape(text)}</span>')
             else:
                 html_lines.append(escape(text))
         self._lines_label.setText("<br>".join(html_lines))
@@ -178,6 +222,62 @@ class SpeedWidget(QWidget):
 
     def _sync_unit_button(self) -> None:
         self._unit_button.setText("Show ft / round" if self._metric else "Show km / h")
+
+
+class MovementModesWidget(QWidget):
+    """The specialised speeds the character's active powers grant.
+
+    One row per :class:`~mm_companion.core.rules.MovementModeLine` — the mode's name,
+    the speed it moves at, and any per-tier caveat. Unlike :class:`SpeedWidget`'s single
+    rich-text label this builds a label per row, because each mode carries its own hover
+    description and a tooltip cannot be applied to part of a label.
+
+    Hidden entirely while nothing grants a mode, so the block gains no empty row for
+    the many characters that have none.
+    """
+
+    def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._data = data
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        self.setVisible(False)
+
+    def render_lines(self, lines: list) -> None:
+        layout = self.layout()
+        while layout.count():  # rebuilt wholesale — a mode list is a handful of rows
+            widget = layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        for line in lines:
+            text = f"{line.label}: {_compact(speed_columns(line.rank, self._data)[0])}/round"
+            if line.note:
+                text += f" ({line.note})"
+            label = QLabel(text)
+            label.setWordWrap(True)
+            if line.description:
+                label.setToolTip(line.description)
+            layout.addWidget(label)
+        self.setVisible(bool(lines))
+
+
+def hero_point_note(previous: int, current: int) -> str:
+    """The sentence for a hero-point change, or ``""`` when nothing moved.
+
+    Deliberately says the same thing whoever caused it: a point the GM granted and
+    a point the player clicked are the same event at the table, and the card names
+    the character either way. The new total rides along because "spent a hero
+    point" without it sends everyone back to the sheet to count pips.
+    """
+    delta = current - previous
+    if not delta:
+        return ""
+    verb = "gained" if delta > 0 else "spent"
+    count = abs(delta)
+    points = "a hero point" if count == 1 else f"{count} hero points"
+    return f"{verb} {points} — {current} left"
 
 
 def _compact(label: str) -> str:
@@ -206,6 +306,12 @@ class SystemInfoSection(QGroupBox):
     #: Raised when a homebrew PP-cost rate changes, so every priced block re-titles
     #: its subtotal (the pool total already recomputes off ``changed``).
     costRatesChanged = Signal()
+    #: The Initiative readout was double-clicked — roll it. Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
+    rollRequested = Signal(object)
+    #: A sentence for the roll history — a hero point spent or gained. Carries the
+    #: text, since the block that writes it down cannot see what changed here.
+    noteRequested = Signal(str)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -226,6 +332,8 @@ class SystemInfoSection(QGroupBox):
         form.addRow(self._build_cost_notice())
         form.addRow("Size:", self._build_size())
         form.addRow("Speed:", self._build_speed())
+        self._movement_row_label = QLabel("Movement:")
+        form.addRow(self._movement_row_label, self._build_movement_modes())
         form.addRow("Initiative:", self._build_initiative())
         form.addRow("Hero Points:", self._build_hero_points())
 
@@ -284,7 +392,7 @@ class SystemInfoSection(QGroupBox):
 
     def _build_cost_notice(self) -> QWidget:
         self._cost_notice = QLabel("⌂ Homebrew PP costs")
-        self._cost_notice.setStyleSheet(f"color: {ACCENT}; font-weight: bold;")
+        self._cost_notice.setStyleSheet(tinted_style("tint.homerule"))
         self._cost_notice.setToolTip(
             "Homebrew PP cost changed — this character uses non-default point costs "
             "(Settings ▸ Cost config)."
@@ -307,7 +415,7 @@ class SystemInfoSection(QGroupBox):
         guard_wheel(self._size_combo)
         # Effective size when an active Growth/Shrinking shifts it away from the base.
         self._size_effective = QLabel()
-        self._size_effective.setStyleSheet("color: palette(placeholder-text);")
+        self._size_effective.setStyleSheet(muted_style())
         row.addWidget(self._size_combo)
         row.addWidget(self._size_effective)
         row.addStretch()
@@ -318,14 +426,31 @@ class SystemInfoSection(QGroupBox):
         self._speed = SpeedWidget(self._data)
         return self._speed
 
+    def _build_movement_modes(self) -> QWidget:
+        self._movement_modes = MovementModesWidget(self._data)
+        return self._movement_modes
+
     def _build_initiative(self) -> QWidget:
         self._initiative = QLabel("—")
-        self._initiative.setToolTip("Agility (or an Alternate Initiative ability) plus advantages")
+        self._initiative.setToolTip(INITIATIVE_TIP)
+        # The one readout on this block that is a die roll rather than a fact. Its
+        # tooltip is rewritten on every refresh, so the "double-click to roll" hint
+        # is folded into that text rather than left to attach_roll_click.
+        attach_roll_click(
+            self._initiative,
+            lambda: initiative_roll(self._character, self._data),
+            self.rollRequested.emit,
+            tooltip=False,
+        )
         return self._initiative
 
     def _build_hero_points(self) -> QWidget:
         self._hero_points = HeroPointsWidget()
         self._hero_points.set_value(int(self._seed("hero_points", 1)))
+        # What the total was before the change being handled, so a note can say
+        # whether a point was spent or gained. Seeding is silent — the widget's own
+        # set_value emits nothing — so this starts out agreeing with the model.
+        self._last_hero_points = self._hero_points.value()
         self._hero_points.valueChanged.connect(self._on_hero_points_changed)
         return self._hero_points
 
@@ -351,8 +476,29 @@ class SystemInfoSection(QGroupBox):
         self._emit_edited()
 
     def _on_hero_points_changed(self, value: int) -> None:
+        """The single funnel for a hero-point change, wherever it came from.
+
+        A click on a pip and a GM's command both arrive here (see
+        :meth:`set_hero_points`), which is why the note is raised here rather than
+        in either of them — one code path, so a point can never move silently.
+        """
         self._character.characteristics["hero_points"] = value
+        note = hero_point_note(self._last_hero_points, value)
+        self._last_hero_points = value
+        if note:
+            self.noteRequested.emit(note)
         self._emit_edited()
+
+    def set_hero_points(self, value: int) -> None:
+        """Set the hero-point total from outside the sheet — a GM's session command.
+
+        Moves the pips, writes the model, and marks the sheet edited so the
+        snapshot pusher relays the new total back to the GM's card. (The widget's
+        own :meth:`~HeroPointsWidget.set_value` is deliberately silent, so this
+        does the model write and edit signal the click handler would.)
+        """
+        self._hero_points.set_value(value)
+        self._on_hero_points_changed(self._hero_points.value())
 
     def open_cost_config(self) -> None:
         """Open the homebrew cost-rate editor; a saved change refreshes the whole build.
@@ -451,9 +597,10 @@ class SystemInfoSection(QGroupBox):
         points on a thug, so the pool row would only ever be a number to ignore.
         In its place the row reads back an *estimated* Power Level derived from the
         NPC's traits — its Resistances and best attack (:meth:`refresh_estimated_pl`).
-        The Power Level field above it stays exactly as it was — that is the level
-        the NPC is *meant* to be, and what the PL caps are checked against; the
-        estimate underneath says what the traits actually add up to.
+        The editable Power Level field above it is dropped too: an NPC is not built
+        to a target level, so the single Estimated PL readout — what the traits
+        actually add up to — is the only Power Level the sheet shows. Hero points
+        are a player's currency, so that row goes as well.
         """
         self._npc = npc
         for widget in (self._pool_current, self._pool_separator, self._power_points):
@@ -462,9 +609,20 @@ class SystemInfoSection(QGroupBox):
         label = self._form.labelForField(self._points_row)
         if isinstance(label, QLabel):
             label.setText("Estimated PL:" if npc else "Power Points:")
+        # Drop the rows that only make sense for a budgeted player character: the
+        # bought Power Level (replaced by the estimate) and Hero Points.
+        self._set_row_visible(self._power_level, not npc)
+        self._set_row_visible(self._hero_points, not npc)
         self._refresh_cost_notice()
         if npc:
             self.refresh_estimated_pl()
+
+    def _set_row_visible(self, field: QWidget, visible: bool) -> None:
+        """Show or hide a whole form row — the field and its caption label."""
+        field.setVisible(visible)
+        label = self._form.labelForField(field)
+        if label is not None:
+            label.setVisible(visible)
 
     def refresh_derived(self) -> None:
         """Recompute the derived readouts: speed lines, initiative, effective size.
@@ -474,26 +632,29 @@ class SystemInfoSection(QGroupBox):
         (a slowing/immobilising condition on ground speed, a check penalty on initiative)
         the same display-only way the stat grids show them — the build math is untouched.
         """
-        speed_mod = condition_speed_rank_mod(self._character, self._data)
-        self._speed.render_lines(speed_lines(self._character, self._data), speed_mod)
-        self._speed.setToolTip(_speed_condition_tooltip(speed_mod))
+        self._speed.render_lines(condition_speed_lines(self._character, self._data))
+        self._speed.setToolTip(
+            _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))
+        )
+
+        modes = movement_mode_lines(self._character, self._data)
+        self._movement_modes.render_lines(modes)
+        self._movement_row_label.setVisible(bool(modes))  # no modes, no row at all
 
         modifier = initiative_modifier(self._character, self._data)
         ability = initiative_ability(self._character, self._data)
         penalty = condition_check_penalty(self._character, self._data)
         net = modifier + penalty
         if penalty:
-            self._initiative.setText(
-                f'<span style="color: {TINT_WORSE};">{net:+d}</span> ({ability})'
-            )
+            worse = theme.color("tint.worse")
+            self._initiative.setText(f'<span style="color: {worse};">{net:+d}</span> ({ability})')
             self._initiative.setToolTip(
                 f"{modifier:+d} base {penalty:+d} from an active condition on all checks"
+                f"\n{ROLL_TOOLTIP}"
             )
         else:
             self._initiative.setText(f"{net:+d} ({ability})")
-            self._initiative.setToolTip(
-                "Agility (or an Alternate Initiative ability) plus advantages"
-            )
+            self._initiative.setToolTip(INITIATIVE_TIP)
 
         effective = effective_size(self._character, self._data)
         base = str(self._character.characteristics.get("size", "Medium"))

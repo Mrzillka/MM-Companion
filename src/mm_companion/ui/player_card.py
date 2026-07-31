@@ -69,6 +69,11 @@ class PlayerCard(QFrame):
     applyConditionRequested = Signal(str, str, object)
     #: ``(player_id, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
+    #: ``(player_id, value)`` — set this player's hero-point total. Like a
+    #: condition, the GM only *asks*; the player's app applies it and pushes back.
+    setHeroPointsRequested = Signal(str, int)
+    #: The player's id — the GM asked to remove this seat from the session.
+    removePlayerRequested = Signal(str)
 
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -79,11 +84,16 @@ class PlayerCard(QFrame):
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
         self._addable_conditions: list[Condition] = addable_conditions(data)
         self.player_id = ""
+        self._display_name = "Player"
         self._character: Character | None = None
         # Whether this seat can be *commanded*: a connected player, not the GM's
         # own card (the GM applies conditions to itself on its own sheet) and not
         # someone whose socket has gone.
         self._targetable = False
+        # Whether this is the GM's own seat. Kept apart from ``_targetable``:
+        # removing a seat works even when it has gone offline (a lingering seat is
+        # exactly what a GM wants to clear), but the GM can never remove itself.
+        self._is_gm = False
 
         layout = QVBoxLayout(self)
 
@@ -112,10 +122,16 @@ class PlayerCard(QFrame):
         self._hero_label = QLabel("HP")
         hero_row.addWidget(self._hero_label)
         self._hero_points = HeroPointsWidget()
-        # The GM watches these, they do not spend them: the widget renders exactly
-        # as it does on the sheet but takes no clicks. setEnabled(False) would grey
-        # the circles out, which reads as "this player has no hero points".
+        # The GM *grants and spends* a player's hero points by clicking these pips;
+        # the click is sent to the player's app, which applies it and pushes back.
+        # Clicks are gated to a commandable seat (see :meth:`set_roster`): a GM's
+        # own card and an offline seat take none. setEnabled(False) would grey the
+        # circles out, which reads as "this player has no hero points", so the
+        # widget is silenced with a mouse-transparency attribute instead.
         self._hero_points.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._hero_points.valueChanged.connect(
+            lambda value: self.setHeroPointsRequested.emit(self.player_id, value)
+        )
         hero_row.addWidget(self._hero_points)
         hero_row.addStretch()
         layout.addLayout(hero_row)
@@ -147,21 +163,31 @@ class PlayerCard(QFrame):
         """The last snapshot as a model, or ``None`` before one arrives."""
         return self._character
 
+    def display_name(self) -> str:
+        """The player's display name, as the roster gave it (no status suffix)."""
+        return self._display_name
+
     def set_roster(self, entry: dict) -> None:
         """Apply one roster entry: who this is, and whether they are still here."""
         self.player_id = str(entry.get("player_id", ""))
         name = str(entry.get("display_name", "")) or "Player"
+        self._display_name = name
         if entry.get("is_gm"):
             self._name_label.setText(f"{name} (you)")
             self._name_label.setStyleSheet("")
         elif not entry.get("connected"):
             self._name_label.setText(f"{name} — offline")
-            self._name_label.setStyleSheet(f"color: {theme.TINT_WORSE};")
+            self._name_label.setStyleSheet(f"color: {theme.color('tint.worse')};")
         else:
             self._name_label.setText(name)
             self._name_label.setStyleSheet("")
-        self._targetable = not entry.get("is_gm") and bool(entry.get("connected"))
+        self._is_gm = bool(entry.get("is_gm"))
+        self._targetable = not self._is_gm and bool(entry.get("connected"))
         self._condition_button.setEnabled(self._targetable)
+        # Only a commandable seat takes hero-point clicks; the rest stay read-only.
+        self._hero_points.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, not self._targetable
+        )
         # A seat that just went offline (or came back) changes what the chips can
         # do, so they are restated even though the character has not moved.
         self._show_conditions()
@@ -255,6 +281,23 @@ class PlayerCard(QFrame):
         if go_ahead:
             self.applyConditionRequested.emit(self.player_id, condition.id, parameter)
 
+    # -- removing the seat -------------------------------------------------
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Right-click offers to remove the player. Never on the GM's own card.
+
+        Offered for an offline seat too — a seat outlives its connection, and
+        clearing one a player has abandoned is a fair thing for a GM to want.
+        """
+        if self._is_gm or not self.player_id:
+            return
+        menu = QMenu(self)
+        menu.addAction(
+            "Remove player",
+            lambda: self.removePlayerRequested.emit(self.player_id),
+        )
+        menu.exec(event.globalPos())
+
 
 class _ConditionChip(QFrame):
     """One condition, as a compact chip with an optional "×" to take it off."""
@@ -262,9 +305,10 @@ class _ConditionChip(QFrame):
     def __init__(self, text: str, *, tooltip: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setStyleSheet(
-            f"border: 1px solid {theme.TINT_WORSE};"
-            f"background: {theme.tint_rgba(theme.TINT_WORSE, 0.12)};"
-            "border-radius: 6px;"
+            f"border: {int(theme.metric('border.width'))}px solid"
+            f" {theme.color('tint.worse')};"
+            f"background: {theme.wash('tint.worse', 0.12)};"
+            f"border-radius: {int(theme.metric('radius.chip'))}px;"
         )
         if tooltip:
             self.setToolTip(tooltip)

@@ -150,16 +150,89 @@ def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str
     return label
 
 
-def _render_note(modifier: Modifier, rank: int) -> str:
-    """A modifier's :attr:`note_template` with its ``{n}`` placeholder resolved.
+def _config_trait_name(game_data: GameData | None, value: str) -> str:
+    """A stored config value shown as a trait name — ``"AGL"`` → ``"Agility"``.
+
+    Falls through :func:`_trait_name` (abilities/resistances/skills) to the derived
+    stats ``system.json`` names, so a checkable-but-unbuyable stat like Initiative
+    still reads by its label. Anything else (a free-text value) passes through.
+    """
+
+    if game_data is None:
+        return value
+    for trait in game_data.system.derived_traits:
+        if trait.key == value:
+            return trait.label
+    return _trait_name(game_data, value)
+
+
+def _render_note(
+    modifier: Modifier,
+    rank: int,
+    selection=None,
+    game_data: GameData | None = None,
+) -> str:
+    """A modifier's :attr:`note_template` with its placeholders resolved.
 
     ``{n}`` becomes the effect's ``rank`` times the modifier's ``note_per_rank`` (or the
     bare rank when that is zero) — Empowering's ``notePerRank`` of 15 turns a rank-4
     Affliction's note into "transformed form gains 60 power points".
+
+    With a ``selection``, three more placeholders resolve: ``{rank}`` is the modifier's
+    own rank, ``{dc}`` the difficulty it sets (the system's base DC plus that rank —
+    Check Required's "DC 10 + the flaw's rank"), and ``{<config key>}`` any value the
+    player chose on the chip, with a trait key rendered as its display name so a stored
+    ``"AGL"`` reads as "Agility".
     """
 
     value = rank * modifier.note_per_rank if modifier.note_per_rank else rank
-    return modifier.note_template.replace("{n}", str(value))
+    text = modifier.note_template.replace("{n}", str(value))
+    if selection is None:
+        return text
+    dc_base = game_data.system.defense_dc_base if game_data else 10
+    text = text.replace("{rank}", str(selection.rank))
+    text = text.replace("{dc}", str(dc_base + selection.rank))
+    for key, chosen in selection.config.items():
+        text = text.replace(f"{{{key}}}", _config_trait_name(game_data, str(chosen)))
+    # A placeholder the player hasn't filled in yet drops out rather than showing its
+    # braces, so an unconfigured Check Required still reads as a sentence.
+    text = re.sub(r"\s*\{[^{}]*\}", "", text).strip()
+    return text[:1].upper() + text[1:] if text else text
+
+
+def required_checks(
+    effect: PowerEffectInstance, game_data: GameData
+) -> tuple[tuple[str, int | None], ...]:
+    """The extra checks the effect's modifiers demand before it works, with their DCs.
+
+    A flaw flagged ``requiresCheck`` (Check Required) makes using the effect an extra
+    roll that can simply fail, so it is a *roll*, not a footnote — each one renders
+    from the modifier's ``note_template`` (``"{trait} check, DC {dc}"``) and gets its
+    own game-term row, which is what puts it in the power card's dice footer beside the
+    attack and the save.
+
+    Each entry is ``(rendered note, DC)``. The DC is the same number
+    :func:`_render_note` writes into the sentence (the system's base DC plus the
+    flaw's rank), returned alongside it so the dice roller does not have to read it
+    back out of the prose.
+    """
+
+    catalog = game_data.modifier_catalog()
+    checks: list[tuple[str, int | None]] = []
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None or not modifier.requires_check:
+            continue
+        rendered = _render_note(modifier, effect.rank, selection, game_data)
+        dc = game_data.system.defense_dc_base + selection.rank
+        checks.append((rendered or modifier_label(modifier, selection), dc))
+    return tuple(checks)
+
+
+def required_check_notes(effect: PowerEffectInstance, game_data: GameData) -> tuple[str, ...]:
+    """Just the note text of every :func:`required_checks` entry."""
+
+    return tuple(note for note, _dc in required_checks(effect, game_data))
 
 
 def _modifier_notes(
@@ -292,6 +365,12 @@ def _effective_stats(
         if modifier.check_note:
             check_notes.append(modifier.check_note)
             touched = True
+        if modifier.distance_rank_bonus:
+            # Extended Range reaches further — visible in the Distance row, so it is
+            # spoken for and doesn't also need listing as a bare Note.
+            touched = True
+        if modifier.requires_check:
+            touched = True  # gets its own roll row (see :func:`required_check_notes`)
         if touched:
             impactful.add(selection.modifier_id)
 
@@ -454,6 +533,181 @@ def resolve_stat_display(
     return raw_value
 
 
+def _distance_rank_bonus(effect: PowerEffectInstance, game_data: GameData) -> int:
+    """Distance ranks the effect's modifiers add to its reach (Extended Range's ranks)."""
+    catalog = game_data.modifier_catalog()
+    bonus = 0
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is not None and modifier.distance_rank_bonus:
+            bonus += modifier.distance_rank_bonus * (selection.rank if modifier.ranked else 1)
+    return bonus
+
+
+def ranged_distance_ranks(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> tuple[int, int] | None:
+    """``(base rank, effective rank)`` an effect reaches, or ``None`` if it isn't ranged.
+
+    A ranged effect's reach is a distance rank — by default the effect's own effective
+    rank, though an effect whose reach doesn't scale that way overrides the derivation
+    in its ``rangeDistance`` block. The effective rank adds whatever the attached
+    modifiers extend it by (Extended Range), so the two returned ranks differ exactly
+    when the reach was bought up and the Distance row should read as improved.
+
+    ``None`` for a Close, Personal or Perception effect — those have no distance to
+    state — which also covers a Ranged effect a flaw has since brought back to Close.
+    """
+
+    base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    spec = base_effect.range_distance if base_effect else None
+    if base_effect is None or spec is None:
+        return None
+    if effective_effect_stats(effect, game_data).get("range") != spec.range_value:
+        return None
+    source = effect_effective_rank(effect, game_data, char) if spec.rank is None else spec.rank
+    base_rank = source + spec.offset
+    return base_rank, base_rank + _distance_rank_bonus(effect, game_data)
+
+
+def ranged_distance_increments(rank: int, game_data: GameData, spec) -> str:
+    """The reach's range increments — ``"short 200 feet / medium 400 feet / long 800 feet"``.
+
+    One entry per ``spec.steps`` offset from ``rank``, each named by the matching
+    ``spec.step_labels`` entry. The names sit in the value rather than the row's label
+    because the summary panel lays labels out in a fixed column, and a label long
+    enough to spell them pushes the value column off the panel. Steps that fall off the
+    ends of the measurement table are dropped rather than rendered blank.
+    """
+
+    parts = []
+    for index, step in enumerate(spec.steps):
+        measure = game_data.measurements.label("distance", rank + step)
+        if not measure:
+            continue
+        name = spec.step_labels[index] if index < len(spec.step_labels) else ""
+        parts.append(f"{name} {measure}".strip())
+    return " / ".join(parts)
+
+
+def _ranged_distance_rows(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None,
+    base_effect,
+) -> list[EffectStat]:
+    """The Distance and Measurements rows that follow a Ranged effect's Range row.
+
+    "Ranged" on its own says nothing about how far, so the reach is spelled out: the
+    distance rank, then that rank's range increments as real measurements. The rank row
+    reads as improved when a modifier bought the reach up past its base.
+    """
+
+    ranks = ranged_distance_ranks(effect, game_data, char)
+    if ranks is None:
+        return []
+    base_rank, rank = ranks
+    spec = base_effect.range_distance
+    rows = [
+        EffectStat(
+            "distance_rank",
+            "Distance",
+            f"rank {base_rank}",
+            f"rank {rank}",
+            "better" if rank > base_rank else "",
+        )
+    ]
+    increments = ranged_distance_increments(rank, game_data, spec)
+    if increments:
+        rows.append(EffectStat("distance", "Measurements", "", increments, ""))
+    return rows
+
+
+@dataclass(frozen=True)
+class EffectRollNumbers:
+    """The raw d20 numbers behind an effect's check and resistance phrases.
+
+    :func:`effect_stat_rows` renders those numbers *into prose* (``"8 vs. Defense"``,
+    ``"Toughness vs. 18"``), which is right for a summary table and useless for
+    actually rolling one. Both read this record, so the dice roller gets the same
+    numbers the card shows without regexing them back out of the sentence.
+
+    ``attack`` is the wielder's attack-trait bonus (or a linked combat focus's
+    total), and ``check_actor`` is what the check row actually rolls: ``attack`` for
+    an "Attack vs. …" phrase, the effect's rank for an "Effect"/"Deflect vs. …" one,
+    plus any Accurate/Inaccurate adjustment. ``dc`` is the save DC the effect imposes
+    (``resistance_dc_base`` plus the *effective* rank, so a Strength-Based Damage
+    folds in Strength), or ``None`` for an effect that imposes none. ``drops_check``
+    is set when a modifier removed the attack roll entirely (Perception Range).
+    """
+
+    attack: int = 0
+    check_actor: int = 0
+    dc: int | None = None
+    drops_check: bool = False
+
+
+def effect_roll_numbers(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None = None,
+    attack_bonus: int | None = None,
+) -> EffectRollNumbers:
+    """The d20 numbers for one effect's rolls — see :class:`EffectRollNumbers`.
+
+    ``char`` and ``attack_bonus`` mean exactly what they do for
+    :func:`effect_stat_rows`, which shares this computation.
+    """
+
+    base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None:
+        return EffectRollNumbers()
+    base, stats, _change, impact = _effective_stats(effect, game_data)
+    return _roll_numbers(effect, game_data, char, attack_bonus, base_effect, base, stats, impact)
+
+
+def _roll_numbers(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None,
+    attack_bonus: int | None,
+    base_effect,
+    base: dict[str, str],
+    stats: dict[str, str],
+    impact: EffectImpact,
+) -> EffectRollNumbers:
+    """:func:`effect_roll_numbers` once the stat dicts are already in hand."""
+
+    effective_rank = effect_effective_rank(effect, game_data, char)
+    dc = (
+        None
+        if base_effect.resistance_dc_base is None
+        else base_effect.resistance_dc_base + effective_rank
+    )
+    # The attacker's own d20 bonus. An "Attack vs. Defense" roll uses the character's
+    # Attack (plus this power's Accurate/Inaccurate); an "Effect vs. …" / "Deflect
+    # vs. …" phrase instead uses the effect's own rank. A linked combat focus
+    # overrides the Attack via ``attack_bonus``. Without either we fall back to the
+    # effect rank so a context-free summary still reads.
+    if attack_bonus is not None:
+        attack = attack_bonus
+    elif char is not None:
+        attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
+    else:
+        attack = effect.rank
+    # Which of the two the check row uses is decided by the phrase, and an "after"
+    # override replaces the phrase wholesale — read the base in that case, since the
+    # override is verbatim text with no actor to substitute.
+    phrase = stats.get("check") or base.get("check") or ""
+    actor = attack if phrase.startswith("Attack") else effect.rank
+    return EffectRollNumbers(
+        attack=attack,
+        check_actor=actor + impact.check_bonus,
+        dc=dc,
+        drops_check=impact.drops_check,
+    )
+
+
 def effect_stat_rows(
     effect: PowerEffectInstance,
     game_data: GameData,
@@ -500,24 +754,10 @@ def effect_stat_rows(
 
     # Resolve the check/resistance phrases to concrete numbers: the save DC is
     # ``base + effective rank`` (effective rank folds in a Strength-Based bonus), and
-    # the attack roll uses the character's Attack (see below).
-    effective_rank = effect_effective_rank(effect, game_data, char)
-    dc = (
-        None
-        if base_effect.resistance_dc_base is None
-        else base_effect.resistance_dc_base + effective_rank
-    )
-    # The attacker's own d20 bonus in the check phrase. An "Attack vs. Defense" roll
-    # uses the character's Attack (plus this power's Accurate/Inaccurate); an "Effect
-    # vs. …" / "Deflect vs. …" phrase instead uses the effect's own rank. A linked
-    # combat focus overrides the Attack via ``attack_bonus``. Without either we fall
-    # back to the effect rank so a context-free summary still reads.
-    if attack_bonus is not None:
-        attack = attack_bonus
-    elif char is not None:
-        attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
-    else:
-        attack = effect.rank
+    # the attack roll uses the character's Attack (see :func:`_roll_numbers`).
+    numbers = _roll_numbers(effect, game_data, char, attack_bonus, base_effect, base, stats, impact)
+    dc = numbers.dc
+    attack = numbers.attack
 
     def _actor(phrase: str, *, with_mods: bool) -> int:
         roll = attack if phrase.startswith("Attack") else effect.rank
@@ -551,6 +791,8 @@ def effect_stat_rows(
             continue
         if stats[key]:
             rows.append(EffectStat(key, label, base[key], stats[key], change[key]))
+        if key == "range":
+            rows.extend(_ranged_distance_rows(effect, game_data, char, base_effect))
     # An effect can impose a save DC without either a (shown) check or resistance
     # phrase to carry it — surface it in its own row so the number is never lost.
     check_shown = "" if impact.drops_check else stats["check"]
@@ -575,6 +817,10 @@ def effect_stat_rows(
     # Tier-5 derived readouts (Growth's size mods, Insubstantial's state, ...) — purely
     # computed information, appended as untinted (or sign-tinted) rows.
     rows.extend(effect_readout_rows(effect, game_data))
+    # A Check Required-style flaw is a roll, not a footnote — its own row, which is
+    # what carries it into the power card's dice footer.
+    for note in required_check_notes(effect, game_data):
+        rows.append(EffectStat("required_check", "Required check", "", note, "worse"))
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
     return _apply_row_overrides(rows, effect)
@@ -711,6 +957,42 @@ def _readout_config_flag(readout, effect: PowerEffectInstance, game_data: GameDa
 def _readout_points_per_rank(readout, effect: PowerEffectInstance, game_data: GameData):
     per = int(readout.data.get("perRank", 1))
     return [EffectStat("pool", readout.label, "", f"{effect.rank * per} points", "")]
+
+
+@READOUT_KINDS.handler("capped_rank_bonus")
+def _readout_capped_rank_bonus(readout, effect: PowerEffectInstance, game_data: GameData):
+    """A per-rank bonus that stops climbing at a cap, applied to a chosen subject.
+
+    Extra Limbs is the case: ``+1`` per rank to *either* Grab or Stability, no higher
+    than ``+5``. ``fromConfig`` names the config field holding the subject; when that
+    field is deferred to use-time (Extra Limbs' Variable extra reassigns the limbs each
+    turn, so no subject is stored) the bonus still shows, just without a subject.
+    """
+
+    data = readout.data
+    per_rank = int(data.get("perRank", 1))
+    cap = int(data.get("cap", 0))
+    bonus = effect.rank * per_rank
+    capped = cap and bonus > cap
+    if capped:
+        bonus = cap
+    if bonus <= 0:
+        return []
+
+    field_key = data.get("fromConfig", "")
+    chosen = effect.config.get(field_key) if field_key else None
+    subject = ""
+    if chosen:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        field = next((f for f in base.config_fields if f.key == field_key), None) if base else None
+        options = field.options if field else ()
+        subject = next((o.label for o in options if o.value == chosen), str(chosen))
+
+    text = f"+{bonus} {subject}".strip()
+    text += " (capped)" if capped else ""
+    if not subject:
+        text += f" {data.get('unchosenNote', '(chosen when used)')}"
+    return [EffectStat("bonus", readout.label or "Bonus", "", text.strip(), "better")]
 
 
 def _readout_rows(readout, effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:

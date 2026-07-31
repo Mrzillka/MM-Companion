@@ -9,13 +9,11 @@ on close only when something actually changed.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -35,29 +33,11 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import mods, storage
+from mm_companion.ui.app_restart import restart_app
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import BOLD_STYLE, make_spin_box
 
 _MOD_ID_ROLE = Qt.ItemDataRole.UserRole
-
-
-def restart_app() -> None:
-    """Relaunch the app so mod changes take effect; abort if a window won't close.
-
-    Closes every open window first so character sheets run their unsaved-change
-    guards; if any window refuses (the user cancelled a Save) the relaunch is
-    aborted and the app keeps running. Otherwise a fresh process is spawned via
-    ``python -m mm_companion`` (the launch path that works however the app was
-    started) and this one quits.
-    """
-    app = QApplication.instance()
-    if app is None:
-        return
-    app.closeAllWindows()
-    if any(w.isVisible() and w.isWindow() for w in app.topLevelWidgets()):
-        return  # a window refused to close — stay running, changes apply next launch
-    QProcess.startDetached(sys.executable, ["-m", "mm_companion"])
-    app.quit()
 
 
 class _ModOptionsDialog(QDialog):
@@ -177,7 +157,7 @@ class ModsWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         self._detail_name = QLabel()
-        self._detail_name.setStyleSheet("font-weight: bold;")
+        self._detail_name.setStyleSheet(BOLD_STYLE)
         self._detail_version = QLabel()
         self._detail_version.setEnabled(False)
         self._detail_description = QLabel()

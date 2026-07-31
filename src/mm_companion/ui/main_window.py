@@ -42,11 +42,16 @@ class MainWindow(QMainWindow):
         path: Path | None = None,
         locked: bool = True,
         gm_view: bool = False,
+        npc: bool = False,
     ) -> None:
         super().__init__(parent)
         # A GM's read-only view of a player's snapshot: force-locked, with only the
-        # View menu — no File/Settings/Tools/Session and no way to unlock or save.
+        # View menu — no File/Settings/Session and no way to unlock or save.
         self._gm_view = gm_view
+        # An NPC sheet: the GM's working material, not a player's finished build.
+        # It keeps File/Settings but drops the play-time menus that only make sense
+        # for a player at the table — Session and Cost config.
+        self._npc = npc
         if gm_view:
             locked = True
         # Comfortably fits Base Information's natural width; the blocks stay well
@@ -62,8 +67,8 @@ class MainWindow(QMainWindow):
         self._child_windows: list[MainWindow] = []
         # The mod manager window, kept referenced while open for the same reason.
         self._mods_window: QWidget | None = None
-        # The dice roller window, likewise kept referenced while open.
-        self._dice_window: QWidget | None = None
+        # The settings window, likewise kept referenced while open.
+        self._settings_window: QWidget | None = None
 
         self._sheet = CharacterSheet(character=character)
         self._build_menu_bar(locked)
@@ -103,7 +108,7 @@ class MainWindow(QMainWindow):
         """Build the top menu bar.
 
         A GM's read-only view (:attr:`_gm_view`) gets only the **View** menu — no
-        File/Settings/Tools/Session, and no Lock toggle — so a player's snapshot
+        File/Settings/Session, and no Lock toggle — so a player's snapshot
         can be looked at and rearranged but never edited, saved, or unlocked.
         """
         menu_bar = self.menuBar()
@@ -124,23 +129,28 @@ class MainWindow(QMainWindow):
             return
 
         settings_menu = menu_bar.addMenu("&Settings")
-        self._add_placeholder_actions(settings_menu, ["Rules", "Theme"])
+        self._add_placeholder_actions(settings_menu, ["Rules"])
+        settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
         settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
         # Homebrew the non-power PP-cost rates for this character. Stays available even
         # in a locked (read-only) view — it is a config action, not a build edit.
-        self._cost_config_action = settings_menu.addAction("Cost config...")
-        self._cost_config_action.triggered.connect(self._open_cost_config)
+        # An NPC has no point build, so there is nothing to configure the cost of.
+        if not self._npc:
+            self._cost_config_action = settings_menu.addAction("Cost config...")
+            self._cost_config_action.triggered.connect(self._open_cost_config)
 
         self._lock_action = settings_menu.addAction("Lock")
         self._lock_action.setCheckable(True)
         self._lock_action.setChecked(locked)
         self._lock_action.toggled.connect(self._sheet.set_locked)
 
-        session_menu = menu_bar.addMenu("&Session")
-        session_menu.addAction("Join session...").triggered.connect(self._join_session)
-
-        tools_menu = menu_bar.addMenu("&Tools")
-        tools_menu.addAction("Dice Roller...").triggered.connect(self._open_dice_roller)
+        # Joining a session is something a *player* does at the table; an NPC sheet
+        # is the GM's prep material, driven from the GM window instead. (Rolling
+        # dice used to have a Tools menu here; it is the Dice block now — see
+        # mm_companion.ui.sections.dice.)
+        if not self._npc:
+            session_menu = menu_bar.addMenu("&Session")
+            session_menu.addAction("Join session...").triggered.connect(self._join_session)
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""
@@ -149,7 +159,9 @@ class MainWindow(QMainWindow):
         # reopened, plus a reset back to the default arrangement.
         self._block_actions: dict = {}
         for key in self._sheet.block_keys():
-            action = self._view_menu.addAction(self._sheet.block_frame(key).title)
+            # `base_title`, not `title`: the live one carries a point subtotal that
+            # was current when this menu was built and is never re-labelled.
+            action = self._view_menu.addAction(self._sheet.block_frame(key).base_title)
             action.setCheckable(True)
             action.setChecked(not self._sheet.is_block_hidden(key))
             action.toggled.connect(lambda visible, k=key: self._on_block_toggled(k, visible))
@@ -169,7 +181,7 @@ class MainWindow(QMainWindow):
         """
         from mm_companion.core.session.client import SessionClientError
         from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
-        from mm_companion.ui.session_dialogs import JoinSessionDialog
+        from mm_companion.ui.session_dialogs import JoinSessionDialog, record_session_history
         from mm_companion.ui.session_player import attach_player_session
 
         if active_session() is not None:
@@ -185,21 +197,27 @@ class MainWindow(QMainWindow):
             return
 
         bridge = SessionBridge()
+        player_id, player_token = dialog.reclaim_ids()
         try:
-            bridge.join(dialog.join_code(), dialog.display_name())
+            client = bridge.join(
+                dialog.join_code(),
+                dialog.display_name(),
+                player_id=player_id,
+                player_token=player_token,
+            )
         except SessionClientError as exc:
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
+        record_session_history(
+            code=dialog.code_text(),
+            session_id=client.session_id,
+            session_name=client.session_name,
+            display_name=dialog.display_name(),
+            player_id=client.player_id,
+            player_token=client.player_token,
+        )
         attach_player_session(self, bridge)
-
-    def _open_dice_roller(self) -> None:
-        """Open the standalone Dice Roller window."""
-        from mm_companion.ui.dice_roller import DiceRollerWindow
-
-        window = DiceRollerWindow()
-        self._dice_window = window
-        window.show()
 
     def _open_cost_config(self) -> None:
         """Open the per-character homebrew cost-config editor (Settings ▸ Cost config)."""
@@ -211,6 +229,14 @@ class MainWindow(QMainWindow):
 
         window = ModsWindow()
         self._mods_window = window
+        window.show()
+
+    def _open_settings(self) -> None:
+        """Open the Settings window (Settings ▸ Preferences)."""
+        from mm_companion.ui.settings import SettingsWindow
+
+        window = SettingsWindow()
+        self._settings_window = window
         window.show()
 
     # -- persistence ---------------------------------------------------------
@@ -300,18 +326,22 @@ class MainWindow(QMainWindow):
         action.blockSignals(False)
 
     def _reset_layout(self) -> None:
-        """Restore the default arrangement and resync the View-menu toggles."""
+        """Restore the default arrangement.
+
+        The View-menu toggles resync themselves: ``reset_layout`` goes through
+        ``BlockCanvas.apply_arrangement``, which announces every block whose
+        visibility changed over ``block_visibility_changed``.
+        """
         self._sheet.reset_layout()
-        for key, action in self._block_actions.items():
-            action.blockSignals(True)
-            action.setChecked(not self._sheet.is_block_hidden(key))
-            action.blockSignals(False)
 
     def _on_edited(self) -> None:
-        """Mark the sheet dirty on the first user edit since the last save."""
-        if not self._dirty:
-            self._dirty = True
-            self._update_title()
+        """Mark the sheet dirty and refresh the title on any user edit.
+
+        The title carries the character's name, which an edit can *be* — so it is
+        rebuilt every time, not only on the first edit that flips the dirty flag.
+        """
+        self._dirty = True
+        self._update_title()
 
     def _update_title(self) -> None:
         name = library.display_name(self._sheet.character)

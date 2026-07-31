@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import QEvent, QPointF, QVariantAnimation
 from PySide6.QtGui import QEnterEvent
-from PySide6.QtWidgets import QApplication, QGridLayout, QLabel
+from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -381,18 +381,28 @@ def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> No
     sec = _sheet_for(char).powers
     cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
 
-    def dice(card: _DraggableCard) -> list[str]:
-        return [lb.text() for lb in card.findChildren(QLabel) if lb.text().startswith("🎲")]
+    def rolled(card: _DraggableCard) -> list[str]:
+        """The lines this card offers a 🎲 for — the button sits beside the text."""
+        lines = []
+        for button in card.findChildren(QPushButton):
+            if button.text() != "🎲":
+                continue
+            lines.append(button.parent().findChild(QLabel).text())
+        return lines
 
     # Nothing to roll, so nothing is said about it — no placeholder line, and no rule
     # above the footer that is not there.
-    assert dice(cards[armor.id]) == []
+    assert rolled(cards[armor.id]) == []
     assert sec._rolls_lines(armor) == []
 
     # An attack and the save it forces are two rolls, made by two people: a line each.
-    attack, save = dice(cards[blast.id])
-    assert attack == "🎲 0 vs. Defense"
-    assert save.startswith("🎲 Toughness vs. ")
+    attack, save = sec._rolls_lines(blast)
+    assert attack == "0 vs. Defense"
+    assert save.startswith("Toughness vs. ")
+
+    # But only the attack is the wielder's to roll. The save is written down and left
+    # unbuttoned — it reaches whoever makes it as a chip on the attack's history card.
+    assert rolled(cards[blast.id]) == [attack]
 
 
 def test_an_effects_terms_sit_beside_its_modifiers(qapp: QApplication) -> None:
@@ -538,3 +548,71 @@ def test_homerule_power_shows_the_badge(qapp: QApplication) -> None:
     # Exactly one card (the homerule one) carries the badge.
     assert len(badges) == 1
     assert "homerule" in badges[0].toolTip().lower()
+
+
+def test_linked_group_drives_members_through_an_intervening_subgroup(
+    qapp: QApplication,
+) -> None:
+    """Dragging one card onto another always makes an *Independent* group, so a Linked
+    group's members are routinely one level deeper than the group. They must still
+    switch as one rather than sprouting their own switches."""
+    from mm_companion.core.powers import STRUCTURE_INDEPENDENT
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    shield = Power(name="Shield", effects=[PowerEffectInstance("protection", rank=6)])
+    inner = PowerGroup(mode=STRUCTURE_INDEPENDENT, children=[flight, shield])
+    glow = Power(name="Glow", effects=[PowerEffectInstance("protection", rank=2)])
+    linked = PowerGroup(mode=STRUCTURE_LINKED, children=[inner, glow])
+    char.powers.append(linked)
+    sec = _sheet_for(char).powers
+
+    # The group owns the switch; nothing beneath it does — not the sub-group and not
+    # the leaves inside the sub-group.
+    assert sec._activation_role(linked, None) == "toggle"
+    assert sec._activation_role(inner, linked) == ""
+    assert sec._activation_role(flight, inner) == ""
+    assert sec._activation_role(glow, linked) == ""
+
+    # And a nested leaf's activation set is every leaf under the linked group.
+    assert sorted(p.name for p in sec._linked_activation_set(flight)) == [
+        "Flight",
+        "Glow",
+        "Shield",
+    ]
+
+    # Flipping the group takes the nested members with it.
+    sec._set_group_active(linked, False)
+    assert not any(p.activated for p in (flight, shield, glow))
+
+
+def test_a_linked_group_nested_in_another_switches_from_the_outermost(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # Flight is sustained, so it carries a runtime gate and the group is switchable.
+    a = Power(name="A", effects=[PowerEffectInstance("flight", rank=2)])
+    b = Power(name="B", effects=[PowerEffectInstance("flight", rank=2)])
+    inner = PowerGroup(mode=STRUCTURE_LINKED, children=[a, b])
+    c = Power(name="C", effects=[PowerEffectInstance("flight", rank=2)])
+    outer = PowerGroup(mode=STRUCTURE_LINKED, children=[inner, c])
+    char.powers.append(outer)
+    sec = _sheet_for(char).powers
+
+    assert sec._activation_role(outer, None) == "toggle"
+    assert sec._activation_role(inner, outer) == ""  # the inner group defers outward
+    assert sorted(p.name for p in sec._linked_activation_set(a)) == ["A", "B", "C"]
+
+
+def test_a_top_level_power_keeps_its_own_switch(qapp: QApplication) -> None:
+    """The ancestor walk must not make an ungrouped power inert."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    char.powers.append(flight)
+    sec = _sheet_for(char).powers
+
+    assert sec._activation_role(flight, None) == "toggle"
+    assert sec._linked_activation_set(flight) == [flight]

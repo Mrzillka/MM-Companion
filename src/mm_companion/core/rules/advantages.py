@@ -70,6 +70,20 @@ def heroic_advantage_ranks(char: Character, game_data: GameData) -> int:
     return total
 
 
+def heroic_advantage_ranks_free(char: Character, game_data: GameData, divisor: int = 2) -> int:
+    """Ranks still unspent in the shared Heroic-advantage budget (may go negative).
+
+    The one place the "budget minus what is already drawn" subtraction lives, so the
+    picker's rank ceiling and the add-time refusal can't drift apart — they are the
+    same question asked at two moments. Negative when the build is already over
+    budget; callers decide whether to clamp that for display or refuse on it.
+    """
+
+    return heroic_advantage_budget(char.power_level, divisor) - heroic_advantage_ranks(
+        char, game_data
+    )
+
+
 def advantage_violations(char: Character, game_data: GameData) -> list[str]:
     """Advantage limit breaches in the current build; an empty list means it is valid.
 

@@ -137,7 +137,15 @@
         }
       ],
       "description": "Inflicts an escalating condition on a target instead of damage.",
-      "resistanceDcBase": 10
+      "resistanceDcBase": 10,
+      "resistanceOutcomes": {
+        "note": "Affliction's rungs are the conditions the player picked when building the power, so each degree reads its own config field rather than a fixed list.",
+        "degrees": [
+          { "configKey": "degree1" },
+          { "configKey": "degree2" },
+          { "configKey": "degree3" }
+        ]
+      }
     },
     {
       "id": "burrowing",
@@ -292,7 +300,25 @@
         }
       ],
       "description": "A direct harmful attack — the basis for most offensive powers.",
-      "resistanceDcBase": 10
+      "resistanceDcBase": 10,
+      "resistanceOutcomes": {
+        "note": "The damage condition ladder (docs/mm-core-mechanics.md §9).",
+        "success": {
+          "conditions": ["hit"],
+          "note": "unless the target's Toughness is Hardened, Impervious or Impenetrable against this attack"
+        },
+        "degrees": [
+          {
+            "conditions": ["hit", "dazed"],
+            "note": "Stunned instead of Dazed if already Dazed"
+          },
+          { "conditions": ["hit", "stunned", "staggered"] },
+          {
+            "conditions": ["hit", "staggered", "incapacitated"],
+            "note": "further failed checks escalate to Dying, then Dead"
+          }
+        ]
+      }
     },
     {
       "id": "deflect",
@@ -310,14 +336,6 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "config": [
-        {
-          "key": "limitedCategory",
-          "label": "Limited to",
-          "type": "text",
-          "hint": "If the Limited flaw is taken, the attack category this deflects (e.g. thrown weapons only)."
-        }
-      ],
       "description": "Bats away or redirects an incoming ranged attack."
     },
     {
@@ -361,18 +379,17 @@
           "type": "allocation",
           "hint": "Check modes to spend the effect's ranks; tiered modes let you buy increasing scope.",
           "allocOptions": [
-            { "id": "dimensional_travel", "label": "Dimensional Travel", "tiers": [2, 4, 6] },
-            { "id": "environmental_adaptation", "label": "Environmental Adaptation", "tiers": [1], "perNote": "per environment" },
-            { "id": "permeate", "label": "Permeate", "tiers": [2, 4, 6] },
-            { "id": "safe_fall", "label": "Safe Fall", "tiers": [1] },
-            { "id": "slithering", "label": "Slithering", "tiers": [1] },
-            { "id": "space_travel", "label": "Space Travel", "tiers": [2, 4, 6] },
-            { "id": "stable", "label": "Stable", "tiers": [1], "perNote": "per mode" },
-            { "id": "sure_footed", "label": "Sure-Footed", "tiers": [1, 2] },
-            { "id": "swinging", "label": "Swinging", "tiers": [2] },
-            { "id": "trackless", "label": "Trackless", "tiers": [1], "perNote": "per sense" },
-            { "id": "wall_crawling", "label": "Wall-Crawling", "tiers": [1, 2] },
-            { "id": "water_walking", "label": "Water-Walking", "tiers": [1, 2] }
+            { "id": "dimensional_travel", "label": "Dimensional Travel", "tiers": [2, 4, 6], "description": "Travel to another dimension: one fixed dimension, then any of a group, then any dimension at all." },
+            { "id": "environmental_adaptation", "label": "Environmental Adaptation", "tiers": [1], "perNote": "per environment", "description": "Ignore the penalties one environment imposes on movement and checks (zero-g, underwater, extreme cold)." },
+            { "id": "permeate", "label": "Permeate", "tiers": [2, 4, 6], "speeds": [0, 1, "ground"], "description": "Move through solid matter — slowly at first, then quicker, and at the top tier as fast as you walk." },
+            { "id": "safe_fall", "label": "Safe Fall", "tiers": [1], "description": "Fall any distance without harm, so long as you are free to move." },
+            { "id": "slithering", "label": "Slithering", "tiers": [1], "speeds": ["ground"], "description": "Move at your normal ground speed without limbs, and through gaps a body your size would not normally pass." },
+            { "id": "space_travel", "label": "Space Travel", "tiers": [2, 4, 6], "description": "Cross interplanetary, then interstellar, then intergalactic distances." },
+            { "id": "stable", "label": "Stable", "tiers": [1], "perNote": "per mode", "description": "Keep your footing on unstable ground: no penalty for moving over a surface that would normally unbalance you." },
+            { "id": "swinging", "label": "Swinging", "tiers": [2], "speeds": [2], "description": "Swing from anchor points at speed rank 2, given something overhead to catch." },
+            { "id": "trackless", "label": "Trackless", "tiers": [1], "perNote": "per sense", "description": "Leave no trail one chosen sense can follow." },
+            { "id": "wall_crawling", "label": "Wall-Crawling", "tiers": [2, 4], "speeds": ["ground-1", "ground"], "tierNotes": ["vulnerable while climbing", "not vulnerable"], "description": "Move across walls and ceilings — one rank slower than your ground speed and vulnerable while you climb, or at full ground speed and not vulnerable." },
+            { "id": "water_walking", "label": "Water-Walking", "tiers": [1, 2], "speeds": ["ground", "ground"], "tierNotes": ["sinks if knocked prone", "stays up even when prone"], "description": "Walk on liquid surfaces at your normal ground speed. The lower tier sinks if you are knocked prone; the higher one does not." }
           ]
         }
       ],
@@ -401,27 +418,27 @@
           "type": "allocation",
           "hint": "Spend the effect's ranks across sense qualities (each applied to a chosen sense or sense type). Tiered qualities buy increasing scope.",
           "allocOptions": [
-            { "id": "accurate", "label": "Accurate", "tiers": [2, 4] },
-            { "id": "acute", "label": "Acute", "tiers": [1, 2] },
-            { "id": "analytical", "label": "Analytical", "tiers": [1, 2] },
-            { "id": "counters_concealment", "label": "Counters Concealment", "tiers": [2] },
-            { "id": "counters_illusion", "label": "Counters Illusion", "tiers": [1] },
-            { "id": "danger_sense", "label": "Danger Sense", "tiers": [2] },
-            { "id": "dark_vision", "label": "Dark-Vision", "tiers": [2] },
-            { "id": "direction_sense", "label": "Direction Sense", "tiers": [1] },
-            { "id": "distance_sense", "label": "Distance Sense", "tiers": [1] },
-            { "id": "extended", "label": "Extended", "tiers": [1, 2], "perNote": "per sense" },
-            { "id": "infravision", "label": "Infravision", "tiers": [1] },
-            { "id": "low_light_vision", "label": "Low-Light Vision", "tiers": [1] },
-            { "id": "microscopic_vision", "label": "Microscopic Vision", "tiers": [1, 2, 3, 4] },
-            { "id": "penetrates_concealment", "label": "Penetrates Concealment", "tiers": [4] },
-            { "id": "radio", "label": "Radio", "tiers": [1] },
-            { "id": "radius", "label": "Radius", "tiers": [1] },
-            { "id": "ranged", "label": "Ranged", "tiers": [1] },
-            { "id": "rapid", "label": "Rapid", "tiers": [1, 2, 3], "perNote": "per sense" },
-            { "id": "tracking", "label": "Tracking", "tiers": [1, 2] },
-            { "id": "ultra_hearing", "label": "Ultra-Hearing", "tiers": [1] },
-            { "id": "ultravision", "label": "Ultravision", "tiers": [1] }
+            { "id": "accurate", "label": "Accurate", "tiers": [2, 4], "description": "The sense pinpoints a target precisely enough to target with it, rather than only noticing that something is there." },
+            { "id": "acute", "label": "Acute", "tiers": [1, 2], "description": "The sense distinguishes fine detail, telling one thing apart from another of its kind (one scent from another)." },
+            { "id": "analytical", "label": "Analytical", "tiers": [1, 2], "description": "An acute sense that also reads exact composition — the precise chemical make-up, not just 'smells of almonds'." },
+            { "id": "counters_concealment", "label": "Counters Concealment", "tiers": [2], "description": "Ignore one Concealment effect against this sense." },
+            { "id": "counters_illusion", "label": "Counters Illusion", "tiers": [1], "description": "See through an Illusion affecting this sense." },
+            { "id": "danger_sense", "label": "Danger Sense", "tiers": [2], "description": "Never be caught fully unaware — you get a notice check against surprise through this sense." },
+            { "id": "dark_vision", "label": "Dark-Vision", "tiers": [2], "description": "See normally in total darkness; darkness does not conceal from this sense at all." },
+            { "id": "direction_sense", "label": "Direction Sense", "tiers": [1], "description": "Always know which way is north and which way you are facing." },
+            { "id": "distance_sense", "label": "Distance Sense", "tiers": [1], "description": "Judge distances exactly by sense alone." },
+            { "id": "extended", "label": "Extended", "tiers": [1, 2], "perNote": "per sense", "description": "The sense works at ten times its normal range per tier, so distance penalties start much further out." },
+            { "id": "infravision", "label": "Infravision", "tiers": [1], "description": "See heat, letting you make out warm shapes in darkness or through smoke." },
+            { "id": "low_light_vision", "label": "Low-Light Vision", "tiers": [1], "description": "Dim light does not conceal — you see in shadow as though it were bright." },
+            { "id": "microscopic_vision", "label": "Microscopic Vision", "tiers": [1, 2, 3, 4], "description": "See detail far too small for the naked eye, each tier one step finer (cell, then microbe, then molecule, then atom)." },
+            { "id": "penetrates_concealment", "label": "Penetrates Concealment", "tiers": [4], "description": "Nothing conceals from this sense short of an effect specifically countering it." },
+            { "id": "radio", "label": "Radio", "tiers": [1], "description": "A new radio sense: receive broadcast radio signals directly." },
+            { "id": "radius", "label": "Radius", "tiers": [1], "description": "The sense works in every direction at once, so nothing can approach from a blind side." },
+            { "id": "ranged", "label": "Ranged", "tiers": [1], "description": "A normally touch-range sense works at a distance." },
+            { "id": "rapid", "label": "Rapid", "tiers": [1, 2, 3], "perNote": "per sense", "description": "The sense takes in fast-moving detail, each tier ten times quicker than the last." },
+            { "id": "tracking", "label": "Tracking", "tiers": [1, 2], "description": "Follow a trail with the sense, at half speed then at full speed." },
+            { "id": "ultra_hearing", "label": "Ultra-Hearing", "tiers": [1], "description": "Hear frequencies above and below the normal range, including ultrasound." },
+            { "id": "ultravision", "label": "Ultravision", "tiers": [1], "description": "See ultraviolet light, making otherwise invisible marks and traces visible." }
           ]
         }
       ],
@@ -479,6 +496,19 @@
         "pattern": "passive_permanent",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "appliesTo",
+          "label": "Applies to",
+          "type": "select",
+          "hiddenWith": "variable_extra_limbs",
+          "hint": "The extra limbs add +1 per rank, to a maximum of +5, to either your Grab checks or your Stability. The Variable extra reassigns them each turn instead of fixing the choice here.",
+          "options": [
+            { "value": "grab", "label": "Grab" },
+            { "value": "stability", "label": "Stability" }
+          ]
+        }
+      ],
       "description": "Grants additional functional limbs for extra actions or grips."
     },
     {

@@ -17,31 +17,52 @@ from mm_companion.core.session.protocol import (
     PROTOCOL_VERSION,
     ApplyCondition,
     CharacterSnapshot,
+    ControlHello,
+    ControlWelcome,
+    CreateSessionRequest,
+    DeleteSessionRequest,
     ErrorMessage,
     Hello,
     Kicked,
+    KickRequest,
+    ListSessionsRequest,
+    NoteRequest,
     Ping,
+    PlayerSnapshot,
     Pong,
     ProtocolError,
     RemoveCondition,
     RemoveRollRequest,
+    RenameSessionRequest,
     RollAdded,
     RollRemoved,
     RollRequest,
     Roster,
+    SessionCatalog,
+    SessionInfo,
+    SessionStatusRequest,
+    SetHeroPoints,
+    SetNpcPaths,
+    SetSessionName,
     Welcome,
     decode,
     encode,
     sanitize_snapshot,
+    sanitize_spec,
 )
 
 ROUND_TRIP_CASES = [
     Hello(token="abc", display_name="Alex", app_version="0.4.0", mod_fingerprint="base@1#0"),
     Hello(token="abc", display_name="Alex", player_id="p1", player_token="secret"),
+    Hello(token="abc", display_name="Morgan", gm_token="gm-secret"),
     CharacterSnapshot(character={"power_level": 10, "abilities": {"str": 4}}),
     RollRequest(label="Athletics", bonus=6, penalty=2, dc=15, hidden=False),
     RollRequest(),  # a bare d20 with no DC
+    NoteRequest(text="spent a hero point — 2 left"),
     RemoveRollRequest(seq=3),
+    KickRequest(player_id="p1", reason="afk"),
+    SetSessionName(name="Friday Game"),
+    SetNpcPaths(paths=["thug.json", "boss.json"]),
     Ping(nonce=7),
     Welcome(
         session_id="s1",
@@ -51,14 +72,36 @@ ROUND_TRIP_CASES = [
         roster=[{"player_id": "p1", "display_name": "Alex"}],
         history=[{"seq": 1, "die": 12}],
     ),
+    Welcome(
+        session_id="s1",
+        session_name="Tuesday",
+        player_id="gm",
+        is_gm=True,
+        npc_paths=["thug.json"],
+    ),
     Roster(players=[{"player_id": "p1"}, {"player_id": "p2"}]),
+    PlayerSnapshot(player_id="p1", character={"power_level": 10}),
     RollAdded(roll={"seq": 3, "die": 20, "degree": 2}),
     RollRemoved(seq=3),
     ApplyCondition(player_id="p1", condition_id="dazed", parameter="Strength"),
     RemoveCondition(player_id="p1", condition_id="dazed"),
+    SetHeroPoints(player_id="p1", value=3),
     ErrorMessage(code=protocol.ERROR_BAD_TOKEN, message="wrong join code"),
     Kicked(reason="session closed"),
     Pong(nonce=7),
+    # The hub control plane — a GM talking to the box, not to a session.
+    ControlHello(),  # the ordinary case: no credential at all
+    ControlHello(secret="operator-secret", app_version="0.4.0"),
+    ControlWelcome(),
+    ControlWelcome(operator=True, sessions=[{"id": "s1", "name": "Friday Game"}]),
+    CreateSessionRequest(name="Friday Game"),
+    DeleteSessionRequest(session_id="s1", gm_token="gm-secret"),
+    RenameSessionRequest(session_id="s1", name="Saturday Game", gm_token="gm-secret"),
+    SessionStatusRequest(session_id="s1", gm_token="gm-secret"),
+    ListSessionsRequest(),
+    SessionInfo(),  # the session is gone
+    SessionInfo(session={"id": "s1", "name": "Friday Game", "join_code": "ABCDE"}),
+    SessionCatalog(sessions=[{"id": "s1", "name": "Friday Game", "join_code": "ABCDE"}]),
 ]
 
 
@@ -167,3 +210,83 @@ def test_sanitize_snapshot_does_not_mutate_its_input() -> None:
     sanitize_snapshot(original)
 
     assert original == {"image_path": "hero.png"}
+
+
+# -- roll specs ---------------------------------------------------------------
+#
+# A spec describes what is being rolled and travels so the *other* seats can act on
+# it — the target's player clicks the save an attack forced. It is therefore
+# client-supplied data that gets broadcast and rendered on everyone's screen, and
+# this is the only place it is checked.
+
+
+def test_a_spec_survives_with_its_chain_intact() -> None:
+    spec = sanitize_spec(
+        {
+            "label": "7 vs. Defense",
+            "modifier": 7,
+            "follow_up": {"label": "Toughness vs. 18", "dc": 18, "outcomes": ["Dazed"]},
+        }
+    )
+
+    assert spec["label"] == "7 vs. Defense"
+    assert spec["follow_up"]["dc"] == 18
+    assert spec["follow_up"]["outcomes"] == ["Dazed"]
+
+
+def test_a_spec_without_a_label_is_not_a_spec() -> None:
+    assert sanitize_spec({"modifier": 7}) is None
+    assert sanitize_spec({"label": "   "}) is None
+    assert sanitize_spec(None) is None
+    assert sanitize_spec("a string") is None
+
+
+def test_unknown_keys_are_dropped_rather_than_forwarded() -> None:
+    # A whitelist, so a field added to RollSpec later cannot silently start crossing
+    # the wire unchecked.
+    spec = sanitize_spec({"label": "x", "surprise": {"deeply": "nested"}})
+
+    assert spec == {"label": "x"}
+
+
+def test_text_and_ladders_are_capped() -> None:
+    spec = sanitize_spec(
+        {
+            "label": "L" * 5000,
+            "hint": "H" * 5000,
+            "outcomes": ["O" * 5000] * 500,
+        }
+    )
+
+    assert len(spec["label"]) == protocol.MAX_SPEC_TEXT
+    assert len(spec["hint"]) == protocol.MAX_SPEC_TEXT
+    assert len(spec["outcomes"]) == protocol.MAX_SPEC_OUTCOMES
+    assert len(spec["outcomes"][0]) == protocol.MAX_SPEC_TEXT
+
+
+def test_a_deep_chain_is_cut_rather_than_followed() -> None:
+    deep: dict = {"label": "bottom"}
+    for _ in range(50):
+        deep = {"label": "link", "follow_up": deep}
+
+    spec = sanitize_spec(deep)
+
+    depth = 0
+    while spec is not None:
+        depth += 1
+        spec = spec.get("follow_up")
+    assert depth == protocol.MAX_SPEC_DEPTH
+
+
+def test_values_of_the_wrong_shape_are_dropped_not_coerced() -> None:
+    spec = sanitize_spec(
+        {
+            "label": "x",
+            "modifier": "lots",  # not a number
+            "dc": True,  # a bool is not a DC, even though it is an int
+            "outcomes": "Dazed",  # not a list
+            "rolled_by_target": "yes",  # not a bool
+        }
+    )
+
+    assert spec == {"label": "x"}

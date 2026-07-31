@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QSize
+from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import power_points_spent, resistance_total, skill_total
+from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.roll_history import NoteCard
 from mm_companion.ui.sections.powers import _DraggableCard
+from mm_companion.ui.sections.system_info import HeroPointsWidget, hero_point_note
 
 
 @pytest.fixture(scope="module")
@@ -237,9 +241,13 @@ def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
         "complications",
         "skills",
         "powers",
+        "dice",
     }
-    # Every block is placed exactly once across the arrangement's rows.
-    placed = [key for row in sheet.arrangement()["rows"] for key in row]
+    # Every block is placed exactly once across the arrangement — the rows on the
+    # page plus the pinned strip, which the Dice block starts in.
+    arrangement = sheet.arrangement()
+    placed = [key for row in arrangement["rows"] for key in row]
+    placed += [key for line in arrangement["pinned"]["lines"] for key in line]
     assert sorted(placed) == sorted(sheet.block_keys())
 
 
@@ -317,7 +325,9 @@ def test_skill_modifier_column_nets_a_condition_penalty_against_a_boost(
 
     stealth = next(r for r in sheet.skills._rows if r.row_id == "Stealth")
     assert stealth.mod_item.text() == "-2"
-    assert stealth.mod_item.foreground().color().name() == "#d15b5b"  # a penalty reads red
+    assert stealth.mod_item.foreground().color().name() == theme.color(
+        "tint.worse"
+    )  # a penalty reads red
     assert "Impaired" in stealth.mod_item.toolTip()
     assert stealth.total_item.text() == "3"  # 5 ranks - 2
     # The condition is scoped, so a different skill is untouched.
@@ -333,23 +343,122 @@ def test_skill_modifier_column_nets_a_condition_penalty_against_a_boost(
     sheet.skills.refresh_totals()
     stealth = next(r for r in sheet.skills._rows if r.row_id == "Stealth")
     assert stealth.mod_item.text() == "+4"  # +6 boost - 2 impaired
-    assert stealth.mod_item.foreground().color().name() == "#d15b5b"  # still penalised
+    assert stealth.mod_item.foreground().color().name() == theme.color(
+        "tint.worse"
+    )  # still penalised
     tip = stealth.mod_item.toolTip()
     assert "Cat's Grace" in tip and "Impaired" in tip
     assert stealth.total_item.text() == "9"  # 5 ranks + 6 boost - 2
 
 
-def test_hero_points_circles_spend_and_gain(qapp: QApplication) -> None:
+def test_hero_points_pips_spend_and_gain(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     hero = sheet.system_info._hero_points
+    hero.set_value(0)
 
-    hero._on_click(2)  # click the 3rd circle → 3 hero points
-    assert hero.value() == 3
-    assert sheet.character.characteristics["hero_points"] == 3
+    hero._on_click(2)  # light the 3rd pip → 1 hero point
+    assert hero.value() == 1
+    assert sheet.character.characteristics["hero_points"] == 1
 
-    hero._on_click(2)  # click the last filled circle again → empties it to 2
+    hero._on_click(2)  # click it again → spent, back to none
+    assert hero.value() == 0
+    assert sheet.character.characteristics["hero_points"] == 0
+
+
+def test_hero_point_pips_toggle_in_any_order(qapp: QApplication) -> None:
+    hero = HeroPointsWidget()
+    hero.set_value(0)
+
+    hero._on_click(3)  # the 4th pip alone, with nothing to its left
+    assert hero.value() == 1
+    assert hero._lit == {3}
+
+    hero._on_click(0)
     assert hero.value() == 2
-    assert sheet.character.characteristics["hero_points"] == 2
+    assert hero._lit == {0, 3}
+
+
+def test_hero_points_set_value_reconciles_to_the_count(qapp: QApplication) -> None:
+    """An outside change carries a number, not an arrangement — see set_value."""
+    hero = HeroPointsWidget()
+    hero.set_value(0)
+    hero._on_click(3)
+    hero._on_click(4)  # a player's own arrangement: the two right-hand pips
+
+    hero.set_value(1)  # the GM takes one — the right-most goes out
+    assert hero._lit == {3}
+
+    hero.set_value(3)  # and grants two — the left-most dark pips light up
+    assert hero._lit == {0, 1, 3}
+
+    hero.set_value(0)  # nothing left to preserve
+    assert hero._lit == set()
+    hero.set_value(2)
+    assert hero._lit == {0, 1}
+
+
+def test_hero_point_pips_show_the_held_and_spent_artwork(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    hero = sheet.system_info._hero_points
+    hero.set_value(2)
+
+    icons = [button.icon() for button in hero._buttons]
+    assert not any(icon.isNull() for icon in icons)  # the SVGs actually rendered
+    size = QSize(hero._pip_size, hero._pip_size)
+    held = icons[0].pixmap(size).toImage()
+    spent = icons[4].pixmap(size).toImage()
+    assert held != spent  # a held point does not look like a spent one
+    assert icons[1].pixmap(size).toImage() == held
+    assert icons[2].pixmap(size).toImage() == spent  # the 3rd pip is the first spent one
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "expected"),
+    [
+        (3, 2, "spent a hero point — 2 left"),
+        (2, 3, "gained a hero point — 3 left"),
+        (5, 3, "spent 2 hero points — 3 left"),
+        (0, 2, "gained 2 hero points — 2 left"),
+        (2, 2, ""),  # nothing moved, nothing to say
+    ],
+)
+def test_hero_point_note_wording(previous: int, current: int, expected: str) -> None:
+    assert hero_point_note(previous, current) == expected
+
+
+def test_spending_a_hero_point_writes_it_in_the_history(qapp: QApplication) -> None:
+    """Off the air the note lands in the Dice block's own private history."""
+    sheet = CharacterSheet(load_game_data())
+    sheet.system_info._hero_points.set_value(3)
+    sheet.system_info._last_hero_points = 3
+
+    sheet.system_info._hero_points._on_click(2)  # put one out → 2 left
+
+    notes = sheet.dice.view._local_history.findChildren(NoteCard)
+    assert [n.findChild(QLabel).text() for n in notes] == ["spent a hero point — 2 left"]
+
+
+def test_a_gm_granted_hero_point_is_written_down_too(qapp: QApplication) -> None:
+    """The GM's command lands on the player's own model, so it takes the same path."""
+    sheet = CharacterSheet(load_game_data())
+    sheet.system_info._hero_points.set_value(1)
+    sheet.system_info._last_hero_points = 1
+
+    sheet.system_info.set_hero_points(3)
+
+    notes = sheet.dice.view._local_history.findChildren(NoteCard)
+    assert [n.findChild(QLabel).text() for n in notes] == ["gained 2 hero points — 3 left"]
+
+
+def test_a_hero_point_note_does_not_reopen_a_closed_dice_block(qapp: QApplication) -> None:
+    """A note is a side effect of an edit elsewhere — it must not grab the screen."""
+    sheet = CharacterSheet(load_game_data())
+    sheet._canvas.hide_block("dice")
+    sheet.system_info._last_hero_points = sheet.system_info._hero_points.value()
+
+    sheet.system_info._hero_points._on_click(4)
+
+    assert sheet._canvas.is_hidden("dice")
 
 
 def test_initiative_readout_follows_agility_and_advantages(qapp: QApplication) -> None:
@@ -393,7 +502,7 @@ def test_disabled_condition_lowers_the_initiative_readout(qapp: QApplication) ->
 
     text = sheet.system_info._initiative.text()
     assert "-1" in text  # +4 AGL - 5 = -1
-    assert "#d15b5b" in text  # the penalised value reads red
+    assert theme.color("tint.worse") in text  # the penalised value reads red
     assert "-5" in sheet.system_info._initiative.toolTip()
 
 
@@ -408,7 +517,7 @@ def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
 
     text = sheet.system_info._speed._lines_label.text()
     assert "-1 rank" in text
-    assert "#d15b5b" in text
+    assert theme.color("tint.worse") in text
     assert "slowed" in sheet.system_info._speed.toolTip()
 
 
@@ -423,7 +532,7 @@ def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplicatio
 
     text = sheet.system_info._speed._lines_label.text()
     assert "immobilised" in text
-    assert "#d15b5b" in text
+    assert theme.color("tint.worse") in text
 
 
 def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
@@ -440,3 +549,53 @@ def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
     sheet.conditions.conditionsChanged.emit()
 
     assert "immobilised" in sheet.system_info._speed._lines_label.text()
+
+
+def test_high_resistance_total_is_not_clamped_away(qapp: QApplication) -> None:
+    """A resistance spin box holds the *total*, which on a high-Stamina character runs
+    past an ability's ceiling. Clamping it would make the next edit recompute the
+    bought delta from the wrong number and silently refund points."""
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.character.resistances["TOUGHNESS"] = 10  # ten bought ranks
+    sheet.abilities._abilities["STA"].setValue(28)
+    sheet.resistances.refresh_bases()
+
+    spin = sheet.resistances._resistances["TOUGHNESS"]
+    assert spin.value() == 38  # 28 base + 10 bought, not clamped to 30
+
+    # One decrement moves the bought delta by exactly one, not down to a clamp remainder.
+    spin.setValue(spin.value() - 1)
+    assert sheet.character.resistances["TOUGHNESS"] == 9
+
+
+def test_resistance_range_comes_from_the_data(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    expected = data.costs.trait_range("resistance")
+    spin = sheet.resistances._resistances["TOUGHNESS"]
+    assert (spin.minimum(), spin.maximum()) == (expected.min, expected.max)
+    # Abilities keep their own, narrower range.
+    ability = data.costs.trait_range("ability")
+    assert sheet.abilities._abilities["STR"].maximum() == ability.max
+
+
+def test_cancelling_add_specialization_leaves_the_model_untouched(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancelled dialog must not seed an empty entry — ``_remove_specialization``
+    goes out of its way to keep those out of the model, and one would be saved."""
+    from PySide6.QtWidgets import QInputDialog
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    skill = next(s for s in data.skills if not s.focused)
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", False)))
+    sheet.skills._add_specialization(skill)
+    assert skill.name not in sheet.character.specializations
+
+    # An accepted dialog still records the specialization.
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Forgery", True)))
+    sheet.skills._add_specialization(skill)
+    assert sheet.character.specializations[skill.name] == ["Forgery"]

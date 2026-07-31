@@ -24,6 +24,7 @@ from mm_companion.core.rules import (
     resistance_condition_effect,
     roll_confused_action,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.condition_dialog import ConditionParameterDialog
 from mm_companion.ui.sections.conditions import ConditionsSection
@@ -443,7 +444,7 @@ def test_scoped_impaired_reddens_skill_total_disabled_strikes(qapp2: QApplicatio
     apply_condition(char, "impaired", data, parameter="Stealth")
     sheet.skills.refresh_totals()
     assert stealth().total_item.text() == "4"  # 6 - 2, display only
-    assert stealth().total_item.foreground().color().name() == "#d15b5b"
+    assert stealth().total_item.foreground().color().name() == theme.color("tint.worse")
     assert stealth().total_item.font().strikeOut() is False
 
     apply_condition(char, "disabled", data, parameter="Stealth")  # supersedes impaired
@@ -484,22 +485,56 @@ def test_confused_chip_records_a_roll(qapp2: QApplication) -> None:
     assert section._confused_rolls  # a rolled outcome was stored for the chip
 
 
-def test_flow_container_reports_wrapped_height(qapp2: QApplication) -> None:
+def make_flow_container(chips: int = 6):
+    """A container holding *chips* fixed 120×24 chips — several rows when narrow."""
     from PySide6.QtWidgets import QLabel
 
     from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 
     container = FlowContainer()
     flow = FlowLayout(container)
-    for _ in range(6):
+    for _ in range(chips):
         label = QLabel("wide-chip-xxxxx")
         label.setFixedSize(120, 24)
         flow.addWidget(label)
-    # Narrow enough that six 120px chips must wrap to several rows.
-    assert container.sizePolicy().hasHeightForWidth() is True
+    return container, flow
+
+
+def test_flow_container_reports_wrapped_height(qapp2: QApplication) -> None:
+    container, _flow = make_flow_container()
     one_row = container.heightForWidth(1000)
     many_rows = container.heightForWidth(200)
     assert many_rows > one_row
+
+
+def test_flow_container_does_not_advertise_height_for_width(qapp2: QApplication) -> None:
+    """Qt must not size the container by asking how tall it is at its *hint* width.
+
+    That width is a single chip's, so the answer is every chip in its own row — a
+    minimum height several times too large, which the enclosing block reserves and
+    the rest of the page then has to absorb.
+    """
+    container, flow = make_flow_container()
+    assert flow.hasHeightForWidth() is False
+    assert container.hasHeightForWidth() is False
+
+
+def test_flow_container_gives_height_back_when_chips_are_removed(qapp2: QApplication) -> None:
+    """The pinned minimum height has to follow the content down as well as up.
+
+    Removing chips fires no resize (the stale, taller minimum is what prevents one),
+    so without an explicit re-fit the container would ratchet: permanently as tall as
+    the most chips it ever held.
+    """
+    container, flow = make_flow_container()
+    container.resize(200, 400)  # narrow: the six chips wrap to several rows
+    tall = container.minimumHeight()
+    assert tall > 24
+
+    while flow.count() > 1:
+        item = flow.takeAt(0)
+        item.widget().setParent(None)
+    assert container.minimumHeight() < tall
 
 
 # --------------------------------------------------------------------------- #
@@ -553,7 +588,7 @@ def test_debilitated_advantage_row_struck_through(qapp2: QApplication) -> None:
     table, row, _ = sheet.advantages._row_refs[0]
     item = table.item(row, 0)
     assert item.font().strikeOut() is True
-    assert item.foreground().color().name() == "#d15b5b"
+    assert item.foreground().color().name() == theme.color("tint.worse")
 
     remove_condition(char, char.conditions[0])
     sheet.advantages.refresh_conditions()
@@ -642,3 +677,65 @@ def test_removing_by_id_can_take_off_a_bundled_member(qapp: QApplication) -> Non
 
     assert "dazed" not in _ids(char)
     assert "staggered" in _ids(char)
+
+
+# --- The sheet's condition presentation is data-driven, not keyed off ids -------
+
+
+def test_condition_categories_come_from_the_data() -> None:
+    """The Conditions block's chip groups are declared in conditions.json, so a mod
+    adding a category gets a group instead of being folded into 'General'."""
+    data = load_game_data()
+    sections = {c.category: c for c in data.condition_categories}
+
+    assert sections["condition"].title == "General"
+    assert sections["damage_condition"].title == "Damage"
+    # The object-damage ladder is tracked but is not a status a player applies.
+    assert sections["object_damage_condition"].addable is False
+    assert sections["condition"].addable is True
+
+    # Every addable category is one the catalog actually uses.
+    used = {c.category for c in data.conditions}
+    assert {c.category for c in data.condition_categories} <= used
+
+
+def test_trait_lost_is_declared_in_the_data() -> None:
+    """Disabled is a check penalty and Debilitated a trait removal — neither is
+    derivable from `mechanisms`, so the record says outright which read as lost."""
+    catalog = load_game_data().condition_catalog()
+    assert catalog["disabled"].trait_lost is True
+    assert catalog["debilitated"].trait_lost is True
+    assert catalog["impaired"].trait_lost is False
+    assert catalog["hindered"].trait_lost is False
+
+
+def test_condition_effect_reports_trait_lost() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+
+    apply_condition(char, "impaired", data, parameter="Attack")
+    effect = condition_scope_penalty(char, data, {"ATK", "Attack"})
+    assert effect.active and effect.trait_lost is False
+
+    apply_condition(char, "disabled", data, parameter="Attack")
+    effect = condition_scope_penalty(char, data, {"ATK", "Attack"})
+    assert effect.active and effect.trait_lost is True
+
+
+def test_unscoped_and_specific_options_are_flagged_in_the_data() -> None:
+    """The condition dialog reads these flags instead of matching the option's prose,
+    so rewording an option can't silently change what a choice stores."""
+    catalog = load_game_data().condition_catalog()
+
+    disabled = {o.value: o for o in catalog["disabled"].parameter.option_specs}
+    assert disabled["All checks"].unscoped is True
+    assert disabled["Attack"].unscoped is False
+    assert disabled["a specific skill"].specific_kind == "skill"
+
+    unaware = {o.value: o for o in catalog["unaware"].parameter.option_specs}
+    assert unaware["All senses"].unscoped is True
+    assert unaware["Sight"].unscoped is False
+
+    # The plain string form still parses, carrying no flags.
+    debilitated = {o.value: o for o in catalog["debilitated"].parameter.option_specs}
+    assert debilitated["Strength"] == debilitated["Strength"].__class__("Strength")

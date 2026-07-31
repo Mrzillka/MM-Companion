@@ -4,15 +4,23 @@ Both the Skills and Advantages blocks render their rows across several
 side-by-side tables. The number of panels is not fixed: it adapts to the block's
 current width so a wide block shows more columns and a narrow one shows fewer,
 and it never lets a panel get narrower than the content needs (so nothing is
-clipped). These two pure functions carry that logic, kept free of Qt state so
-they are unit-testable:
+clipped).
+
+Two pure functions carry the arithmetic, kept free of Qt state so they are
+unit-testable:
 
 - :func:`column_count` decides how many panels fit a given width.
 - :func:`even_split` divides an ordered list of weighted blocks into that many
   near-equal-height buckets without reordering or splitting a block.
+
+:class:`ColumnFlowPanels` is the Qt half — the panel pool, the width measurement
+and the shrink-to-one-column minimum both blocks were carrying their own copy of.
 """
 
 from __future__ import annotations
+
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QWidget
 
 
 def column_count(
@@ -103,3 +111,117 @@ def even_split(weights: list[int], groups: int) -> list[list[int]]:
         result[p - 1] = list(range(j, i))
         i = j
     return result
+
+
+class ColumnFlowPanels:
+    """The Qt half of the column-flow pattern: a pool of side-by-side table panels.
+
+    Mix into a section that renders its rows across several tables (Skills,
+    Advantages). It owns the panel pool, the available-width measurement, and the
+    shrink-to-one-column minimum; the section supplies what varies:
+
+    - :meth:`_make_table` — build one empty panel.
+    - :meth:`_min_col_width` — the narrowest a panel may get before content clips
+      (driven by the widest label actually present, so it moves with the data).
+    - :meth:`_flow_item_count` — how many items are being laid out, the ceiling on
+      the panel count.
+    - :meth:`_rebuild` — re-render every panel; called when the count changes.
+
+    Call :meth:`_init_flow_panels` during construction, then
+    :meth:`_sync_column_count` from ``resizeEvent``. Because this overrides
+    ``minimumSizeHint``, it must come *before* the ``QWidget`` base in the class's
+    bases so it wins the MRO.
+    """
+
+    #: Gap between panels, and the dead-band that stops the count flipping when the
+    #: page's vertical scrollbar appears/disappears (which nudges the width by its
+    #: own extent). The band should be at least a scrollbar wide.
+    FLOW_SPACING = 6
+    FLOW_HYSTERESIS = 24
+
+    def _init_flow_panels(self, parent_layout: QBoxLayout) -> None:
+        """Build the panel container and add it to *parent_layout*."""
+
+        self._tables: list = []
+        self._column_count = 0
+        self._tables_container = QWidget()
+        self._tables_layout = QHBoxLayout(self._tables_container)
+        self._tables_layout.setContentsMargins(0, 0, 0, 0)
+        self._tables_layout.setSpacing(self.FLOW_SPACING)
+        self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        parent_layout.addWidget(self._tables_container)
+
+    # -- supplied by the section ------------------------------------------------
+
+    def _make_table(self):
+        raise NotImplementedError
+
+    def _min_col_width(self) -> int:
+        raise NotImplementedError
+
+    def _flow_item_count(self) -> int:
+        raise NotImplementedError
+
+    def _rebuild(self) -> None:
+        raise NotImplementedError
+
+    # -- panel pool --------------------------------------------------------------
+
+    def _ensure_tables(self, count: int) -> None:
+        """Grow or shrink the pool of side-by-side panels to *count*."""
+
+        while len(self._tables) < count:
+            table = self._make_table()
+            self._tables_layout.addWidget(table, stretch=1)
+            self._tables.append(table)
+        while len(self._tables) > count:
+            table = self._tables.pop()
+            self._tables_layout.removeWidget(table)
+            # Unparent before scheduling the delete: a widget still parented to the
+            # container keeps painting until the deferred delete is serviced, which
+            # leaves a ghost panel on screen for the rest of the event loop turn.
+            table.setParent(None)
+            table.deleteLater()
+
+    # -- responsive count --------------------------------------------------------
+
+    def _available_width(self) -> int:
+        """The width the panels have to share, net of the section's margins."""
+
+        margins = self.layout().contentsMargins()
+        return self.width() - margins.left() - margins.right()
+
+    def _flow_column_count(self) -> int:
+        """How many panels the current width fits (hysteresis applied)."""
+
+        return column_count(
+            self._available_width(),
+            self._min_col_width(),
+            self.FLOW_SPACING,
+            self._flow_item_count(),
+            self._column_count,
+            self.FLOW_HYSTERESIS,
+        )
+
+    def _sync_column_count(self) -> bool:
+        """Rebuild if the width now fits a different number of panels.
+
+        Returns whether a rebuild happened. Call from ``resizeEvent``; ``_rebuild``
+        settles ``_column_count`` itself, so this only decides *whether* to run.
+        """
+
+        if self._flow_column_count() == self._column_count:
+            return False
+        self._rebuild()
+        return True
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Report a *single-column* minimum so the block can shrink to one panel.
+
+        The side-by-side tables would otherwise inflate the section's minimum to the
+        full multi-column width, pinning the whole page (and window) wide and forcing
+        at least two columns. Capping the reported minimum at one column's width lets
+        the block narrow; ``resizeEvent`` then rebuilds to as many columns as fit.
+        """
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self._min_col_width()), hint.height())

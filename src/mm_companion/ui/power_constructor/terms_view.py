@@ -26,7 +26,6 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
 )
 from mm_companion.core.rules import (
-    HOMERULE_TINT,
     array_alternate_cost,
     array_base_index,
     effect_attack_skill_bonus,
@@ -35,9 +34,9 @@ from mm_companion.core.rules import (
     power_total_cost,
     resolve_stat_display,
 )
-from mm_companion.ui.theme import ACCENT, TINT_BETTER, TINT_WORSE
+from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import hline_separator, make_spin_box
+from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, make_spin_box, muted_style
 
 # The six standard game-term fields the Dev-mode override table edits directly, with
 # their labels and the matching :class:`~mm_companion.core.data_loader.Effect`
@@ -72,11 +71,6 @@ class PowerTermsView(QWidget):
 
     # Tints for a modified stat's value; readable on both light and dark themes.
     # A homerule override reads in a distinct blue, apart from modifier better/worse.
-    _TINTS = {"better": TINT_BETTER, "worse": TINT_WORSE, HOMERULE_TINT: ACCENT}
-    # How many label/value pairs sit side by side per grid row, so the short stats
-    # pack across the width instead of stacking into a tall, scrolling column.
-    _PAIRS_PER_ROW = 2
-
     # Emitted when a Dev-mode override is edited in the table, so the window can
     # recompute cost/PL without rebuilding the table (which would drop the live widget).
     edited = Signal()
@@ -114,7 +108,7 @@ class PowerTermsView(QWidget):
             return
         if not power.effects:
             placeholder = QLabel("Game-term summary appears here as you add effects.")
-            placeholder.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
+            placeholder.setStyleSheet(muted_style(italic=True))
             placeholder.setWordWrap(True)
             self._layout.addWidget(placeholder)
             return
@@ -122,7 +116,7 @@ class PowerTermsView(QWidget):
         header = self._structure_header(power)
         if header:
             label = QLabel(header)
-            label.setStyleSheet("font-weight: bold;")
+            label.setStyleSheet(BOLD_STYLE)
             self._layout.addWidget(label)
         if self._editable:
             self._render_editable(power, game_data, self._char)
@@ -149,55 +143,43 @@ class PowerTermsView(QWidget):
         header = QHBoxLayout()
         header.setSpacing(6)
         name = QLabel(title)
-        name.setStyleSheet("font-weight: bold;")
+        name.setStyleSheet(BOLD_STYLE)
         header.addWidget(name)
         note = self._role_note(power, index, game_data, char)
         if note:
             role = QLabel(note)
-            role.setStyleSheet("color: palette(placeholder-text); font-style: italic;")
+            role.setStyleSheet(muted_style(italic=True))
             header.addWidget(role)
         header.addStretch()
         self._layout.addLayout(header)
 
         rows = effect_stat_rows(effect, game_data, char, attack_bonus)
         self.effect_rows.append(rows)
-        pairs = self._PAIRS_PER_ROW
-        grid = QGridLayout()
+        grid = build_terms_grid(rows)
         grid.setContentsMargins(12, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(1)
-        for index, stat in enumerate(rows):
-            grid_row, pair = divmod(index, pairs)
-            col = pair * 2
-            label = QLabel(f"{stat.label}:")
-            label.setStyleSheet("color: palette(placeholder-text);")
-            value = QLabel(stat.value)
-            value.setWordWrap(True)
-            tint = self._TINTS.get(stat.change)
-            if tint:
-                value.setStyleSheet(f"color: {tint}; font-weight: bold;")
-                value.setToolTip(f"Base: {stat.base}")
-            grid.addWidget(label, grid_row, col, Qt.AlignmentFlag.AlignTop)
-            grid.addWidget(value, grid_row, col + 1, Qt.AlignmentFlag.AlignTop)
-        # Let the value columns share the slack evenly so the pairs spread across
-        # the width rather than bunching at the left.
-        for pair in range(pairs):
-            grid.setColumnStretch(pair * 2 + 1, 1)
         self._layout.addLayout(grid)
 
     # -- Dev-mode editable table ------------------------------------------
     def _render_editable(self, power: Power, game_data: GameData, char: Character | None) -> None:
         """Render the whole table as the homerule override editor: a whole-power cost
         override, then one group per effect (its game-term fields, derived readout rows,
-        and custom rows)."""
+        and custom rows).
+
+        The attack-skill bonus is threaded through exactly as the read-only path does
+        it, so ticking Dev mode doesn't restate an effect's Check line without the
+        combat focus it is linked to — which would make the by-the-book value look like
+        an override and badge the power homerule for correcting it back.
+        """
         self.effect_rows = []
         self._layout.addWidget(self._cost_override_row(power, game_data, char))
         multi = len(power.effects) > 1
         for index, effect in enumerate(power.effects, start=1):
-            rows = effect_stat_rows(effect, game_data, char)
+            attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
+            rows = effect_stat_rows(effect, game_data, char, attack_bonus)
             self.effect_rows.append(rows)
             self._layout.addWidget(
-                self._effect_edit_group(effect, index, multi, rows, game_data, char)
+                self._effect_edit_group(effect, index, multi, rows, game_data, char, attack_bonus)
             )
 
     def _cost_override_row(
@@ -241,6 +223,7 @@ class PowerTermsView(QWidget):
         rows: list,
         game_data: GameData,
         char: Character | None,
+        attack_bonus: int | None = None,
     ) -> QWidget:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         name = base.name if base else effect.effect_id
@@ -249,10 +232,14 @@ class PowerTermsView(QWidget):
         outer.setContentsMargins(6, 4, 6, 4)
 
         # The auto values every field starts at: the resolved rows this effect would
-        # show with *no* overrides at all. A field left at its auto value stores no
-        # override (so it isn't flagged homerule); anything else does.
+        # show with *no* overrides at all — but still with its attack-skill link, which
+        # is not an override. A field left at its auto value stores no override (so it
+        # isn't flagged homerule); anything else does.
         auto_effect = replace(effect, overrides={})
-        auto = {row.key: row.value for row in effect_stat_rows(auto_effect, game_data, char)}
+        auto = {
+            row.key: row.value
+            for row in effect_stat_rows(auto_effect, game_data, char, attack_bonus)
+        }
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
@@ -262,7 +249,7 @@ class PowerTermsView(QWidget):
         for key, label, _attr in _OVERRIDE_STD_FIELDS:
             grid.addWidget(QLabel(label), gr, 0)
             auto_value = auto.get(key, "")
-            combo = self._make_value_combo(effect, key, auto_value, game_data, char)
+            combo = self._make_value_combo(effect, key, auto_value, game_data, char, attack_bonus)
             order = self._make_order_combo(effect, key)
             self._wire_std_override(effect, key, combo, order, auto_value)
             grid.addWidget(combo, gr, 1)
@@ -314,6 +301,7 @@ class PowerTermsView(QWidget):
         attr: str,
         game_data: GameData,
         char: Character | None,
+        attack_bonus: int | None = None,
     ) -> list[str]:
         """Resolved dropdown choices for a standard field.
 
@@ -330,7 +318,7 @@ class PowerTermsView(QWidget):
                 raw.append(value)
         options: list[str] = []
         for value in raw:
-            resolved = resolve_stat_display(effect, game_data, field_key, value, char)
+            resolved = resolve_stat_display(effect, game_data, field_key, value, char, attack_bonus)
             if resolved and resolved not in options:
                 options.append(resolved)
         return options
@@ -342,11 +330,12 @@ class PowerTermsView(QWidget):
         auto_value: str,
         game_data: GameData,
         char: Character | None,
+        attack_bonus: int | None = None,
     ) -> QComboBox:
         attr = next(a for k, _, a in _OVERRIDE_STD_FIELDS if k == key)
         combo = QComboBox()
         combo.setEditable(True)
-        options = self._field_options(effect, key, attr, game_data, char)
+        options = self._field_options(effect, key, attr, game_data, char, attack_bonus)
         # The auto (un-overridden) value is always selectable, so re-picking it clears
         # the override.
         if auto_value and auto_value not in options:

@@ -15,7 +15,7 @@ files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 
 from . import mods as mods_module
 from .components import Integration, TraitBoost
@@ -205,13 +205,35 @@ class Advantage:
 # --- Conditions: the status catalog + its mechanical sub-records (parameters,
 #     debilitation, defense/attack/resistance mods, stacking, recovery). -------
 @dataclass(frozen=True)
+class ConditionParameterOption:
+    """One choice in a condition parameter's dropdown.
+
+    ``value`` is both the label shown and the text stored. The two flags mark the
+    choices that are not ordinary subjects, so the dialog recognises them from the
+    data rather than by matching their prose (which a reword or a translation would
+    silently break):
+
+    - ``unscoped`` — the choice means *no particular subject* (Disabled's
+      "All checks", Unaware's "All senses"), and is stored as no scope at all.
+    - ``specific_kind`` — the choice is a placeholder that opens a second dropdown of
+      concrete traits of that kind: ``"a specific skill"`` carries ``"skill"``.
+    """
+
+    value: str
+    unscoped: bool = False
+    specific_kind: str = ""
+
+
+@dataclass(frozen=True)
 class ConditionParameter:
     """The subject a condition must be qualified with when applied (§6).
 
     ``type`` is one of ``trait_select`` / ``sense_select`` / ``descriptor_text`` /
     ``character_ref`` and drives the UI control; ``options`` populates a combobox
-    (empty ⇒ free text). ``required`` gates whether the condition can be applied
-    before the subject is named — see ``docs/mm-conditions-design.md`` §6.
+    (empty ⇒ free text), with ``option_specs`` carrying the same choices plus the
+    per-choice flags described on :class:`ConditionParameterOption`. ``required``
+    gates whether the condition can be applied before the subject is named — see
+    ``docs/mm-conditions-design.md`` §6.
     """
 
     type: str
@@ -219,6 +241,7 @@ class ConditionParameter:
     label: str = ""
     help: str = ""
     options: tuple[str, ...] = ()
+    option_specs: tuple[ConditionParameterOption, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -329,6 +352,30 @@ class Condition:
     stacking_rule: StackingRule | None = None
     recovery_check: RecoveryCheck | None = None
     random_table: tuple[RandomActionRow, ...] = ()
+    #: Whether the trait this condition scopes to should read as lost — the sheet
+    #: strikes it through (Disabled, Debilitated). Not derivable from ``mechanisms``:
+    #: Disabled is a check penalty severe enough to count, Debilitated a real trait
+    #: removal, so the data says so outright.
+    trait_lost: bool = False
+
+
+@dataclass(frozen=True)
+class ConditionCategory:
+    """One group the Conditions block sorts its chips into, from ``conditions.json``.
+
+    ``category`` matches a :class:`Condition`'s ``category``; ``title`` is the heading
+    shown above that group; ``addable`` marks a group the "+" menu may apply from —
+    false for the object-damage ladder and the ``normal`` bookkeeping marker, which
+    are not statuses a player puts on a character.
+
+    In data (``_meta.sheetSections``) rather than in the widget so a mod that adds a
+    category gets a group of its own instead of having its conditions silently folded
+    into the general one.
+    """
+
+    category: str
+    title: str
+    addable: bool = True
 
 
 # --- Powers layer: base effects, modifiers (extras/flaws), and the config
@@ -365,6 +412,27 @@ class ConfigOption:
 
 
 @dataclass(frozen=True)
+class SpeedRank:
+    """The rate one tier of a movement mode grants, as a distance rank.
+
+    Some modes move at a rate of their own regardless of how fast the character walks
+    (Swinging's flat rank 2, Permeate's slow lower tiers); others are expressed against
+    the character's ground speed (Wall-Crawling's "ground speed, minus one rank at the
+    lower tier"). ``from_ground`` picks which, and ``value`` is the flat rank or the
+    signed offset accordingly.
+
+    In JSON a tier is written as a bare number for a flat rank (``2``) or as a
+    ``"ground"`` expression for a relative one (``"ground"``, ``"ground-1"``).
+    """
+
+    value: int = 0
+    from_ground: bool = False
+
+    def rank(self, ground_rank: int) -> int:
+        return ground_rank + self.value if self.from_ground else self.value
+
+
+@dataclass(frozen=True)
 class AllocationOption:
     """One named sub-ability on a Tier-4 ``allocation`` field (Enhanced Senses etc.).
 
@@ -373,12 +441,38 @@ class AllocationOption:
     (``(2, 4, 6)`` = increasing scope). Picking the option consumes the chosen
     tier's cost from the effect's rank pool. ``per_note`` is an optional qualifier
     shown after the label (e.g. ``"per environment"``, ``"per sense"``).
+
+    ``description`` is a one-line summary of what the option does, shown on hover in
+    the constructor's checklist — a list of two dozen bare names (Permeate, Trackless,
+    Ultravision) is otherwise unreadable without the rulebook open beside it.
+
+    ``speeds`` gives the movement *rate* each tier grants as a :class:`SpeedRank`, one
+    entry per tier. It is **empty for an option that is not a way of moving at all**
+    (Safe Fall, Trackless, Stable) — those confer no rate, so nothing lists them among
+    the character's movement speeds. ``tier_notes`` is an optional per-tier caveat shown
+    beside that rate (Wall-Crawling's "vulnerable while climbing"). Both are read by
+    :func:`mm_companion.core.rules.movement_mode_lines`.
     """
 
     id: str
     label: str
     tiers: tuple[int, ...] = (1,)
     per_note: str = ""
+    description: str = ""
+    speeds: tuple[SpeedRank | None, ...] = ()
+    tier_notes: tuple[str, ...] = ()
+
+    def speed(self, tier: int) -> SpeedRank | None:
+        """The rate a 1-based ``tier`` grants, or ``None`` when it grants none."""
+        if 1 <= tier <= len(self.speeds):
+            return self.speeds[tier - 1]
+        return None
+
+    def tier_note(self, tier: int) -> str:
+        """The caveat attached to a 1-based ``tier`` (``""`` when it has none)."""
+        if 1 <= tier <= len(self.tier_notes):
+            return self.tier_notes[tier - 1]
+        return ""
 
 
 @dataclass(frozen=True)
@@ -474,6 +568,33 @@ class Measure:
 
 
 @dataclass(frozen=True)
+class ResistanceOutcome:
+    """One rung of an effect's degree-of-failure ladder (``resistanceOutcomes``).
+
+    Failing a resistance check does something specific to the target, and *how*
+    specific depends on the effect. Damage's rungs are fixed by the rules
+    (``conditions`` naming ids from ``conditions.json``); Affliction's are whatever
+    the player chose when building the power, so its rungs carry a ``config_key``
+    naming the instance config field to read the ids out of instead. ``text`` is the
+    escape hatch for a rung the condition catalog can't express, and ``note`` is a
+    short qualifier shown after the conditions ("Stunned instead if already Dazed").
+
+    The ladder is indexed by degree of failure — index 0 is one degree — and its last
+    rung covers every deeper failure, so a three-rung ladder answers a five-degree
+    rout without inventing rungs. A ladder may also carry a ``success`` rung
+    (:attr:`Effect.resistance_success`): making a Toughness save is not "nothing
+    happened" — the target still takes a Hit unless their Toughness is Hardened,
+    Impervious or Impenetrable, which is a caveat only the ``note`` can carry since
+    this app cannot see the target's sheet.
+    """
+
+    conditions: tuple[str, ...] = ()
+    config_key: str = ""
+    text: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``docs/mm-powers-architecture.md``).
 
@@ -523,7 +644,17 @@ class Effect:
     config_fields: tuple[EffectConfigField, ...] = ()
     measure: Measure | None = None
     resistance_dc_base: int | None = None
+    #: What failing this effect's resistance check does to the target, one rung per
+    #: degree of failure (see :class:`ResistanceOutcome`). Empty for an effect whose
+    #: outcome is a GM call rather than a table.
+    resistance_outcomes: tuple[ResistanceOutcome, ...] = ()
+    #: What *making* the check still costs the target, for the effects where that is
+    #: not nothing (Damage's Hit). ``None`` where a made save really is a clean escape.
+    resistance_success: ResistanceOutcome | None = None
     implicit_modifiers: tuple[str, ...] = ()
+    #: How far this effect reaches once its range resolves to Ranged. Seeded from the
+    #: system-wide default and overridden by the effect's own ``rangeDistance`` block.
+    range_distance: RangeDistance | None = None
 
 
 @dataclass(frozen=True)
@@ -607,12 +738,19 @@ class Modifier:
     check_note: str = ""
     step_field: str = ""
     step_by: int = 0
+    #: How many distance ranks each rank of this modifier adds to a Ranged effect's
+    #: reach (Extended Range's ``1``). Zero for every modifier that doesn't reach further.
+    distance_rank_bonus: int = 0
     adds_ability: str = ""
     gate: str = ""
     requires_effect_id: str = ""
     hidden: bool = False
     note_template: str = ""
     note_per_rank: int = 0
+    #: Using the effect first calls for an extra roll that can fail (Check Required).
+    #: Such a modifier gets its own game-term row and a line in the card's dice footer
+    #: rather than being buried in Notes — it is something someone has to roll.
+    requires_check: bool = False
     requires_any: tuple[str, ...] = ()
     config_fields: tuple[EffectConfigField, ...] = ()
     custom: bool = False
@@ -656,11 +794,42 @@ class PowerLevelRules:
 
 
 @dataclass(frozen=True)
+class TraitRange:
+    """The range a trait's sheet control accepts, from ``costs.json``'s ``trait_ranges``.
+
+    Kept in data so a high-power campaign can widen it without a code change. Note the
+    ranges are *not* the same for every trait family: an ability spin box holds the rank
+    the player bought, while a resistance spin box holds the **total** (derived base plus
+    bought delta), which runs much higher — a high-Stamina character's Toughness total
+    easily passes an ability's ceiling.
+    """
+
+    min: int = -5
+    max: int = 30
+
+
+#: Fallbacks for a ``costs.json`` (a mod's, or an older one) that omits ``trait_ranges``.
+DEFAULT_TRAIT_RANGES: dict[str, TraitRange] = {
+    "ability": TraitRange(min=-5, max=30),
+    "resistance": TraitRange(min=-5, max=60),
+}
+
+
+@dataclass(frozen=True)
 class Costs:
     """The parsed contents of ``costs.json``."""
 
     traits: TraitCosts
     power_level: PowerLevelRules
+    trait_ranges: dict[str, TraitRange] = field(default_factory=dict)
+
+    def trait_range(self, family: str) -> TraitRange:
+        """The spin-box range for a trait *family* (``"ability"``, ``"resistance"``, …),
+        falling back to :data:`DEFAULT_TRAIT_RANGES` and then to a plain default."""
+
+        if family in self.trait_ranges:
+            return self.trait_ranges[family]
+        return DEFAULT_TRAIT_RANGES.get(family, TraitRange())
 
 
 # --- System rules: the trait-key strings and paired caps the resolvers
@@ -693,6 +862,43 @@ class PairedCap:
 
 
 @dataclass(frozen=True)
+class RangeDistance:
+    """How far a ranged effect reaches, as a distance rank plus its range increments.
+
+    An effect whose range resolves to ``range_value`` reaches distance rank
+    ``rank_source`` (the effect's own effective rank, or a fixed ``rank`` when the
+    effect doesn't scale that way) shifted by ``offset``. ``steps`` are the further
+    rank shifts of each range increment and ``step_labels`` names them — the default
+    ``(0, 1, 2)`` / short-medium-long is the ×1/×2/×4 progression, the same idiom
+    :func:`mm_companion.core.rules.speed_columns` uses for walk/dash/run.
+
+    The default lives in ``system.json``; an effect in ``effects.json`` may carry its
+    own ``rangeDistance`` block overriding whichever keys it names — the effects whose
+    reach isn't a function of their rank say so there rather than in code.
+    """
+
+    rank_source: str = "effect_rank"
+    rank: int | None = None
+    offset: int = 0
+    steps: tuple[int, ...] = (0, 1, 2)
+    step_labels: tuple[str, ...] = ("short", "medium", "long")
+    range_value: str = "Ranged"
+
+
+@dataclass(frozen=True)
+class DerivedTrait:
+    """A numeric stat a player can be asked to check that isn't a bought trait.
+
+    The abilities, resistances and skills are enumerated by their own data files;
+    these are the leftovers a check can still name — the derived Defence aggregate,
+    Initiative — listed in ``system.json`` rather than hardcoded in the picker.
+    """
+
+    key: str
+    label: str
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -703,11 +909,17 @@ class SystemRules:
     default_initiative_ability: str = "AGL"
     defense_dc_base: int = 10
     heroic_budget_divisor: int = 2
+    #: What a natural 20 adds to the resistance DC of the effect it lands, and what a
+    #: natural 1 that still hits gives the *target* on their resistance check.
+    critical_effect_bonus: int = 5
+    critical_miss_resistance_bonus: int = 5
     trait_keys: TraitKeys = field(default_factory=TraitKeys)
     paired_caps: tuple[PairedCap, ...] = ()
     unscoped_scope_values: tuple[str, ...] = ("All checks",)
     alternate_effect_modifier: str = "alternate_effect"
     linked_modifier: str = "linked"
+    ranged_distance: RangeDistance = field(default_factory=RangeDistance)
+    derived_traits: tuple[DerivedTrait, ...] = ()
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -899,6 +1111,9 @@ class GameData:
     #: Data-described blocks a mod contributes via ``blocks.json`` (empty for the
     #: base ruleset, whose blocks are built-in Python widgets).
     blocks: tuple[BlockSpec, ...] = ()
+    #: How the Conditions block groups its chips, from ``conditions.json``'s
+    #: ``_meta.sheetSections`` — in display order.
+    condition_categories: tuple[ConditionCategory, ...] = ()
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1069,15 +1284,29 @@ def _parse_advantage(a: dict) -> Advantage:
     )
 
 
+def _parse_condition_parameter_option(raw) -> ConditionParameterOption:
+    """One ``options`` entry: a bare string, or an object carrying the per-choice flags."""
+
+    if isinstance(raw, dict):
+        return ConditionParameterOption(
+            value=str(raw.get("value", "")),
+            unscoped=bool(raw.get("unscoped", False)),
+            specific_kind=str(raw.get("specificKind", "")),
+        )
+    return ConditionParameterOption(value=str(raw))
+
+
 def _parse_condition_parameter(raw: dict | None) -> ConditionParameter | None:
     if not raw:
         return None
+    specs = tuple(_parse_condition_parameter_option(o) for o in raw.get("options", ()))
     return ConditionParameter(
         type=raw.get("type", ""),
         required=bool(raw.get("required", False)),
         label=raw.get("label", ""),
         help=raw.get("help", ""),
-        options=tuple(raw.get("options", ())),
+        options=tuple(spec.value for spec in specs),
+        option_specs=specs,
     )
 
 
@@ -1172,7 +1401,25 @@ def _parse_condition(c: dict) -> Condition:
             RandomActionRow(range=r.get("range", ""), outcome=r.get("outcome", ""))
             for r in c.get("randomTable", ())
         ),
+        trait_lost=bool(c.get("traitLost", False)),
     )
+
+
+def _parse_speed_rank(raw) -> SpeedRank | None:
+    """One ``speeds`` entry: a flat rank (``2``) or a ground expression (``"ground-1"``).
+
+    ``None`` (or anything unparseable) means the tier grants no rate of its own.
+    """
+
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return SpeedRank(value=int(raw))
+    text = str(raw).strip().replace(" ", "")
+    if not text.startswith("ground"):
+        return SpeedRank(value=int(text)) if text.lstrip("+-").isdigit() else None
+    offset = text[len("ground") :]
+    return SpeedRank(value=int(offset) if offset else 0, from_ground=True)
 
 
 def _parse_config_field(c: dict) -> EffectConfigField:
@@ -1207,6 +1454,9 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 label=o.get("label", o["id"]),
                 tiers=tuple(int(t) for t in o.get("tiers", (1,))),
                 per_note=o.get("perNote", ""),
+                description=o.get("description", ""),
+                speeds=tuple(_parse_speed_rank(s) for s in o.get("speeds", ())),
+                tier_notes=tuple(o.get("tierNotes", ())),
             )
             for o in c.get("allocOptions", [])
         ),
@@ -1246,7 +1496,47 @@ def _parse_integration(raw: dict, configurable: bool) -> Integration:
     return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
 
 
-def _parse_effect(e: dict) -> Effect:
+def _parse_outcome_rung(entry: object) -> ResistanceOutcome | None:
+    """One rung of a ``resistanceOutcomes`` ladder; a plain string is shorthand for ``text``."""
+
+    if isinstance(entry, str):
+        return ResistanceOutcome(text=entry)
+    if not isinstance(entry, dict):
+        return None
+    return ResistanceOutcome(
+        conditions=tuple(entry.get("conditions", ())),
+        config_key=entry.get("configKey", ""),
+        text=entry.get("text", ""),
+        note=entry.get("note", ""),
+    )
+
+
+def _parse_resistance_outcomes(raw: object) -> tuple[ResistanceOutcome, ...]:
+    """Parse an effect's ``resistanceOutcomes`` failure ladder (see :class:`ResistanceOutcome`).
+
+    Accepts the ladder either as a bare list of rungs or wrapped in an object with a
+    ``degrees`` list, so a mod can hang its own documentation — and its ``success``
+    rung — off the same block.
+    """
+
+    if isinstance(raw, dict):
+        raw = raw.get("degrees", ())
+    if not isinstance(raw, list):
+        return ()
+    rungs = (_parse_outcome_rung(entry) for entry in raw)
+    return tuple(rung for rung in rungs if rung is not None)
+
+
+def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
+    """The ``success`` rung of a ``resistanceOutcomes`` block, if it has one."""
+
+    if not isinstance(raw, dict):
+        return None
+    return _parse_outcome_rung(raw.get("success"))
+
+
+def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
+    default_distance = ranged_distance or RangeDistance()
     return Effect(
         id=e["id"],
         name=e["name"],
@@ -1265,7 +1555,11 @@ def _parse_effect(e: dict) -> Effect:
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
         measure=_parse_measure(e.get("measure")),
         resistance_dc_base=e.get("resistanceDcBase"),
+        resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
+        resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),
+        range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
+        or default_distance,
     )
 
 
@@ -1292,12 +1586,14 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         check_note=m.get("checkNote", ""),
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
+        distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
         adds_ability=m.get("addsAbility", ""),
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
         hidden=bool(m.get("hidden", False)),
         note_template=m.get("noteTemplate", ""),
         note_per_rank=int(m.get("notePerRank", 0)),
+        requires_check=bool(m.get("requiresCheck", False)),
         requires_any=tuple(m.get("requiresAny", ())),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         custom=bool(m.get("custom", False)),
@@ -1406,6 +1702,30 @@ def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
     return result
 
 
+#: Used when ``conditions.json`` carries no ``_meta.sheetSections`` (an older file, or
+#: a mod's), so the Conditions block still groups the base categories sensibly.
+_DEFAULT_CONDITION_CATEGORIES = (
+    ConditionCategory("condition", "General", addable=True),
+    ConditionCategory("damage_condition", "Damage", addable=True),
+)
+
+
+def _parse_condition_categories(raw: dict) -> tuple[ConditionCategory, ...]:
+    sections = raw.get("_meta", {}).get("sheetSections")
+    if not isinstance(sections, list) or not sections:
+        return _DEFAULT_CONDITION_CATEGORIES
+    parsed = [
+        ConditionCategory(
+            category=str(entry["category"]),
+            title=str(entry.get("title", entry["category"])),
+            addable=bool(entry.get("addable", True)),
+        )
+        for entry in sections
+        if isinstance(entry, dict) and entry.get("category")
+    ]
+    return tuple(parsed) or _DEFAULT_CONDITION_CATEGORIES
+
+
 def _parse_costs(raw: dict) -> Costs:
     # Tolerate unknown keys (e.g. from a mod) so they can't crash the loader.
     trait_fields = {f.name for f in fields(TraitCosts)}
@@ -1415,9 +1735,39 @@ def _parse_costs(raw: dict) -> Costs:
         name: PowerLevelCap(mult=int(cap["mult"]), add=int(cap["add"]))
         for name, cap in pl["caps"].items()
     }
+    ranges = {
+        family: TraitRange(
+            min=int(entry.get("min", DEFAULT_TRAIT_RANGES.get(family, TraitRange()).min)),
+            max=int(entry.get("max", DEFAULT_TRAIT_RANGES.get(family, TraitRange()).max)),
+        )
+        for family, entry in raw.get("trait_ranges", {}).items()
+        if isinstance(entry, dict)
+    }
     return Costs(
         traits=traits,
         power_level=PowerLevelRules(pp_per_level=int(pl["pp_per_level"]), caps=caps),
+        trait_ranges=ranges,
+    )
+
+
+def _parse_range_distance(raw: dict | None, base: RangeDistance) -> RangeDistance | None:
+    """A ``rangeDistance`` block laid over ``base``, or ``None`` when there is none.
+
+    Only the keys the block actually names are overridden, so an effect that merely
+    reaches further than its rank suggests writes ``{"offset": 2}`` and inherits the
+    rest of the system-wide derivation.
+    """
+
+    if not raw:
+        return None
+    return replace(
+        base,
+        rank_source=raw.get("rankSource", base.rank_source),
+        rank=None if raw.get("rank") is None else int(raw["rank"]),
+        offset=int(raw.get("offset", base.offset)),
+        steps=tuple(int(s) for s in raw["steps"]) if "steps" in raw else base.steps,
+        step_labels=(tuple(raw["stepLabels"]) if "stepLabels" in raw else base.step_labels),
+        range_value=raw.get("rangeValue", base.range_value),
     )
 
 
@@ -1447,6 +1797,10 @@ def _parse_system(raw: dict) -> SystemRules:
         ),
         defense_dc_base=int(sys.get("defense_dc_base", defaults.defense_dc_base)),
         heroic_budget_divisor=int(sys.get("heroic_budget_divisor", defaults.heroic_budget_divisor)),
+        critical_effect_bonus=int(sys.get("criticalEffectBonus", defaults.critical_effect_bonus)),
+        critical_miss_resistance_bonus=int(
+            sys.get("criticalMissResistanceBonus", defaults.critical_miss_resistance_bonus)
+        ),
         trait_keys=trait_keys,
         paired_caps=paired_caps,
         unscoped_scope_values=tuple(
@@ -1456,6 +1810,12 @@ def _parse_system(raw: dict) -> SystemRules:
             "alternate_effect_modifier", defaults.alternate_effect_modifier
         ),
         linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+        ranged_distance=_parse_range_distance(sys.get("ranged_distance"), defaults.ranged_distance)
+        or defaults.ranged_distance,
+        derived_traits=tuple(
+            DerivedTrait(key=d["key"], label=d.get("label", d["key"]))
+            for d in sys.get("derived_traits", [])
+        ),
     )
 
 
@@ -1594,6 +1954,10 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     movement_raw = content.get("movement.json", {})
     blocks_raw = content.get("blocks.json", {})
 
+    # Parsed first: an effect's own ``rangeDistance`` block overrides only the keys it
+    # names, so it needs the system-wide default to lay itself over.
+    system = _parse_system(system_raw)
+
     return GameData(
         profile_fields=[_parse_field(f) for f in profile_raw.get("profile_fields", [])],
         characteristics=[
@@ -1604,7 +1968,8 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         skills=[_parse_skill(s) for s in skills_raw.get("skills", [])],
         advantages=[_parse_advantage(a) for a in advantages_raw.get("advantages", [])],
         conditions=[_parse_condition(c) for c in conditions_raw.get("conditions", [])],
-        effects=[_parse_effect(e) for e in effects_raw.get("effects", [])],
+        condition_categories=_parse_condition_categories(conditions_raw),
+        effects=[_parse_effect(e, system.ranged_distance) for e in effects_raw.get("effects", [])],
         modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
         costs=_parse_costs(costs_raw),
@@ -1613,7 +1978,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
-        system=_parse_system(system_raw),
+        system=system,
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
     )
 

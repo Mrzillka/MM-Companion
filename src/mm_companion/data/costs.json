@@ -8,6 +8,17 @@
     "skill_ranks_per_pp": 2,
     "skill_specialized_ranks_per_pp": 4
   },
+  "_trait_ranges_comment": "The range each trait family's sheet control accepts. An ability spin box holds the bought rank; a resistance spin box holds the *total* (derived base + bought delta), which runs well past an ability's ceiling on a high-Stamina character, so it gets its own wider range.",
+  "trait_ranges": {
+    "ability": {
+      "min": -5,
+      "max": 30
+    },
+    "resistance": {
+      "min": -5,
+      "max": 60
+    }
+  },
   "power_level": {
     "pp_per_level": 15,
     "caps": {

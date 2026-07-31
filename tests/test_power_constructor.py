@@ -1317,3 +1317,229 @@ def test_edited_homerule_power_reopens_with_dev_mode_on(qapp: QApplication) -> N
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character(), power=power)
     assert window._dev_mode.isChecked()
     assert window._terms._editable
+
+
+# -- drag affordances: the reorder indicator and drag-to-remove -----------------
+
+
+def test_drop_indicator_tracks_the_insertion_point_between_chips(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")
+    card.attach_modifier("accurate")
+    group = card._extras_group
+    group.resize(320, 80)  # lay the chips out so they have real geometry
+    group.show()
+    qapp.processEvents()
+
+    before_first = group._indicator_rect(0)
+    at_end = group._indicator_rect(len(group._chips))
+    assert before_first.width() == group.INDICATOR_WIDTH
+    # The end marker sits to the right of the one before the first chip.
+    assert at_end.left() > before_first.left()
+
+    # isHidden (not isVisible): the card around the group is never shown in a
+    # headless test, so every descendant reports itself invisible regardless.
+    group._show_indicator(before_first.topLeft())
+    assert not group._indicator.isHidden()
+    group._end_drag()
+    assert group._indicator.isHidden()
+
+
+def test_indicator_stays_hidden_for_an_empty_group(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+
+    group = card._flaws_group  # nothing attached
+    assert group._indicator_rect(0).isEmpty()
+    group._show_indicator(group.rect().topLeft())
+    assert group._indicator.isHidden()
+
+
+def test_dropping_a_chip_on_the_palette_detaches_it(qapp: QApplication) -> None:
+    from mm_companion.ui.power_constructor.bricks import PaletteDropZone
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")
+    card.attach_modifier("accurate")
+    chip = card._chips[0]
+
+    # Removal is deferred past the drag's own event, so let the timer fire.
+    PaletteDropZone.remove_chip(chip)
+    qapp.processEvents()
+
+    assert [s.modifier_id for s in card.instance.extras] == ["accurate"]
+    assert len(card._chips) == 1
+
+
+def test_palette_accepts_only_chip_drags(qapp: QApplication) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QMimeData
+    from PySide6.QtWidgets import QWidget
+
+    from mm_companion.ui.power_constructor.common import CHIP_MIME, EFFECT_MIME
+
+    def drag(fmt: bytes, payload: bytes, source):
+        """The two things ``PaletteDropZone._accepts`` reads off a drag event."""
+        mime = QMimeData()
+        mime.setData(fmt, payload)
+        return SimpleNamespace(mimeData=lambda: mime, source=lambda: source)
+
+    window = PowerConstructorWindow(load_game_data())
+    zone = window.palette_zone
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("ranged")
+
+    # A palette brick dragged around inside the palette is not a removal.
+    assert not zone._accepts(drag(EFFECT_MIME, b"damage", QWidget()))
+    assert zone._accepts(drag(CHIP_MIME, b"1", card._chips[0]))
+
+
+# -- hover descriptions ---------------------------------------------------------
+
+
+def test_palette_bricks_hint_their_description(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    data = load_game_data()
+
+    _search, effect_bricks = window._search_tabs["effects"]
+    damage = next(b for b in effect_bricks if b.search_key == "damage")
+    record = next(e for e in data.effects if e.id == "damage")
+    assert record.description in damage.toolTip()
+    assert record.name in damage.toolTip()
+
+    _search, extra_bricks = window._search_tabs["extras"]
+    assert all(b.toolTip() for b in extra_bricks)  # every modifier ships a description
+
+
+def test_an_attached_chip_hints_the_same_description(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("accurate")
+
+    record = next(m for m in data.modifiers if m.id == "accurate")
+    assert record.description in card._chips[0].toolTip()
+
+
+def test_allocation_options_hint_what_each_mode_does(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_movement")
+
+    boxes = card.findChildren(QCheckBox)
+    wall_crawling = next(b for b in boxes if b.text().startswith("Wall-Crawling"))
+    assert "walls" in wall_crawling.toolTip()
+
+
+def test_check_required_offers_derived_traits_the_boost_picker_hides(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("check_required")
+
+    combo = card._chips[0].findChild(QComboBox)
+    assert combo.findData("Acrobatics") > 0  # a skill
+    assert combo.findData("AGL") > 0  # an ability
+    assert combo.findData("initiative") > 0  # a derived stat, only in `all_traits`
+
+
+# --- Identity, not equality: the model is a list of plain dataclasses, so two
+#     copies of the same part compare equal and a value-based lookup drops the
+#     wrong one. ---------------------------------------------------------------
+
+
+def test_removing_one_of_two_identical_effects_keeps_the_other_card_live(
+    qapp: QApplication,
+) -> None:
+    """Two copies of an effect are equal dataclasses; removing the second must not
+    unbind the first from the power."""
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    second = window.canvas.add_effect("damage")
+    assert first.instance == second.instance  # equal by value...
+    assert first.instance is not second.instance  # ...but distinct objects
+
+    window.canvas._remove_card(second)
+
+    assert len(window.power.effects) == 1
+    assert window.power.effects[0] is first.instance
+
+    # The surviving card still writes through to the power, so what is saved is
+    # what the card shows.
+    first._rank.setValue(8)
+    assert window.power.effects[0].rank == 8
+
+
+def test_removing_one_of_two_identical_modifier_chips_keeps_the_other_live(
+    qapp: QApplication,
+) -> None:
+    """A modifier with config fields can be taken twice, and two fresh copies seed
+    identical configs — so chip removal has to match by identity."""
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("custom_extra")
+    card.attach_modifier("custom_extra")
+    assert len(card.instance.extras) == 2
+    first, second = card._chips[0], card._chips[1]
+    assert first.selection == second.selection
+
+    card._remove_chip(second)
+
+    assert len(card.instance.extras) == 1
+    assert card.instance.extras[0] is first.selection
+
+    # Removing the survivor too must not raise (the old code hit ValueError here).
+    card._remove_chip(first)
+    assert card.instance.extras == []
+
+
+def test_editing_a_power_preserves_its_switched_off_runtime_state(qapp: QApplication) -> None:
+    """The save format omits runtime state on purpose, so the edit copy must not be a
+    ``to_dict``/``from_dict`` round-trip — that would switch a powered-down power on."""
+    data = load_game_data()
+    power = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    power.activated = False
+    power.effects[0].toggled_on = False
+
+    window = PowerConstructorWindow(data, character=_pl10_character(), power=power)
+
+    assert window.power is not power  # still an isolated copy...
+    assert window.power.effects[0] is not power.effects[0]
+    assert window.power.activated is False  # ...that kept the runtime state
+    assert window.power.effects[0].toggled_on is False
+
+    # And the copy is genuinely deep: editing it leaves the original alone.
+    window.power.effects[0].rank = 9
+    assert power.effects[0].rank == 4
+
+
+def test_dev_mode_keeps_the_attack_skill_bonus_in_its_auto_values(qapp: QApplication) -> None:
+    """Ticking Dev mode must restate the same numbers the read-only panel showed. An
+    attack-skill link is not an override, so dropping it would make the by-the-book
+    value look like a homerule edit."""
+    char = _pl10_character()
+    char.abilities["ATK"] = 3
+    char.focuses["Close Combat"] = ["Blades"]
+    char.skill_ranks["Close Combat::Blades"] = 5  # focus total = ATK 3 + 5 = 8
+    window = PowerConstructorWindow(load_game_data(), character=char)
+
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(6)
+    card._attack_skill_check.setChecked(True)
+    index = card._attack_skill.findData("Close Combat::Blades")
+    card._attack_skill.setCurrentIndex(index)
+
+    read_only = {r.key: r.value for r in window._terms.effect_rows[0]}
+    assert read_only["check"] == "8 vs. Defense"
+
+    window._terms.set_editable(True)
+    dev_mode = {r.key: r.value for r in window._terms.effect_rows[0]}
+    assert dev_mode["check"] == read_only["check"]
+
+    # And nothing was recorded as an override just by opening the editor.
+    assert card.instance.overrides == {}

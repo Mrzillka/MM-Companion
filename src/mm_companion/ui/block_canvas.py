@@ -20,6 +20,7 @@ indicator, and edge auto-scroll.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -33,7 +34,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
-    QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QSizePolicy,
@@ -43,10 +43,22 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui.block_frame import BlockFrame, BlockWindow
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.drop_feedback import DropIndicator
+from mm_companion.ui.pinned import (
+    DEFAULT_ALIGN,
+    DEFAULT_EDGE,
+    DEFAULT_EXTENT,
+    PIN_ALIGNMENTS,
+    PIN_EDGES,
+    PinSlot,
+)
+
+if TYPE_CHECKING:  # the board is the canvas's *view* for pinned blocks, not a dependency
+    from mm_companion.ui.pinned_panel import PinnedBoard
 
 # Bumped whenever the persisted arrangement schema changes, so a layout saved by
 # an older version is rejected and the default applies.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -86,44 +98,85 @@ class Anchor:
         return cls(neighbour, bool(value.get("in_row")), bool(value.get("before")))
 
 
-class DropIndicator(QFrame):
-    """A thin accent line showing where a dragged block will drop.
+def default_pin_model() -> dict:
+    """An empty pinned strip: the default every fresh layout starts from."""
+    return {
+        "edge": DEFAULT_EDGE,
+        "lines": [],
+        "align": DEFAULT_ALIGN,
+        "sizes": [],
+        "line_sizes": [],
+        "extent": DEFAULT_EXTENT,
+    }
 
-    It slides between drop slots instead of teleporting: :meth:`move_to` animates
-    the geometry over a short hop when the target stays the same orientation, and
-    snaps instantly on first appearance or when it flips between a row-boundary bar
-    (horizontal) and an in-row bar (vertical), where a slide would just morph oddly.
-    """
 
-    SLIDE_MS = 120
+def _int_list(value: object) -> list[int]:
+    """A list of positive ints, or [] for anything else (a cosmetic field)."""
+    if not isinstance(value, list):
+        return []
+    if not all(isinstance(item, int) and not isinstance(item, bool) for item in value):
+        return []
+    return [int(item) for item in value]
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("dropIndicator")
-        self.setStyleSheet("#dropIndicator { background-color: palette(highlight); }")
-        self._slide = QPropertyAnimation(self, b"geometry", self)
-        self._slide.setDuration(self.SLIDE_MS)
-        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.hide()
 
-    def move_to(self, rect: QRect) -> None:
-        """Show the indicator at *rect*, sliding there when it makes sense."""
-        self._slide.stop()
-        current = self.geometry()
-        # Orientation = which dimension is the thin one; only slide within the same.
-        same_axis = (current.width() < current.height()) == (rect.width() < rect.height())
-        if self.isVisible() and same_axis and current != rect:
-            self._slide.setStartValue(current)
-            self._slide.setEndValue(rect)
-            self._slide.start()
-        else:
-            self.setGeometry(rect)
-        self.show()
-        self.raise_()
+@dataclass(frozen=True)
+class _PinModel:
+    """The parsed ``pinned`` section of a persisted arrangement."""
 
-    def hide_indicator(self) -> None:
-        self._slide.stop()
-        self.hide()
+    edge: str
+    lines: list[list[str]]
+    align: str
+    sizes: list[int]
+    line_sizes: list[list[int]]
+    extent: int
+
+    @property
+    def keys(self) -> list[str]:
+        return [key for line in self.lines for key in line]
+
+    @classmethod
+    def parse(cls, value: object, known: set[str]) -> _PinModel | None:
+        """Parse the ``pinned`` sub-model, or None when it is unusable.
+
+        Strict about what changes *where a block lives* — an unknown key, edge or
+        alignment rejects the whole layout, the same as a malformed row would,
+        since guessing would silently move a block. Lenient about the cosmetic
+        numbers: bad sizes or extent fall back to the defaults, which only costs
+        the strip its remembered proportions.
+        """
+        if value is None:  # a layout written before the strip existed
+            value = {}
+        if not isinstance(value, dict):
+            return None
+
+        edge = value.get("edge", DEFAULT_EDGE)
+        align = value.get("align", DEFAULT_ALIGN)
+        if edge not in PIN_EDGES or align not in PIN_ALIGNMENTS:
+            return None
+
+        raw_lines = value.get("lines", [])
+        if not isinstance(raw_lines, list):
+            return None
+        lines: list[list[str]] = []
+        for raw_line in raw_lines:
+            if not isinstance(raw_line, list) or any(key not in known for key in raw_line):
+                return None
+            if raw_line:  # an empty line is nothing to render, not a reason to reject
+                lines.append(list(raw_line))
+
+        raw_line_sizes = value.get("line_sizes", [])
+        line_sizes = (
+            [_int_list(entry) for entry in raw_line_sizes]
+            if isinstance(raw_line_sizes, list)
+            else []
+        )
+        raw_extent = value.get("extent", DEFAULT_EXTENT)
+        extent = (
+            int(raw_extent)
+            if isinstance(raw_extent, int) and not isinstance(raw_extent, bool) and raw_extent > 0
+            else DEFAULT_EXTENT
+        )
+        return cls(edge, lines, align, _int_list(value.get("sizes", [])), line_sizes, extent)
 
 
 class RowWidget(QWidget):
@@ -171,12 +224,23 @@ class BlockCanvas(QWidget):
         block_sizes: dict[str, BlockSize],
         default_rows: list[list[str]],
         parent: QWidget | None = None,
+        *,
+        fill_last: bool = False,
+        default_pinned: list[list[str]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
 
         self._sizes = block_sizes
         self._default_rows = default_rows
+        # Blocks the default arrangement parks in the strip rather than on the page
+        # (the sheet's Dice block). A host that offers no strip passes none.
+        self._default_pinned = default_pinned or []
+        # When set, the bottom row's growable blocks stretch to fill leftover
+        # height instead of a trailing spacer holding empty space beneath them.
+        # Used by boards with only a few blocks (GM Mode) where a top-aligned
+        # stack would leave a large dead gap at the bottom of the page.
+        self._fill_last = fill_last
         # One frame per block, created once and reparented as it moves.
         self._frames: dict[str, BlockFrame] = {}
         for key, title, section in panels:
@@ -191,6 +255,24 @@ class BlockCanvas(QWidget):
         # Where each hidden block was closed from, so reopening restores it there.
         self._anchors: dict[str, Anchor] = {}
         self._row_widgets: list[RowWidget] = []
+
+        # The pinned strip: blocks parked on one edge of the window, outside this
+        # scrolling page (see mm_companion.ui.pinned_panel). Modelled the same way
+        # the page is — lines of block keys, each line holding one or more blocks
+        # side by side — with the sizes the user dragged alongside. The canvas
+        # stays the single source of truth; the board is only the view it renders
+        # them through, and stays None for a host that doesn't offer the strip.
+        self._pinned: list[list[str]] = []
+        self._pin_edge = DEFAULT_EDGE
+        self._pin_align = DEFAULT_ALIGN
+        # The proportions the user dragged, as live pixel sizes. They only mean
+        # anything against the shape they were measured in, so a block arriving
+        # somewhere clears the sizes on that axis rather than trying to slot a
+        # value in beside them (see pin_block).
+        self._pin_sizes: list[int] = []  # how the lines share the strip's length
+        self._pin_line_sizes: list[list[int]] = []  # within each line
+        self._pin_extent = DEFAULT_EXTENT
+        self._board: PinnedBoard | None = None
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 6, 6, 6)
@@ -218,11 +300,24 @@ class BlockCanvas(QWidget):
         and edge auto-scroll during a drag)."""
         self._scroll_area = scroll
 
+    def set_pinned_board(self, board: PinnedBoard) -> None:
+        """Give the canvas the board hosting the pinned strip, and render into it.
+
+        Optional: a host that never calls this simply has no strip, and the pinned
+        list stays empty (nothing can be dropped into a board that doesn't exist).
+        """
+        self._board = board
+        self._render_pinned()
+
     def block_keys(self) -> list[str]:
         return list(self._frames)
 
     def block_frame(self, key: str) -> BlockFrame:
         return self._frames[key]
+
+    def block_window(self, key: str):
+        """The :class:`BlockWindow` block *key* is floated in, or ``None`` if docked."""
+        return self._windows.get(key)
 
     def content_minimum_width(self) -> int:
         """The widest docked row's minimum width, including the canvas margins.
@@ -257,7 +352,8 @@ class BlockCanvas(QWidget):
         return not (size.max_width < UNBOUNDED and size.max_width == size.min_width)
 
     def _relayout(self) -> None:
-        """Rebuild the row widgets from ``_rows`` (empty rows collapse away)."""
+        """Rebuild the strip and the row widgets from the model (empty rows collapse)."""
+        self._render_pinned()  # first: see _render_pinned for why the order matters
         old = self._row_widgets
         self._row_widgets = []
         # Detach every current layout item; frames are moved into the new rows
@@ -265,6 +361,13 @@ class BlockCanvas(QWidget):
         while self._layout.count():
             self._layout.takeAt(0)
 
+        # Every block starts flush to its content; the fill block (if any) is
+        # promoted to Expanding below. Reset first so a block that used to be the
+        # bottom one — before a reorder or a float — doesn't stay stretchy.
+        for frame in self._frames.values():
+            frame.set_vertical_fill(False)
+
+        built: list[list[str]] = []
         for row_keys in self._rows:
             keys = [k for k in row_keys if k in self._frames]
             if not keys:
@@ -277,8 +380,19 @@ class BlockCanvas(QWidget):
             row.finalize()
             self._layout.addWidget(row)
             self._row_widgets.append(row)
+            built.append(keys)
 
-        self._layout.addStretch(1)
+        if self._fill_last and self._row_widgets:
+            # The bottom row soaks up the slack: its row widget grows, and its
+            # growable blocks grow inside it, so nothing is left empty below.
+            self._row_widgets[-1].setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+            for key in built[-1]:
+                if self._is_growable(key):
+                    self._frames[key].set_vertical_fill(True)
+        else:
+            self._layout.addStretch(1)
 
         # Free the old rows. Any frame not moved into a new row above (a block now
         # hidden or floating) is still parented to its old row; rescue it to the
@@ -293,20 +407,81 @@ class BlockCanvas(QWidget):
 
         self._indicator.raise_()
 
+    def _render_pinned(self) -> None:
+        """Push the pinned blocks into the board (a no-op without one).
+
+        Called at the *top* of :meth:`_relayout`, before the rows are rebuilt: the
+        strip lets go of any block that is no longer pinned, so the row build that
+        follows is the last thing to claim a frame. The other order loses — the row
+        would place the block and the strip would then take it straight back, which
+        is exactly what left Reset Layout needing two goes.
+
+        The board itself skips the rebuild when nothing about the strip actually
+        changed, so a row reorder doesn't reflow the pinned blocks or discard the
+        sizes the user dragged.
+        """
+        if self._board is None:
+            return
+        lines = [[self._frames[key] for key in line] for line in self._pinned]
+        self._board.set_blocks(
+            lines, self._pin_edge, self._pin_align, self._pin_sizes, self._pin_line_sizes
+        )
+
+    def _sync_from_board(self) -> None:
+        """Read the strip's live proportions back out of the board.
+
+        The splitter handles are dragged by the user, not by us, so the sizes and
+        the strip's thickness are only true on the widgets; pull them in before
+        anything snapshots or rebuilds the arrangement. Anything whose shape no
+        longer matches the model is dropped rather than kept — a stale size list
+        would be applied to the wrong blocks.
+        """
+        if self._board is None:
+            return
+        extents = self._board.line_extents()
+        self._pin_sizes = extents if len(extents) == len(self._pinned) else []
+        sizes = self._board.block_sizes()
+        matches = len(sizes) == len(self._pinned) and all(
+            len(within) == len(line) for within, line in zip(sizes, self._pinned, strict=False)
+        )
+        self._pin_line_sizes = sizes if matches else []
+        # The thickness the strip was *asked* for, not the one its blocks forced on
+        # it — see PinnedBoard.desired_extent.
+        extent = self._board.desired_extent()
+        if extent > 0:
+            self._pin_extent = extent
+
     # -- arrangement model ---------------------------------------------------
 
     def default_arrangement(self) -> dict:
-        """The default layout as a persistence model (see the block registry's ``default_rows``)."""
+        """The default layout as a persistence model.
+
+        The page's rows come from the block registry's ``default_rows`` and the
+        strip's lines from its ``default_pin_lines`` (see
+        :mod:`mm_companion.ui.blocks.registry`). A block named in neither trails as
+        a row of its own, so a mod block that declares no position still appears —
+        but a *pinned* block must be excluded from that sweep as well, or it would
+        be placed twice and the exactly-once check in :meth:`_validate` would reject
+        the whole arrangement.
+        """
         present = set(self._frames)
+        pinned = [[k for k in line if k in present] for line in self._default_pinned]
+        pinned = [line for line in pinned if line]
+        used: set[str] = {key for line in pinned for key in line}
         rows: list[list[str]] = []
-        used: set[str] = set()
         for row in self._default_rows:
-            keys = [k for k in row if k in present]
+            keys = [k for k in row if k in present and k not in used]
             used.update(keys)
             if keys:
                 rows.append(keys)
         rows.extend([k] for k in self._frames if k not in used)
-        return {"version": SCHEMA_VERSION, "rows": rows, "floating": {}, "hidden": []}
+        return {
+            "version": SCHEMA_VERSION,
+            "rows": rows,
+            "floating": {},
+            "hidden": [],
+            "pinned": default_pin_model() | {"lines": pinned},
+        }
 
     def arrangement(self) -> dict:
         """A snapshot of the current arrangement as a persistence model.
@@ -315,15 +490,26 @@ class BlockCanvas(QWidget):
         way back in, so it needed no schema bump and a layout saved without it
         still restores (its blocks just reopen at their default position).
         """
+        self._sync_from_board()
         return {
             "version": SCHEMA_VERSION,
             "rows": [list(row) for row in self._rows],
             "floating": {key: self._window_geometry(key) for key in self._windows},
             "hidden": sorted(self._hidden),
+            # Kept for a block that is *off* the page — hidden or pinned — since
+            # both come back through the same anchor.
             "hidden_anchors": {
                 key: anchor.to_dict()
                 for key, anchor in self._anchors.items()
-                if key in self._hidden
+                if key in self._hidden or self.is_pinned(key)
+            },
+            "pinned": {
+                "edge": self._pin_edge,
+                "lines": self.pinned_lines(),
+                "align": self._pin_align,
+                "sizes": list(self._pin_sizes),
+                "line_sizes": [list(sizes) for sizes in self._pin_line_sizes],
+                "extent": self._pin_extent,
             },
         }
 
@@ -333,32 +519,55 @@ class BlockCanvas(QWidget):
 
     def apply_arrangement(self, model: dict) -> bool:
         """Replace the arrangement with *model*; returns False (leaving the current
-        arrangement) if it is invalid."""
+        arrangement) if it is invalid.
+
+        Wholesale replacement moves blocks in and out of hiding just as
+        :meth:`hide_block`/:meth:`show_block` do, so it announces those changes the
+        same way — otherwise a restored layout leaves the View menu's checkmarks
+        describing the arrangement this one replaced.
+        """
         parsed = self._validate(model)
         if parsed is None:
             return False
-        rows, floating, hidden, anchors = parsed
+        rows, floating, hidden, anchors, pinned = parsed
 
         for key in list(self._windows):
             self._destroy_window(key)
+        was_hidden = self._hidden
         self._rows = rows
         self._hidden = set(hidden)
         self._anchors = anchors
+        self._pinned = pinned.lines
+        self._pin_edge = pinned.edge
+        self._pin_align = pinned.align
+        self._pin_sizes = pinned.sizes
+        self._pin_line_sizes = pinned.line_sizes
+        self._pin_extent = pinned.extent
+        if self._board is not None:
+            # The model is authoritative here, not the widgets: force the strip to
+            # rebuild so the restored proportions are actually applied.
+            self._board.invalidate()
         self._relayout()
+        if self._board is not None:
+            # A restored thickness, not one the user dragged — the only place the
+            # board is told what it should be rather than asked what it is.
+            self._board.set_extent(self._pin_extent)
         for key, geom in floating.items():
             self._make_floating(key, geom)
 
+        for key in sorted(was_hidden ^ self._hidden):
+            self.block_visibility_changed.emit(key, key not in self._hidden)
         self.arrangement_changed.emit()
         return True
 
     def _validate(self, model: object):
-        """Parse/validate a persistence model → (rows, floating, hidden, anchors) or None.
+        """Parse/validate a persistence model → (rows, floating, hidden, anchors, pinned) or None.
 
         Enforces the invariant that every known block appears exactly once across
-        rows, floating, and hidden. The optional ``hidden_anchors`` is parsed
-        leniently — anything unusable is dropped rather than rejecting the whole
-        layout, since a missing anchor only costs a reopened block its remembered
-        spot.
+        rows, floating, hidden, and the pinned strip. The optional
+        ``hidden_anchors`` is parsed leniently — anything unusable is dropped
+        rather than rejecting the whole layout, since a missing anchor only costs
+        a reopened block its remembered spot.
         """
         if not isinstance(model, dict) or model.get("version") != SCHEMA_VERSION:
             return None
@@ -369,7 +578,10 @@ class BlockCanvas(QWidget):
             return None
 
         known = set(self._frames)
-        seen: list[str] = []
+        pinned = _PinModel.parse(model.get("pinned"), known)
+        if pinned is None:
+            return None
+        seen: list[str] = list(pinned.keys)
 
         clean_rows: list[list[str]] = []
         for row in rows:
@@ -405,7 +617,7 @@ class BlockCanvas(QWidget):
                 if key in known and anchor is not None:
                     anchors[key] = anchor
 
-        return clean_rows, floating, list(hidden), anchors
+        return clean_rows, floating, list(hidden), anchors, pinned
 
     @staticmethod
     def _valid_geometry(geom: object) -> bool:
@@ -427,6 +639,22 @@ class BlockCanvas(QWidget):
         if key in self._windows:
             self._destroy_window(key)
             return
+        if self.is_pinned(key):
+            self._sync_from_board()  # keep the other pinned blocks' dragged sizes
+            for index, line in enumerate(self._pinned):
+                if key not in line:
+                    continue
+                slot = line.index(key)
+                line.pop(slot)
+                if index < len(self._pin_line_sizes) and slot < len(self._pin_line_sizes[index]):
+                    self._pin_line_sizes[index].pop(slot)
+                if not line:  # the line emptied out; it collapses away with its size
+                    self._pinned.pop(index)
+                    if index < len(self._pin_sizes):
+                        self._pin_sizes.pop(index)
+                    if index < len(self._pin_line_sizes):
+                        self._pin_line_sizes.pop(index)
+                break
         for row in self._rows:
             if key in row:
                 row.remove(key)
@@ -526,6 +754,137 @@ class BlockCanvas(QWidget):
         self._detach(key)
         self._place(key, DropSlot(new_row, row, slot))
         self._relayout()
+        self.arrangement_changed.emit()
+
+    # -- the pinned strip ----------------------------------------------------
+
+    def pin_block(
+        self, key: str, line: int | None = None, slot: int = 0, new_line: bool = True
+    ) -> None:
+        """Move *key* into the pinned strip at (*line*, *slot*).
+
+        Defaults to a new line at the end — what the title bar's pin button does.
+        A drop passes the place its :class:`~mm_companion.ui.pinned.PinSlot` named,
+        so a block can join an existing line beside another block just as it can
+        start a new one.
+
+        Does nothing without a board: a host that offers no strip has nowhere to
+        put the block, and losing it off the page would be worse than refusing.
+
+        A block arriving **forgets the dragged proportions along the axis it joins**,
+        leaving the splitter to lay that axis out from the blocks' own size hints.
+        The remembered sizes are live pixel values, true only of the shape they were
+        measured in: a line that was alone in the strip is recorded as the strip's
+        whole length, and slotting a newcomer's natural size in beside that number
+        hands it a sliver of the space. Sizes taken away are still kept (they are
+        all live values from one layout, so the survivors' proportions hold and the
+        freed space is shared out between them).
+        """
+        if self._board is None:
+            return
+        # Read the live proportions in first: a block arriving from the *page*
+        # never touches the strip's own bookkeeping on its way, so without this the
+        # rebuild below would restore whatever sizes predated the last handle drag.
+        self._sync_from_board()
+        self._hidden.discard(key)
+        # Remember where it sat, so unpinning can put it back there.
+        anchor = self._anchor_for(key, self._rows)
+        # Taking the block out can collapse the line it was in, shifting every
+        # line after it up one — so a target line named against the strip as it
+        # looks *now* has to move with it.
+        before = len(self._pinned)
+        from_line = next((i for i, existing in enumerate(self._pinned) if key in existing), None)
+        self._detach(key)  # also syncs the live sizes out of the board
+        if anchor is not None:
+            self._anchors[key] = anchor
+        if line is not None and from_line is not None and len(self._pinned) < before:
+            if from_line < line:
+                line -= 1
+        at = len(self._pinned) if line is None else max(0, min(line, len(self._pinned)))
+        # Arriving somewhere forgets the sizes on that axis — see _forget_sizes.
+        if new_line or line is None or not self._pinned:
+            self._pinned.insert(at, [key])
+            self._pin_sizes = []
+            if len(self._pin_line_sizes) == len(self._pinned) - 1:
+                self._pin_line_sizes.insert(at, [])  # its blocks will lay themselves out
+            else:
+                self._pin_line_sizes = []
+        else:
+            at = min(at, len(self._pinned) - 1)
+            target = self._pinned[at]
+            index = max(0, min(slot, len(target)))
+            target.insert(index, key)
+            if at < len(self._pin_line_sizes):
+                self._pin_line_sizes[at] = []
+        self._relayout()
+        self.arrangement_changed.emit()
+
+    def unpin_block(self, key: str) -> None:
+        """Take *key* out of the strip and dock it back onto the page.
+
+        It returns where it was pinned from if that still resolves, else its
+        default position — the same fallback ladder :meth:`show_block` walks, so a
+        block dragged off the page into the strip tends to come back to the spot
+        it left.
+        """
+        if not self.is_pinned(key):
+            return
+        slot = self._resolve_anchor(self._anchors.pop(key, None))
+        if slot is None:
+            slot = self._resolve_anchor(self._anchor_for(key, self._default_rows))
+        if slot is None:
+            slot = DropSlot(True, len(self._rows), 0)
+        self._detach(key)
+        self._place(key, slot)
+        self._relayout()
+        self.arrangement_changed.emit()
+
+    def unpin_all(self) -> None:
+        """Empty the strip, docking every pinned block back onto the page."""
+        for key in self.pinned_keys():
+            self.unpin_block(key)
+
+    def is_pinned(self, key: str) -> bool:
+        return any(key in line for line in self._pinned)
+
+    def pinned_keys(self) -> list[str]:
+        """Every pinned block, in strip order (lines, then within each line)."""
+        return [key for line in self._pinned for key in line]
+
+    def pinned_lines(self) -> list[list[str]]:
+        return [list(line) for line in self._pinned]
+
+    def pin_edge(self) -> str:
+        return self._pin_edge
+
+    def pin_align(self) -> str:
+        return self._pin_align
+
+    def set_pin_edge(self, edge: str) -> None:
+        """Park the strip on another side of the page."""
+        if edge not in PIN_EDGES or edge == self._pin_edge:
+            return
+        self._sync_from_board()
+        self._pin_edge = edge
+        # Every remembered size was measured along the old axis and means nothing
+        # on the new one — a strip dragged 600px wide down the side would become a
+        # 600px-deep floor. Start from the default thickness and let the blocks'
+        # own minimums push it out from there.
+        self._pin_sizes = []
+        self._pin_line_sizes = []
+        self._pin_extent = DEFAULT_EXTENT
+        self._render_pinned()
+        if self._board is not None:
+            self._board.set_extent(self._pin_extent)
+        self.arrangement_changed.emit()
+
+    def set_pin_align(self, align: str) -> None:
+        """Set how pinned blocks sit across the strip (fill / start / center / end)."""
+        if align not in PIN_ALIGNMENTS or align == self._pin_align:
+            return
+        self._sync_from_board()
+        self._pin_align = align
+        self._render_pinned()
         self.arrangement_changed.emit()
 
     # -- remembering where a closed block came from --------------------------
@@ -654,8 +1013,12 @@ class BlockCanvas(QWidget):
 
     def title_bar_released(self, key: str, global_pos: QPoint) -> None:
         active = self._drag_active and self._drag_key == key
+        pin_at = self._pin_hit_test(global_pos)
         self._end_drag()
         if not active:
+            return
+        if pin_at is not None:
+            self.pin_block(key, pin_at.line, pin_at.slot, new_line=pin_at.new_line)
             return
         slot = self._hit_test(global_pos)
         if slot is not None:
@@ -666,6 +1029,13 @@ class BlockCanvas(QWidget):
 
     def request_hide(self, key: str) -> None:
         self.hide_block(key)
+
+    def request_pin(self, key: str) -> None:
+        """The title bar's pin button: into the strip, or back onto the page."""
+        if self.is_pinned(key):
+            self.unpin_block(key)
+        else:
+            self.pin_block(key)
 
     @staticmethod
     def _start_distance() -> int:
@@ -679,11 +1049,28 @@ class BlockCanvas(QWidget):
         self._autoscroll_velocity = 0
         self._autoscroll_timer.stop()
         self._indicator.hide_indicator()
+        if self._board is not None:
+            self._board.hide_drop()
 
     def update_drag(self, global_pos: QPoint) -> None:
         """Refresh the drop indicator and edge auto-scroll for a cursor position."""
+        pin_at = self._pin_hit_test(global_pos)
+        if pin_at is not None:
+            # Over the strip: it owns the feedback, and the page shows none — two
+            # insert lines at once would be a lie about where the block lands.
+            self._indicator.hide_indicator()
+            self._board.show_drop(pin_at)  # type: ignore[union-attr] - set with pin_at
+            return
+        if self._board is not None:
+            self._board.hide_drop()
         self._show_indicator(self._hit_test(global_pos))
         self._maybe_autoscroll(global_pos)
+
+    def _pin_hit_test(self, global_pos: QPoint) -> PinSlot | None:
+        """Where in the pinned strip a drop at *global_pos* would land, if at all."""
+        if self._board is None:
+            return None
+        return self._board.drop_slot(global_pos)
 
     # -- hit testing / indicator geometry ------------------------------------
 

@@ -1,0 +1,63 @@
+{
+  "id": "slate-dark",
+  "name": "Slate Dark",
+  "description": "A dark, app-owned look: cool slate surfaces, a toned block header, and the familiar blue accent. Does not follow the operating system's light/dark setting.",
+  "extends": "classic",
+  "chrome": {
+    "mode": "styled",
+    "focus_ring": true
+  },
+
+  "_note": "Only what differs from Classic is listed; everything else is inherited. Because this preset knows its own surfaces, the semantic tints are re-tuned for a dark background instead of the both-themes compromise Classic has to make — they clear a far better contrast ratio here.",
+  "colors": {
+    "surface.window": "#1e222b",
+    "surface.block": "#262b36",
+    "surface.titlebar": "#2f3542",
+    "surface.card": "#2b313d",
+    "surface.field": "#1a1e26",
+
+    "text.primary": "#dfe4ec",
+    "text.muted": "#8d97a8",
+    "text.muted.rich": "#8d97a8",
+    "text.on-badge": "#ffffff",
+
+    "border.block": "#3a4150",
+    "border.card": "#3a4150",
+    "border.group": "#4a5468",
+    "border.empty": "#3a4150",
+
+    "accent": "#5b9ee0",
+    "accent.dice": "#7c9ad8",
+    "tint.better": "#4fbf76",
+    "tint.worse": "#e8767a",
+    "tint.warning": "#e0b442",
+    "tint.homerule": "#5b9ee0",
+
+    "drop.indicator": "#5b9ee0",
+    "drop.reject": "#e8767a",
+    "focus.ring": "#5b9ee0",
+
+    "splash.background": "#1e222b",
+    "splash.text": "#dfe4ec"
+  },
+
+  "_metrics": "Softer corners and a touch more room than Classic, which inherits the platform's tighter default padding.",
+  "metrics": {
+    "radius.block": 8,
+    "radius.card": 6,
+    "radius.group": 8,
+    "radius.field": 5,
+    "card.margins": [10, 7, 10, 7],
+    "group.margins": [8, 5, 8, 8]
+  },
+
+  "typography": {
+    "size.card-name": 11.5
+  },
+
+  "_assets": "The shaded die and the medallion pips: this preset owns its surfaces, so it can take the richest artwork without having to survive an unknown background.",
+  "assets": {
+    "die": "gradient",
+    "hero-point": "medallion"
+  }
+}

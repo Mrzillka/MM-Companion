@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import GameData
+from .conditions import condition_speed_rank_mod
 from .powers_cost import effect_effective_rank
 from .runtime import effect_is_active, live_powers
 
@@ -19,10 +20,18 @@ class SpeedLine:
     ``label`` names the mode (``"Base"`` for ground movement, else the power's effect
     and rank, e.g. ``"Flight 2"``); ``rank`` is the speed rank the three distance
     columns derive from.
+
+    ``rank_mod`` and ``immobilised`` carry a condition overlay
+    (:func:`condition_speed_lines`): ``rank_mod`` is the penalty *already folded into*
+    ``rank``, kept alongside so the UI can say how much was lost and tint the line, and
+    ``immobilised`` marks a line a condition has zeroed outright. Both are inert on the
+    plain build lines :func:`speed_lines` returns.
     """
 
     label: str
     rank: int
+    rank_mod: int = 0
+    immobilised: bool = False
 
 
 def _size_speed_mod(char: Character, game_data: GameData) -> int:
@@ -68,6 +77,109 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
                 continue
             rank = effect_effective_rank(effect, game_data, char)
             lines.append(SpeedLine(f"{base.name} {rank}", rank))
+    return lines
+
+
+def condition_speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
+    """:func:`speed_lines` with the character's condition overlay resolved into them.
+
+    Conditions are a display overlay, not build math, and they only reach the *base*
+    (ground) line — a Hindered character's Flight is unaffected. Resolving it here
+    rather than in the widget keeps the arithmetic in one place, the way
+    :func:`~mm_companion.core.rules.resistance_condition_effect` and
+    :func:`~mm_companion.core.rules.condition_scope_penalty` already do for the grids.
+    """
+
+    lines = speed_lines(char, game_data)
+    mod = condition_speed_rank_mod(char, game_data)
+    if not lines or mod == 0:
+        return lines
+    base = lines[0]
+    if mod is None:  # Immobile / Prone zeroes ground movement outright
+        lines[0] = replace(base, immobilised=True)
+    else:
+        lines[0] = replace(base, rank=base.rank + mod, rank_mod=mod)
+    return lines
+
+
+@dataclass(frozen=True)
+class MovementModeLine:
+    """One specialised way of moving an active power grants (Wall-Crawling, Permeate…).
+
+    Unlike a :class:`SpeedLine`, a mode is not a movement power of its own — it is one
+    allocation option chosen inside an effect such as Enhanced Movement, so its rate
+    comes from the option's tier (often relative to the character's ground speed)
+    rather than from the effect's rank. ``rank`` is that rate's distance rank,
+    ``note`` an optional per-tier caveat ("vulnerable while climbing"), and
+    ``description`` the option's hover text.
+    """
+
+    label: str
+    rank: int
+    description: str = ""
+    note: str = ""
+
+
+#: The ``statIntegration.affects`` category marking an effect as one that changes how
+#: the character *moves*. Enhanced Senses lays its sense qualities out with the same
+#: ``allocation`` field type, so the field shape alone can't tell the two apart.
+MOVEMENT_AFFECTS = "movement"
+
+
+def _affects_movement(base) -> bool:
+    """Whether a base effect's ``statIntegration`` declares it a movement effect."""
+    boost = base.integration.trait_boost
+    return boost is not None and MOVEMENT_AFFECTS in boost.affects
+
+
+def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementModeLine]:
+    """The specialised movement *speeds* the character's active powers currently grant.
+
+    Walks the ``allocation`` config fields of every live effect that declares itself a
+    *movement* effect (:func:`_affects_movement`) and yields one line per chosen option
+    at the rate its tier grants — a flat rank for a mode with a speed of its own
+    (Swinging), or one derived from the character's ground speed for a mode expressed
+    against it (Wall-Crawling).
+
+    Only options that actually confer a **rate** appear. Safe Fall, Stable, Trackless
+    and the like are real capabilities, but they are not speeds, so listing them under a
+    speed readout would say nothing; they stay on the power's own card instead. Empty
+    when nothing is switched on.
+    """
+
+    ground = base_ground_speed_rank(char, game_data)
+    lines: list[MovementModeLine] = []
+    for power in live_powers(char.powers):
+        for effect in power.effects:
+            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+            if base is None or not _affects_movement(base):
+                continue
+            if not effect_is_active(power, effect, base, game_data, char):
+                continue
+            for field in base.config_fields:
+                if field.type != "allocation":
+                    continue
+                chosen = {
+                    entry["id"]: int(entry.get("tier", 1))
+                    for entry in effect.config.get(field.key, [])
+                    if isinstance(entry, dict) and "id" in entry
+                }
+                for option in field.alloc_options:
+                    tier = chosen.get(option.id)
+                    if tier is None:
+                        continue
+                    speed = option.speed(tier)
+                    if speed is None:
+                        continue  # a capability, not a speed — nothing to show here
+                    label = option.label + (f" {tier}" if len(option.tiers) > 1 else "")
+                    lines.append(
+                        MovementModeLine(
+                            label,
+                            speed.rank(ground),
+                            option.description,
+                            option.tier_note(tier),
+                        )
+                    )
     return lines
 
 

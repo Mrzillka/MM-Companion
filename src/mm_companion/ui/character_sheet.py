@@ -3,7 +3,8 @@
 The sheet is a scrolling page: a :class:`QScrollArea` hosting a
 :class:`~mm_companion.ui.block_canvas.BlockCanvas` that arranges the blocks the
 registry supplies (Base Information, Abilities, Resistances, Conditions,
-Advantages, Complications, Skills, Powers, …). The user
+Advantages, Complications, Skills, Powers, …), plus the ones it declares
+``default_pinned`` — the Dice block — parked in the strip beside the page. The user
 can drag a block to reorder it, put blocks side by side, tear one out into its
 own window, and drag that window back to re-dock it — all while the whole page
 scrolls vertically and each block shows its full content (no per-block scroll).
@@ -34,10 +35,12 @@ from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
     SignalBus,
     block_descriptors,
+    default_pin_lines,
     default_rows,
     sync_declarative_blocks,
 )
-from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
+from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED, QUIET_REQUESTS
+from mm_companion.ui.pinned_panel import PinnedBoard
 
 
 class CharacterSheet(QWidget):
@@ -76,7 +79,9 @@ class CharacterSheet(QWidget):
             self._sections_by_key[descriptor.key] = section
             panels.append((descriptor.key, descriptor.title, section))
             sizes[descriptor.key] = descriptor.size
-        self._canvas = BlockCanvas(panels, sizes, default_rows())
+        self._canvas = BlockCanvas(
+            panels, sizes, default_rows(), default_pinned=default_pin_lines()
+        )
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -85,9 +90,15 @@ class CharacterSheet(QWidget):
         self._scroll.setWidget(self._canvas)
         self._canvas.set_scroll_area(self._scroll)
 
+        # The scrolling page and the pinned strip beside it. The strip starts with
+        # whatever the registry declared `default_pinned` — the Dice block — and
+        # collapses to a thin bar with one icon once the user unpins everything.
+        self._board = PinnedBoard(self._scroll, self._canvas)
+        self._canvas.set_pinned_board(self._board)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._scroll)
+        layout.addWidget(self._board)
 
         # Pin the page's minimum width to the widest docked row so it can never
         # shrink narrow enough to clip a block (the fixed-width Abilities /
@@ -125,6 +136,23 @@ class CharacterSheet(QWidget):
         """Dock a block into the arrangement at (row, slot)."""
         self._canvas.dock_block(key, row, slot, new_row=new_row)
 
+    def pin_block(
+        self, key: str, line: int | None = None, slot: int = 0, new_line: bool = True
+    ) -> None:
+        """Park a block in the strip that doesn't scroll with the page.
+
+        Defaults to a new line at the end of the strip; pass a line and slot to put
+        it beside a block already there.
+        """
+        self._canvas.pin_block(key, line, slot, new_line=new_line)
+
+    def unpin_block(self, key: str) -> None:
+        """Send a pinned block back onto the scrolling page."""
+        self._canvas.unpin_block(key)
+
+    def is_block_pinned(self, key: str) -> bool:
+        return self._canvas.is_pinned(key)
+
     def show_block(self, key: str) -> None:
         self._canvas.show_block(key)
 
@@ -141,6 +169,11 @@ class CharacterSheet(QWidget):
     @property
     def canvas(self) -> BlockCanvas:
         return self._canvas
+
+    @property
+    def board(self) -> PinnedBoard:
+        """The page-plus-pinned-strip container the canvas renders into."""
+        return self._board
 
     @property
     def bus(self) -> SignalBus:
@@ -198,11 +231,44 @@ class CharacterSheet(QWidget):
                     signal.connect(self._bus.make_publisher(topic))
             for topic, method_name in descriptor.subscribes.items():
                 self._bus.subscribe(topic, getattr(section, method_name))
+            # The payload channel: the same two tables, one topic further out.
+            for signal_name, topics in descriptor.requests.items():
+                signal = getattr(section, signal_name)
+                for topic in topics:
+                    signal.connect(self._bus.make_requester(topic))
+            for topic, method_name in descriptor.serves.items():
+                self._bus.serve(topic, getattr(section, method_name))
+
+        # A request is no use to a block the user has closed, so the sheet reveals
+        # whichever block answers it. Named by *what it serves*, not by its key, so
+        # a mod that ships its own roller is revealed on the same terms. A quiet
+        # topic is exempt: it is raised as a side effect of something else the user
+        # was doing, and would open a window they never asked for (see bus.py).
+        for topic in {t for d in self._descriptors for t in d.serves} - QUIET_REQUESTS:
+            self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
 
         # No block emits at construction (each seeds its own view from the model as
         # it is built), so seed the one build-wide readout the sheet owns — the
         # spent-power-points pool label — once now.
         self._recompute_derived()
+
+    def _reveal_servers(self, topic: str) -> None:
+        """Make sure every block serving *topic* is somewhere the user can see it.
+
+        A closed block is only hidden, never destroyed, so a request to it still
+        works — it just happens off screen, which reads as the app ignoring the
+        click. Reopening it is the honest answer. A block floated into its own
+        window is raised instead, since it is already visible in principle but may
+        be behind the sheet.
+        """
+        for descriptor in self._descriptors:
+            if topic not in descriptor.serves:
+                continue
+            if self._canvas.is_hidden(descriptor.key):
+                self._canvas.show_block(descriptor.key)
+            window = self._canvas.block_window(descriptor.key)
+            if window is not None:
+                window.raise_()
 
     def _sections(self) -> tuple:
         return tuple(self._sections_by_key.values())
@@ -229,6 +295,22 @@ class CharacterSheet(QWidget):
         self._locked = locked
         for section in self._sections():
             section.set_locked(locked)
+
+    def sync_session(self) -> None:
+        """Tell any block that cares that the session changed (joined, or ended).
+
+        Duck-typed and fanned out like :meth:`set_npc_mode`, so this needs no
+        knowledge of *which* blocks care: the Dice block swaps its private roll
+        history for the table's shared one, and a mod block can join in by exposing
+        the same method. Called by
+        :func:`~mm_companion.ui.session_player.attach_player_session` at both ends
+        of a session — the blocks are built with the sheet, so nothing about them is
+        re-shown when a player joins a table.
+        """
+        for section in self._sections():
+            handler = getattr(section, "sync_session", None)
+            if callable(handler):
+                handler()
 
     def set_npc_mode(self, npc: bool) -> None:
         """Simplify the sheet for a GM's NPC: no point budget, an estimated PL.

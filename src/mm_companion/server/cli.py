@@ -14,6 +14,7 @@ import logging
 import signal
 import sys
 import threading
+from pathlib import Path
 
 from mm_companion.core import mods, storage
 from mm_companion.core.session import discovery, store
@@ -22,23 +23,38 @@ from mm_companion.core.session.net import DEFAULT_PORT, Transport
 from mm_companion.core.session.relay import RelayTransport, relay_url
 from mm_companion.core.session.server import SessionServer
 
+from . import hub as hub_mod
+
 log = logging.getLogger("mm_companion.server")
 
 EPILOG = """\
 Examples:
+  python -m mm_companion.server --hub --relay relay.example.net \\
+                                --admin-secret-file /etc/mm-companion/admin.secret
   python -m mm_companion.server --new "Friday Game"
   python -m mm_companion.server --session friday-game --relay relay.example.net
   python -m mm_companion.server --list
 
-With no --session or --new the most recently updated session in the workspace is
-hosted. The session persists across restarts, so stopping and starting resumes
-the same roster and roll history. Set MM_COMPANION_HOME to share a workspace with
-the desktop app (or to keep the server's own).
+--hub is what an always-on server runs: it hosts every session in the workspace
+at once, each reaching players by dialling out to the relay, and opens a control
+channel GMs use to create, rename and delete sessions.
 
-Note: a GM cannot yet *drive* a headless session remotely (hidden rolls and
-GM-applied conditions need a GM slot, which only the in-process host holds). The
-box keeps the session alive, resolves rolls, and syncs sheets; the GM joins as a
-player until remote-GM auth lands.
+Creating a session is open to anyone running the app. What a session belongs to
+is its gm token, handed back by the create and held by nobody else: renaming it,
+deleting it and taking the GM's seat in it all need that token, and there is no
+way to list other people's sessions at all. --admin-secret-file is the one
+exception, for whoever runs the box: it grants the full list and the right to
+delete anything, so abandoned or abusive sessions can be cleaned up.
+
+Without --hub a single session is hosted: the one named by --session, a new one
+from --new, or otherwise the most recently updated in the workspace. Either way
+the session persists across restarts, resuming the same roster and roll history.
+Set MM_COMPANION_HOME to share a workspace with the desktop app (or to keep the
+server's own).
+
+A GM drives a session hosted here by connecting with its gm token, which the
+control channel hands out alongside the join code. They get their own seat, with
+hidden rolls and conditions; nobody has to be at the table for players to play.
 """
 
 
@@ -56,6 +72,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     which.add_argument(
         "--list", action="store_true", help="list the sessions in the workspace and exit"
+    )
+    which.add_argument(
+        "--hub",
+        action="store_true",
+        help="host EVERY session in the workspace at once, and open a control channel a GM "
+        "can create and delete sessions over - what an always-on server runs",
+    )
+
+    hub = parser.add_argument_group("hub mode")
+    hub.add_argument(
+        "--admin-secret-file",
+        metavar="PATH",
+        default="",
+        help="file holding the OPERATOR secret - not needed to create a session, which is "
+        "open to anyone; it grants whoever runs the box the full session list and the "
+        "right to delete any of them. A file rather than an argument so it stays out of "
+        "the process list. Omit it and the server simply has no caretaker",
+    )
+    hub.add_argument(
+        "--retention-days",
+        type=int,
+        default=hub_mod.DEFAULT_RETENTION_DAYS,
+        metavar="DAYS",
+        help="delete a session nobody has touched in this long (0 disables the sweep); "
+        "a join, a roll or a rename all count as touching it",
+    )
+    hub.add_argument(
+        "--control-id",
+        default=hub_mod.DEFAULT_CONTROL_ID,
+        help="the relay session id the control channel registers under",
+    )
+    hub.add_argument(
+        "--max-sessions", type=int, default=hub_mod.DEFAULT_MAX_SESSIONS, help="ceiling on sessions"
+    )
+    hub.add_argument(
+        "--idle-unload",
+        type=float,
+        default=hub_mod.DEFAULT_IDLE_UNLOAD,
+        metavar="SECONDS",
+        help="drop an empty session's roll history from memory after this long; it stays "
+        "joinable throughout and reloads on the next arrival",
     )
 
     parser.add_argument("--bind", default="0.0.0.0", help="address to listen on (default: all)")
@@ -211,6 +268,9 @@ def run(argv: list[str] | None = None, *, stop: threading.Event | None = None) -
         _print_sessions()
         return 0
 
+    if args.hub:
+        return _run_hub(args, stop)
+
     try:
         state = resolve_session(args)
     except store.SessionStoreError as exc:
@@ -254,6 +314,83 @@ def run(argv: list[str] | None = None, *, stop: threading.Event | None = None) -
         log.info("stopping session %s", state.id)
         server.stop()
         reach.release()
+    return 0
+
+
+def read_admin_secret(path: str) -> str:
+    """The operator's secret, read from a file rather than an argument.
+
+    A command line is world-readable in ``ps``; a 0640 file is not. Optional: no
+    path means no operator, which costs the box its caretaker but stops nobody
+    from hosting a game on it.
+    """
+    if not path:
+        return ""
+    try:
+        secret = Path(path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise hub_mod.HubError(f"cannot read {path}: {exc}") from exc
+    if not secret:
+        raise hub_mod.HubError(f"{path} is empty; delete the file or put a secret in it")
+    return secret
+
+
+def describe_hub(hub: hub_mod.SessionHub) -> str:
+    """The banner: every session it is holding, and the code for each."""
+    catalog = hub.catalog()
+    lines = ["", f"Hosting {len(catalog)} session(s) through {hub.relay_base}", ""]
+    for entry in catalog:
+        lines.append(f'  {entry["name"]!r}  (id: {entry["id"]})')
+        lines.append(f'    Join code : {entry["join_code"]}')
+        lines.append(f'    Players   : {entry["player_count"]}, {entry["roll_count"]} roll(s)')
+        lines.append("")
+    if not catalog:
+        lines.append("  No sessions yet. Any GM can make one from the app's GM Mode.")
+        lines.append("")
+    lines.append(f"Control channel : {hub.control_id} (open — anyone may create a session)")
+    lines.append(
+        "Operator        : "
+        + ("yes, a secret is configured" if hub.admin_secret else "none — nobody can clean up")
+    )
+    if hub.retention_days > 0:
+        lines.append(f"Sweep           : sessions untouched for {hub.retention_days} days")
+    lines.append("Press Ctrl+C to stop.")
+    return "\n".join(lines)
+
+
+def _run_hub(args: argparse.Namespace, stop: threading.Event | None) -> int:
+    """Host every session at once until interrupted."""
+    try:
+        secret = read_admin_secret(args.admin_secret_file)
+        if not args.relay:
+            raise hub_mod.HubError(
+                "--hub needs --relay: sessions reach players by dialling out to one"
+            )
+        hub = hub_mod.SessionHub(
+            args.relay,
+            secret,
+            mod_fingerprint=mods.stack_fingerprint(),
+            max_sessions=args.max_sessions,
+            idle_unload=args.idle_unload,
+            retention_days=args.retention_days,
+            control_id=args.control_id,
+        )
+    except hub_mod.HubError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
+    hub.start()
+    print(describe_hub(hub))
+
+    stop = stop if stop is not None else threading.Event()
+    _install_signals(stop)
+    try:
+        stop.wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        log.info("stopping the hub")
+        hub.stop()
     return 0
 
 

@@ -23,6 +23,9 @@ about, and grading is plain arithmetic over the roll dict.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -34,8 +37,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.rules import (
+    RollSpec,
+    follow_up_for_result,
+    outcome_is_failure,
+    resistance_outcome,
+)
+from mm_companion.core.session.model import KIND_NOTE
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
+from mm_companion.ui.widgets import muted_style, tinted_style
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
@@ -47,6 +59,26 @@ HIDDEN_MARK = "👁"
 MAX_CARDS = 200
 
 EMPTY_TEXT = "No rolls yet — every roll at this table shows up here."
+
+#: Narrowest a roll history may get. A card carries a name, a headline and its
+#: star; below this its buttons truncate. Both histories pin this as a floor — a
+#: scroll area asks for almost nothing on its own, so without it a history is
+#: squeezed to a sliver by whatever it shares its space with (and, for the Dice
+#: block, a reflow would read that sliver as "a row fits here").
+MIN_HISTORY_WIDTH = 260
+
+#: Shortest a roll history may get, for the same reason and pinned in the same two
+#: places. A card is roughly 70px tall, so this is two of them and the start of a
+#: third — enough that the list reads as a list. Without it the scroll area gives
+#: its height away just as readily as its width, and at the Dice block's minimum
+#: the history collapses to about one card.
+MIN_HISTORY_HEIGHT = 200
+
+#: How many quick rolls the strip holds. A cap rather than a scroll: the strip
+#: shares the Dice block with the roll controls and the die, so an unbounded list
+#: of chips ratchets the block — and the pinned strip holding it — ever taller. Six
+#: is two rows of chips in the narrow strip, and more than anyone reaches for.
+MAX_QUICK_ROLLS = 6
 
 
 def degree_label(degree: int | None, critical: bool, die: int) -> str:
@@ -68,7 +100,7 @@ def degree_label(degree: int | None, critical: bool, die: int) -> str:
 
 
 def roll_parameters(roll: dict) -> dict:
-    """The quick-roll parameters behind a shared roll — what "★ Save" saves."""
+    """The quick-roll parameters behind a shared roll — what its star saves."""
     dc = roll.get("dc")
     return {
         "bonus": int(roll.get("bonus", 0)),
@@ -77,7 +109,224 @@ def roll_parameters(roll: dict) -> dict:
     }
 
 
-class SessionRollCard(QFrame):
+def quick_roll_key(params: dict) -> tuple[int, int, int | None]:
+    """A quick roll's identity: its numbers, **ignoring any name** it was given.
+
+    Two quick rolls are the same roll when they load the same inputs, whatever they
+    are called — so this is what de-duplicates the strip, and what a card's star
+    matches itself against to know whether it is already saved. Comparing whole
+    entries instead would make "+3 vs DC 15" and the same numbers named "Attack"
+    two different rolls, and the star could then glow for one and not the other.
+    """
+    dc = params.get("dc")
+    return (
+        int(params.get("bonus", 0)),
+        int(params.get("penalty", 0)),
+        None if dc is None else int(dc),
+    )
+
+
+class QuickRollStar(QPushButton):
+    """A card's star: save this roll to the quick-roll strip, or take it back out.
+
+    Shared by both card classes — the local roller's :class:`RollCard` and the
+    session's :class:`SessionRollCard` — so it lives here, the module they can both
+    import (see :data:`MIN_HISTORY_WIDTH` for the same reason).
+
+    It is a *state* as much as a button, which is the point: a roll already in the
+    strip glows, so there is no need to look down at the chips to see whether this
+    one is saved. Three looks, all from :meth:`set_state`:
+
+    ``★`` lit — saved, and a click takes it back out again.
+    ``☆`` muted — not saved, and there is room for it.
+    ``☆`` disabled — not saved, and the strip is full (:data:`MAX_QUICK_ROLLS`).
+
+    Deliberately no font size: the glyph rides the widget font, so it needs no size
+    token, and nothing here sets ``font-size`` in a stylesheet (which would outrank
+    a widget's own ``QFont`` — see the theme rules in ``CLAUDE.md``).
+    """
+
+    #: Kept the same in every state so the button's geometry doesn't jump as it
+    #: lights up: the unsaved border is drawn in ``transparent``, not dropped.
+    _WIDTH = 30
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(self._WIDTH)
+        self.setFlat(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._saved = False
+        self.set_state(False, True)
+
+    def is_saved(self) -> bool:
+        """Whether this star is currently lit (its roll is in the strip)."""
+        return self._saved
+
+    def set_state(self, saved: bool, room: bool) -> None:
+        """Light the star, mute it, or disable it for want of room."""
+        self._saved = bool(saved)
+        width = int(theme.metric("border.width.emphasis"))
+        radius = int(theme.metric("radius.chip"))
+        if saved:
+            accent = theme.color("accent.dice")
+            self.setText("★")
+            self.setEnabled(True)
+            self.setToolTip("In the quick rolls — click to take it out again")
+            self.setStyleSheet(
+                f"color: {accent};"
+                f" background: {theme.wash('accent.dice', 0.25)};"
+                f" border: {width}px solid {accent};"
+                f" border-radius: {radius}px;"
+            )
+            return
+        self.setText("☆")
+        self.setEnabled(room)
+        if room:
+            self.setToolTip("Save these parameters to the quick rolls")
+        else:
+            self.setToolTip(
+                f"The quick rolls are full ({MAX_QUICK_ROLLS}) — take one out to save this"
+            )
+        self.setStyleSheet(
+            f"color: {theme.color('text.muted.rich')};"
+            " background: transparent;"
+            f" border: {width}px solid transparent;"
+            f" border-radius: {radius}px;"
+        )
+
+
+def chain_widgets(
+    spec: object,
+    *,
+    die: int,
+    degree: int | None,
+    on_follow_up: Callable[[RollSpec], None],
+    localize: bool = True,
+) -> list[QWidget]:
+    """What a rolled :class:`RollSpec` adds under its history card: the chain.
+
+    Two things, either or neither:
+
+    * a **follow-up button** when the roll provoked another one and landed — an
+      attack that hit makes its target save, and the button primes that save with
+      its DC already filled in, adjusted for a critical hit or a natural 1
+      (:func:`~mm_companion.core.rules.follow_up_for_result`);
+    * an **outcome line** — "Incapacitated!" on a failed save, or the Hit a *made*
+      Toughness save still costs, rather than a bare "2 degrees of failure".
+
+    This goes on **every** card, not only one's own, and that is the point of the
+    whole chain: the player rolls the attack, and the target's player — reading the
+    same history — clicks the save straight off it. The spec travels with the roll
+    (see ``docs/mm-session-architecture.md``); the crit adjustment and the ladder
+    lookup are then computed here from the broadcast die and degree, so every screen
+    at the table derives the same chip and the same sentence without the server
+    knowing a single rule.
+
+    Accepts the spec as a :class:`RollSpec` or as the plain dict it arrives as.
+
+    ``localize`` is what decides whether the follow-up arrives with the reader's own
+    resistance filled in (:func:`~mm_companion.core.rules.localize_spec`, applied
+    downstream by the Dice block). It is off on **one's own** card: you are not the
+    target of your own attack, so quietly filling in your own Toughness there would
+    be a confident wrong number. It is carried by dropping the spec's trait key
+    rather than by a flag the whole chain would have to thread.
+    """
+
+    resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
+    if resolved is None:
+        return []
+    widgets: list[QWidget] = []
+    follow_up = follow_up_for_result(resolved, die, degree, load_game_data())
+    if follow_up is not None and not localize:
+        follow_up = replace(follow_up, trait_key="")
+    if follow_up is not None:
+        button = QPushButton(f"🎲 {follow_up.label}")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setToolTip(follow_up.hint or f"Roll {follow_up.label}")
+        button.clicked.connect(lambda _=False, s=follow_up: on_follow_up(s))
+        widgets.append(button)
+    outcome = resistance_outcome(resolved, degree)
+    if outcome:
+        line = QLabel(f"{escape_rich_text(outcome)}!")
+        line.setWordWrap(True)
+        # A failed save is harm; a made one that still leaves a Hit is a caveat.
+        tint = "tint.worse" if outcome_is_failure(degree) else "tint.warning"
+        line.setStyleSheet(tinted_style(tint, bold=True))
+        widgets.append(line)
+    return widgets
+
+
+class HistoryCard(QFrame):
+    """What every card in a history has in common: an id, and a star or not.
+
+    The two histories hold a mix of rolls and notes, and the things done *to* a
+    card — striking it by ``seq``, telling it what the quick-roll strip holds —
+    have to work whichever it is. So they are declared here and a note simply
+    inherits the do-nothing versions.
+    """
+
+    def __init__(self, seq: object = None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        # A session entry has a positive seq; a pre-hosting (offline) roll is given
+        # a negative one so it too has a stable id to remove by. Only an entry with
+        # no id at all cannot be struck.
+        self.seq = seq if isinstance(seq, int) else None
+
+    def set_save_state(self, saved_keys: set, room: bool) -> None:
+        """No-op unless the card carries a star (see :class:`SessionRollCard`)."""
+
+
+class NoteCard(HistoryCard):
+    """A line in the history that nobody rolled: "spent a hero point — 2 left".
+
+    Deliberately plain beside a roll card — no headline number, no star, no chain.
+    A note is context for the rolls around it, so it reads as an aside rather than
+    competing with them for the eye.
+
+    The GM can strike one exactly like a roll (``can_remove``): it took a sequence
+    number from the same counter, which is the whole reason a note is a record in
+    the log rather than a message beside it.
+    """
+
+    removeRequested = Signal(int)
+
+    def __init__(
+        self,
+        note: dict,
+        *,
+        show_author: bool = True,
+        can_remove: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(note.get("seq"), parent)
+
+        layout = QHBoxLayout(self)
+        info = QVBoxLayout()
+
+        if show_author:
+            who = str(note.get("player_name", "")) or "Someone"
+            name_line = QLabel(f"<b>{escape_rich_text(who)}</b>")
+            name_line.setTextFormat(Qt.TextFormat.RichText)
+            name_line.setWordWrap(True)
+            info.addWidget(name_line)
+
+        text = QLabel(str(note.get("text", "")))
+        text.setWordWrap(True)
+        text.setStyleSheet(muted_style(italic=True))
+        info.addWidget(text)
+
+        layout.addLayout(info, stretch=1)
+
+        if can_remove and self.seq is not None:
+            remove_button = QPushButton("✕")
+            remove_button.setToolTip("Remove this note from the history")
+            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
+            remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
+            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+
+class SessionRollCard(HistoryCard):
     """One roll in the shared history: who rolled it, what it was, how it went.
 
     Deliberately not :class:`~mm_companion.ui.dice_roller.RollCard`: that one is
@@ -87,8 +336,16 @@ class SessionRollCard(QFrame):
     ``✕`` button (``can_remove``).
     """
 
-    saveRequested = Signal(dict)
+    #: This card's star was clicked — save these parameters as a quick roll, or, if
+    #: they already are one, take them back out. The roller owns that decision (it
+    #: owns the strip), so the card only reports the click and its parameters.
+    saveToggled = Signal(dict)
     removeRequested = Signal(int)
+
+    #: A chain button on this card was pressed — roll the spec it carries. Only ever
+    #: on one's own card, since a follow-up is read off local game data (see
+    #: :func:`chain_widgets`).
+    rollFollowUp = Signal(object)
 
     def __init__(
         self,
@@ -98,14 +355,8 @@ class SessionRollCard(QFrame):
         can_remove: bool = False,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        super().__init__(roll.get("seq"), parent)
         self._roll = dict(roll)
-        raw_seq = roll.get("seq")
-        # A session roll has a positive seq; a pre-hosting (offline) roll is given a
-        # negative one so it too has a stable id to remove by. Only a roll with no
-        # id at all cannot be struck.
-        self.seq = raw_seq if isinstance(raw_seq, int) else None
 
         die = int(roll.get("die", 0))
         bonus = int(roll.get("bonus", 0))
@@ -120,18 +371,22 @@ class SessionRollCard(QFrame):
 
         who = str(roll.get("player_name", "")) or "Someone"
         label = str(roll.get("label", ""))
-        heading = f"<b>{_escape(who)}</b>"
+        heading = f"<b>{escape_rich_text(who)}</b>"
         if hidden:
             heading = f"{HIDDEN_MARK} {heading}"
         if label:
-            heading += f" <span style='color:gray'>— {_escape(label)}</span>"
+            heading += (
+                f" <span style='color:{theme.color('text.muted.rich')}'>"
+                f"— {escape_rich_text(label)}</span>"
+            )
         name_line = QLabel(heading)
         name_line.setTextFormat(Qt.TextFormat.RichText)
         name_line.setWordWrap(True)
         info.addWidget(name_line)
 
         headline = (
-            f"<b>{die + modifier}</b> " f"<span style='color:gray'>(d20 {die} {modifier:+d})</span>"
+            f"<b>{die + modifier}</b> "
+            f"<span style='color:{theme.color('text.muted.rich')}'>(d20 {die} {modifier:+d})</span>"
         )
         if dc is not None:
             headline += f" vs DC {int(dc)}"
@@ -142,44 +397,74 @@ class SessionRollCard(QFrame):
 
         if degree is not None:
             outcome = QLabel(degree_label(int(degree), bool(roll.get("critical")), die))
-            colour = theme.TINT_BETTER if int(degree) > 0 else theme.TINT_WORSE
+            colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
             outcome.setStyleSheet(f"color: {colour};")
             info.addWidget(outcome)
 
+        # The chain — on every card, whoever rolled it. A save an attack forced is
+        # made by the *other* side of the table, so the button has to be on the
+        # reader's screen, not the roller's.
+        for widget in chain_widgets(
+            roll.get("spec"),
+            die=die,
+            degree=None if degree is None else int(degree),
+            on_follow_up=self.rollFollowUp.emit,
+            localize=not own,
+        ):
+            info.addWidget(widget)
+
         layout.addLayout(info, stretch=1)
 
+        # Only for a roll of one's own: saving someone else's modifiers into your
+        # quick rolls would be saving their character's numbers.
+        self.star: QuickRollStar | None = None
         if own:
-            # Only for a roll of one's own: saving someone else's modifiers into
-            # your quick rolls would be saving their character's numbers.
-            save_button = QPushButton("★ Save")
-            save_button.setToolTip("Save these parameters to the quick rolls strip")
-            save_button.clicked.connect(
-                lambda: self.saveRequested.emit(roll_parameters(self._roll))
-            )
-            layout.addWidget(save_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+            self.star = QuickRollStar()
+            self.star.clicked.connect(lambda: self.saveToggled.emit(roll_parameters(self._roll)))
+            layout.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         if can_remove and self.seq is not None:
             # GM only — strikes the roll from the log (from every screen, in a session).
             remove_button = QPushButton("✕")
             remove_button.setToolTip("Remove this roll from the history")
-            remove_button.setFixedWidth(28)
+            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
             remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
             layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+    def parameters(self) -> dict:
+        """The quick-roll parameters this card would save."""
+        return roll_parameters(self._roll)
+
+    def set_save_state(self, saved_keys: set, room: bool) -> None:
+        """Light this card's star if its roll is among *saved_keys* (a no-op without one)."""
+        if self.star is None:
+            return
+        key = quick_roll_key(self.parameters())
+        self.star.set_state(key in saved_keys, room)
 
 
 class RollHistoryPanel(QWidget):
     """The shared roll log, newest first, fed by a :class:`SessionBridge`."""
 
-    #: A card's "★ Save" — the roll's parameters, for the roller's quick strip.
-    saveRequested = Signal(dict)
+    #: A card's star — the roll's parameters, for the roller to save or unsave.
+    saveToggled = Signal(dict)
     #: A roll the GM struck with no live session to remove it from — so an owner
     #: (the GM window) can drop it from a persisted, off-air session too.
     rollRemovedLocally = Signal(int)
+
+    #: A card's follow-up button was pressed — roll this spec (see :func:`chain_widgets`).
+    rollFollowUp = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, *, gm: bool = False) -> None:
         super().__init__(parent)
         self._bridge: SessionBridge | None = None
         self._own_id = ""
+        # What the roller's quick-roll strip currently holds, so every card's star —
+        # the ones on screen and the ones still to be built — shows the same thing.
+        # Pushed in by whoever owns both this panel and the roller; see
+        # :meth:`set_quick_roll_state`.
+        self._saved_keys: set = set()
+        self._quick_room = True
         # The GM's panel gets a per-roll ✕ to strike a roll from everyone's log.
         self._gm = gm
         # Newest first, so the seq of the card at the top is the newest seen. Kept
@@ -207,11 +492,23 @@ class RollHistoryPanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
-        # A card carries a name, a headline and (for one's own) a "★ Save" button;
-        # below this the buttons truncate. Pin a floor so the column never squashes
-        # them, whatever it shares its row with.
-        self._scroll.setMinimumWidth(260)
+        self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
+        self._scroll.setMinimumHeight(MIN_HISTORY_HEIGHT)
         layout.addWidget(self._scroll)
+
+    # -- the quick-roll strip's state --------------------------------------
+
+    def set_quick_roll_state(self, saved_keys: set, room: bool) -> None:
+        """Tell every card what the quick-roll strip holds, so its star can show it.
+
+        *saved_keys* are :func:`quick_roll_key` tuples and *room* is whether another
+        quick roll would fit. Remembered as well as applied, since a card built after
+        this call has to start out in the same state (see :meth:`_insert`).
+        """
+        self._saved_keys = set(saved_keys)
+        self._quick_room = bool(room)
+        for card in self.cards():
+            card.set_save_state(self._saved_keys, self._quick_room)
 
     # -- the feed ----------------------------------------------------------
 
@@ -268,17 +565,19 @@ class RollHistoryPanel(QWidget):
             self.add_roll(roll)
 
     def add_roll(self, roll: object) -> None:
-        """Put one roll at the top of the list.
+        """Put one entry at the top of the list.
 
         One's own roll is held (not shown) while :attr:`_defer_own` is set, so a
         paired roller can release it as the die settles — see :meth:`release_roll`.
+        A note of one's own is *not* held: deferral waits on a die animation, and a
+        note has none to wait for, so holding one would hold it forever.
         """
         if not isinstance(roll, dict):
             return
         seq = roll.get("seq")
         if isinstance(seq, int) and seq in self._seen:
             return
-        if self._defer_own and self._is_own(roll):
+        if self._defer_own and roll.get("kind") != KIND_NOTE and self._is_own(roll):
             if isinstance(seq, int):
                 self._held[seq] = roll
             return
@@ -304,9 +603,16 @@ class RollHistoryPanel(QWidget):
                 return
             self._seen.add(seq)
 
-        card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
-        card.saveRequested.connect(self.saveRequested)
-        card.removeRequested.connect(self._request_remove)
+        card: HistoryCard
+        if roll.get("kind") == KIND_NOTE:
+            card = NoteCard(roll, can_remove=self._gm)
+            card.removeRequested.connect(self._request_remove)
+        else:
+            card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
+            card.set_save_state(self._saved_keys, self._quick_room)
+            card.saveToggled.connect(self.saveToggled)
+            card.removeRequested.connect(self._request_remove)
+            card.rollFollowUp.connect(self.rollFollowUp)
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
@@ -347,8 +653,8 @@ class RollHistoryPanel(QWidget):
         self._held.clear()
         self._empty.setVisible(True)
 
-    def cards(self) -> list[SessionRollCard]:
-        """The cards on screen, newest first.
+    def cards(self) -> list[HistoryCard]:
+        """The cards on screen, newest first — rolls and notes alike.
 
         Read off the layout rather than ``findChildren``, which answers in
         construction order — the opposite end of the list from where a new card
@@ -358,7 +664,7 @@ class RollHistoryPanel(QWidget):
         for index in range(self._layout.count()):
             item = self._layout.itemAt(index)
             widget = item.widget() if item is not None else None
-            if isinstance(widget, SessionRollCard):
+            if isinstance(widget, HistoryCard):
                 found.append(widget)
         return found
 
@@ -375,10 +681,12 @@ class RollHistoryPanel(QWidget):
             widget.deleteLater()
 
 
-def _escape(text: str) -> str:
-    """Escape a player-supplied string for the rich-text labels above.
+def escape_rich_text(text: str) -> str:
+    """Escape a player-supplied string for a rich-text label.
 
     Display names and roll labels come off the wire, and these labels render
     HTML — an unescaped ``<`` would let a peer restyle someone else's history.
+    Public because the private history's cards (:mod:`mm_companion.ui.dice_roller`)
+    render the same strings and must escape them the same way.
     """
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

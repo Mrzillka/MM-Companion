@@ -127,8 +127,8 @@ class StartWindow(QMainWindow):
         self._child_windows: list[MainWindow] = []
         # The mod manager window, kept referenced while open for the same reason.
         self._mods_window: QWidget | None = None
-        # The dice roller window, likewise kept referenced while open.
-        self._dice_window: QWidget | None = None
+        # The settings window, likewise kept referenced while open.
+        self._settings_window: QWidget | None = None
         # The GM window. Only one may exist — it owns the hosted session — so a
         # second "Open GM Mode" raises this one instead of building another.
         self._gm_window: QWidget | None = None
@@ -165,9 +165,12 @@ class StartWindow(QMainWindow):
         mods_button.clicked.connect(self._manage_mods)
         column.addWidget(mods_button)
 
-        dice_button = QPushButton("Dice Roller")
-        dice_button.clicked.connect(self._open_dice_roller)
-        column.addWidget(dice_button)
+        # The launcher has no menu bar, so the Settings window the sheet reaches
+        # through its Settings menu hangs off a button here — the look is
+        # changeable before ever opening a character.
+        settings_button = QPushButton("Settings")
+        settings_button.clicked.connect(self._open_settings)
+        column.addWidget(settings_button)
 
         exit_button = QPushButton("Exit")
         exit_button.clicked.connect(self.close)
@@ -274,12 +277,12 @@ class StartWindow(QMainWindow):
         self._mods_window = window
         window.show()
 
-    def _open_dice_roller(self) -> None:
-        """Open the standalone Dice Roller window."""
-        from mm_companion.ui.dice_roller import DiceRollerWindow
+    def _open_settings(self) -> None:
+        """Open the Settings window."""
+        from mm_companion.ui.settings import SettingsWindow
 
-        window = DiceRollerWindow()
-        self._dice_window = window
+        window = SettingsWindow()
+        self._settings_window = window
         window.show()
 
     def _join_session(self) -> None:
@@ -290,7 +293,7 @@ class StartWindow(QMainWindow):
         it leaves the session.
         """
         from mm_companion.ui.session_bridge import active_session, set_active_session
-        from mm_companion.ui.session_dialogs import JoinSessionDialog
+        from mm_companion.ui.session_dialogs import JoinSessionDialog, record_session_history
         from mm_companion.ui.session_player import attach_player_session
 
         if active_session() is not None:
@@ -306,12 +309,26 @@ class StartWindow(QMainWindow):
             return
 
         bridge = SessionBridge()
+        player_id, player_token = dialog.reclaim_ids()
         try:
-            bridge.join(dialog.join_code(), dialog.display_name())
+            client = bridge.join(
+                dialog.join_code(),
+                dialog.display_name(),
+                player_id=player_id,
+                player_token=player_token,
+            )
         except SessionClientError as exc:
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
+        record_session_history(
+            code=dialog.code_text(),
+            session_id=client.session_id,
+            session_name=client.session_name,
+            display_name=dialog.display_name(),
+            player_id=client.player_id,
+            player_token=client.player_token,
+        )
 
         path = dialog.character_path()
         character = library.load_character(path) if path is not None else None
@@ -322,17 +339,56 @@ class StartWindow(QMainWindow):
         self._open_sheet(window)
 
     def _open_gm_mode(self) -> None:
-        """Open the GM window, or raise the one already open.
+        """Pick a session to run, then open the GM window already hosting it.
 
         The launcher stays visible behind it (unlike a character sheet): a GM
         hosting a session still opens character sheets, and the session has to
         survive that. Only one GM window ever exists — it owns the hosted
-        session — so a second click raises the first rather than starting over.
+        session — so a second click just raises the first, skipping the pre-stage.
         """
+        from mm_companion.core.session.model import new_session
+        from mm_companion.core.session.store import SessionStoreError, load_session
         from mm_companion.ui.gm_window import GMWindow
+        from mm_companion.ui.session_dialogs import GMSessionLaunchDialog
 
-        if self._gm_window is None:
-            self._gm_window = GMWindow()
+        if self._gm_window is not None:
+            self._gm_window.show()
+            self._gm_window.raise_()
+            self._gm_window.activateWindow()
+            return
+
+        dialog = GMSessionLaunchDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        options = dialog.options()
+        session_id = dialog.chosen_session_id()
+
+        entry = dialog.chosen_server_entry()
+        if entry is not None:
+            # The session lives on a server: nothing to host, nothing to load off
+            # this disk. The window dials in and takes the GM's seat.
+            self._gm_window = GMWindow(host_options=options, autohost=False)
+            if not self._gm_window.connect_to_server(entry, dialog.server_label()):
+                QMessageBox.warning(
+                    self,
+                    "Could not open the session",
+                    "The server did not let this app in. Check that it is still running "
+                    "and that the session is still there, then try again.",
+                )
+                self._gm_window.close()
+                self._gm_window = None
+                return
+        else:
+            state = None
+            if session_id:
+                try:
+                    state = load_session(session_id)
+                except SessionStoreError:
+                    state = None
+            if state is None:
+                state = new_session(options.name)
+            self._gm_window = GMWindow(state=state, host_options=options, autohost=True)
+
         self._gm_window.show()
         self._gm_window.raise_()
         self._gm_window.activateWindow()

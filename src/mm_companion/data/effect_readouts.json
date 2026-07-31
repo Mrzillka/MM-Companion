@@ -53,6 +53,16 @@
         ]
       }
     ],
+    "extra_limbs": [
+      {
+        "kind": "capped_rank_bonus",
+        "label": "Bonus",
+        "perRank": 1,
+        "cap": 5,
+        "fromConfig": "appliesTo",
+        "unchosenNote": "(Grab or Stability, chosen each turn)"
+      }
+    ],
     "flight": [
       {
         "kind": "thresholds",

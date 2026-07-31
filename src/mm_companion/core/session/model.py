@@ -112,17 +112,38 @@ class PlayerSlot:
         )
 
 
+#: A record of a roll — the ordinary entry, with a die and a grade.
+KIND_ROLL = "roll"
+#: A record of something that merely *happened* at the table and is worth writing
+#: down: a hero point spent, a hero point granted. It carries ``text`` and none of
+#: the dice fields, and the server composes none of it (see :meth:`SessionState.record_note`).
+KIND_NOTE = "note"
+
+
 @dataclass(frozen=True)
 class RollRecord:
-    """One resolved roll in the shared history.
+    """One entry in the shared history: a resolved roll, or a note.
 
-    Resolved *server-side* (:func:`~mm_companion.core.dice.resolve_check`) and then
-    broadcast, so the numbers are the server's, not a client's claim. ``dc`` is
-    ``None`` for a bare d20 with no target, in which case ``degree`` is ``None``
-    too — there is nothing to grade against.
+    ``kind`` says which (:data:`KIND_ROLL` or :data:`KIND_NOTE`). One record type
+    covers both because the history *is* the log — seq-numbered, appended to
+    ``rolls.jsonl``, replayed to a late joiner, strikeable by the GM — and a note
+    wants every one of those. A note leaves the dice fields at their defaults and
+    carries its sentence in ``text``; a roll leaves ``text`` empty.
+
+    A roll is resolved *server-side* (:func:`~mm_companion.core.dice.resolve_check`)
+    and then broadcast, so the numbers are the server's, not a client's claim.
+    ``dc`` is ``None`` for a bare d20 with no target, in which case ``degree`` is
+    ``None`` too — there is nothing to grade against.
 
     ``hidden`` marks a GM roll that is stored but never broadcast; ``seq`` is the
     session-wide ordering, assigned by :meth:`SessionState.record_roll`.
+
+    ``spec`` is the sheet's description of the roll (a serialized
+    :class:`~mm_companion.core.rules.RollSpec`), carried verbatim from the request
+    and validated on the way in by
+    :func:`~mm_companion.core.session.protocol.sanitize_spec`. It is what lets
+    *another* player's screen offer the save an attack forced, and read the same
+    outcome off the same ladder. Opaque here — this module never interprets it.
     """
 
     seq: int
@@ -136,6 +157,9 @@ class RollRecord:
     critical: bool = False
     label: str = ""
     hidden: bool = False
+    spec: dict | None = None
+    kind: str = KIND_ROLL
+    text: str = ""
     timestamp: str = field(default_factory=utc_now)
 
     @property
@@ -161,6 +185,9 @@ class RollRecord:
             "critical": self.critical,
             "label": self.label,
             "hidden": self.hidden,
+            "spec": self.spec,
+            "kind": self.kind,
+            "text": self.text,
             "timestamp": self.timestamp,
         }
 
@@ -180,6 +207,10 @@ class RollRecord:
             critical=bool(raw.get("critical", False)),
             label=str(raw.get("label", "")),
             hidden=bool(raw.get("hidden", False)),
+            spec=raw.get("spec") if isinstance(raw.get("spec"), dict) else None,
+            # A line written to rolls.jsonl before notes existed is a roll.
+            kind=str(raw.get("kind", "")) or KIND_ROLL,
+            text=str(raw.get("text", "")),
             timestamp=str(raw.get("timestamp", "")) or utc_now(),
         )
 
@@ -196,6 +227,7 @@ class RollRecord:
         result: CheckResult | None = None,
         label: str = "",
         hidden: bool = False,
+        spec: dict | None = None,
     ) -> RollRecord:
         """Build a record from a resolved check (``None`` when no DC was set)."""
         return cls(
@@ -210,6 +242,7 @@ class RollRecord:
             critical=die in (1, 20) if result is None else result.critical,
             label=label,
             hidden=hidden,
+            spec=spec,
         )
 
 
@@ -222,11 +255,19 @@ class SessionState:
     ``gm_characters/`` dir (GM-only, never sent to a player); ``rolls`` is the
     full history *including* hidden GM rolls, which are filtered out on the way
     to the wire by :meth:`visible_rolls`.
+
+    The **gm token** is the second, quieter secret. Where the host token opens a
+    seat to anyone holding the join code, this one claims *the GM's* seat, with
+    the powers that go with it — a hidden roll, a struck roll, a condition laid
+    on a player. It is deliberately not in the join code: everyone at the table
+    has that. It goes to one person, once, and it is what lets the GM drive a
+    session hosted on a machine that is not theirs.
     """
 
     id: str = field(default_factory=new_id)
     name: str = "Session"
     host_token: str = field(default_factory=new_token)
+    gm_token: str = field(default_factory=new_token)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     players: dict[str, PlayerSlot] = field(default_factory=dict)
@@ -301,6 +342,7 @@ class SessionState:
         result: CheckResult | None = None,
         label: str = "",
         hidden: bool = False,
+        spec: dict | None = None,
     ) -> RollRecord:
         """Build a :class:`RollRecord` from a resolved check and append it.
 
@@ -317,6 +359,27 @@ class SessionState:
             result=result,
             label=label,
             hidden=hidden,
+            spec=spec,
+        )
+        self.rolls.append(record)
+        self.touch()
+        return record
+
+    def record_note(self, *, player_id: str, player_name: str, text: str) -> RollRecord:
+        """Append a note — something that happened, rather than something rolled.
+
+        Takes a sequence number from the same counter the rolls do, so the log
+        stays one ordered stream and a note can be struck like any other line.
+        *text* is composed by the client and stored verbatim: what counts as worth
+        writing down is a rules question, and this layer has no rules in it.
+        """
+        record = RollRecord(
+            seq=self.next_seq(),
+            player_id=player_id,
+            player_name=player_name,
+            die=0,
+            kind=KIND_NOTE,
+            text=text,
         )
         self.rolls.append(record)
         self.touch()
@@ -351,6 +414,7 @@ class SessionState:
             "id": self.id,
             "name": self.name,
             "host_token": self.host_token,
+            "gm_token": self.gm_token,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "players": [slot.to_dict() for slot in self.players.values()],
@@ -367,6 +431,10 @@ class SessionState:
             id=str(raw.get("id", "")) or new_id(),
             name=str(raw.get("name", "Session")),
             host_token=str(raw.get("host_token", "")) or new_token(),
+            # A session written before gm tokens existed simply gets one now. It
+            # cannot be recovered from anywhere, so minting is the only option;
+            # the GM reads the new one off the server the next time they connect.
+            gm_token=str(raw.get("gm_token", "")) or new_token(),
             created_at=str(raw.get("created_at", "")) or utc_now(),
             updated_at=str(raw.get("updated_at", "")) or utc_now(),
             players={slot.player_id: slot for slot in players},

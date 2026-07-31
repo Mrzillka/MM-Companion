@@ -155,6 +155,7 @@ class ConditionReceiver(QObject):
         #: How many commands actually landed on the character.
         self.applied = 0
         bridge.conditionCommand.connect(self.handle)
+        bridge.heroPointsCommand.connect(self.handle_hero_points)
 
     def handle(self, action: str, payload: object) -> None:
         """Apply one ``("apply" | "remove", payload)`` command from the GM."""
@@ -174,6 +175,21 @@ class ConditionReceiver(QObject):
             changed = section.remove_condition_by_id(condition_id, parameter)
         if changed:
             self.applied += 1
+
+    def handle_hero_points(self, value: int) -> None:
+        """Set this sheet's hero-point total from the GM's command.
+
+        Like a condition command, the change lands on the player's own model
+        through the system-info section, and the snapshot pusher beside it bounces
+        the result back so the GM's card restates from the real value.
+        """
+        if not self._attached:
+            return
+        section = getattr(self._sheet, "system_info", None)
+        if section is None:
+            return
+        section.set_hero_points(value)
+        self.applied += 1
 
     def _is_for_us(self, player_id: str) -> bool:
         """The server only sends a command down its target's own connection, so
@@ -200,6 +216,10 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     The single seam both entry points share: the launcher's "Join Session" (with a
     freshly loaded character) and a sheet's own ``Session ▸ Join session…`` (with
     the character already open) both call this after ``bridge.join(...)`` succeeds.
+
+    It is also where the sheet's blocks are told a session began or ended, through
+    :meth:`~mm_companion.ui.character_sheet.CharacterSheet.sync_session` — the Dice
+    block swaps its private roll history for the table's shared one off that.
     """
     pusher = SnapshotPusher(window.sheet, bridge, parent=window)
     receiver = ConditionReceiver(window.sheet, bridge, parent=window)
@@ -209,6 +229,7 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
         receiver.detach()
         bridge.stop()
         set_active_session(None)
+        window.sheet.sync_session()
 
     window.closed.connect(leave)
     bridge.disconnected.connect(
@@ -219,6 +240,10 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
             f"The GM removed you from the session: {reason}", 10000
         )
     )
+    # The blocks were built before the session existed, so tell them it does now.
+    # (A session *ending* reaches them on its own: the Dice block follows the
+    # bridge's disconnected/stopped/kicked signals once it has one.)
+    window.sheet.sync_session()
     window.statusBar().showMessage(f"Joined “{bridge.client.session_name}”.", 10000)
     # Keep the wires alive for the window's lifetime.
     window._session_pusher = pusher

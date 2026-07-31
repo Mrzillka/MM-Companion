@@ -23,13 +23,19 @@ from PySide6.QtWidgets import QLabel, QSpinBox, QVBoxLayout, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    RollSpec,
     power_trait_bonuses,
     resistance_base,
     resistance_condition_effect,
     resistance_points_spent,
+    resistance_roll,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
+from mm_companion.ui.sections.stat_grid import (
+    apply_stat_effects,
+    build_stat_group,
+    set_stat_value,
+)
 from mm_companion.ui.sections.titled_section import TitledSection
 
 
@@ -42,11 +48,16 @@ class ResistancesSection(TitledSection):
 
     changed = Signal()
 
+    #: A row was double-clicked — roll this resistance check. Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
+    rollRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._data = data
         self._character = character
+        self._locked = False
         self._resistances: dict[str, QSpinBox] = {}
         self._resistance_enh: dict[str, QLabel] = {}
 
@@ -57,6 +68,10 @@ class ResistancesSection(TitledSection):
             self._resistance_enh,
             character.resistances,
             self._on_resistance_changed,
+            data.costs.trait_range("resistance"),
+            roll_spec=self._roll_spec,
+            roll_sink=self.rollRequested.emit,
+            is_locked=lambda: self._locked,
         )
         layout.addWidget(grid)
 
@@ -92,7 +107,10 @@ class ResistancesSection(TitledSection):
 
         The model stores only the bought delta, so the displayed total is
         :func:`~mm_companion.core.rules.resistance_base` plus that delta. Signals are
-        blocked while re-seeding so following the base doesn't count as a fresh edit.
+        blocked while re-seeding so following the base doesn't count as a fresh edit,
+        and :func:`~mm_companion.ui.sections.stat_grid.set_stat_value` stretches the
+        spin box rather than let a total past its ceiling clamp — a clamped display
+        would make the next edit recompute the delta from the wrong number.
         """
         for res in self._data.resistances:
             spin = self._resistances.get(res.key)
@@ -101,7 +119,7 @@ class ResistancesSection(TitledSection):
             base = resistance_base(self._character, self._data, res.key)
             bought = self._character.resistances.get(res.key, 0)
             blocker = QSignalBlocker(spin)
-            spin.setValue(base + bought)
+            set_stat_value(spin, base + bought)
             del blocker
 
     def refresh_enhancements(self) -> None:
@@ -124,7 +142,12 @@ class ResistancesSection(TitledSection):
         cost-rate change, via ``cost-rates-changed``)."""
         self.set_priced_title("Resistances", resistance_points_spent(self._character, self._data))
 
+    def _roll_spec(self, key: str) -> RollSpec:
+        """This resistance's check, built fresh at click time so it is never stale."""
+        return resistance_roll(self._character, self._data, key)
+
     def set_locked(self, locked: bool) -> None:
         """Make the resistance spin boxes read-only labels (locked) or editable."""
+        self._locked = locked
         for spin in self._resistances.values():
             set_widget_locked(spin, locked)

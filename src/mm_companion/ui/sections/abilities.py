@@ -7,6 +7,11 @@ bought value; the boost is computed in
 :func:`~mm_companion.core.rules.power_trait_bonuses`.
 :meth:`AbilitiesSection.refresh_enhancements` recomputes those labels, and the
 sheet calls it whenever a power changes.
+
+Double-clicking a row rolls that ability: the section emits
+:attr:`AbilitiesSection.rollRequested` with the spec
+:func:`~mm_companion.core.rules.ability_roll` builds, and the bus hands it to the
+Dice block.
 """
 
 from __future__ import annotations
@@ -17,7 +22,9 @@ from PySide6.QtWidgets import QLabel, QSpinBox, QVBoxLayout, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    RollSpec,
     ability_points_spent,
+    ability_roll,
     condition_scope_penalty,
     power_trait_bonuses,
 )
@@ -38,11 +45,17 @@ class AbilitiesSection(TitledSection):
     abilityChanged = Signal(str, int)
     changed = Signal()
 
+    #: A row was double-clicked — roll this ability. Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`, and is deliberately *not* a build
+    #: signal: rolling changes nothing and must never mark the sheet dirty.
+    rollRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._data = data
         self._character = character
+        self._locked = False
         self._abilities: dict[str, QSpinBox] = {}
         # The "→ total" labels that show a power-boosted trait's enhanced value.
         self._ability_enh: dict[str, QLabel] = {}
@@ -54,6 +67,10 @@ class AbilitiesSection(TitledSection):
             self._ability_enh,
             character.abilities,
             self._on_ability_changed,
+            data.costs.trait_range("ability"),
+            roll_spec=self._roll_spec,
+            roll_sink=self.rollRequested.emit,
+            is_locked=lambda: self._locked,
         )
         layout.addWidget(grid)
 
@@ -84,8 +101,13 @@ class AbilitiesSection(TitledSection):
         }
         apply_stat_effects(self._abilities, self._ability_enh, bonuses["ability"], cond_effects)
 
+    def _roll_spec(self, key: str) -> RollSpec:
+        """This ability's roll, built fresh at click time so it is never stale."""
+        return ability_roll(self._character, self._data, key)
+
     def set_locked(self, locked: bool) -> None:
         """Make the ability spin boxes read-only labels (locked) or editable."""
+        self._locked = locked
         for spin in self._abilities.values():
             set_widget_locked(spin, locked)
 

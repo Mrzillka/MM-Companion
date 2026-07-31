@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -50,14 +50,15 @@ from mm_companion.core.rules import (
     effective_ability,
     skill_modifiers,
     skill_points_spent,
+    skill_roll,
     skill_total,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.column_flow import column_count, even_split
+from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.stat_grid import (
     CONDITION_TINT,
     ENHANCED_TINT,
-    STRIKETHROUGH_CONDITIONS,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -66,24 +67,35 @@ from mm_companion.ui.widgets import make_spin_box, readonly_item
 RANK_MIN, RANK_MAX = 0, 20
 COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
-# Keep the numeric spin-box columns narrow so they don't hog horizontal space.
-SPIN_WIDTH = 56
-# Spacing between the side-by-side skill panels.
-TABLE_SPACING = 6
-# Dead-band (px) that stops the panel count from flipping when the page's vertical
-# scrollbar appears/disappears (which nudges the width by its own extent).
-COLUMN_HYSTERESIS = 24
-# Rough widths used to decide how many panels fit without clipping a name.
-# The numeric columns are near-fixed; the name column needs room for the widest
+#: Item role carrying ``(row_id, display)`` on a rollable row's Total cell — what a
+#: double-click on that row rolls. A row without it (a focused skill's group header)
+#: is not rollable.
+ROLL_ROLE = Qt.ItemDataRole.UserRole
+# Rough widths used to decide how many panels fit without clipping a name. The
+# numeric columns are near-fixed; the name column needs room for the widest
 # skill/focus/specialization label. Kept lean so a second column appears before a
-# lone one stretches wide and leaves a big gap between names and their numbers —
-# these are UI heuristics, easy to retune.
-NAME_MIN_WIDTH = 100
+# lone one stretches wide and leaves a big gap between names and their numbers.
+# The three that set the block's density are theme metrics — a denser preset wants
+# narrower ones — and are read through spin_width()/name_min_width()/mod_width().
 NAME_PADDING = 16
-NUMERIC_WIDTH = 40 + SPIN_WIDTH + 24  # ABL + rank spin + Total
-# The derived "+" column's share, added only while it is shown.
-MOD_WIDTH = 36
 FRAME_PADDING = 16
+# The fixed share of the ABL and Total columns, either side of the rank spin box.
+NUMERIC_PADDING = 40 + 24
+
+
+def spin_width() -> int:
+    """Width cap for the numeric spin-box columns, so they don't hog the row."""
+    return int(theme.metric("column.skill.spin"))
+
+
+def name_min_width() -> int:
+    """Floor for the skill-name column, before the widest label widens it."""
+    return int(theme.metric("column.skill.name"))
+
+
+def mod_width() -> int:
+    """The derived "+" column's share, added only while that column is shown."""
+    return int(theme.metric("column.skill.mod"))
 
 
 class SkillRow(NamedTuple):
@@ -101,7 +113,7 @@ class SkillRow(NamedTuple):
     name_item: QTableWidgetItem | None
 
 
-class SkillsSection(TitledSection):
+class SkillsSection(ColumnFlowPanels, TitledSection):
     """A table of skills whose total bonuses track the shared character model.
 
     Ranks and focuses are read from and written to the :class:`Character`; the "+"
@@ -111,6 +123,11 @@ class SkillsSection(TitledSection):
     """
 
     changed = Signal()
+
+    #: A row was double-clicked — roll that skill (a focus and a specialized pool
+    #: each roll their own row). Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
+    rollRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -142,17 +159,8 @@ class SkillsSection(TitledSection):
 
         layout = QVBoxLayout(self)
         # The skills fan out across a variable number of side-by-side panels; the
-        # count adapts to the block's width (see resizeEvent / _rebuild). The
-        # tables live in a container whose horizontal layout is rebuilt when the
-        # count changes.
-        self._tables_container = QWidget()
-        self._tables_layout = QHBoxLayout(self._tables_container)
-        self._tables_layout.setContentsMargins(0, 0, 0, 0)
-        self._tables_layout.setSpacing(TABLE_SPACING)
-        self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self._tables_container)
-        self._tables: list[QTableWidget] = []
-        self._column_count = 0
+        # count adapts to the block's width (see ColumnFlowPanels).
+        self._init_flow_panels(layout)
         self._rebuild()
 
     def _make_table(self) -> QTableWidget:
@@ -172,20 +180,27 @@ class SkillsSection(TitledSection):
         # The panels fit their content and never scroll, so keep them out of the
         # focus chain; the wheel then always falls through to the page scroll.
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Connected once per table, which outlives the frequent _rebuild: the tables
+        # themselves are reused, only their items are rebuilt.
+        table.cellDoubleClicked.connect(
+            lambda row, _col, t=table: self._on_cell_double_clicked(t, row)
+        )
         guard_wheel(table)
         return table
 
-    def _ensure_tables(self, count: int) -> None:
-        """Grow or shrink the pool of side-by-side panels to *count*."""
+    def _on_cell_double_clicked(self, table: QTableWidget, row: int) -> None:
+        """Roll the skill on this table row, if it is one that rolls.
 
-        while len(self._tables) < count:
-            table = self._make_table()
-            self._tables_layout.addWidget(table, stretch=1)
-            self._tables.append(table)
-        while len(self._tables) > count:
-            table = self._tables.pop()
-            self._tables_layout.removeWidget(table)
-            table.deleteLater()
+        Every column but Rank arrives here — that one is a spin box cell widget,
+        which eats the double-click itself (and unlocked would want it for editing
+        anyway).
+        """
+        item = table.item(row, COL_TOTAL)
+        payload = None if item is None else item.data(ROLL_ROLE)
+        if not payload:
+            return
+        row_id, display = payload
+        self.rollRequested.emit(skill_roll(self._character, self._data, row_id, label=display))
 
     @staticmethod
     def _fit_table_height(table: QTableWidget) -> None:
@@ -202,14 +217,7 @@ class SkillsSection(TitledSection):
     def _rebuild(self) -> None:
         self._rows.clear()
         self._editable_spins.clear()
-        count = column_count(
-            self._available_width(),
-            self._min_col_width(),
-            TABLE_SPACING,
-            len(self._skills),
-            self._column_count,
-            COLUMN_HYSTERESIS,
-        )
+        count = self._flow_column_count()
         self._column_count = count
         self._ensure_tables(count)
         for table, skills in zip(self._tables, self._split_blocks(count), strict=True):
@@ -241,11 +249,8 @@ class SkillsSection(TitledSection):
 
     # -- responsive panel count ---------------------------------------------
 
-    def _available_width(self) -> int:
-        """The width the panels have to share, net of the section's margins."""
-
-        margins = self.layout().contentsMargins()
-        return self.width() - margins.left() - margins.right()
+    def _flow_item_count(self) -> int:
+        return len(self._skills)
 
     def _min_col_width(self) -> int:
         """Narrowest a panel may get before a skill name would clip.
@@ -264,34 +269,14 @@ class SkillsSection(TitledSection):
             for spec in self._specializations.get(skill.name, []):
                 label = f"    {skill.name}: {spec} (specialized)"
                 longest = max(longest, fm.horizontalAdvance(label))
-        name_width = max(NAME_MIN_WIDTH, longest + NAME_PADDING)
-        mod_width = MOD_WIDTH if self._show_mods else 0
-        return name_width + NUMERIC_WIDTH + mod_width + FRAME_PADDING
+        name_width = max(name_min_width(), longest + NAME_PADDING)
+        mods = mod_width() if self._show_mods else 0
+        numeric = NUMERIC_PADDING + spin_width()
+        return name_width + numeric + mods + FRAME_PADDING
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
-        count = column_count(
-            self._available_width(),
-            self._min_col_width(),
-            TABLE_SPACING,
-            len(self._skills),
-            self._column_count,
-            COLUMN_HYSTERESIS,
-        )
-        if count != self._column_count:
-            self._rebuild()
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Report a *single-column* minimum so the block can shrink to one panel.
-
-        The side-by-side skill tables would otherwise inflate the section's
-        minimum to the full multi-column width, pinning the whole page wide and
-        forcing at least two columns. Capping the reported minimum at one
-        column's width lets the block narrow to a single column; the resize then
-        rebuilds to as many columns as fit (see :meth:`resizeEvent`).
-        """
-        hint = super().minimumSizeHint()
-        return QSize(min(hint.width(), self._min_col_width()), hint.height())
+        self._sync_column_count()
 
     def _expand(self, skills: list[Skill]) -> list[tuple]:
         """Flatten skills into per-row specs.
@@ -389,7 +374,7 @@ class SkillsSection(TitledSection):
             RANK_MAX,
             value=self._ranks.get(row_id, 0),
             buttons=False,
-            max_width=SPIN_WIDTH,
+            max_width=spin_width(),
         )
         ranks_spin.valueChanged.connect(lambda value, rid=row_id: self._on_rank_changed(rid, value))
         table.setCellWidget(row, COL_RANKS, ranks_spin)
@@ -401,6 +386,11 @@ class SkillsSection(TitledSection):
         table.setItem(row, COL_MODS, mod_item)
 
         total_item = readonly_item("", center=True)
+        # What this table row rolls, carried on the Total cell. A double-click reads
+        # it back from there whichever column was hit (see _on_cell_double_clicked);
+        # a group header row has no Total cell at all, which is exactly how it says
+        # "nothing to roll here".
+        total_item.setData(ROLL_ROLE, (row_id, display))
         table.setItem(row, COL_TOTAL, total_item)
         self._rows.append(
             SkillRow(skill.ability, row_id, ability_rank_item, mod_item, total_item, name_item)
@@ -486,8 +476,14 @@ class SkillsSection(TitledSection):
     def _add_specialization(self, skill: Skill) -> None:
         name, ok = QInputDialog.getText(self, f"Add {skill.name} specialization", "Specialization:")
         name = name.strip()
+        if not ok or not name:
+            return
+        # Only reach for the list once the dialog was actually accepted: a bare
+        # ``setdefault`` on the cancel path leaves an empty entry on the model, which
+        # ``_remove_specialization`` goes out of its way to avoid and which would then
+        # ride along into the saved JSON.
         specs = self._specializations.setdefault(skill.name, [])
-        if ok and name and name not in specs:
+        if name not in specs:
             specs.append(name)
             self._rebuild()
             self.changed.emit()
@@ -525,16 +521,6 @@ class SkillsSection(TitledSection):
         self.changed.emit()
 
     # -- totals --------------------------------------------------------------
-
-    def set_ability_value(self, key: str, value: int) -> None:
-        """Refresh skill totals after an ability changed on the shared model."""
-
-        self._refresh_totals()
-
-    def set_ability_values(self, values: dict[str, int]) -> None:
-        """Refresh skill totals (kept for the sheet's initial sync call)."""
-
-        self._refresh_totals()
 
     def refresh_totals(self) -> None:
         """Recompute every skill total — the sheet calls this when powers change,
@@ -601,15 +587,17 @@ class SkillsSection(TitledSection):
             tips.append(mod.condition.tooltip)
         mod_item.setToolTip("\n".join(tips))
 
-        mod_item.setForeground(QBrush(QColor(CONDITION_TINT if penalised else ENHANCED_TINT)))
-        font.setStrikeOut(bool(mod.condition.condition_ids & STRIKETHROUGH_CONDITIONS))
+        mod_item.setForeground(
+            QBrush(QColor(theme.color(CONDITION_TINT if penalised else ENHANCED_TINT)))
+        )
+        font.setStrikeOut(mod.condition.trait_lost)
         mod_item.setFont(font)
 
     @staticmethod
     def _style_condition(total_item, name_item, effect, base_total: int) -> None:
         """Tint the total red (and strike the row) while a condition scopes to it."""
 
-        struck = effect.active and bool(effect.condition_ids & STRIKETHROUGH_CONDITIONS)
+        struck = effect.active and effect.trait_lost
         for item in (total_item, name_item):
             if item is None:
                 continue
@@ -617,7 +605,7 @@ class SkillsSection(TitledSection):
             font.setStrikeOut(struck)
             item.setFont(font)
             if effect.active:
-                item.setForeground(QBrush(QColor(CONDITION_TINT)))
+                item.setForeground(QBrush(QColor(theme.color(CONDITION_TINT))))
             else:
                 item.setData(Qt.ItemDataRole.ForegroundRole, None)
         if effect.active:

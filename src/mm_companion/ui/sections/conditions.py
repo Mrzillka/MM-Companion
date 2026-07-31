@@ -29,12 +29,14 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.character import AppliedCondition, Character
+from mm_companion.core.components import MECH_RANDOM_ACTION
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
     apply_condition,
     decrement_condition,
     roll_confused_action,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.widgets import hline_separator
@@ -44,11 +46,16 @@ CONDITIONS_ROW_HEIGHT = 44
 # and a single row of chips) so applying the first condition fills pre-allocated
 # space instead of growing the box. Only a second chip row makes it grow.
 CONDITIONS_MIN_HEIGHT = 150
-# The chip groups the conditions box splits into, in display order.
-CONDITION_CATEGORY_SECTIONS = (("condition", "General"), ("damage_condition", "Damage"))
-# The catalog categories a "+" menu offers — statuses that apply to a character,
-# not the object-damage ladder or the "normal" bookkeeping marker.
-ADDABLE_CATEGORIES = tuple(category for category, _title in CONDITION_CATEGORY_SECTIONS)
+
+
+def addable_categories(data: GameData) -> tuple[str, ...]:
+    """The catalog categories a "+" menu offers.
+
+    Statuses that apply to a character — not the object-damage ladder or the
+    ``normal`` bookkeeping marker. Read from ``conditions.json``'s ``sheetSections``,
+    so a mod's own category is offered without a code change.
+    """
+    return tuple(c.category for c in data.condition_categories if c.addable)
 
 
 def addable_conditions(data: GameData) -> list[Condition]:
@@ -57,7 +64,30 @@ def addable_conditions(data: GameData) -> list[Condition]:
     Module-level because two menus offer the same list: this block's own "+", and
     the GM's fast-apply on a player card.
     """
-    return [c for c in data.conditions if c.category in ADDABLE_CATEGORIES]
+    addable = addable_categories(data)
+    return [c for c in data.conditions if c.category in addable]
+
+
+def matching_condition(
+    character: Character, condition_id: str, parameter: str | None = None
+) -> AppliedCondition | None:
+    """The applied condition a by-id removal should shed, or ``None``.
+
+    Matches on the parameter too, so removing "Attack Impaired" leaves "Dodge
+    Impaired" alone, and prefers a directly applied instance over a bundled member
+    — dropping the umbrella is what taking a condition off means. Module-level so
+    the sheet's own chips and the GM's fast-apply on a card (player or NPC) shed
+    a condition identically.
+    """
+    matches = [
+        applied
+        for applied in character.conditions
+        if applied.condition_id == condition_id and applied.parameter == parameter
+    ]
+    if not matches:
+        return None
+    direct = [applied for applied in matches if applied.provenance is None]
+    return direct[0] if direct else matches[0]
 
 
 def condition_display_name(applied: AppliedCondition, record: Condition | None) -> str:
@@ -144,18 +174,24 @@ class ConditionsSection(QGroupBox):
         header.addStretch()
         outer.addLayout(header)
 
-        # One titled sub-group of chips per category (General / Damage), each with a
-        # header + rule, hidden until it holds a chip.
+        # One titled sub-group of chips per category (General / Damage / …), each with
+        # a header + rule, hidden until it holds a chip. The groups and their order come
+        # from the data, so a mod's category gets one of its own.
         self._category_flows: dict[str, FlowLayout] = {}
-        self._category_sections: dict[str, tuple[QLabel, QWidget, QWidget]] = {}
-        for category, title in CONDITION_CATEGORY_SECTIONS:
+        self._category_sections: dict[str, tuple[QLabel, QWidget, FlowContainer]] = {}
+        self._fallback_category = (
+            data.condition_categories[0].category if data.condition_categories else "condition"
+        )
+        for section in data.condition_categories:
+            category, title = section.category, section.title
             head = QLabel(title)
             head.setStyleSheet(
-                "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
+                f"font-weight: bold; color: {theme.color('text.muted')};"
+                f" padding-top: {int(theme.metric('space.sm'))}px;"
             )
             rule = hline_separator()
             container = FlowContainer()
-            container.setMinimumHeight(CONDITIONS_ROW_HEIGHT)
+            container.set_minimum_row_height(CONDITIONS_ROW_HEIGHT)
             self._category_flows[category] = FlowLayout(container)
             outer.addWidget(head)
             outer.addWidget(rule)
@@ -214,15 +250,10 @@ class ConditionsSection(QGroupBox):
         bundled member — dropping the umbrella is what the GM means by taking the
         condition off. Returns whether anything was on the character to remove.
         """
-        matches = [
-            applied
-            for applied in self._character.conditions
-            if applied.condition_id == condition_id and applied.parameter == parameter
-        ]
-        if not matches:
+        applied = matching_condition(self._character, condition_id, parameter)
+        if applied is None:
             return False
-        direct = [applied for applied in matches if applied.provenance is None]
-        self._shed_condition(direct[0] if direct else matches[0])
+        self._shed_condition(applied)
         return True
 
     def _shed_condition(self, applied: AppliedCondition) -> None:
@@ -257,9 +288,9 @@ class ConditionsSection(QGroupBox):
         used: set[str] = set()
         for applied in self._character.conditions:
             record = self._conditions_by_id.get(applied.condition_id)
-            category = record.category if record else "condition"
+            category = record.category if record else self._fallback_category
             if category not in self._category_flows:
-                category = "condition"
+                category = self._fallback_category
             chip = self._build_condition_chip(applied, record)
             self._condition_chips.append(chip)
             self._category_flows[category].addWidget(chip)
@@ -267,6 +298,19 @@ class ConditionsSection(QGroupBox):
         for category, (head, rule, container) in self._category_sections.items():
             for widget in (head, rule, container):
                 widget.setVisible(category in used)
+        self._refit_containers()
+
+    def _refit_containers(self) -> None:
+        """Re-fit each chip container to its current content.
+
+        ``FlowContainer`` re-pins its own height as chips come and go, but a group
+        that was hidden while it changed had no width to measure at; re-pin here now
+        that visibility has been settled, and let the geometry change bubble up so
+        the enclosing ``BlockFrame`` re-queries its size hint.
+        """
+        for _head, _rule, container in self._category_sections.values():
+            container.refresh_height()
+        self.updateGeometry()
 
     def _build_condition_chip(self, applied: AppliedCondition, record: Condition | None) -> QFrame:
         name = self._condition_display_name(applied, record)
@@ -288,9 +332,10 @@ class ConditionsSection(QGroupBox):
             label.setFont(font)
         chip_layout.addWidget(label)
 
-        # Confused: the turn's action is rolled, not chosen — a die button rolls it
-        # and the last outcome shows inline.
-        if applied.condition_id == "confused":
+        # A condition whose turn's action is rolled rather than chosen (Confused) gets
+        # a die button, with the last outcome shown inline. Driven off the record's
+        # declared mechanism, not its id, so a mod's own random-action condition works.
+        if record is not None and MECH_RANDOM_ACTION in record.mechanisms:
             rolled = self._confused_rolls.get(self._confused_key(applied))
             if rolled:
                 outcome = QLabel(f"— {rolled}")

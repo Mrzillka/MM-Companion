@@ -93,7 +93,6 @@ from mm_companion.core.powers import (
     power_is_homerule,
 )
 from mm_companion.core.rules import (
-    HOMERULE_TINT,
     active_array_child,
     array_alternate_cost,
     array_base_index,
@@ -107,53 +106,28 @@ from mm_companion.core.rules import (
     power_has_custom_modifier,
     power_has_standing_effect,
     power_pl_violations,
+    power_roll_lines,
+    power_rolls,
     power_runtime_gates,
     powers_points_spent,
 )
+from mm_companion.ui import theme
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
 from mm_companion.ui.sections.titled_section import TitledSection
-from mm_companion.ui.theme import ACCENT, DICE_ACCENT, TINT_BETTER, TINT_WORSE, tint_rgba
-from mm_companion.ui.widgets import hline_separator
+from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, muted_style, tinted_style
 
-# Tints for a stat a modifier changed, matching the Power Constructor's
-# PowerTermsView: an extra improved it (green), a flaw limited it (red).
-_TINT_BETTER = TINT_BETTER
-_TINT_WORSE = TINT_WORSE
-# A homerule (Dev-mode) override reads in a distinct blue, apart from better/worse.
-_TINT_HOMERULE = ACCENT
-_TINTS = {"better": _TINT_BETTER, "worse": _TINT_WORSE, HOMERULE_TINT: _TINT_HOMERULE}
 
-# A calm blue reused for drag affordances and dice info.
-_ACCENT = DICE_ACCENT
+def _terms_style() -> TermsGridStyle:
+    """The card's copy of the terms grid: small, unbolded type.
 
-# Repeated inline-style snippets, hoisted so a card's chrome is described once.
-_BOLD = "font-weight: bold;"
-# A muted, italic secondary line (descriptions, role notes) that recedes on both themes.
-_MUTED_ITALIC = "color: palette(placeholder-text); font-style: italic;"
+    The numbers read as reference rather than as the point of the card. The size
+    is set on the QFont (see :class:`TermsGridStyle`) so it scales with a
+    switched-off card's transition instead of being pinned by a stylesheet.
+    """
+    return TermsGridStyle(point_size=theme.font_size("size.terms"), bold_changed=False)
 
-# How a switched-off card recedes: it stays fully readable, but dimmed and a notch
-# smaller, so the active powers are the ones that catch the eye. Every value below is
-# an *endpoint* — a card's look is interpolated between them (see set_off_progress),
-# so flipping a power eases between the two states instead of cutting.
-_INACTIVE_OPACITY = 0.5
-_INACTIVE_FONT_SCALE = 0.9
-# The name label and the game-term table set their own point sizes rather than
-# inheriting the card's, so they are listed here and scaled explicitly.
-_NAME_POINT_SIZE = 11.0
-# Card padding, normal and switched-off (left, top, right, bottom).
-_CARD_MARGINS = (8, 6, 8, 6)
-_CARD_MARGINS_OFF = (5, 3, 5, 3)
-_GROUP_MARGINS = (6, 4, 6, 6)
-_GROUP_MARGINS_OFF = (4, 2, 4, 3)
-_SPACING = 4
-_SPACING_OFF = 2
-# The neutral outline a group card is drawn with, reused by its hover/clickable states.
-_GROUP_BORDER = "#8894b0"
 
-# The always-visible game-term table: deliberately small type, and short lines — two
-# label/value pairs per row, matching the Power Constructor's PowerTermsView.
-_TERM_POINT_SIZE = 8.0
-_TERM_PAIRS_PER_ROW = 2
 # How an effect's row divides between what was bought (extras/flaws) and what it costs
 # at the table (the game terms).
 _MODIFIER_STRETCH = 1
@@ -183,6 +157,18 @@ def _lerp(start: float, end: float, progress: float) -> float:
     return start + (end - start) * progress
 
 
+def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
+    """One entry per die roll a power calls for; effect-prefixed for a multi-effect power.
+
+    Module-level so both the power card's dice footer and the GM's NPC hover summary
+    read the same lines. The lines are the labels of :func:`~mm_companion.core.rules.
+    power_rolls`, which is also what the card's 🎲 buttons roll — so what is written
+    and what is rolled can never drift apart.
+    """
+
+    return power_roll_lines(power, character, data)
+
+
 class _DragHandle(QLabel):
     """The ``⠿`` grip at the head of a card; a press-drag on it starts the drag.
 
@@ -198,7 +184,7 @@ class _DragHandle(QLabel):
         self._press: QPoint | None = None
         self.setToolTip("Drag to reorder, or drop onto another power to group them")
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setStyleSheet("color: palette(placeholder-text);")
+        self.setStyleSheet(muted_style())
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -352,12 +338,12 @@ class _DraggableCard(QFrame):
         if not isinstance(effect, QGraphicsOpacityEffect):
             effect = QGraphicsOpacityEffect(self)
             self.setGraphicsEffect(effect)
-        effect.setOpacity(_lerp(1.0, _INACTIVE_OPACITY, progress))
+        effect.setOpacity(_lerp(1.0, theme.metric("opacity.inactive"), progress))
 
     def _apply_fonts(self, progress: float) -> None:
         if self._base_points is None:
             self._base_points = [(w, w.font().pointSizeF()) for w in self._own_widgets()]
-        scale = _lerp(1.0, _INACTIVE_FONT_SCALE, progress)
+        scale = _lerp(1.0, theme.font_size("scale.inactive"), progress)
         for widget, base in self._base_points:
             font = widget.font()
             font.setPointSizeF(base * scale)
@@ -382,14 +368,12 @@ class _DraggableCard(QFrame):
         layout = self.layout()
         if layout is None:
             return
-        live, off = (
-            (_GROUP_MARGINS, _GROUP_MARGINS_OFF)
-            if self._is_group
-            else (_CARD_MARGINS, _CARD_MARGINS_OFF)
-        )
+        prefix = "group" if self._is_group else "card"
+        live, off = theme.box(f"{prefix}.margins"), theme.box(f"{prefix}.margins.off")
         margins = (round(_lerp(a, b, progress)) for a, b in zip(live, off, strict=True))
         layout.setContentsMargins(*margins)
-        layout.setSpacing(round(_lerp(_SPACING, _SPACING_OFF, progress)))
+        spacing = _lerp(theme.metric("card.spacing"), theme.metric("card.spacing.off"), progress)
+        layout.setSpacing(round(spacing))
 
     # -- clickability -----------------------------------------------------
     def set_clickable(self, clickable: bool) -> None:
@@ -410,24 +394,28 @@ class _DraggableCard(QFrame):
         an unscoped border here would be inherited by every child QFrame (the
         separators) and every label inside the card.
         """
+        width = int(theme.metric("border.width"))
+        accent = theme.color("accent")
         if self._is_group:
-            rules = [f"border: 1px solid {_GROUP_BORDER};", "border-radius: 6px;"]
+            border, radius = theme.color("border.group"), theme.metric("radius.group")
         else:
             # Spelled out rather than left to the native StyledPanel: once a stylesheet
             # dresses this frame at all (for the accent edge), it owns every border, so
             # the plain state has to name the one it replaces.
-            rules = ["border: 1px solid palette(mid);", "border-radius: 4px;"]
+            border, radius = theme.color("border.card"), theme.metric("radius.card")
+        rules = [f"border: {width}px solid {border};", f"border-radius: {int(radius)}px;"]
         if self._clickable:
             # A standing edge says "this one is a switch" without needing a hover, and
             # the border confirms the one the pointer is actually on.
             if self._hovered:
-                rules.append(f"border: 1px solid {ACCENT};")
+                rules.append(f"border: {width}px solid {accent};")
                 # Only a leaf card fills. A stylesheet background paints behind every
                 # child, so washing a *group* would flood its whole subtree — its
                 # outline lights instead, and its members stay as they were.
                 if not self._is_group:
-                    rules.append(f"background: {tint_rgba(ACCENT, 0.10)};")
-            rules.append(f"border-left: 3px solid {ACCENT};")
+                    rules.append(f"background: {theme.wash('accent', 0.10)};")
+            edge = int(theme.metric("border.width.accent-edge"))
+            rules.append(f"border-left: {edge}px solid {accent};")
         self.setStyleSheet(f"#{self.objectName()} {{ {' '.join(rules)} }}")
 
     def _set_hovered(self, hovered: bool) -> None:
@@ -474,11 +462,18 @@ class _DraggableCard(QFrame):
         to happen here. Whether the pointer is still inside it is read from the cursor
         rather than from ``underMouse()``, whose flag Qt may already have cleared by
         the time this child's Leave is delivered.
+
+        Inert ancestors are stepped over rather than stopped at: ``_set_hovered``
+        no-ops on a card that isn't clickable, so handing the highlight to one would
+        just drop it — and the clickable card further out, which is what a click there
+        would actually reach, would stay dark until the pointer left the group entirely.
         """
         super().leaveEvent(event)
         self._set_hovered(False)
         cursor = QCursor.pos()
         for ancestor in self._card_ancestors():
+            if not ancestor.is_clickable():
+                continue
             if ancestor.rect().contains(ancestor.mapFromGlobal(cursor)):
                 ancestor._set_hovered(True)
                 break
@@ -527,12 +522,19 @@ class _GroupHeader(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("groupHeader")
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(_POWER_MIME):
             event.acceptProposedAction()
-            self.setStyleSheet(f"background: {tint_rgba(_ACCENT, 0.25)}; border-radius: 4px;")
+            # Scoped to this widget by object name: a selector-less stylesheet applies
+            # to every child too, so the wash would also tint the group's name and its
+            # ✎/✕ and mode buttons rather than just the bar behind them.
+            self.setStyleSheet(
+                f"#groupHeader {{ background: {theme.wash('accent.dice', 0.25)};"
+                f" border-radius: {int(theme.metric('radius.header'))}px; }}"
+            )
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if event.mimeData().hasFormat(_POWER_MIME):
@@ -573,13 +575,15 @@ class _NodeList(QWidget):
         self._indicator = QFrame(self)
         self._indicator.setFrameShape(QFrame.Shape.HLine)
         self._indicator.setFixedHeight(2)
-        self._indicator.setStyleSheet(f"background: {_ACCENT}; border: none;")
+        self._indicator.setStyleSheet(f"background: {theme.color('accent.dice')}; border: none;")
         self._indicator.hide()
         # A translucent outline laid over a card to mark it as the combine target.
         self._highlight = QFrame(self)
         self._highlight.setStyleSheet(
-            f"border: 2px solid {_ACCENT}; border-radius: 6px; "
-            f"background: {tint_rgba(_ACCENT, 0.15)};"
+            f"border: {int(theme.metric('border.width.emphasis'))}px solid"
+            f" {theme.color('accent.dice')};"
+            f" border-radius: {int(theme.metric('radius.group'))}px;"
+            f" background: {theme.wash('accent.dice', 0.15)};"
         )
         self._highlight.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._highlight.hide()
@@ -673,6 +677,10 @@ class PowersSection(TitledSection):
     # not mark the character dirty — the sheet wires this to the same refreshes as
     # ``changed`` minus the unsaved-changes flag.
     runtimeChanged = Signal()
+    #: A card's 🎲 was pressed — roll that line. Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`. Neither a build change nor a
+    #: runtime one: rolling a power changes nothing about the power.
+    rollRequested = Signal(object)
 
     #: How long a card takes to ease between its live and switched-off looks. A class
     #: attribute so tests can zero it and assert on the resting state without waiting
@@ -810,8 +818,8 @@ class PowersSection(TitledSection):
         source_node, src_list, src_index, _ = source
         src_list.pop(src_index)
         target = self._locate(target_id)
-        if target is None:  # source and target were the same list and collapsed away
-            src_list.append(source_node)  # put it back; nothing to do
+        if target is None:  # defensive: the target should still be findable here
+            src_list.insert(src_index, source_node)  # put it back where it was
             return
         target_node, tgt_list, tgt_index, _ = target
         group = PowerGroup(
@@ -985,7 +993,7 @@ class PowersSection(TitledSection):
 
         mode_label = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
         label = QLabel(group.name or mode_label)
-        label.setStyleSheet(_BOLD)
+        label.setStyleSheet(BOLD_STYLE)
         row.addWidget(label)
 
         rename = QPushButton("✎")
@@ -1059,8 +1067,13 @@ class PowersSection(TitledSection):
         has a runtime gate *and* a standing bonus.
 
         ``""`` — nothing to switch (a permanent ungated power, a pure-instant attack),
-        or the switch belongs to an ancestor: a member of a Linked group is driven by
+        or the switch belongs to an ancestor: anything under a Linked group is driven by
         that group's card, so its own card stays inert and lets the click bubble up.
+
+        The Linked test looks at the whole ancestor chain, not just the immediate
+        parent: a member may sit inside a sub-group (dragging one card onto another
+        always makes an *Independent* group) that is itself inside the Linked group, and
+        it still has to switch with its linked siblings rather than sprout its own switch.
         """
         if (
             isinstance(parent, PowerGroup)
@@ -1069,7 +1082,7 @@ class PowersSection(TitledSection):
             and any(self._node_has_standing(child) for child in parent.children)
         ):
             return "select"
-        if isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
+        if self._linked_ancestor(node) is not None:
             return ""
         if isinstance(node, PowerGroup):
             if (
@@ -1211,7 +1224,7 @@ class PowersSection(TitledSection):
         if power.description:
             desc = QLabel(power.description)
             desc.setWordWrap(True)
-            desc.setStyleSheet(_MUTED_ITALIC)
+            desc.setStyleSheet(muted_style(italic=True))
             layout.addWidget(desc)
 
         effects = self._effects_block(power)
@@ -1255,15 +1268,15 @@ class PowersSection(TitledSection):
         # The size goes on the QFont, not into the stylesheet: a stylesheet font-size
         # would outrank the card's own font and so sit out the switched-off transition.
         font = name.font()
-        font.setPointSizeF(_NAME_POINT_SIZE)
+        font.setPointSizeF(theme.font_size("size.card-name"))
         # A Debilitated condition naming this power loses it — strike the header through
         # and redden it (display-only; the power's point cost is untouched).
         if power.name and power.name in debilitated_traits(self._character, self._data):
-            name.setStyleSheet(f"font-weight: bold; color: {_TINT_WORSE};")
+            name.setStyleSheet(tinted_style("tint.worse"))
             font.setStrikeOut(True)
             name.setToolTip("Debilitated — this power is effectively lost")
         else:
-            name.setStyleSheet(_BOLD)
+            name.setStyleSheet(BOLD_STYLE)
         name.setFont(font)
         layout.addWidget(name)
 
@@ -1272,7 +1285,7 @@ class PowersSection(TitledSection):
         violations = power_pl_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
-            warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
+            warning.setStyleSheet(tinted_style("tint.warning"))
             warning.setToolTip("\n".join(violations))
             layout.addWidget(warning)
 
@@ -1280,7 +1293,7 @@ class PowersSection(TitledSection):
         # is badged so a bent value on the sheet is never mistaken for a by-the-book one.
         if power_is_homerule(power) or power_has_custom_modifier(power, self._data):
             homerule = QLabel("⌂")
-            homerule.setStyleSheet(f"color: {_TINT_HOMERULE}; font-weight: bold;")
+            homerule.setStyleSheet(tinted_style("tint.homerule"))
             homerule.setToolTip(
                 "Homerule power — carries manual (Dev-mode) overrides or a custom modifier."
             )
@@ -1326,7 +1339,7 @@ class PowersSection(TitledSection):
         header = self._structure_header(power)
         if header:
             line = QLabel(header)
-            line.setStyleSheet(_MUTED_ITALIC)
+            line.setStyleSheet(muted_style(italic=True))
             layout.addWidget(line)
         for index, effect in enumerate(power.effects):
             layout.addWidget(self._effect_summary(power, effect, index))
@@ -1348,12 +1361,12 @@ class PowersSection(TitledSection):
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         title = QLabel(self._effect_title(effect))
-        title.setStyleSheet(_BOLD)
+        title.setStyleSheet(BOLD_STYLE)
         header.addWidget(title)
         note = self._role_note(power, index)
         if note:
             role = QLabel(note)
-            role.setStyleSheet(_MUTED_ITALIC)
+            role.setStyleSheet(muted_style(italic=True))
             header.addWidget(role)
         header.addStretch()
         layout.addLayout(header)
@@ -1380,15 +1393,15 @@ class PowersSection(TitledSection):
         layout = QVBoxLayout(column)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        for caption, names, tint in (
-            ("Extras: ", extras, _TINT_BETTER),
-            ("Flaws: ", flaws, _TINT_WORSE),
+        for caption, names, token in (
+            ("Extras: ", extras, "tint.better"),
+            ("Flaws: ", flaws, "tint.worse"),
         ):
             if not names:
                 continue
             label = QLabel(caption + ", ".join(names))
             label.setWordWrap(True)
-            label.setStyleSheet(f"color: {tint};")
+            label.setStyleSheet(tinted_style(token, bold=False))
             layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addStretch()
         return column
@@ -1402,34 +1415,11 @@ class PowersSection(TitledSection):
         modifier changed keeps its green/red tint (with the base value on its tooltip),
         because that is the part worth noticing at a glance.
         """
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 1, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(0)
         attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
         rows = effect_stat_rows(effect, self._data, self._character, attack_bonus)
-        for index, stat in enumerate(rows):
-            grid_row, pair = divmod(index, _TERM_PAIRS_PER_ROW)
-            column = pair * 2
-            label = QLabel(f"{stat.label}:")
-            label.setStyleSheet("color: palette(placeholder-text);")
-            value = QLabel(stat.value)
-            value.setWordWrap(True)
-            tint = _TINTS.get(stat.change)
-            if tint:
-                value.setStyleSheet(f"color: {tint};")
-                value.setToolTip(f"Base: {stat.base}")
-            # The table's small size lives on the QFont rather than in the stylesheet,
-            # so it scales with the card when the power is switched off (a stylesheet
-            # font-size would override the card font and stay put).
-            for widget in (label, value):
-                small = widget.font()
-                small.setPointSizeF(_TERM_POINT_SIZE)
-                widget.setFont(small)
-            grid.addWidget(label, grid_row, column, Qt.AlignmentFlag.AlignTop)
-            grid.addWidget(value, grid_row, column + 1, Qt.AlignmentFlag.AlignTop)
-        for pair in range(_TERM_PAIRS_PER_ROW):
-            grid.setColumnStretch(pair * 2 + 1, 1)
+        grid = build_terms_grid(rows, _terms_style())
+        grid.setContentsMargins(0, 1, 0, 0)
+        grid.setVerticalSpacing(0)
         return grid
 
     def _effect_title(self, effect: PowerEffectInstance) -> str:
@@ -1472,51 +1462,66 @@ class PowersSection(TitledSection):
         A power that resolves without dice — a Protection, a permanent Enhanced Trait —
         gets no footer at all rather than a line saying so: the absence *is* the answer,
         and a placeholder on every passive power is pure noise.
+
+        A line the *wielder* rolls gets a ``🎲``; a resistance line does not, because
+        the wielder never makes their own target's save. That roll reaches the person
+        who does make it as the follow-up chip on the attack's history card. The line
+        still reads (it is what the power does), indented to keep the column of text
+        straight.
+
+        Each ``🎲`` is a real :class:`QPushButton`, and that is the whole trick: a
+        button consumes its own press, so the click never reaches
+        :meth:`_DraggableCard.mousePressEvent` and rolling a power can't be mistaken
+        for switching it on. (The same reason the grip, ✎ and ✕ are buttons.) A label
+        would have let the press through and toggled the card.
         """
-        lines = self._rolls_lines(power)
-        if not lines:
+        specs = self._rolls(power)
+        if not specs:
             return None
         host = QWidget()
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        for line in lines:
-            label = QLabel(f"🎲 {line}")
-            label.setWordWrap(True)
-            label.setStyleSheet(f"color: {_ACCENT};")  # a calm blue reserved for dice info
-            layout.addWidget(label)
+        for spec in specs:
+            layout.addWidget(self._roll_line(spec))
         return host
 
-    def _rolls_lines(self, power: Power) -> list[str]:
-        """One entry per die roll the power calls for, read from the same game-term rows
-        the constructor shows; effect-prefixed for a multi-effect power.
+    def _roll_line(self, spec) -> QWidget:
+        """One dice-footer line: its ``🎲`` button, if the wielder rolls it, then its text."""
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(int(theme.metric("space.sm")))
+        button_width = int(theme.metric("column.roll-button"))
 
-        An attack check and the save it forces are separate rolls made by different
-        people, so they get a line each rather than sharing one.
-        """
-        multi = len(power.effects) > 1
-        lines: list[str] = []
-        for effect in power.effects:
-            attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
-            rows = {
-                r.key: r
-                for r in effect_stat_rows(effect, self._data, self._character, attack_bonus)
-            }
-            rolls = []
-            if "check" in rows:
-                rolls.append(rows["check"].value)
-            if "resistance" in rows:
-                rolls.append(rows["resistance"].value)
-            elif "effect_dc" in rows:  # a save DC with no shown check/resistance phrase
-                rolls.append(rows["effect_dc"].value)
-            if not rolls:
-                continue
-            if multi:
-                base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
-                name = base.name if base else effect.effect_id
-                rolls = [f"{name}: {roll}" for roll in rolls]
-            lines.extend(rolls)
-        return lines
+        if spec.rolled_by_target:
+            # No button, but the same indent, so the lines read as one column.
+            line.addSpacing(button_width)
+        else:
+            button = QPushButton("🎲")
+            button.setFlat(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedWidth(button_width)
+            button.setToolTip(spec.hint or f"Roll {spec.label}")
+            button.clicked.connect(lambda _=False, s=spec: self.rollRequested.emit(s))
+            line.addWidget(button, alignment=Qt.AlignmentFlag.AlignTop)
+
+        label = QLabel(spec.label)
+        label.setWordWrap(True)
+        label.setToolTip(spec.hint)
+        label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
+        line.addWidget(label, stretch=1)
+        return row
+
+    def _rolls(self, power: Power):
+        """Every roll the power calls for, as specs; see :func:`~mm_companion.core.
+        rules.power_rolls`."""
+        return power_rolls(power, self._character, self._data)
+
+    def _rolls_lines(self, power: Power) -> list[str]:
+        """One entry per die roll the power calls for; see module-level
+        :func:`roll_lines`."""
+        return roll_lines(power, self._character, self._data)
 
     @staticmethod
     def _structure_header(power: Power) -> str:
@@ -1583,15 +1588,35 @@ class PowersSection(TitledSection):
     def _linked_activation_set(self, power: Power) -> list[Power]:
         """Every leaf power that switches on/off together with *power*.
 
-        Just ``[power]`` unless it sits directly inside a Linked group, in which case
-        all leaf powers under that group activate as one.
+        Just ``[power]`` unless it sits somewhere under a Linked group, in which case
+        all leaf powers under that group activate as one — including through any
+        intervening sub-group, and out to the *outermost* Linked group when they nest.
         """
-        located = self._locate(power.id)
-        if located is not None:
-            parent = located[3]
-            if isinstance(parent, PowerGroup) and parent.mode == STRUCTURE_LINKED:
-                return self._leaf_powers(parent)
-        return [power]
+        linked = self._linked_ancestor(power)
+        return self._leaf_powers(linked) if linked is not None else [power]
+
+    def _ancestor_groups(self, node_id: str) -> list[PowerGroup]:
+        """Every group enclosing *node_id*, outermost first (empty at the top level)."""
+
+        def walk(nodes: list[PowerNode], trail: list[PowerGroup]) -> list[PowerGroup] | None:
+            for node in nodes:
+                if node.id == node_id:
+                    return trail
+                if isinstance(node, PowerGroup):
+                    found = walk(node.children, [*trail, node])
+                    if found is not None:
+                        return found
+            return None
+
+        return walk(self._character.powers, []) or []
+
+    def _linked_ancestor(self, node: PowerNode) -> PowerGroup | None:
+        """The outermost Linked group enclosing *node*, or ``None``.
+
+        Outermost rather than nearest: nested Linked groups all switch as one, so the
+        activation set is the widest of them.
+        """
+        return next((g for g in self._ancestor_groups(node.id) if g.mode == STRUCTURE_LINKED), None)
 
     @staticmethod
     def _leaf_powers(node: PowerNode) -> list[Power]:

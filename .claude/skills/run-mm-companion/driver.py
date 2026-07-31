@@ -17,6 +17,12 @@ Screenshots land in ./_driver_shots/<target>.png by default (override with
 --out). The workspace is redirected to a throwaway temp dir so the driver never
 touches the user's real %APPDATA%\\MM-Companion (pass --keep-home to opt out).
 
+``--theme <id>`` renders under a given theme preset (``classic``, ``slate-dark``,
+``parchment-light``, or anything in the workspace ``themes/`` dir) and tags the
+filename with it, so the same surface can be compared across looks:
+
+    python .claude/skills/run-mm-companion/driver.py sheet --theme slate-dark
+
 To drive a NEW flow, add a branch in build() that constructs the window and
 pokes its real widgets before the screenshot — see the "sheet-demo" branch,
 which sets ability spin boxes through the section API so the derived PP totals
@@ -52,6 +58,32 @@ def _shoot(widget, path: Path) -> None:
     print(f"[driver] wrote {path}  ({pixmap.width()}x{pixmap.height()})")
 
 
+def _app():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance()
+
+
+def _fixed_rng(value: int):
+    """A stand-in RNG that always rolls *value* — the server owns the die, so a
+    reproducible screenshot has to force it there."""
+    import random
+
+    rng = random.Random()
+    rng.randint = lambda _a, _b: value  # type: ignore[method-assign]
+    return rng
+
+
+def _guest_seat(bridge, display_name: str) -> str:
+    """A second seat at a hosted session, so a roll can come from somebody else.
+
+    The screenshot needs an attack that this window did *not* make — that is the
+    whole point of the chain — and adding a roster slot is cheaper than running a
+    second app.
+    """
+    return bridge.server.state.add_player(display_name).player_id
+
+
 def build(target: str):
     """Construct and show the window for ``target``; return it."""
     from mm_companion.core.storage import ensure_workspace
@@ -77,27 +109,202 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target in ("sheet-pinned", "sheet-pinned-bottom"):
+        # The pinned strip with something in it: two blocks parked outside the
+        # scrolling page. The bottom variant also moves the strip to another edge,
+        # which flips the strip's stacking axis and the board's split.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        sheet = win._sheet
+        sheet.pin_block("conditions")
+        # Beside the first one, in the same line, so the shot shows the strip
+        # arranging blocks in both directions rather than as one stack.
+        sheet.pin_block("abilities", line=0, slot=1, new_line=False)
+        sheet.pin_block("resistances")
+        if target == "sheet-pinned-bottom":
+            sheet.canvas.set_pin_edge("bottom")
+        return win
+    elif target == "focus":
+        # Put keyboard focus on an ability spin box, so the focus ring — the only
+        # visible sign that a wheel-guarded control now owns the scroll wheel —
+        # shows up in the screenshot.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        spin = win._sheet.abilities._abilities["AGL"]
+        spin.setValue(8)
+        spin.setFocus()
+        return win
     elif target == "constructor":
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
     elif target in ("dice", "dice-demo"):
-        from mm_companion.ui.dice_roller import DiceRollerWindow
+        # The roller is a sheet block now, pinned in the strip by default, so the
+        # shot is of the sheet — there is no standalone roller window.
+        from mm_companion.ui.main_window import MainWindow
 
-        win = DiceRollerWindow()
+        win = MainWindow(locked=False)
         if target == "dice-demo":
-            # Drive a couple of rolls straight through the resolve path (skipping
-            # the 2s animation) so the readout, a couple of history cards, and a
-            # saved quick roll are all populated in the screenshot.
-            win._bonus_spin.setValue(5)
-            win._penalty_spin.setValue(1)
-            win._dc_check.setChecked(True)
-            win._dc_spin.setValue(15)
-            win._finish_roll()
-            win._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
-            win._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
-            win._dc_check.setChecked(False)
-            win._finish_roll()
+            # Drive a couple of rolls straight through the resolve path (skipping the
+            # tumble animation) so the readout and a couple of history cards are
+            # populated, and fill the quick-roll strip to one short of MAX_QUICK_ROLLS
+            # so the shot shows both star states: the first roll's card is lit (it *is*
+            # a quick roll), the second's is muted (it is not, and there is room).
+            panel = win._sheet.dice.panel
+            panel._bonus_spin.setValue(5)
+            panel._penalty_spin.setValue(1)
+            panel._dc_check.setChecked(True)
+            panel._dc_spin.setValue(15)
+            panel._finish_roll()
+            panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
+            panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+            for bonus in (3, 7, 11):
+                panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
+            panel._dc_check.setChecked(False)
+            panel._bonus_spin.setValue(4)
+            panel._finish_roll()
+    elif target in ("roll-demo", "roll-demo-table"):
+        # Rolling straight off the sheet. "roll-demo" is the solo case: a power's
+        # attack goes through the same path a card's 🎲 uses, against a typed-in
+        # target Defense, and the save it forced is rolled from the follow-up chip
+        # on its own history card — the whole chain, ending in the outcome line.
+        #
+        # "roll-demo-table" is what the feature is actually for: a real loopback
+        # session with two seats, where the *attacker* is somebody else and this
+        # window is the target's. Its card carries the chip because the spec came
+        # over the wire, and clicking it fills in this sheet's own Toughness.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui import dice_roller as dice_module
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=True)  # the play view: rolling works locked
+        win.show()
+        sheet = win._sheet
+        for key, value in {"STR": 4, "STA": 5, "AGL": 3, "ATK": 7}.items():
+            sheet.abilities._abilities[key].setValue(value)
+        sheet.character.powers.append(
+            Power(name="Force Blast", effects=[PowerEffectInstance("damage", rank=8)])
+        )
+        sheet.powers.refresh()
+
+        panel = sheet.dice.panel
+        attack, _save = sheet.powers._rolls(sheet.character.powers[0])
+
+        if target == "roll-demo-table":
+            from PySide6.QtWidgets import QPushButton
+
+            from mm_companion.core.session.model import new_session
+            from mm_companion.ui.session_bridge import SessionBridge, set_active_session
+
+            bridge = SessionBridge()
+            bridge.host(new_session("The Table"), port=0, bind="127.0.0.1")
+            set_active_session(bridge)
+            sheet.sync_session()
+            # The server rolls, so the die is forced there rather than in the panel.
+            bridge.server._rng = _fixed_rng(20)
+            # Somebody else's attack lands, and it is a critical hit: the save it
+            # forces is at +5 DC, and the spec travels with the roll so this window
+            # — the target's — can act on it.
+            bridge.server.roll(
+                label=attack.label,
+                bonus=attack.modifier,
+                dc=12,
+                spec=attack.to_dict(),
+                player_id=_guest_seat(bridge, "Ada"),
+            )
+            _pump(_app())
+            # Answer it from this sheet: the chip fills in our own Toughness (5).
+            card = sheet.dice.view._session_history.cards()[0]
+            chip = next(b for b in card.findChildren(QPushButton) if b.text().startswith("🎲"))
+            bridge.server._rng = _fixed_rng(6)  # and the save fails
+            dice_module.ROLL_DURATION_MS = 0  # no tumble, so the shot is deterministic
+            chip.click()
+            _pump(_app())
+            win._driver_bridge = bridge  # keep it alive for the screenshot
+            return win
+
+        panel._dc_check.setChecked(True)
+        panel._dc_spin.setValue(12)  # the target's Defense
+        dice_module.roll_d20 = lambda *a, **k: 14  # a hit, deterministically
+        panel._finish_roll()
+
+        # The chip the hit put on the card: roll the save it forced.
+        card = sheet.dice.view._local_history.cards()[0]
+        from PySide6.QtWidgets import QPushButton
+
+        chip = next(b for b in card.findChildren(QPushButton) if b.text().startswith("🎲"))
+        chip.click()
+        panel._bonus_spin.setValue(4)  # the target's Toughness
+        dice_module.roll_d20 = lambda *a, **k: 6  # and it fails
+        panel._finish_roll()
+        return win
+    elif target in ("dice-bottom", "dice-bottom-demo"):
+        # The Dice block in a *bottom* strip — short and wide, so its four parts
+        # reflow into one row instead of the column the right-hand strip gets.
+        # Nothing else is pinned, so the shot is of the roller alone.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        sheet = win._sheet
+        sheet.canvas.set_pin_edge("bottom")
+        if target == "dice-bottom-demo":
+            panel = sheet.dice.panel
+            panel._bonus_spin.setValue(5)
+            panel._penalty_spin.setValue(1)
+            panel._dc_check.setChecked(True)
+            panel._dc_spin.setValue(15)
+            panel._finish_roll()
+            panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
+            panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+            panel._finish_roll()
+        return win
+    elif target in ("settings", "settings-demo"):
+        from mm_companion.ui.settings import SettingsWindow
+
+        win = SettingsWindow()
+        if target == "settings-demo":
+            # Duplicate the active preset, dress it in Slate Dark's surfaces, and
+            # recolour the accent — driven through the page's own handlers, so the
+            # draft, the live preview and the dirty state all move exactly as they
+            # would under a mouse. The window is previewing an unsaved theme.
+            from mm_companion.ui import theme as theme_module
+            from mm_companion.ui.settings.token_editor import seed_styled_surfaces
+
+            page = win._pages[0]
+            source = page._editor.draft()
+            copy = source.__class__(
+                **{
+                    **source.__dict__,
+                    "id": "driver-demo",
+                    "name": "Driver Demo",
+                    "description": f"Based on {source.name}.",
+                }
+            )
+            from mm_companion.ui.theme import loader as theme_loader
+
+            theme_loader.save_workspace_theme(copy)
+            theme_module.reset()
+            page._reload_presets(select="driver-demo")
+            page._editor.load(
+                seed_styled_surfaces(
+                    page._editor.draft(), theme_module.available_themes()["slate-dark"]
+                )
+            )
+            # Through the row itself, the way the colour picker does it, so the
+            # swatch and the field show the new colour and not just the draft.
+            row = page._editor._color_rows["accent"]
+            row.set_value("#c0693c")
+            row.valueChanged.emit("#c0693c")
+            page._on_edited()
+            page._preview_now()
+            # And filter down to the tokens the demo actually changed, so the shot
+            # shows what the filter box is for rather than the top of a long form.
+            page._filter_field.setText("accent")
     elif target == "gm":
         # GM Mode with a cast already in it, so the NPC panel is not an empty
         # state: two NPCs are written into the workspace gm_characters/ dir and
@@ -142,9 +349,18 @@ def main(argv: list[str] | None = None) -> int:
             "start",
             "sheet",
             "sheet-demo",
+            "sheet-pinned",
+            "sheet-pinned-bottom",
             "constructor",
+            "focus",
             "dice",
             "dice-demo",
+            "roll-demo",
+            "roll-demo-table",
+            "dice-bottom",
+            "dice-bottom-demo",
+            "settings",
+            "settings-demo",
             "gm",
             "npc",
             "all",
@@ -157,6 +373,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use the real workspace instead of a throwaway temp dir",
     )
+    parser.add_argument(
+        "--theme",
+        default=None,
+        help="theme preset id to render under (default: whatever the workspace has)",
+    )
     args = parser.parse_args(argv)
 
     if not args.keep_home and "MM_COMPANION_HOME" not in os.environ:
@@ -167,11 +388,23 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
 
+    # The real entry point installs the theme before the first widget exists; do
+    # the same here, or every surface renders unstyled no matter what is saved.
+    from mm_companion.core.storage import ensure_workspace
+    from mm_companion.ui import theme
+
+    ensure_workspace()
+    if args.theme:
+        theme.set_active_theme(args.theme)
+    theme.apply(app)
+    suffix = f".{theme.active_theme().id}" if args.theme else ""
+    print(f"[driver] theme={theme.active_theme().id} ({theme.active_theme().chrome.mode})")
+
     targets = ["start", "sheet", "constructor"] if args.target == "all" else [args.target]
     for target in targets:
         win = build(target)
         _pump(app)
-        _shoot(win, args.out / f"{target}.png")
+        _shoot(win, args.out / f"{target}{suffix}.png")
         win.hide()
         win.deleteLater()
         _pump(app, rounds=2)

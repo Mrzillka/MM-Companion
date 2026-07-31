@@ -63,6 +63,10 @@ jobs:
       - name: Build installer
         run: pwsh installer\build.ps1
 
+      # The release body is the hand-written docs/releases/<tag>.md committed with
+      # the version bump (see the make-release skill). Tags from before that
+      # convention have no such file, so fall back to auto-generated notes rather
+      # than failing a build over it.
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -70,9 +74,15 @@ jobs:
         run: |
           $asset = "installer\output\MM-Companion-Setup-${{ steps.ver.outputs.version }}.exe"
           if (-not (Test-Path $asset)) { throw "Expected installer $asset was not produced." }
-          gh release create "${{ github.ref_name }}" $asset `
-            --title "MM-Companion ${{ steps.ver.outputs.version }}" `
-            --generate-notes
+          $title = "MM-Companion ${{ steps.ver.outputs.version }}"
+          $notes = "docs\releases\${{ github.ref_name }}.md"
+          if (Test-Path $notes) {
+            Write-Host "Publishing with release notes from $notes"
+            gh release create "${{ github.ref_name }}" $asset --title $title --notes-file $notes
+          } else {
+            Write-Host "::warning::No $notes found - falling back to auto-generated notes."
+            gh release create "${{ github.ref_name }}" $asset --title $title --generate-notes
+          }
 
       # On a manual (workflow_dispatch) run there is no tag, so keep the
       # installer as a downloadable build artifact instead of releasing it.

@@ -93,6 +93,8 @@ class SessionBridge(QObject):
     #: ``("apply" | "remove", payload)`` — the GM told this client to change a
     #: condition on its live sheet. Client side only.
     conditionCommand = Signal(str, object)
+    #: ``value`` — the GM set this client's hero-point total. Client side only.
+    heroPointsCommand = Signal(int)
     #: The GM dropped us; carries the reason. Client side only.
     kicked = Signal(str)
 
@@ -181,6 +183,7 @@ class SessionBridge(QObject):
         penalty: int = 0,
         dc: int | None = None,
         hidden: bool = False,
+        spec: dict | None = None,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -191,15 +194,35 @@ class SessionBridge(QObject):
         live session to roll in.
 
         ``hidden`` is honoured only for the host; the server ignores the flag on a
-        player's request rather than trusting it.
+        player's request rather than trusting it. ``spec`` is the sheet's
+        description of the roll (a serialized
+        :class:`~mm_companion.core.rules.RollSpec`), which travels so that the
+        *other* seats can act on it — see ``docs/mm-session-architecture.md``.
         """
         if self._server is not None:
-            self._server.roll(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden)
+            self._server.roll(
+                label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+            )
             return True
         if self._client is not None:
             return self._client.request_roll(
-                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
+                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
             )
+        return False
+
+    def post_note(self, text: str) -> bool:
+        """Write a line in the shared log — something that happened, not a roll.
+
+        Dual-path like :meth:`remove_roll`: the host records it in-process, a
+        player asks over the wire. Either way it comes back as :attr:`rollAdded`
+        carrying ``kind="note"``, so every history already following that signal
+        shows it without a new connection. Returns False with no live session.
+        """
+        if self._server is not None:
+            self._server.note(text)
+            return True
+        if self._client is not None:
+            return self._client.post_note(text)
         return False
 
     def remove_roll(self, seq: int) -> bool:
@@ -213,6 +236,79 @@ class SessionBridge(QObject):
             return self._server.remove_roll(seq)
         if self._client is not None:
             return self._client.request_remove_roll(seq)
+        return False
+
+    # -- GM commands -------------------------------------------------------
+    #
+    # Each is dual-path in the same shape as :meth:`remove_roll`: the in-process
+    # host does it directly, a GM dialled in to a hosted session asks over the
+    # wire. A player's bridge has neither and returns False. The server enforces
+    # the privilege at the far end; this is only about which road the command
+    # takes.
+
+    @property
+    def is_gm(self) -> bool:
+        """True when this app holds the GM's seat, hosting or dialled in."""
+        if self._server is not None:
+            return True
+        return self._client is not None and self._client.is_gm
+
+    def kick(self, player_id: str, reason: str = "") -> bool:
+        """Remove a player from the session, dropping their seat."""
+        if self._server is not None:
+            return self._server.kick(player_id, reason)
+        if self._client is not None:
+            return self._client.request_kick(player_id, reason)
+        return False
+
+    def apply_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
+        """Put a condition on a player's live sheet."""
+        if self._server is not None:
+            return self._server.apply_condition(player_id, condition_id, parameter)
+        if self._client is not None:
+            return self._client.apply_condition(player_id, condition_id, parameter)
+        return False
+
+    def remove_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
+        """Take a condition off a player's live sheet."""
+        if self._server is not None:
+            return self._server.remove_condition(player_id, condition_id, parameter)
+        if self._client is not None:
+            return self._client.remove_condition(player_id, condition_id, parameter)
+        return False
+
+    def set_hero_points(self, player_id: str, value: int) -> bool:
+        """Set a player's hero-point total on their live sheet."""
+        if self._server is not None:
+            return self._server.set_hero_points(player_id, value)
+        if self._client is not None:
+            return self._client.set_hero_points(player_id, value)
+        return False
+
+    def set_session_name(self, name: str) -> bool:
+        """Rename the session."""
+        if self._server is not None:
+            self._server.set_session_name(name)
+            return True
+        if self._client is not None:
+            return self._client.set_session_name(name)
+        return False
+
+    def npc_paths(self) -> list[str]:
+        """The NPC cast list — from the hosted state, or as the Welcome carried it."""
+        if self._server is not None:
+            return list(self._server.state.npc_paths)
+        if self._client is not None:
+            return list(self._client.npc_paths)
+        return []
+
+    def set_npc_paths(self, paths: list[str]) -> bool:
+        """Store the NPC cast list so it follows the session, not the machine."""
+        if self._server is not None:
+            self._server.set_npc_paths(paths)
+            return True
+        if self._client is not None:
+            return self._client.set_npc_paths(paths)
         return False
 
     # -- hosting -----------------------------------------------------------
@@ -315,6 +411,7 @@ class SessionBridge(QObject):
         *,
         player_id: str = "",
         player_token: str = "",
+        gm_token: str = "",
     ) -> session_client.SessionClient:
         """Dial a session from a decoded join code and complete the handshake.
 
@@ -322,6 +419,10 @@ class SessionBridge(QObject):
         (or a :class:`~mm_companion.core.session.client.SessionClientError`)
         rather than having to wait for a signal — and everything after it arrives
         as signals.
+
+        ``gm_token`` claims the GM's seat on a session hosted elsewhere. It is the
+        secret the hub's control channel hands out beside the join code, and a
+        wrong one is refused rather than seating us quietly as a player.
         """
         if self._server is not None:
             raise SessionBridgeError("this bridge is hosting; stop that first")
@@ -335,6 +436,7 @@ class SessionBridge(QObject):
             display_name=display_name,
             player_id=player_id,
             player_token=player_token,
+            gm_token=gm_token,
             transport=discovery.transport_for(code.host),
             on_event=self._on_client_event,
             mod_fingerprint=mods.stack_fingerprint(),
@@ -413,10 +515,18 @@ class SessionBridge(QObject):
             self.rollAdded.emit(payload)
         elif kind == session_client.EVENT_ROLL_REMOVED:
             self.rollRemoved.emit(int(payload.get("seq", 0)))
+        elif kind == session_client.EVENT_SNAPSHOT:
+            # Reaches a GM client only, and deliberately raises the same signal
+            # the hosting half does, so the player cards are written once.
+            self.snapshotReceived.emit(
+                str(payload.get("player_id", "")), payload.get("character", {})
+            )
         elif kind == session_client.EVENT_APPLY_CONDITION:
             self.conditionCommand.emit("apply", payload)
         elif kind == session_client.EVENT_REMOVE_CONDITION:
             self.conditionCommand.emit("remove", payload)
+        elif kind == session_client.EVENT_SET_HERO_POINTS:
+            self.heroPointsCommand.emit(int(payload.get("value", 0)))
         elif kind == session_client.EVENT_KICKED:
             self.kicked.emit(str(payload.get("reason", "")))
         elif kind == session_client.EVENT_ERROR:

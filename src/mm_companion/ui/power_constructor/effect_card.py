@@ -30,9 +30,10 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_ability,
 )
+from mm_companion.ui import theme
+from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.power_constructor.common import (
-    _ACCENT,
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
     RANK_MAX,
@@ -41,17 +42,13 @@ from mm_companion.ui.power_constructor.common import (
     _move_item,
 )
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
-from mm_companion.ui.theme import TINT_WORSE, tint_rgba
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
-# Effect card chrome — a rounded, padded panel. The drag state swaps to an accent
-# border + faint fill so a hovering modifier clearly lands "on this card".
-_CARD_STYLE = "EffectCard { border: 1px solid palette(mid); border-radius: 8px; }"
-_CARD_STYLE_DRAG = (
-    f"EffectCard {{ border: 2px solid {_ACCENT}; border-radius: 8px;"
-    f" background: {tint_rgba(_ACCENT, 0.10)}; }}"
-)
+
+def _idle_card_rules() -> str:
+    """The effect card's resting chrome — a rounded, padded panel."""
+    return f"border: {int(theme.metric('border.width'))}px solid {theme.color('border.card')};"
 
 
 class EffectCard(QFrame):
@@ -86,32 +83,13 @@ class EffectCard(QFrame):
         # rebuilt with the config form and fired when the effect's rank changes.
         self._alloc_updaters: list = []
         self.setObjectName("EffectCard")
-        self.setStyleSheet(_CARD_STYLE)
+        self._drops = DropFeedback(self, "EffectCard", radius="radius.canvas")
+        self._drops.set_idle(_idle_card_rules())
         self.setAcceptDrops(True)
 
         effect = self._effect()
         layout = QVBoxLayout(self)
-
-        header = QHBoxLayout()
-        name = QLabel(effect.name if effect else instance.effect_id)
-        name.setStyleSheet("font-weight: bold;")
-        header.addWidget(name)
-        # A structure badge (Base / Alternate / Linked) the canvas drives; hidden
-        # while the power is a single or independent-multi effect.
-        self._role_badge = QLabel()
-        self._role_badge.setVisible(False)
-        header.addWidget(self._role_badge)
-        header.addStretch()
-        header.addWidget(QLabel("Rank"))
-        self._rank = make_spin_box(1, RANK_MAX, value=instance.rank, buttons=False, max_width=44)
-        self._rank.valueChanged.connect(self._on_rank_changed)
-        header.addWidget(self._rank)
-        remove = QPushButton("✕")
-        remove.setFixedWidth(24)
-        remove.setToolTip("Remove this effect")
-        remove.clicked.connect(lambda: self.removeRequested.emit(self))
-        header.addWidget(remove)
-        layout.addLayout(header)
+        layout.addLayout(self._build_header(effect))
 
         # A configurable trait booster (Enhanced Trait) picks which trait it raises;
         # a fixed one (Protection) has no picker. Shown just under the header so the
@@ -136,6 +114,50 @@ class EffectCard(QFrame):
         layout.addWidget(self._config_host)
         self._populate_config_form()
 
+        self._build_modifier_groups(layout)
+        layout.addWidget(self._build_specific_button())
+
+        self._cost = QLabel()
+        self._cost.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._cost.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self._cost)
+
+        # When editing an existing power the instance already carries its extras and
+        # flaws — render a chip for each (the config form built above already reads
+        # them, e.g. an attached Extra Condition, so only the chips need seeding).
+        self._seed_modifier_chips()
+        self._refresh_cost()
+
+    # -- construction pieces ----------------------------------------------
+    def _build_header(self, effect) -> QHBoxLayout:
+        """The card's top row: effect name, structure badge, rank spin, remove button."""
+
+        header = QHBoxLayout()
+        name = QLabel(effect.name if effect else self.instance.effect_id)
+        name.setStyleSheet("font-weight: bold;")
+        header.addWidget(name)
+        # A structure badge (Base / Alternate / Linked) the canvas drives; hidden
+        # while the power is a single or independent-multi effect.
+        self._role_badge = QLabel()
+        self._role_badge.setVisible(False)
+        header.addWidget(self._role_badge)
+        header.addStretch()
+        header.addWidget(QLabel("Rank"))
+        self._rank = make_spin_box(
+            1, RANK_MAX, value=self.instance.rank, buttons=False, max_width=44
+        )
+        self._rank.valueChanged.connect(self._on_rank_changed)
+        header.addWidget(self._rank)
+        remove = QPushButton("✕")
+        remove.setFixedWidth(24)
+        remove.setToolTip("Remove this effect")
+        remove.clicked.connect(lambda: self.removeRequested.emit(self))
+        header.addWidget(remove)
+        return header
+
+    def _build_modifier_groups(self, layout: QVBoxLayout) -> None:
+        """The extras and flaws chip columns, plus the drop hint below them."""
+
         self._extras_group = ModifierGroup("Extras")
         self._flaws_group = ModifierGroup("Flaws")
         self._extras_group.reordered.connect(
@@ -151,8 +173,13 @@ class EffectCard(QFrame):
         self._hint.setEnabled(False)
         layout.addWidget(self._hint)
 
-        # Effect-specific extras/flaws (from effect_modifiers.json) can't be dragged
-        # from the general palette — this effect offers its own through a menu button.
+    def _build_specific_button(self) -> QToolButton:
+        """The menu of this effect's own extras/flaws (from ``effect_modifiers.json``).
+
+        They can't be dragged from the general palette, so the effect offers its own
+        through a menu button — hidden entirely when it has none.
+        """
+
         self._specific_button = QToolButton()
         self._specific_button.setText("＋ Effect-specific extra / flaw")
         self._specific_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -160,20 +187,9 @@ class EffectCard(QFrame):
         self._specific_menu.setToolTipsVisible(True)
         self._specific_menu.aboutToShow.connect(self._populate_specific_menu)
         self._specific_button.setMenu(self._specific_menu)
-        if not self._data.effect_modifiers.get(instance.effect_id):
-            self._specific_button.hide()  # this effect has no specific modifiers
-        layout.addWidget(self._specific_button)
-
-        self._cost = QLabel()
-        self._cost.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._cost.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self._cost)
-
-        # When editing an existing power the instance already carries its extras and
-        # flaws — render a chip for each (the config form built above already reads
-        # them, e.g. an attached Extra Condition, so only the chips need seeding).
-        self._seed_modifier_chips()
-        self._refresh_cost()
+        if not self._data.effect_modifiers.get(self.instance.effect_id):
+            self._specific_button.hide()
+        return self._specific_button
 
     # -- attack-skill link ------------------------------------------------
     def _build_attack_skill_row(self) -> QWidget | None:
@@ -421,6 +437,25 @@ class EffectCard(QFrame):
             )
         return container
 
+    def _allocation_readout(self, label: QLabel):
+        """A callable that refreshes an allocation field's "used / rank" readout.
+
+        Shared by the two Tier-4 rank-pool widgets (:meth:`_allocation_widget`'s
+        checklist and :meth:`_repeatable_widget`'s row list), which meter their
+        selections against the effect's rank the same way and turn the readout red on
+        an overspend. The returned callable is also what goes into
+        ``_alloc_updaters``, so a rank change re-meters every field on the card.
+        """
+
+        def update_total() -> None:
+            used = effect_allocation_used(self.instance, self._data)
+            rank = self._rank.value()
+            label.setText(f"Allocated {used} / {rank} ranks")
+            over = f"color: {theme.color('tint.worse')}; font-weight: bold;"
+            label.setStyleSheet(over if used > rank else "")
+
+        return update_total
+
     def _allocation_widget(self, field) -> QWidget:
         """A Tier-4 rank-allocation checklist (Enhanced Senses/Movement, Comprehend).
 
@@ -447,11 +482,7 @@ class EffectCard(QFrame):
         }
         controls: list[tuple] = []
 
-        def update_total() -> None:
-            used = effect_allocation_used(self.instance, self._data)
-            rank = self._rank.value()
-            total.setText(f"Allocated {used} / {rank} ranks")
-            total.setStyleSheet(f"color: {TINT_WORSE}; font-weight: bold;" if used > rank else "")
+        update_total = self._allocation_readout(total)
 
         def commit() -> None:
             new = []
@@ -471,6 +502,11 @@ class EffectCard(QFrame):
             label = option.label + (f" ({option.per_note})" if option.per_note else "")
             box = QCheckBox(label)
             box.setChecked(option.id in chosen)
+            # A checklist of two dozen bare names (Permeate, Trackless, Ultravision…)
+            # says nothing about what each does; the option's description hints it.
+            if option.description:
+                box.setToolTip(option.description)
+                row.setToolTip(option.description)  # also over the tier combo beside it
             row_layout.addWidget(box)
             combo = None
             if len(option.tiers) > 1:
@@ -526,11 +562,7 @@ class EffectCard(QFrame):
             existing = []
         row_widgets: list[tuple[QWidget, dict]] = []
 
-        def update_total() -> None:
-            used = effect_allocation_used(self.instance, self._data)
-            rank = self._rank.value()
-            total.setText(f"Allocated {used} / {rank} ranks")
-            total.setStyleSheet(f"color: {TINT_WORSE}; font-weight: bold;" if used > rank else "")
+        update_total = self._allocation_readout(total)
 
         def commit() -> None:
             rows = []
@@ -698,17 +730,19 @@ class EffectCard(QFrame):
     # -- drops ------------------------------------------------------------
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.mimeData().hasFormat(MODIFIER_MIME):
-            self.setStyleSheet(_CARD_STYLE_DRAG)  # light up as a drop target
+            self._drops.show_accept()  # light up as a drop target
             event.acceptProposedAction()
         else:
+            # An effect brick dragged onto a card, say: only modifiers attach here.
+            self._drops.show_reject()
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self.setStyleSheet(_CARD_STYLE)
+        self._drops.clear()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self.setStyleSheet(_CARD_STYLE)
+        self._drops.clear()
         self.attach_modifier(_mime_id(event.mimeData(), MODIFIER_MIME))
         event.acceptProposedAction()
 
@@ -776,12 +810,19 @@ class EffectCard(QFrame):
                 self._build_chip(modifier, selection, is_flaw=True)
 
     def _remove_chip(self, chip: ModifierChip) -> None:
-        if chip.selection in self.instance.extras:
-            self.instance.extras.remove(chip.selection)
-            self._extras_group.remove_chip(chip)
-        else:
-            self.instance.flaws.remove(chip.selection)
-            self._flaws_group.remove_chip(chip)
+        # Find the selection by *identity*, not equality. A modifier with config fields
+        # can be taken more than once (see :meth:`attach_modifier`), and two fresh copies
+        # seed identical defaults — so they compare equal, and an ``in``/``remove`` pair
+        # would drop the wrong one and leave this chip editing an orphaned selection.
+        for bucket, group in (
+            (self.instance.extras, self._extras_group),
+            (self.instance.flaws, self._flaws_group),
+        ):
+            index = next((i for i, sel in enumerate(bucket) if sel is chip.selection), None)
+            if index is not None:
+                del bucket[index]
+                group.remove_chip(chip)
+                break
         self._chips.remove(chip)
         self._hint.setVisible(not self._chips)
         self._populate_config_form()  # removing a gating extra may downgrade a field
@@ -833,20 +874,19 @@ class EffectCard(QFrame):
         cost) so the badge shows the number without this widget hardcoding it.
         """
 
-        palette = {
-            "base": ("Base", "#3a5f8a"),
-            "alternate": ("Alternate", "#7a5c1e"),
-            "linked": ("Linked", "#3a6f4a"),
-        }
-        if role not in palette:
+        labels = {"base": "Base", "alternate": "Alternate", "linked": "Linked"}
+        if role not in labels:
             self._role_badge.clear()
             self._role_badge.setVisible(False)
             return
-        text, color = palette[role]
+        text = labels[role]
         if note:
             text = f"{text} · {note}"
         self._role_badge.setText(text)
         self._role_badge.setStyleSheet(
-            f"background: {color}; color: white; border-radius: 6px; padding: 0 6px;"
+            f"background: {theme.color(f'badge.role.{role}')};"
+            f" color: {theme.color('text.on-badge')};"
+            f" border-radius: {int(theme.metric('radius.badge'))}px;"
+            f" padding: 0 {int(theme.metric('space.md'))}px;"
         )
         self._role_badge.setVisible(True)

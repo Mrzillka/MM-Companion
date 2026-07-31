@@ -291,15 +291,21 @@ class ConditionEffect:
     """A condition's overlay on one displayed stat row (display-only, pass 2).
 
     ``delta`` is a flat modifier (negative), ``op`` an override (``"halve"`` / ``"zero"``)
-    taking precedence over ``delta``; ``condition_ids`` are the contributing conditions
-    (the UI decides which render struck through); ``tooltip`` is the breakdown text.
-    These never touch the point build — they only re-skin the number a section shows.
+    taking precedence over ``delta``; ``condition_ids`` are the contributing conditions;
+    ``tooltip`` is the breakdown text. These never touch the point build — they only
+    re-skin the number a section shows.
+
+    ``trait_lost`` says whether any contributing condition reads as losing the trait
+    outright (Disabled, Debilitated), which the sheet renders struck through. It is
+    resolved here, from each condition record's own ``traitLost`` flag, rather than
+    left to the widgets to recognise a set of condition ids.
     """
 
     delta: int = 0
     op: str = ""
     condition_ids: frozenset[str] = frozenset()
     tooltip: str = ""
+    trait_lost: bool = False
 
     @property
     def active(self) -> bool:
@@ -411,7 +417,11 @@ def condition_scope_penalty(
             ids.add(cond.id)
             parts.append(contribution.label)
     return ConditionEffect(
-        delta=total, op=op, condition_ids=frozenset(ids), tooltip="; ".join(parts)
+        delta=total,
+        op=op,
+        condition_ids=frozenset(ids),
+        tooltip="; ".join(parts),
+        trait_lost=any(catalog[i].trait_lost for i in ids if i in catalog),
     )
 
 
@@ -475,7 +485,11 @@ def resistance_condition_effect(
                     parts.append(f"{cond.name} {chosen}s {res_key.title()}")
 
     return ConditionEffect(
-        delta=delta, op=op, condition_ids=frozenset(ids), tooltip="; ".join(parts)
+        delta=delta,
+        op=op,
+        condition_ids=frozenset(ids),
+        tooltip="; ".join(parts),
+        trait_lost=any(catalog[i].trait_lost for i in ids if i in catalog),
     )
 
 

@@ -156,7 +156,8 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
-      "description": "Increases how far a ranged effect can reach."
+      "distanceRankBonus": 1,
+      "description": "Increases how far a ranged effect can reach, by one distance rank per rank."
     },
     {
       "id": "feature_extra",
@@ -464,6 +465,17 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
+      "requiresCheck": true,
+      "noteTemplate": "{trait} check, DC {dc}",
+      "config": [
+        {
+          "key": "trait",
+          "label": "Check",
+          "type": "select",
+          "source": "all_traits",
+          "hint": "Which of your traits is checked before the effect works. The DC is 10 plus this flaw's rank, so a deeper discount is a harder check."
+        }
+      ],
       "description": "Using the effect requires an extra check that can simply fail."
     },
     {

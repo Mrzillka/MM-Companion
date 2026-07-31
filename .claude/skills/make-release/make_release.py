@@ -7,22 +7,30 @@ release, done safely and idempotently:
 
   1. Reads ``__version__`` from ``src/mm_companion/__init__.py``  ->  tag ``vX.Y.Z``.
   2. Refuses (with a clear reason, changing nothing) if the bump is not committed,
-     if that tag already exists, if you are not on the release branch, or if the
-     ``gh`` CLI is missing / not authenticated — so a release is never
-     half-made, duplicated, or built from the wrong commit.
+     if the release notes are missing or unfinished, if that tag already exists,
+     if you are not on the release branch, or if the ``gh`` CLI is missing / not
+     authenticated — so a release is never half-made, duplicated, undescribed, or
+     built from the wrong commit.
   3. Creates an annotated ``vX.Y.Z`` tag and pushes the branch + tag to origin.
 
 Pushing the ``v*`` tag fires ``.github/workflows/release.yml``, which rebuilds
 the installer on a Windows runner and publishes it as a GitHub Release asset
-(``MM-Companion-Setup-X.Y.Z.exe``). That workflow re-verifies the tag matches
-the committed package version; this script guarantees the match by construction
-(it derives the tag *from* the committed version), so the guard never trips.
+(``MM-Companion-Setup-X.Y.Z.exe``), using ``docs/releases/vX.Y.Z.md`` as the
+release body. That workflow re-verifies the tag matches the committed package
+version; this script guarantees the match by construction (it derives the tag
+*from* the committed version), so the guard never trips.
+
+The workflow falls back to auto-generated notes when that file is absent, which
+would silently ship a release with an empty body — so the notes guard *here* is
+what actually keeps every release described. Write them with
+``release_notes.py`` before committing the bump.
 
 Usage (from anywhere in the repo)::
 
     python .claude/skills/make-release/make_release.py --dry-run   # preview only
     python .claude/skills/make-release/make_release.py             # tag + push
     python .claude/skills/make-release/make_release.py --watch      # + wait for CI
+    python .claude/skills/make-release/make_release.py --no-notes   # skip the notes guard
 
 The local ``.exe`` from ``build-installer`` is NOT uploaded — the runner builds
 its own from the tagged commit. build-installer's local build is a smoke test.
@@ -36,6 +44,10 @@ import subprocess
 import time
 from pathlib import Path
 from typing import NoReturn
+
+# Sibling driver — Python puts this script's own directory on sys.path, and
+# sharing the predicate keeps "are the notes finished?" answered in one place.
+from release_notes import NOTES_DIR, notes_are_finished
 
 VERSION_RE = re.compile(r'(?m)^__version__\s*=\s*"(\d+\.\d+\.\d+)"')
 RELEASE_BRANCH = "main"
@@ -122,6 +134,11 @@ def main() -> int:
         action="store_true",
         help="After pushing, block until the release workflow finishes (~3 min).",
     )
+    parser.add_argument(
+        "--no-notes",
+        action="store_true",
+        help="Skip the guard that requires committed release notes (ships an empty body).",
+    )
     args = parser.parse_args()
 
     root = find_repo_root(Path(__file__).resolve())
@@ -142,7 +159,19 @@ def main() -> int:
     # 2. Not already released.
     already_tagged = tag_exists(root, tag, args.remote)
 
-    # 3. On the release branch (unless overridden).
+    # 3. The release notes must be committed too, and actually written: CI reads
+    #    them out of the tagged commit, so a file sitting in the working tree
+    #    would publish an empty release body.
+    notes_rel = f"{NOTES_DIR}/{tag}.md"
+    notes_ok, notes_why = True, "ok"
+    if not args.no_notes:
+        committed_notes = git(root, "show", f"HEAD:{notes_rel}", check=False)
+        if not committed_notes:
+            notes_ok, notes_why = False, f"{notes_rel} is not committed at HEAD"
+        else:
+            notes_ok, notes_why = notes_are_finished(committed_notes)
+
+    # 4. On the release branch (unless overridden).
     wrong_branch = branch != RELEASE_BRANCH and not args.allow_branch
 
     print(f"  version (working): {work_version}")
@@ -150,6 +179,7 @@ def main() -> int:
     print(f"  tag:               {tag}")
     print(f"  branch:            {branch}")
     print(f"  remote:            {args.remote}")
+    print(f"  notes:             {'skipped (--no-notes)' if args.no_notes else notes_why}")
 
     if args.dry_run:
         print("\n[dry-run] would:")
@@ -157,6 +187,8 @@ def main() -> int:
             print("  - REFUSE: version bump is not committed (commit it first).")
         elif already_tagged:
             print(f"  - REFUSE: tag {tag} already exists (bump the version to release again).")
+        elif not notes_ok:
+            print(f"  - REFUSE: {notes_why} (write {notes_rel}, then commit it).")
         elif wrong_branch:
             print(
                 f"  - REFUSE: on '{branch}', not '{RELEASE_BRANCH}' "
@@ -177,6 +209,13 @@ def main() -> int:
         fail(
             f"Tag {tag} already exists locally or on {args.remote}; {work_version} is already "
             "released. Run build-installer to bump the version before releasing again."
+        )
+    if not notes_ok:
+        fail(
+            f"Release notes are not ready: {notes_why}. Every release ships a description "
+            f"and a changelog. Run 'python .claude/skills/make-release/release_notes.py "
+            f"--scaffold', write it, and commit {notes_rel} alongside the version bump "
+            "(pass --no-notes only if you deliberately mean to release without notes)."
         )
     if wrong_branch:
         fail(

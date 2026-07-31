@@ -49,8 +49,11 @@ from .protocol import (
     ErrorMessage,
     Hello,
     Kicked,
+    KickRequest,
     Message,
+    NoteRequest,
     Ping,
+    PlayerSnapshot,
     Pong,
     ProtocolError,
     RemoveCondition,
@@ -59,8 +62,12 @@ from .protocol import (
     RollRemoved,
     RollRequest,
     Roster,
+    SetHeroPoints,
+    SetNpcPaths,
+    SetSessionName,
     Welcome,
     sanitize_snapshot,
+    sanitize_spec,
 )
 
 #: How many player connections a session accepts at once.
@@ -80,6 +87,10 @@ RATE_LIMIT_WINDOW = 5.0
 #: history cannot be filled with absurd values.
 MAX_ROLL_MODIFIER = 1000
 MAX_LABEL_CHARS = 120
+
+#: Longest a note may be. A sentence, not a chat message — the history is a log of
+#: what happened, and a card that has to wrap five times pushes the rolls off screen.
+MAX_NOTE_CHARS = 200
 
 #: How many recent rolls a :class:`~.protocol.Welcome` carries. The full history
 #: keeps growing across evenings (that is the point of persistence), and a roll
@@ -123,9 +134,11 @@ class SessionServer:
         transport: Transport | None = None,
         workspace: storage.Workspace | None = None,
         on_event: Callable[[str, dict], None] | None = None,
+        on_activate: Callable[[], None] | None = None,
         max_clients: int = DEFAULT_MAX_CLIENTS,
         mod_fingerprint: str = "",
         gm_name: str = "GM",
+        gm_in_process: bool = True,
         persist: bool = True,
         rng: Random | None = None,
     ) -> None:
@@ -138,9 +151,19 @@ class SessionServer:
         self._transport = transport or TcpTransport()
         self._workspace = workspace
         self._on_event = on_event
+        # Called on each arriving connection before its handshake. The seam a
+        # supervisor uses to bring a session it had let go idle back into memory;
+        # ``None`` for an ordinary server, which is always fully loaded.
+        self._on_activate = on_activate
         self._persist_enabled = persist
         self._rng = rng
         self._gm_name = gm_name
+        # True when the GM *is* this process (the app hosting its own game), so
+        # the GM seat is occupied the moment the server starts. False on a
+        # headless host, where the seat waits for someone to claim it with the
+        # session's gm token — showing a GM online that nobody is sitting in
+        # would be a lie the player cards would faithfully render.
+        self._gm_in_process = gm_in_process
 
         self._lock = threading.RLock()
         self._listener = None
@@ -224,18 +247,29 @@ class SessionServer:
     # -- the GM's own half -------------------------------------------------
 
     def gm_slot(self) -> PlayerSlot:
-        """The host's roster slot, created on first use.
+        """The GM's roster slot, created on first use.
 
-        The GM drives the server object in-process rather than over a socket, but
-        still needs a slot so its rolls carry a name and its card appears in the
+        The GM needs a slot whether they drive this server in-process or dial in
+        over a socket, so their rolls carry a name and their card appears in the
         roster like anyone else's.
+
+        The seat is marked occupied here only when the GM *is* this process. A
+        headless host leaves it empty until someone presents the session's gm
+        token, at which point the handshake marks it connected like any other.
         """
         with self._lock:
-            for slot in self.state.players.values():
-                if slot.is_gm:
-                    return slot
-            slot = self.state.add_player(self._gm_name, is_gm=True)
-            slot.connected = True
+            slot = next((s for s in self.state.players.values() if s.is_gm), None)
+            if slot is None:
+                slot = self.state.add_player(self._gm_name, is_gm=True)
+            elif self._gm_name and slot.display_name != self._gm_name:
+                # A resumed session used to keep whatever name it was saved
+                # under, ignoring the one this run was started with.
+                slot.display_name = self._gm_name
+            if self._gm_in_process:
+                # Also on the resumed path: store.load_session clears every
+                # connected flag, so without this a restarted session showed its
+                # own GM permanently offline.
+                slot.connected = True
             return slot
 
     def roll(
@@ -246,6 +280,7 @@ class SessionServer:
         penalty: int = 0,
         dc: int | None = None,
         hidden: bool = False,
+        spec: dict | None = None,
         player_id: str | None = None,
     ) -> RollRecord:
         """Resolve a roll for the GM (or for *player_id*) and publish it.
@@ -258,8 +293,23 @@ class SessionServer:
         if slot is None:
             raise KeyError(f"no player {player_id!r}")
         return self._resolve_roll(
-            slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
+            slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
         )
+
+    def note(self, text: str, *, player_id: str | None = None) -> RollRecord:
+        """Write a line in the shared log for the GM (or for *player_id*).
+
+        The counterpart of :meth:`roll` for something that happened rather than
+        something rolled — a hero point spent. Like a roll it is the one path in,
+        so a :class:`~.protocol.NoteRequest` from a client lands here too, and like
+        a roll it is attributed to the seat it came from rather than to whatever
+        the text claims.
+        """
+        with self._lock:
+            slot = self.state.players.get(player_id) if player_id else self.gm_slot()
+        if slot is None:
+            raise KeyError(f"no player {player_id!r}")
+        return self._record_note(slot, text)
 
     def remove_roll(self, seq: int) -> bool:
         """Drop one roll from the shared log and tell every client (a GM action).
@@ -296,6 +346,10 @@ class SessionServer:
             player_id,
             RemoveCondition(player_id=player_id, condition_id=condition_id, parameter=parameter),
         )
+
+    def set_hero_points(self, player_id: str, value: int) -> bool:
+        """Tell one player's client to set their hero-point total on their sheet."""
+        return self.send_to(player_id, SetHeroPoints(player_id=player_id, value=value))
 
     def kick(self, player_id: str, reason: str = "") -> bool:
         """Drop a player's connection *and* their roster slot."""
@@ -417,6 +471,15 @@ class SessionServer:
         """One connection's whole life: handshake, then read until it ends."""
         slot: PlayerSlot | None = None
         try:
+            if self._on_activate is not None:
+                # Before the handshake, because the Welcome carries the roll
+                # history: a supervisor that shed an idle session's history has
+                # to put it back before anyone is told what it is.
+                try:
+                    self._on_activate()
+                except Exception as exc:  # noqa: BLE001 - a supervisor bug must
+                    # not take the session down with it, exactly as with _emit.
+                    self._emit(EVENT_ERROR, {"code": "activate", "message": str(exc)})
             slot = self._handshake(connection)
             if slot is None:
                 return
@@ -452,13 +515,24 @@ class SessionServer:
         if not tokens_match(message.token, self.state.host_token):
             self._refuse(connection, ERROR_BAD_TOKEN, "that join code is not for this session")
             return None
+        # A GM claim is checked before the seat is worked out, and a wrong one is
+        # refused rather than downgraded to a player seat. Silently seating a GM
+        # as a player would "work" — they would just find their hidden rolls
+        # broadcast to the table, which is the one failure that cannot be undone.
+        claims_gm = bool(message.gm_token)
+        if claims_gm and not tokens_match(message.gm_token, self.state.gm_token):
+            self._refuse(connection, ERROR_BAD_TOKEN, "that is not this session's GM token")
+            return None
 
         replaced: Connection | None = None
         with self._lock:
-            slot = self.state.player_by_token(message.player_token)
+            slot = self.gm_slot() if claims_gm else self.state.player_by_token(message.player_token)
             is_new = slot is None
             if slot is None:
-                if len(self._connections) >= self.max_clients:
+                # The GM's own connection does not take a player's place: their
+                # seat is the table's, not one of the chairs around it.
+                seated = sum(1 for pid in self._connections if pid != self._gm_id())
+                if seated >= self.max_clients:
                     self._refuse(connection, ERROR_SESSION_FULL, "this session is full")
                     return None
                 slot = self.state.add_player(message.display_name.strip() or "Player")
@@ -481,6 +555,8 @@ class SessionServer:
                 history=[
                     roll.to_dict() for roll in self.state.visible_rolls()[-WELCOME_HISTORY_ROLLS:]
                 ],
+                is_gm=slot.is_gm,
+                npc_paths=list(self.state.npc_paths) if slot.is_gm else [],
             )
 
         if replaced is not None and replaced is not connection:
@@ -569,6 +645,7 @@ class SessionServer:
                 self.state.set_snapshot(slot.player_id, character)
                 self._persist()
             self._emit(EVENT_SNAPSHOT, {"player_id": slot.player_id, "character": character})
+            self._forward_snapshot_to_gm(slot.player_id, character)
             self._broadcast_roster()
         elif isinstance(message, RollRequest):
             self._resolve_roll(
@@ -579,16 +656,50 @@ class SessionServer:
                 dc=message.dc,
                 # Only the GM may roll unseen; a player's flag is simply ignored.
                 hidden=message.hidden and slot.is_gm,
+                spec=message.spec,
             )
+        elif isinstance(message, NoteRequest):
+            self._record_note(slot, message.text)
         elif isinstance(message, RemoveRollRequest) and slot.is_gm:
             # Removing a roll is a GM privilege; a player's request is ignored.
             self.remove_roll(message.seq)
         elif isinstance(message, Ping):
             self._send_quietly(connection, Pong(nonce=message.nonce))
-        elif isinstance(message, (ApplyCondition, RemoveCondition)) and slot.is_gm:
+        elif isinstance(message, (ApplyCondition, RemoveCondition, SetHeroPoints)) and slot.is_gm:
             # A GM driving a headless server from a remote app: relay the command
             # on to the player it names.
             self.send_to(message.player_id, message)
+        elif isinstance(message, KickRequest) and slot.is_gm:
+            # Never let a GM kick themselves out of their own session.
+            if message.player_id != slot.player_id:
+                self.kick(message.player_id, reason=message.reason or "removed by the GM")
+        elif isinstance(message, SetSessionName) and slot.is_gm:
+            self.set_session_name(message.name)
+        elif isinstance(message, SetNpcPaths) and slot.is_gm:
+            self.set_npc_paths(message.paths)
+
+    def _forward_snapshot_to_gm(self, player_id: str, character: dict) -> None:
+        """Send one player's sheet on to a GM who is dialled in over a socket.
+
+        A no-op when the GM is this process (they read the state directly) or is
+        not connected. The snapshot goes to the GM's connection alone — it is
+        never broadcast, since no player needs another player's sheet and the
+        combined size would not fit in one message anyway.
+        """
+        gm_id = self._gm_id()
+        if not gm_id or gm_id == player_id:
+            return
+        self.send_to(gm_id, PlayerSnapshot(player_id=player_id, character=character))
+
+    def _gm_id(self) -> str:
+        """The GM slot's player id, or ``""`` if the session has no GM seat yet.
+
+        ``send_to`` is a no-op for a seat with no live connection, so this is
+        safe to aim at whether or not a remote GM is currently dialled in.
+        """
+        with self._lock:
+            gm = next((s for s in self.state.players.values() if s.is_gm), None)
+            return gm.player_id if gm is not None else ""
 
     # -- rolls -------------------------------------------------------------
 
@@ -601,11 +712,16 @@ class SessionServer:
         penalty: int,
         dc: int | None,
         hidden: bool,
+        spec: dict | None = None,
     ) -> RollRecord:
         bonus = _clamp(bonus, MAX_ROLL_MODIFIER)
         penalty = _clamp(penalty, MAX_ROLL_MODIFIER)
         dc = None if dc is None else _clamp(dc, MAX_ROLL_MODIFIER)
         label = label[:MAX_LABEL_CHARS]
+        # The one place a client-supplied spec is checked, alongside the other
+        # client-supplied values. It is opaque to this module — the server records
+        # and rebroadcasts it without ever reading what it means.
+        spec = sanitize_spec(spec)
 
         result: CheckResult | None = None
         if dc is None:
@@ -624,6 +740,7 @@ class SessionServer:
                 result=result,
                 label=label,
                 hidden=hidden,
+                spec=spec,
             )
             self._append_roll(record)
 
@@ -631,6 +748,31 @@ class SessionServer:
         self._emit(EVENT_ROLL, payload)
         if not record.hidden:
             self.broadcast(RollAdded(roll=payload))
+        else:
+            # A hidden roll is kept off the wire, but its own author still has to
+            # learn what they rolled. An in-process GM reads it from the event
+            # above; a GM dialled in over a socket has only this.
+            self.send_to(self._gm_id(), RollAdded(roll=payload))
+        return record
+
+    def _record_note(self, slot: PlayerSlot, text: str) -> RollRecord:
+        """Append a note and publish it, on the same path a resolved roll takes.
+
+        There is nothing to resolve, so this is the whole of it: cap the text, take
+        a sequence number, persist, and broadcast. A note is never hidden — it says
+        what happened at the table, and hiding is a property of *rolls*.
+        """
+        with self._lock:
+            record = self.state.record_note(
+                player_id=slot.player_id,
+                player_name=slot.display_name,
+                text=text[:MAX_NOTE_CHARS],
+            )
+            self._append_roll(record)
+
+        payload = record.to_dict()
+        self._emit(EVENT_ROLL, payload)
+        self.broadcast(RollAdded(roll=payload))
         return record
 
     # -- housekeeping ------------------------------------------------------

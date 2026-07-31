@@ -29,13 +29,69 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 | Module | What it holds |
 | --- | --- |
 | `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine. |
-| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`), `PlayerSlot`, and `RollRecord`. Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
+| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`), `PlayerSlot`, and `RollRecord` — which is a roll *or* a note, per its `kind` (see "Notes" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
 | `store.py` | Workspace persistence, modelled on `core/library.py`: `sessions/<id>/session.json` plus an **appended** `rolls.jsonl`, so a roll never rewrites the whole history. `save_session`, `append_roll`, `load_session` (stitches the two back and clears stale `connected` flags), `list_sessions`, `delete_session`. Session ids are validated against `^[A-Za-z0-9_-]{1,64}$` before they touch a path — an id can arrive over the wire. |
 | `net.py` | `Connection` (framed, buffered, lock-guarded writes), the `Transport`/`Listener` ABCs, and the loopback/LAN `TcpTransport`. `DEFAULT_PORT = 47331`. |
 | `server.py` | `SessionServer` — an accept thread, one reader thread per peer, one `RLock` over every mutation. It **rolls** (a client sends a request; the server resolves with `core.dice.resolve_check`, so no client edits its own number), persists on every change, and broadcasts. A callback `on_event(kind, payload)` reports to the owner; the payload is always a plain dict. No Qt. |
 | `client.py` | `SessionClient` — connect, handshake on the calling thread (returns the `Welcome` or raises with an `ERROR_*` code), then one reader thread emitting `EVENT_*`. Remembers `player_id`/`player_token` for reconnect. |
 | `discovery.py` | Getting reachable: join-code encode/decode, UPnP/IGD port mapping and external-IP discovery (SSDP + SOAP, stdlib only), a manual-address fallback, `publish_session()` → a `Reachability` carrying the address **and finished advice prose**, and the `transports` registry / `transport_for()` seam a relay plugs into. |
 | `relay.py` | `RelayTransport` — reach a session through a relay by dialling *out* to it. Registered into `discovery.transports` under `mmrelay://` (TLS) and `mmrelay+tcp://` (plaintext), so a relay join code just works: `server.py`/`client.py` are untouched. |
+
+### What a roll is, and what it provokes
+
+`RollRequest.label` / `RollRecord.label` carry the **name** of what was rolled
+("Athletics", "Blast: 7 vs. Defense"). The field was designed in from the start
+and sat empty until rolling from the character sheet landed; the dice roller now
+fills it from the loaded `RollSpec` (see CLAUDE.md, "Rolling from the sheet"), so
+a shared history reads as who rolled *what*.
+
+`RollRequest.spec` / `RollRecord.spec` carry the **sheet's description** of the
+roll — a serialized `RollSpec`: the save this attack will force, the degree ladder
+that save reads, which resistance it is. It travels because the roll it describes
+is *acted on by somebody else*: the target's player sees the attack land in the
+shared history and clicks the save straight off its card, and everyone watches the
+consequence. A chain only the roller could see would be pointless.
+
+Two rules keep that from leaking rules into the session layer:
+
+- **The server never interprets a spec.** It validates the shape with
+  `protocol.sanitize_spec` — a key whitelist, caps on text, ladder length and
+  `follow_up` nesting depth, because this is client-supplied data that gets
+  broadcast and rendered on every other screen — then records and rebroadcasts it
+  untouched. `core/session/` must never import `core.rules`; the standalone server
+  loads no game data at all.
+- **The consequences are derived on the clients**, from the broadcast `die` and
+  `degree`. A critical hit's raised DC and the outcome a failed save reads are both
+  deterministic functions of numbers everybody already has, so every screen at the
+  table computes the same chip and the same sentence without the server knowing a
+  single rule.
+
+A hidden GM roll is never broadcast, so its spec reaches nobody either — the chain
+is exactly as visible as the roll that started it.
+
+### Notes: the history's other kind of entry
+
+Some things worth writing down are not rolls. A hero point spent or granted moves a
+number on somebody's sheet and nothing else, and before notes existed the table only
+learned about it if the player said so out loud.
+
+A note is a `RollRecord` with `kind = "note"`, carrying its sentence in `text` and
+leaving the dice fields at their defaults. **One record type, because the history
+*is* a log** — seq-numbered from one counter, appended to `rolls.jsonl`, replayed to
+a late joiner in the `Welcome`, strikeable by the GM — and a note wants every one of
+those. A line written before notes existed loads as `kind = "roll"`, so the log is
+backward compatible on disk; the wire is not, hence `PROTOCOL_VERSION` 6.
+
+The same two rules apply as to a spec. The client composes the sentence (what is
+worth noting is a rules question) and the server stores it opaquely, capping it at
+`MAX_NOTE_CHARS` exactly as it caps a roll label, and attributing it to the seat it
+arrived on rather than to anything the text claims. A note is never hidden — hiding
+is a property of *rolls*, and a note says what happened at the table.
+
+The **author is the player's own app**, whichever end the change came from: a GM's
+`SetHeroPoints` lands on the player's sheet and the note is raised there, so a grant
+and a click produce exactly one note and it reflects what actually landed. The GM's
+window shows it through the same shared feed.
 
 ### The handshake
 
@@ -125,20 +181,100 @@ player card / GM's read-only sheet decode it; a card with none shows a placehold
 - **`python -m mm_companion.server`** (`mm-companion-server`) hosts a session
   without the GUI, for a GM who wants the table reachable around the clock on an
   always-on box. It runs the same `SessionServer`, shares a workspace via
-  `MM_COMPANION_HOME`, and prints the join code and reachability banner. See
-  `--help` and the networking guide.
+  `MM_COMPANION_HOME`, and prints the join code and reachability banner. With
+  **`--hub`** it hosts every session in the workspace at once and opens the
+  control channel — see "Sessions that live on a server" above. Deploying it is
+  `deploy/README.md`.
 - **`python -m mm_companion.relay`** is the public relay: a single-threaded
   `selectors` loop that pairs two *inbound* connections and pumps bytes between
   them. It parses only the relay envelope and holds no session state, so one small
   box serves thousands of tables. Deploying it is covered in the networking guide.
 
+## Sessions that live on a server
+
+A session need not belong to the GM's laptop. `python -m mm_companion.server
+--hub` hosts **every** session in its workspace at once, so a table outlives the
+machine that started it: players join whenever they like, the GM dials in and
+takes their seat, and closing GM Mode leaves the game running.
+
+**Reachability is free**, and that is why this cost so little. A relay join code
+already carries the session id (`mmrelay://host:port/<session-id>`), so each
+session on the hub registers with a relay by dialling *out* to it, exactly as a
+GM's app does. No inbound port, no new transport, no join-code change — a player
+cannot tell a hub-hosted session from a laptop-hosted one.
+
+### Anyone may host; a session belongs to whoever made it
+
+**Creating a session needs no credential.** The server is a public utility: a
+stranger who has just installed the app can point it at one and run a game. What
+that costs is a rule about *ownership*, and it is the whole design:
+
+> Creating is open. Everything else needs the session's own `gm_token`, which the
+> create handed back and nobody else ever sees.
+
+| Secret | Who holds it | What it opens |
+| --- | --- | --- |
+| `host_token` | everyone at the table (it is *in* the join code) | one session, as a player |
+| `gm_token` | whoever created the session | the **GM's seat**, plus renaming and deleting *that* session |
+| operator secret | whoever runs the box, from its `/etc` | **everything** — the full list, and deleting anything |
+
+Three consequences worth stating plainly:
+
+- **There is no way to list other people's sessions.** `ListSessionsRequest` is
+  refused for anyone but the operator. A GM's own sessions are remembered by
+  their *app* (`session_my_sessions`), because a server-side list is exactly the
+  thing that would hand every table's join code to whoever asked for it.
+- **A wrong token and an unknown id give the identical refusal.** Telling them
+  apart would make the endpoint an oracle for which session ids exist.
+- **A wrong `gm_token` at the session handshake is refused, not downgraded.** Being
+  quietly seated as a player "works", right up to the moment a hidden roll is
+  broadcast to the table.
+
+The operator secret is optional. Without one the box simply has no caretaker —
+it does not stop anybody hosting, because nothing was gating that.
+
+### Keeping a public box healthy
+
+Three brakes, none of which a real GM ever notices:
+
+- **A global ceiling** (`--max-sessions`), refused with a readable "this server is
+  full" rather than by filling the disk.
+- **A per-connection create limit**, so a script cannot make thousands cheaply.
+- **A sweep** (`--retention-days`, 30 by default): a session nobody has touched in
+  that long is deleted. `updated_at` moves on every join, roll and rename, so a
+  monthly campaign is never at risk — only a table genuinely left behind. A
+  session with somebody connected is never swept, however old its timestamp looks.
+
+### What a remote GM needed that a local one got for free
+
+- **Player sheets.** The roster deliberately carries no characters, so a
+  socket-connected GM could see none. `PlayerSnapshot` forwards each one to the
+  GM seat and nowhere else.
+- **The result of their own hidden roll**, which is never broadcast.
+- **Kick, rename and the NPC cast**, none of which had a wire message.
+
+### The control plane
+
+`ControlHello` opens the channel (with an empty secret, normally) and is answered
+by `ControlWelcome`, whose `operator` flag says which kind of channel this is.
+Create, rename, delete and status all answer with a `SessionInfo` describing that
+one session — empty when it is gone, which is how a GM learns theirs was swept.
+`SessionCatalog` exists but only ever reaches an operator.
+
+`core/session/hub_client.py` is the app's side: no reader thread and no events,
+unlike `client.py` — connect, ask, read, close.
+
+### Idle sessions
+
+A session with nobody in it stays registered and joinable (that is one socket)
+but sheds its roll history from memory after ten minutes, reloading on the next
+arrival. The reload runs in `SessionServer`'s `on_activate` hook, called *before*
+the handshake rather than after: the `Welcome` carries the recent history, and
+sequence numbers are assigned from the tail of that list, so reloading late would
+restart the numbering and corrupt the log.
+
 ## What is deliberately deferred
 
-- **A remote GM cannot yet drive a headless session.** The only GM slot is the
-  in-process host's, so hidden rolls and GM-applied conditions need the app that
-  started the server. A headless box keeps the session alive, resolves rolls, and
-  syncs sheets, but a GM connecting to it over the network is seated as a player
-  until a GM-auth field is added to the handshake.
 - **An opened player sheet on the GM side is a snapshot, not live.** The player
   *card* updates in real time; re-opening the sheet re-reads the latest snapshot.
   The GM's sheet is a **fully-locked read-only view** (`MainWindow(gm_view=True)`):

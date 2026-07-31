@@ -7,6 +7,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.ui.block_canvas import SCHEMA_VERSION
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
@@ -202,13 +203,14 @@ def test_apply_arrangement_transitions_dont_destroy_frames(make_sheet) -> None:
 
     sheet = make_sheet()
     model = {
-        "version": 5,
+        "version": SCHEMA_VERSION,
         "rows": [
             ["base_info", "system_info", "character_image"],
             ["abilities", "resistances"],
             ["conditions"],
             ["complications"],
             ["powers"],
+            ["dice"],
         ],
         "floating": {"skills": {"x": 50, "y": 50, "w": 400, "h": 400}},
         "hidden": ["advantages"],
@@ -236,3 +238,41 @@ def test_restore_layout_rejects_garbage(make_sheet) -> None:
     assert sheet.restore_layout('{"version": 1}') is False  # wrong schema version
 
     assert sheet.arrangement()["rows"] == default_rows  # unchanged
+
+
+# -- fill_last: the bottom block soaks up leftover height (GM board) --------
+
+
+def _plain_canvas(fill_last: bool):
+    """A tiny two-block canvas built directly, no character sheet involved."""
+    from PySide6.QtWidgets import QLabel
+
+    from mm_companion.ui.block_canvas import BlockCanvas
+    from mm_companion.ui.block_sizes import BlockSize
+
+    panels = [("a", "A", QLabel("a")), ("b", "B", QLabel("b"))]
+    sizes = {"a": BlockSize(min_width=100), "b": BlockSize(min_width=100)}
+    return BlockCanvas(panels, sizes, [["a"], ["b"]], fill_last=fill_last)
+
+
+def test_fill_last_stretches_the_bottom_block(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSizePolicy
+
+    canvas = _plain_canvas(fill_last=True)
+    # The bottom row and its growable block go Expanding, so they eat the slack;
+    # the block above stays flush to its content.
+    assert canvas._row_widgets[-1].sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
+    assert canvas._frames["b"].sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
+    assert canvas._frames["a"].sizePolicy().verticalPolicy() == QSizePolicy.Policy.Minimum
+    canvas.deleteLater()
+
+
+def test_without_fill_last_a_trailing_stretch_holds_the_slack(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSizePolicy
+
+    canvas = _plain_canvas(fill_last=False)
+    # The last layout item is a stretch spacer (no widget), and no block expands.
+    last = canvas._layout.itemAt(canvas._layout.count() - 1)
+    assert last.widget() is None and last.spacerItem() is not None
+    assert canvas._frames["b"].sizePolicy().verticalPolicy() == QSizePolicy.Policy.Minimum
+    canvas.deleteLater()

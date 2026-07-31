@@ -16,6 +16,7 @@ from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.blocks.registry import (
     BLOCKS,
     block_descriptors,
+    default_pin_lines,
     default_rows,
     register_block,
     sync_declarative_blocks,
@@ -30,6 +31,7 @@ __all__ = [
     "DeclarativeBlock",
     "SignalBus",
     "block_descriptors",
+    "default_pin_lines",
     "default_rows",
     "register_block",
     "sync_declarative_blocks",

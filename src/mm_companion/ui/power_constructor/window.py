@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -32,16 +34,17 @@ from mm_companion.core.rules import (
     power_strength_amount_violations,
     power_total_cost,
 )
-from mm_companion.ui.power_constructor.bricks import BrickWidget
+from mm_companion.ui import theme
+from mm_companion.ui.power_constructor.bricks import BrickList, BrickWidget, PaletteDropZone
 from mm_companion.ui.power_constructor.canvas import PowerCanvas
 from mm_companion.ui.power_constructor.common import (
-    _GROUP_HEADER,
     EFFECT_MIME,
     MODIFIER_MIME,
     combat_focus_options,
 )
 from mm_companion.ui.power_constructor.terms_view import PowerTermsView
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import BOLD_STYLE, tinted_style
 
 
 class PowerConstructorWindow(QMainWindow):
@@ -69,10 +72,16 @@ class PowerConstructorWindow(QMainWindow):
         # Editing works on a deep copy so closing the window without saving leaves
         # the character's stored power untouched; the copy is what `powerSaved` hands
         # back, and the host section swaps it in for the original on save.
+        #
+        # The copy is a real ``deepcopy``, *not* a ``to_dict``/``from_dict`` round-trip:
+        # the save format deliberately omits runtime state (``activated``,
+        # ``item_present``, ``array_active``, ``toggled_on``, ``suppressed``) so a loaded
+        # character comes up all-active, which means a round-trip would quietly switch a
+        # power the player had turned off back on the moment they edited its description.
         self._editing = power is not None
-        self.power = Power.from_dict(power.to_dict()) if self._editing else Power()
+        self.power = deepcopy(power) if self._editing else Power()
         self.setWindowTitle("Edit Power" if self._editing else "Power Constructor")
-        self.resize(1150, 640)
+        self.resize(1240, 660)
 
         # Three columns: the brick palette, the build panel (the effect canvas the
         # player works in), and the read-only game-term summary. The summary lives in
@@ -85,7 +94,11 @@ class PowerConstructorWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([250, 580, 320])
+        # The palette opens wide enough for a brick's full cost subtitle, and can't be
+        # dragged shut — it is the only way to add anything, so a collapsed palette
+        # leaves the window with no visible way forward.
+        splitter.setSizes([330, 560, 340])
+        splitter.setCollapsible(0, False)
         self.setCentralWidget(splitter)
 
         if self._editing:
@@ -129,12 +142,16 @@ class PowerConstructorWindow(QMainWindow):
         # applied automatically from a power's structure, so they never appear as
         # draggable palette bricks — they stay in the catalog only for cost lookups.
         extras = [
-            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
+            BrickWidget(
+                m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat, description=m.description
+            )
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
             if m.category == "extra" and not m.hidden
         ]
         flaws = [
-            BrickWidget(m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat)
+            BrickWidget(
+                m.name, m.cost_formula, MODIFIER_MIME, m.id, flat=m.flat, description=m.description
+            )
             for m in sorted(self._data.modifiers, key=lambda m: m.name)
             if m.category == "flaw" and not m.hidden
         ]
@@ -148,13 +165,22 @@ class PowerConstructorWindow(QMainWindow):
         )
         tabs.addTab(self._build_search_tab("extras", "Search extras", bricks=extras), "Extras")
         tabs.addTab(self._build_search_tab("flaws", "Search flaws", bricks=flaws), "Flaws")
-        return tabs
+        tabs.setMinimumWidth(300)
+        # The palette is also where an attached chip is dragged to detach it.
+        self.palette_zone = PaletteDropZone(tabs)
+        return self.palette_zone
 
     def _effect_groups(self) -> list[tuple[str, list[BrickWidget]]]:
         """The effect bricks bucketed under their game-term type, in reading order."""
         by_type: dict[str, list[BrickWidget]] = {}
         for effect in sorted(self._data.effects, key=lambda e: e.name):
-            brick = BrickWidget(effect.name, effect.base_cost, EFFECT_MIME, effect.id)
+            brick = BrickWidget(
+                effect.name,
+                effect.base_cost,
+                EFFECT_MIME,
+                effect.id,
+                description=effect.description,
+            )
             by_type.setdefault(effect.effect_type, []).append(brick)
         ordered = [t for t in self._EFFECT_TYPE_ORDER if t in by_type]
         ordered += [t for t in by_type if t not in self._EFFECT_TYPE_ORDER]  # any stragglers
@@ -169,7 +195,7 @@ class PowerConstructorWindow(QMainWindow):
         groups: list[tuple[str, list[BrickWidget]]] | None = None,
         sortable: bool = False,
     ) -> QWidget:
-        """A scrollable brick list with a live search box pinned above it.
+        """A scrollable :class:`BrickList` with a live search box pinned above it.
 
         Pass a flat ``bricks`` list or, for the Effects tab, ``groups`` of
         ``(section title, bricks)`` rendered under sticky-styled headers. Typing
@@ -191,122 +217,24 @@ class PowerConstructorWindow(QMainWindow):
         search.setClearButtonEnabled(True)  # a one-click reset
         outer.addWidget(search)
 
-        sort_check = None
+        brick_list = BrickList(list(groups or [(None, bricks or [])]))
+
         if sortable and groups:
             sort_check = QCheckBox("Sort A–Z (no groups)")
             sort_check.setToolTip(
                 "List every effect in one alphabetical list, ignoring type groups."
             )
+            sort_check.toggled.connect(brick_list.set_alphabetical)
             outer.addWidget(sort_check)
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setSpacing(4)
-
-        # A flat list is one unnamed section; grouped tabs get a header per section.
-        # Sections drive both layout and the search's empty-header hiding.
-        sections: list[tuple[QLabel | None, list[BrickWidget]]] = []
-        all_bricks: list[BrickWidget] = []
-        for title, group in groups or [(None, bricks or [])]:
-            header = None
-            if title is not None:
-                header = QLabel(title)
-                # Named so a header is addressable as one: a brick can share a group's
-                # name (the Attack extra vs. the Attack effect group), so selecting
-                # headers by their text alone would sweep bricks up too.
-                header.setObjectName(_GROUP_HEADER)
-                header.setStyleSheet(
-                    "font-weight: bold; color: palette(placeholder-text); padding-top: 4px;"
-                )
-                layout.addWidget(header)
-            for brick in group:
-                layout.addWidget(brick)
-            sections.append((header, group))
-            all_bricks.extend(group)
-
-        empty = QLabel("No matches")
-        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty.setEnabled(False)
-        empty.setVisible(False)
-        layout.addWidget(empty)
-        layout.addStretch()
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setWidget(container)
+        scroll.setWidget(brick_list)
         outer.addWidget(scroll, stretch=1)
 
-        def alpha_now() -> bool:
-            return bool(sort_check and sort_check.isChecked())
-
-        search.textChanged.connect(
-            lambda text: self._filter_bricks(text, sections, all_bricks, empty, alpha_now())
-        )
-        if sort_check is not None:
-            sort_check.toggled.connect(
-                lambda alpha: self._apply_sort(
-                    layout, sections, all_bricks, empty, search.text(), alpha
-                )
-            )
-        self._search_tabs[key] = (search, all_bricks)
+        search.textChanged.connect(brick_list.filter_to)
+        self._search_tabs[key] = (search, brick_list.bricks)
         return tab
-
-    def _apply_sort(
-        self,
-        layout: QVBoxLayout,
-        sections: list[tuple[QLabel | None, list[BrickWidget]]],
-        bricks: list[BrickWidget],
-        empty: QLabel,
-        search_text: str,
-        alpha: bool,
-    ) -> None:
-        """Re-lay-out the effect bricks grouped (default) or in one flat A–Z list.
-
-        The headers and bricks are detached and re-inserted in the new order (the
-        ``empty`` note and trailing stretch stay put at the end); the current search
-        filter is then re-applied so a query survives the toggle.
-        """
-        for header, group in sections:
-            if header is not None:
-                layout.removeWidget(header)
-            for brick in group:
-                layout.removeWidget(brick)
-
-        at = 0
-        if alpha:
-            for header, _group in sections:
-                if header is not None:
-                    header.setVisible(False)
-            for brick in sorted(bricks, key=lambda b: b.search_key):
-                layout.insertWidget(at, brick)
-                at += 1
-        else:
-            for header, group in sections:
-                if header is not None:
-                    header.setVisible(True)
-                    layout.insertWidget(at, header)
-                    at += 1
-                for brick in group:
-                    layout.insertWidget(at, brick)
-                    at += 1
-        self._filter_bricks(search_text, sections, bricks, empty, alpha)
-
-    @staticmethod
-    def _filter_bricks(
-        text: str,
-        sections: list[tuple[QLabel | None, list[BrickWidget]]],
-        bricks: list[BrickWidget],
-        empty: QLabel,
-        alpha: bool = False,
-    ) -> None:
-        needle = text.strip().lower()
-        for brick in bricks:
-            brick.setVisible(needle in brick.search_key)
-        # In the flat A–Z view the section headers stay hidden regardless of matches.
-        for header, group in sections:  # hide a section header with no visible bricks
-            if header is not None:
-                header.setVisible(not alpha and any(not b.isHidden() for b in group))
-        empty.setVisible(all(b.isHidden() for b in bricks))
 
     # -- centre: the power being built ------------------------------------
     def _build_build_panel(self) -> QWidget:
@@ -337,11 +265,16 @@ class PowerConstructorWindow(QMainWindow):
         # the power is within caps, naming the breach on its tooltip when it isn't).
         cost_row = QHBoxLayout()
         self._cost = QLabel()
-        self._cost.setStyleSheet("font-size: 12pt; font-weight: bold;")
+        self._cost.setStyleSheet(BOLD_STYLE)
+        # Size on the QFont, never in the stylesheet: a QSS font-size outranks the
+        # widget font, which is the mechanism the sheet's power cards animate.
+        cost_font = self._cost.font()
+        cost_font.setPointSizeF(theme.font_size("size.cost-total"))
+        self._cost.setFont(cost_font)
         cost_row.addWidget(self._cost)
         cost_row.addStretch()
         self._warning = QLabel()
-        self._warning.setStyleSheet("color: #d1a01e; font-weight: bold;")
+        self._warning.setStyleSheet(tinted_style("tint.warning"))
         self._warning.setVisible(False)
         cost_row.addWidget(self._warning)
         layout.addLayout(cost_row)
@@ -382,7 +315,7 @@ class PowerConstructorWindow(QMainWindow):
 
         head_row = QHBoxLayout()
         heading = QLabel("Game terms")
-        heading.setStyleSheet("font-weight: bold;")
+        heading.setStyleSheet(BOLD_STYLE)
         head_row.addWidget(heading)
         head_row.addStretch()
         self._dev_mode = QCheckBox("Dev mode (homerule)")

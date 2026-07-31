@@ -5,7 +5,7 @@ one row per trait, with a green "→ total" label that appears only when a power
 enhances that trait. Both :class:`~mm_companion.ui.sections.abilities.AbilitiesSection`
 and :class:`~mm_companion.ui.sections.resistances.ResistancesSection` build their
 grids through :func:`build_stat_group` and refresh their enhancement labels through
-:func:`apply_enhancements`.
+:func:`apply_stat_effects`.
 """
 
 from __future__ import annotations
@@ -15,33 +15,55 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QSpinBox, QWidget
 
-from mm_companion.core.rules import ConditionEffect
-from mm_companion.ui.theme import TINT_BETTER, TINT_WORSE
-from mm_companion.ui.widgets import hline_separator, make_spin_box
+from mm_companion.core.data_loader import TraitRange
+from mm_companion.core.rules import ConditionEffect, RollSpec
+from mm_companion.ui import theme
+from mm_companion.ui.roll_click import attach_roll_click
+from mm_companion.ui.widgets import hline_separator, make_spin_box, tinted_style
 
-STAT_MIN, STAT_MAX = -5, 30
-STAT_SPIN_WIDTH = 80
+#: What a grid needs to make its rows rollable: a factory turning a trait key into
+#: that trait's :class:`RollSpec`, the sink the spec goes to (the section's
+#: ``rollRequested.emit``), and the predicate telling whether the sheet is locked.
+RollHookFactory = Callable[[str], "RollSpec | None"]
+RollHook = tuple[Callable[[], "RollSpec | None"], Callable[[RollSpec], None], Callable[[], bool]]
 
-# The green a power-boosted trait's "→ total" reads in, matching the summary tints.
-ENHANCED_TINT = TINT_BETTER
-# The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
-CONDITION_TINT = TINT_WORSE
-# Conditions rendered struck through on the stat they hit (a lost/near-lost trait).
-STRIKETHROUGH_CONDITIONS = frozenset({"disabled", "debilitated"})
+# Colour-token names, not values: resolved where they are used so a theme switch
+# reaches them (see :mod:`mm_companion.ui.theme`).
+#: The green a power-boosted trait's "→ total" reads in, matching the summary tints.
+ENHANCED_TINT = "tint.better"
+#: The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
+CONDITION_TINT = "tint.worse"
 
 
 def add_stat_row(
-    grid: QGridLayout, row: int, name: str, abbr: str, spin: QSpinBox, enh: QLabel
+    grid: QGridLayout,
+    row: int,
+    name: str,
+    abbr: str,
+    spin: QSpinBox,
+    enh: QLabel,
+    roll: RollHook | None = None,
 ) -> None:
     """Lay out one stat as four aligned columns: name, short code, spin box, and
-    the (usually hidden) power-enhanced total."""
+    the (usually hidden) power-enhanced total.
 
-    grid.addWidget(QLabel(f"{name}:"), row, 0)
+    With a *roll* hook, double-clicking anywhere along the row rolls that stat —
+    over the spin box only while the sheet is locked, since unlocked a double-click
+    there selects the number for editing (see :mod:`mm_companion.ui.roll_click`).
+    """
+
+    label = QLabel(f"{name}:")
+    grid.addWidget(label, row, 0)
     code = QLabel(abbr)
     code.setAlignment(Qt.AlignmentFlag.AlignCenter)
     grid.addWidget(code, row, 1)
     grid.addWidget(spin, row, 2)
     grid.addWidget(enh, row, 3)
+    if roll is not None:
+        factory, sink, locked = roll
+        for widget in (label, code, enh):
+            attach_roll_click(widget, factory, sink)
+        attach_roll_click(spin, factory, sink, enabled=locked)
 
 
 def build_stat_group(
@@ -50,15 +72,25 @@ def build_stat_group(
     enh_store: dict[str, QLabel],
     values: dict[str, int],
     on_change: Callable[[str, int], None],
+    trait_range: TraitRange,
+    *,
+    roll_spec: RollHookFactory | None = None,
+    roll_sink: Callable[[RollSpec], None] | None = None,
+    is_locked: Callable[[], bool] | None = None,
 ) -> QWidget:
     """Build a frameless grid of stat spin boxes (abilities or resistances).
 
     Spin boxes are seeded from *values* (the model dict) and write back through
-    *on_change*. Each row also gets a green "→ total" label that stays hidden
-    until a power enhances that trait. A separator is inserted before the first
-    derived entry. *store* and *enh_store* are filled in place, keyed by each
-    entry's ``key``. The container is frameless — the hosting section's group box
-    carries the title and running cost.
+    *on_change*, and accept the data-driven *trait_range* for their trait family
+    (``costs.json``'s ``trait_ranges``). Each row also gets a green "→ total" label
+    that stays hidden until a power enhances that trait. A separator is inserted
+    before the first derived entry. *store* and *enh_store* are filled in place, keyed
+    by each entry's ``key``. The container is frameless — the hosting section's group
+    box carries the title and running cost.
+
+    Given *roll_spec*, *roll_sink* and *is_locked*, each row is also double-clickable
+    to roll that trait (see :func:`add_stat_row`). The spec is built at click time
+    from the trait key, so it always reflects the current sheet.
     """
 
     container = QWidget()
@@ -72,21 +104,42 @@ def build_stat_group(
             row += 1
             separated = True
         spin = make_spin_box(
-            STAT_MIN,
-            STAT_MAX,
+            trait_range.min,
+            trait_range.max,
             value=values.get(entry.key, 0),
             buttons=False,
-            max_width=STAT_SPIN_WIDTH,
+            max_width=int(theme.metric("column.stat.spin")),
         )
         spin.valueChanged.connect(lambda value, key=entry.key: on_change(key, value))
         store[entry.key] = spin
         enh = QLabel()
-        enh.setStyleSheet(f"color: {ENHANCED_TINT}; font-weight: bold;")
+        enh.setStyleSheet(tinted_style(ENHANCED_TINT))
         enh.setVisible(False)
         enh_store[entry.key] = enh
-        add_stat_row(grid, row, entry.name, entry.abbr, spin, enh)
+        hook = None
+        if roll_spec is not None and roll_sink is not None:
+            locked = is_locked or (lambda: True)
+            hook = (lambda key=entry.key: roll_spec(key), roll_sink, locked)
+        add_stat_row(grid, row, entry.name, entry.abbr, spin, enh, hook)
         row += 1
     return container
+
+
+def set_stat_value(spin: QSpinBox, value: int) -> None:
+    """Seed a stat spin box, widening its range first if *value* falls outside it.
+
+    A spin box silently clamps a value it can't represent, which is destructive here:
+    the resistance spins hold a *total* and the model stores only the bought delta, so a
+    clamped display would make the very next edit rewrite that delta from the wrong
+    number. Rather than lose ranks to a range that is too tight (a stingy mod's, or a
+    character built before a range was narrowed), stretch the range to fit.
+    """
+
+    if value < spin.minimum():
+        spin.setMinimum(value)
+    elif value > spin.maximum():
+        spin.setMaximum(value)
+    spin.setValue(value)
 
 
 def _set_label_strike(label: QLabel, struck: bool) -> None:
@@ -106,8 +159,8 @@ def apply_stat_effects(
     The label reads ``→ N``, where ``N`` is the spin box's value plus any power boost,
     then a condition overlay (a Hit penalty on Toughness, a halved/zeroed active defense,
     a scoped check penalty). A pure power boost tints green; any condition tints it red,
-    struck through when a lost-trait condition (Disabled/Debilitated) is involved. A trait
-    with neither keeps its label hidden.
+    struck through when the overlay reports the trait lost (``ConditionEffect.trait_lost``
+    — Disabled/Debilitated in the base data). A trait with neither keeps its label hidden.
     """
 
     cond_effects = cond_effects or {}
@@ -134,13 +187,6 @@ def apply_stat_effects(
             tips.append(effect.tooltip)
         label.setToolTip("\n".join(tips))
 
-        tint = CONDITION_TINT if has_cond else ENHANCED_TINT
-        label.setStyleSheet(f"color: {tint}; font-weight: bold;")
-        _set_label_strike(label, has_cond and bool(effect.condition_ids & STRIKETHROUGH_CONDITIONS))
+        label.setStyleSheet(tinted_style(CONDITION_TINT if has_cond else ENHANCED_TINT))
+        _set_label_strike(label, has_cond and effect.trait_lost)
         label.setVisible(True)
-
-
-def apply_enhancements(spins: dict, labels: dict, bonuses: dict) -> None:
-    """Back-compat shim: power boosts only, no condition overlay."""
-
-    apply_stat_effects(spins, labels, bonuses, None)

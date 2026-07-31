@@ -27,13 +27,22 @@ ROOT = Path(SPECPATH).parent
 SRC = str(ROOT / "src")
 ICON = str(ROOT / "src" / "mm_companion" / "ui" / "assets" / "mm.ico")
 
-# Bundle exactly the package data the app reads at runtime (mirrors the
-# package-data globs in pyproject.toml) — no tests, no dev tooling, no design.
+# Bundle exactly the package data the app reads at runtime — no tests, no dev
+# tooling, no design. This list must stay a copy of the package-data globs in
+# pyproject.toml: everything here is read through importlib.resources, so a file
+# these globs miss is simply absent from the built app while working perfectly
+# from a source checkout. That is how the theme presets came to be missing —
+# "ui/*.json" does not match "ui/theme/themes/classic.json", and nothing failed
+# until the installed app had no themes to load.
 datas = collect_data_files(
     "mm_companion",
     includes=[
         "data/**/*.json",
+        "data/**/*.yaml",
+        "data/**/*.yml",
         "ui/*.json",
+        "ui/theme/*.json",
+        "ui/theme/themes/*.json",
         "ui/assets/*.ico",
         "ui/assets/*.png",
         "ui/assets/*.svg",

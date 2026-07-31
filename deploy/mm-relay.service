@@ -1,0 +1,46 @@
+[Unit]
+Description=MM-Companion relay (TLS byte-pump for session traffic)
+Documentation=https://github.com/Mrzillka/MM_Companion/blob/main/docs/mm-session-networking.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mm
+Group=mm
+WorkingDirectory=/home/mm/MM_Companion
+
+# --session-ttl is in HOURS. The stock 12 h is meant for a GM's laptop hosting an
+# evening's game; a session parked here by the hub is meant to outlive that, so it
+# is raised to 30 days. The hub re-registers on its own if a link is ever dropped,
+# so this is a safety valve against a leaked session, not the normal path.
+ExecStart=/home/mm/MM_Companion/.venv/bin/python -m mm_companion.relay \
+    --port 47332 \
+    --session-ttl 720 \
+    --cert /etc/letsencrypt/live/mmcompanion.duckdns.org/fullchain.pem \
+    --key /etc/letsencrypt/live/mmcompanion.duckdns.org/privkey.pem
+
+Restart=on-failure
+RestartSec=5s
+
+# The relay holds no state and reads nothing but its cert, so it can be locked
+# down hard. ProtectHome=read-only rather than true: the venv and the code live
+# under /home/mm.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

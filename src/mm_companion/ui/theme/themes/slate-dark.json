@@ -53,5 +53,11 @@
 
   "typography": {
     "size.card-name": 11.5
+  },
+
+  "_assets": "The shaded die and the medallion pips: this preset owns its surfaces, so it can take the richest artwork without having to survive an unknown background.",
+  "assets": {
+    "die": "gradient",
+    "hero-point": "medallion"
   }
 }

@@ -80,6 +80,11 @@ class Theme:
     #: ``max_height``. Usually empty — only a theme that changes the density
     #: needs to move a block's floor.
     blocks: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
+    #: Which bundled drawing the artwork is taken from — ``die`` and
+    #: ``hero-point``, each naming a variant id owned by
+    #: :mod:`mm_companion.ui.svg_assets`. A theme picks the *look*; it never names
+    #: a file, so a hand-edited preset cannot point the renderer at one.
+    assets: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def styled(self) -> bool:

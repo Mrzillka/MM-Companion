@@ -10,6 +10,7 @@ import pytest
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QGroupBox,
     QLineEdit,
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
-from mm_companion.ui import theme
+from mm_companion.ui import svg_assets, theme
 from mm_companion.ui.settings.color_row import ColorRow, is_valid_color_value
 from mm_companion.ui.settings.token_editor import TokenEditor
 from mm_companion.ui.theme.loader import available_themes
@@ -157,6 +158,45 @@ def test_chrome_is_its_own_group(editor) -> None:
 
     assert "Chrome" in titles
     assert "Semantic tints" in titles  # a named bucket kept its heading
+
+
+# -- artwork --------------------------------------------------------------------
+
+
+def test_artwork_offers_every_bundled_variant_by_its_friendly_name(editor) -> None:
+    """The registry decides what exists; the form only decides what to call it."""
+    die = rows(editor)[("Artwork", "Die")]
+
+    assert isinstance(die, QComboBox)
+    ids = [die.itemData(i) for i in range(die.count())]
+    assert ids == list(svg_assets.DIE_VARIANTS)
+    assert "Shaded" in [die.itemText(i) for i in range(die.count())]
+
+
+def test_artwork_shows_what_a_preset_stating_nothing_would_actually_draw(editor) -> None:
+    """SAMPLE carries no ``assets`` at all, as a pre-artwork snapshot would.
+
+    Showing the module default here instead of Classic's value would present a
+    setting the user never chose as one they had.
+    """
+    assert rows(editor)[("Artwork", "Die")].currentData() == "classic"
+    assert rows(editor)[("Artwork", "Hero points")].currentData() == "classic"
+
+
+def test_picking_a_variant_writes_its_id_not_its_label(editor) -> None:
+    pips = rows(editor)[("Artwork", "Hero points")]
+
+    pips.setCurrentIndex(pips.findData("medallion"))
+
+    assert editor.draft().assets["hero-point"] == "medallion"
+
+
+def test_a_filter_finds_the_artwork_rows(editor) -> None:
+    editor.set_filter("d20")
+    assert "Die" in visible_labels(editor)
+
+    editor.set_filter("pips")
+    assert "Hero points" in visible_labels(editor)
 
 
 # -- editing --------------------------------------------------------------------

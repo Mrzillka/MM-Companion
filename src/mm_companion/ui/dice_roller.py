@@ -82,7 +82,7 @@ from mm_companion.ui.roll_history import (
     quick_roll_key,
 )
 from mm_companion.ui.session_bridge import SessionBridge, live_session
-from mm_companion.ui.svg_assets import D20_RESOURCE, svg_pixmap
+from mm_companion.ui.svg_assets import die_resource, svg_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, tinted_style
 
@@ -118,13 +118,17 @@ NOT_SENT = "The roll could not be sent to the session."
 
 
 def d20_pixmap(ratio: float = 1.0) -> QPixmap:
-    """The bundled d20 drawing at :data:`DIE_SIZE`, for a screen of *ratio*.
+    """The theme's d20 drawing at :data:`DIE_SIZE`, for a screen of *ratio*.
 
     A thin wrapper over :func:`~mm_companion.ui.svg_assets.svg_pixmap`, which does
     the loading, the aspect-ratio fitting and the caching. The die is not square,
     so it is fitted into the square icon rather than stretched to it.
+
+    Which of the bundled drawings that is comes from the ``assets.die`` token, read
+    here at call time rather than held in a constant — the point of the token is
+    that a preset switch changes it.
     """
-    return svg_pixmap(D20_RESOURCE, QSize(DIE_SIZE, DIE_SIZE), ratio)
+    return svg_pixmap(die_resource(theme.asset("die")), QSize(DIE_SIZE, DIE_SIZE), ratio)
 
 
 def degree_text(result: CheckResult | None) -> str:

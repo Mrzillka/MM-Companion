@@ -23,7 +23,7 @@ Two values it refuses rather than passes on:
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.ui import block_sizes, theme
+from mm_companion.ui import block_sizes, svg_assets, theme
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.settings.color_row import ColorRow
 from mm_companion.ui.theme import token_meta as meta_module
@@ -66,6 +66,17 @@ TOKEN_GROUPS = ("colors", "metrics", "typography")
 _CHROME_LABELS = {
     "system": "System (follow the OS)",
     "styled": "Styled (dress the window)",
+}
+
+#: Friendly names for the artwork variant ids, which are what a preset stores.
+#: Not a gate on what exists: the combo boxes iterate the registries in
+#: :mod:`mm_companion.ui.svg_assets`, so a drawing added there shows up whether or
+#: not it is named here — it just appears under its own id.
+_VARIANT_LABELS = {
+    "classic": "Classic (outlined)",
+    "flat": "Flat colour",
+    "gradient": "Shaded",
+    "medallion": "Medallion",
 }
 
 #: The colours ``qss._chrome_rules`` reads with no fallback, and which Classic
@@ -264,7 +275,7 @@ class TokenEditor(QWidget):
             _clear(self._layout)
             self._color_rows.clear()
             self._inputs.clear()
-            self._sections = [self._build_chrome()]
+            self._sections = [self._build_chrome(), self._build_artwork()]
             self._sections += [self._build_group(group) for group in TOKEN_GROUPS]
             self._sections.append(self._build_blocks())
             for section in self._sections:
@@ -315,6 +326,61 @@ class TokenEditor(QWidget):
         )
         section.add_row(form, "chrome focus ring focused accent outline")
         return section
+
+    def _build_artwork(self) -> _Section:
+        """The bundled drawings — a hand-built section, like Chrome.
+
+        Deliberately not routed through :func:`token_meta.grouped`: these two
+        tokens are a *choice from a fixed set*, not a value to type, so the widget
+        cannot be picked from the shape of the value the way the colour and size
+        rows are. Already-built icons are not re-drawn by a stylesheet, so a change
+        here shows up after the relaunch the window offers on close.
+        """
+        box = QGroupBox("Artwork")
+        form = QFormLayout(box)
+        section = _Section(box)
+
+        die = self._build_variant("die", svg_assets.DIE_VARIANTS)
+        form.addRow(_field_label("Die", "Which of the bundled d20 drawings the roller shows."), die)
+        section.add_row(form, "artwork die d20 dice roller drawing classic flat gradient shaded")
+
+        pips = self._build_variant("hero-point", svg_assets.HERO_POINT_VARIANTS)
+        form.addRow(
+            _field_label(
+                "Hero points",
+                "Which pair of drawings the held and spent pips are taken from.",
+            ),
+            pips,
+        )
+        section.add_row(form, "artwork hero point pips medallion classic held spent")
+        return section
+
+    def _build_variant(self, name: str, variants: Mapping[str, object]) -> QComboBox:
+        combo = QComboBox()
+        for variant in variants:
+            combo.addItem(_VARIANT_LABELS.get(variant, variant), variant)
+        combo.setCurrentIndex(max(0, combo.findData(self._variant_value(name))))
+        combo.setMaximumWidth(int(theme.metric("column.settings.value")))
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo, n=name: self._set_token("assets", n, c.currentData())
+        )
+        guard_wheel(combo)
+        self._inputs.append(combo)
+        return combo
+
+    def _variant_value(self, name: str) -> str:
+        """The draft's variant for *name*, or the one the app would fall back to.
+
+        A snapshot written before the artwork tokens existed carries no ``assets``
+        map at all, and :func:`theme.asset` answers such a preset from Classic's
+        value. The combo has to show that same value, or it would present the
+        default as a *change* the user never made.
+        """
+        chosen = self.draft().assets.get(name)
+        if chosen:
+            return str(chosen)
+        backing = theme.available_themes().get(theme.DEFAULT_THEME_ID)
+        return str(getattr(backing, "assets", {}).get(name, ""))
 
     def _build_group(self, group: str) -> _Section:
         meta = meta_module.token_meta()

@@ -97,5 +97,11 @@
   },
 
   "_blocks": "Per-block size overrides layered over ui/block_sizes.json. Empty here: Classic keeps the shipped sizes.",
-  "blocks": {}
+  "blocks": {},
+
+  "_assets": "Which bundled drawing the die and the hero-point pips are taken from. These are variant ids owned by ui/svg_assets.py, not file paths — a preset picks a look, it cannot point the renderer at an arbitrary file. Classic keeps the plain outlined artwork the app shipped with; the designed presets take the shaded medallion set. Already-built icons are not re-drawn by a stylesheet, so a switch shows up after the relaunch the Settings window offers.",
+  "assets": {
+    "die": "classic",
+    "hero-point": "classic"
+  }
 }

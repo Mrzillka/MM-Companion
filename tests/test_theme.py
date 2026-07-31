@@ -115,7 +115,13 @@ def test_an_inline_comment_key_is_not_a_token() -> None:
     preset = loader.available_themes()["classic"]
 
     assert "_tint.warning" not in preset.colors
-    for group in (preset.colors, preset.metrics, preset.typography, preset.blocks):
+    for group in (
+        preset.colors,
+        preset.metrics,
+        preset.typography,
+        preset.blocks,
+        preset.assets,
+    ):
         assert not [key for key in group if key.startswith("_")]
 
 

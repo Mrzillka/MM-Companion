@@ -43,7 +43,7 @@ DEFAULT_THEME_ID = "classic"
 _LEGACY_IDS = {"system": DEFAULT_THEME_ID, "": DEFAULT_THEME_ID}
 
 #: The token groups a preset may carry, each a flat ``name -> value`` map.
-_TOKEN_GROUPS = ("colors", "metrics", "typography", "blocks")
+_TOKEN_GROUPS = ("colors", "metrics", "typography", "blocks", "assets")
 
 
 def _parse(raw: Any, theme_id: str) -> dict[str, Any]:
@@ -165,6 +165,7 @@ def _build(theme_id: str, sources: dict[str, dict[str, Any]]) -> Theme:
         metrics=tokens["metrics"],
         typography=tokens["typography"],
         blocks=tokens["blocks"],
+        assets=tokens["assets"],
     )
 
 
@@ -250,6 +251,7 @@ def theme_to_dict(theme: Theme) -> dict[str, Any]:
             for key, value in theme.blocks.items()
             if not key.startswith("_") and isinstance(value, dict)
         },
+        "assets": _without_comments(dict(theme.assets)),
     }
 
 

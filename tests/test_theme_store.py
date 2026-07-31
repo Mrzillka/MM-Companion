@@ -35,7 +35,7 @@ def test_a_snapshot_is_self_contained() -> None:
 
     assert "extends" not in payload
     assert payload["chrome"] == {"mode": "system", "focus_ring": True}
-    for group in ("colors", "metrics", "typography", "blocks"):
+    for group in ("colors", "metrics", "typography", "blocks", "assets"):
         assert group in payload
     assert payload["colors"]["tint.worse"] == "#d15b5b"
 
@@ -68,6 +68,7 @@ def test_a_saved_snapshot_round_trips_to_the_same_tokens() -> None:
     assert dict(reloaded.colors) == dict(source.colors)
     assert dict(reloaded.metrics) == dict(source.metrics)
     assert dict(reloaded.typography) == dict(source.typography)
+    assert dict(reloaded.assets) == dict(source.assets)
     assert reloaded.chrome == source.chrome
 
 

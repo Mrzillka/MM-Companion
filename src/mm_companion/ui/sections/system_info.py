@@ -63,9 +63,10 @@ class HeroPointsWidget(QWidget):
     """Five hero-point pips, each its own switch; the count is how many are lit.
 
     A pip toggles on its own — light the fourth and leave the rest dark if that is
-    how you like to read your row. A held point shows the lit medallion, a spent
-    one the grey medallion (the artwork bundled as
-    :mod:`~mm_companion.ui.svg_assets`). Emits :attr:`valueChanged` on a user click.
+    how you like to read your row. A held point shows the lit drawing, a spent one
+    the dimmed twin; which pair of the bundled ones (:mod:`~mm_companion.ui.svg_assets`)
+    is the theme's ``assets.hero-point`` choice. Emits :attr:`valueChanged` on a
+    user click.
 
     **Which** pips are lit is cosmetic: the character carries a count, so
     :meth:`set_value` — a load, or a GM's command — can only say *how many*. It
@@ -146,8 +147,12 @@ class HeroPointsWidget(QWidget):
 
     def _render(self) -> None:
         ratio = self.devicePixelRatioF()
+        # The variant is read here rather than kept from __init__, so a widget
+        # rebuilt after a preset switch draws the new artwork.
+        variant = theme.asset("hero-point")
         for i, button in enumerate(self._buttons):
-            button.setIcon(QIcon(hero_point_pixmap(i in self._lit, self._pip_size, ratio)))
+            pixmap = hero_point_pixmap(i in self._lit, self._pip_size, ratio, variant)
+            button.setIcon(QIcon(pixmap))
 
 
 class SpeedWidget(QWidget):

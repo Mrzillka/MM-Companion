@@ -22,12 +22,36 @@ from PySide6.QtSvg import QSvgRenderer
 
 RESOURCE_PACKAGE = "mm_companion.ui"
 
-D20_RESOURCE = "assets/D20_icon.svg"
-HERO_POINT_FILLED_RESOURCE = "assets/hero_points_on.svg"
-HERO_POINT_EMPTY_RESOURCE = "assets/hero_points_off.svg"
+#: The die drawings, by variant id. A theme's ``assets.die`` token names one of
+#: these keys — never a path, so a preset cannot point the renderer at an
+#: arbitrary file. Which one a preset asks for is the theme's business; *what
+#: exists* is this module's, which is why there is no import of ``theme`` here.
+DIE_VARIANTS = {
+    "classic": "assets/D20_classic.svg",
+    "flat": "assets/D20_no_grad.svg",
+    "gradient": "assets/D20_grad.svg",
+}
+DEFAULT_DIE = "flat"
+
+#: The hero-point pips, by variant id, as ``(held, spent)``.
+HERO_POINT_VARIANTS = {
+    "classic": ("assets/hero_point_classic_on.svg", "assets/hero_point_classic_off.svg"),
+    "medallion": ("assets/hero_points_on.svg", "assets/hero_points_off.svg"),
+}
+DEFAULT_HERO_POINT = "medallion"
 
 
-@lru_cache(maxsize=16)
+def die_resource(variant: str | None = None) -> str:
+    """The die drawing for *variant*, falling back to the default on an unknown id."""
+    return DIE_VARIANTS.get(variant or "", DIE_VARIANTS[DEFAULT_DIE])
+
+
+def hero_point_resources(variant: str | None = None) -> tuple[str, str]:
+    """The ``(held, spent)`` pips for *variant*, falling back on an unknown id."""
+    return HERO_POINT_VARIANTS.get(variant or "", HERO_POINT_VARIANTS[DEFAULT_HERO_POINT])
+
+
+@lru_cache(maxsize=32)
 def svg_pixmap(resource: str, size: QSize, ratio: float = 1.0) -> QPixmap:
     """Render a bundled SVG to fit *size*, rasterised for a screen of *ratio*.
 
@@ -61,10 +85,13 @@ def _fitted(drawing: QSizeF, bounds: QSize) -> QRectF:
     )
 
 
-def hero_point_pixmap(filled: bool, size: int, ratio: float = 1.0) -> QPixmap:
+def hero_point_pixmap(
+    filled: bool, size: int, ratio: float = 1.0, variant: str | None = None
+) -> QPixmap:
     """One hero-point pip, *size* logical pixels square.
 
-    *filled* picks the lit medallion over the spent grey one.
+    *filled* picks the held pip over the spent one; *variant* picks which drawing
+    of the pair, defaulting to the medallion.
     """
-    resource = HERO_POINT_FILLED_RESOURCE if filled else HERO_POINT_EMPTY_RESOURCE
-    return svg_pixmap(resource, QSize(size, size), ratio)
+    held, spent = hero_point_resources(variant)
+    return svg_pixmap(held if filled else spent, QSize(size, size), ratio)

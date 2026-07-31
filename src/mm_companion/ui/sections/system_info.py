@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from html import escape
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -46,6 +47,7 @@ from mm_companion.core.rules import (
     speed_columns,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.hero_point_icons import hero_point_pixmap
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
@@ -53,18 +55,19 @@ from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
-HERO_POINT_CIRCLES = 5
+HERO_POINT_PIPS = 5
 INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
 
 
 class HeroPointsWidget(QWidget):
-    """A row of five circles; clicking one spends or gains hero points.
+    """A row of five hero-point pips; clicking one spends or gains hero points.
 
-    Clicking a circle sets the count to that circle's position, except clicking the
-    last filled circle empties it (so the count can be lowered back to zero). Filled
-    circles are ``●``, empty ones ``○``. Emits :attr:`valueChanged` on a user click.
-    Hero points stay clickable even when the sheet is locked — they are spent during
-    play, not a build value — so this widget has no locked state.
+    Clicking a pip sets the count to that pip's position, except clicking the last
+    filled pip empties it (so the count can be lowered back to zero). A held point
+    shows the lit medallion, a spent one the grey medallion — the artwork bundled
+    as :mod:`~mm_companion.ui.hero_point_icons`. Emits :attr:`valueChanged` on a
+    user click. Hero points stay clickable even when the sheet is locked — they are
+    spent during play, not a build value — so this widget has no locked state.
     """
 
     valueChanged = Signal(int)
@@ -73,30 +76,43 @@ class HeroPointsWidget(QWidget):
         super().__init__(parent)
         self._value = 0
         self._buttons: list[QPushButton] = []
+        self._pip_size = int(theme.metric("column.hero-point"))
+        self.setToolTip("Click a pip to spend or gain a hero point")
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(2)
-        for i in range(HERO_POINT_CIRCLES):
-            button = QPushButton("○")
+        row.setSpacing(int(theme.metric("space.xs")))
+        # The pip is the artwork edge to edge: a button frame or padding would
+        # scale it down inside its own cell. The hover wash stands in for the
+        # button chrome that goes with them.
+        style = (
+            "QPushButton { border: none; padding: 0; background: transparent; }"
+            f"QPushButton:hover {{ background: {theme.wash('accent', 0.18)};"
+            f" border-radius: {self._pip_size // 2}px; }}"
+        )
+        for i in range(HERO_POINT_PIPS):
+            button = QPushButton()
             button.setFlat(True)
-            button.setFixedWidth(22)
+            button.setFixedSize(self._pip_size, self._pip_size)
+            button.setIconSize(QSize(self._pip_size, self._pip_size))
+            button.setStyleSheet(style)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _=False, index=i: self._on_click(index))
             self._buttons.append(button)
             row.addWidget(button)
         row.addStretch()
+        self._render()
 
     def value(self) -> int:
         return self._value
 
     def set_value(self, value: int) -> None:
         """Set the count (clamped to 0…5) without emitting :attr:`valueChanged`."""
-        self._value = max(0, min(HERO_POINT_CIRCLES, int(value)))
+        self._value = max(0, min(HERO_POINT_PIPS, int(value)))
         self._render()
 
     def _on_click(self, index: int) -> None:
-        # Clicking the last filled circle empties it; otherwise fill up to the click.
+        # Clicking the last filled pip empties it; otherwise fill up to the click.
         new_value = index if self._value == index + 1 else index + 1
         if new_value == self._value:
             return
@@ -104,9 +120,17 @@ class HeroPointsWidget(QWidget):
         self._render()
         self.valueChanged.emit(self._value)
 
+    def changeEvent(self, event: QEvent) -> None:
+        # Dragged to a screen of a different scaling, the pips are re-rasterised at
+        # that screen's ratio rather than left as a stretched copy of the old one.
+        if event.type() == QEvent.Type.DevicePixelRatioChange:
+            self._render()
+        super().changeEvent(event)
+
     def _render(self) -> None:
+        ratio = self.devicePixelRatioF()
         for i, button in enumerate(self._buttons):
-            button.setText("●" if i < self._value else "○")
+            button.setIcon(QIcon(hero_point_pixmap(i < self._value, self._pip_size, ratio)))
 
 
 class SpeedWidget(QWidget):

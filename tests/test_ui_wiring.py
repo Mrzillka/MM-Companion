@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import Character
@@ -348,17 +349,32 @@ def test_skill_modifier_column_nets_a_condition_penalty_against_a_boost(
     assert stealth.total_item.text() == "9"  # 5 ranks + 6 boost - 2
 
 
-def test_hero_points_circles_spend_and_gain(qapp: QApplication) -> None:
+def test_hero_points_pips_spend_and_gain(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     hero = sheet.system_info._hero_points
 
-    hero._on_click(2)  # click the 3rd circle → 3 hero points
+    hero._on_click(2)  # click the 3rd pip → 3 hero points
     assert hero.value() == 3
     assert sheet.character.characteristics["hero_points"] == 3
 
-    hero._on_click(2)  # click the last filled circle again → empties it to 2
+    hero._on_click(2)  # click the last filled pip again → empties it to 2
     assert hero.value() == 2
     assert sheet.character.characteristics["hero_points"] == 2
+
+
+def test_hero_point_pips_show_the_held_and_spent_artwork(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    hero = sheet.system_info._hero_points
+    hero.set_value(2)
+
+    icons = [button.icon() for button in hero._buttons]
+    assert not any(icon.isNull() for icon in icons)  # the SVGs actually rendered
+    size = QSize(hero._pip_size, hero._pip_size)
+    held = icons[0].pixmap(size).toImage()
+    spent = icons[4].pixmap(size).toImage()
+    assert held != spent  # a held point does not look like a spent one
+    assert icons[1].pixmap(size).toImage() == held
+    assert icons[2].pixmap(size).toImage() == spent  # the 3rd pip is the first spent one
 
 
 def test_initiative_readout_follows_agility_and_advantages(qapp: QApplication) -> None:

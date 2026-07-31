@@ -241,7 +241,12 @@ clean (see Licensing below).
   shifted by an active Growth/Shrinking). It exposes `refresh_derived()` for the sheet to
   call when abilities/advantages/powers/conditions change. Movement constants live in
   `data/movement.json`; the km/h conversion reads `Measurements.distance_m`. Hero points
-  render as five clickable circles.
+  render as five clickable pips — a lit medallion for a held point, a grey one for a
+  spent point, rasterised from the bundled SVGs by `ui/hero_point_icons.py`. It renders
+  them **eagerly** at the screen's device pixel ratio: `QIcon` reads an SVG path lazily,
+  at paint time, and `importlib.resources.as_file`'s extraction of a zipped install is
+  gone by then. `HeroPointsWidget` is shared with GM Mode's `PlayerCard`, so its pip size
+  (`column.hero-point`) has to suit both.
 - `DiceSection` (`ui/sections/dice.py`) is the d20 roller **as a block**, and it is the
   one block whose descriptor sets `default_pinned` — a die that scrolls away with the
   page is no use mid-fight, so it starts in the strip. There is no standalone roller

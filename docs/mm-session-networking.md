@@ -109,10 +109,52 @@ sockets, not bandwidth (a table-hour is a few MB). **TLS terminates at the
 relay**, so its operator could in principle read the traffic (character sheets and
 dice rolls); anyone who minds should run their own — it is the one command above.
 
-## Path 3 — a headless always-on host
+## Path 3 — a session server (the one to pick if you have a box)
 
-If you would rather the table not depend on your laptop being open, run the
-session on an always-on machine (a home server, a cheap VPS):
+The other two paths make *your machine* reachable while you are hosting. This one
+takes your machine out of the question entirely: the sessions live on an
+always-on box, and the game runs whether or not you are at it.
+
+```
+player ──TLS──┐                  ┌── "Friday Game"
+              ├─► relay :47332 ──┤
+GM     ──TLS──┘                  └── "The Vault"
+```
+
+What it gets you:
+
+- **Players join whenever they like** — GM present or not. Someone can log in,
+  roll, and log out with nobody else at the table.
+- **Closing GM Mode leaves the game running**, rather than ending it.
+- **Nothing to forward, ever.** Both the box and every player dial *out* to the
+  relay, so CGNAT is a non-issue at both ends.
+
+### Setting one up
+
+The box runs two things: the relay, and the hub that holds the sessions.
+`deploy/README.md` in this repo is the runbook — a firewall, a Let's Encrypt
+certificate, and one `deploy.sh`. It prints an **admin secret** on first run;
+that is the credential that may create sessions, and it goes to the GM alone.
+
+### Using it
+
+In the app: **Open GM Mode** → fill in the **Session server** box with the
+address and the admin secret → **Connect**. The list below becomes the server's
+sessions. **New session** makes one; pick it and press **Open**.
+
+The port and tunnel questions disappear while you are connected, because a
+session reached by dialling out to a relay has no port to forward.
+
+Players need nothing new: **Session ▸ Copy join code**, send it, they paste it
+into **Join Session** exactly as before.
+
+> **Only a GM can create sessions.** A join code opens one session as a player;
+> the catalog is behind the admin secret, which is never in a join code.
+
+### Hosting one session headless
+
+If you only want one table up around the clock and no catalog, the single-session
+mode is still there:
 
 ```bash
 # Create and host a new session:
@@ -134,10 +176,9 @@ restarting resumes the same roster and roll history. Point it at a workspace wit
 `MM_COMPANION_HOME` (share the app's, or give the server its own). Stop it with
 Ctrl-C (or SIGTERM), and it shuts the session down cleanly.
 
-> **Caveat:** a GM cannot yet *drive* a headless session remotely — hidden rolls
-> and GM-applied conditions need the in-process host. The box keeps the session
-> alive, resolves everyone's rolls, and syncs sheets; the GM joins it as a player
-> until remote-GM auth lands. See the deferred list in the architecture doc.
+A GM drives either kind of hosted session with its **gm token**, which `--hub`
+hands out through the control channel. In single-session mode read it out of the
+session's `session.json` — there is no catalog to ask.
 
 ## Troubleshooting
 
@@ -146,7 +187,10 @@ is the same guidance gathered in one place.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| **LAN only** (red) | The app could not make you reachable from the internet — commonly CGNAT or UPnP being off. | Use a tunnel (Path 1) or the relay (Path 2). Players on your own network / VPN can still join with the address shown. |
+| **LAN only** (red) | The app could not make you reachable from the internet — commonly CGNAT or UPnP being off. | Use a tunnel (Path 1), the relay (Path 2), or a session server (Path 3). Players on your own network / VPN can still join with the address shown. |
+| "could not reach *server*" when connecting to a session server | The box is down, the address is wrong, or its certificate has expired. | `systemctl status mm-relay mm-sessions` on the box; `openssl s_client -connect YOUR.DOMAIN:47332` checks the certificate. See `deploy/README.md`. |
+| "that is not this server's admin secret" | The admin secret is wrong or was rotated. | Read it back with `cat /etc/mm-companion/admin.secret`. |
+| GM Mode opened but the GM controls do nothing | The app was let in as a player — the session's gm token went stale. | Reopen GM Mode and pick the session from the server list again, which fetches a fresh token. |
 | "carrier-grade NAT" | Your ISP shares one public address; no port forward can help. | Tunnel or relay. Or ask your ISP for a public IP, or host on a machine that has one. |
 | "a second router in front of it" (double NAT) | There is another router upstream. | If it is yours, forward the port on it too. If it is the ISP's, use a tunnel or relay. |
 | "your router refused to forward the port" | UPnP was found but declined. | Forward the port by hand in the router admin page, or use a tunnel. |

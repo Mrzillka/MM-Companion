@@ -37,7 +37,13 @@ from typing import ClassVar
 #: Bumped whenever the message vocabulary changes incompatibly. A client whose
 #: version differs from the server's is refused at the handshake with a readable
 #: message instead of failing obscurely later.
-PROTOCOL_VERSION = 4
+#:
+#: v5 added the GM over the wire: ``Hello.gm_token``, the snapshot forward, the
+#: kick/rename/cast commands, and the hub's control plane. The *fields* are all
+#: additive and would have decoded either way, which is exactly why this is
+#: bumped by hand — an old client would connect happily and then find its GM
+#: token ignored and its hidden rolls broadcast. Better refused at the door.
+PROTOCOL_VERSION = 5
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything

@@ -592,6 +592,34 @@ The shape:
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.
+  `server/hub.py` is the **session hub** (`--hub`): every session in the
+  workspace hosted at once, so a table outlives the GM's laptop.
+- **Sessions can live on a server**, and that cost almost nothing because a relay
+  join code *already* carries the session id
+  (`mmrelay://host:port/<session-id>`): each session on the hub registers by
+  dialling out to a relay exactly as a GM's app does — no inbound port, no new
+  transport, no join-code change, and a player cannot tell the difference. Three
+  secrets, and keeping them straight is the whole design: the **`host_token`** is
+  in the join code and everyone has it; the **`gm_token`** claims the GM's *seat*
+  and goes to one person (a wrong one is **refused**, never quietly downgraded to
+  a player — that failure "works" right until a hidden roll reaches the table);
+  the **admin secret** lives in the server's `/etc` and opens the *catalog*,
+  which is the entirety of "only a GM can create a session". A remote GM needed
+  three things a local one got free: player sheets (the roster carries no
+  characters, so `PlayerSnapshot` forwards each to the GM seat alone), the result
+  of their own hidden roll (never broadcast), and kick/rename/cast (no wire
+  message existed). `SessionCatalog` answers *every* control request — returning
+  the whole catalog rather than a delta makes a stale list impossible.
+  `core/session/hub_client.py` is the app's side, deliberately unlike `client.py`:
+  no reader thread, no events — connect, ask, read, close.
+- An idle session stays registered and joinable but sheds its roll history after
+  ten minutes. The reload hangs on `SessionServer`'s `on_activate`, called
+  **before** the handshake, not after: the `Welcome` carries the history, and
+  sequence numbers come from the tail of that list, so reloading late would
+  restart the numbering and corrupt the log.
+- Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
+  and secret-free. The operator's addresses and key paths are in a gitignored
+  `SERVER.md`.
 - Standing constraints: session networking stays **Qt-free and
   headless-testable** (Qt only in `ui/`), **no new dependencies** (PySide6 + the
   stdlib), and **nothing new under `data/`** — the session layer is MIT code, not

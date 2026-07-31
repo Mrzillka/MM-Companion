@@ -157,20 +157,70 @@ player card / GM's read-only sheet decode it; a card with none shows a placehold
 - **`python -m mm_companion.server`** (`mm-companion-server`) hosts a session
   without the GUI, for a GM who wants the table reachable around the clock on an
   always-on box. It runs the same `SessionServer`, shares a workspace via
-  `MM_COMPANION_HOME`, and prints the join code and reachability banner. See
-  `--help` and the networking guide.
+  `MM_COMPANION_HOME`, and prints the join code and reachability banner. With
+  **`--hub`** it hosts every session in the workspace at once and opens the
+  control channel — see "Sessions that live on a server" above. Deploying it is
+  `deploy/README.md`.
 - **`python -m mm_companion.relay`** is the public relay: a single-threaded
   `selectors` loop that pairs two *inbound* connections and pumps bytes between
   them. It parses only the relay envelope and holds no session state, so one small
   box serves thousands of tables. Deploying it is covered in the networking guide.
 
+## Sessions that live on a server
+
+A session need not belong to the GM's laptop. `python -m mm_companion.server
+--hub` hosts **every** session in its workspace at once, so a table outlives the
+machine that started it: players join whenever they like, the GM dials in and
+takes their seat, and closing GM Mode leaves the game running.
+
+**Reachability is free**, and that is why this cost so little. A relay join code
+already carries the session id (`mmrelay://host:port/<session-id>`), so each
+session on the hub registers with a relay by dialling *out* to it, exactly as a
+GM's app does. No inbound port, no new transport, no join-code change — a player
+cannot tell a hub-hosted session from a laptop-hosted one.
+
+### The two secrets
+
+| Secret | Who holds it | What it opens |
+| --- | --- | --- |
+| `host_token` | everyone at the table (it is *in* the join code) | one session, as a player |
+| `gm_token` | the GM alone | the **GM's seat** in one session |
+| admin secret | the GM alone, from the server's `/etc` | the **catalog** — list, create, rename, delete |
+
+`Hello.gm_token` is checked right after the host token. A wrong one is **refused**
+rather than quietly seating the claimant as a player: that failure "works", right
+up to the moment a hidden roll is broadcast to the table.
+
+The admin secret is the whole of "only a GM can create a session". It never
+travels in a join code, so a player holds nothing that opens the catalog.
+
+### What a remote GM needed that a local one got for free
+
+- **Player sheets.** The roster deliberately carries no characters, so a
+  socket-connected GM could see none. `PlayerSnapshot` forwards each one to the
+  GM seat and nowhere else.
+- **The result of their own hidden roll**, which is never broadcast.
+- **Kick, rename and the NPC cast**, none of which had a wire message.
+
+### The control plane
+
+`SessionCatalog` is the answer to *every* control request — create, rename,
+delete and list alike. Returning the whole catalog rather than a delta costs a
+few hundred bytes and removes any chance of a GM's list drifting out of step with
+the server's. `core/session/hub_client.py` is the app's side: no reader thread
+and no events, unlike `client.py` — connect, ask, read, close.
+
+### Idle sessions
+
+A session with nobody in it stays registered and joinable (that is one socket)
+but sheds its roll history from memory after ten minutes, reloading on the next
+arrival. The reload runs in `SessionServer`'s `on_activate` hook, called *before*
+the handshake rather than after: the `Welcome` carries the recent history, and
+sequence numbers are assigned from the tail of that list, so reloading late would
+restart the numbering and corrupt the log.
+
 ## What is deliberately deferred
 
-- **A remote GM cannot yet drive a headless session.** The only GM slot is the
-  in-process host's, so hidden rolls and GM-applied conditions need the app that
-  started the server. A headless box keeps the session alive, resolves rolls, and
-  syncs sheets, but a GM connecting to it over the network is seated as a player
-  until a GM-auth field is added to the handshake.
 - **An opened player sheet on the GM side is a snapshot, not live.** The player
   *card* updates in real time; re-opening the sheet re-reads the latest snapshot.
   The GM's sheet is a **fully-locked read-only view** (`MainWindow(gm_view=True)`):

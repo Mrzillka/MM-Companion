@@ -37,6 +37,38 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 | `discovery.py` | Getting reachable: join-code encode/decode, UPnP/IGD port mapping and external-IP discovery (SSDP + SOAP, stdlib only), a manual-address fallback, `publish_session()` → a `Reachability` carrying the address **and finished advice prose**, and the `transports` registry / `transport_for()` seam a relay plugs into. |
 | `relay.py` | `RelayTransport` — reach a session through a relay by dialling *out* to it. Registered into `discovery.transports` under `mmrelay://` (TLS) and `mmrelay+tcp://` (plaintext), so a relay join code just works: `server.py`/`client.py` are untouched. |
 
+### What a roll is, and what it provokes
+
+`RollRequest.label` / `RollRecord.label` carry the **name** of what was rolled
+("Athletics", "Blast: 7 vs. Defense"). The field was designed in from the start
+and sat empty until rolling from the character sheet landed; the dice roller now
+fills it from the loaded `RollSpec` (see CLAUDE.md, "Rolling from the sheet"), so
+a shared history reads as who rolled *what*.
+
+`RollRequest.spec` / `RollRecord.spec` carry the **sheet's description** of the
+roll — a serialized `RollSpec`: the save this attack will force, the degree ladder
+that save reads, which resistance it is. It travels because the roll it describes
+is *acted on by somebody else*: the target's player sees the attack land in the
+shared history and clicks the save straight off its card, and everyone watches the
+consequence. A chain only the roller could see would be pointless.
+
+Two rules keep that from leaking rules into the session layer:
+
+- **The server never interprets a spec.** It validates the shape with
+  `protocol.sanitize_spec` — a key whitelist, caps on text, ladder length and
+  `follow_up` nesting depth, because this is client-supplied data that gets
+  broadcast and rendered on every other screen — then records and rebroadcasts it
+  untouched. `core/session/` must never import `core.rules`; the standalone server
+  loads no game data at all.
+- **The consequences are derived on the clients**, from the broadcast `die` and
+  `degree`. A critical hit's raised DC and the outcome a failed save reads are both
+  deterministic functions of numbers everybody already has, so every screen at the
+  table computes the same chip and the same sentence without the server knowing a
+  single rule.
+
+A hidden GM roll is never broadcast, so its spec reaches nobody either — the chain
+is exactly as visible as the roll that started it.
+
 ### The handshake
 
 A joiner sends `Hello` (protocol version, host token, display name, app version,

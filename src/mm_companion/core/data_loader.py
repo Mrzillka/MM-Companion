@@ -568,6 +568,33 @@ class Measure:
 
 
 @dataclass(frozen=True)
+class ResistanceOutcome:
+    """One rung of an effect's degree-of-failure ladder (``resistanceOutcomes``).
+
+    Failing a resistance check does something specific to the target, and *how*
+    specific depends on the effect. Damage's rungs are fixed by the rules
+    (``conditions`` naming ids from ``conditions.json``); Affliction's are whatever
+    the player chose when building the power, so its rungs carry a ``config_key``
+    naming the instance config field to read the ids out of instead. ``text`` is the
+    escape hatch for a rung the condition catalog can't express, and ``note`` is a
+    short qualifier shown after the conditions ("Stunned instead if already Dazed").
+
+    The ladder is indexed by degree of failure — index 0 is one degree — and its last
+    rung covers every deeper failure, so a three-rung ladder answers a five-degree
+    rout without inventing rungs. A ladder may also carry a ``success`` rung
+    (:attr:`Effect.resistance_success`): making a Toughness save is not "nothing
+    happened" — the target still takes a Hit unless their Toughness is Hardened,
+    Impervious or Impenetrable, which is a caveat only the ``note`` can carry since
+    this app cannot see the target's sheet.
+    """
+
+    conditions: tuple[str, ...] = ()
+    config_key: str = ""
+    text: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``docs/mm-powers-architecture.md``).
 
@@ -617,6 +644,13 @@ class Effect:
     config_fields: tuple[EffectConfigField, ...] = ()
     measure: Measure | None = None
     resistance_dc_base: int | None = None
+    #: What failing this effect's resistance check does to the target, one rung per
+    #: degree of failure (see :class:`ResistanceOutcome`). Empty for an effect whose
+    #: outcome is a GM call rather than a table.
+    resistance_outcomes: tuple[ResistanceOutcome, ...] = ()
+    #: What *making* the check still costs the target, for the effects where that is
+    #: not nothing (Damage's Hit). ``None`` where a made save really is a clean escape.
+    resistance_success: ResistanceOutcome | None = None
     implicit_modifiers: tuple[str, ...] = ()
     #: How far this effect reaches once its range resolves to Ranged. Seeded from the
     #: system-wide default and overridden by the effect's own ``rangeDistance`` block.
@@ -875,6 +909,10 @@ class SystemRules:
     default_initiative_ability: str = "AGL"
     defense_dc_base: int = 10
     heroic_budget_divisor: int = 2
+    #: What a natural 20 adds to the resistance DC of the effect it lands, and what a
+    #: natural 1 that still hits gives the *target* on their resistance check.
+    critical_effect_bonus: int = 5
+    critical_miss_resistance_bonus: int = 5
     trait_keys: TraitKeys = field(default_factory=TraitKeys)
     paired_caps: tuple[PairedCap, ...] = ()
     unscoped_scope_values: tuple[str, ...] = ("All checks",)
@@ -1458,6 +1496,45 @@ def _parse_integration(raw: dict, configurable: bool) -> Integration:
     return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
 
 
+def _parse_outcome_rung(entry: object) -> ResistanceOutcome | None:
+    """One rung of a ``resistanceOutcomes`` ladder; a plain string is shorthand for ``text``."""
+
+    if isinstance(entry, str):
+        return ResistanceOutcome(text=entry)
+    if not isinstance(entry, dict):
+        return None
+    return ResistanceOutcome(
+        conditions=tuple(entry.get("conditions", ())),
+        config_key=entry.get("configKey", ""),
+        text=entry.get("text", ""),
+        note=entry.get("note", ""),
+    )
+
+
+def _parse_resistance_outcomes(raw: object) -> tuple[ResistanceOutcome, ...]:
+    """Parse an effect's ``resistanceOutcomes`` failure ladder (see :class:`ResistanceOutcome`).
+
+    Accepts the ladder either as a bare list of rungs or wrapped in an object with a
+    ``degrees`` list, so a mod can hang its own documentation — and its ``success``
+    rung — off the same block.
+    """
+
+    if isinstance(raw, dict):
+        raw = raw.get("degrees", ())
+    if not isinstance(raw, list):
+        return ()
+    rungs = (_parse_outcome_rung(entry) for entry in raw)
+    return tuple(rung for rung in rungs if rung is not None)
+
+
+def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
+    """The ``success`` rung of a ``resistanceOutcomes`` block, if it has one."""
+
+    if not isinstance(raw, dict):
+        return None
+    return _parse_outcome_rung(raw.get("success"))
+
+
 def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
     default_distance = ranged_distance or RangeDistance()
     return Effect(
@@ -1478,6 +1555,8 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
         measure=_parse_measure(e.get("measure")),
         resistance_dc_base=e.get("resistanceDcBase"),
+        resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
+        resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),
         range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
         or default_distance,
@@ -1718,6 +1797,10 @@ def _parse_system(raw: dict) -> SystemRules:
         ),
         defense_dc_base=int(sys.get("defense_dc_base", defaults.defense_dc_base)),
         heroic_budget_divisor=int(sys.get("heroic_budget_divisor", defaults.heroic_budget_divisor)),
+        critical_effect_bonus=int(sys.get("criticalEffectBonus", defaults.critical_effect_bonus)),
+        critical_miss_resistance_bonus=int(
+            sys.get("criticalMissResistanceBonus", defaults.critical_miss_resistance_bonus)
+        ),
         trait_keys=trait_keys,
         paired_caps=paired_caps,
         unscoped_scope_values=tuple(

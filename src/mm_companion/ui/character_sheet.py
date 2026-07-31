@@ -231,11 +231,42 @@ class CharacterSheet(QWidget):
                     signal.connect(self._bus.make_publisher(topic))
             for topic, method_name in descriptor.subscribes.items():
                 self._bus.subscribe(topic, getattr(section, method_name))
+            # The payload channel: the same two tables, one topic further out.
+            for signal_name, topics in descriptor.requests.items():
+                signal = getattr(section, signal_name)
+                for topic in topics:
+                    signal.connect(self._bus.make_requester(topic))
+            for topic, method_name in descriptor.serves.items():
+                self._bus.serve(topic, getattr(section, method_name))
+
+        # A request is no use to a block the user has closed, so the sheet reveals
+        # whichever block answers it. Named by *what it serves*, not by its key, so
+        # a mod that ships its own roller is revealed on the same terms.
+        for topic in {t for d in self._descriptors for t in d.serves}:
+            self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
 
         # No block emits at construction (each seeds its own view from the model as
         # it is built), so seed the one build-wide readout the sheet owns — the
         # spent-power-points pool label — once now.
         self._recompute_derived()
+
+    def _reveal_servers(self, topic: str) -> None:
+        """Make sure every block serving *topic* is somewhere the user can see it.
+
+        A closed block is only hidden, never destroyed, so a request to it still
+        works — it just happens off screen, which reads as the app ignoring the
+        click. Reopening it is the honest answer. A block floated into its own
+        window is raised instead, since it is already visible in principle but may
+        be behind the sheet.
+        """
+        for descriptor in self._descriptors:
+            if topic not in descriptor.serves:
+                continue
+            if self._canvas.is_hidden(descriptor.key):
+                self._canvas.show_block(descriptor.key)
+            window = self._canvas.block_window(descriptor.key)
+            if window is not None:
+                window.raise_()
 
     def _sections(self) -> tuple:
         return tuple(self._sections_by_key.values())

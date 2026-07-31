@@ -23,10 +23,12 @@ from PySide6.QtWidgets import QLabel, QSpinBox, QVBoxLayout, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    RollSpec,
     power_trait_bonuses,
     resistance_base,
     resistance_condition_effect,
     resistance_points_spent,
+    resistance_roll,
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_grid import (
@@ -46,11 +48,16 @@ class ResistancesSection(TitledSection):
 
     changed = Signal()
 
+    #: A row was double-clicked — roll this resistance check. Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
+    rollRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._data = data
         self._character = character
+        self._locked = False
         self._resistances: dict[str, QSpinBox] = {}
         self._resistance_enh: dict[str, QLabel] = {}
 
@@ -62,6 +69,9 @@ class ResistancesSection(TitledSection):
             character.resistances,
             self._on_resistance_changed,
             data.costs.trait_range("resistance"),
+            roll_spec=self._roll_spec,
+            roll_sink=self.rollRequested.emit,
+            is_locked=lambda: self._locked,
         )
         layout.addWidget(grid)
 
@@ -132,7 +142,12 @@ class ResistancesSection(TitledSection):
         cost-rate change, via ``cost-rates-changed``)."""
         self.set_priced_title("Resistances", resistance_points_spent(self._character, self._data))
 
+    def _roll_spec(self, key: str) -> RollSpec:
+        """This resistance's check, built fresh at click time so it is never stale."""
+        return resistance_roll(self._character, self._data, key)
+
     def set_locked(self, locked: bool) -> None:
         """Make the resistance spin boxes read-only labels (locked) or editable."""
+        self._locked = locked
         for spin in self._resistances.values():
             set_widget_locked(spin, locked)

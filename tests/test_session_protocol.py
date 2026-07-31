@@ -34,6 +34,7 @@ from mm_companion.core.session.protocol import (
     decode,
     encode,
     sanitize_snapshot,
+    sanitize_spec,
 )
 
 ROUND_TRIP_CASES = [
@@ -169,3 +170,83 @@ def test_sanitize_snapshot_does_not_mutate_its_input() -> None:
     sanitize_snapshot(original)
 
     assert original == {"image_path": "hero.png"}
+
+
+# -- roll specs ---------------------------------------------------------------
+#
+# A spec describes what is being rolled and travels so the *other* seats can act on
+# it — the target's player clicks the save an attack forced. It is therefore
+# client-supplied data that gets broadcast and rendered on everyone's screen, and
+# this is the only place it is checked.
+
+
+def test_a_spec_survives_with_its_chain_intact() -> None:
+    spec = sanitize_spec(
+        {
+            "label": "7 vs. Defense",
+            "modifier": 7,
+            "follow_up": {"label": "Toughness vs. 18", "dc": 18, "outcomes": ["Dazed"]},
+        }
+    )
+
+    assert spec["label"] == "7 vs. Defense"
+    assert spec["follow_up"]["dc"] == 18
+    assert spec["follow_up"]["outcomes"] == ["Dazed"]
+
+
+def test_a_spec_without_a_label_is_not_a_spec() -> None:
+    assert sanitize_spec({"modifier": 7}) is None
+    assert sanitize_spec({"label": "   "}) is None
+    assert sanitize_spec(None) is None
+    assert sanitize_spec("a string") is None
+
+
+def test_unknown_keys_are_dropped_rather_than_forwarded() -> None:
+    # A whitelist, so a field added to RollSpec later cannot silently start crossing
+    # the wire unchecked.
+    spec = sanitize_spec({"label": "x", "surprise": {"deeply": "nested"}})
+
+    assert spec == {"label": "x"}
+
+
+def test_text_and_ladders_are_capped() -> None:
+    spec = sanitize_spec(
+        {
+            "label": "L" * 5000,
+            "hint": "H" * 5000,
+            "outcomes": ["O" * 5000] * 500,
+        }
+    )
+
+    assert len(spec["label"]) == protocol.MAX_SPEC_TEXT
+    assert len(spec["hint"]) == protocol.MAX_SPEC_TEXT
+    assert len(spec["outcomes"]) == protocol.MAX_SPEC_OUTCOMES
+    assert len(spec["outcomes"][0]) == protocol.MAX_SPEC_TEXT
+
+
+def test_a_deep_chain_is_cut_rather_than_followed() -> None:
+    deep: dict = {"label": "bottom"}
+    for _ in range(50):
+        deep = {"label": "link", "follow_up": deep}
+
+    spec = sanitize_spec(deep)
+
+    depth = 0
+    while spec is not None:
+        depth += 1
+        spec = spec.get("follow_up")
+    assert depth == protocol.MAX_SPEC_DEPTH
+
+
+def test_values_of_the_wrong_shape_are_dropped_not_coerced() -> None:
+    spec = sanitize_spec(
+        {
+            "label": "x",
+            "modifier": "lots",  # not a number
+            "dc": True,  # a bool is not a DC, even though it is an int
+            "outcomes": "Dazed",  # not a list
+            "rolled_by_target": "yes",  # not a bool
+        }
+    )
+
+    assert spec == {"label": "x"}

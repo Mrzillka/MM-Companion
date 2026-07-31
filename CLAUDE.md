@@ -252,7 +252,8 @@ clean (see Licensing below).
   `RollHistoryPanel` in a session), which is what the block hosts. Two ways it is
   unlike its neighbours: it is **not a view over the character** (it drives `core.dice`
   and `core.storage` directly), so it publishes nothing on the bus — a roll must never
-  mark the sheet dirty — and its `set_locked` is a **no-op**, since rolling is a
+  mark the sheet dirty, though it does **serve** `roll-requested`, see "Rolling from
+  the sheet" below — and its `set_locked` is a **no-op**, since rolling is a
   mid-play action like a power's on/off switch. Its history keeps an inner scroll area,
   the same deliberate exception the GM window's `gm_rolls` block makes, with a
   `MIN_HISTORY_WIDTH` **and** `MIN_HISTORY_HEIGHT` floor (a scroll area asks for nothing
@@ -309,6 +310,101 @@ clean (see Licensing below).
 - A block's `min_width` in `ui/block_sizes.json` is what sets the **strip's** thickness
   for a pinned block (a page row is wide enough for anything), so `dice` is 360 — under
   that its column arrangement clips in a side strip.
+
+## Rolling from the sheet (matters when touching the roller or a stat block)
+
+Any stat line on the sheet can be rolled: **double-click** an ability, resistance,
+skill or the Initiative readout; press the **🎲** beside a line of a power card's
+dice footer. The same rule as everywhere applies — *the widget never computes the
+number*.
+
+- `core/rules/rolls.py` is the layer that answers "what does rolling X look like":
+  a frozen `RollSpec` (`label`, `modifier`, `dc`, `kind`, `hint`, `follow_up`,
+  `outcomes`) plus one builder per trait — `ability_roll`, `resistance_roll`,
+  `skill_roll`, `initiative_roll`, `power_rolls`. Each folds in the **displayed**
+  (condition-adjusted) number, so what is rolled always matches what the sheet
+  shows, while the build math itself stays condition-free. Pure Python — provable
+  without a display (`tests/test_roll_specs.py`).
+- Two things a spec deliberately does *not* know, because this character's sheet
+  cannot see them: an attack's **DC** (the target's Defense — `dc` stays `None` and
+  the roller's DC box supplies it) and a save's **modifier** (the target's
+  resistance — `modifier` is 0 and the Bonus slider supplies it).
+- `power_rolls` replaced the card footer's prose-only `roll_lines`, which built
+  strings like `"8 vs. Defense"` and threw the numbers away. It reads them from
+  `powers_terms.effect_roll_numbers` (`check_actor`/`dc`/`attack`, factored out of
+  `effect_stat_rows` so both share one computation) rather than regexing them back
+  out of the sentence. `PowersSection.roll_lines` is now `[spec.label for spec in …]`,
+  so what is written on a card and what its 🎲 rolls cannot drift apart.
+- **Routing** goes over a second, payload-carrying channel on the block bus
+  (`ui/blocks/bus.py`): `publish_request`/`serve`/`make_requester`, kept separate
+  from the argless notification channel so a handler on one is never fed the
+  other's arguments. A `BlockDescriptor` declares `requests` (this block asks) and
+  `serves` (this block answers) alongside `publishes`/`subscribes`; five sections
+  emit `rollRequested(object)` and `DiceSection.perform_roll` answers. No block
+  names another, and a mod block joins on the same terms. `CharacterSheet` also
+  serves the topic itself, to **reopen** a closed roller (named by what it serves,
+  not by its key) rather than roll where nobody can see it.
+- `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. The
+  loaded trait is **sticky**: it shows as a chip above the sliders and survives the
+  roll, so the sliders can be nudged and the die thrown again. The sliders always
+  **add on top** (`net = spec.modifier + bonus − penalty`, split back into a
+  non-negative pair for the wire) rather than being overwritten — they are the
+  situational extras, and a trait bonus can exceed their 0-20 range anyway.
+- Every such roll now travels **named**: `RollRequest.label` has existed end to end
+  since the session layer landed and nothing filled it; `_request_session_roll`
+  passes `spec.label`, so the table sees *what* was rolled. A named quick-roll chip
+  passes its name the same way. Rolling stays available in the locked read-only
+  sheet and emits neither `changed` nor `edited` — it is a play action, like a
+  power's on/off switch.
+- **The chain, and why it is on the wire.** An attack spec carries the save it
+  forces as its `follow_up`, so the history card for a hit offers a
+  `🎲 Toughness vs. 18` button, and a resolved save states its outcome. Both are
+  built by `roll_history.chain_widgets` — **on every card, not just one's own**,
+  which is the entire point: the player rolls the attack, and the *target's* player,
+  reading the same shared history, clicks the save straight off it. So the spec
+  travels: `RollSpec.to_dict()` → `RollRequest.spec` → `RollRecord.spec` → every
+  client. An earlier version kept it local "because it's derived data", which left
+  the chip in front of the one person who had no use for it.
+- The server stays **rules-free**. It validates the spec's *shape*
+  (`protocol.sanitize_spec` — a key whitelist, text/ladder caps, a `follow_up` depth
+  cap, since this is client-supplied data rendered on other people's screens) and
+  records it opaquely. The crit adjustment and the ladder lookup happen **client-side**
+  from the broadcast `die`/`degree`, which are deterministic — so every screen
+  derives the same chip and the same sentence, and `python -m mm_companion.server`
+  still needs no game data. Never import `core.rules` into `core/session/`.
+- **Criticals** (`follow_up_for_result`): a natural 20 raises the forced save's DC by
+  `system.critical_effect_bonus`; a natural 1 that still hits gives the *target*
+  `system.critical_miss_resistance_bonus` on their check (a bonus to them, not a cut
+  to the DC — same arithmetic, honest description). The reason is written into the
+  follow-up's label, so a DC box reading 23 where the card said 18 explains itself.
+- **Auto-fill.** A save spec carries `trait_key`, so clicking the chip on someone
+  else's card rolls with *your own* resistance already in (`localize_spec`, installed
+  on the panel via `set_localizer` — one seam, so the bus path and the chip path both
+  get it; GM Mode's roller has no sheet and installs none). Off on your **own** card:
+  you are not the target of your own attack, and `chain_widgets(localize=False)` drops
+  the trait key rather than presenting a confident wrong number.
+- Outcome ladders are **data**: an effect's optional `resistanceOutcomes` in
+  `effects.json` (parsed into `ResistanceOutcome` records), one rung per degree of
+  failure, the last rung covering every deeper one — plus an optional `success` rung,
+  because a *made* Toughness save is not "nothing happened": the target still takes a
+  Hit unless Hardened/Impervious/Impenetrable, a caveat only the rung's `note` can
+  carry since this app cannot see the target's sheet. A rung either names
+  `conditions` (ids from `conditions.json` — Damage's `hit`/`dazed`/… ladder) or a
+  `configKey` reading the ids off the *instance* (Affliction's `degree1`/`2`/`3`,
+  which the player chose when building the power). No degree ladder in Python.
+- A power card puts a 🎲 only on the lines **the wielder rolls**. A resistance line
+  (`RollSpec.rolled_by_target`) is written down and indented but unbuttoned — the
+  wielder never makes their own target's save, and that roll reaches the person who
+  does as the follow-up chip.
+- `ui/roll_click.py::attach_roll_click(widget, factory, sink, *, enabled=…)` is the
+  one way a widget becomes double-clickable; use it rather than open-coding an event
+  filter. The factory builds the spec **at click time** (a spec captured when the row
+  was built would be stale after any edit). Its one subtlety: a spin box is watched
+  through `lineEdit()` as well as itself, and rolls **only while the sheet is
+  locked** — unlocked, a double-click there selects the number for retyping and
+  stealing that would make editing hostile. The labels around it always roll.
+  Skills go through `cellDoubleClicked` instead, resolving the row from a
+  `(row_id, display)` tuple stashed on the Total cell's `ROLL_ROLE`.
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
   inner scroll area, sized to its content. A floated block moves into a

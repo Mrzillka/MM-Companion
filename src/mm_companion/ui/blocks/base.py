@@ -13,9 +13,10 @@ Every block widget already follows a uniform contract — construct with
 the :class:`Block` protocol. Cross-block reactivity flows over a topic signal bus
 (:mod:`mm_companion.ui.blocks.bus`): a descriptor's ``publishes`` maps one of the
 block's Qt signals to the topics it raises, and ``subscribes`` maps a topic to
-the block method that recomputes on it. The sheet wires the whole web from these
-tables, so a mod block joins it without a
-:mod:`mm_companion.ui.character_sheet` edit.
+the block method that recomputes on it; ``requests``/``serves`` are the same pair
+for the bus's payload channel, where a block asks another to act on something
+specific (roll this trait). The sheet wires the whole web from these tables, so a
+mod block joins it without a :mod:`mm_companion.ui.character_sheet` edit.
 """
 
 from __future__ import annotations
@@ -67,6 +68,13 @@ class BlockDescriptor:
     one of the block's Qt signals to the tuple of topics firing it raises;
     ``subscribes`` maps a topic to the name of the block method that recomputes
     when it fires. Both default empty (a purely presentational block).
+
+    ``requests`` and ``serves`` are the same pair for the bus's **payload**
+    channel, where one block asks another to *do* something rather than announcing
+    that something changed: ``requests`` maps a Qt signal carrying the payload
+    (``rollRequested(object)``) to the request topics it raises, and ``serves`` maps
+    a request topic to the block method that answers it, which takes the payload as
+    its one argument.
     """
 
     key: str
@@ -78,3 +86,5 @@ class BlockDescriptor:
     default_pinned: bool = False
     publishes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     subscribes: Mapping[str, str] = field(default_factory=dict)
+    requests: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    serves: Mapping[str, str] = field(default_factory=dict)

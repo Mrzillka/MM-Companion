@@ -40,6 +40,22 @@ Topic                   Subscribers (what recomputes)
 block-to-block. A runtime power toggle publishes the live-refresh topics
 (``build-changed`` / ``enhancements-changed`` / ``derived-changed``) but
 deliberately **not** ``edited`` — toggling a power on/off is not a persisted edit.
+
+**Requests are the second channel, and they do carry a payload.** Everything above
+is a notification: something changed, go and re-read the model. A *request* is the
+opposite — one block asking another to do a specific thing, which needs saying
+*what* ("roll Athletics +9"). Those go through :meth:`SignalBus.publish_request`
+and its own subscriber list, so the argless contract above stays exactly as strict
+as it was; a handler on one channel can never be fed the other's arguments. Blocks
+declare them on their descriptor as ``requests`` (this block asks) and ``serves``
+(this block answers), mirroring ``publishes``/``subscribes``.
+
+======================  ====================================================
+Request topic           Payload / server
+======================  ====================================================
+``roll-requested``      a :class:`~mm_companion.core.rules.RollSpec`; the Dice
+                        block rolls it
+======================  ====================================================
 """
 
 from __future__ import annotations
@@ -59,7 +75,11 @@ CONDITION_CHANGED = "condition-changed"
 COST_RATES_CHANGED = "cost-rates-changed"
 EDITED = "edited"
 
+# Request topics (the payload channel — see the module docstring).
+ROLL_REQUESTED = "roll-requested"
+
 Handler = Callable[[], None]
+RequestHandler = Callable[[object], None]
 
 
 class SignalBus:
@@ -73,6 +93,7 @@ class SignalBus:
 
     def __init__(self) -> None:
         self._subscribers: dict[str, list[Handler]] = defaultdict(list)
+        self._servers: dict[str, list[RequestHandler]] = defaultdict(list)
 
     def subscribe(self, topic: str, handler: Handler) -> None:
         """Call *handler* (with no arguments) whenever *topic* is published."""
@@ -95,3 +116,26 @@ class SignalBus:
     def topics(self) -> list[str]:
         """Every topic that currently has at least one subscriber."""
         return [topic for topic, handlers in self._subscribers.items() if handlers]
+
+    # -- requests (the payload channel) --------------------------------------
+
+    def serve(self, topic: str, handler: RequestHandler) -> None:
+        """Call *handler* with the payload whenever *topic* is requested."""
+        self._servers[topic].append(handler)
+
+    def publish_request(self, topic: str, payload: object = None) -> None:
+        """Hand *payload* to every handler serving *topic*, in subscription order."""
+        for handler in list(self._servers.get(topic, ())):
+            handler(payload)
+
+    def make_requester(self, topic: str) -> Callable[..., None]:
+        """A callable that requests *topic*, passing its first argument as the payload.
+
+        Suitable for ``qt_signal.connect(...)`` where the signal carries exactly the
+        payload — ``rollRequested(object)``. An argless signal requests with ``None``.
+        """
+        return lambda *args: self.publish_request(topic, args[0] if args else None)
+
+    def request_topics(self) -> list[str]:
+        """Every request topic that currently has at least one server."""
+        return [topic for topic, handlers in self._servers.items() if handlers]

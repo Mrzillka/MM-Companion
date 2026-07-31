@@ -37,7 +37,7 @@ from typing import ClassVar
 #: Bumped whenever the message vocabulary changes incompatibly. A client whose
 #: version differs from the server's is refused at the handshake with a readable
 #: message instead of failing obscurely later.
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -184,9 +184,17 @@ class CharacterSnapshot(Message):
 class RollRequest(Message):
     """A request to roll; the *server* resolves it so no client edits its numbers.
 
-    ``label`` is free-form (``"Attack"``, ``"Athletics"``, …) so rolling from the
-    character sheet can be added later without a protocol change. ``hidden`` is
-    honored only for the GM — a hidden roll is never broadcast.
+    ``label`` is free-form (``"Attack"``, ``"Athletics"``, …) and names the roll in
+    everyone's history. ``hidden`` is honored only for the GM — a hidden roll is
+    never broadcast.
+
+    ``spec`` is the sheet's description of what is being rolled — a serialized
+    :class:`~mm_companion.core.rules.RollSpec`: the save this attack will force, the
+    degree ladder that save reads, the resistance it is. It travels because the roll
+    it describes is *acted on by somebody else*: the target's player sees the attack
+    land and clicks the save straight off its card. The server treats it as opaque
+    data — it validates the shape (:func:`sanitize_spec`) and records it, and never
+    interprets it, so the headless server needs no game rules loaded.
     """
 
     TYPE: ClassVar[str] = "roll_request"
@@ -196,6 +204,7 @@ class RollRequest(Message):
     penalty: int = 0
     dc: int | None = None
     hidden: bool = False
+    spec: dict | None = None
 
 
 @_register
@@ -394,6 +403,62 @@ def decode(line: bytes | str) -> Message:
     if message_cls is None:
         raise ProtocolError(f"unknown message type {tag!r}")
     return message_cls.from_payload(payload)
+
+
+# Bounds on a :attr:`RollRequest.spec`. It is client-supplied, gets broadcast to
+# every other seat, and is rendered as text on their screens — so it is checked into
+# a known shape here rather than trusted. These are generous next to anything the
+# sheet actually builds (a two-link chain of short phrases); they exist to stop a
+# hostile client, not to constrain a legitimate one.
+MAX_SPEC_TEXT = 200
+MAX_SPEC_OUTCOMES = 12
+MAX_SPEC_DEPTH = 4
+
+# Everything a spec may carry, and how each value is coerced. Anything else in the
+# dict is dropped: a whitelist, so a field added to RollSpec later does not silently
+# start crossing the wire unchecked.
+_SPEC_TEXT_KEYS = ("label", "kind", "hint", "success_outcome", "trait_key")
+_SPEC_INT_KEYS = ("modifier", "dc")
+
+
+def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
+    """Check a client-supplied roll spec into a known shape, or drop it.
+
+    Deliberately *structural*, not semantic: this file knows nothing about traits,
+    saves or degree ladders, and must not — the standalone server
+    (``python -m mm_companion.server``) loads no game data. It caps the text, the
+    ladder, and the depth of the ``follow_up`` chain, and passes the rest through for
+    :meth:`~mm_companion.core.rules.RollSpec.from_dict` to make sense of at the other
+    end. Returns ``None`` for anything it cannot make a spec of, which simply costs
+    that roll its chain.
+    """
+
+    if not isinstance(raw, dict) or _depth >= MAX_SPEC_DEPTH:
+        return None
+    label = raw.get("label")
+    if not isinstance(label, str) or not label.strip():
+        return None
+
+    spec: dict = {"label": label[:MAX_SPEC_TEXT]}
+    for key in _SPEC_TEXT_KEYS[1:]:
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            spec[key] = value[:MAX_SPEC_TEXT]
+    for key in _SPEC_INT_KEYS:
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            spec[key] = value
+    if raw.get("rolled_by_target") is True:
+        spec["rolled_by_target"] = True
+    outcomes = raw.get("outcomes")
+    if isinstance(outcomes, list):
+        rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]
+        if rungs:
+            spec["outcomes"] = rungs
+    follow_up = sanitize_spec(raw.get("follow_up"), _depth + 1)
+    if follow_up is not None:
+        spec["follow_up"] = follow_up
+    return spec
 
 
 def sanitize_snapshot(character: dict) -> dict:

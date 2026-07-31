@@ -62,6 +62,7 @@ from .protocol import (
     SetHeroPoints,
     Welcome,
     sanitize_snapshot,
+    sanitize_spec,
 )
 
 #: How many player connections a session accepts at once.
@@ -247,6 +248,7 @@ class SessionServer:
         penalty: int = 0,
         dc: int | None = None,
         hidden: bool = False,
+        spec: dict | None = None,
         player_id: str | None = None,
     ) -> RollRecord:
         """Resolve a roll for the GM (or for *player_id*) and publish it.
@@ -259,7 +261,7 @@ class SessionServer:
         if slot is None:
             raise KeyError(f"no player {player_id!r}")
         return self._resolve_roll(
-            slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden
+            slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
         )
 
     def remove_roll(self, seq: int) -> bool:
@@ -584,6 +586,7 @@ class SessionServer:
                 dc=message.dc,
                 # Only the GM may roll unseen; a player's flag is simply ignored.
                 hidden=message.hidden and slot.is_gm,
+                spec=message.spec,
             )
         elif isinstance(message, RemoveRollRequest) and slot.is_gm:
             # Removing a roll is a GM privilege; a player's request is ignored.
@@ -606,11 +609,16 @@ class SessionServer:
         penalty: int,
         dc: int | None,
         hidden: bool,
+        spec: dict | None = None,
     ) -> RollRecord:
         bonus = _clamp(bonus, MAX_ROLL_MODIFIER)
         penalty = _clamp(penalty, MAX_ROLL_MODIFIER)
         dc = None if dc is None else _clamp(dc, MAX_ROLL_MODIFIER)
         label = label[:MAX_LABEL_CHARS]
+        # The one place a client-supplied spec is checked, alongside the other
+        # client-supplied values. It is opaque to this module — the server records
+        # and rebroadcasts it without ever reading what it means.
+        spec = sanitize_spec(spec)
 
         result: CheckResult | None = None
         if dc is None:
@@ -629,6 +637,7 @@ class SessionServer:
                 result=result,
                 label=label,
                 hidden=hidden,
+                spec=spec,
             )
             self._append_roll(record)
 

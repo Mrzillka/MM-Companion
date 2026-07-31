@@ -16,9 +16,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QLabel, QSpinBox, QWidget
 
 from mm_companion.core.data_loader import TraitRange
-from mm_companion.core.rules import ConditionEffect
+from mm_companion.core.rules import ConditionEffect, RollSpec
 from mm_companion.ui import theme
+from mm_companion.ui.roll_click import attach_roll_click
 from mm_companion.ui.widgets import hline_separator, make_spin_box, tinted_style
+
+#: What a grid needs to make its rows rollable: a factory turning a trait key into
+#: that trait's :class:`RollSpec`, the sink the spec goes to (the section's
+#: ``rollRequested.emit``), and the predicate telling whether the sheet is locked.
+RollHookFactory = Callable[[str], "RollSpec | None"]
+RollHook = tuple[Callable[[], "RollSpec | None"], Callable[[RollSpec], None], Callable[[], bool]]
 
 # Colour-token names, not values: resolved where they are used so a theme switch
 # reaches them (see :mod:`mm_companion.ui.theme`).
@@ -29,17 +36,34 @@ CONDITION_TINT = "tint.worse"
 
 
 def add_stat_row(
-    grid: QGridLayout, row: int, name: str, abbr: str, spin: QSpinBox, enh: QLabel
+    grid: QGridLayout,
+    row: int,
+    name: str,
+    abbr: str,
+    spin: QSpinBox,
+    enh: QLabel,
+    roll: RollHook | None = None,
 ) -> None:
     """Lay out one stat as four aligned columns: name, short code, spin box, and
-    the (usually hidden) power-enhanced total."""
+    the (usually hidden) power-enhanced total.
 
-    grid.addWidget(QLabel(f"{name}:"), row, 0)
+    With a *roll* hook, double-clicking anywhere along the row rolls that stat —
+    over the spin box only while the sheet is locked, since unlocked a double-click
+    there selects the number for editing (see :mod:`mm_companion.ui.roll_click`).
+    """
+
+    label = QLabel(f"{name}:")
+    grid.addWidget(label, row, 0)
     code = QLabel(abbr)
     code.setAlignment(Qt.AlignmentFlag.AlignCenter)
     grid.addWidget(code, row, 1)
     grid.addWidget(spin, row, 2)
     grid.addWidget(enh, row, 3)
+    if roll is not None:
+        factory, sink, locked = roll
+        for widget in (label, code, enh):
+            attach_roll_click(widget, factory, sink)
+        attach_roll_click(spin, factory, sink, enabled=locked)
 
 
 def build_stat_group(
@@ -49,6 +73,10 @@ def build_stat_group(
     values: dict[str, int],
     on_change: Callable[[str, int], None],
     trait_range: TraitRange,
+    *,
+    roll_spec: RollHookFactory | None = None,
+    roll_sink: Callable[[RollSpec], None] | None = None,
+    is_locked: Callable[[], bool] | None = None,
 ) -> QWidget:
     """Build a frameless grid of stat spin boxes (abilities or resistances).
 
@@ -59,6 +87,10 @@ def build_stat_group(
     before the first derived entry. *store* and *enh_store* are filled in place, keyed
     by each entry's ``key``. The container is frameless — the hosting section's group
     box carries the title and running cost.
+
+    Given *roll_spec*, *roll_sink* and *is_locked*, each row is also double-clickable
+    to roll that trait (see :func:`add_stat_row`). The spec is built at click time
+    from the trait key, so it always reflects the current sheet.
     """
 
     container = QWidget()
@@ -84,7 +116,11 @@ def build_stat_group(
         enh.setStyleSheet(tinted_style(ENHANCED_TINT))
         enh.setVisible(False)
         enh_store[entry.key] = enh
-        add_stat_row(grid, row, entry.name, entry.abbr, spin, enh)
+        hook = None
+        if roll_spec is not None and roll_sink is not None:
+            locked = is_locked or (lambda: True)
+            hook = (lambda key=entry.key: roll_spec(key), roll_sink, locked)
+        add_stat_row(grid, row, entry.name, entry.abbr, spin, enh, hook)
         row += 1
     return container
 

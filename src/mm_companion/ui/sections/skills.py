@@ -50,6 +50,7 @@ from mm_companion.core.rules import (
     effective_ability,
     skill_modifiers,
     skill_points_spent,
+    skill_roll,
     skill_total,
 )
 from mm_companion.ui import theme
@@ -66,6 +67,10 @@ from mm_companion.ui.widgets import make_spin_box, readonly_item
 RANK_MIN, RANK_MAX = 0, 20
 COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
+#: Item role carrying ``(row_id, display)`` on a rollable row's Total cell — what a
+#: double-click on that row rolls. A row without it (a focused skill's group header)
+#: is not rollable.
+ROLL_ROLE = Qt.ItemDataRole.UserRole
 # Rough widths used to decide how many panels fit without clipping a name. The
 # numeric columns are near-fixed; the name column needs room for the widest
 # skill/focus/specialization label. Kept lean so a second column appears before a
@@ -119,6 +124,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
 
     changed = Signal()
 
+    #: A row was double-clicked — roll that skill (a focus and a specialized pool
+    #: each roll their own row). Carries a
+    #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
+    rollRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -170,8 +180,27 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # The panels fit their content and never scroll, so keep them out of the
         # focus chain; the wheel then always falls through to the page scroll.
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Connected once per table, which outlives the frequent _rebuild: the tables
+        # themselves are reused, only their items are rebuilt.
+        table.cellDoubleClicked.connect(
+            lambda row, _col, t=table: self._on_cell_double_clicked(t, row)
+        )
         guard_wheel(table)
         return table
+
+    def _on_cell_double_clicked(self, table: QTableWidget, row: int) -> None:
+        """Roll the skill on this table row, if it is one that rolls.
+
+        Every column but Rank arrives here — that one is a spin box cell widget,
+        which eats the double-click itself (and unlocked would want it for editing
+        anyway).
+        """
+        item = table.item(row, COL_TOTAL)
+        payload = None if item is None else item.data(ROLL_ROLE)
+        if not payload:
+            return
+        row_id, display = payload
+        self.rollRequested.emit(skill_roll(self._character, self._data, row_id, label=display))
 
     @staticmethod
     def _fit_table_height(table: QTableWidget) -> None:
@@ -357,6 +386,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         table.setItem(row, COL_MODS, mod_item)
 
         total_item = readonly_item("", center=True)
+        # What this table row rolls, carried on the Total cell. A double-click reads
+        # it back from there whichever column was hit (see _on_cell_double_clicked);
+        # a group header row has no Total cell at all, which is exactly how it says
+        # "nothing to roll here".
+        total_item.setData(ROLL_ROLE, (row_id, display))
         table.setItem(row, COL_TOTAL, total_item)
         self._rows.append(
             SkillRow(skill.ability, row_id, ability_rank_item, mod_item, total_item, name_item)

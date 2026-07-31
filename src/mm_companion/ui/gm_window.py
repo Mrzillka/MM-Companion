@@ -414,6 +414,7 @@ class GMWindow(QMainWindow):
 
         self._history = RollHistoryPanel(gm=True)
         self._history.saveToggled.connect(self._roller.toggle_quick_roll)
+        self._history.rollFollowUp.connect(self._roller.roll_spec)
         self._history.rollRemovedLocally.connect(self._on_local_roll_removed)
         # A card's star shows whether that roll is already in the roller's strip, so
         # it has to hear about every chip that comes or goes — and once up front, since
@@ -586,6 +587,9 @@ class GMWindow(QMainWindow):
                 "dc": roll["dc"],
                 "degree": None if result is None else result.degree,
                 "critical": bool(result is not None and result.critical),
+                "label": roll.get("label", ""),
+                # Local-only, as everywhere: it carries the chain this card offers.
+                "spec": roll.get("spec"),
             }
         )
 

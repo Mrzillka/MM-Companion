@@ -200,25 +200,39 @@ def _render_note(
     return text[:1].upper() + text[1:] if text else text
 
 
-def required_check_notes(effect: PowerEffectInstance, game_data: GameData) -> tuple[str, ...]:
-    """The extra checks the effect's modifiers demand before it works.
+def required_checks(
+    effect: PowerEffectInstance, game_data: GameData
+) -> tuple[tuple[str, int | None], ...]:
+    """The extra checks the effect's modifiers demand before it works, with their DCs.
 
     A flaw flagged ``requiresCheck`` (Check Required) makes using the effect an extra
     roll that can simply fail, so it is a *roll*, not a footnote — each one renders
     from the modifier's ``note_template`` (``"{trait} check, DC {dc}"``) and gets its
     own game-term row, which is what puts it in the power card's dice footer beside the
     attack and the save.
+
+    Each entry is ``(rendered note, DC)``. The DC is the same number
+    :func:`_render_note` writes into the sentence (the system's base DC plus the
+    flaw's rank), returned alongside it so the dice roller does not have to read it
+    back out of the prose.
     """
 
     catalog = game_data.modifier_catalog()
-    notes: list[str] = []
+    checks: list[tuple[str, int | None]] = []
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or not modifier.requires_check:
             continue
         rendered = _render_note(modifier, effect.rank, selection, game_data)
-        notes.append(rendered or modifier_label(modifier, selection))
-    return tuple(notes)
+        dc = game_data.system.defense_dc_base + selection.rank
+        checks.append((rendered or modifier_label(modifier, selection), dc))
+    return tuple(checks)
+
+
+def required_check_notes(effect: PowerEffectInstance, game_data: GameData) -> tuple[str, ...]:
+    """Just the note text of every :func:`required_checks` entry."""
+
+    return tuple(note for note, _dc in required_checks(effect, game_data))
 
 
 def _modifier_notes(
@@ -609,6 +623,91 @@ def _ranged_distance_rows(
     return rows
 
 
+@dataclass(frozen=True)
+class EffectRollNumbers:
+    """The raw d20 numbers behind an effect's check and resistance phrases.
+
+    :func:`effect_stat_rows` renders those numbers *into prose* (``"8 vs. Defense"``,
+    ``"Toughness vs. 18"``), which is right for a summary table and useless for
+    actually rolling one. Both read this record, so the dice roller gets the same
+    numbers the card shows without regexing them back out of the sentence.
+
+    ``attack`` is the wielder's attack-trait bonus (or a linked combat focus's
+    total), and ``check_actor`` is what the check row actually rolls: ``attack`` for
+    an "Attack vs. …" phrase, the effect's rank for an "Effect"/"Deflect vs. …" one,
+    plus any Accurate/Inaccurate adjustment. ``dc`` is the save DC the effect imposes
+    (``resistance_dc_base`` plus the *effective* rank, so a Strength-Based Damage
+    folds in Strength), or ``None`` for an effect that imposes none. ``drops_check``
+    is set when a modifier removed the attack roll entirely (Perception Range).
+    """
+
+    attack: int = 0
+    check_actor: int = 0
+    dc: int | None = None
+    drops_check: bool = False
+
+
+def effect_roll_numbers(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None = None,
+    attack_bonus: int | None = None,
+) -> EffectRollNumbers:
+    """The d20 numbers for one effect's rolls — see :class:`EffectRollNumbers`.
+
+    ``char`` and ``attack_bonus`` mean exactly what they do for
+    :func:`effect_stat_rows`, which shares this computation.
+    """
+
+    base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None:
+        return EffectRollNumbers()
+    base, stats, _change, impact = _effective_stats(effect, game_data)
+    return _roll_numbers(effect, game_data, char, attack_bonus, base_effect, base, stats, impact)
+
+
+def _roll_numbers(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None,
+    attack_bonus: int | None,
+    base_effect,
+    base: dict[str, str],
+    stats: dict[str, str],
+    impact: EffectImpact,
+) -> EffectRollNumbers:
+    """:func:`effect_roll_numbers` once the stat dicts are already in hand."""
+
+    effective_rank = effect_effective_rank(effect, game_data, char)
+    dc = (
+        None
+        if base_effect.resistance_dc_base is None
+        else base_effect.resistance_dc_base + effective_rank
+    )
+    # The attacker's own d20 bonus. An "Attack vs. Defense" roll uses the character's
+    # Attack (plus this power's Accurate/Inaccurate); an "Effect vs. …" / "Deflect
+    # vs. …" phrase instead uses the effect's own rank. A linked combat focus
+    # overrides the Attack via ``attack_bonus``. Without either we fall back to the
+    # effect rank so a context-free summary still reads.
+    if attack_bonus is not None:
+        attack = attack_bonus
+    elif char is not None:
+        attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
+    else:
+        attack = effect.rank
+    # Which of the two the check row uses is decided by the phrase, and an "after"
+    # override replaces the phrase wholesale — read the base in that case, since the
+    # override is verbatim text with no actor to substitute.
+    phrase = stats.get("check") or base.get("check") or ""
+    actor = attack if phrase.startswith("Attack") else effect.rank
+    return EffectRollNumbers(
+        attack=attack,
+        check_actor=actor + impact.check_bonus,
+        dc=dc,
+        drops_check=impact.drops_check,
+    )
+
+
 def effect_stat_rows(
     effect: PowerEffectInstance,
     game_data: GameData,
@@ -655,24 +754,10 @@ def effect_stat_rows(
 
     # Resolve the check/resistance phrases to concrete numbers: the save DC is
     # ``base + effective rank`` (effective rank folds in a Strength-Based bonus), and
-    # the attack roll uses the character's Attack (see below).
-    effective_rank = effect_effective_rank(effect, game_data, char)
-    dc = (
-        None
-        if base_effect.resistance_dc_base is None
-        else base_effect.resistance_dc_base + effective_rank
-    )
-    # The attacker's own d20 bonus in the check phrase. An "Attack vs. Defense" roll
-    # uses the character's Attack (plus this power's Accurate/Inaccurate); an "Effect
-    # vs. …" / "Deflect vs. …" phrase instead uses the effect's own rank. A linked
-    # combat focus overrides the Attack via ``attack_bonus``. Without either we fall
-    # back to the effect rank so a context-free summary still reads.
-    if attack_bonus is not None:
-        attack = attack_bonus
-    elif char is not None:
-        attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
-    else:
-        attack = effect.rank
+    # the attack roll uses the character's Attack (see :func:`_roll_numbers`).
+    numbers = _roll_numbers(effect, game_data, char, attack_bonus, base_effect, base, stats, impact)
+    dc = numbers.dc
+    attack = numbers.attack
 
     def _actor(phrase: str, *, with_mods: bool) -> int:
         roll = attack if phrase.startswith("Attack") else effect.rank

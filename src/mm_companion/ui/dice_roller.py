@@ -39,6 +39,7 @@ directly (no game rules live here) and persists quick rolls through
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from functools import lru_cache
 from importlib.resources import as_file, files
 
@@ -64,6 +65,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
+from mm_companion.core.rules import RollSpec
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
@@ -74,12 +76,14 @@ from mm_companion.ui.roll_history import (
     MIN_HISTORY_WIDTH,
     QuickRollStar,
     RollHistoryPanel,
+    chain_widgets,
     degree_label,
+    escape_rich_text,
     quick_roll_key,
 )
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import make_spin_box, tinted_style
 
 RESOURCE_PACKAGE = "mm_companion.ui"
 D20_RESOURCE = "assets/D20_icon.png"
@@ -134,6 +138,17 @@ def degree_text(result: CheckResult | None) -> str:
     if result is None:
         return ""
     return degree_label(result.degree, result.critical, result.die_roll)
+
+
+def spec_caption(spec: RollSpec) -> str:
+    """A loaded spec's chip caption: its name, and its modifier when it has one.
+
+    A spec carrying no modifier of its own — a save (the target's resistance goes in
+    the Bonus slider) or a named quick roll — reads as just its name rather than a
+    bare ``+0``. Its DC, if it set one, is already visible in the DC box.
+    """
+
+    return f"{spec.label} {spec.modifier:+d}" if spec.modifier else spec.label
 
 
 def _params_label(params: dict) -> str:
@@ -223,6 +238,10 @@ class RollCard(QFrame):
     saveToggled = Signal(dict)
     removeRequested = Signal()
 
+    #: A chain button on this card was pressed — see
+    #: :func:`~mm_companion.ui.roll_history.chain_widgets`.
+    rollFollowUp = Signal(object)
+
     def __init__(
         self,
         *,
@@ -231,6 +250,8 @@ class RollCard(QFrame):
         penalty: int,
         dc: int | None,
         result: CheckResult | None,
+        label: str = "",
+        spec: object = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -248,6 +269,14 @@ class RollCard(QFrame):
         headline = f"<b>{total}</b> <span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
         if dc is not None:
             headline += f" vs DC {dc}"
+        # What was rolled leads, the way the shared history's card names the player —
+        # a private history of bare numbers is unreadable a few rolls later.
+        if label:
+            headline = (
+                f"<span style='color:{theme.color('accent.dice')}'>"
+                f"{escape_rich_text(label)}</span><br>"
+                f"{headline}"
+            )
         title = QLabel(headline)
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
@@ -258,6 +287,18 @@ class RollCard(QFrame):
             degree = QLabel(degree_text(result))
             degree.setStyleSheet(f"color: {color};")
             info.addWidget(degree)
+
+        for widget in chain_widgets(
+            spec,
+            die=die,
+            degree=None if result is None else result.degree,
+            on_follow_up=self.rollFollowUp.emit,
+            # Every card in the private history is one's own, and off the air the
+            # roller is usually running both sides — so never assume the sheet in
+            # front of us is the target's.
+            localize=False,
+        ):
+            info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
 
@@ -328,6 +369,11 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._own_id = ""
         # Wall-clock for the tumble; drives the flicker's ease-out deceleration.
         self._roll_clock = QElapsedTimer()
+        # What the sheet asked to roll, if anything — see :meth:`load_spec`. Sticky:
+        # it survives the roll so the sliders can be nudged and the die thrown again.
+        self._spec: RollSpec | None = None
+        # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
+        self._localizer: Callable[[RollSpec], RollSpec] | None = None
         self._quick_rolls: list[dict] = self._load_quick_rolls()
 
         # The three reflowing parts, in order. The layout's *direction* is what the
@@ -399,16 +445,19 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # pixels above its 15px minimum — a groove too short to aim at, let alone drag.
         grid.setColumnStretch(1, 1)
 
+        self._spec_chip = self._build_spec_chip()
+        grid.addWidget(self._spec_chip, 0, 0, 1, 3)
+
         self._bonus_slider, self._bonus_spin = self._make_slider_spin(0, 20)
         self._penalty_slider, self._penalty_spin = self._make_slider_spin(0, 20)
 
-        grid.addWidget(QLabel("Bonus"), 0, 0)
-        grid.addWidget(self._bonus_slider, 0, 1)
-        grid.addWidget(self._bonus_spin, 0, 2)
+        grid.addWidget(QLabel("Bonus"), 1, 0)
+        grid.addWidget(self._bonus_slider, 1, 1)
+        grid.addWidget(self._bonus_spin, 1, 2)
 
-        grid.addWidget(QLabel("Penalty"), 1, 0)
-        grid.addWidget(self._penalty_slider, 1, 1)
-        grid.addWidget(self._penalty_spin, 1, 2)
+        grid.addWidget(QLabel("Penalty"), 2, 0)
+        grid.addWidget(self._penalty_slider, 2, 1)
+        grid.addWidget(self._penalty_spin, 2, 2)
 
         self._dc_check = QCheckBox("Difficulty Class")
         self._dc_spin = make_spin_box(0, 60, value=15)
@@ -417,8 +466,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # Spanning the label *and* slider columns: on its own in column 0 this
         # checkbox's caption is by far the widest thing there and would hold that
         # column open to its width, stealing the room from the sliders beside it.
-        grid.addWidget(self._dc_check, 2, 0, 1, 2)
-        grid.addWidget(self._dc_spin, 2, 2)
+        grid.addWidget(self._dc_check, 3, 0, 1, 2)
+        grid.addWidget(self._dc_spin, 3, 2)
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
@@ -427,9 +476,37 @@ class DiceRollerPanel(ReflowBox, QWidget):
         )
         self._hidden_check.setVisible(self._hidden_option)
         if self._hidden_option:
-            grid.addWidget(self._hidden_check, 3, 0, 1, 3)
+            grid.addWidget(self._hidden_check, 4, 0, 1, 3)
 
         return group
+
+    def _build_spec_chip(self) -> QWidget:
+        """The strip naming what the sheet asked to roll — hidden until it does.
+
+        It sits *above* the sliders because it is what they now modify: the loaded
+        stat supplies the base number and the sliders are the situational extras on
+        top of it. The ``✕`` puts the panel back to a plain manual roll.
+        """
+
+        chip = QFrame()
+        chip.setFrameShape(QFrame.Shape.StyledPanel)
+        chip.setVisible(False)
+        layout = QHBoxLayout(chip)
+        margin = int(theme.metric("space.sm"))
+        layout.setContentsMargins(margin, margin, margin, margin)
+        layout.setSpacing(int(theme.metric("space.xs")))
+
+        self._spec_label = QLabel()
+        self._spec_label.setWordWrap(True)
+        self._spec_label.setStyleSheet(tinted_style("accent.dice", bold=True))
+        layout.addWidget(self._spec_label, stretch=1)
+
+        clear = QPushButton("✕")
+        clear.setFixedWidth(int(theme.metric("column.chip-button")))
+        clear.setToolTip("Stop rolling this trait")
+        clear.clicked.connect(lambda: self.load_spec(None))
+        layout.addWidget(clear, alignment=Qt.AlignmentFlag.AlignVCenter)
+        return chip
 
     def _make_slider_spin(self, minimum: int, maximum: int) -> tuple[QSlider, QWidget]:
         """A horizontal slider linked two-way to a spin box over the same range."""
@@ -503,6 +580,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
 
     def _input_widgets(self) -> list[QWidget]:
         return [
+            self._spec_chip,
             self._bonus_slider,
             self._bonus_spin,
             self._penalty_slider,
@@ -513,14 +591,81 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._quick_container,
         ]
 
+    # -- rolling a trait off the sheet ---------------------------------------
+
+    def current_spec(self) -> RollSpec | None:
+        """The trait currently loaded, or ``None`` for a plain manual roll."""
+        return self._spec
+
+    def set_localizer(self, localizer: Callable[[RollSpec], RollSpec] | None) -> None:
+        """Install a last pass over every spec on its way in.
+
+        A spec can arrive from three directions — a double-clicked stat, a power's
+        🎲, or a follow-up chip on a history card, which may be *another player's*
+        card. Only one of those is worth adjusting (a save that knows which
+        resistance it is but not this character's number for it), but all three end
+        up here, so the adjustment is installed once on the panel rather than
+        threaded down every path. See
+        :meth:`~mm_companion.ui.sections.dice.DiceSection.perform_roll`, which
+        supplies it; a panel with no sheet behind it (GM Mode's) installs none.
+        """
+        self._localizer = localizer
+
+    def load_spec(self, spec: RollSpec | None) -> None:
+        """Load *spec* as the thing this panel rolls, or ``None`` to go back to manual.
+
+        Sticky on purpose: the chip stays after the roll so the sliders can be
+        adjusted and the die thrown again for the same trait. A spec that names its
+        own DC (a power's save) ticks the DC box and fills it in, so the number it
+        will roll against is visible rather than implied; a spec without one leaves
+        the box exactly as the player left it.
+        """
+        if spec is not None and self._localizer is not None:
+            spec = self._localizer(spec)
+        self._spec = spec
+        if spec is not None and spec.dc is not None:
+            self._dc_check.setChecked(True)
+            self._dc_spin.setValue(spec.dc)
+        self._spec_chip.setVisible(spec is not None)
+        if spec is not None:
+            self._spec_label.setText(spec_caption(spec))
+            self._spec_chip.setToolTip(spec.hint)
+        self.updateGeometry()
+
+    def roll_spec(self, spec: RollSpec | None) -> bool:
+        """Load *spec* and roll it at once. ``False`` if a die is already tumbling.
+
+        The one public way in for the sheet: a double-clicked stat line, a power's
+        🎲, or a follow-up chip on a history card all land here.
+        """
+        if self._rolling:
+            return False
+        self.load_spec(spec)
+        self._start_roll()
+        return True
+
     def _roll_parameters(self) -> tuple[int, int, int | None, bool]:
-        """What the inputs currently ask for: bonus, penalty, DC, hidden."""
-        return (
-            self._bonus_spin.value(),
-            self._penalty_spin.value(),
-            self._dc_spin.value() if self._dc_check.isChecked() else None,
-            self._hidden_option and self._hidden_check.isChecked(),
-        )
+        """What the inputs currently ask for: bonus, penalty, DC, hidden.
+
+        The loaded spec's modifier is folded in **on top of** the sliders rather than
+        written into them — the sliders are the situational extras ("+2 for cover"),
+        and a trait bonus can in any case exceed their 0-20 range. The net is split
+        back into a non-negative bonus and penalty, which is the shape the wire and
+        the history cards speak.
+        """
+        bonus = self._bonus_spin.value()
+        penalty = self._penalty_spin.value()
+        dc = self._dc_spin.value() if self._dc_check.isChecked() else None
+        if self._spec is not None:
+            net = self._spec.modifier + bonus - penalty
+            bonus, penalty = max(net, 0), max(-net, 0)
+            if self._spec.dc is not None:
+                dc = self._spec.dc
+        return (bonus, penalty, dc, self._hidden_option and self._hidden_check.isChecked())
+
+    def _roll_label(self) -> str:
+        """The name this roll travels under — the loaded spec's, or nothing."""
+        return self._spec.label if self._spec is not None else ""
 
     def _start_roll(self) -> None:
         """Begin a roll: lock the inputs, tumble the die, then reveal the result.
@@ -555,7 +700,18 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._awaiting = True
         self._pending = None
         bridge.rollAdded.connect(self._on_session_roll)
-        if not bridge.request_roll(bonus=bonus, penalty=penalty, dc=dc, hidden=hidden):
+        sent = bridge.request_roll(
+            label=self._roll_label(),
+            bonus=bonus,
+            penalty=penalty,
+            dc=dc,
+            hidden=hidden,
+            # What is being rolled travels with it, so the *other* seats can act on
+            # it: the target's player sees the attack land and clicks the save off
+            # its card. The server echoes it back on the record.
+            spec=None if self._spec is None else self._spec.to_dict(),
+        )
+        if not sent:
             self._abandon_roll(NOT_SENT)
 
     def _on_session_roll(self, roll: object) -> None:
@@ -614,7 +770,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
             bool(result is not None and result.critical),
         )
         self.localRoll.emit(
-            {"die": die, "bonus": bonus, "penalty": penalty, "dc": dc, "result": result}
+            {
+                "die": die,
+                "bonus": bonus,
+                "penalty": penalty,
+                "dc": dc,
+                "result": result,
+                "label": self._roll_label(),
+                "spec": self._spec,
+            }
         )
         self._unlock_inputs()
 
@@ -641,6 +805,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         )
         self._unlock_inputs()
         # The die has settled — a paired history panel can now show this own roll.
+        # The spec is already on the record (the server recorded what we sent and
+        # broadcast it), so this is the same dict every other seat is reading.
         self.sessionRollRevealed.emit(roll)
 
     def _abandon_roll(self, message: str) -> None:
@@ -685,7 +851,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
     ) -> None:
         total = die + modifier
         muted = theme.color("text.muted.rich")
-        html = (
+        html = ""
+        label = self._roll_label()
+        if label:
+            html += (
+                f"<span style='color:{theme.color('accent.dice')}'>"
+                f"{escape_rich_text(label)}</span><br>"
+            )
+        html += (
             f"<span style='font-size:{theme.font_size('size.roll-readout')}pt'>"
             f"<b>{total}</b></span> "
             f"<span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
@@ -810,13 +983,21 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._rebuild_quick_strip()
 
     def _apply_quick_roll(self, entry: dict) -> None:
-        """Load a saved quick roll into the inputs and roll it immediately."""
+        """Load a saved quick roll into the inputs and roll it immediately.
+
+        A *named* chip also loads its name as a spec, so a saved roll reaches the
+        table under that name instead of anonymously. Its numbers stay in the
+        sliders where they have always been, so the spec carries no modifier of its
+        own — the chip is a caption, not a second bonus.
+        """
         self._bonus_spin.setValue(entry["bonus"])
         self._penalty_spin.setValue(entry["penalty"])
         has_dc = entry.get("dc") is not None
         self._dc_check.setChecked(has_dc)
         if has_dc:
             self._dc_spin.setValue(entry["dc"])
+        name = str(entry.get("name", "")).strip()
+        self.load_spec(RollSpec(label=name) if name else None)
         self._start_roll()
 
     def _rebuild_quick_strip(self) -> None:
@@ -888,6 +1069,9 @@ class LocalRollHistory(QWidget):
     #: A card's star — the roll's parameters, for the roller to save or unsave.
     saveToggled = Signal(dict)
 
+    #: A card's follow-up button — the next roll in the chain, for the roller to make.
+    rollFollowUp = Signal(object)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         # What the roller's quick-roll strip holds, mirrored here so every card's
@@ -937,9 +1121,12 @@ class LocalRollHistory(QWidget):
             penalty=int(roll["penalty"]),
             dc=roll["dc"],
             result=roll["result"],
+            label=str(roll.get("label", "")),
+            spec=roll.get("spec"),
         )
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)
+        card.rollFollowUp.connect(self.rollFollowUp)
         card.removeRequested.connect(lambda c=card: self._remove_card(c))
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
@@ -1150,6 +1337,9 @@ class DiceRollerView(ReflowBox, QWidget):
         local_layout = QVBoxLayout(self._local_box)
         self._local_history = LocalRollHistory()
         self._local_history.saveToggled.connect(self.panel.toggle_quick_roll)
+        # A chain button on a card puts the next roll back into the panel it came
+        # from — an attack's card offers the save it forced.
+        self._local_history.rollFollowUp.connect(self.panel.roll_spec)
         local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
@@ -1157,6 +1347,7 @@ class DiceRollerView(ReflowBox, QWidget):
         session_layout = QVBoxLayout(self._session_box)
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
+        self._session_history.rollFollowUp.connect(self.panel.roll_spec)
         # Hold this app's own roll until its die stops tumbling; the roller cues it.
         self._session_history.set_defer_own(True)
         self.panel.sessionRollRevealed.connect(self._session_history.release_roll)

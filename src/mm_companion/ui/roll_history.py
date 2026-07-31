@@ -23,6 +23,9 @@ about, and grading is plain arithmetic over the roll dict.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -34,8 +37,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.rules import (
+    RollSpec,
+    follow_up_for_result,
+    outcome_is_failure,
+    resistance_outcome,
+)
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
+from mm_companion.ui.widgets import tinted_style
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
@@ -183,6 +194,67 @@ class QuickRollStar(QPushButton):
         )
 
 
+def chain_widgets(
+    spec: object,
+    *,
+    die: int,
+    degree: int | None,
+    on_follow_up: Callable[[RollSpec], None],
+    localize: bool = True,
+) -> list[QWidget]:
+    """What a rolled :class:`RollSpec` adds under its history card: the chain.
+
+    Two things, either or neither:
+
+    * a **follow-up button** when the roll provoked another one and landed — an
+      attack that hit makes its target save, and the button primes that save with
+      its DC already filled in, adjusted for a critical hit or a natural 1
+      (:func:`~mm_companion.core.rules.follow_up_for_result`);
+    * an **outcome line** — "Incapacitated!" on a failed save, or the Hit a *made*
+      Toughness save still costs, rather than a bare "2 degrees of failure".
+
+    This goes on **every** card, not only one's own, and that is the point of the
+    whole chain: the player rolls the attack, and the target's player — reading the
+    same history — clicks the save straight off it. The spec travels with the roll
+    (see ``docs/mm-session-architecture.md``); the crit adjustment and the ladder
+    lookup are then computed here from the broadcast die and degree, so every screen
+    at the table derives the same chip and the same sentence without the server
+    knowing a single rule.
+
+    Accepts the spec as a :class:`RollSpec` or as the plain dict it arrives as.
+
+    ``localize`` is what decides whether the follow-up arrives with the reader's own
+    resistance filled in (:func:`~mm_companion.core.rules.localize_spec`, applied
+    downstream by the Dice block). It is off on **one's own** card: you are not the
+    target of your own attack, so quietly filling in your own Toughness there would
+    be a confident wrong number. It is carried by dropping the spec's trait key
+    rather than by a flag the whole chain would have to thread.
+    """
+
+    resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
+    if resolved is None:
+        return []
+    widgets: list[QWidget] = []
+    follow_up = follow_up_for_result(resolved, die, degree, load_game_data())
+    if follow_up is not None and not localize:
+        follow_up = replace(follow_up, trait_key="")
+    if follow_up is not None:
+        button = QPushButton(f"🎲 {follow_up.label}")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setToolTip(follow_up.hint or f"Roll {follow_up.label}")
+        button.clicked.connect(lambda _=False, s=follow_up: on_follow_up(s))
+        widgets.append(button)
+    outcome = resistance_outcome(resolved, degree)
+    if outcome:
+        line = QLabel(f"{escape_rich_text(outcome)}!")
+        line.setWordWrap(True)
+        # A failed save is harm; a made one that still leaves a Hit is a caveat.
+        tint = "tint.worse" if outcome_is_failure(degree) else "tint.warning"
+        line.setStyleSheet(tinted_style(tint, bold=True))
+        widgets.append(line)
+    return widgets
+
+
 class SessionRollCard(QFrame):
     """One roll in the shared history: who rolled it, what it was, how it went.
 
@@ -198,6 +270,11 @@ class SessionRollCard(QFrame):
     #: owns the strip), so the card only reports the click and its parameters.
     saveToggled = Signal(dict)
     removeRequested = Signal(int)
+
+    #: A chain button on this card was pressed — roll the spec it carries. Only ever
+    #: on one's own card, since a follow-up is read off local game data (see
+    #: :func:`chain_widgets`).
+    rollFollowUp = Signal(object)
 
     def __init__(
         self,
@@ -229,12 +306,13 @@ class SessionRollCard(QFrame):
 
         who = str(roll.get("player_name", "")) or "Someone"
         label = str(roll.get("label", ""))
-        heading = f"<b>{_escape(who)}</b>"
+        heading = f"<b>{escape_rich_text(who)}</b>"
         if hidden:
             heading = f"{HIDDEN_MARK} {heading}"
         if label:
             heading += (
-                f" <span style='color:{theme.color('text.muted.rich')}'>— {_escape(label)}</span>"
+                f" <span style='color:{theme.color('text.muted.rich')}'>"
+                f"— {escape_rich_text(label)}</span>"
             )
         name_line = QLabel(heading)
         name_line.setTextFormat(Qt.TextFormat.RichText)
@@ -257,6 +335,18 @@ class SessionRollCard(QFrame):
             colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
             outcome.setStyleSheet(f"color: {colour};")
             info.addWidget(outcome)
+
+        # The chain — on every card, whoever rolled it. A save an attack forced is
+        # made by the *other* side of the table, so the button has to be on the
+        # reader's screen, not the roller's.
+        for widget in chain_widgets(
+            roll.get("spec"),
+            die=die,
+            degree=None if degree is None else int(degree),
+            on_follow_up=self.rollFollowUp.emit,
+            localize=not own,
+        ):
+            info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
 
@@ -296,6 +386,9 @@ class RollHistoryPanel(QWidget):
     #: A roll the GM struck with no live session to remove it from — so an owner
     #: (the GM window) can drop it from a persisted, off-air session too.
     rollRemovedLocally = Signal(int)
+
+    #: A card's follow-up button was pressed — roll this spec (see :func:`chain_widgets`).
+    rollFollowUp = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, *, gm: bool = False) -> None:
         super().__init__(parent)
@@ -447,6 +540,7 @@ class RollHistoryPanel(QWidget):
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)
         card.removeRequested.connect(self._request_remove)
+        card.rollFollowUp.connect(self.rollFollowUp)
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
@@ -515,10 +609,12 @@ class RollHistoryPanel(QWidget):
             widget.deleteLater()
 
 
-def _escape(text: str) -> str:
-    """Escape a player-supplied string for the rich-text labels above.
+def escape_rich_text(text: str) -> str:
+    """Escape a player-supplied string for a rich-text label.
 
     Display names and roll labels come off the wire, and these labels render
     HTML — an unescaped ``<`` would let a peer restyle someone else's history.
+    Public because the private history's cards (:mod:`mm_companion.ui.dice_roller`)
+    render the same strings and must escape them the same way.
     """
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

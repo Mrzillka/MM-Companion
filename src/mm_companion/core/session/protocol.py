@@ -43,7 +43,12 @@ from typing import ClassVar
 #: additive and would have decoded either way, which is exactly why this is
 #: bumped by hand — an old client would connect happily and then find its GM
 #: token ignored and its hidden rolls broadcast. Better refused at the door.
-PROTOCOL_VERSION = 5
+#:
+#: v6 added notes to the history: :class:`NoteRequest`, and the ``kind``/``text``
+#: fields on a roll record. Additive again, and refused for the same reason — an
+#: old server drops a note on the floor, and an old client renders one as a d20
+#: that rolled zero.
+PROTOCOL_VERSION = 6
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -225,6 +230,23 @@ class RollRequest(Message):
     dc: int | None = None
     hidden: bool = False
     spec: dict | None = None
+
+
+@_register
+@dataclass(frozen=True)
+class NoteRequest(Message):
+    """A request to write a line in the shared history without rolling anything.
+
+    What it says — "spent a hero point — 2 left" — is composed by the client and
+    carried verbatim, the way ``RollRequest.label`` is: what is worth noting is a
+    rules question, and the server has no rules in it. The text is length-capped
+    on the way in and attributed to the seat that sent it, so a note can no more
+    impersonate someone than a roll label can.
+    """
+
+    TYPE: ClassVar[str] = "note_request"
+
+    text: str = ""
 
 
 @_register

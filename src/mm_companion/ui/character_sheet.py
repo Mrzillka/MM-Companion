@@ -39,7 +39,7 @@ from mm_companion.ui.blocks import (
     default_rows,
     sync_declarative_blocks,
 )
-from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
+from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED, QUIET_REQUESTS
 from mm_companion.ui.pinned_panel import PinnedBoard
 
 
@@ -241,8 +241,10 @@ class CharacterSheet(QWidget):
 
         # A request is no use to a block the user has closed, so the sheet reveals
         # whichever block answers it. Named by *what it serves*, not by its key, so
-        # a mod that ships its own roller is revealed on the same terms.
-        for topic in {t for d in self._descriptors for t in d.serves}:
+        # a mod that ships its own roller is revealed on the same terms. A quiet
+        # topic is exempt: it is raised as a side effect of something else the user
+        # was doing, and would open a window they never asked for (see bus.py).
+        for topic in {t for d in self._descriptors for t in d.serves} - QUIET_REQUESTS:
             self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
 
         # No block emits at construction (each seeds its own view from the model as

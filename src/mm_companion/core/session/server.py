@@ -51,6 +51,7 @@ from .protocol import (
     Kicked,
     KickRequest,
     Message,
+    NoteRequest,
     Ping,
     PlayerSnapshot,
     Pong,
@@ -86,6 +87,10 @@ RATE_LIMIT_WINDOW = 5.0
 #: history cannot be filled with absurd values.
 MAX_ROLL_MODIFIER = 1000
 MAX_LABEL_CHARS = 120
+
+#: Longest a note may be. A sentence, not a chat message — the history is a log of
+#: what happened, and a card that has to wrap five times pushes the rolls off screen.
+MAX_NOTE_CHARS = 200
 
 #: How many recent rolls a :class:`~.protocol.Welcome` carries. The full history
 #: keeps growing across evenings (that is the point of persistence), and a roll
@@ -290,6 +295,21 @@ class SessionServer:
         return self._resolve_roll(
             slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
         )
+
+    def note(self, text: str, *, player_id: str | None = None) -> RollRecord:
+        """Write a line in the shared log for the GM (or for *player_id*).
+
+        The counterpart of :meth:`roll` for something that happened rather than
+        something rolled — a hero point spent. Like a roll it is the one path in,
+        so a :class:`~.protocol.NoteRequest` from a client lands here too, and like
+        a roll it is attributed to the seat it came from rather than to whatever
+        the text claims.
+        """
+        with self._lock:
+            slot = self.state.players.get(player_id) if player_id else self.gm_slot()
+        if slot is None:
+            raise KeyError(f"no player {player_id!r}")
+        return self._record_note(slot, text)
 
     def remove_roll(self, seq: int) -> bool:
         """Drop one roll from the shared log and tell every client (a GM action).
@@ -638,6 +658,8 @@ class SessionServer:
                 hidden=message.hidden and slot.is_gm,
                 spec=message.spec,
             )
+        elif isinstance(message, NoteRequest):
+            self._record_note(slot, message.text)
         elif isinstance(message, RemoveRollRequest) and slot.is_gm:
             # Removing a roll is a GM privilege; a player's request is ignored.
             self.remove_roll(message.seq)
@@ -731,6 +753,26 @@ class SessionServer:
             # learn what they rolled. An in-process GM reads it from the event
             # above; a GM dialled in over a socket has only this.
             self.send_to(self._gm_id(), RollAdded(roll=payload))
+        return record
+
+    def _record_note(self, slot: PlayerSlot, text: str) -> RollRecord:
+        """Append a note and publish it, on the same path a resolved roll takes.
+
+        There is nothing to resolve, so this is the whole of it: cap the text, take
+        a sequence number, persist, and broadcast. A note is never hidden — it says
+        what happened at the table, and hiding is a property of *rolls*.
+        """
+        with self._lock:
+            record = self.state.record_note(
+                player_id=slot.player_id,
+                player_name=slot.display_name,
+                text=text[:MAX_NOTE_CHARS],
+            )
+            self._append_roll(record)
+
+        payload = record.to_dict()
+        self._emit(EVENT_ROLL, payload)
+        self.broadcast(RollAdded(roll=payload))
         return record
 
     # -- housekeeping ------------------------------------------------------

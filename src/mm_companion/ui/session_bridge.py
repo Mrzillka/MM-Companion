@@ -210,6 +210,21 @@ class SessionBridge(QObject):
             )
         return False
 
+    def post_note(self, text: str) -> bool:
+        """Write a line in the shared log — something that happened, not a roll.
+
+        Dual-path like :meth:`remove_roll`: the host records it in-process, a
+        player asks over the wire. Either way it comes back as :attr:`rollAdded`
+        carrying ``kind="note"``, so every history already following that signal
+        shows it without a new connection. Returns False with no live session.
+        """
+        if self._server is not None:
+            self._server.note(text)
+            return True
+        if self._client is not None:
+            return self._client.post_note(text)
+        return False
+
     def remove_roll(self, seq: int) -> bool:
         """Drop one roll from the shared log (a GM action).
 

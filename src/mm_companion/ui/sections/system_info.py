@@ -47,11 +47,11 @@ from mm_companion.core.rules import (
     speed_columns,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.hero_point_icons import hero_point_pixmap
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
+from mm_companion.ui.svg_assets import hero_point_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
@@ -60,21 +60,27 @@ INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\
 
 
 class HeroPointsWidget(QWidget):
-    """A row of five hero-point pips; clicking one spends or gains hero points.
+    """Five hero-point pips, each its own switch; the count is how many are lit.
 
-    Clicking a pip sets the count to that pip's position, except clicking the last
-    filled pip empties it (so the count can be lowered back to zero). A held point
-    shows the lit medallion, a spent one the grey medallion — the artwork bundled
-    as :mod:`~mm_companion.ui.hero_point_icons`. Emits :attr:`valueChanged` on a
-    user click. Hero points stay clickable even when the sheet is locked — they are
-    spent during play, not a build value — so this widget has no locked state.
+    A pip toggles on its own — light the fourth and leave the rest dark if that is
+    how you like to read your row. A held point shows the lit medallion, a spent
+    one the grey medallion (the artwork bundled as
+    :mod:`~mm_companion.ui.svg_assets`). Emits :attr:`valueChanged` on a user click.
+
+    **Which** pips are lit is cosmetic: the character carries a count, so
+    :meth:`set_value` — a load, or a GM's command — can only say *how many*. It
+    reconciles rather than redraws (see there), which keeps an arrangement the
+    player made wherever the new count still allows it.
+
+    Hero points stay clickable even when the sheet is locked — they are spent
+    during play, not a build value — so this widget has no locked state.
     """
 
     valueChanged = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._value = 0
+        self._lit: set[int] = set()
         self._buttons: list[QPushButton] = []
         self._pip_size = int(theme.metric("column.hero-point"))
         self.setToolTip("Click a pip to spend or gain a hero point")
@@ -104,21 +110,32 @@ class HeroPointsWidget(QWidget):
         self._render()
 
     def value(self) -> int:
-        return self._value
+        return len(self._lit)
 
     def set_value(self, value: int) -> None:
-        """Set the count (clamped to 0…5) without emitting :attr:`valueChanged`."""
-        self._value = max(0, min(HERO_POINT_PIPS, int(value)))
+        """Set the count (clamped to 0…5) without emitting :attr:`valueChanged`.
+
+        The caller has a number, not an arrangement, so this *reconciles* to it:
+        spending puts out the right-most lit pips, gaining lights the left-most
+        dark ones. A player who lit only the fourth pip and then spends a point
+        still ends up where they expect, and a load with nothing to preserve
+        settles on the left-most ``value`` pips.
+        """
+        target = max(0, min(HERO_POINT_PIPS, int(value)))
+        while len(self._lit) > target:
+            self._lit.discard(max(self._lit))
+        while len(self._lit) < target:
+            self._lit.add(min(set(range(HERO_POINT_PIPS)) - self._lit))
         self._render()
 
     def _on_click(self, index: int) -> None:
-        # Clicking the last filled pip empties it; otherwise fill up to the click.
-        new_value = index if self._value == index + 1 else index + 1
-        if new_value == self._value:
-            return
-        self._value = new_value
+        """Flip one pip. Each is independent — no filling up to the click."""
+        if index in self._lit:
+            self._lit.discard(index)
+        else:
+            self._lit.add(index)
         self._render()
-        self.valueChanged.emit(self._value)
+        self.valueChanged.emit(self.value())
 
     def changeEvent(self, event: QEvent) -> None:
         # Dragged to a screen of a different scaling, the pips are re-rasterised at
@@ -130,7 +147,7 @@ class HeroPointsWidget(QWidget):
     def _render(self) -> None:
         ratio = self.devicePixelRatioF()
         for i, button in enumerate(self._buttons):
-            button.setIcon(QIcon(hero_point_pixmap(i < self._value, self._pip_size, ratio)))
+            button.setIcon(QIcon(hero_point_pixmap(i in self._lit, self._pip_size, ratio)))
 
 
 class SpeedWidget(QWidget):
@@ -241,6 +258,23 @@ class MovementModesWidget(QWidget):
         self.setVisible(bool(lines))
 
 
+def hero_point_note(previous: int, current: int) -> str:
+    """The sentence for a hero-point change, or ``""`` when nothing moved.
+
+    Deliberately says the same thing whoever caused it: a point the GM granted and
+    a point the player clicked are the same event at the table, and the card names
+    the character either way. The new total rides along because "spent a hero
+    point" without it sends everyone back to the sheet to count pips.
+    """
+    delta = current - previous
+    if not delta:
+        return ""
+    verb = "gained" if delta > 0 else "spent"
+    count = abs(delta)
+    points = "a hero point" if count == 1 else f"{count} hero points"
+    return f"{verb} {points} — {current} left"
+
+
 def _compact(label: str) -> str:
     """Shorten a distance label for the compact speed row (``"15 feet"`` → ``"15 ft"``)."""
     return label.replace(" feet", " ft").replace(" foot", " ft")
@@ -270,6 +304,9 @@ class SystemInfoSection(QGroupBox):
     #: The Initiative readout was double-clicked — roll it. Carries a
     #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
     rollRequested = Signal(object)
+    #: A sentence for the roll history — a hero point spent or gained. Carries the
+    #: text, since the block that writes it down cannot see what changed here.
+    noteRequested = Signal(str)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -405,6 +442,10 @@ class SystemInfoSection(QGroupBox):
     def _build_hero_points(self) -> QWidget:
         self._hero_points = HeroPointsWidget()
         self._hero_points.set_value(int(self._seed("hero_points", 1)))
+        # What the total was before the change being handled, so a note can say
+        # whether a point was spent or gained. Seeding is silent — the widget's own
+        # set_value emits nothing — so this starts out agreeing with the model.
+        self._last_hero_points = self._hero_points.value()
         self._hero_points.valueChanged.connect(self._on_hero_points_changed)
         return self._hero_points
 
@@ -430,7 +471,17 @@ class SystemInfoSection(QGroupBox):
         self._emit_edited()
 
     def _on_hero_points_changed(self, value: int) -> None:
+        """The single funnel for a hero-point change, wherever it came from.
+
+        A click on a pip and a GM's command both arrive here (see
+        :meth:`set_hero_points`), which is why the note is raised here rather than
+        in either of them — one code path, so a point can never move silently.
+        """
         self._character.characteristics["hero_points"] = value
+        note = hero_point_note(self._last_hero_points, value)
+        self._last_hero_points = value
+        if note:
+            self.noteRequested.emit(note)
         self._emit_edited()
 
     def set_hero_points(self, value: int) -> None:

@@ -855,9 +855,9 @@ def test_clicking_a_players_hero_points_sends_the_new_total(
         window.bridge.server, "set_hero_points", lambda *args: sent.append(args) or True
     )
 
-    window._cards["p0"]._hero_points._on_click(2)  # fill three pips
+    window._cards["p0"]._hero_points._on_click(2)  # light the 3rd pip
 
-    assert sent == [("p0", 3)]
+    assert sent == [("p0", 1)]
 
 
 def test_a_connected_players_hero_points_take_clicks(qapp: QApplication, window: GMWindow) -> None:

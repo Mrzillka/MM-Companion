@@ -651,6 +651,66 @@ def test_absurd_modifiers_are_clamped(running_server, connect) -> None:
     assert len(roll["label"]) == server_mod.MAX_LABEL_CHARS
 
 
+# --------------------------------------------------------------------------
+# Notes — the history's other kind of entry
+# --------------------------------------------------------------------------
+
+
+def test_a_note_reaches_every_player(running_server, connect) -> None:
+    srv = running_server(rng=Random(11))
+    first, first_events = connect(srv, "Volt")
+    _second, second_events = connect(srv, "Mesa")
+
+    first.post_note("spent a hero point — 2 left")
+
+    for events in (first_events, second_events):
+        note = events.next_of(EVENT_ROLL)
+        assert note["kind"] == "note"
+        assert note["text"] == "spent a hero point — 2 left"
+        # Attributed to the seat it came from, not to anything the text claims.
+        assert note["player_name"] == "Volt"
+
+
+def test_a_note_shares_the_sequence_with_the_rolls(running_server, connect) -> None:
+    """One log, one counter — which is what lets the GM strike a note like a roll."""
+    srv = running_server(rng=Random(4))
+    client, events = connect(srv, "Volt")
+
+    client.request_roll("One", dc=10)
+    events.next_of(EVENT_ROLL)
+    client.post_note("gained a hero point — 3 left")
+    seq = events.next_of(EVENT_ROLL)["seq"]
+
+    assert [entry.seq for entry in srv.state.rolls] == [1, 2]
+    assert [entry.kind for entry in srv.state.rolls] == ["roll", "note"]
+
+    assert srv.remove_roll(seq) is True
+    assert events.next_of(EVENT_ROLL_REMOVED)["seq"] == seq
+    assert [entry.seq for entry in srv.state.rolls] == [1]
+
+
+def test_a_note_is_persisted_and_reloads_as_a_note(running_server, connect) -> None:
+    srv = running_server(rng=Random(6))
+    client, _events = connect(srv, "Volt")
+
+    client.post_note("spent a hero point — 0 left")
+    wait_for(lambda: len(srv.state.rolls) == 1, message="the note was recorded")
+
+    reloaded = store.load_rolls(srv.state.id)
+    assert [entry.kind for entry in reloaded] == ["note"]
+    assert reloaded[0].text == "spent a hero point — 0 left"
+    assert reloaded[0].die == 0
+
+
+def test_an_absurdly_long_note_is_capped(running_server, connect) -> None:
+    srv = running_server(rng=Random(9))
+    client, events = connect(srv, "Volt")
+
+    client.post_note("x" * 5000)
+
+    assert len(events.next_of(EVENT_ROLL)["text"]) == server_mod.MAX_NOTE_CHARS
+
+
 def test_the_gm_can_remove_a_roll_for_everyone(running_server, connect) -> None:
     srv = running_server(rng=Random(8))
     client, events = connect(srv, "Volt")

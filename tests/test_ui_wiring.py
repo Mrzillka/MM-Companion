@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QSize
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -12,7 +12,9 @@ from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstan
 from mm_companion.core.rules import power_points_spent, resistance_total, skill_total
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.roll_history import NoteCard
 from mm_companion.ui.sections.powers import _DraggableCard
+from mm_companion.ui.sections.system_info import HeroPointsWidget, hero_point_note
 
 
 @pytest.fixture(scope="module")
@@ -352,14 +354,47 @@ def test_skill_modifier_column_nets_a_condition_penalty_against_a_boost(
 def test_hero_points_pips_spend_and_gain(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     hero = sheet.system_info._hero_points
+    hero.set_value(0)
 
-    hero._on_click(2)  # click the 3rd pip → 3 hero points
-    assert hero.value() == 3
-    assert sheet.character.characteristics["hero_points"] == 3
+    hero._on_click(2)  # light the 3rd pip → 1 hero point
+    assert hero.value() == 1
+    assert sheet.character.characteristics["hero_points"] == 1
 
-    hero._on_click(2)  # click the last filled pip again → empties it to 2
+    hero._on_click(2)  # click it again → spent, back to none
+    assert hero.value() == 0
+    assert sheet.character.characteristics["hero_points"] == 0
+
+
+def test_hero_point_pips_toggle_in_any_order(qapp: QApplication) -> None:
+    hero = HeroPointsWidget()
+    hero.set_value(0)
+
+    hero._on_click(3)  # the 4th pip alone, with nothing to its left
+    assert hero.value() == 1
+    assert hero._lit == {3}
+
+    hero._on_click(0)
     assert hero.value() == 2
-    assert sheet.character.characteristics["hero_points"] == 2
+    assert hero._lit == {0, 3}
+
+
+def test_hero_points_set_value_reconciles_to_the_count(qapp: QApplication) -> None:
+    """An outside change carries a number, not an arrangement — see set_value."""
+    hero = HeroPointsWidget()
+    hero.set_value(0)
+    hero._on_click(3)
+    hero._on_click(4)  # a player's own arrangement: the two right-hand pips
+
+    hero.set_value(1)  # the GM takes one — the right-most goes out
+    assert hero._lit == {3}
+
+    hero.set_value(3)  # and grants two — the left-most dark pips light up
+    assert hero._lit == {0, 1, 3}
+
+    hero.set_value(0)  # nothing left to preserve
+    assert hero._lit == set()
+    hero.set_value(2)
+    assert hero._lit == {0, 1}
 
 
 def test_hero_point_pips_show_the_held_and_spent_artwork(qapp: QApplication) -> None:
@@ -375,6 +410,55 @@ def test_hero_point_pips_show_the_held_and_spent_artwork(qapp: QApplication) -> 
     assert held != spent  # a held point does not look like a spent one
     assert icons[1].pixmap(size).toImage() == held
     assert icons[2].pixmap(size).toImage() == spent  # the 3rd pip is the first spent one
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "expected"),
+    [
+        (3, 2, "spent a hero point — 2 left"),
+        (2, 3, "gained a hero point — 3 left"),
+        (5, 3, "spent 2 hero points — 3 left"),
+        (0, 2, "gained 2 hero points — 2 left"),
+        (2, 2, ""),  # nothing moved, nothing to say
+    ],
+)
+def test_hero_point_note_wording(previous: int, current: int, expected: str) -> None:
+    assert hero_point_note(previous, current) == expected
+
+
+def test_spending_a_hero_point_writes_it_in_the_history(qapp: QApplication) -> None:
+    """Off the air the note lands in the Dice block's own private history."""
+    sheet = CharacterSheet(load_game_data())
+    sheet.system_info._hero_points.set_value(3)
+    sheet.system_info._last_hero_points = 3
+
+    sheet.system_info._hero_points._on_click(2)  # put one out → 2 left
+
+    notes = sheet.dice.view._local_history.findChildren(NoteCard)
+    assert [n.findChild(QLabel).text() for n in notes] == ["spent a hero point — 2 left"]
+
+
+def test_a_gm_granted_hero_point_is_written_down_too(qapp: QApplication) -> None:
+    """The GM's command lands on the player's own model, so it takes the same path."""
+    sheet = CharacterSheet(load_game_data())
+    sheet.system_info._hero_points.set_value(1)
+    sheet.system_info._last_hero_points = 1
+
+    sheet.system_info.set_hero_points(3)
+
+    notes = sheet.dice.view._local_history.findChildren(NoteCard)
+    assert [n.findChild(QLabel).text() for n in notes] == ["gained 2 hero points — 3 left"]
+
+
+def test_a_hero_point_note_does_not_reopen_a_closed_dice_block(qapp: QApplication) -> None:
+    """A note is a side effect of an edit elsewhere — it must not grab the screen."""
+    sheet = CharacterSheet(load_game_data())
+    sheet._canvas.hide_block("dice")
+    sheet.system_info._last_hero_points = sheet.system_info._hero_points.value()
+
+    sheet.system_info._hero_points._on_click(4)
+
+    assert sheet._canvas.is_hidden("dice")
 
 
 def test_initiative_readout_follows_agility_and_advantages(qapp: QApplication) -> None:

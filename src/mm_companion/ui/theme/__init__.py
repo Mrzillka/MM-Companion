@@ -75,6 +75,7 @@ __all__ = [
     "Theme",
     "UnknownToken",
     "active_theme",
+    "asset",
     "available_themes",
     "apply",
     "box",
@@ -292,6 +293,17 @@ def font_family() -> str:
     """The theme's font family, or ``""`` to keep the platform default."""
     value = active_theme().typography.get("family")
     return str(value) if value else ""
+
+
+def asset(name: str) -> str:
+    """Which artwork variant the theme wants for *name* — ``"die"``, ``"hero-point"``.
+
+    The value is a variant id from :mod:`mm_companion.ui.svg_assets`, not a path.
+    Resolve it there, at the point of use, and let that module fall back if the
+    preset names something it doesn't have — a hand-edited theme file must not be
+    able to raise inside a paint path.
+    """
+    return str(_lookup("assets", name))
 
 
 def wash(name: str, alpha: float) -> str:

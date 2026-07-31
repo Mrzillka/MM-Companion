@@ -1,0 +1,72 @@
+{
+  "id": "crimson-gold",
+  "name": "Crimson & Gold",
+  "description": "The look built around the artwork: near-black warm surfaces, crimson accents and a gold dice highlight, matched to the shaded die and the medallion hero points. Does not follow the operating system's light/dark setting.",
+  "extends": "classic",
+  "chrome": {
+    "mode": "styled",
+    "focus_ring": true
+  },
+
+  "_note": "Only what differs from Classic is listed. Unlike Slate Dark's cool greys, every surface here is warmed towards the artwork's own deep reds, so the medallion's black outline reads as a drawn line rather than as a hole in the page. The accent and the dice highlight are taken straight off the medallion: its crimson body (#ba1500) lifted until it clears the contrast floor as text, and the gold of its centre.",
+  "colors": {
+    "surface.window": "#17100f",
+    "surface.block": "#201615",
+    "surface.titlebar": "#2a1c19",
+    "surface.card": "#261a18",
+    "surface.field": "#140e0d",
+
+    "text.primary": "#f0e3d8",
+    "text.muted": "#a8938a",
+    "text.muted.rich": "#a8938a",
+    "text.on-badge": "#fffaf5",
+
+    "border.block": "#3d2b27",
+    "border.card": "#3d2b27",
+    "border.group": "#55403a",
+    "border.empty": "#3d2b27",
+
+    "accent": "#d94a2e",
+    "accent.dice": "#e8a33a",
+    "tint.better": "#4fbf76",
+    "tint.worse": "#e8767a",
+    "tint.warning": "#e0b442",
+    "tint.homerule": "#d94a2e",
+
+    "_badges": "Warmed off Classic's cooler set so a chip sits on the card rather than on top of it; the alternate-effect gold deliberately echoes accent.dice.",
+    "badge.extra": "#39602f",
+    "badge.flaw": "#6e2b26",
+    "badge.flat": "#5a4741",
+    "badge.role.base": "#7a3a24",
+    "badge.role.alternate": "#7d611c",
+    "badge.role.linked": "#39602f",
+
+    "drop.indicator": "#d94a2e",
+    "drop.reject": "#e8767a",
+    "focus.ring": "#d94a2e",
+
+    "splash.background": "#17100f",
+    "splash.text": "#f0e3d8",
+    "dice.face": "#f5e6cf"
+  },
+
+  "_metrics": "Slate Dark's softer corners and roomier padding — the artwork is round and heavily outlined, and square edges beside it read as a mismatch.",
+  "metrics": {
+    "radius.block": 8,
+    "radius.card": 6,
+    "radius.group": 8,
+    "radius.field": 5,
+    "card.margins": [10, 7, 10, 7],
+    "group.margins": [8, 5, 8, 8]
+  },
+
+  "typography": {
+    "size.card-name": 11.5
+  },
+
+  "_assets": "The whole point of this preset: the shaded die and the medallion pips, which is where every colour above came from.",
+  "assets": {
+    "die": "gradient",
+    "hero-point": "medallion"
+  }
+}

@@ -60,5 +60,11 @@
     "radius.field": 2,
     "card.margins": [7, 5, 7, 5],
     "group.margins": [5, 3, 5, 5]
+  },
+
+  "_assets": "The flat-colour die, for the same reason the corners are square: on a printed page the artwork is ink, not a rendered object. The pips are the medallion set, whose reds sit in the same warm band as the accents.",
+  "assets": {
+    "die": "flat",
+    "hero-point": "medallion"
   }
 }

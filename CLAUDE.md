@@ -255,6 +255,15 @@ clean (see Licensing below).
   lazily, at paint time, and `importlib.resources.as_file`'s extraction of a zipped
   install is gone by then. It also does the aspect-ratio fitting itself, since
   `QSvgRenderer` stretches to whatever rectangle it is handed and the d20 is not square.
+  Each drawing comes in **variants**, held in the `DIE_VARIANTS` / `HERO_POINT_VARIANTS`
+  registries, and **which one is a theme token** — `theme.asset("die")` /
+  `theme.asset("hero-point")`, read at the call site (`d20_pixmap`,
+  `HeroPointsWidget._render`) and never kept in a constant. The split is deliberate: this
+  module owns *what drawings exist*, the preset owns *which*, so a hand-edited theme file
+  names a variant id and can never point the renderer at an arbitrary path. An unknown id
+  falls back rather than raising — this resolves inside a paint path. Adding a drawing is
+  a file in `ui/assets/` plus an entry in the registry; the Settings combo lists it on its
+  own (a friendly name in `token_editor._VARIANT_LABELS` is optional).
 - `DiceSection` (`ui/sections/dice.py`) is the d20 roller **as a block**, and it is the
   one block whose descriptor sets `default_pinned` — a die that scrolls away with the
   page is no use mid-fight, so it starts in the strip. There is no standalone roller
@@ -685,7 +694,8 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
 - **Read a token where you use it**: `theme.color("tint.worse")`,
   `theme.metric("radius.card")`, `theme.font_size("size.card-name")`,
   `theme.wash("accent", 0.10)` (a translucent fill of the same hue),
-  `theme.box("card.margins")` (a 4-tuple). Never cache one in a module constant
+  `theme.box("card.margins")` (a 4-tuple), `theme.asset("die")` (which bundled
+  drawing — see `ui/svg_assets.py`). Never cache one in a module constant
   — a preset switch would not reach it. An unknown name raises `UnknownToken`
   with a did-you-mean.
 - Repeated snippets live in `ui/widgets.py`: `muted_style(italic=…)`,
@@ -694,7 +704,8 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   workspace `themes/` dir (which wins on an id clash, and whose parse failure is
   skipped, never fatal). A preset may `extends` another and restate only what it
   changes. `classic` is the default and reproduces the historical native look;
-  `slate-dark` and `parchment-light` are `chrome.mode: "styled"`. A `_`-prefixed
+  `slate-dark`, `parchment-light` and `crimson-gold` (built around the medallion
+  artwork) are `chrome.mode: "styled"`. A `_`-prefixed
   key inside a token map is an inline comment and is dropped, not parsed as a
   token. A preset the Settings window writes is a **full snapshot** (every
   resolved token, no `extends`) so it stays portable; the price is that it cannot
@@ -763,6 +774,15 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   paint path), and `qss._chrome_rules` requires the `surface.*`/`text.primary`/
   `border.block` colours with no fallback, so flipping a Classic-derived draft to
   `styled` offers to borrow them from a shipped preset rather than raising.
+- A whole new **token group** (`assets` is the fifth, after `colors`/`metrics`/
+  `typography`/`blocks`) is five edits and **all five are load-bearing**: a field on
+  `Theme`, the name in `loader._TOKEN_GROUPS` (which alone buys parse validation,
+  `extends` merging and comment-stripping), passing it in `loader._build`, emitting it
+  in `loader.theme_to_dict` — miss that one and the group silently vanishes the first
+  time the Settings window saves a preset — and an accessor in `theme/__init__.py`. A
+  top-level record like `chrome` is the wrong shape for anything inheritable: `_build`
+  reads chrome from the preset's *own* raw dict, so it does **not** come down an
+  `extends` chain.
 - Screenshot it with `driver.py settings` / `settings-demo` (see the
   `run-mm-companion` skill).
 

@@ -21,14 +21,14 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton
+from PySide6.QtWidgets import QApplication, QBoxLayout, QLabel, QPushButton
 
 from mm_companion.core import storage
 from mm_companion.core.dice import resolve_check
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.dice_roller import DiceRollerView, degree_text
-from mm_companion.ui.roll_history import MAX_QUICK_ROLLS, MIN_HISTORY_HEIGHT
+from mm_companion.ui.roll_history import MAX_QUICK_ROLLS, MIN_HISTORY_HEIGHT, NoteCard
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 
@@ -538,6 +538,48 @@ def test_leaving_the_session_brings_the_private_history_back(
 
     assert view._local_box.isVisibleTo(view)
     assert not view._session_box.isVisibleTo(view)
+
+
+# -- notes in the history ----------------------------------------------------
+
+
+def test_a_note_lands_in_the_private_history(qapp: QApplication) -> None:
+    view = DiceRollerView()
+
+    view.add_local_note("spent a hero point — 2 left")
+
+    notes = view._local_history.findChildren(NoteCard)
+    assert [note.findChild(QLabel).text() for note in notes] == ["spent a hero point — 2 left"]
+    # A note is not a roll: it has no parameters to save to the quick-roll strip.
+    assert view._local_history.cards() == []
+
+
+def test_a_note_reaches_the_shared_history(qapp: QApplication, hosting: SessionBridge) -> None:
+    view = DiceRollerView()
+
+    assert hosting.post_note("gained a hero point — 3 left") is True
+    qapp.processEvents()
+
+    cards = view._session_history.findChildren(NoteCard)
+    assert len(cards) == 1
+    assert "gained a hero point" in cards[0].findChildren(QLabel)[-1].text()
+
+
+def test_a_note_arriving_mid_roll_is_not_mistaken_for_the_answer(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    """A note has no die; taking one for the roll would settle the d20 on zero."""
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view = DiceRollerView()
+    view.panel._start_roll()
+
+    hosting.post_note("spent a hero point — 1 left")  # from our own seat, mid-tumble
+    qapp.processEvents()
+
+    assert view.panel._awaiting is True
+    assert view.panel._pending is None
+    view.panel._abandon_roll("done")  # release the timer chain
 
 
 # -- the hidden-roll option --------------------------------------------------

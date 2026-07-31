@@ -241,7 +241,20 @@ clean (see Licensing below).
   shifted by an active Growth/Shrinking). It exposes `refresh_derived()` for the sheet to
   call when abilities/advantages/powers/conditions change. Movement constants live in
   `data/movement.json`; the km/h conversion reads `Measurements.distance_m`. Hero points
-  render as five clickable circles.
+  render as five pips — a lit medallion for a held point, a grey one for a spent one —
+  and each is **its own switch**: light the fourth alone if you like. The character
+  carries a *count*, so which pips are lit is cosmetic and `HeroPointsWidget.set_value`
+  (a load, a GM's command) **reconciles** to the number rather than redrawing from it.
+  Every change — a click or a GM's command — funnels through
+  `SystemInfoSection._on_hero_points_changed`, which is why the `note-requested` topic
+  is raised there and a point can never move silently (see "Rolling from the sheet").
+  `HeroPointsWidget` is shared with GM Mode's `PlayerCard`, so its pip size
+  (`column.hero-point`) has to suit both.
+- `ui/svg_assets.py` renders the bundled SVG artwork — the d20 and the hero-point pips —
+  to pixmaps. **Eagerly**, at the screen's device pixel ratio: `QIcon` reads an SVG path
+  lazily, at paint time, and `importlib.resources.as_file`'s extraction of a zipped
+  install is gone by then. It also does the aspect-ratio fitting itself, since
+  `QSvgRenderer` stretches to whatever rectangle it is handed and the d20 is not square.
 - `DiceSection` (`ui/sections/dice.py`) is the d20 roller **as a block**, and it is the
   one block whose descriptor sets `default_pinned` — a die that scrolls away with the
   page is no use mid-fight, so it starts in the strip. There is no standalone roller
@@ -262,6 +275,16 @@ clean (see Licensing below).
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
+- **A history holds notes as well as rolls.** A `NoteCard` is a line nobody rolled —
+  "spent a hero point — 2 left" — written by the `note-requested` topic (see "Rolling
+  from the sheet"). In a session it goes to the server and comes back through the shared
+  feed like any other entry; off the air `DiceSection.post_note` puts it in the private
+  history instead. Both cards descend from `HistoryCard`, which is what lets
+  `RollHistoryPanel.remove_roll` and the GM's ✕ strike either kind. Two things a note is
+  deliberately *not*: it is never **deferred** (deferral waits on a die's tumble and a
+  note has none, so holding one would hold it forever), and `_on_session_roll` **ignores
+  it** — a note from one's own seat landing mid-tumble would otherwise be taken for the
+  answer and settle the d20 on zero.
 - **Quick rolls** are capped at `MAX_QUICK_ROLLS` (6). The cap is a layout constraint,
   not a preference: the strip shares the block with the controls and the die, so an
   unbounded chip list ratchets the block — and the pinned strip holding it — ever
@@ -344,6 +367,12 @@ number*.
   names another, and a mod block joins on the same terms. `CharacterSheet` also
   serves the topic itself, to **reopen** a closed roller (named by what it serves,
   not by its key) rather than roll where nobody can see it.
+- The channel carries a second topic, `note-requested` (a `str`): the sentence for a
+  hero point spent or gained, answered by `DiceSection.post_note`. It is listed in
+  `bus.QUIET_REQUESTS`, the one thing that sets it apart from a roll — a note is a
+  **side effect** of an edit the user was making elsewhere on the sheet, so reopening
+  a closed Dice block for one would be the app grabbing the screen unasked. The note
+  reaches the session either way.
 - `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. The
   loaded trait is **sticky**: it shows as a chip above the sliders and survives the
   roll, so the sliders can be nudged and the die thrown again. The sliders always

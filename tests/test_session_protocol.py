@@ -26,6 +26,7 @@ from mm_companion.core.session.protocol import (
     Kicked,
     KickRequest,
     ListSessionsRequest,
+    NoteRequest,
     Ping,
     PlayerSnapshot,
     Pong,
@@ -57,6 +58,7 @@ ROUND_TRIP_CASES = [
     CharacterSnapshot(character={"power_level": 10, "abilities": {"str": 4}}),
     RollRequest(label="Athletics", bonus=6, penalty=2, dc=15, hidden=False),
     RollRequest(),  # a bare d20 with no DC
+    NoteRequest(text="spent a hero point — 2 left"),
     RemoveRollRequest(seq=3),
     KickRequest(player_id="p1", reason="afk"),
     SetSessionName(name="Friday Game"),

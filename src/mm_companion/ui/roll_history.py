@@ -44,9 +44,10 @@ from mm_companion.core.rules import (
     outcome_is_failure,
     resistance_outcome,
 )
+from mm_companion.core.session.model import KIND_NOTE
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
-from mm_companion.ui.widgets import tinted_style
+from mm_companion.ui.widgets import muted_style, tinted_style
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
@@ -255,7 +256,77 @@ def chain_widgets(
     return widgets
 
 
-class SessionRollCard(QFrame):
+class HistoryCard(QFrame):
+    """What every card in a history has in common: an id, and a star or not.
+
+    The two histories hold a mix of rolls and notes, and the things done *to* a
+    card — striking it by ``seq``, telling it what the quick-roll strip holds —
+    have to work whichever it is. So they are declared here and a note simply
+    inherits the do-nothing versions.
+    """
+
+    def __init__(self, seq: object = None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        # A session entry has a positive seq; a pre-hosting (offline) roll is given
+        # a negative one so it too has a stable id to remove by. Only an entry with
+        # no id at all cannot be struck.
+        self.seq = seq if isinstance(seq, int) else None
+
+    def set_save_state(self, saved_keys: set, room: bool) -> None:
+        """No-op unless the card carries a star (see :class:`SessionRollCard`)."""
+
+
+class NoteCard(HistoryCard):
+    """A line in the history that nobody rolled: "spent a hero point — 2 left".
+
+    Deliberately plain beside a roll card — no headline number, no star, no chain.
+    A note is context for the rolls around it, so it reads as an aside rather than
+    competing with them for the eye.
+
+    The GM can strike one exactly like a roll (``can_remove``): it took a sequence
+    number from the same counter, which is the whole reason a note is a record in
+    the log rather than a message beside it.
+    """
+
+    removeRequested = Signal(int)
+
+    def __init__(
+        self,
+        note: dict,
+        *,
+        show_author: bool = True,
+        can_remove: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(note.get("seq"), parent)
+
+        layout = QHBoxLayout(self)
+        info = QVBoxLayout()
+
+        if show_author:
+            who = str(note.get("player_name", "")) or "Someone"
+            name_line = QLabel(f"<b>{escape_rich_text(who)}</b>")
+            name_line.setTextFormat(Qt.TextFormat.RichText)
+            name_line.setWordWrap(True)
+            info.addWidget(name_line)
+
+        text = QLabel(str(note.get("text", "")))
+        text.setWordWrap(True)
+        text.setStyleSheet(muted_style(italic=True))
+        info.addWidget(text)
+
+        layout.addLayout(info, stretch=1)
+
+        if can_remove and self.seq is not None:
+            remove_button = QPushButton("✕")
+            remove_button.setToolTip("Remove this note from the history")
+            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
+            remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
+            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+
+class SessionRollCard(HistoryCard):
     """One roll in the shared history: who rolled it, what it was, how it went.
 
     Deliberately not :class:`~mm_companion.ui.dice_roller.RollCard`: that one is
@@ -284,14 +355,8 @@ class SessionRollCard(QFrame):
         can_remove: bool = False,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        super().__init__(roll.get("seq"), parent)
         self._roll = dict(roll)
-        raw_seq = roll.get("seq")
-        # A session roll has a positive seq; a pre-hosting (offline) roll is given a
-        # negative one so it too has a stable id to remove by. Only a roll with no
-        # id at all cannot be struck.
-        self.seq = raw_seq if isinstance(raw_seq, int) else None
 
         die = int(roll.get("die", 0))
         bonus = int(roll.get("bonus", 0))
@@ -362,7 +427,7 @@ class SessionRollCard(QFrame):
             # GM only — strikes the roll from the log (from every screen, in a session).
             remove_button = QPushButton("✕")
             remove_button.setToolTip("Remove this roll from the history")
-            remove_button.setFixedWidth(28)
+            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
             remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
             layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
 
@@ -500,17 +565,19 @@ class RollHistoryPanel(QWidget):
             self.add_roll(roll)
 
     def add_roll(self, roll: object) -> None:
-        """Put one roll at the top of the list.
+        """Put one entry at the top of the list.
 
         One's own roll is held (not shown) while :attr:`_defer_own` is set, so a
         paired roller can release it as the die settles — see :meth:`release_roll`.
+        A note of one's own is *not* held: deferral waits on a die animation, and a
+        note has none to wait for, so holding one would hold it forever.
         """
         if not isinstance(roll, dict):
             return
         seq = roll.get("seq")
         if isinstance(seq, int) and seq in self._seen:
             return
-        if self._defer_own and self._is_own(roll):
+        if self._defer_own and roll.get("kind") != KIND_NOTE and self._is_own(roll):
             if isinstance(seq, int):
                 self._held[seq] = roll
             return
@@ -536,11 +603,16 @@ class RollHistoryPanel(QWidget):
                 return
             self._seen.add(seq)
 
-        card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
-        card.set_save_state(self._saved_keys, self._quick_room)
-        card.saveToggled.connect(self.saveToggled)
-        card.removeRequested.connect(self._request_remove)
-        card.rollFollowUp.connect(self.rollFollowUp)
+        card: HistoryCard
+        if roll.get("kind") == KIND_NOTE:
+            card = NoteCard(roll, can_remove=self._gm)
+            card.removeRequested.connect(self._request_remove)
+        else:
+            card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
+            card.set_save_state(self._saved_keys, self._quick_room)
+            card.saveToggled.connect(self.saveToggled)
+            card.removeRequested.connect(self._request_remove)
+            card.rollFollowUp.connect(self.rollFollowUp)
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
@@ -581,8 +653,8 @@ class RollHistoryPanel(QWidget):
         self._held.clear()
         self._empty.setVisible(True)
 
-    def cards(self) -> list[SessionRollCard]:
-        """The cards on screen, newest first.
+    def cards(self) -> list[HistoryCard]:
+        """The cards on screen, newest first — rolls and notes alike.
 
         Read off the layout rather than ``findChildren``, which answers in
         construction order — the opposite end of the list from where a new card
@@ -592,7 +664,7 @@ class RollHistoryPanel(QWidget):
         for index in range(self._layout.count()):
             item = self._layout.itemAt(index)
             widget = item.widget() if item is not None else None
-            if isinstance(widget, SessionRollCard):
+            if isinstance(widget, HistoryCard):
                 found.append(widget)
         return found
 

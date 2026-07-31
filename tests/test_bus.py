@@ -21,6 +21,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
+    NOTE_REQUESTED,
     ROLL_REQUESTED,
     SignalBus,
 )
@@ -37,7 +38,7 @@ BASE_TOPICS = {
     EDITED,
 }
 
-REQUEST_TOPICS = {ROLL_REQUESTED}
+REQUEST_TOPICS = {ROLL_REQUESTED, NOTE_REQUESTED}
 
 
 # -- bus mechanics -----------------------------------------------------------

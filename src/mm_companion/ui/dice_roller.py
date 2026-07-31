@@ -40,8 +40,6 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
-from functools import lru_cache
-from importlib.resources import as_file, files
 
 from PySide6.QtCore import QElapsedTimer, QMimeData, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent
@@ -66,6 +64,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 from mm_companion.core.rules import RollSpec
+from mm_companion.core.session.model import KIND_NOTE
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
@@ -74,6 +73,7 @@ from mm_companion.ui.roll_history import (
     MAX_QUICK_ROLLS,
     MIN_HISTORY_HEIGHT,
     MIN_HISTORY_WIDTH,
+    NoteCard,
     QuickRollStar,
     RollHistoryPanel,
     chain_widgets,
@@ -82,11 +82,14 @@ from mm_companion.ui.roll_history import (
     quick_roll_key,
 )
 from mm_companion.ui.session_bridge import SessionBridge, live_session
+from mm_companion.ui.svg_assets import D20_RESOURCE, svg_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, tinted_style
 
-RESOURCE_PACKAGE = "mm_companion.ui"
-D20_RESOURCE = "assets/D20_icon.png"
+# How big the die is drawn, and the button around it. The artwork is vector, so
+# this is the size it is *rasterised* at rather than a bitmap scaled to fit.
+DIE_SIZE = 160
+DIE_BUTTON_SIZE = 180
 
 # The quick-roll list is stored under this settings key as a list of plain dicts
 # ``{"bonus": int, "penalty": int, "dc": int | None, "name"?: str}`` so no Qt
@@ -114,17 +117,14 @@ NO_ANSWER = "The session did not answer, so nothing was rolled."
 NOT_SENT = "The roll could not be sent to the session."
 
 
-@lru_cache(maxsize=1)
-def d20_pixmap() -> QPixmap:
-    """Load the bundled D20 image (cached — one load per process).
+def d20_pixmap(ratio: float = 1.0) -> QPixmap:
+    """The bundled d20 drawing at :data:`DIE_SIZE`, for a screen of *ratio*.
 
-    Mirrors :func:`mm_companion.ui.app_icon.app_icon`: the PNG is a UI asset under
-    ``ui/assets/`` and is read via :mod:`importlib.resources` so it resolves when
-    the app is installed as a package.
+    A thin wrapper over :func:`~mm_companion.ui.svg_assets.svg_pixmap`, which does
+    the loading, the aspect-ratio fitting and the caching. The die is not square,
+    so it is fitted into the square icon rather than stretched to it.
     """
-    resource = files(RESOURCE_PACKAGE).joinpath(D20_RESOURCE)
-    with as_file(resource) as path:
-        return QPixmap(str(path))
+    return svg_pixmap(D20_RESOURCE, QSize(DIE_SIZE, DIE_SIZE), ratio)
 
 
 def degree_text(result: CheckResult | None) -> str:
@@ -536,15 +536,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._die_button.setFlat(True)
         self._die_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._die_button.setToolTip("Click to roll")
-        pixmap = d20_pixmap().scaled(
-            160,
-            160,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self._die_button.setIcon(QIcon(pixmap))
-        self._die_button.setIconSize(QSize(160, 160))
-        self._die_button.setFixedSize(180, 180)
+        self._die_button.setIcon(QIcon(d20_pixmap(self.devicePixelRatioF())))
+        self._die_button.setIconSize(QSize(DIE_SIZE, DIE_SIZE))
+        self._die_button.setFixedSize(DIE_BUTTON_SIZE, DIE_BUTTON_SIZE)
         self._die_button.clicked.connect(self._start_roll)
 
         self._face = QLabel("?")
@@ -720,8 +714,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
         Only our own answers this roll. The die keeps tumbling for the rest of
         its animation even once the number is known, so a fast answer does not
         cut the roll short.
+
+        The history feed carries notes as well as rolls, and one of ours can land
+        mid-tumble (spending a hero point on the attack being rolled is exactly
+        when it would). A note has no die, so taking one for the answer would
+        settle the d20 on zero — hence the ``kind`` check, not just the seat.
         """
         if not self._awaiting or not isinstance(roll, dict):
+            return
+        if roll.get("kind") == KIND_NOTE:
             return
         if str(roll.get("player_id", "")) != self._own_id:
             return
@@ -1131,8 +1132,18 @@ class LocalRollHistory(QWidget):
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
 
+    def add_note(self, text: str) -> None:
+        """Write a line that nobody rolled — the off-air twin of a session note.
+
+        The author is left off: this list is one's own, so naming oneself on every
+        card would be noise. Otherwise it is the same card the shared history
+        shows, which is the point of it living in the lower module.
+        """
+        card = NoteCard({"text": text}, show_author=False)
+        self._layout.insertWidget(0, card)
+
     def cards(self) -> list[RollCard]:
-        """The cards on screen, newest first."""
+        """The roll cards on screen, newest first (notes carry no parameters)."""
         found = []
         for index in range(self._layout.count()):
             item = self._layout.itemAt(index)
@@ -1394,6 +1405,14 @@ class DiceRollerView(ReflowBox, QWidget):
 
     def _add_local_card(self, roll: object) -> None:
         self._local_history.add_roll(roll)
+
+    def add_local_note(self, text: str) -> None:
+        """Write a note in the private history — what to do with one off the air.
+
+        In a session the note goes to the server instead and comes back through the
+        shared history like any other entry, so this is only ever the fallback.
+        """
+        self._local_history.add_note(text)
 
     # -- lifecycle -----------------------------------------------------------
 

@@ -34,6 +34,7 @@ from .protocol import (
     Kicked,
     KickRequest,
     Message,
+    NoteRequest,
     Ping,
     PlayerSnapshot,
     Pong,
@@ -251,6 +252,14 @@ class SessionClient:
         return self.send(
             RollRequest(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec)
         )
+
+    def post_note(self, text: str) -> bool:
+        """Ask the server to write *text* in the shared log (no dice involved).
+
+        Comes back as :data:`EVENT_ROLL` like a roll does — one history, one feed —
+        carrying ``kind="note"``.
+        """
+        return self.send(NoteRequest(text=text))
 
     def request_remove_roll(self, seq: int) -> bool:
         """Ask the server to drop one roll from the log (honored only for the GM).

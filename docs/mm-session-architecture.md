@@ -29,7 +29,7 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 | Module | What it holds |
 | --- | --- |
 | `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine. |
-| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`), `PlayerSlot`, and `RollRecord`. Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
+| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`), `PlayerSlot`, and `RollRecord` — which is a roll *or* a note, per its `kind` (see "Notes" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
 | `store.py` | Workspace persistence, modelled on `core/library.py`: `sessions/<id>/session.json` plus an **appended** `rolls.jsonl`, so a roll never rewrites the whole history. `save_session`, `append_roll`, `load_session` (stitches the two back and clears stale `connected` flags), `list_sessions`, `delete_session`. Session ids are validated against `^[A-Za-z0-9_-]{1,64}$` before they touch a path — an id can arrive over the wire. |
 | `net.py` | `Connection` (framed, buffered, lock-guarded writes), the `Transport`/`Listener` ABCs, and the loopback/LAN `TcpTransport`. `DEFAULT_PORT = 47331`. |
 | `server.py` | `SessionServer` — an accept thread, one reader thread per peer, one `RLock` over every mutation. It **rolls** (a client sends a request; the server resolves with `core.dice.resolve_check`, so no client edits its own number), persists on every change, and broadcasts. A callback `on_event(kind, payload)` reports to the owner; the payload is always a plain dict. No Qt. |
@@ -68,6 +68,30 @@ Two rules keep that from leaking rules into the session layer:
 
 A hidden GM roll is never broadcast, so its spec reaches nobody either — the chain
 is exactly as visible as the roll that started it.
+
+### Notes: the history's other kind of entry
+
+Some things worth writing down are not rolls. A hero point spent or granted moves a
+number on somebody's sheet and nothing else, and before notes existed the table only
+learned about it if the player said so out loud.
+
+A note is a `RollRecord` with `kind = "note"`, carrying its sentence in `text` and
+leaving the dice fields at their defaults. **One record type, because the history
+*is* a log** — seq-numbered from one counter, appended to `rolls.jsonl`, replayed to
+a late joiner in the `Welcome`, strikeable by the GM — and a note wants every one of
+those. A line written before notes existed loads as `kind = "roll"`, so the log is
+backward compatible on disk; the wire is not, hence `PROTOCOL_VERSION` 6.
+
+The same two rules apply as to a spec. The client composes the sentence (what is
+worth noting is a rules question) and the server stores it opaquely, capping it at
+`MAX_NOTE_CHARS` exactly as it caps a roll label, and attributing it to the seat it
+arrived on rather than to anything the text claims. A note is never hidden — hiding
+is a property of *rolls*, and a note says what happened at the table.
+
+The **author is the player's own app**, whichever end the change came from: a GM's
+`SetHeroPoints` lands on the player's sheet and the note is raised there, so a grant
+and a click produce exactly one note and it reflects what actually landed. The GM's
+window shows it through the same shared feed.
 
 ### The handshake
 

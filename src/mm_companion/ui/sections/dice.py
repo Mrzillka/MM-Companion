@@ -37,6 +37,7 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import RollSpec, localize_spec
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
+from mm_companion.ui.session_bridge import live_session
 
 
 class DiceSection(QGroupBox):
@@ -82,6 +83,23 @@ class DiceSection(QGroupBox):
         """
         if isinstance(spec, RollSpec):
             self.view.panel.roll_spec(spec)
+
+    def post_note(self, text: object) -> None:
+        """Write a line in the history — the ``note-requested`` topic's handler.
+
+        Where it goes is the same question the block already answers for rolls: at
+        a table it goes to the session, so the note lands in everyone's shared log
+        (and the GM's window); off the air it goes in the private history beside
+        one's own rolls.
+
+        Ignores a payload that isn't a non-empty string, for the reason
+        :meth:`perform_roll` ignores a bad spec — a mod block publishes here too.
+        """
+        if not isinstance(text, str) or not text:
+            return
+        bridge = live_session()
+        if bridge is None or not bridge.post_note(text):
+            self.view.add_local_note(text)
 
     def sync_session(self) -> None:
         """Re-check whether there is a session, and show the matching history.

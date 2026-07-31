@@ -33,6 +33,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
+    NOTE_REQUESTED,
     ROLL_REQUESTED,
 )
 from mm_companion.ui.blocks.declarative import DeclarativeBlock
@@ -125,7 +126,8 @@ _BASE_BLOCKS = [
             "edited": (EDITED,),
         },
         {DERIVED_CHANGED: "refresh_derived"},
-        _ROLLS,  # the Initiative readout
+        # the Initiative readout, plus the note a hero-point change writes
+        {**_ROLLS, "noteRequested": (NOTE_REQUESTED,)},
         {},
     ),
     (
@@ -254,11 +256,12 @@ _BASE_BLOCKS = [
         0,
         # A roll is not a character edit and must never mark the sheet dirty, and
         # the roller reads nothing off the build — so it publishes and subscribes
-        # nothing. It is, however, the block that *answers* a roll request.
+        # nothing. It is, however, the block that *answers* a roll request, and the
+        # one that owns a history for a note to be written in.
         {},
         {},
         {},
-        {ROLL_REQUESTED: "perform_roll"},
+        {ROLL_REQUESTED: "perform_roll", NOTE_REQUESTED: "post_note"},
     ),
 ]
 

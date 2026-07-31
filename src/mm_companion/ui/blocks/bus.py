@@ -55,7 +55,15 @@ Request topic           Payload / server
 ======================  ====================================================
 ``roll-requested``      a :class:`~mm_companion.core.rules.RollSpec`; the Dice
                         block rolls it
+``note-requested``      a sentence (``str``); the Dice block writes it in the
+                        history — the table's shared one, or the private one
+                        off the air
 ======================  ====================================================
+
+A request normally *reveals* the block that serves it (a roll is no use happening
+off screen), but a request raised as the **side effect** of another action must
+not — clicking a hero point should not throw the Dice block open. Those topics are
+listed in :data:`QUIET_REQUESTS`.
 """
 
 from __future__ import annotations
@@ -77,6 +85,13 @@ EDITED = "edited"
 
 # Request topics (the payload channel — see the module docstring).
 ROLL_REQUESTED = "roll-requested"
+NOTE_REQUESTED = "note-requested"
+
+#: Request topics whose server is **not** brought into view when they are raised.
+#: A note is a side effect of an edit somewhere else on the sheet, so reopening a
+#: closed Dice block for one would be the app grabbing the screen unasked; the
+#: note still reaches the session either way.
+QUIET_REQUESTS = frozenset({NOTE_REQUESTED})
 
 Handler = Callable[[], None]
 RequestHandler = Callable[[object], None]

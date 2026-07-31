@@ -13,6 +13,9 @@
 *.md    text eol=lf
 *.txt   text eol=lf
 *.sh    text eol=lf
+# systemd passes a trailing \r through as part of the argument, so a unit file
+# checked out with CRLF starts the service with a broken command line.
+*.service text eol=lf
 .gitignore      text eol=lf
 .gitattributes  text eol=lf
 .editorconfig   text eol=lf

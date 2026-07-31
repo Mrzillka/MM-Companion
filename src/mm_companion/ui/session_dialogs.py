@@ -618,32 +618,35 @@ class GMSessionLaunchDialog(QDialog):
         layout.addWidget(buttons)
 
         self._reload()
-        # A GM who has a server almost always wants it, so connect on open rather
-        # than making them press a button every evening.
-        if self._server_field.text().strip() and self._secret_field.text():
+        # Connect on open for a GM who already uses a server, so they are not
+        # pressing a button every evening — but not on the strength of the bundled
+        # default alone. A fresh install shows the address and waits to be told,
+        # which also keeps this dialog from reaching for the network unbidden.
+        if storage.session_server_chosen() and self._server_field.text().strip():
             self._connect_to_server()
 
     # -- the session server ------------------------------------------------
 
     def _build_server_box(self) -> QGroupBox:
-        """Address and credential for the box the GM's sessions live on.
+        """Which server this GM's sessions live on.
 
-        Optional: left empty, this dialog behaves exactly as it always did and the
-        GM hosts from this machine. Filled in, the session list below becomes the
-        server's, and hosting stops being this app's problem.
+        Pre-filled with the public default, so a fresh install can host a game
+        without being configured first; editable, so a group running their own box
+        points at that instead. Cleared, the dialog falls back to hosting on this
+        machine, which is what it always did.
+
+        There is no credential here. Creating a session needs none — the server is
+        a public utility. The operator's secret is under **Advanced**, because
+        exactly one person per server has any use for it.
         """
         box = QGroupBox("Session server")
-        form = QFormLayout(box)
+        outer = QVBoxLayout(box)
+        form = QFormLayout()
         server, secret = storage.session_server()
 
         self._server_field = QLineEdit(server)
-        self._server_field.setPlaceholderText("mmcompanion.example.org — leave empty to host here")
+        self._server_field.setPlaceholderText("leave empty to host on this computer instead")
         form.addRow("Address", self._server_field)
-
-        self._secret_field = QLineEdit(secret)
-        self._secret_field.setEchoMode(QLineEdit.EchoMode.Password)
-        self._secret_field.setPlaceholderText("the server's admin secret")
-        form.addRow("Admin secret", self._secret_field)
 
         row = QHBoxLayout()
         self._connect_button = QPushButton("Connect")
@@ -654,28 +657,73 @@ class GMSessionLaunchDialog(QDialog):
         self._server_status.setStyleSheet(muted_style())
         row.addWidget(self._server_status, stretch=1)
         form.addRow("", row)
+        outer.addLayout(form)
+
+        self._operator_box = QGroupBox("Advanced — I run this server")
+        self._operator_box.setCheckable(True)
+        self._operator_box.setChecked(bool(secret))
+        operator_form = QFormLayout(self._operator_box)
+        self._secret_field = QLineEdit(secret)
+        self._secret_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self._secret_field.setPlaceholderText(
+            "operator secret — lets you see and remove any session"
+        )
+        operator_form.addRow("Operator secret", self._secret_field)
+        outer.addWidget(self._operator_box)
         return box
 
     def _connect_to_server(self) -> None:
         """Open the control channel and swap the list over to the server's."""
         server = self._server_field.text().strip()
-        secret = self._secret_field.text().strip()
-        if not server or not secret:
-            self._set_server_status("Enter the server's address and admin secret.", "tint.worse")
+        secret = self._secret_field.text().strip() if self._operator_box.isChecked() else ""
+        if not server:
+            self._set_server_status(
+                "Enter a server address, or leave it empty to host on this computer.",
+                "tint.worse",
+            )
             return
         self._disconnect_from_server()
         client = HubClient(server, secret)
         try:
-            catalog = client.connect()
+            client.connect()
         except HubClientError as exc:
             self._set_server_status(str(exc), "tint.worse")
             return
         self._client = client
-        self._catalog = catalog
+        self._catalog = self._my_sessions(client, server)
         storage.update_settings(session_server_url=server, session_admin_secret=secret)
-        self._set_server_status(f"Connected to {server}.", "accent")
+        self._set_server_status(
+            f"Connected to {server}" + (" as its operator." if client.operator else "."),
+            "accent",
+        )
         self._sync_mode()
         self._reload()
+
+    def _my_sessions(self, client: HubClient, server: str) -> list[dict]:
+        """The sessions this app knows it owns, refreshed against the server.
+
+        An operator instead gets everything, which is the point of their secret.
+        A session we remember but the server no longer has (deleted elsewhere, or
+        swept for going untouched) is dropped from our list rather than left as a
+        row that opens nothing.
+        """
+        if client.operator:
+            return list(client.sessions)
+        rows: list[dict] = []
+        for mine in storage.my_sessions(server):
+            try:
+                live = client.status(str(mine.get("id", "")), str(mine.get("gm_token", "")))
+            except HubClientError:
+                # The server is there but would not answer for this one; keep the
+                # row rather than throwing away a token we cannot get back.
+                rows.append(dict(mine))
+                continue
+            if not live:
+                storage.forget_my_session(str(mine.get("id", "")))
+                continue
+            storage.remember_my_session(server, live)
+            rows.append(live)
+        return rows
 
     def _disconnect_from_server(self) -> None:
         client, self._client = self._client, None
@@ -703,11 +751,14 @@ class GMSessionLaunchDialog(QDialog):
         self._form.setVisible(local)
         self._form_rule.setVisible(local)
         self._rename_button.setVisible(self._on_server)
-        self._list_caption.setText(
-            "Sessions on this server — players can join them whether or not you are here:"
-            if self._on_server
-            else "Continue a previous session, or start a new one:"
-        )
+        operator = self._client is not None and self._client.operator
+        if not self._on_server:
+            caption = "Continue a previous session, or start a new one:"
+        elif operator:
+            caption = "Every session on this server — you are its operator:"
+        else:
+            caption = "Your sessions on this server — players can join whether or not you are here:"
+        self._list_caption.setText(caption)
 
     # -- what the caller reads back ----------------------------------------
 
@@ -810,7 +861,27 @@ class GMSessionLaunchDialog(QDialog):
         name, ok = QInputDialog.getText(self, "New session", "Name this session:", text="Session")
         if not ok or not name.strip():
             return
-        self._with_client(lambda client: client.create(name.strip()))
+        self._create_on_server(name.strip())
+
+    def _create_on_server(self, name: str) -> None:
+        """Make a session and remember that it is ours.
+
+        The gm token comes back exactly once, and it is the only proof the session
+        belongs to us — so it is written to settings before anything else can go
+        wrong, not after.
+        """
+        client = self._client
+        if client is None:
+            return
+        try:
+            created = client.create(name)
+        except HubClientError as exc:
+            self._set_server_status(str(exc), "tint.worse")
+            return
+        storage.remember_my_session(self._server_field.text().strip(), created)
+        self._catalog = [created, *(self._catalog or [])]
+        self._reload()
+        self._select_session(str(created.get("id", "")))
 
     def _rename_selected(self) -> None:
         entry = self._selected_entry()
@@ -821,7 +892,29 @@ class GMSessionLaunchDialog(QDialog):
         )
         if not ok or not name.strip():
             return
-        self._with_client(lambda client: client.rename(str(entry["id"]), name.strip()))
+        session_id = str(entry["id"])
+        token = self._token_for(entry)
+        self._with_client(lambda client: client.rename(session_id, name.strip(), token))
+
+    def _token_for(self, entry: dict) -> str:
+        """This session's gm token — from the catalog row, else from our own list.
+
+        An operator's catalog carries every token; an ordinary GM's rows come from
+        settings and carry only theirs.
+        """
+        token = str(entry.get("gm_token", ""))
+        if token:
+            return token
+        session_id = str(entry.get("id", ""))
+        mine = next((m for m in storage.my_sessions() if m.get("id") == session_id), None)
+        return str(mine.get("gm_token", "")) if mine else ""
+
+    def _select_session(self, session_id: str) -> None:
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item is not None and str(item.data(Qt.ItemDataRole.UserRole)) == session_id:
+                self._table.selectRow(row)
+                return
 
     def _delete_selected(self) -> None:
         session_id = self._selected_id()
@@ -839,21 +932,38 @@ class GMSessionLaunchDialog(QDialog):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         if self._on_server:
-            self._with_client(lambda client: client.delete(session_id))
+            entry = self._selected_entry() or {}
+            token = self._token_for(entry)
+            client = self._client
+            if client is None:
+                return
+            try:
+                client.delete(session_id, token)
+            except HubClientError as exc:
+                self._set_server_status(str(exc), "tint.worse")
+                return
+            storage.forget_my_session(session_id)
+            self._catalog = [e for e in (self._catalog or []) if e.get("id") != session_id]
+            self._reload()
             return
         store.delete_session(session_id)
         self._reload()
 
     def _with_client(self, action) -> None:
-        """Run one control request, refresh the list, and report a refusal."""
+        """Run one control request that answers with the changed session."""
         client = self._client
         if client is None:
             return
         try:
-            self._catalog = action(client)
+            changed = action(client)
         except HubClientError as exc:
             self._set_server_status(str(exc), "tint.worse")
             return
+        if isinstance(changed, dict) and changed.get("id"):
+            storage.remember_my_session(self._server_field.text().strip(), changed)
+            self._catalog = [
+                changed if e.get("id") == changed["id"] else e for e in (self._catalog or [])
+            ]
         self._reload()
 
     def _on_accept(self) -> None:
@@ -865,9 +975,10 @@ class GMSessionLaunchDialog(QDialog):
                     "Pick a session, or make one with New session.", "tint.worse"
                 )
                 return
-            self._chosen_entry = entry
+            # Carry the token forward: an operator's row has it inline, an
+            # ordinary GM's comes from our own remembered list.
+            self._chosen_entry = {**entry, "gm_token": self._token_for(entry)}
             self._chosen_id = str(entry.get("id", ""))
-            storage.remember_gm_token(self._chosen_id, str(entry.get("gm_token", "")))
         else:
             summary = self._selected_summary()
             self._chosen_id = summary.id if summary is not None else None

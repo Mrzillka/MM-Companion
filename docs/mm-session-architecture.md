@@ -179,20 +179,47 @@ session on the hub registers with a relay by dialling *out* to it, exactly as a
 GM's app does. No inbound port, no new transport, no join-code change — a player
 cannot tell a hub-hosted session from a laptop-hosted one.
 
-### The two secrets
+### Anyone may host; a session belongs to whoever made it
+
+**Creating a session needs no credential.** The server is a public utility: a
+stranger who has just installed the app can point it at one and run a game. What
+that costs is a rule about *ownership*, and it is the whole design:
+
+> Creating is open. Everything else needs the session's own `gm_token`, which the
+> create handed back and nobody else ever sees.
 
 | Secret | Who holds it | What it opens |
 | --- | --- | --- |
 | `host_token` | everyone at the table (it is *in* the join code) | one session, as a player |
-| `gm_token` | the GM alone | the **GM's seat** in one session |
-| admin secret | the GM alone, from the server's `/etc` | the **catalog** — list, create, rename, delete |
+| `gm_token` | whoever created the session | the **GM's seat**, plus renaming and deleting *that* session |
+| operator secret | whoever runs the box, from its `/etc` | **everything** — the full list, and deleting anything |
 
-`Hello.gm_token` is checked right after the host token. A wrong one is **refused**
-rather than quietly seating the claimant as a player: that failure "works", right
-up to the moment a hidden roll is broadcast to the table.
+Three consequences worth stating plainly:
 
-The admin secret is the whole of "only a GM can create a session". It never
-travels in a join code, so a player holds nothing that opens the catalog.
+- **There is no way to list other people's sessions.** `ListSessionsRequest` is
+  refused for anyone but the operator. A GM's own sessions are remembered by
+  their *app* (`session_my_sessions`), because a server-side list is exactly the
+  thing that would hand every table's join code to whoever asked for it.
+- **A wrong token and an unknown id give the identical refusal.** Telling them
+  apart would make the endpoint an oracle for which session ids exist.
+- **A wrong `gm_token` at the session handshake is refused, not downgraded.** Being
+  quietly seated as a player "works", right up to the moment a hidden roll is
+  broadcast to the table.
+
+The operator secret is optional. Without one the box simply has no caretaker —
+it does not stop anybody hosting, because nothing was gating that.
+
+### Keeping a public box healthy
+
+Three brakes, none of which a real GM ever notices:
+
+- **A global ceiling** (`--max-sessions`), refused with a readable "this server is
+  full" rather than by filling the disk.
+- **A per-connection create limit**, so a script cannot make thousands cheaply.
+- **A sweep** (`--retention-days`, 30 by default): a session nobody has touched in
+  that long is deleted. `updated_at` moves on every join, roll and rename, so a
+  monthly campaign is never at risk — only a table genuinely left behind. A
+  session with somebody connected is never swept, however old its timestamp looks.
 
 ### What a remote GM needed that a local one got for free
 
@@ -204,11 +231,14 @@ travels in a join code, so a player holds nothing that opens the catalog.
 
 ### The control plane
 
-`SessionCatalog` is the answer to *every* control request — create, rename,
-delete and list alike. Returning the whole catalog rather than a delta costs a
-few hundred bytes and removes any chance of a GM's list drifting out of step with
-the server's. `core/session/hub_client.py` is the app's side: no reader thread
-and no events, unlike `client.py` — connect, ask, read, close.
+`ControlHello` opens the channel (with an empty secret, normally) and is answered
+by `ControlWelcome`, whose `operator` flag says which kind of channel this is.
+Create, rename, delete and status all answer with a `SessionInfo` describing that
+one session — empty when it is gone, which is how a GM learns theirs was swept.
+`SessionCatalog` exists but only ever reaches an operator.
+
+`core/session/hub_client.py` is the app's side: no reader thread and no events,
+unlike `client.py` — connect, ask, read, close.
 
 ### Idle sessions
 

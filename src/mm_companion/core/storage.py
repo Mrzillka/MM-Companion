@@ -89,19 +89,25 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # own (``python -m mm_companion.relay``) points at it here. See
     # :mod:`mm_companion.core.session.relay`.
     "session_relay_url": "",
-    # The session server this GM's tables live on — the box running
-    # ``python -m mm_companion.server --hub``. Empty for a GM who hosts from their
-    # own machine. See :mod:`mm_companion.core.session.hub_client`.
+    # The session server this GM's tables live on — a box running
+    # ``python -m mm_companion.server --hub``. Seeded with the public default the
+    # app ships with, and freely editable: a group running their own puts its
+    # address here. See :mod:`mm_companion.core.session.hub_client`.
     "session_server_url": "",
-    # That server's admin secret: the credential that may list, create and delete
-    # sessions on it. Not any session's join token — this is the one that makes
-    # "only a GM creates sessions" true, and it is remembered here so a GM types
-    # it once rather than every evening.
+    # The server's *operator* secret, for whoever runs the box. Empty for
+    # everyone else — creating a session needs no credential at all. It grants the
+    # full session list and the right to delete any of them, which is how
+    # abandoned sessions get cleaned up.
     "session_admin_secret": "",
-    # Per-session GM tokens, ``{session_id: token}``, as the server's catalog
-    # handed them out. Kept so reopening GM Mode takes the GM's seat back without
-    # another trip to the catalog.
-    "session_gm_tokens": {},
+    # **The GM's own sessions**, one entry per session they created:
+    # ``{"server", "id", "name", "join_code", "gm_token"}``.
+    #
+    # This list lives here rather than on the server on purpose. A server-side
+    # "list all sessions" is exactly the thing that would hand every table's join
+    # code to whoever asked, now that anyone may create one — so a session belongs
+    # to whoever holds its gm token, and this is where that token is kept. Lose
+    # this file and the session is still running; you simply can no longer GM it.
+    "session_my_sessions": [],
     # The GM window's block arrangement + geometry, mirroring ``layout`` for the
     # character sheet: ``{"window_geometry": base64, "dock_state": json}``. Its own
     # key because the GM window has a different block set. See
@@ -251,35 +257,70 @@ def relay_url() -> str:
 
 
 def session_server() -> tuple[str, str]:
-    """The configured session server and its admin secret, or two empty strings.
+    """The configured session server and operator secret; the secret is usually ``""``.
 
-    The one seam for "does this GM keep their sessions on a server", so the
-    launcher and GM Mode ask in one place rather than each reading settings.
+    The one seam for "which server does this app use", so the launcher and GM
+    Mode ask in one place rather than each reading settings. The server falls
+    back to the public default the app ships with, so a fresh install can host a
+    game without being configured first.
     """
+    from mm_companion.core.session.hub_client import DEFAULT_SERVER
+
     settings = load_settings()
     url = settings.get("session_server_url", "")
     secret = settings.get("session_admin_secret", "")
     return (
-        url.strip() if isinstance(url, str) else "",
+        (url.strip() if isinstance(url, str) else "") or DEFAULT_SERVER,
         secret.strip() if isinstance(secret, str) else "",
     )
 
 
-def gm_token_for(session_id: str) -> str:
-    """The remembered GM token for a session on the server, or ``""``."""
-    tokens = load_settings().get("session_gm_tokens", {})
-    if not isinstance(tokens, dict):
-        return ""
-    value = tokens.get(session_id, "")
-    return value if isinstance(value, str) else ""
+def session_server_chosen() -> bool:
+    """True once the user has actually settled on a server.
+
+    :func:`session_server` falls back to the bundled default so a fresh install
+    has an address to offer, but "there is a default in the box" is not the same
+    as "this user uses a server" — and only the second should make the app reach
+    for the network on its own. So a first run pre-fills the field and waits to be
+    told to connect; every run after that connects by itself.
+    """
+    settings = load_settings()
+    url = settings.get("session_server_url", "")
+    return bool(isinstance(url, str) and url.strip()) or bool(my_sessions())
 
 
-def remember_gm_token(session_id: str, token: str) -> None:
-    """Keep a session's GM token so the seat can be reclaimed without the catalog."""
-    tokens = load_settings().get("session_gm_tokens", {})
-    tokens = dict(tokens) if isinstance(tokens, dict) else {}
-    if token:
-        tokens[session_id] = token
-    else:
-        tokens.pop(session_id, None)
-    update_settings(session_gm_tokens=tokens)
+def my_sessions(server: str = "") -> list[dict]:
+    """The sessions this app created, newest first, optionally on one server.
+
+    Each is ``{"server", "id", "name", "join_code", "gm_token"}``. This is the
+    *only* record that a session is ours — the server offers no way to list what
+    somebody made, precisely so it cannot be asked to list what everyone made.
+    """
+    stored = load_settings().get("session_my_sessions", [])
+    if not isinstance(stored, list):
+        return []
+    rows = [dict(row) for row in stored if isinstance(row, dict) and row.get("id")]
+    return [row for row in rows if not server or row.get("server") == server]
+
+
+def remember_my_session(server: str, session: dict) -> None:
+    """Record a session we created (or refresh what we know of one)."""
+    session_id = str(session.get("id", ""))
+    if not session_id:
+        return
+    rest = [row for row in my_sessions() if row.get("id") != session_id]
+    entry = {
+        "server": server,
+        "id": session_id,
+        "name": str(session.get("name", "")),
+        "join_code": str(session.get("join_code", "")),
+        "gm_token": str(session.get("gm_token", "")),
+    }
+    update_settings(session_my_sessions=[entry, *rest])
+
+
+def forget_my_session(session_id: str) -> None:
+    """Drop a session from our list — deleted on the server, or swept."""
+    update_settings(
+        session_my_sessions=[row for row in my_sessions() if row.get("id") != session_id]
+    )

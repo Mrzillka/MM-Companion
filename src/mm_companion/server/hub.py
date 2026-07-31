@@ -28,6 +28,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from mm_companion.core import storage
 from mm_companion.core.session import discovery, store
@@ -38,9 +39,11 @@ from mm_companion.core.session.protocol import (
     ERROR_HUB_FULL,
     ERROR_MALFORMED,
     ERROR_PROTOCOL_VERSION,
+    ERROR_RATE_LIMIT,
     ERROR_UNKNOWN_SESSION,
     PROTOCOL_VERSION,
-    AdminHello,
+    ControlHello,
+    ControlWelcome,
     CreateSessionRequest,
     DeleteSessionRequest,
     ErrorMessage,
@@ -48,6 +51,8 @@ from mm_companion.core.session.protocol import (
     ProtocolError,
     RenameSessionRequest,
     SessionCatalog,
+    SessionInfo,
+    SessionStatusRequest,
 )
 from mm_companion.core.session.relay import RelayTransport, relay_url
 from mm_companion.core.session.server import SessionServer
@@ -69,6 +74,21 @@ JANITOR_INTERVAL = 30.0
 #: A ceiling so a runaway client cannot fill the disk with empty sessions.
 DEFAULT_MAX_SESSIONS = 50
 
+#: How many sessions one control connection may create before it is told to slow
+#: down. A real GM makes one and plays; a script makes thousands. Reconnecting
+#: resets it, which is fine — the global ceiling and the sweep are what actually
+#: bound the box, and this only makes the cheap attack no longer cheap.
+MAX_CREATES_PER_CONNECTION = 5
+
+#: Days a session may sit untouched before the sweep takes it. ``updated_at``
+#: moves on every join, roll and rename, so a live campaign is never at risk
+#: however long between sessions.
+DEFAULT_RETENTION_DAYS = 30
+
+#: How often the sweep runs. Hourly is plenty for a 30-day retention, and keeps
+#: the janitor's own cost invisible.
+SWEEP_INTERVAL = 3600.0
+
 MAX_SESSION_NAME = 120
 
 #: Seconds between attempts to re-register a session whose relay link dropped.
@@ -80,6 +100,14 @@ MAX_RETRY_DELAY = 120.0
 
 class HubError(Exception):
     """The hub could not do what was asked; the message is fit to show a GM."""
+
+
+class HubFullError(HubError):
+    """The server is at its session ceiling."""
+
+
+class UnknownSessionError(HubError):
+    """No such session — or one this caller has no token for; the same answer."""
 
 
 @dataclass
@@ -120,17 +148,20 @@ class SessionHub:
         mod_fingerprint: str = "",
         max_sessions: int = DEFAULT_MAX_SESSIONS,
         idle_unload: float = DEFAULT_IDLE_UNLOAD,
+        retention_days: int = DEFAULT_RETENTION_DAYS,
         control_id: str = DEFAULT_CONTROL_ID,
         transport_factory: Callable[[str], Transport | None] | None = None,
     ) -> None:
-        if not admin_secret:
-            raise HubError("the hub needs an admin secret; nobody could create a session without")
         self.relay_base = relay_base
+        # Optional: without one, nobody is an operator and the box simply has no
+        # caretaker. Creating a session never needed it, so this is not a way to
+        # lock the server — only a way to have no one able to clean it up.
         self.admin_secret = admin_secret
         self.workspace = workspace
         self.mod_fingerprint = mod_fingerprint
         self.max_sessions = max_sessions
         self.idle_unload = idle_unload
+        self.retention_days = retention_days
         self.control_id = control_id
 
         self._transport_factory = transport_factory or self._relay_transport
@@ -233,36 +264,110 @@ class SessionHub:
     # -- creating and destroying -------------------------------------------
 
     def create(self, name: str) -> dict:
-        """Mint a session, host it, and return its catalog entry."""
+        """Mint a session, host it, and return it.
+
+        **Deliberately needs no credential.** Anyone running the app may host a
+        game here; what stops that being abused is the ceiling below and the
+        per-connection limit its caller applies, not a password.
+        """
         with self._lock:
             if len(self._entries) >= self.max_sessions:
-                raise HubError(f"this server is holding its limit of {self.max_sessions} sessions")
+                raise HubFullError(
+                    f"this server is holding its limit of {self.max_sessions} sessions; "
+                    "try again later, or point the app at another server"
+                )
         state = new_session((name or "Session").strip()[:MAX_SESSION_NAME] or "Session")
         store.save_session(state, self.workspace, write_rolls=True)
         entry = self._host(state)
         log.info("created session %r (%s)", state.name, state.id)
         return self._describe(entry)
 
-    def delete(self, session_id: str) -> None:
-        """Stop a session and erase it — roll history, roster and all."""
+    def delete(self, session_id: str, gm_token: str = "", *, operator: bool = False) -> None:
+        """Stop a session and erase it — roll history, roster and all.
+
+        Needs the session's own gm token, so only the GM who made it can remove
+        it; the server's operator may do so regardless, which is how abandoned
+        and abusive sessions get cleaned up.
+        """
+        entry = self._owned(session_id, gm_token, operator=operator)
         with self._lock:
-            entry = self._entries.pop(session_id, None)
-        if entry is None:
-            raise HubError("that session is not on this server")
+            self._entries.pop(session_id, None)
         entry.server.stop()
         store.delete_session(session_id, self.workspace)
-        log.info("deleted session %s", session_id)
+        log.info("deleted session %s%s", session_id, " (by the operator)" if operator else "")
 
-    def rename(self, session_id: str, name: str) -> None:
-        entry = self._entry(session_id)
+    def rename(
+        self, session_id: str, name: str, gm_token: str = "", *, operator: bool = False
+    ) -> dict:
+        entry = self._owned(session_id, gm_token, operator=operator)
         entry.server.set_session_name((name or "").strip()[:MAX_SESSION_NAME] or "Session")
+        return self._describe(entry)
+
+    def status(self, session_id: str, gm_token: str = "", *, operator: bool = False) -> dict:
+        """One session as its own GM sees it, or ``{}`` if it is gone.
+
+        A missing session is not an error here: it is the answer to "is my
+        session still there", and a swept one has to be able to come back as no.
+        """
+        try:
+            return self._describe(self._owned(session_id, gm_token, operator=operator))
+        except UnknownSessionError:
+            return {}
+
+    def _owned(self, session_id: str, gm_token: str, *, operator: bool) -> _Entry:
+        """The session, if this caller is allowed to touch it.
+
+        A wrong token and an unknown id give the *same* refusal on purpose:
+        telling them apart would turn this into an oracle for which session ids
+        exist on the box.
+        """
+        with self._lock:
+            entry = self._entries.get(session_id)
+        if entry is None:
+            raise UnknownSessionError("that session is not on this server")
+        if operator:
+            return entry
+        if not gm_token or not tokens_match(gm_token, entry.state.gm_token):
+            raise UnknownSessionError("that session is not on this server")
+        return entry
 
     def _entry(self, session_id: str) -> _Entry:
         with self._lock:
             entry = self._entries.get(session_id)
         if entry is None:
-            raise HubError("that session is not on this server")
+            raise UnknownSessionError("that session is not on this server")
         return entry
+
+    # -- sweeping ----------------------------------------------------------
+
+    def sweep(self, now: datetime | None = None) -> list[str]:
+        """Delete sessions nobody has touched in :attr:`retention_days`.
+
+        A public server otherwise fills with tables somebody made once and never
+        opened again. ``updated_at`` moves on every join, roll and rename, so an
+        active campaign is never at risk however long between games — only a
+        session that has genuinely sat still is swept.
+        """
+        if self.retention_days <= 0:
+            return []
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=self.retention_days)
+        with self._lock:
+            entries = list(self._entries.values())
+        swept = []
+        for entry in entries:
+            if entry.server.connected_player_ids():
+                continue
+            if _parse_time(entry.state.updated_at) > cutoff:
+                continue
+            try:
+                self.delete(entry.state.id, operator=True)
+            except HubError:
+                continue
+            swept.append(entry.state.id)
+        if swept:
+            log.info("swept %d session(s) untouched for %d days", len(swept), self.retention_days)
+        return swept
 
     # -- hosting -----------------------------------------------------------
 
@@ -348,6 +453,7 @@ class SessionHub:
             log.info("unloaded idle session %s (%d rolls shed)", entry.state.id, count)
 
     def _janitor_loop(self) -> None:
+        next_sweep = time.monotonic() + SWEEP_INTERVAL
         while self._running:
             self._wake.wait(JANITOR_INTERVAL)
             if not self._running:
@@ -359,6 +465,12 @@ class SessionHub:
                 since = entry.empty_since
                 if entry.loaded and since is not None and since <= cutoff:
                     self._unload(entry)
+            if time.monotonic() >= next_sweep:
+                next_sweep = time.monotonic() + SWEEP_INTERVAL
+                try:
+                    self.sweep()
+                except Exception as exc:  # noqa: BLE001 - the janitor must not die
+                    log.warning("sweep failed: %s", exc)
 
     # -- the control channel -----------------------------------------------
 
@@ -395,11 +507,17 @@ class SessionHub:
                 listener.close()
 
     def _serve_control(self, connection: Connection) -> None:
-        """One admin conversation: authenticate once, then answer requests."""
+        """One control conversation: open the channel, then answer requests.
+
+        Opening it needs no credential — anyone may create a session here. The
+        secret, when one is offered, only decides whether this channel is the
+        *operator's*.
+        """
         try:
-            if not self._authenticate(connection):
+            operator = self._open_channel(connection)
+            if operator is None:
                 return
-            self._send(connection, SessionCatalog(sessions=self.catalog()))
+            created = 0
             while self._running:
                 try:
                     message = connection.receive()
@@ -410,23 +528,35 @@ class SessionHub:
                     return
                 if message is None:
                     return
-                self._handle_control(connection, message)
+                if isinstance(message, CreateSessionRequest):
+                    created += 1
+                    if created > MAX_CREATES_PER_CONNECTION and not operator:
+                        self._send(
+                            connection,
+                            ErrorMessage(
+                                code=ERROR_RATE_LIMIT,
+                                message="that is a lot of sessions at once; reconnect to make more",
+                            ),
+                        )
+                        return
+                self._handle_control(connection, message, operator=operator)
         except OSError:
             pass
         finally:
             connection.close()
 
-    def _authenticate(self, connection: Connection) -> bool:
+    def _open_channel(self, connection: Connection) -> bool | None:
+        """Read the opening hello. Returns whether this is the operator, or None to hang up."""
         try:
             message = connection.receive()
         except (OSError, ProtocolError):
-            return False
-        if not isinstance(message, AdminHello):
+            return None
+        if not isinstance(message, ControlHello):
             self._send(
                 connection,
-                ErrorMessage(code=ERROR_MALFORMED, message="expected an admin hello first"),
+                ErrorMessage(code=ERROR_MALFORMED, message="expected a control hello first"),
             )
-            return False
+            return None
         if message.protocol_version != PROTOCOL_VERSION:
             self._send(
                 connection,
@@ -436,35 +566,70 @@ class SessionHub:
                     f"you speak v{message.protocol_version}",
                 ),
             )
-            return False
-        if not tokens_match(message.secret, self.admin_secret):
-            log.warning("control channel refused a bad secret from %s", connection.address)
-            self._send(
-                connection,
-                ErrorMessage(
-                    code=ERROR_BAD_TOKEN, message="that is not this server's admin secret"
-                ),
-            )
-            return False
-        return True
+            return None
 
-    def _handle_control(self, connection: Connection, message: object) -> None:
+        operator = False
+        if message.secret:
+            # An empty configured secret must never match an empty presented one,
+            # or every caller would silently become the operator.
+            operator = bool(self.admin_secret) and tokens_match(message.secret, self.admin_secret)
+            if not operator:
+                log.warning("control channel refused a bad secret from %s", connection.address)
+                self._send(
+                    connection,
+                    ErrorMessage(
+                        code=ERROR_BAD_TOKEN, message="that is not this server's operator secret"
+                    ),
+                )
+                return None
+        self._send(
+            connection,
+            ControlWelcome(operator=operator, sessions=self.catalog() if operator else []),
+        )
+        return operator
+
+    def _handle_control(self, connection: Connection, message: object, *, operator: bool) -> None:
         try:
             if isinstance(message, CreateSessionRequest):
-                self.create(message.name)
+                answer = SessionInfo(session=self.create(message.name))
             elif isinstance(message, DeleteSessionRequest):
-                self.delete(message.session_id)
+                self.delete(message.session_id, message.gm_token, operator=operator)
+                answer = SessionInfo()
             elif isinstance(message, RenameSessionRequest):
-                self.rename(message.session_id, message.name)
-            elif not isinstance(message, ListSessionsRequest):
+                answer = SessionInfo(
+                    session=self.rename(
+                        message.session_id, message.name, message.gm_token, operator=operator
+                    )
+                )
+            elif isinstance(message, SessionStatusRequest):
+                answer = SessionInfo(
+                    session=self.status(message.session_id, message.gm_token, operator=operator)
+                )
+            elif isinstance(message, ListSessionsRequest):
+                if not operator:
+                    # Refusing rather than answering with an empty list: a GM's own
+                    # sessions live in their app, and there is no view of everyone's.
+                    self._send(
+                        connection,
+                        ErrorMessage(
+                            code=ERROR_BAD_TOKEN,
+                            message="only this server's operator can list its sessions",
+                        ),
+                    )
+                    return
+                answer = SessionCatalog(sessions=self.catalog())
+            else:
                 return
-        except HubError as exc:
-            code = ERROR_HUB_FULL if "limit" in str(exc) else ERROR_UNKNOWN_SESSION
-            self._send(connection, ErrorMessage(code=code, message=str(exc)))
+        except HubFullError as exc:
+            self._send(connection, ErrorMessage(code=ERROR_HUB_FULL, message=str(exc)))
             return
-        # Every mutation answers with the whole catalog, so a GM's list can never
-        # drift out of step with the server's.
-        self._send(connection, SessionCatalog(sessions=self.catalog()))
+        except UnknownSessionError as exc:
+            self._send(connection, ErrorMessage(code=ERROR_UNKNOWN_SESSION, message=str(exc)))
+            return
+        except HubError as exc:
+            self._send(connection, ErrorMessage(code=ERROR_UNKNOWN_SESSION, message=str(exc)))
+            return
+        self._send(connection, answer)
 
     def _send(self, connection: Connection, message: object) -> None:
         try:
@@ -503,6 +668,19 @@ def relay_secret(session_id: str, workspace: storage.Workspace | None = None) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(secret, encoding="utf-8")
     return secret
+
+
+def _parse_time(stamp: str) -> datetime:
+    """An ISO timestamp from the store, or the epoch if it is unreadable.
+
+    Unreadable means "very old", which makes the sweep take it — the alternative,
+    treating it as brand new, would leave a corrupt entry on the box forever.
+    """
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _relay_port(url: str) -> int:

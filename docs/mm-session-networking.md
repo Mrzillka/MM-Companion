@@ -129,27 +129,48 @@ What it gets you:
 - **Nothing to forward, ever.** Both the box and every player dial *out* to the
   relay, so CGNAT is a non-issue at both ends.
 
-### Setting one up
-
-The box runs two things: the relay, and the hub that holds the sessions.
-`deploy/README.md` in this repo is the runbook — a firewall, a Let's Encrypt
-certificate, and one `deploy.sh`. It prints an **admin secret** on first run;
-that is the credential that may create sessions, and it goes to the GM alone.
-
 ### Using it
 
-In the app: **Open GM Mode** → fill in the **Session server** box with the
-address and the admin secret → **Connect**. The list below becomes the server's
-sessions. **New session** makes one; pick it and press **Open**.
+The app ships pointing at a server already, so there is usually nothing to set
+up: **Open GM Mode**, press **New session**, name it, press **Open**. You are the
+GM of it.
+
+**No password, for anybody.** Creating a session needs no credential — the server
+is a public utility, and anyone who installs the app can run games on it.
+
+What keeps your table yours is the **gm token** the server hands back when you
+create the session. Your app keeps it, and it is what proves the session is
+yours: only it can rename the session, delete it, or take the GM's seat. Nobody
+can list other people's sessions at all, so there is nothing to browse and
+nothing to steal.
+
+> **Keep your app's settings.** The gm token is stored there and handed out
+> exactly once. Lose it and the session keeps running — you simply can no longer
+> GM it. (The server's operator can delete it for you.)
+
+Players need only the join code: **Session ▸ Copy join code**, send it, they
+paste it into **Join Session**. A join code makes somebody a *player*; it never
+makes them the GM.
 
 The port and tunnel questions disappear while you are connected, because a
 session reached by dialling out to a relay has no port to forward.
 
-Players need nothing new: **Session ▸ Copy join code**, send it, they paste it
-into **Join Session** exactly as before.
+### Pointing at a different server
 
-> **Only a GM can create sessions.** A join code opens one session as a player;
-> the catalog is behind the admin secret, which is never in a join code.
+Replace the address in the **Session server** box. Clear it entirely and the
+dialog goes back to hosting on your own machine (Paths 1 and 2).
+
+### Running one for your group
+
+`deploy/README.md` in this repo is the runbook — a firewall, a Let's Encrypt
+certificate, and one `deploy.sh`. It prints an **operator secret** on first run.
+That is *not* needed to create sessions; it is for whoever looks after the box,
+and it grants the full session list and the right to delete any of them. Tick
+**Advanced — I run this server** in the dialog to use it.
+
+A public box also sweeps: a session nobody has touched in **30 days** is deleted
+(`--retention-days`). Joining, rolling or renaming all count as touching it, so a
+campaign that meets monthly is never at risk.
 
 ### Hosting one session headless
 
@@ -189,8 +210,10 @@ is the same guidance gathered in one place.
 | --- | --- | --- |
 | **LAN only** (red) | The app could not make you reachable from the internet — commonly CGNAT or UPnP being off. | Use a tunnel (Path 1), the relay (Path 2), or a session server (Path 3). Players on your own network / VPN can still join with the address shown. |
 | "could not reach *server*" when connecting to a session server | The box is down, the address is wrong, or its certificate has expired. | `systemctl status mm-relay mm-sessions` on the box; `openssl s_client -connect YOUR.DOMAIN:47332` checks the certificate. See `deploy/README.md`. |
-| "that is not this server's admin secret" | The admin secret is wrong or was rotated. | Read it back with `cat /etc/mm-companion/admin.secret`. |
-| GM Mode opened but the GM controls do nothing | The app was let in as a player — the session's gm token went stale. | Reopen GM Mode and pick the session from the server list again, which fetches a fresh token. |
+| "that is not this server's operator secret" | Only relevant if you run the box; the secret is wrong or was rotated. | Read it back with `cat /etc/mm-companion/admin.secret`. Untick **Advanced** if you are not the operator. |
+| "this server is holding its limit of N sessions" | The box is full. | Delete a session you no longer need, or point at another server. |
+| Your session vanished from the list | It was swept for going 30 days untouched, or deleted. | Make a new one. Sessions you use are never swept. |
+| GM Mode opened but the GM controls do nothing | The app was let in as a player — the gm token is missing or stale. | Reopen GM Mode and pick the session from the list again. If your settings were lost, the token is gone and the session can no longer be GM'd. |
 | "carrier-grade NAT" | Your ISP shares one public address; no port forward can help. | Tunnel or relay. Or ask your ISP for a public IP, or host on a machine that has one. |
 | "a second router in front of it" (double NAT) | There is another router upstream. | If it is yours, forward the port on it too. If it is the ISP's, use a tunnel or relay. |
 | "your router refused to forward the port" | UPnP was found but declined. | Forward the port by hand in the router admin page, or use a tunnel. |

@@ -65,6 +65,10 @@ ERROR_MOD_SKEW = "mod_skew"
 ERROR_HUB_FULL = "hub_full"
 #: The named session is not on this hub (deleted, or a stale entry in a GM's list).
 ERROR_UNKNOWN_SESSION = "unknown_session"
+#: A rename or delete without the session's gm token. Deliberately the same
+#: answer as :data:`ERROR_UNKNOWN_SESSION` would give in prose, so a stranger
+#: cannot use the difference to learn which session ids exist.
+ERROR_NOT_OWNER = "not_owner"
 
 
 class ProtocolError(Exception):
@@ -547,33 +551,62 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
 # The hub control plane
 #
 # A second, much smaller conversation: not with a session, but with the box that
-# holds them all. It answers one question a session cannot — "which sessions are
-# there, and make me a new one" — and it is the reason only a GM can create a
-# session, because it is gated on a secret that lives on the server and is given
-# to the GM alone. A player never speaks this vocabulary; they have a join code,
-# which names one session and opens nothing else.
+# holds them all. Anyone running the app may open it and make a session — the
+# server is a public utility, not one GM's private property.
+#
+# What that costs is a rule about *ownership*, and it is the whole design here:
+#
+#   Creating is open. Everything else needs the session's gm token, which the
+#   create handed back and nobody else ever sees.
+#
+# So there is no way to enumerate other people's tables, and no way to rename or
+# delete one you did not make. A GM's own list of sessions lives in their app,
+# not on the server, because a server-side list is exactly the thing that would
+# leak everyone's join codes to whoever asked.
+#
+# The operator's secret is the one exception, for the person paying for the box:
+# it opens the full catalog so abandoned or abusive sessions can be cleaned up.
 # --------------------------------------------------------------------------
 
 
 @_register
 @dataclass(frozen=True)
-class AdminHello(Message):
-    """Open the control channel. Answered with a :class:`SessionCatalog`.
+class ControlHello(Message):
+    """Open the control channel; answered with :class:`ControlWelcome`.
 
-    ``secret`` is the hub's admin secret, not any one session's token.
+    ``secret`` is **empty for everybody normally** — creating a session needs no
+    credential. It carries the server's operator secret only for whoever runs the
+    box, and a wrong one is refused rather than quietly downgraded, so an operator
+    never believes they have powers they do not.
     """
 
-    TYPE: ClassVar[str] = "admin_hello"
+    TYPE: ClassVar[str] = "control_hello"
 
-    secret: str
+    secret: str = ""
     protocol_version: int = PROTOCOL_VERSION
     app_version: str = ""
 
 
 @_register
 @dataclass(frozen=True)
+class ControlWelcome(Message):
+    """The channel is open. ``operator`` says whether the secret was accepted.
+
+    ``sessions`` is the full catalog for an operator and **empty for everyone
+    else** — an ordinary GM learns about their own sessions from the answers to
+    their own requests, never from a list of the server's.
+    """
+
+    TYPE: ClassVar[str] = "control_welcome"
+
+    operator: bool = False
+    sessions: list[dict] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
 class CreateSessionRequest(Message):
-    """Ask the hub to create and start hosting a new session."""
+    """Make a new session. Needs no credential — anyone may host a game."""
 
     TYPE: ClassVar[str] = "create_session_request"
 
@@ -583,46 +616,75 @@ class CreateSessionRequest(Message):
 @_register
 @dataclass(frozen=True)
 class DeleteSessionRequest(Message):
-    """Ask the hub to stop a session and erase it, roll history and all."""
+    """Stop a session and erase it, roll history and all.
+
+    ``gm_token`` proves this is the session's own GM. An operator channel may
+    leave it empty; anyone else without it is refused.
+    """
 
     TYPE: ClassVar[str] = "delete_session_request"
 
     session_id: str
+    gm_token: str = ""
 
 
 @_register
 @dataclass(frozen=True)
 class RenameSessionRequest(Message):
-    """Ask the hub to rename a session."""
+    """Rename a session. Same ownership rule as deleting it."""
 
     TYPE: ClassVar[str] = "rename_session_request"
 
     session_id: str
     name: str
+    gm_token: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class SessionStatusRequest(Message):
+    """Ask after one session this GM already knows the token for.
+
+    How an app refreshes its own list: is the session still there, and who is in
+    it? Answered with a :class:`SessionInfo` whose ``session`` is empty when the
+    session is gone — which is also how a GM learns theirs was swept.
+    """
+
+    TYPE: ClassVar[str] = "session_status_request"
+
+    session_id: str
+    gm_token: str = ""
 
 
 @_register
 @dataclass(frozen=True)
 class ListSessionsRequest(Message):
-    """Ask for the catalog again, without changing anything."""
+    """The whole catalog. **Operator only** — refused on an ordinary channel."""
 
     TYPE: ClassVar[str] = "list_sessions_request"
 
 
 @_register
 @dataclass(frozen=True)
-class SessionCatalog(Message):
-    """Every session on the hub — the answer to *every* control request.
+class SessionInfo(Message):
+    """One session — the answer to create, rename, delete and status alike.
 
-    Returning the whole catalog after a create, a rename and a delete alike costs
-    a few hundred bytes and removes a whole class of bug: there is no partial
-    update to apply, so a GM's list cannot drift out of step with the server's.
-
-    Each entry carries ``id``, ``name``, ``join_code``, ``gm_token``,
-    ``player_count``, ``roll_count``, ``connected`` and ``updated_at``. The join
-    code and the gm token are the two things a GM cannot derive for themselves,
-    and this channel is the only place either is handed out.
+    ``session`` carries ``id``, ``name``, ``join_code``, ``gm_token``,
+    ``player_count``, ``roll_count``, ``connected`` and ``updated_at``, and is
+    **empty** when the session no longer exists. The join code and the gm token
+    are the two things a GM cannot derive for themselves, and they are handed out
+    here and nowhere else.
     """
+
+    TYPE: ClassVar[str] = "session_info"
+
+    session: dict = field(default_factory=dict)
+
+
+@_register
+@dataclass(frozen=True)
+class SessionCatalog(Message):
+    """Every session on the hub. Only ever sent to an operator."""
 
     TYPE: ClassVar[str] = "session_catalog"
 

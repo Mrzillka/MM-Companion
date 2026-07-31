@@ -15,9 +15,10 @@ from mm_companion.core.session import protocol
 from mm_companion.core.session.protocol import (
     MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION,
-    AdminHello,
     ApplyCondition,
     CharacterSnapshot,
+    ControlHello,
+    ControlWelcome,
     CreateSessionRequest,
     DeleteSessionRequest,
     ErrorMessage,
@@ -37,6 +38,8 @@ from mm_companion.core.session.protocol import (
     RollRequest,
     Roster,
     SessionCatalog,
+    SessionInfo,
+    SessionStatusRequest,
     SetHeroPoints,
     SetNpcPaths,
     SetSessionName,
@@ -85,11 +88,17 @@ ROUND_TRIP_CASES = [
     Kicked(reason="session closed"),
     Pong(nonce=7),
     # The hub control plane — a GM talking to the box, not to a session.
-    AdminHello(secret="admin-secret", app_version="0.4.0"),
+    ControlHello(),  # the ordinary case: no credential at all
+    ControlHello(secret="operator-secret", app_version="0.4.0"),
+    ControlWelcome(),
+    ControlWelcome(operator=True, sessions=[{"id": "s1", "name": "Friday Game"}]),
     CreateSessionRequest(name="Friday Game"),
-    DeleteSessionRequest(session_id="s1"),
-    RenameSessionRequest(session_id="s1", name="Saturday Game"),
+    DeleteSessionRequest(session_id="s1", gm_token="gm-secret"),
+    RenameSessionRequest(session_id="s1", name="Saturday Game", gm_token="gm-secret"),
+    SessionStatusRequest(session_id="s1", gm_token="gm-secret"),
     ListSessionsRequest(),
+    SessionInfo(),  # the session is gone
+    SessionInfo(session={"id": "s1", "name": "Friday Game", "join_code": "ABCDE"}),
     SessionCatalog(sessions=[{"id": "s1", "name": "Friday Game", "join_code": "ABCDE"}]),
 ]
 

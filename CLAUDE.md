@@ -598,20 +598,32 @@ The shape:
   join code *already* carries the session id
   (`mmrelay://host:port/<session-id>`): each session on the hub registers by
   dialling out to a relay exactly as a GM's app does — no inbound port, no new
-  transport, no join-code change, and a player cannot tell the difference. Three
-  secrets, and keeping them straight is the whole design: the **`host_token`** is
-  in the join code and everyone has it; the **`gm_token`** claims the GM's *seat*
-  and goes to one person (a wrong one is **refused**, never quietly downgraded to
-  a player — that failure "works" right until a hidden roll reaches the table);
-  the **admin secret** lives in the server's `/etc` and opens the *catalog*,
-  which is the entirety of "only a GM can create a session". A remote GM needed
+  transport, no join-code change, and a player cannot tell the difference.
+- **Creating a session needs no credential** — the server is a public utility and
+  anyone who installs the app can host on it. What that costs is a rule about
+  *ownership*, and it is the whole design: **creating is open, everything else
+  needs the session's own `gm_token`**, handed back by the create and held by
+  nobody else. Three secrets, and keeping them straight matters: the
+  **`host_token`** is in the join code and everyone at the table has it; the
+  **`gm_token`** claims the GM's *seat* and owns the session (a wrong one is
+  **refused**, never quietly downgraded to a player — that failure "works" right
+  until a hidden roll reaches the table); the **operator secret** in the server's
+  `/etc` is the caretaker's override, granting the full list and deleting
+  anything. Two rules fall out: **there is no way to list other people's
+  sessions** (a GM's own live in `session_my_sessions` in *their app*, because a
+  server-side list would hand every join code to whoever asked), and **a wrong
+  token and an unknown id give the identical refusal**, or the endpoint becomes an
+  oracle for which ids exist. A public box also needs brakes: a global ceiling, a
+  per-connection create limit, and a sweep of sessions untouched for 30 days
+  (`updated_at` moves on every join/roll/rename, so a live campaign is safe).
+  A remote GM needed
   three things a local one got free: player sheets (the roster carries no
   characters, so `PlayerSnapshot` forwards each to the GM seat alone), the result
   of their own hidden roll (never broadcast), and kick/rename/cast (no wire
-  message existed). `SessionCatalog` answers *every* control request — returning
-  the whole catalog rather than a delta makes a stale list impossible.
-  `core/session/hub_client.py` is the app's side, deliberately unlike `client.py`:
-  no reader thread, no events — connect, ask, read, close.
+  message existed). `core/session/hub_client.py` is the app's side, deliberately
+  unlike `client.py`: no reader thread, no events — connect, ask, read, close.
+  It also carries `DEFAULT_SERVER`, the address a fresh install points at so
+  someone can host without knowing anyone; it is a default, not a hardcoding.
 - An idle session stays registered and joinable but sheds its roll history after
   ten minutes. The reload hangs on `SessionServer`'s `on_activate`, called
   **before** the handshake, not after: the `Welcome` carries the history, and

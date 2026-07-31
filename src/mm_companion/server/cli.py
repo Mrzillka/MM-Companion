@@ -37,9 +37,14 @@ Examples:
 
 --hub is what an always-on server runs: it hosts every session in the workspace
 at once, each reaching players by dialling out to the relay, and opens a control
-channel a GM uses to create, rename and delete sessions. That channel is guarded
-by the admin secret, which is the whole of the "only a GM makes sessions" rule --
-a player has a join code, which opens one session and nothing else.
+channel GMs use to create, rename and delete sessions.
+
+Creating a session is open to anyone running the app. What a session belongs to
+is its gm token, handed back by the create and held by nobody else: renaming it,
+deleting it and taking the GM's seat in it all need that token, and there is no
+way to list other people's sessions at all. --admin-secret-file is the one
+exception, for whoever runs the box: it grants the full list and the right to
+delete anything, so abandoned or abusive sessions can be cleaned up.
 
 Without --hub a single session is hosted: the one named by --session, a new one
 from --new, or otherwise the most recently updated in the workspace. Either way
@@ -80,8 +85,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--admin-secret-file",
         metavar="PATH",
         default="",
-        help="file holding the secret that guards the control channel (required with --hub); "
-        "a file rather than an argument so it stays out of the process list",
+        help="file holding the OPERATOR secret - not needed to create a session, which is "
+        "open to anyone; it grants whoever runs the box the full session list and the "
+        "right to delete any of them. A file rather than an argument so it stays out of "
+        "the process list. Omit it and the server simply has no caretaker",
+    )
+    hub.add_argument(
+        "--retention-days",
+        type=int,
+        default=hub_mod.DEFAULT_RETENTION_DAYS,
+        metavar="DAYS",
+        help="delete a session nobody has touched in this long (0 disables the sweep); "
+        "a join, a roll or a rename all count as touching it",
     )
     hub.add_argument(
         "--control-id",
@@ -303,18 +318,20 @@ def run(argv: list[str] | None = None, *, stop: threading.Event | None = None) -
 
 
 def read_admin_secret(path: str) -> str:
-    """The control channel's secret, read from a file rather than an argument.
+    """The operator's secret, read from a file rather than an argument.
 
-    A command line is world-readable in ``ps``; a 0640 file is not.
+    A command line is world-readable in ``ps``; a 0640 file is not. Optional: no
+    path means no operator, which costs the box its caretaker but stops nobody
+    from hosting a game on it.
     """
     if not path:
-        raise hub_mod.HubError("--hub needs --admin-secret-file")
+        return ""
     try:
         secret = Path(path).read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise hub_mod.HubError(f"cannot read {path}: {exc}") from exc
     if not secret:
-        raise hub_mod.HubError(f"{path} is empty; nobody could create a session")
+        raise hub_mod.HubError(f"{path} is empty; delete the file or put a secret in it")
     return secret
 
 
@@ -328,9 +345,15 @@ def describe_hub(hub: hub_mod.SessionHub) -> str:
         lines.append(f'    Players   : {entry["player_count"]}, {entry["roll_count"]} roll(s)')
         lines.append("")
     if not catalog:
-        lines.append("  No sessions yet. A GM creates one from the app's GM Mode.")
+        lines.append("  No sessions yet. Any GM can make one from the app's GM Mode.")
         lines.append("")
-    lines.append(f"Control channel : {hub.control_id} (guarded by the admin secret)")
+    lines.append(f"Control channel : {hub.control_id} (open — anyone may create a session)")
+    lines.append(
+        "Operator        : "
+        + ("yes, a secret is configured" if hub.admin_secret else "none — nobody can clean up")
+    )
+    if hub.retention_days > 0:
+        lines.append(f"Sweep           : sessions untouched for {hub.retention_days} days")
     lines.append("Press Ctrl+C to stop.")
     return "\n".join(lines)
 
@@ -349,6 +372,7 @@ def _run_hub(args: argparse.Namespace, stop: threading.Event | None) -> int:
             mod_fingerprint=mods.stack_fingerprint(),
             max_sessions=args.max_sessions,
             idle_unload=args.idle_unload,
+            retention_days=args.retention_days,
             control_id=args.control_id,
         )
     except hub_mod.HubError as exc:

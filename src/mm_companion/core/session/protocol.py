@@ -37,7 +37,13 @@ from typing import ClassVar
 #: Bumped whenever the message vocabulary changes incompatibly. A client whose
 #: version differs from the server's is refused at the handshake with a readable
 #: message instead of failing obscurely later.
-PROTOCOL_VERSION = 4
+#:
+#: v5 added the GM over the wire: ``Hello.gm_token``, the snapshot forward, the
+#: kick/rename/cast commands, and the hub's control plane. The *fields* are all
+#: additive and would have decoded either way, which is exactly why this is
+#: bumped by hand — an old client would connect happily and then find its GM
+#: token ignored and its hidden rolls broadcast. Better refused at the door.
+PROTOCOL_VERSION = 5
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -55,6 +61,14 @@ ERROR_RATE_LIMIT = "rate_limit"
 #: A warning, not a refusal: the join succeeded but the two ends load different
 #: mods, so condition and effect ids may not line up.
 ERROR_MOD_SKEW = "mod_skew"
+#: The hub is already holding as many sessions as it is configured to.
+ERROR_HUB_FULL = "hub_full"
+#: The named session is not on this hub (deleted, or a stale entry in a GM's list).
+ERROR_UNKNOWN_SESSION = "unknown_session"
+#: A rename or delete without the session's gm token. Deliberately the same
+#: answer as :data:`ERROR_UNKNOWN_SESSION` would give in prose, so a stranger
+#: cannot use the difference to learn which session ids exist.
+ERROR_NOT_OWNER = "not_owner"
 
 
 class ProtocolError(Exception):
@@ -152,6 +166,11 @@ class Hello(Message):
     :class:`Welcome` to reclaim the same roster slot on a reconnect.
     ``mod_fingerprint`` lets the server warn about mod skew (a GM running content
     the player lacks means condition and effect ids do not match).
+
+    ``gm_token`` claims the GM's seat rather than a player's. Empty for everyone
+    at the table; a wrong one is refused outright rather than quietly seating the
+    claimant as a player, because a GM who joined without their powers would only
+    find out halfway through a fight.
     """
 
     TYPE: ClassVar[str] = "hello"
@@ -163,6 +182,7 @@ class Hello(Message):
     mod_fingerprint: str = ""
     player_id: str = ""
     player_token: str = ""
+    gm_token: str = ""
 
 
 @_register
@@ -223,6 +243,46 @@ class RemoveRollRequest(Message):
 
 @_register
 @dataclass(frozen=True)
+class KickRequest(Message):
+    """A GM request to remove a player from the session outright.
+
+    Unlike a disconnect this drops the slot, so the player does not reclaim their
+    seat with their old token. Honored only for the GM.
+    """
+
+    TYPE: ClassVar[str] = "kick_request"
+
+    player_id: str
+    reason: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class SetSessionName(Message):
+    """A GM request to rename the session. Honored only for the GM."""
+
+    TYPE: ClassVar[str] = "set_session_name"
+
+    name: str
+
+
+@_register
+@dataclass(frozen=True)
+class SetNpcPaths(Message):
+    """A GM request to store the session's NPC cast list. Honored only for the GM.
+
+    The paths are filenames under the GM's own workspace and mean nothing to
+    anyone else, which is exactly why they are only ever stored and handed back
+    to the GM — they are never broadcast.
+    """
+
+    TYPE: ClassVar[str] = "set_npc_paths"
+
+    paths: list[str] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
 class Ping(Message):
     """Keepalive; the server answers :class:`Pong` with the same ``nonce``."""
 
@@ -246,6 +306,11 @@ class Welcome(Message):
     :meth:`~.model.PlayerSlot.roster_dict`). ``history`` is the recent slice of
     the visible roll log (:data:`~.server.WELCOME_HISTORY_ROLLS`) — hidden GM
     rolls are omitted here as well as from every later broadcast.
+
+    ``is_gm`` tells the client which seat it got, and ``npc_paths`` is filled
+    **only for the GM** — empty for every player. The cast list names files in
+    the GM's own workspace; it is kept on the server so a GM picking the session
+    up from another machine still has it, and it means nothing to anyone else.
     """
 
     TYPE: ClassVar[str] = "welcome"
@@ -257,6 +322,8 @@ class Welcome(Message):
     protocol_version: int = PROTOCOL_VERSION
     roster: list[dict] = field(default_factory=list)
     history: list[dict] = field(default_factory=list)
+    is_gm: bool = False
+    npc_paths: list[str] = field(default_factory=list)
 
 
 @_register
@@ -267,6 +334,25 @@ class Roster(Message):
     TYPE: ClassVar[str] = "roster"
 
     players: list[dict] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
+class PlayerSnapshot(Message):
+    """One player's character, forwarded to a **remote GM only**.
+
+    The roster deliberately carries no characters — re-broadcasting the table's
+    combined sheets on every change would blow past
+    :data:`MAX_MESSAGE_BYTES`. A GM in the hosting process reads them straight off
+    :class:`~.model.SessionState`; a GM dialled in over a socket cannot, so their
+    connection alone is sent this. It goes to the GM seat and nowhere else: no
+    player needs another player's sheet.
+    """
+
+    TYPE: ClassVar[str] = "player_snapshot"
+
+    player_id: str
+    character: dict
 
 
 @_register
@@ -459,6 +545,150 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     if follow_up is not None:
         spec["follow_up"] = follow_up
     return spec
+
+
+# --------------------------------------------------------------------------
+# The hub control plane
+#
+# A second, much smaller conversation: not with a session, but with the box that
+# holds them all. Anyone running the app may open it and make a session — the
+# server is a public utility, not one GM's private property.
+#
+# What that costs is a rule about *ownership*, and it is the whole design here:
+#
+#   Creating is open. Everything else needs the session's gm token, which the
+#   create handed back and nobody else ever sees.
+#
+# So there is no way to enumerate other people's tables, and no way to rename or
+# delete one you did not make. A GM's own list of sessions lives in their app,
+# not on the server, because a server-side list is exactly the thing that would
+# leak everyone's join codes to whoever asked.
+#
+# The operator's secret is the one exception, for the person paying for the box:
+# it opens the full catalog so abandoned or abusive sessions can be cleaned up.
+# --------------------------------------------------------------------------
+
+
+@_register
+@dataclass(frozen=True)
+class ControlHello(Message):
+    """Open the control channel; answered with :class:`ControlWelcome`.
+
+    ``secret`` is **empty for everybody normally** — creating a session needs no
+    credential. It carries the server's operator secret only for whoever runs the
+    box, and a wrong one is refused rather than quietly downgraded, so an operator
+    never believes they have powers they do not.
+    """
+
+    TYPE: ClassVar[str] = "control_hello"
+
+    secret: str = ""
+    protocol_version: int = PROTOCOL_VERSION
+    app_version: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class ControlWelcome(Message):
+    """The channel is open. ``operator`` says whether the secret was accepted.
+
+    ``sessions`` is the full catalog for an operator and **empty for everyone
+    else** — an ordinary GM learns about their own sessions from the answers to
+    their own requests, never from a list of the server's.
+    """
+
+    TYPE: ClassVar[str] = "control_welcome"
+
+    operator: bool = False
+    sessions: list[dict] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
+class CreateSessionRequest(Message):
+    """Make a new session. Needs no credential — anyone may host a game."""
+
+    TYPE: ClassVar[str] = "create_session_request"
+
+    name: str
+
+
+@_register
+@dataclass(frozen=True)
+class DeleteSessionRequest(Message):
+    """Stop a session and erase it, roll history and all.
+
+    ``gm_token`` proves this is the session's own GM. An operator channel may
+    leave it empty; anyone else without it is refused.
+    """
+
+    TYPE: ClassVar[str] = "delete_session_request"
+
+    session_id: str
+    gm_token: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class RenameSessionRequest(Message):
+    """Rename a session. Same ownership rule as deleting it."""
+
+    TYPE: ClassVar[str] = "rename_session_request"
+
+    session_id: str
+    name: str
+    gm_token: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class SessionStatusRequest(Message):
+    """Ask after one session this GM already knows the token for.
+
+    How an app refreshes its own list: is the session still there, and who is in
+    it? Answered with a :class:`SessionInfo` whose ``session`` is empty when the
+    session is gone — which is also how a GM learns theirs was swept.
+    """
+
+    TYPE: ClassVar[str] = "session_status_request"
+
+    session_id: str
+    gm_token: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class ListSessionsRequest(Message):
+    """The whole catalog. **Operator only** — refused on an ordinary channel."""
+
+    TYPE: ClassVar[str] = "list_sessions_request"
+
+
+@_register
+@dataclass(frozen=True)
+class SessionInfo(Message):
+    """One session — the answer to create, rename, delete and status alike.
+
+    ``session`` carries ``id``, ``name``, ``join_code``, ``gm_token``,
+    ``player_count``, ``roll_count``, ``connected`` and ``updated_at``, and is
+    **empty** when the session no longer exists. The join code and the gm token
+    are the two things a GM cannot derive for themselves, and they are handed out
+    here and nowhere else.
+    """
+
+    TYPE: ClassVar[str] = "session_info"
+
+    session: dict = field(default_factory=dict)
+
+
+@_register
+@dataclass(frozen=True)
+class SessionCatalog(Message):
+    """Every session on the hub. Only ever sent to an operator."""
+
+    TYPE: ClassVar[str] = "session_catalog"
+
+    sessions: list[dict] = field(default_factory=list)
 
 
 def sanitize_snapshot(character: dict) -> dict:

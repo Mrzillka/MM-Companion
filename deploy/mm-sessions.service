@@ -1,0 +1,47 @@
+[Unit]
+Description=MM-Companion session hub (stores and hosts every session)
+Documentation=https://github.com/Mrzillka/MM_Companion/blob/main/docs/mm-session-architecture.md
+# Not Requires=: the hub retries its relay registration with backoff, so it
+# survives the relay restarting under it (which a cert renewal does).
+After=network-online.target mm-relay.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mm
+Group=mm
+WorkingDirectory=/home/mm/MM_Companion
+
+# Every session lives here: sessions/<id>/session.json + rolls.jsonl. This is the
+# thing to back up.
+Environment=MM_COMPANION_HOME=/var/lib/mm-companion
+
+# The hub reaches the relay over the loopback-facing public name so the join
+# codes it mints name the address players can actually reach. --admin-secret-file
+# holds the one credential that may create or delete a session.
+ExecStart=/home/mm/MM_Companion/.venv/bin/python -m mm_companion.server \
+    --hub \
+    --relay mmcompanion.duckdns.org:47332 \
+    --admin-secret-file /etc/mm-companion/admin.secret
+
+Restart=on-failure
+RestartSec=10s
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/mm-companion
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -109,10 +109,73 @@ sockets, not bandwidth (a table-hour is a few MB). **TLS terminates at the
 relay**, so its operator could in principle read the traffic (character sheets and
 dice rolls); anyone who minds should run their own — it is the one command above.
 
-## Path 3 — a headless always-on host
+## Path 3 — a session server (the one to pick if you have a box)
 
-If you would rather the table not depend on your laptop being open, run the
-session on an always-on machine (a home server, a cheap VPS):
+The other two paths make *your machine* reachable while you are hosting. This one
+takes your machine out of the question entirely: the sessions live on an
+always-on box, and the game runs whether or not you are at it.
+
+```
+player ──TLS──┐                  ┌── "Friday Game"
+              ├─► relay :47332 ──┤
+GM     ──TLS──┘                  └── "The Vault"
+```
+
+What it gets you:
+
+- **Players join whenever they like** — GM present or not. Someone can log in,
+  roll, and log out with nobody else at the table.
+- **Closing GM Mode leaves the game running**, rather than ending it.
+- **Nothing to forward, ever.** Both the box and every player dial *out* to the
+  relay, so CGNAT is a non-issue at both ends.
+
+### Using it
+
+The app ships pointing at a server already, so there is usually nothing to set
+up: **Open GM Mode**, press **New session**, name it, press **Open**. You are the
+GM of it.
+
+**No password, for anybody.** Creating a session needs no credential — the server
+is a public utility, and anyone who installs the app can run games on it.
+
+What keeps your table yours is the **gm token** the server hands back when you
+create the session. Your app keeps it, and it is what proves the session is
+yours: only it can rename the session, delete it, or take the GM's seat. Nobody
+can list other people's sessions at all, so there is nothing to browse and
+nothing to steal.
+
+> **Keep your app's settings.** The gm token is stored there and handed out
+> exactly once. Lose it and the session keeps running — you simply can no longer
+> GM it. (The server's operator can delete it for you.)
+
+Players need only the join code: **Session ▸ Copy join code**, send it, they
+paste it into **Join Session**. A join code makes somebody a *player*; it never
+makes them the GM.
+
+The port and tunnel questions disappear while you are connected, because a
+session reached by dialling out to a relay has no port to forward.
+
+### Pointing at a different server
+
+Replace the address in the **Session server** box. Clear it entirely and the
+dialog goes back to hosting on your own machine (Paths 1 and 2).
+
+### Running one for your group
+
+`deploy/README.md` in this repo is the runbook — a firewall, a Let's Encrypt
+certificate, and one `deploy.sh`. It prints an **operator secret** on first run.
+That is *not* needed to create sessions; it is for whoever looks after the box,
+and it grants the full session list and the right to delete any of them. Tick
+**Advanced — I run this server** in the dialog to use it.
+
+A public box also sweeps: a session nobody has touched in **30 days** is deleted
+(`--retention-days`). Joining, rolling or renaming all count as touching it, so a
+campaign that meets monthly is never at risk.
+
+### Hosting one session headless
+
+If you only want one table up around the clock and no catalog, the single-session
+mode is still there:
 
 ```bash
 # Create and host a new session:
@@ -134,10 +197,9 @@ restarting resumes the same roster and roll history. Point it at a workspace wit
 `MM_COMPANION_HOME` (share the app's, or give the server its own). Stop it with
 Ctrl-C (or SIGTERM), and it shuts the session down cleanly.
 
-> **Caveat:** a GM cannot yet *drive* a headless session remotely — hidden rolls
-> and GM-applied conditions need the in-process host. The box keeps the session
-> alive, resolves everyone's rolls, and syncs sheets; the GM joins it as a player
-> until remote-GM auth lands. See the deferred list in the architecture doc.
+A GM drives either kind of hosted session with its **gm token**, which `--hub`
+hands out through the control channel. In single-session mode read it out of the
+session's `session.json` — there is no catalog to ask.
 
 ## Troubleshooting
 
@@ -146,7 +208,12 @@ is the same guidance gathered in one place.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| **LAN only** (red) | The app could not make you reachable from the internet — commonly CGNAT or UPnP being off. | Use a tunnel (Path 1) or the relay (Path 2). Players on your own network / VPN can still join with the address shown. |
+| **LAN only** (red) | The app could not make you reachable from the internet — commonly CGNAT or UPnP being off. | Use a tunnel (Path 1), the relay (Path 2), or a session server (Path 3). Players on your own network / VPN can still join with the address shown. |
+| "could not reach *server*" when connecting to a session server | The box is down, the address is wrong, or its certificate has expired. | `systemctl status mm-relay mm-sessions` on the box; `openssl s_client -connect YOUR.DOMAIN:47332` checks the certificate. See `deploy/README.md`. |
+| "that is not this server's operator secret" | Only relevant if you run the box; the secret is wrong or was rotated. | Read it back with `cat /etc/mm-companion/admin.secret`. Untick **Advanced** if you are not the operator. |
+| "this server is holding its limit of N sessions" | The box is full. | Delete a session you no longer need, or point at another server. |
+| Your session vanished from the list | It was swept for going 30 days untouched, or deleted. | Make a new one. Sessions you use are never swept. |
+| GM Mode opened but the GM controls do nothing | The app was let in as a player — the gm token is missing or stale. | Reopen GM Mode and pick the session from the list again. If your settings were lost, the token is gone and the session can no longer be GM'd. |
 | "carrier-grade NAT" | Your ISP shares one public address; no port forward can help. | Tunnel or relay. Or ask your ISP for a public IP, or host on a machine that has one. |
 | "a second router in front of it" (double NAT) | There is another router upstream. | If it is yours, forward the port on it too. If it is the ISP's, use a tunnel or relay. |
 | "your router refused to forward the port" | UPnP was found but declined. | Forward the port by hand in the router admin page, or use a tunnel. |

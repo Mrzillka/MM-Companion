@@ -32,8 +32,10 @@ from .protocol import (
     ErrorMessage,
     Hello,
     Kicked,
+    KickRequest,
     Message,
     Ping,
+    PlayerSnapshot,
     Pong,
     ProtocolError,
     RemoveCondition,
@@ -43,6 +45,8 @@ from .protocol import (
     RollRequest,
     Roster,
     SetHeroPoints,
+    SetNpcPaths,
+    SetSessionName,
     Welcome,
     sanitize_snapshot,
 )
@@ -53,6 +57,9 @@ EVENT_DISCONNECTED = "disconnected"  # {"reason"}
 EVENT_ROSTER = "roster"  # {"players": [public slot dicts]}
 EVENT_ROLL = "roll"  # one roll dict
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
+# Reaches a GM client only. Named to match the hosting side's EVENT_SNAPSHOT so
+# the Qt bridge can raise one signal from either half.
+EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
 EVENT_APPLY_CONDITION = "apply_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_REMOVE_CONDITION = "remove_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_SET_HERO_POINTS = "set_hero_points"  # {"player_id", "value"}
@@ -91,6 +98,7 @@ class SessionClient:
         display_name: str,
         player_id: str = "",
         player_token: str = "",
+        gm_token: str = "",
         transport: Transport | None = None,
         on_event: Callable[[str, dict], None] | None = None,
         app_version: str = __version__,
@@ -102,6 +110,7 @@ class SessionClient:
         self.display_name = display_name
         self.player_id = player_id
         self.player_token = player_token
+        self.gm_token = gm_token
         self.app_version = app_version
         self.mod_fingerprint = mod_fingerprint
 
@@ -109,6 +118,10 @@ class SessionClient:
         self.session_name = ""
         self.roster: list[dict] = []
         self.history: list[dict] = []
+        #: Filled from the Welcome. ``is_gm`` says whether the gm token was
+        #: accepted; ``npc_paths`` arrives only for the GM.
+        self.is_gm = False
+        self.npc_paths: list[str] = []
 
         self._transport = transport or TcpTransport()
         self._on_event = on_event
@@ -148,6 +161,7 @@ class SessionClient:
                     mod_fingerprint=self.mod_fingerprint,
                     player_id=self.player_id,
                     player_token=self.player_token,
+                    gm_token=self.gm_token,
                 )
             )
             message = connection.receive()
@@ -168,6 +182,8 @@ class SessionClient:
         self.player_token = message.player_token or self.player_token
         self.roster = list(message.roster)
         self.history = list(message.history)
+        self.is_gm = bool(message.is_gm)
+        self.npc_paths = list(message.npc_paths)
 
         connection.set_timeout(IO_TIMEOUT)
         self._connection = connection
@@ -248,6 +264,40 @@ class SessionClient:
         """Keepalive; the answer arrives as :data:`EVENT_PONG`."""
         return self.send(Ping(nonce=nonce))
 
+    # -- GM commands -------------------------------------------------------
+    #
+    # Each of these is honored by the server only for the seat that presented the
+    # session's gm token; from a player they are ignored. They are *requests*, so
+    # a True return means the bytes left, not that the server agreed.
+
+    def apply_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
+        """Put a condition on one player's live sheet."""
+        return self.send(
+            ApplyCondition(player_id=player_id, condition_id=condition_id, parameter=parameter)
+        )
+
+    def remove_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
+        """Take a condition back off one player's live sheet."""
+        return self.send(
+            RemoveCondition(player_id=player_id, condition_id=condition_id, parameter=parameter)
+        )
+
+    def set_hero_points(self, player_id: str, value: int) -> bool:
+        """Set one player's hero-point total on their live sheet."""
+        return self.send(SetHeroPoints(player_id=player_id, value=int(value)))
+
+    def request_kick(self, player_id: str, reason: str = "") -> bool:
+        """Remove a player from the session, dropping their slot."""
+        return self.send(KickRequest(player_id=player_id, reason=reason))
+
+    def set_session_name(self, name: str) -> bool:
+        """Rename the session; the new name reaches everyone on the next roster."""
+        return self.send(SetSessionName(name=name))
+
+    def set_npc_paths(self, paths: list[str]) -> bool:
+        """Store the NPC cast list on the server so it follows the session."""
+        return self.send(SetNpcPaths(paths=list(paths)))
+
     # -- reading -----------------------------------------------------------
 
     def _read_loop(self) -> None:
@@ -290,6 +340,11 @@ class SessionClient:
         elif isinstance(message, RollRemoved):
             self.history = [r for r in self.history if r.get("seq") != message.seq]
             self._emit(EVENT_ROLL_REMOVED, {"seq": message.seq})
+        elif isinstance(message, PlayerSnapshot):
+            self._emit(
+                EVENT_SNAPSHOT,
+                {"player_id": message.player_id, "character": dict(message.character)},
+            )
         elif isinstance(message, ApplyCondition):
             self._emit(EVENT_APPLY_CONDITION, message.to_dict())
         elif isinstance(message, RemoveCondition):

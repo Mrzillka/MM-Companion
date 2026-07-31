@@ -61,7 +61,7 @@ from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import apply_condition, decrement_condition
 from mm_companion.core.session import discovery, store
-from mm_companion.core.session.model import SessionState, new_session
+from mm_companion.core.session.model import PlayerSlot, SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
@@ -155,6 +155,9 @@ class GMWindow(QMainWindow):
         # card is fed from whichever lands.
         self._cards: dict[str, PlayerCard] = {}
         self._snapshots: dict[str, dict] = {}
+        #: The server this session lives on, for the status line; empty when this
+        #: app is hosting the session itself.
+        self._server_label = ""
         # Read-only sheets opened from a card, kept referenced while open.
         self._player_windows: dict[str, QMainWindow] = {}
         # NPC sheets opened from this window, keyed by the file they came from
@@ -449,6 +452,10 @@ class GMWindow(QMainWindow):
         self._bridge.playerJoined.connect(self._on_player_joined)
         self._bridge.refused.connect(self._on_refused)
         self._bridge.error.connect(self._on_error)
+        # The other way of being in a session: dialled in to one hosted on a
+        # server rather than hosting it here.
+        self._bridge.connected.connect(self._on_joined)
+        self._bridge.disconnected.connect(self._on_left)
 
     # -- hosting -----------------------------------------------------------
 
@@ -456,6 +463,94 @@ class GMWindow(QMainWindow):
     def bridge(self) -> SessionBridge:
         """The session this window drives — the seam later phases attach to."""
         return self._bridge
+
+    def connect_to_server(self, entry: dict, server_label: str = "") -> bool:
+        """Take the GM's seat on a session hosted elsewhere.
+
+        *entry* is one row of the hub's catalog: it carries the join code and the
+        session's gm token, which are the two things this app cannot work out for
+        itself. Returns whether the connection was made; the caller reports why
+        not, since it owns the dialog the GM is standing in.
+        """
+        try:
+            code = discovery.decode_join_code(entry.get("join_code", ""))
+        except discovery.JoinCodeError as exc:
+            self._show_notice(str(exc), theme.color("tint.worse"))
+            return False
+        # Both are set before the join, not after: connecting raises `connected`
+        # synchronously, and _on_joined writes the status line that names them.
+        self._server_label = server_label
+        # The catalog handed us the code; the GM should not have to go back and
+        # ask the server for the one thing they need to invite anyone.
+        self._join_code = str(entry.get("join_code", ""))
+        try:
+            self._bridge.join(
+                code,
+                display_name="GM",
+                gm_token=str(entry.get("gm_token", "")),
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure is one message
+            self._server_label = ""
+            self._join_code = ""
+            self._show_notice(f"Could not reach the session: {exc}", theme.color("tint.worse"))
+            return False
+        self._copy_code_action.setEnabled(bool(self._join_code))
+        return True
+
+    def _on_joined(self, welcome: dict) -> None:
+        """Seed the window from the Welcome of a session hosted elsewhere.
+
+        The GM window is written against a SessionState, and a session on a server
+        is not ours to own — so what we keep is a **mirror**, filled from the wire
+        and never saved to disk. Every read in this window goes on working; only
+        the writes were rerouted through the bridge, which knows whose session it
+        is.
+        """
+        if not self._bridge.is_gm:
+            # Refused the GM seat but let in as a player: possible only if the
+            # token went stale between listing the catalog and connecting. Say so
+            # rather than presenting a console whose buttons all quietly fail.
+            self._show_notice(
+                "This app is connected as a player, not the GM — its GM controls will "
+                "not work. Reopen GM Mode to pick the session up again.",
+                theme.color("tint.worse"),
+            )
+        self._state.id = str(welcome.get("session_id", "")) or self._state.id
+        self._state.name = str(welcome.get("session_name", "")) or self._state.name
+        self._state.npc_paths = [str(p) for p in welcome.get("npc_paths", [])]
+        self._mirror_roster(welcome.get("roster", []))
+        where = f" on {self._server_label}" if self._server_label else ""
+        self._set_status(f"Connected to “{self._state.name}”{where}", theme.color("accent"))
+        self._clear_advice()
+        self._show_advice(
+            (
+                "Players join with this session's join code, whether or not you are here.",
+                "Closing this window leaves the table running.",
+            )
+        )
+        self.setWindowTitle(f"GM Mode — {self._state.name}")
+        self._refresh_rolls()
+        self._refresh_npcs()
+        self._refresh_idle_status()
+
+    def _on_left(self, reason: str) -> None:
+        self._set_status(f"Disconnected ({reason})", theme.color("tint.worse"))
+
+    def _mirror_roster(self, roster: list) -> None:
+        """Rebuild the mirrored roster from a wire roster, keeping snapshots.
+
+        Roster entries carry no character (they never do — the table's combined
+        sheets would not fit in one message), so the snapshots this window has
+        collected separately are preserved rather than blanked.
+        """
+        players: dict[str, PlayerSlot] = {}
+        for entry in roster:
+            if not isinstance(entry, dict):
+                continue
+            slot = PlayerSlot.from_dict(entry)
+            slot.character = self._snapshots.get(slot.player_id, {})
+            players[slot.player_id] = slot
+        self._state.players = players
 
     def start_hosting(self, options: HostOptions) -> None:
         """Begin hosting with *options* (from the launch dialog) and publish.
@@ -544,7 +639,13 @@ class GMWindow(QMainWindow):
         self._bridge.publish()
 
     def stop_hosting(self) -> None:
-        """Stop hosting, clear the join code and cards, and return to the idle state."""
+        """Leave the session, clear the join code and cards, and go back to idle.
+
+        Symmetrical for both ways of being in one: this app's own server is shut
+        down, while a session hosted on a server is only *disconnected from* — it
+        goes on running with its players in it, which is the point of putting it
+        there.
+        """
         self._relay_attempted = False
         self._bridge.stop()
         self._join_code = ""
@@ -556,11 +657,12 @@ class GMWindow(QMainWindow):
     def _refresh_rolls(self) -> None:
         """Point the history at the live session, or at the one on disk.
 
-        While hosting it follows the server. Between sessions there is nothing to
-        follow, but the state loaded from the workspace still carries the log —
-        so reopening GM Mode shows last night's rolls rather than a blank panel.
+        In a session it follows the bridge, whether this app is hosting or dialled
+        in to a session on a server. Between sessions there is nothing to follow,
+        but the state loaded from the workspace still carries the log — so
+        reopening GM Mode shows last night's rolls rather than a blank panel.
         """
-        if self._bridge.hosting:
+        if self._bridge.hosting or self._bridge.joined:
             self._history.attach(self._bridge)
             return
         self._history.detach()
@@ -596,12 +698,12 @@ class GMWindow(QMainWindow):
     def _on_local_roll_removed(self, seq: int) -> None:
         """Persist a roll the GM struck while not hosting.
 
-        A live session removes on the server (and this never fires). Off the air the
-        panel shows the resumed session's persisted log, so drop the roll from the
-        state and save it too; a pre-hosting offline roll is not in the state, so
-        this is a no-op for those.
+        A live session removes it wherever the session lives (and this never
+        fires). Off the air the panel shows the resumed session's persisted log,
+        so drop the roll from the state and save it too; a pre-hosting offline
+        roll is not in the state, so this is a no-op for those.
         """
-        if self._bridge.hosting:
+        if self._bridge.hosting or self._bridge.joined:
             return
         if self._state.remove_roll(seq) is not None:
             try:
@@ -616,8 +718,7 @@ class GMWindow(QMainWindow):
     def _rename_session(self) -> None:
         name = (self._state.name or "").strip() or "Session"
         self._state.name = name
-        if self._bridge.hosting and self._bridge.server is not None:
-            self._bridge.server.set_session_name(name)
+        self._bridge.set_session_name(name)
         self.setWindowTitle(f"GM Mode — {name}")
 
     # -- bridge signals ----------------------------------------------------
@@ -818,9 +919,8 @@ class GMWindow(QMainWindow):
         connection, their app writes the value, and the card's pips move only once
         the snapshot comes back — so a command that did not land stays visible.
         """
-        server = self._bridge.server
         who = self._player_name(player_id)
-        if server is None or not server.set_hero_points(player_id, value):
+        if not self._bridge.set_hero_points(player_id, value):
             self._show_notice(
                 f"{who} is not connected, so their hero points were not changed.",
                 theme.color("tint.worse"),
@@ -837,15 +937,11 @@ class GMWindow(QMainWindow):
         would. The chips on this card only move once the snapshot comes back, so
         a command that quietly failed is visible rather than assumed.
         """
-        server = self._bridge.server
         subject = str(parameter) if parameter else None
         name = self._condition_name(condition_id, subject)
         who = self._player_name(player_id)
-        sent = False
-        if server is not None:
-            send = server.apply_condition if action == "apply" else server.remove_condition
-            sent = send(player_id, condition_id, subject)
-        if not sent:
+        send = self._bridge.apply_condition if action == "apply" else self._bridge.remove_condition
+        if not send(player_id, condition_id, subject):
             self._show_notice(
                 f"{who} is not connected, so “{name}” was not sent.", theme.color("tint.worse")
             )
@@ -914,16 +1010,14 @@ class GMWindow(QMainWindow):
     def _set_npc_paths(self, paths: list[str]) -> None:
         """Record the session's cast, persisting it wherever the session lives now.
 
-        While hosting, the state belongs to the server's lock — writing it from
-        here would race its own saves — so the change goes through the server. Off
-        the air the window owns the state and writes it itself; either way the
-        cast survives a restart.
+        In a live session the state belongs to whoever is hosting — this app's own
+        server lock, or a box across the internet — so the change goes through the
+        bridge, which knows which. Off the air the window owns the state and writes
+        it itself; either way the cast survives a restart.
         """
-        server = self._bridge.server
-        if server is not None:
-            server.set_npc_paths(paths)
-            return
         self._state.npc_paths = list(paths)
+        if self._bridge.set_npc_paths(paths):
+            return
         self._state.touch()
         try:
             store.save_session(self._state)
@@ -1212,7 +1306,14 @@ class GMWindow(QMainWindow):
     # -- small view helpers ------------------------------------------------
 
     def _refresh_idle_status(self) -> None:
-        """What the status line says while nothing is being hosted."""
+        """What the status line says while nothing is being hosted.
+
+        A session on a server is not idle just because this app is not hosting it,
+        so leave the connected status where it is rather than overwriting it with
+        "Not hosting" — which would be true and wholly misleading.
+        """
+        if self._bridge.joined:
+            return
         rolls = len(self._state.rolls)
         seats = sum(1 for slot in self._state.players.values() if not slot.is_gm)
         if rolls or seats:
@@ -1266,11 +1367,13 @@ class GMWindow(QMainWindow):
         super().showEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
-        """Stop hosting and give the router its port back before going away.
+        """Leave the session and give the router its port back before going away.
 
         The window itself survives (the launcher keeps it, and reopening GM Mode
         shows this one again) so the session it was working on — its name, its
-        roster, its rolls — is still here rather than replaced by a blank one.
+        roster, its rolls — is still here rather than replaced by a blank one. A
+        session hosted on a server survives rather more thoroughly: closing this
+        window disconnects the GM and leaves the table playing.
         """
         for window in self._player_windows.values():
             window.close()

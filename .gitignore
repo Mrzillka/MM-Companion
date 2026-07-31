@@ -33,6 +33,11 @@ poetry.lock
 .DS_Store
 Thumbs.db
 
+# How to reach the production server: addresses, key paths, secrets. The
+# secret-free deployment assets under deploy/ ARE tracked — this is only the
+# operator's private address book.
+SERVER.md
+
 # run-mm-companion skill driver screenshots
 _driver_shots/
 

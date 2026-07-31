@@ -477,6 +477,12 @@ class GMWindow(QMainWindow):
         except discovery.JoinCodeError as exc:
             self._show_notice(str(exc), theme.color("tint.worse"))
             return False
+        # Both are set before the join, not after: connecting raises `connected`
+        # synchronously, and _on_joined writes the status line that names them.
+        self._server_label = server_label
+        # The catalog handed us the code; the GM should not have to go back and
+        # ask the server for the one thing they need to invite anyone.
+        self._join_code = str(entry.get("join_code", ""))
         try:
             self._bridge.join(
                 code,
@@ -484,9 +490,11 @@ class GMWindow(QMainWindow):
                 gm_token=str(entry.get("gm_token", "")),
             )
         except Exception as exc:  # noqa: BLE001 - every failure is one message
+            self._server_label = ""
+            self._join_code = ""
             self._show_notice(f"Could not reach the session: {exc}", theme.color("tint.worse"))
             return False
-        self._server_label = server_label
+        self._copy_code_action.setEnabled(bool(self._join_code))
         return True
 
     def _on_joined(self, welcome: dict) -> None:
@@ -1298,7 +1306,14 @@ class GMWindow(QMainWindow):
     # -- small view helpers ------------------------------------------------
 
     def _refresh_idle_status(self) -> None:
-        """What the status line says while nothing is being hosted."""
+        """What the status line says while nothing is being hosted.
+
+        A session on a server is not idle just because this app is not hosting it,
+        so leave the connected status where it is rather than overwriting it with
+        "Not hosting" — which would be true and wholly misleading.
+        """
+        if self._bridge.joined:
+            return
         rolls = len(self._state.rolls)
         seats = sum(1 for slot in self._state.players.values() if not slot.is_gm)
         if rolls or seats:

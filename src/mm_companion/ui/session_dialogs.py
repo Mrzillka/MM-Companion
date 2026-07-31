@@ -661,21 +661,19 @@ class GMSessionLaunchDialog(QDialog):
         server = self._server_field.text().strip()
         secret = self._secret_field.text().strip()
         if not server or not secret:
-            self._set_server_status(
-                "Enter the server's address and admin secret.", theme.color("tint.worse")
-            )
+            self._set_server_status("Enter the server's address and admin secret.", "tint.worse")
             return
         self._disconnect_from_server()
         client = HubClient(server, secret)
         try:
             catalog = client.connect()
         except HubClientError as exc:
-            self._set_server_status(str(exc), theme.color("tint.worse"))
+            self._set_server_status(str(exc), "tint.worse")
             return
         self._client = client
         self._catalog = catalog
         storage.update_settings(session_server_url=server, session_admin_secret=secret)
-        self._set_server_status(f"Connected to {server}.", theme.color("accent"))
+        self._set_server_status(f"Connected to {server}.", "accent")
         self._sync_mode()
         self._reload()
 
@@ -685,9 +683,10 @@ class GMSessionLaunchDialog(QDialog):
         if client is not None:
             client.close()
 
-    def _set_server_status(self, text: str, color: str = "") -> None:
+    def _set_server_status(self, text: str, token: str = "") -> None:
+        """Say how the server is doing. *token* is a theme token name, not a colour."""
         self._server_status.setText(text)
-        self._server_status.setStyleSheet(tinted_style(color) if color else muted_style())
+        self._server_status.setStyleSheet(tinted_style(token) if token else muted_style())
 
     @property
     def _on_server(self) -> bool:
@@ -853,7 +852,7 @@ class GMSessionLaunchDialog(QDialog):
         try:
             self._catalog = action(client)
         except HubClientError as exc:
-            self._set_server_status(str(exc), theme.color("tint.worse"))
+            self._set_server_status(str(exc), "tint.worse")
             return
         self._reload()
 
@@ -863,7 +862,7 @@ class GMSessionLaunchDialog(QDialog):
             entry = self._selected_entry()
             if entry is None:
                 self._set_server_status(
-                    "Pick a session, or make one with New session.", theme.color("tint.worse")
+                    "Pick a session, or make one with New session.", "tint.worse"
                 )
                 return
             self._chosen_entry = entry

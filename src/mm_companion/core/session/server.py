@@ -129,6 +129,7 @@ class SessionServer:
         transport: Transport | None = None,
         workspace: storage.Workspace | None = None,
         on_event: Callable[[str, dict], None] | None = None,
+        on_activate: Callable[[], None] | None = None,
         max_clients: int = DEFAULT_MAX_CLIENTS,
         mod_fingerprint: str = "",
         gm_name: str = "GM",
@@ -145,6 +146,10 @@ class SessionServer:
         self._transport = transport or TcpTransport()
         self._workspace = workspace
         self._on_event = on_event
+        # Called on each arriving connection before its handshake. The seam a
+        # supervisor uses to bring a session it had let go idle back into memory;
+        # ``None`` for an ordinary server, which is always fully loaded.
+        self._on_activate = on_activate
         self._persist_enabled = persist
         self._rng = rng
         self._gm_name = gm_name
@@ -446,6 +451,15 @@ class SessionServer:
         """One connection's whole life: handshake, then read until it ends."""
         slot: PlayerSlot | None = None
         try:
+            if self._on_activate is not None:
+                # Before the handshake, because the Welcome carries the roll
+                # history: a supervisor that shed an idle session's history has
+                # to put it back before anyone is told what it is.
+                try:
+                    self._on_activate()
+                except Exception as exc:  # noqa: BLE001 - a supervisor bug must
+                    # not take the session down with it, exactly as with _emit.
+                    self._emit(EVENT_ERROR, {"code": "activate", "message": str(exc)})
             slot = self._handshake(connection)
             if slot is None:
                 return

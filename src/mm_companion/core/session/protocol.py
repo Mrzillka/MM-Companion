@@ -55,6 +55,10 @@ ERROR_RATE_LIMIT = "rate_limit"
 #: A warning, not a refusal: the join succeeded but the two ends load different
 #: mods, so condition and effect ids may not line up.
 ERROR_MOD_SKEW = "mod_skew"
+#: The hub is already holding as many sessions as it is configured to.
+ERROR_HUB_FULL = "hub_full"
+#: The named session is not on this hub (deleted, or a stale entry in a GM's list).
+ERROR_UNKNOWN_SESSION = "unknown_session"
 
 
 class ProtocolError(Exception):
@@ -531,6 +535,92 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     if follow_up is not None:
         spec["follow_up"] = follow_up
     return spec
+
+
+# --------------------------------------------------------------------------
+# The hub control plane
+#
+# A second, much smaller conversation: not with a session, but with the box that
+# holds them all. It answers one question a session cannot — "which sessions are
+# there, and make me a new one" — and it is the reason only a GM can create a
+# session, because it is gated on a secret that lives on the server and is given
+# to the GM alone. A player never speaks this vocabulary; they have a join code,
+# which names one session and opens nothing else.
+# --------------------------------------------------------------------------
+
+
+@_register
+@dataclass(frozen=True)
+class AdminHello(Message):
+    """Open the control channel. Answered with a :class:`SessionCatalog`.
+
+    ``secret`` is the hub's admin secret, not any one session's token.
+    """
+
+    TYPE: ClassVar[str] = "admin_hello"
+
+    secret: str
+    protocol_version: int = PROTOCOL_VERSION
+    app_version: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class CreateSessionRequest(Message):
+    """Ask the hub to create and start hosting a new session."""
+
+    TYPE: ClassVar[str] = "create_session_request"
+
+    name: str
+
+
+@_register
+@dataclass(frozen=True)
+class DeleteSessionRequest(Message):
+    """Ask the hub to stop a session and erase it, roll history and all."""
+
+    TYPE: ClassVar[str] = "delete_session_request"
+
+    session_id: str
+
+
+@_register
+@dataclass(frozen=True)
+class RenameSessionRequest(Message):
+    """Ask the hub to rename a session."""
+
+    TYPE: ClassVar[str] = "rename_session_request"
+
+    session_id: str
+    name: str
+
+
+@_register
+@dataclass(frozen=True)
+class ListSessionsRequest(Message):
+    """Ask for the catalog again, without changing anything."""
+
+    TYPE: ClassVar[str] = "list_sessions_request"
+
+
+@_register
+@dataclass(frozen=True)
+class SessionCatalog(Message):
+    """Every session on the hub — the answer to *every* control request.
+
+    Returning the whole catalog after a create, a rename and a delete alike costs
+    a few hundred bytes and removes a whole class of bug: there is no partial
+    update to apply, so a GM's list cannot drift out of step with the server's.
+
+    Each entry carries ``id``, ``name``, ``join_code``, ``gm_token``,
+    ``player_count``, ``roll_count``, ``connected`` and ``updated_at``. The join
+    code and the gm token are the two things a GM cannot derive for themselves,
+    and this channel is the only place either is handed out.
+    """
+
+    TYPE: ClassVar[str] = "session_catalog"
+
+    sessions: list[dict] = field(default_factory=list)
 
 
 def sanitize_snapshot(character: dict) -> dict:

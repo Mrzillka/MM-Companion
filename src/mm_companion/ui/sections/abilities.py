@@ -51,6 +51,10 @@ class AbilitiesSection(TitledSection):
     #: signal: rolling changes nothing and must never mark the sheet dirty.
     rollRequested = Signal(object)
 
+    #: A row was clicked once — show this ability in the roller's chip, ready to roll.
+    #: The same spec and the same non-build promise; only the die stays still.
+    loadRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -71,6 +75,7 @@ class AbilitiesSection(TitledSection):
             data.costs.trait_range("ability"),
             roll_spec=self._roll_spec,
             roll_sink=self.rollRequested.emit,
+            load_sink=self.loadRequested.emit,
         )
         layout.addWidget(self.table)
         layout.addStretch()  # top-aligned, so it lines up with Resistances beside it

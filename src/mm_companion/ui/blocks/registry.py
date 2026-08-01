@@ -33,6 +33,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
+    LOAD_REQUESTED,
     NOTE_REQUESTED,
     ROLL_REQUESTED,
 )
@@ -104,6 +105,12 @@ def default_pin_lines() -> list[list[str]]:
 # and a sixth requester is a one-word addition.
 _ROLLS = {"rollRequested": (ROLL_REQUESTED,)}
 
+# A *stat readout* also loads on a single click, so the sliders and the DC can be
+# set before anything is thrown. A power card's roll line does not: it is an
+# explicit "roll this" affordance rather than a number being read off the sheet, so
+# one click there throws the die and it keeps the plain table above.
+_ROLLS_AND_LOADS = {**_ROLLS, "loadRequested": (LOAD_REQUESTED,)}
+
 # One row per base block: (key, dock title, factory, default_row, default_col,
 # publishes, subscribes, requests, serves). Listed in construction order; the
 # row/col fields drive the default layout (see default_rows). Sizes are read from
@@ -127,7 +134,7 @@ _BASE_BLOCKS = [
         },
         {DERIVED_CHANGED: "refresh_derived"},
         # the Initiative readout, plus the note a hero-point change writes
-        {**_ROLLS, "noteRequested": (NOTE_REQUESTED,)},
+        {**_ROLLS_AND_LOADS, "noteRequested": (NOTE_REQUESTED,)},
         {},
     ),
     (
@@ -152,7 +159,7 @@ _BASE_BLOCKS = [
             "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {ENHANCEMENTS_CHANGED: "refresh_enhancements", COST_RATES_CHANGED: "refresh_cost"},
-        _ROLLS,
+        _ROLLS_AND_LOADS,
         {},
     ),
     (
@@ -167,7 +174,7 @@ _BASE_BLOCKS = [
             ENHANCEMENTS_CHANGED: "refresh_enhancements",
             COST_RATES_CHANGED: "refresh_cost",
         },
-        _ROLLS,
+        _ROLLS_AND_LOADS,
         {},
     ),
     (
@@ -229,7 +236,7 @@ _BASE_BLOCKS = [
             ENHANCEMENTS_CHANGED: "refresh_totals",
             COST_RATES_CHANGED: "refresh_totals",
         },
-        _ROLLS,
+        _ROLLS_AND_LOADS,
         {},
     ),
     (
@@ -261,7 +268,11 @@ _BASE_BLOCKS = [
         {},
         {},
         {},
-        {ROLL_REQUESTED: "perform_roll", NOTE_REQUESTED: "post_note"},
+        {
+            ROLL_REQUESTED: "perform_roll",
+            LOAD_REQUESTED: "load_roll",
+            NOTE_REQUESTED: "post_note",
+        },
     ),
 ]
 

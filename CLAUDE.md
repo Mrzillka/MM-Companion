@@ -348,10 +348,18 @@ clean (see Licensing below).
 
 ## Rolling from the sheet (matters when touching the roller or a stat block)
 
-Any stat line on the sheet can be rolled: **double-click** an ability, resistance,
-skill or the Initiative readout; press the **🎲** beside a line of a power card's
-dice footer. The same rule as everywhere applies — *the widget never computes the
-number*.
+Any stat line on the sheet can be rolled: **click** an ability, resistance, skill or
+the Initiative readout to load it into the roller's chip, **double-click** to throw
+it; click a line of a power card's dice footer to roll it outright. The same rule as
+everywhere applies — *the widget never computes the number*.
+
+One click loading rather than rolling is what makes the sliders and the DC box
+usable: you name the trait, then set the situational extras, then throw. A
+double-click necessarily fires the single click first, and that is left alone rather
+than deferred by the double-click interval — rolling loads the same spec anyway, so
+the pair is load → (load + roll) on one spec, and deferring would make a plain click
+feel a beat late. A power card's roll line is the deliberate exception: it is an
+explicit "roll this" affordance rather than a number being read off the sheet.
 
 - `core/rules/rolls.py` is the layer that answers "what does rolling X look like":
   a frozen `RollSpec` (`label`, `modifier`, `dc`, `kind`, `hint`, `follow_up`,
@@ -375,16 +383,19 @@ number*.
   from the argless notification channel so a handler on one is never fed the
   other's arguments. A `BlockDescriptor` declares `requests` (this block asks) and
   `serves` (this block answers) alongside `publishes`/`subscribes`; five sections
-  emit `rollRequested(object)` and `DiceSection.perform_roll` answers. No block
+  emit `rollRequested(object)` answered by `DiceSection.perform_roll`, and the four
+  stat blocks also emit `loadRequested(object)` on the sibling `load-requested`
+  topic, answered by `DiceSection.load_roll`. No block
   names another, and a mod block joins on the same terms. `CharacterSheet` also
   serves the topic itself, to **reopen** a closed roller (named by what it serves,
   not by its key) rather than roll where nobody can see it.
-- The channel carries a second topic, `note-requested` (a `str`): the sentence for a
-  hero point spent or gained, answered by `DiceSection.post_note`. It is listed in
-  `bus.QUIET_REQUESTS`, the one thing that sets it apart from a roll — a note is a
-  **side effect** of an edit the user was making elsewhere on the sheet, so reopening
-  a closed Dice block for one would be the app grabbing the screen unasked. The note
-  reaches the session either way.
+- The channel carries a third topic, `note-requested` (a `str`): the sentence for a
+  hero point spent or gained, answered by `DiceSection.post_note`. It is the *only*
+  entry in `bus.QUIET_REQUESTS`, which is the one thing that sets it apart from the
+  two roll topics — a note is a **side effect** of an edit the user was making
+  elsewhere on the sheet, so reopening a closed Dice block for one would be the app
+  grabbing the screen unasked. The note reaches the session either way. `load-requested`
+  is deliberately *not* quiet: someone who clicked a stat line asked to see it loaded.
 - `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. The
   loaded trait is **sticky**: it shows as a chip above the sliders and survives the
   roll, so the sliders can be nudged and the die thrown again. The sliders always

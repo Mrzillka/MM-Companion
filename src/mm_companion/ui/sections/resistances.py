@@ -52,6 +52,9 @@ class ResistancesSection(TitledSection):
     #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
     rollRequested = Signal(object)
 
+    #: A row was clicked once — show this check in the roller's chip, ready to roll.
+    loadRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -71,6 +74,7 @@ class ResistancesSection(TitledSection):
             data.costs.trait_range("resistance"),
             roll_spec=self._roll_spec,
             roll_sink=self.rollRequested.emit,
+            load_sink=self.loadRequested.emit,
         )
         layout.addWidget(self.table)
         # Abilities and Resistances are one fixed size, sized to the taller of the

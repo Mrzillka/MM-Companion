@@ -28,6 +28,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.condition_dialog import ConditionParameterDialog
 from mm_companion.ui.sections.conditions import ConditionsSection
+from mm_companion.ui.sections.stat_table import CONDITION_TINT
 
 
 def _ids(char: Character) -> list[str]:
@@ -453,7 +454,7 @@ def test_scoped_impaired_reddens_skill_total_disabled_strikes(qapp2: QApplicatio
     assert stealth().total_item.font().strikeOut() is True
 
 
-def test_hit_on_toughness_shows_a_red_effective_label(qapp2: QApplication) -> None:
+def test_hit_on_toughness_shows_a_red_effective_total(qapp2: QApplication) -> None:
     data = load_game_data()
     sheet = CharacterSheet(data)
     char = sheet.character
@@ -461,9 +462,14 @@ def test_hit_on_toughness_shows_a_red_effective_label(qapp2: QApplication) -> No
     apply_condition(char, "hit", data)
     apply_condition(char, "hit", data)
     sheet.resistances.refresh_enhancements()
-    label = sheet.resistances._resistance_enh["TOUGHNESS"]
-    assert label.text() == "→ 1"  # 3 - 2
-    assert not label.isHidden()
+    total = sheet.resistances._resistance_enh["TOUGHNESS"]
+    assert total.text() == "→ 1"  # 3 - 2
+    assert total.foreground().color().name() == theme.color(CONDITION_TINT)
+
+    # And it goes back to a blank cell once the condition is gone.
+    char.conditions.clear()
+    sheet.resistances.refresh_enhancements()
+    assert total.text() == ""
 
 
 def test_hit_chip_remove_button_decrements(qapp2: QApplication) -> None:

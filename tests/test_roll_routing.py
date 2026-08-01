@@ -22,6 +22,7 @@ from mm_companion.core.rules import RollSpec, ability_roll
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.sections.stat_table import COL_NAME, COL_TOTAL, ROLL_ROLE
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 
@@ -131,23 +132,57 @@ def test_a_closed_dice_block_is_reopened_rather_than_rolling_unseen(qapp: QAppli
 # -- the double-click itself --------------------------------------------------
 
 
+def _stat_row(table, key: str) -> int:
+    """The row of *table* whose Total cell carries *key* as its roll payload."""
+    return next(
+        row
+        for row in range(table.rowCount())
+        if (table.item(row, COL_TOTAL) or None)
+        and table.item(row, COL_TOTAL).data(ROLL_ROLE) == key
+    )
+
+
 def test_double_clicking_an_ability_row_rolls_it(qapp: QApplication) -> None:
     sheet = _sheet()
     seen: list[RollSpec] = []
     sheet.abilities.rollRequested.connect(seen.append)
 
-    # The label beside the spin box, which is a row handle whether locked or not.
-    label = next(lb for lb in sheet.abilities.findChildren(QLabel) if lb.text() == "Strength:")
-    _double_click(label)
+    table = sheet.abilities.table
+    table.cellDoubleClicked.emit(_stat_row(table, "STR"), COL_NAME)
 
     assert [s.label for s in seen] == ["Strength"]
 
 
-def test_a_spin_box_only_rolls_while_the_sheet_is_locked(qapp: QApplication) -> None:
+def test_double_clicking_a_resistance_row_rolls_it(qapp: QApplication) -> None:
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.resistances.rollRequested.connect(seen.append)
+
+    table = sheet.resistances.table
+    table.cellDoubleClicked.emit(_stat_row(table, "TOUGHNESS"), COL_NAME)
+
+    assert [s.kind for s in seen] == ["resistance"]
+
+
+def test_the_derived_separator_row_is_not_rollable(qapp: QApplication) -> None:
+    """It is a rule drawn across the table, not a trait — a double-click there is nothing."""
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.abilities.rollRequested.connect(seen.append)
+
+    table = sheet.abilities.table
+    separator = next(row for row in range(table.rowCount()) if table.item(row, COL_TOTAL) is None)
+    table.cellDoubleClicked.emit(separator, COL_NAME)
+
+    assert seen == []
+
+
+def test_the_rank_spin_box_keeps_its_own_double_click(qapp: QApplication) -> None:
     """Unlocked, a double-click in a spin box selects the number for retyping.
 
-    Stealing that would make editing hostile, so the spin box is the one part of
-    the row that defers to the lock.
+    Stealing that would make editing hostile. In a table the spin box is a cell
+    widget, so it consumes the double-click itself and the table never hears it —
+    which is the same bargain the Skills block has always struck.
     """
     sheet = _sheet()
     seen: list[RollSpec] = []
@@ -156,11 +191,8 @@ def test_a_spin_box_only_rolls_while_the_sheet_is_locked(qapp: QApplication) -> 
 
     sheet.set_locked(False)
     _double_click(spin.lineEdit())
-    assert seen == []
 
-    sheet.set_locked(True)
-    _double_click(spin.lineEdit())
-    assert [s.label for s in seen] == ["Strength"]
+    assert seen == []
 
 
 def test_double_clicking_a_skill_row_rolls_that_row(qapp: QApplication) -> None:

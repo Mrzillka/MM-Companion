@@ -758,7 +758,6 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
     window._save_power()
 
     enh = sheet.abilities._ability_enh["STR"]
-    assert enh.isVisibleTo(sheet.abilities)
     assert enh.text() == "→ 5"  # 2 bought + 3 boost
     assert "Mighty" in enh.toolTip()
 
@@ -780,10 +779,10 @@ def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) ->
     sheet = CharacterSheet(data, character)
 
     tough = sheet.resistances._resistance_enh["TOUGHNESS"]
-    assert tough.isVisibleTo(sheet.resistances)  # Protection boost shown on load
+    assert tough.text() == "→ 5"  # Protection boost shown on load
 
     sheet.powers._remove_power(character.powers[0])
-    assert not tough.isVisibleTo(sheet.resistances)  # boost cleared when the power goes
+    assert tough.text() == ""  # boost cleared when the power goes
 
 
 # -- edit-in-place ------------------------------------------------------------

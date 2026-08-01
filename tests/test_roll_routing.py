@@ -22,6 +22,8 @@ from mm_companion.core.rules import RollSpec, ability_roll
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.sections.powers import _RollLine
+from mm_companion.ui.sections.stat_table import COL_NAME, COL_TOTAL, ROLL_ROLE
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 
@@ -72,11 +74,11 @@ def _sheet() -> CharacterSheet:
     return CharacterSheet(data, _hero(data))
 
 
-def _double_click(widget) -> None:
-    """A real left double-click at the widget's centre."""
+def _mouse(widget, kind: QMouseEvent.Type) -> None:
+    """Send *kind* as a real left-button event at the widget's centre."""
     point = QPointF(widget.width() / 2, widget.height() / 2)
     event = QMouseEvent(
-        QMouseEvent.Type.MouseButtonDblClick,
+        kind,
         point,
         widget.mapToGlobal(point),
         Qt.MouseButton.LeftButton,
@@ -84,6 +86,22 @@ def _double_click(widget) -> None:
         Qt.KeyboardModifier.NoModifier,
     )
     QApplication.sendEvent(widget, event)
+
+
+def _double_click(widget) -> None:
+    """A real left double-click at the widget's centre."""
+    _mouse(widget, QMouseEvent.Type.MouseButtonDblClick)
+
+
+def _click(widget) -> None:
+    """A real left press-and-release at the widget's centre."""
+    _mouse(widget, QMouseEvent.Type.MouseButtonPress)
+    _mouse(widget, QMouseEvent.Type.MouseButtonRelease)
+
+
+def _release(widget) -> None:
+    """The release that ends a plain left click — what the load path watches for."""
+    _mouse(widget, QMouseEvent.Type.MouseButtonRelease)
 
 
 # -- routing -----------------------------------------------------------------
@@ -128,7 +146,119 @@ def test_a_closed_dice_block_is_reopened_rather_than_rolling_unseen(qapp: QAppli
     assert sheet.dice.panel.current_spec().label == "Strength"
 
 
+# -- one click loads, two roll -----------------------------------------------
+
+
+def test_a_load_request_shows_the_spec_without_throwing_the_die(qapp: QApplication) -> None:
+    sheet = _sheet()
+    panel = sheet.dice.panel
+
+    sheet.abilities.loadRequested.emit(RollSpec(label="Strength", modifier=4))
+
+    assert panel.current_spec().label == "Strength"
+    # The chip is there, but nothing was rolled — the readout still says nothing.
+    assert "Strength" not in panel._readout.text()
+
+
+def test_a_closed_dice_block_is_reopened_for_a_load_too(qapp: QApplication) -> None:
+    """Loading into a hidden block would read as the app ignoring the click.
+
+    Which is exactly what revealing the server exists to prevent, so `load-requested`
+    is deliberately not one of the quiet topics.
+    """
+    sheet = _sheet()
+    sheet.hide_block("dice")
+
+    sheet.abilities.loadRequested.emit(RollSpec(label="Strength", modifier=4))
+
+    assert not sheet.is_block_hidden("dice")
+
+
+def test_clicking_a_stat_row_loads_it_and_double_clicking_rolls_it(qapp: QApplication) -> None:
+    sheet = _sheet()
+    panel = sheet.dice.panel
+    table = sheet.abilities.table
+    row = _stat_row(table, "STR")
+
+    table.cellClicked.emit(row, COL_NAME)
+    assert panel.current_spec().label == "Strength"
+    assert "Strength" not in panel._readout.text()  # loaded, not rolled
+
+    # A real double-click fires the single first; that is harmless, since rolling
+    # loads the same spec anyway.
+    table.cellClicked.emit(row, COL_NAME)
+    table.cellDoubleClicked.emit(row, COL_NAME)
+    assert "Strength" in panel._readout.text()
+
+
+def test_clicking_a_skill_row_loads_it(qapp: QApplication) -> None:
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.skills.loadRequested.connect(seen.append)
+
+    table = sheet.skills._tables[0]
+    row = next(
+        r
+        for r in range(table.rowCount())
+        if (table.item(r, 5) or None) and table.item(r, 5).data(ROLL_ROLE)
+    )
+    table.cellClicked.emit(row, 5)
+
+    assert len(seen) == 1
+    assert seen[0].kind == "skill"
+
+
+def test_clicking_the_separator_row_loads_nothing(qapp: QApplication) -> None:
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.abilities.loadRequested.connect(seen.append)
+
+    table = sheet.abilities.table
+    separator = next(row for row in range(table.rowCount()) if table.item(row, COL_TOTAL) is None)
+    table.cellClicked.emit(separator, COL_NAME)
+
+    assert seen == []
+
+
+def test_clicking_initiative_loads_it_and_double_clicking_rolls_it(qapp: QApplication) -> None:
+    """The one rollable readout that is not in a table, so it goes through roll_click."""
+    sheet = _sheet()
+    loaded: list[RollSpec] = []
+    rolled: list[RollSpec] = []
+    sheet.system_info.loadRequested.connect(loaded.append)
+    sheet.system_info.rollRequested.connect(rolled.append)
+
+    _release(sheet.system_info._initiative)
+    assert [s.label for s in loaded] == ["Initiative"]
+    assert rolled == []
+
+    _double_click(sheet.system_info._initiative)
+    assert [s.label for s in rolled] == ["Initiative"]
+
+
+def test_loading_a_trait_is_not_an_edit(qapp: QApplication) -> None:
+    """Same promise rolling makes: reading a number off the sheet changes nothing."""
+    sheet = _sheet()
+    dirty: list[int] = []
+    sheet.edited.connect(lambda: dirty.append(1))
+
+    table = sheet.abilities.table
+    table.cellClicked.emit(_stat_row(table, "STR"), COL_NAME)
+
+    assert dirty == []
+
+
 # -- the double-click itself --------------------------------------------------
+
+
+def _stat_row(table, key: str) -> int:
+    """The row of *table* whose Total cell carries *key* as its roll payload."""
+    return next(
+        row
+        for row in range(table.rowCount())
+        if (table.item(row, COL_TOTAL) or None)
+        and table.item(row, COL_TOTAL).data(ROLL_ROLE) == key
+    )
 
 
 def test_double_clicking_an_ability_row_rolls_it(qapp: QApplication) -> None:
@@ -136,18 +266,42 @@ def test_double_clicking_an_ability_row_rolls_it(qapp: QApplication) -> None:
     seen: list[RollSpec] = []
     sheet.abilities.rollRequested.connect(seen.append)
 
-    # The label beside the spin box, which is a row handle whether locked or not.
-    label = next(lb for lb in sheet.abilities.findChildren(QLabel) if lb.text() == "Strength:")
-    _double_click(label)
+    table = sheet.abilities.table
+    table.cellDoubleClicked.emit(_stat_row(table, "STR"), COL_NAME)
 
     assert [s.label for s in seen] == ["Strength"]
 
 
-def test_a_spin_box_only_rolls_while_the_sheet_is_locked(qapp: QApplication) -> None:
+def test_double_clicking_a_resistance_row_rolls_it(qapp: QApplication) -> None:
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.resistances.rollRequested.connect(seen.append)
+
+    table = sheet.resistances.table
+    table.cellDoubleClicked.emit(_stat_row(table, "TOUGHNESS"), COL_NAME)
+
+    assert [s.kind for s in seen] == ["resistance"]
+
+
+def test_the_derived_separator_row_is_not_rollable(qapp: QApplication) -> None:
+    """It is a rule drawn across the table, not a trait — a double-click there is nothing."""
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.abilities.rollRequested.connect(seen.append)
+
+    table = sheet.abilities.table
+    separator = next(row for row in range(table.rowCount()) if table.item(row, COL_TOTAL) is None)
+    table.cellDoubleClicked.emit(separator, COL_NAME)
+
+    assert seen == []
+
+
+def test_the_rank_spin_box_keeps_its_own_double_click(qapp: QApplication) -> None:
     """Unlocked, a double-click in a spin box selects the number for retyping.
 
-    Stealing that would make editing hostile, so the spin box is the one part of
-    the row that defers to the lock.
+    Stealing that would make editing hostile. In a table the spin box is a cell
+    widget, so it consumes the double-click itself and the table never hears it —
+    which is the same bargain the Skills block has always struck.
     """
     sheet = _sheet()
     seen: list[RollSpec] = []
@@ -156,11 +310,8 @@ def test_a_spin_box_only_rolls_while_the_sheet_is_locked(qapp: QApplication) -> 
 
     sheet.set_locked(False)
     _double_click(spin.lineEdit())
-    assert seen == []
 
-    sheet.set_locked(True)
-    _double_click(spin.lineEdit())
-    assert [s.label for s in seen] == ["Strength"]
+    assert seen == []
 
 
 def test_double_clicking_a_skill_row_rolls_that_row(qapp: QApplication) -> None:
@@ -190,35 +341,43 @@ def test_double_clicking_initiative_rolls_it(qapp: QApplication) -> None:
     assert [s.label for s in seen] == ["Initiative"]
 
 
-def test_a_power_card_rolls_from_a_button_so_the_click_never_toggles_it(
+def _roll_lines(sheet: CharacterSheet) -> list[_RollLine]:
+    return sheet.powers.findChildren(_RollLine)
+
+
+def test_a_power_card_rolls_from_the_whole_line_and_never_toggles_it(
     qapp: QApplication,
 ) -> None:
     """The card body is the power's on/off switch, so a roll must not reach it.
 
-    A QPushButton consumes its own press — the same mechanism the ✎/✕/grip already
-    rely on — which is why the dice affordance is a button and not a clickable label.
+    The line consumes its own press — the same mechanism the ✎/✕/grip rely on, and
+    the reason it is a frame that accepts the event rather than a clickable label,
+    which would let the press through to the card.
     """
     data = load_game_data()
     char = _hero(data)
     char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=8)]))
     sheet = CharacterSheet(data, char)
+    power = char.powers[0]
+    power.activated = True
 
     seen: list[RollSpec] = []
     sheet.powers.rollRequested.connect(seen.append)
     dirty: list[int] = []
     sheet.edited.connect(lambda: dirty.append(1))
 
-    # Only the attack: the wielder never rolls their own target's save, so that line
-    # is written down without a button (it arrives as the follow-up chip instead).
-    buttons = [b for b in sheet.powers.findChildren(QPushButton) if b.text() == "🎲"]
-    assert len(buttons) == 1
-    buttons[0].click()
+    # Only the attack is rollable here: the wielder never rolls their own target's
+    # save, so that line is written down inert (it arrives as the follow-up chip).
+    rollable = [line for line in _roll_lines(sheet) if line.is_rollable()]
+    assert len(rollable) == 1
+    _click(rollable[0])
 
     assert seen[0].modifier == 7
     assert dirty == []  # a roll is not an edit
+    assert power.activated is True  # and it did not flip the switch underneath
 
 
-def test_the_resistance_line_is_written_down_but_not_buttoned(qapp: QApplication) -> None:
+def test_the_resistance_line_is_written_down_but_stays_inert(qapp: QApplication) -> None:
     data = load_game_data()
     char = _hero(data)
     char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=8)]))
@@ -226,6 +385,11 @@ def test_the_resistance_line_is_written_down_but_not_buttoned(qapp: QApplication
 
     texts = [lb.text() for lb in sheet.powers.findChildren(QLabel)]
     assert any(t.startswith("Toughness vs. ") for t in texts)
+
+    inert = [line for line in _roll_lines(sheet) if not line.is_rollable()]
+    assert len(inert) == 1
+    # Its press bubbles, so the card under it keeps working as the power's switch.
+    assert inert[0].cursor().shape() is Qt.CursorShape.ArrowCursor
 
 
 # -- the sliders, the DC, and the wire ---------------------------------------

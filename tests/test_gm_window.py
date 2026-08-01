@@ -34,6 +34,7 @@ from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
 from mm_companion.ui.gm_window import GMWindow
 from mm_companion.ui.npc_card import NPCCard
+from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions
@@ -1055,6 +1056,38 @@ def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWind
 
     assert window._state.npc_paths == ["bank-robber.json"]
     assert npc_names(window) == ["Bank Robber"]
+
+
+def test_the_quick_wizard_saves_a_playable_npc_and_opens_it(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Five numbers, and the creature is in the cast before anything else is filled in."""
+    entered = QuickNPC(name="Bandit", attack=6, effect=5, defence=7, toughness=4, image_path=None)
+    monkeypatch.setattr(QuickNPCDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(QuickNPCDialog, "value", lambda self: entered)
+
+    window._quick_npc()
+    qapp.processEvents()
+
+    # Saved and in the cast straight away — no trip through an unsaved sheet.
+    assert window._state.npc_paths == ["bandit.json"]
+    assert npc_names(window) == ["Bandit"]
+
+    # And it opened in the ordinary NPC sheet, carrying its two powers.
+    (sheet,) = window._npc_windows.values()
+    assert isinstance(sheet, NPCWindow)
+    assert [power.name for power in sheet.sheet.character.powers] == ["Damage", "Affliction"]
+
+
+def test_cancelling_the_quick_wizard_creates_nothing(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(QuickNPCDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+
+    window._quick_npc()
+
+    assert window._state.npc_paths == []
+    assert window._npc_windows == {}
 
 
 def test_an_npc_sheet_is_the_simplified_one(window: GMWindow) -> None:

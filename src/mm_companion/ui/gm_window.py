@@ -41,6 +41,7 @@ from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QRect, 
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
@@ -59,6 +60,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
+from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import apply_condition, decrement_condition
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import PlayerSlot, SessionState, new_session
@@ -70,6 +72,7 @@ from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
+from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pinned_panel import PinnedBoard
 from mm_companion.ui.player_card import PlayerCard
@@ -367,13 +370,18 @@ class GMWindow(QMainWindow):
 
         An NPC is an ordinary character saved in the workspace ``gm_characters/``
         dir, so the GM's bestiary outlives any one session; what belongs to *this*
-        session is which of them are in it (``SessionState.npc_paths``). Hence two
-        buttons: write a new one, or bring an existing one in.
+        session is which of them are in it (``SessionState.npc_paths``). Hence three
+        buttons: write a new one from a blank sheet, throw one together from five
+        numbers, or bring an existing one in.
         """
         box = QGroupBox("NPCs")
         layout = QVBoxLayout(box)
 
         buttons = QHBoxLayout()
+        quick = QPushButton("Quick NPC…")
+        quick.setToolTip("A mook from five numbers — name, attack, effect, defence, toughness.")
+        quick.clicked.connect(self._quick_npc)
+        buttons.addWidget(quick)
         create = QPushButton("Create NPC")
         create.clicked.connect(self._create_npc)
         buttons.addWidget(create)
@@ -1150,6 +1158,31 @@ class GMWindow(QMainWindow):
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""
         self._track_npc_window(NPCWindow(locked=False))
+
+    def _quick_npc(self) -> None:
+        """Build a mook from five numbers, then open it like any other NPC.
+
+        Saved immediately rather than handed to an unsaved sheet: the wizard has
+        already collected everything the roster needs, so the creature can be in the
+        cast — and rollable against — before the GM decides whether to fill anything
+        else in. The sheet that opens afterwards is the ordinary one.
+        """
+        dialog = QuickNPCDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        entered = dialog.value()
+        npc = quick_npc(
+            load_game_data(),
+            name=entered.name,
+            attack=entered.attack,
+            effect=entered.effect,
+            defence=entered.defence,
+            toughness=entered.toughness,
+            image_path=entered.image_path,
+        )
+        path = library.save_character(npc, directory=self._npc_dir())
+        self._register_npc(path)
+        self._track_npc_window(NPCWindow(character=npc, path=path, locked=False))
 
     def _add_existing_npc(self) -> None:
         """Bring an NPC written for another session into this one."""

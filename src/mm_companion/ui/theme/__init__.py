@@ -204,11 +204,17 @@ def apply(app: QApplication) -> None:
 
     palette = palette_module.build_palette(theme)
     if palette is not None:
+        _remember_os_palette(app)
         app.setPalette(palette)
     elif _palette_installed:
-        # Switching back to a system preset: hand the OS palette back, or the
-        # previous preset's colours would linger with nothing left to state them.
-        app.setPalette(app.style().standardPalette())
+        # Switching back to a system preset: hand back the palette the app actually
+        # had, or the previous preset's colours would linger with nothing left to
+        # state them. It has to be the *remembered* one, not
+        # ``style().standardPalette()``, which fabricates a fresh light palette on
+        # Windows however the OS is set — leaving the window light while the native
+        # style went on painting its buttons for dark mode, which is how a message
+        # box ended up with unreadable "Discard"/"Cancel" text after a theme change.
+        app.setPalette(_os_palette if _os_palette is not None else app.style().standardPalette())
     _remember_palette(palette is not None)
 
     family = font_family()
@@ -224,10 +230,24 @@ def apply(app: QApplication) -> None:
 # system preset knows it has one to undo.
 _palette_installed = False
 
+# The palette the app was wearing before we ever replaced it — the OS one, and the
+# only faithful thing to hand back when a system preset is chosen again. Captured
+# once, on the first install, because after that ``app.palette()`` is ours.
+_os_palette = None
+
 
 def _remember_palette(installed: bool) -> None:
     global _palette_installed
     _palette_installed = installed
+
+
+def _remember_os_palette(app: QApplication) -> None:
+    """Keep a copy of the OS palette, the first time we are about to replace it."""
+    from PySide6.QtGui import QPalette
+
+    global _os_palette
+    if _os_palette is None and not _palette_installed:
+        _os_palette = QPalette(app.palette())
 
 
 def _lookup(group: str, name: str) -> object:

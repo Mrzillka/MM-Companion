@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QResizeEvent
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -56,9 +56,12 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
-from mm_companion.ui.sections.stat_grid import (
+from mm_companion.ui.sections.stat_table import (
     CONDITION_TINT,
     ENHANCED_TINT,
+    ROLL_ROLE,
+    fit_table_height,
+    tint_item,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -67,10 +70,6 @@ from mm_companion.ui.widgets import make_spin_box, readonly_item
 RANK_MIN, RANK_MAX = 0, 20
 COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
-#: Item role carrying ``(row_id, display)`` on a rollable row's Total cell — what a
-#: double-click on that row rolls. A row without it (a focused skill's group header)
-#: is not rollable.
-ROLL_ROLE = Qt.ItemDataRole.UserRole
 # Rough widths used to decide how many panels fit without clipping a name. The
 # numeric columns are near-fixed; the name column needs room for the widest
 # skill/focus/specialization label. Kept lean so a second column appears before a
@@ -129,6 +128,9 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
     rollRequested = Signal(object)
 
+    #: A row was clicked once — show that skill in the roller's chip, ready to roll.
+    loadRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -183,16 +185,22 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # Connected once per table, which outlives the frequent _rebuild: the tables
         # themselves are reused, only their items are rebuilt.
         table.cellDoubleClicked.connect(
-            lambda row, _col, t=table: self._on_cell_double_clicked(t, row)
+            lambda row, _col, t=table: self._emit_row_spec(t, row, self.rollRequested)
+        )
+        # A single click loads the skill into the roller's chip without throwing the
+        # die. It fires first on a double-click too, which is harmless: rolling loads
+        # the same spec anyway. See build_stat_table for the same bargain.
+        table.cellClicked.connect(
+            lambda row, _col, t=table: self._emit_row_spec(t, row, self.loadRequested)
         )
         guard_wheel(table)
         return table
 
-    def _on_cell_double_clicked(self, table: QTableWidget, row: int) -> None:
-        """Roll the skill on this table row, if it is one that rolls.
+    def _emit_row_spec(self, table: QTableWidget, row: int, signal: Signal) -> None:
+        """Send this row's roll to *signal*, if the row is one that rolls.
 
         Every column but Rank arrives here — that one is a spin box cell widget,
-        which eats the double-click itself (and unlocked would want it for editing
+        which eats the clicks itself (and unlocked would want them for editing
         anyway).
         """
         item = table.item(row, COL_TOTAL)
@@ -200,17 +208,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         if not payload:
             return
         row_id, display = payload
-        self.rollRequested.emit(skill_roll(self._character, self._data, row_id, label=display))
+        signal.emit(skill_roll(self._character, self._data, row_id, label=display))
 
-    @staticmethod
-    def _fit_table_height(table: QTableWidget) -> None:
-        """Fix the table's height to exactly show every row, so it never scrolls
-        internally and grows as focuses are added."""
-
-        height = table.horizontalHeader().height() + 2 * table.frameWidth()
-        for row in range(table.rowCount()):
-            height += table.rowHeight(row)
-        table.setFixedHeight(height)
+    #: Fix the table's height to exactly show every row, so it never scrolls
+    #: internally and grows as focuses are added. Shared with the stat tables.
+    _fit_table_height = staticmethod(fit_table_height)
 
     # -- data-driven rebuild -------------------------------------------------
 
@@ -569,12 +571,10 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         is blank, so a shown column still has empty cells.
         """
 
-        font = mod_item.font()
         if not mod.has_flat_modifier:
             mod_item.setText("")
             mod_item.setToolTip("")
-            font.setStrikeOut(False)
-            mod_item.setFont(font)
+            tint_item(mod_item, None)
             return
 
         penalised = mod.condition.active
@@ -587,11 +587,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             tips.append(mod.condition.tooltip)
         mod_item.setToolTip("\n".join(tips))
 
-        mod_item.setForeground(
-            QBrush(QColor(theme.color(CONDITION_TINT if penalised else ENHANCED_TINT)))
+        tint_item(
+            mod_item,
+            CONDITION_TINT if penalised else ENHANCED_TINT,
+            struck=mod.condition.trait_lost,
         )
-        font.setStrikeOut(mod.condition.trait_lost)
-        mod_item.setFont(font)
 
     @staticmethod
     def _style_condition(total_item, name_item, effect, base_total: int) -> None:
@@ -599,15 +599,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
 
         struck = effect.active and effect.trait_lost
         for item in (total_item, name_item):
-            if item is None:
-                continue
-            font = item.font()
-            font.setStrikeOut(struck)
-            item.setFont(font)
-            if effect.active:
-                item.setForeground(QBrush(QColor(theme.color(CONDITION_TINT))))
-            else:
-                item.setData(Qt.ItemDataRole.ForegroundRole, None)
+            tint_item(item, CONDITION_TINT if effect.active else None, struck=struck)
         if effect.active:
             total_item.setToolTip(f"{base_total} {effect.tooltip}")
         else:

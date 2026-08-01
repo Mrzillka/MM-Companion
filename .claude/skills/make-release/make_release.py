@@ -66,7 +66,17 @@ def find_repo_root(start: Path) -> Path:
 
 
 def run(cmd: list[str], cwd: Path, *, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=str(cwd), check=check, text=True, capture_output=True)
+    # Decode as UTF-8 explicitly: notes carry emoji and dashes, and the platform
+    # default (cp1251 on this machine) chokes on them when git prints the file.
+    return subprocess.run(
+        cmd,
+        cwd=str(cwd),
+        check=check,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
 
 
 def git(root: Path, *args: str, check: bool = True) -> str:

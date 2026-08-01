@@ -1,0 +1,51 @@
+{
+  "_comment": "Suggested names for the Quick NPC wizard, offered one at a time so the GM never has to stop and invent one. Presentation only — a placeholder in a text box the GM overwrites at will — which is why this is UI config under ui/ rather than game content under data/: nothing here is derived from the SRD and nothing in the rules layer reads it. Grouped only for readability; the wizard draws from all of them.",
+  "names": {
+    "rabble": [
+      "Bandit",
+      "Thug",
+      "Mook",
+      "Looter",
+      "Street Tough",
+      "Pickpocket",
+      "Smuggler",
+      "Saboteur",
+      "Cultist",
+      "Hired Gun"
+    ],
+    "professionals": [
+      "Enforcer",
+      "Mercenary",
+      "Bodyguard",
+      "Sniper",
+      "Assassin",
+      "Bounty Hunter",
+      "Riot Officer",
+      "Security Drone",
+      "Guard Captain",
+      "Field Agent"
+    ],
+    "leaders": [
+      "Boss",
+      "Ringleader",
+      "Crime Lord",
+      "Warlord",
+      "Lieutenant",
+      "Mastermind",
+      "High Priest",
+      "Overseer"
+    ],
+    "strange": [
+      "Brute",
+      "Hulking Brute",
+      "Creeper",
+      "Swarm",
+      "Automaton",
+      "Sentinel",
+      "Revenant",
+      "Aberration",
+      "Beast",
+      "Elemental"
+    ]
+  }
+}

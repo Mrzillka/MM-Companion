@@ -1,4 +1,4 @@
-"""The resistances block: spin boxes for the derived resistance defenses.
+"""The resistances block: a table of the derived resistance defenses.
 
 Resistances are *derived* from a base trait (Toughness and Fortitude from Stamina,
 Will from Awareness, Dodge from the Defense combat trait): a resistance's spin box
@@ -10,15 +10,15 @@ changes, an unmodified resistance follows it (:meth:`ResistancesSection.refresh_
 re-seeds the spin boxes) while a bought difference is preserved. The sheet calls
 :meth:`follow_ability_change` when an ability moves.
 
-A resistance a power raises (Protection) shows its enhanced total in green beside
-the base spin box; :meth:`refresh_enhancements` recomputes those labels and the
-sheet calls it whenever a power changes.
+A resistance a power raises (Protection) shows its enhanced total in green in the
+Total column; :meth:`refresh_enhancements` recomputes that column and the sheet
+calls it whenever a power changes.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, Signal
-from PySide6.QtWidgets import QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QSpinBox, QTableWidgetItem, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
@@ -31,9 +31,9 @@ from mm_companion.core.rules import (
     resistance_roll,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_grid import (
+from mm_companion.ui.sections.stat_table import (
     apply_stat_effects,
-    build_stat_group,
+    build_stat_table,
     set_stat_value,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -52,6 +52,9 @@ class ResistancesSection(TitledSection):
     #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
     rollRequested = Signal(object)
 
+    #: A row was clicked once — show this check in the roller's chip, ready to roll.
+    loadRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -59,10 +62,10 @@ class ResistancesSection(TitledSection):
         self._character = character
         self._locked = False
         self._resistances: dict[str, QSpinBox] = {}
-        self._resistance_enh: dict[str, QLabel] = {}
+        self._resistance_enh: dict[str, QTableWidgetItem] = {}
 
         layout = QVBoxLayout(self)
-        grid = build_stat_group(
+        self.table = build_stat_table(
             data.resistances,
             self._resistances,
             self._resistance_enh,
@@ -71,12 +74,17 @@ class ResistancesSection(TitledSection):
             data.costs.trait_range("resistance"),
             roll_spec=self._roll_spec,
             roll_sink=self.rollRequested.emit,
-            is_locked=lambda: self._locked,
+            load_sink=self.loadRequested.emit,
         )
-        layout.addWidget(grid)
+        layout.addWidget(self.table)
+        # Abilities and Resistances are one fixed size, sized to the taller of the
+        # two, so the shorter one has room left over; give it to the bottom rather
+        # than let the layout centre the table and leave the two blocks' headers on
+        # different lines.
+        layout.addStretch()
 
         # The spin boxes hold the *total* (base + bought), so display the base on
-        # top of the stored delta now that the grid exists.
+        # top of the stored delta now that the table exists.
         self.refresh_bases()
         self.refresh_enhancements()
         self.refresh_cost()
@@ -108,7 +116,7 @@ class ResistancesSection(TitledSection):
         The model stores only the bought delta, so the displayed total is
         :func:`~mm_companion.core.rules.resistance_base` plus that delta. Signals are
         blocked while re-seeding so following the base doesn't count as a fresh edit,
-        and :func:`~mm_companion.ui.sections.stat_grid.set_stat_value` stretches the
+        and :func:`~mm_companion.ui.sections.stat_table.set_stat_value` stretches the
         spin box rather than let a total past its ceiling clamp — a clamped display
         would make the next edit recompute the delta from the wrong number.
         """
@@ -123,7 +131,7 @@ class ResistancesSection(TitledSection):
             del blocker
 
     def refresh_enhancements(self) -> None:
-        """Recompute each resistance's "→ total" from power boosts and conditions.
+        """Recompute each resistance's Total cell from power boosts and conditions.
 
         Conditions overlay Hit's penalty on Toughness and Vulnerable/Defenseless
         halving/zeroing on the active defenses (Dodge, Defence).

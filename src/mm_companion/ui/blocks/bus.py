@@ -55,6 +55,9 @@ Request topic           Payload / server
 ======================  ====================================================
 ``roll-requested``      a :class:`~mm_companion.core.rules.RollSpec`; the Dice
                         block rolls it
+``load-requested``      the same, but the Dice block only *shows* it in its
+                        chip — what a single click on a stat line asks for,
+                        leaving the die to a double-click
 ``note-requested``      a sentence (``str``); the Dice block writes it in the
                         history — the table's shared one, or the private one
                         off the air
@@ -85,12 +88,18 @@ EDITED = "edited"
 
 # Request topics (the payload channel — see the module docstring).
 ROLL_REQUESTED = "roll-requested"
+LOAD_REQUESTED = "load-requested"
 NOTE_REQUESTED = "note-requested"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
 #: closed Dice block for one would be the app grabbing the screen unasked; the
 #: note still reaches the session either way.
+#:
+#: ``load-requested`` is deliberately **not** here, even though it is the quieter of
+#: the two roll topics: someone who clicks a stat line has asked to see it loaded, so
+#: loading it into a closed block is exactly the "the app ignored my click" failure
+#: revealing the server exists to prevent.
 QUIET_REQUESTS = frozenset({NOTE_REQUESTED})
 
 Handler = Callable[[], None]

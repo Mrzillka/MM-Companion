@@ -93,8 +93,12 @@ class RelayLimits:
     rate_bytes: int = 256 * 1024
     #: Burst allowed above the sustained rate.
     burst_bytes: int = 1024 * 1024
-    #: A connection with no traffic for this long is dropped. The app's control
-    #: link pings well inside it.
+    #: A connection with no traffic for this long is dropped, and its paired half
+    #: with it. "Traffic" means bytes actually read off the socket, so only a peer
+    #: that keeps *sending* survives an idle stretch: the GM's control link pings
+    #: every 30 s and is safe, while a session data stream sends nothing at all
+    #: while a table talks. Until the client keepalive lands, a deployment facing
+    #: quiet tables has to raise this (see ``deploy/mm-relay.service``).
     idle_timeout: float = 120.0
     #: A session is closed at this age however busy it is.
     session_ttl: float = 12 * 3600.0

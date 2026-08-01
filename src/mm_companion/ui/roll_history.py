@@ -480,14 +480,27 @@ class RollHistoryPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self._empty = QLabel(EMPTY_TEXT)
-        self._empty.setWordWrap(True)
-        self._empty.setEnabled(False)
-        layout.addWidget(self._empty)
-
         self._container = QWidget()
         self._layout = QVBoxLayout(self._container)
         self._layout.addStretch()
+
+        # The empty state belongs *inside* the list, not above it. Above it, this
+        # word-wrapped line added its two rows to the panel's height — and since the
+        # Dice block's minimum is its size hint (``BlockFrame.minimumSizeHint``, with
+        # no ``max_height`` to cap ``dice`` against), the block grew by exactly that
+        # much the moment a session attached, which is when this label shows. On a
+        # scaled display that was the difference between the pinned strip fitting the
+        # screen and not. Inside the container it occupies room the history already
+        # has, so the private and the shared history are the same height and joining
+        # a table costs nothing.
+        #
+        # It goes in at the top and sinks as cards are inserted above it, which is
+        # invisible — it is only ever shown when there are no cards at all. What it
+        # is *not* invisible to is :meth:`_trim`, which counts cards for that reason.
+        self._empty = QLabel(EMPTY_TEXT)
+        self._empty.setWordWrap(True)
+        self._empty.setEnabled(False)
+        self._layout.insertWidget(0, self._empty)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -669,16 +682,18 @@ class RollHistoryPanel(QWidget):
         return found
 
     def _trim(self) -> None:
-        """Drop the oldest cards once the list is longer than :data:`MAX_CARDS`."""
-        # The stretch is the last item, so the oldest card sits just above it.
-        while self._layout.count() - 1 > MAX_CARDS:
-            item = self._layout.itemAt(self._layout.count() - 2)
-            widget = item.widget() if item is not None else None
-            if widget is None:
-                return
-            self._layout.removeWidget(widget)
-            widget.setParent(None)
-            widget.deleteLater()
+        """Drop the oldest cards once the list is longer than :data:`MAX_CARDS`.
+
+        Counted in *cards* rather than layout items, because the layout also holds
+        the empty-state label and the trailing stretch — and the label sinks to the
+        bottom of the stack as cards are inserted above it, which is exactly where a
+        positional "the oldest one is second from the end" rule would have found it.
+        """
+        cards = self.cards()
+        for card in cards[MAX_CARDS:]:
+            self._layout.removeWidget(card)
+            card.setParent(None)
+            card.deleteLater()
 
 
 def escape_rich_text(text: str) -> str:

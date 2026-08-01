@@ -8,9 +8,9 @@ and assert on the resulting ``Character.powers`` tree.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QEvent, QPointF, QVariantAnimation
+from PySide6.QtCore import QEvent, QPointF, Qt, QVariantAnimation
 from PySide6.QtGui import QEnterEvent
-from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QGridLayout, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -24,7 +24,7 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import power_trait_bonuses
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.sections.powers import PowersSection, _DraggableCard
+from mm_companion.ui.sections.powers import PowersSection, _DraggableCard, _RollLine
 
 
 @pytest.fixture(scope="module")
@@ -382,13 +382,13 @@ def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> No
     cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
 
     def rolled(card: _DraggableCard) -> list[str]:
-        """The lines this card offers a 🎲 for — the button sits beside the text."""
-        lines = []
-        for button in card.findChildren(QPushButton):
-            if button.text() != "🎲":
-                continue
-            lines.append(button.parent().findChild(QLabel).text())
-        return lines
+        """The lines this card can be clicked to roll — the whole line is the target."""
+        # The text label is the last of the line's own — a rollable line leads with 🎲.
+        return [
+            line.findChildren(QLabel, options=Qt.FindChildOption.FindDirectChildrenOnly)[-1].text()
+            for line in card.findChildren(_RollLine)
+            if line.is_rollable()
+        ]
 
     # Nothing to roll, so nothing is said about it — no placeholder line, and no rule
     # above the footer that is not there.
@@ -401,7 +401,7 @@ def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> No
     assert save.startswith("Toughness vs. ")
 
     # But only the attack is the wielder's to roll. The save is written down and left
-    # unbuttoned — it reaches whoever makes it as a chip on the attack's history card.
+    # inert — it reaches whoever makes it as a chip on the attack's history card.
     assert rolled(cards[blast.id]) == [attack]
 
 

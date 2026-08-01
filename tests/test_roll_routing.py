@@ -22,6 +22,7 @@ from mm_companion.core.rules import RollSpec, ability_roll
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.sections.powers import _RollLine
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 
@@ -72,11 +73,11 @@ def _sheet() -> CharacterSheet:
     return CharacterSheet(data, _hero(data))
 
 
-def _double_click(widget) -> None:
-    """A real left double-click at the widget's centre."""
+def _mouse(widget, kind: QMouseEvent.Type) -> None:
+    """Send *kind* as a real left-button event at the widget's centre."""
     point = QPointF(widget.width() / 2, widget.height() / 2)
     event = QMouseEvent(
-        QMouseEvent.Type.MouseButtonDblClick,
+        kind,
         point,
         widget.mapToGlobal(point),
         Qt.MouseButton.LeftButton,
@@ -84,6 +85,17 @@ def _double_click(widget) -> None:
         Qt.KeyboardModifier.NoModifier,
     )
     QApplication.sendEvent(widget, event)
+
+
+def _double_click(widget) -> None:
+    """A real left double-click at the widget's centre."""
+    _mouse(widget, QMouseEvent.Type.MouseButtonDblClick)
+
+
+def _click(widget) -> None:
+    """A real left press-and-release at the widget's centre."""
+    _mouse(widget, QMouseEvent.Type.MouseButtonPress)
+    _mouse(widget, QMouseEvent.Type.MouseButtonRelease)
 
 
 # -- routing -----------------------------------------------------------------
@@ -190,35 +202,43 @@ def test_double_clicking_initiative_rolls_it(qapp: QApplication) -> None:
     assert [s.label for s in seen] == ["Initiative"]
 
 
-def test_a_power_card_rolls_from_a_button_so_the_click_never_toggles_it(
+def _roll_lines(sheet: CharacterSheet) -> list[_RollLine]:
+    return sheet.powers.findChildren(_RollLine)
+
+
+def test_a_power_card_rolls_from_the_whole_line_and_never_toggles_it(
     qapp: QApplication,
 ) -> None:
     """The card body is the power's on/off switch, so a roll must not reach it.
 
-    A QPushButton consumes its own press — the same mechanism the ✎/✕/grip already
-    rely on — which is why the dice affordance is a button and not a clickable label.
+    The line consumes its own press — the same mechanism the ✎/✕/grip rely on, and
+    the reason it is a frame that accepts the event rather than a clickable label,
+    which would let the press through to the card.
     """
     data = load_game_data()
     char = _hero(data)
     char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=8)]))
     sheet = CharacterSheet(data, char)
+    power = char.powers[0]
+    power.activated = True
 
     seen: list[RollSpec] = []
     sheet.powers.rollRequested.connect(seen.append)
     dirty: list[int] = []
     sheet.edited.connect(lambda: dirty.append(1))
 
-    # Only the attack: the wielder never rolls their own target's save, so that line
-    # is written down without a button (it arrives as the follow-up chip instead).
-    buttons = [b for b in sheet.powers.findChildren(QPushButton) if b.text() == "🎲"]
-    assert len(buttons) == 1
-    buttons[0].click()
+    # Only the attack is rollable here: the wielder never rolls their own target's
+    # save, so that line is written down inert (it arrives as the follow-up chip).
+    rollable = [line for line in _roll_lines(sheet) if line.is_rollable()]
+    assert len(rollable) == 1
+    _click(rollable[0])
 
     assert seen[0].modifier == 7
     assert dirty == []  # a roll is not an edit
+    assert power.activated is True  # and it did not flip the switch underneath
 
 
-def test_the_resistance_line_is_written_down_but_not_buttoned(qapp: QApplication) -> None:
+def test_the_resistance_line_is_written_down_but_stays_inert(qapp: QApplication) -> None:
     data = load_game_data()
     char = _hero(data)
     char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=8)]))
@@ -226,6 +246,11 @@ def test_the_resistance_line_is_written_down_but_not_buttoned(qapp: QApplication
 
     texts = [lb.text() for lb in sheet.powers.findChildren(QLabel)]
     assert any(t.startswith("Toughness vs. ") for t in texts)
+
+    inert = [line for line in _roll_lines(sheet) if not line.is_rollable()]
+    assert len(inert) == 1
+    # Its press bubbles, so the card under it keeps working as the power's switch.
+    assert inert[0].cursor().shape() is Qt.CursorShape.ArrowCursor
 
 
 # -- the sliders, the DC, and the wire ---------------------------------------

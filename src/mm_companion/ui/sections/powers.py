@@ -256,6 +256,22 @@ class _ModeToggle(QWidget):
             button.setEnabled(enabled)
 
 
+def _card_ancestors_of(widget: QWidget) -> list[_DraggableCard]:
+    """The cards enclosing *widget*, innermost first.
+
+    Shared by the cards themselves and by the clickable lines of a card's dice
+    footer: both have to stand an enclosing card down when the pointer arrives, so
+    that exactly one thing is lit and it is the thing a click would reach.
+    """
+    cards: list[_DraggableCard] = []
+    node = widget.parentWidget()
+    while node is not None:
+        if isinstance(node, _DraggableCard):
+            cards.append(node)
+        node = node.parentWidget()
+    return cards
+
+
 class _DraggableCard(QFrame):
     """A stat-block card (leaf power or group) that can be picked up by its grip.
 
@@ -426,13 +442,7 @@ class _DraggableCard(QFrame):
 
     def _card_ancestors(self) -> list[_DraggableCard]:
         """The enclosing cards, innermost first."""
-        cards: list[_DraggableCard] = []
-        node = self.parentWidget()
-        while node is not None:
-            if isinstance(node, _DraggableCard):
-                cards.append(node)
-            node = node.parentWidget()
-        return cards
+        return _card_ancestors_of(self)
 
     def enterEvent(self, event: QEnterEvent) -> None:
         """Light this card — and only this one.
@@ -507,6 +517,115 @@ class _DraggableCard(QFrame):
         drag.setPixmap(pixmap)
         drag.setHotSpot(QPoint(pixmap.width() // 2, 12))
         drag.exec(Qt.DropAction.MoveAction)
+
+
+class _RollLine(QFrame):
+    """One line of a power card's dice footer — the whole line is the roll button.
+
+    The ``🎲`` used to be a real :class:`QPushButton`, and that was doing one job
+    beyond looking like a die: a button consumes its own press, so the click never
+    reached :meth:`_DraggableCard.mousePressEvent` and rolling a power could not be
+    mistaken for switching it on. Widening the target to the whole line means this
+    frame has to take that job over — hence the explicit ``accept()`` below, and why
+    the line cannot simply be a :class:`QLabel`, which would let the press through
+    and toggle the card underneath.
+
+    A line the *target* rolls is inert: no border, no hover, no cursor, and its press
+    is deliberately left to bubble, so the card under it keeps working as the power's
+    on/off switch. The wielder never makes their own target's save; that roll reaches
+    the person who does as the follow-up chip on the attack's history card.
+    """
+
+    clicked = Signal()
+
+    def __init__(self, rollable: bool, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("rollLine")
+        self._rollable = rollable
+        self._hovered = False
+        self._press: QPoint | None = None
+        if rollable:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._restyle()
+
+    def is_rollable(self) -> bool:
+        return self._rollable
+
+    def _restyle(self) -> None:
+        """Dress the line from its own object name — never a bare selector.
+
+        The same scoping rule (and the same reason) as
+        :meth:`_DraggableCard._restyle`: an unscoped border here would be inherited
+        by the line's own label, and by every other frame in the card.
+        """
+        if not self._rollable:
+            self.setStyleSheet(f"#{self.objectName()} {{ border: none; }}")
+            return
+        width = int(theme.metric("border.width"))
+        # At rest, a washed-out version of the same hue the line's text already
+        # carries: enough to read as a target without competing with the card's own
+        # edge, and unmistakably the *dice* affordance rather than the switch.
+        border = theme.color("accent.dice") if self._hovered else theme.wash("accent.dice", 0.45)
+        rules = [
+            f"border: {width}px solid {border};",
+            f"border-radius: {int(theme.metric('radius.chip'))}px;",
+        ]
+        if self._hovered:
+            rules.append(f"background: {theme.wash('accent.dice', 0.10)};")
+        self.setStyleSheet(f"#{self.objectName()} {{ {' '.join(rules)} }}")
+
+    def _set_hovered(self, hovered: bool) -> None:
+        hovered = hovered and self._rollable
+        if hovered != self._hovered:
+            self._hovered = hovered
+            self._restyle()
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        """Light this line, and stand the enclosing card down.
+
+        Otherwise the card stays lit as the power's on/off switch while the pointer
+        is over a line that does something else entirely — the same one-thing-lit
+        rule :meth:`_DraggableCard.enterEvent` keeps between nested cards.
+        """
+        super().enterEvent(event)
+        self._set_hovered(True)
+        if not self._rollable:
+            return
+        for card in _card_ancestors_of(self):
+            card._set_hovered(False)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        """Unlight, handing the highlight back to a clickable card still under the pointer."""
+        super().leaveEvent(event)
+        self._set_hovered(False)
+        if not self._rollable:
+            return
+        cursor = QCursor.pos()
+        for card in _card_ancestors_of(self):
+            if not card.is_clickable():
+                continue
+            if card.rect().contains(card.mapFromGlobal(cursor)):
+                card._set_hovered(True)
+                break
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not self._rollable or event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()  # let the enclosing card switch the power instead
+            return
+        self._press = event.position().toPoint()
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        press, self._press = self._press, None
+        if press is None or event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        event.accept()
+        released = event.position().toPoint()
+        if (released - press).manhattanLength() >= QApplication.startDragDistance():
+            return
+        if self.rect().contains(released):
+            self.clicked.emit()
 
 
 class _GroupHeader(QWidget):
@@ -1463,17 +1582,15 @@ class PowersSection(TitledSection):
         gets no footer at all rather than a line saying so: the absence *is* the answer,
         and a placeholder on every passive power is pure noise.
 
-        A line the *wielder* rolls gets a ``🎲``; a resistance line does not, because
-        the wielder never makes their own target's save. That roll reaches the person
-        who does make it as the follow-up chip on the attack's history card. The line
-        still reads (it is what the power does), indented to keep the column of text
-        straight.
+        A line the *wielder* rolls is a click target end to end — a bordered strip
+        that lights on hover, so what can be rolled is obvious without hunting for a
+        small glyph. A resistance line is not, because the wielder never makes their
+        own target's save. That roll reaches the person who does make it as the
+        follow-up chip on the attack's history card. The line still reads (it is what
+        the power does), indented to keep the column of text straight.
 
-        Each ``🎲`` is a real :class:`QPushButton`, and that is the whole trick: a
-        button consumes its own press, so the click never reaches
-        :meth:`_DraggableCard.mousePressEvent` and rolling a power can't be mistaken
-        for switching it on. (The same reason the grip, ✎ and ✕ are buttons.) A label
-        would have let the press through and toggled the card.
+        Consuming the press is the load-bearing part, and :class:`_RollLine` explains
+        why: the card underneath is the power's on/off switch.
         """
         specs = self._rolls(power)
         if not specs:
@@ -1481,30 +1598,33 @@ class PowersSection(TitledSection):
         host = QWidget()
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        # Enough of a gap that two neighbouring lines' borders read as two targets
+        # rather than one box with a rule through it.
+        layout.setSpacing(int(theme.metric("space.xs")))
         for spec in specs:
             layout.addWidget(self._roll_line(spec))
         return host
 
     def _roll_line(self, spec) -> QWidget:
-        """One dice-footer line: its ``🎲`` button, if the wielder rolls it, then its text."""
-        row = QWidget()
+        """One dice-footer line: its ``🎲``, if the wielder rolls it, then its text."""
+        rollable = not spec.rolled_by_target
+        row = _RollLine(rollable)
         line = QHBoxLayout(row)
-        line.setContentsMargins(0, 0, 0, 0)
+        pad = int(theme.metric("space.xs"))
+        line.setContentsMargins(pad, pad, pad, pad)
         line.setSpacing(int(theme.metric("space.sm")))
-        button_width = int(theme.metric("column.roll-button"))
+        glyph_width = int(theme.metric("column.roll-button"))
 
-        if spec.rolled_by_target:
-            # No button, but the same indent, so the lines read as one column.
-            line.addSpacing(button_width)
+        if rollable:
+            row.setToolTip(spec.hint or f"Roll {spec.label}")
+            row.clicked.connect(lambda s=spec: self.rollRequested.emit(s))
+            glyph = QLabel("🎲")
+            glyph.setFixedWidth(glyph_width)
+            glyph.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            line.addWidget(glyph)
         else:
-            button = QPushButton("🎲")
-            button.setFlat(True)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setFixedWidth(button_width)
-            button.setToolTip(spec.hint or f"Roll {spec.label}")
-            button.clicked.connect(lambda _=False, s=spec: self.rollRequested.emit(s))
-            line.addWidget(button, alignment=Qt.AlignmentFlag.AlignTop)
+            # No die, but the same indent, so the lines read as one column.
+            line.addSpacing(glyph_width)
 
         label = QLabel(spec.label)
         label.setWordWrap(True)

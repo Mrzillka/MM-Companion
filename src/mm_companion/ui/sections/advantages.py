@@ -52,7 +52,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
-from mm_companion.ui.sections.stat_grid import CONDITION_TINT
+from mm_companion.ui.sections.stat_table import CONDITION_TINT
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, tinted_style

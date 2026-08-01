@@ -102,7 +102,7 @@ clean (see Licensing below).
   cascades debilitation; queryable accessors (`condition_check_penalty`,
   `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods. These flow into
   the sheet as a **display-only overlay** (the build/derived math itself stays
-  condition-free): the ability/resistance grids re-skin their `→ total` via
+  condition-free): the ability/resistance tables re-skin their Total column via
   `condition_scope_penalty`/`resistance_condition_effect` (`apply_stat_effects`), the
   Skills block folds the scoped penalty into its "+" column, Advantages/Powers strike
   through a `debilitated_traits` trait, and the System block's derived Speed and
@@ -229,9 +229,12 @@ clean (see Licensing below).
   holds the portrait, and `SystemInfoSection` holds the non-purchasable
   characteristics — Power Level, the power-point pool, size, speed, initiative, and
   hero points. Abilities/Resistances/Advantages were split out of the former
-  `StatsSection`; Abilities and Resistances share the grid helpers in
-  `ui/sections/stat_grid.py`. The data-driven blocks take the `GameData` and build
-  widgets by iterating over the data lists — no hardcoded ability/skill names.
+  `StatsSection`; Abilities and Resistances are `QTableWidget`s built through
+  `ui/sections/stat_table.py` (Trait | ABL | Rank | Total, a spanned rule before the
+  derived traits), which is also where the pieces they share with the Skills table
+  live: `ROLL_ROLE`, `fit_table_height`, `tint_item`, and the two tint tokens. The
+  data-driven blocks take the `GameData` and build widgets by iterating over the
+  data lists — no hardcoded ability/skill names.
 - `SystemInfoSection` shows several **derived** readouts computed in `core.rules`, never
   in the widget: `speed_lines`/`speed_columns` (a base ground line plus one per active
   movement power — Flight, Speed, … — each rank expanded to walk/dash/run distances,
@@ -434,15 +437,19 @@ number*.
   (`RollSpec.rolled_by_target`) is written down and indented but unbuttoned — the
   wielder never makes their own target's save, and that roll reaches the person who
   does as the follow-up chip.
+- **A table row rolls through `cellDoubleClicked`**, resolving what to roll from the
+  payload stashed on that row's Total cell under `ROLL_ROLE` (`ui/sections/stat_table.py`)
+  — a trait key for Abilities/Resistances, a `(row_id, display)` tuple for Skills. A row
+  with nothing there (a spanned separator, a focused skill's group header) is simply not
+  rollable. The Rank column never arrives: its spin box is a cell widget and eats the
+  double-click, which unlocked is what selects the number for retyping — stealing that
+  would make editing hostile.
 - `ui/roll_click.py::attach_roll_click(widget, factory, sink, *, enabled=…)` is the
-  one way a widget becomes double-clickable; use it rather than open-coding an event
-  filter. The factory builds the spec **at click time** (a spec captured when the row
-  was built would be stale after any edit). Its one subtlety: a spin box is watched
-  through `lineEdit()` as well as itself, and rolls **only while the sheet is
-  locked** — unlocked, a double-click there selects the number for retyping and
-  stealing that would make editing hostile. The labels around it always roll.
-  Skills go through `cellDoubleClicked` instead, resolving the row from a
-  `(row_id, display)` tuple stashed on the Total cell's `ROLL_ROLE`.
+  one way a *loose* widget (the Initiative readout) becomes double-clickable; use it
+  rather than open-coding an event filter. The factory builds the spec **at click
+  time** (a spec captured when the row was built would be stale after any edit). Its
+  one subtlety: a spin box is watched through `lineEdit()` as well as itself, and the
+  `enabled` guard is how a caller says "only while locked".
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
   inner scroll area, sized to its content. A floated block moves into a

@@ -1,23 +1,24 @@
-"""The abilities block: a grid of ability spin boxes backed by the shared model.
+"""The abilities block: a table of ability ranks backed by the shared model.
 
 Ability ranks live on the :class:`~mm_companion.core.character.Character`, so the
 spin boxes are views over it. A trait a power raises (Enhanced Trait) shows its
-enhanced total in green beside the base spin box — ``→ 5`` — without replacing the
+enhanced total in green in the Total column — ``→ 5`` — without replacing the
 bought value; the boost is computed in
 :func:`~mm_companion.core.rules.power_trait_bonuses`.
-:meth:`AbilitiesSection.refresh_enhancements` recomputes those labels, and the
+:meth:`AbilitiesSection.refresh_enhancements` recomputes that column, and the
 sheet calls it whenever a power changes.
 
 Double-clicking a row rolls that ability: the section emits
 :attr:`AbilitiesSection.rollRequested` with the spec
 :func:`~mm_companion.core.rules.ability_roll` builds, and the bus hands it to the
-Dice block.
+Dice block. The Rank column is the exception — its spin box eats the double-click,
+which unlocked is what selects the number for retyping.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QSpinBox, QTableWidgetItem, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
@@ -29,7 +30,7 @@ from mm_companion.core.rules import (
     power_trait_bonuses,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_grid import apply_stat_effects, build_stat_group
+from mm_companion.ui.sections.stat_table import apply_stat_effects, build_stat_table
 from mm_companion.ui.sections.titled_section import TitledSection
 
 
@@ -57,11 +58,11 @@ class AbilitiesSection(TitledSection):
         self._character = character
         self._locked = False
         self._abilities: dict[str, QSpinBox] = {}
-        # The "→ total" labels that show a power-boosted trait's enhanced value.
-        self._ability_enh: dict[str, QLabel] = {}
+        # The Total cells that show a power-boosted trait's enhanced value.
+        self._ability_enh: dict[str, QTableWidgetItem] = {}
 
         layout = QVBoxLayout(self)
-        grid = build_stat_group(
+        self.table = build_stat_table(
             data.abilities,
             self._abilities,
             self._ability_enh,
@@ -70,9 +71,9 @@ class AbilitiesSection(TitledSection):
             data.costs.trait_range("ability"),
             roll_spec=self._roll_spec,
             roll_sink=self.rollRequested.emit,
-            is_locked=lambda: self._locked,
         )
-        layout.addWidget(grid)
+        layout.addWidget(self.table)
+        layout.addStretch()  # top-aligned, so it lines up with Resistances beside it
 
         self.refresh_enhancements()
         self.refresh_cost()
@@ -93,7 +94,7 @@ class AbilitiesSection(TitledSection):
         self.set_priced_title("Abilities", ability_points_spent(self._character, self._data))
 
     def refresh_enhancements(self) -> None:
-        """Recompute each ability's "→ total" from power boosts and condition penalties."""
+        """Recompute each ability's Total cell from power boosts and condition penalties."""
         bonuses = power_trait_bonuses(self._character, self._data)
         cond_effects = {
             a.key: condition_scope_penalty(self._character, self._data, {a.key, a.name})

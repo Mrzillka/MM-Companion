@@ -84,6 +84,18 @@ class DiceSection(QGroupBox):
         if isinstance(spec, RollSpec):
             self.view.panel.roll_spec(spec)
 
+    def load_roll(self, spec: object) -> None:
+        """Put what another block named in the chip, without throwing the die — the
+        ``load-requested`` topic's handler.
+
+        The same payload as :meth:`perform_roll` and the same tolerance of a bad one;
+        the difference is only that the die stays still. It is what a *single* click
+        on a stat line asks for, so the sliders can be nudged and the DC set before
+        anything is rolled.
+        """
+        if isinstance(spec, RollSpec):
+            self.view.panel.load_spec(spec)
+
     def post_note(self, text: object) -> None:
         """Write a line in the history — the ``note-requested`` topic's handler.
 

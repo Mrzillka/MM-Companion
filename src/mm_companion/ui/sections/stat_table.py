@@ -69,6 +69,7 @@ def build_stat_table(
     *,
     roll_spec: RollHookFactory | None = None,
     roll_sink: Callable[[RollSpec], None] | None = None,
+    load_sink: Callable[[RollSpec], None] | None = None,
 ) -> QTableWidget:
     """Build the stat table for one trait family (abilities or resistances).
 
@@ -79,10 +80,11 @@ def build_stat_table(
     spanned across before the first derived entry. *store* and *total_store* are
     filled in place, keyed by each entry's ``key``.
 
-    Given *roll_spec* and *roll_sink*, double-clicking a row rolls that trait. The
-    spec is built at click time from the trait key, so it is never stale. The Rank
-    column is the one that never arrives — its spin box eats the double-click, which
-    unlocked is what selects the number for retyping.
+    Given *roll_spec* and *roll_sink*, double-clicking a row rolls that trait, and
+    with *load_sink* a single click loads it into the roller's chip without throwing
+    the die. The spec is built at click time from the trait key, so it is never
+    stale. The Rank column is the one that never arrives — its spin box eats both
+    clicks, which unlocked is what selects the number for retyping.
     """
     table = QTableWidget(0, len(HEADERS))
     table.setHorizontalHeaderLabels(HEADERS)
@@ -138,27 +140,32 @@ def build_stat_table(
         row += 1
 
     if roll_spec is not None and roll_sink is not None:
-        table.cellDoubleClicked.connect(
-            lambda r, _c: _roll_row(table, r, roll_spec, roll_sink)  # noqa: E731
-        )
+        table.cellDoubleClicked.connect(lambda r, _c: _row_spec_to(table, r, roll_spec, roll_sink))
+        if load_sink is not None:
+            # A single click always fires before the double-click that follows it, so
+            # this runs first and the double then rolls. That is harmless and in fact
+            # what is wanted: rolling loads the same spec anyway, so the pair is
+            # load → (load + roll) on one spec. Deferring it by the double-click
+            # interval would only make a plain click feel a beat late.
+            table.cellClicked.connect(lambda r, _c: _row_spec_to(table, r, roll_spec, load_sink))
     fit_table_height(table)
     return table
 
 
-def _roll_row(
+def _row_spec_to(
     table: QTableWidget,
     row: int,
     roll_spec: RollHookFactory,
-    roll_sink: Callable[[RollSpec], None],
+    sink: Callable[[RollSpec], None],
 ) -> None:
-    """Roll the trait on this row, if it is one that rolls (a separator is not)."""
+    """Send this row's spec to *sink*, if the row is one that rolls (a separator is not)."""
     item = table.item(row, COL_TOTAL)
     key = None if item is None else item.data(ROLL_ROLE)
     if not key:
         return
     spec = roll_spec(key)
     if spec is not None:
-        roll_sink(spec)
+        sink(spec)
 
 
 def fit_table_height(table: QTableWidget) -> None:

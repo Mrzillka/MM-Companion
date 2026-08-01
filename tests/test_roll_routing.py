@@ -73,11 +73,11 @@ def _sheet() -> CharacterSheet:
     return CharacterSheet(data, _hero(data))
 
 
-def _double_click(widget) -> None:
-    """A real left double-click at the widget's centre."""
+def _mouse(widget, kind: QMouseEvent.Type) -> None:
+    """Send *kind* as a real left-button event at the widget's centre."""
     point = QPointF(widget.width() / 2, widget.height() / 2)
     event = QMouseEvent(
-        QMouseEvent.Type.MouseButtonDblClick,
+        kind,
         point,
         widget.mapToGlobal(point),
         Qt.MouseButton.LeftButton,
@@ -85,6 +85,16 @@ def _double_click(widget) -> None:
         Qt.KeyboardModifier.NoModifier,
     )
     QApplication.sendEvent(widget, event)
+
+
+def _double_click(widget) -> None:
+    """A real left double-click at the widget's centre."""
+    _mouse(widget, QMouseEvent.Type.MouseButtonDblClick)
+
+
+def _release(widget) -> None:
+    """The release that ends a plain left click — what the load path watches for."""
+    _mouse(widget, QMouseEvent.Type.MouseButtonRelease)
 
 
 # -- routing -----------------------------------------------------------------
@@ -127,6 +137,108 @@ def test_a_closed_dice_block_is_reopened_rather_than_rolling_unseen(qapp: QAppli
 
     assert not sheet.is_block_hidden("dice")
     assert sheet.dice.panel.current_spec().label == "Strength"
+
+
+# -- one click loads, two roll -----------------------------------------------
+
+
+def test_a_load_request_shows_the_spec_without_throwing_the_die(qapp: QApplication) -> None:
+    sheet = _sheet()
+    panel = sheet.dice.panel
+
+    sheet.abilities.loadRequested.emit(RollSpec(label="Strength", modifier=4))
+
+    assert panel.current_spec().label == "Strength"
+    # The chip is there, but nothing was rolled — the readout still says nothing.
+    assert "Strength" not in panel._readout.text()
+
+
+def test_a_closed_dice_block_is_reopened_for_a_load_too(qapp: QApplication) -> None:
+    """Loading into a hidden block would read as the app ignoring the click.
+
+    Which is exactly what revealing the server exists to prevent, so `load-requested`
+    is deliberately not one of the quiet topics.
+    """
+    sheet = _sheet()
+    sheet.hide_block("dice")
+
+    sheet.abilities.loadRequested.emit(RollSpec(label="Strength", modifier=4))
+
+    assert not sheet.is_block_hidden("dice")
+
+
+def test_clicking_a_stat_row_loads_it_and_double_clicking_rolls_it(qapp: QApplication) -> None:
+    sheet = _sheet()
+    panel = sheet.dice.panel
+    table = sheet.abilities.table
+    row = _stat_row(table, "STR")
+
+    table.cellClicked.emit(row, COL_NAME)
+    assert panel.current_spec().label == "Strength"
+    assert "Strength" not in panel._readout.text()  # loaded, not rolled
+
+    # A real double-click fires the single first; that is harmless, since rolling
+    # loads the same spec anyway.
+    table.cellClicked.emit(row, COL_NAME)
+    table.cellDoubleClicked.emit(row, COL_NAME)
+    assert "Strength" in panel._readout.text()
+
+
+def test_clicking_a_skill_row_loads_it(qapp: QApplication) -> None:
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.skills.loadRequested.connect(seen.append)
+
+    table = sheet.skills._tables[0]
+    row = next(
+        r
+        for r in range(table.rowCount())
+        if (table.item(r, 5) or None) and table.item(r, 5).data(ROLL_ROLE)
+    )
+    table.cellClicked.emit(row, 5)
+
+    assert len(seen) == 1
+    assert seen[0].kind == "skill"
+
+
+def test_clicking_the_separator_row_loads_nothing(qapp: QApplication) -> None:
+    sheet = _sheet()
+    seen: list[RollSpec] = []
+    sheet.abilities.loadRequested.connect(seen.append)
+
+    table = sheet.abilities.table
+    separator = next(row for row in range(table.rowCount()) if table.item(row, COL_TOTAL) is None)
+    table.cellClicked.emit(separator, COL_NAME)
+
+    assert seen == []
+
+
+def test_clicking_initiative_loads_it_and_double_clicking_rolls_it(qapp: QApplication) -> None:
+    """The one rollable readout that is not in a table, so it goes through roll_click."""
+    sheet = _sheet()
+    loaded: list[RollSpec] = []
+    rolled: list[RollSpec] = []
+    sheet.system_info.loadRequested.connect(loaded.append)
+    sheet.system_info.rollRequested.connect(rolled.append)
+
+    _release(sheet.system_info._initiative)
+    assert [s.label for s in loaded] == ["Initiative"]
+    assert rolled == []
+
+    _double_click(sheet.system_info._initiative)
+    assert [s.label for s in rolled] == ["Initiative"]
+
+
+def test_loading_a_trait_is_not_an_edit(qapp: QApplication) -> None:
+    """Same promise rolling makes: reading a number off the sheet changes nothing."""
+    sheet = _sheet()
+    dirty: list[int] = []
+    sheet.edited.connect(lambda: dirty.append(1))
+
+    table = sheet.abilities.table
+    table.cellClicked.emit(_stat_row(table, "STR"), COL_NAME)
+
+    assert dirty == []
 
 
 # -- the double-click itself --------------------------------------------------

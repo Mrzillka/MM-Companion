@@ -309,6 +309,8 @@ class SystemInfoSection(QGroupBox):
     #: The Initiative readout was double-clicked — roll it. Carries a
     #: :class:`~mm_companion.core.rules.RollSpec`; rolling is not a build edit.
     rollRequested = Signal(object)
+    #: It was clicked once — show it in the roller's chip, ready to roll.
+    loadRequested = Signal(object)
     #: A sentence for the roll history — a hero point spent or gained. Carries the
     #: text, since the block that writes it down cannot see what changed here.
     noteRequested = Signal(str)
@@ -434,12 +436,13 @@ class SystemInfoSection(QGroupBox):
         self._initiative = QLabel("—")
         self._initiative.setToolTip(INITIATIVE_TIP)
         # The one readout on this block that is a die roll rather than a fact. Its
-        # tooltip is rewritten on every refresh, so the "double-click to roll" hint
-        # is folded into that text rather than left to attach_roll_click.
+        # tooltip is rewritten on every refresh, so the click hint is folded into
+        # that text rather than left to attach_roll_click.
         attach_roll_click(
             self._initiative,
             lambda: initiative_roll(self._character, self._data),
             self.rollRequested.emit,
+            load_sink=self.loadRequested.emit,
             tooltip=False,
         )
         return self._initiative

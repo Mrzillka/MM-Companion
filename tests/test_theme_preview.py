@@ -86,6 +86,38 @@ def test_previewing_a_styled_draft_dresses_the_app_and_undresses_it_again(qapp) 
     assert "#blockFrame" not in qapp.styleSheet()  # classic states no chrome
 
 
+def test_leaving_a_styled_preset_hands_back_the_palette_the_app_started_with(
+    qapp, monkeypatch
+) -> None:
+    """The regression behind unreadable message boxes after a theme change.
+
+    A ``system`` preset promises the OS palette, light/dark setting and all. Handing
+    back ``style().standardPalette()`` instead fabricated a *fresh* one — light on
+    Windows however the OS was actually set — so the window turned light while the
+    native style went on painting its buttons for dark mode, and a message box's
+    "Discard"/"Cancel" came out all but invisible.
+
+    The distinctive colour below stands in for the OS palette precisely because
+    ``standardPalette()`` can never produce it: on a platform where the two happen to
+    agree (offscreen, xvfb) an assertion about the *result* would pass either way.
+    """
+    # Nothing captured yet, as at startup.
+    monkeypatch.setattr(theme, "_os_palette", None)
+    monkeypatch.setattr(theme, "_palette_installed", False)
+
+    from PySide6.QtGui import QColor, QPalette
+
+    os_palette = QPalette(qapp.palette())
+    os_palette.setColor(QPalette.ColorRole.Window, QColor("#123456"))
+    qapp.setPalette(os_palette)
+
+    theme.set_active_theme("slate-dark", qapp)
+    assert qapp.palette().window().color().name() != "#123456"
+
+    theme.set_active_theme("classic", qapp)
+    assert qapp.palette().window().color().name() == "#123456"
+
+
 def test_saving_over_a_preview_leaves_no_draft_behind() -> None:
     """``set_active_theme`` goes through ``reset``, so the two converge."""
     theme.set_preview(draft_of("classic", colors={"accent": "#010203"}))

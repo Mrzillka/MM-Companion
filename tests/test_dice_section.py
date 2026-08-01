@@ -208,3 +208,61 @@ def test_the_block_swaps_to_the_shared_history_when_told_of_a_session(
 
     assert view._local_box.isVisibleTo(view)
     assert not view._session_box.isVisibleTo(view)
+
+
+def test_joining_a_session_does_not_make_the_block_taller(qapp: QApplication) -> None:
+    """The regression the in-list empty state exists for.
+
+    The block's minimum height *is* its size hint
+    (:meth:`~mm_companion.ui.block_frame.BlockFrame.minimumSizeHint`, with no
+    ``max_height`` to cap ``dice`` against), and the shared history put its
+    word-wrapped "no rolls yet" line *above* its scroll area — so joining a table
+    grew the Dice block, and with it the pinned strip, by two lines of text. On a
+    scaled display that was the difference between the strip fitting the screen and
+    not, and it showed up exactly when a player connected, because that is when the
+    log is empty.
+    """
+    sheet = _laid_out(qapp, _sheet(qapp))
+    frame = sheet.block_frame("dice")
+    offline = frame.minimumSizeHint().height()
+
+    bridge = SessionBridge()
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    set_active_session(bridge)
+    try:
+        sheet.sync_session()
+        _settle(qapp)
+
+        assert sheet.dice.view._session_history.cards() == []  # the empty state shows
+        assert frame.minimumSizeHint().height() == offline
+    finally:
+        bridge.stop()
+        set_active_session(None)
+
+
+def test_a_full_session_history_does_not_make_the_block_taller(qapp: QApplication) -> None:
+    """And it stays put as the table's rolls pile up — the history scrolls instead."""
+    sheet = _laid_out(qapp, _sheet(qapp))
+    frame = sheet.block_frame("dice")
+    history = sheet.dice.view._session_history
+    before = frame.minimumSizeHint().height()
+
+    for seq in range(40):
+        history.add_roll(
+            {
+                "seq": seq,
+                "player_id": "someone-else",
+                "player_name": "Another player",
+                "label": f"Athletics roll {seq}",
+                "die": 11,
+                "bonus": 4,
+                "penalty": 0,
+                "dc": 15,
+                "degree": 0,
+                "hidden": False,
+            }
+        )
+    _settle(qapp)
+
+    assert len(history.cards()) == 40
+    assert frame.minimumSizeHint().height() == before

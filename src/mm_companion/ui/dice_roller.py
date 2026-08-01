@@ -1389,8 +1389,19 @@ class DiceRollerView(ReflowBox, QWidget):
         if bridge is not self._session_bridge:
             self._follow(bridge)
         self._session_history.attach(bridge)
+        was_session = self._session_box.isVisibleTo(self)
         self._session_box.setVisible(bridge is not None)
         self._local_box.setVisible(bridge is None)
+        if was_session is not (bridge is not None):
+            # Joining or leaving a table swaps which box the layout holds, and a
+            # splitter child with no stretch keeps the pixels it was given — so
+            # without this the incoming history inherits whatever division the
+            # outgoing one was left at, and no resize follows to correct it. The
+            # same two-pass re-division a quick roll coming or going needs, and for
+            # the same reason; see :meth:`_on_quick_rolls_changed`.
+            self._history_part.updateGeometry()
+            self._redivide()
+            self._settle.start(0)
 
     def _follow(self, bridge: SessionBridge | None) -> None:
         """Watch a new session end (and stop watching the old one's)."""

@@ -27,6 +27,7 @@ from mm_companion.core.rules import (
     available_pins,
     default_pins,
     parse_pins,
+    pin_label,
     resolve_pin,
     resolve_pins,
 )
@@ -244,6 +245,23 @@ def test_a_skill_row_the_character_never_took_reads_as_a_dash(
 
 def test_there_is_nothing_to_resolve_before_a_player_pushes_a_sheet(data: GameData) -> None:
     assert resolve_pin(None, data, PinRef(PIN_RESISTANCE, "DEF")).missing is True
+
+
+def test_a_pin_is_captioned_the_same_whether_or_not_it_resolves(data: GameData) -> None:
+    """A player card exists before that player pushes a sheet, and a strip of raw
+    keys ("initiative —") is a worse thing to show than a strip of proper names."""
+    refs = [
+        PinRef(PIN_RESISTANCE, "DEF"),
+        PinRef(PIN_INITIATIVE),
+        PinRef(PIN_SKILL, "Perception"),
+        PinRef(PIN_DEFENSE_CLASS),
+    ]
+    character = Character.new_default(data)
+
+    assert [resolve_pin(None, data, r).label for r in refs] == [
+        resolve_pin(character, data, r).label for r in refs
+    ]
+    assert [pin_label(r, data) for r in refs] == ["DEF", "Initiative", "Perception", "DEF DC"]
 
 
 # -- the picker's content -----------------------------------------------------

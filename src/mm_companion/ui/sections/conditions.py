@@ -105,7 +105,13 @@ def build_condition_menu(
         if not members:
             continue
         claimed.add(group.group)
-        add_to(menu.addMenu(group.title), members)
+        # Constructed with *menu* as its parent, not through ``menu.addMenu(title)``:
+        # that convenience overload hands ownership of the new menu back to the
+        # caller, so a submenu with no Python reference is collected out from under
+        # the open menu. Parenting it makes the menu keep it alive instead.
+        submenu = QMenu(group.title, menu)
+        menu.addMenu(submenu)
+        add_to(submenu, members)
     leftovers = [c for c in by_name if c.group not in claimed]
     if leftovers:
         # Only ever a separator between real submenus and the stragglers; an

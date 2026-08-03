@@ -177,7 +177,7 @@ class PinGroup:
 def resolve_pin(char: Character | None, game_data: GameData, ref: PinRef) -> PinnedValue:
     """What *ref* currently reads on *char*. Never raises, never returns ``None``."""
     if char is None:
-        return _missing(ref, ref.key or ref.kind)
+        return _missing(ref, pin_label(ref, game_data))
     if ref.kind == PIN_ABILITY:
         return _from_ability(char, game_data, ref)
     if ref.kind == PIN_RESISTANCE:
@@ -190,7 +190,7 @@ def resolve_pin(char: Character | None, game_data: GameData, ref: PinRef) -> Pin
         return _from_power(char, game_data, ref)
     if ref.kind == PIN_DEFENSE_CLASS:
         return _from_defense_class(char, game_data, ref)
-    return _missing(ref, ref.kind)
+    return _missing(ref, pin_label(ref, game_data))
 
 
 def resolve_pins(
@@ -198,6 +198,34 @@ def resolve_pins(
 ) -> list[PinnedValue]:
     """:func:`resolve_pin` over a whole strip, in order."""
     return [resolve_pin(char, game_data, ref) for ref in refs]
+
+
+def pin_label(ref: PinRef, game_data: GameData) -> str:
+    """What a pin is *called*, without needing a character to read it off.
+
+    Kept apart from resolving so a chip is captioned the same whether or not it
+    has a value yet: a player card exists before that player pushes a sheet, and
+    "initiative —" (the raw kind, in lower case) is a worse thing to show than
+    "Initiative —".
+    """
+    if ref.kind == PIN_ABILITY:
+        ability = next((a for a in game_data.abilities if a.key == ref.key), None)
+        return (ability.abbr or ability.key) if ability else ref.key
+    if ref.kind == PIN_RESISTANCE:
+        resistance = next((r for r in game_data.resistances if r.key == ref.key), None)
+        return (resistance.abbr or resistance.name) if resistance else ref.key
+    if ref.kind == PIN_DEFENSE_CLASS:
+        key = game_data.system.trait_keys.defense
+        resistance = next((r for r in game_data.resistances if r.key == key), None)
+        return f"{(resistance.abbr or resistance.name) if resistance else key} DC"
+    if ref.kind == PIN_SKILL:
+        return skill_row_label(ref.key) if ref.key else PIN_SKILL
+    if ref.kind == PIN_INITIATIVE:
+        return next(
+            (t.label for t in game_data.system.derived_traits if t.key == PIN_INITIATIVE),
+            "Initiative",
+        )
+    return "Power"
 
 
 def _missing(ref: PinRef, label: str) -> PinnedValue:
@@ -217,7 +245,7 @@ def _signed(value: int) -> str:
 def _from_ability(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
     ability = next((a for a in game_data.abilities if a.key == ref.key), None)
     if ability is None:
-        return _missing(ref, ref.key)
+        return _missing(ref, pin_label(ref, game_data))
     spec = ability_roll(char, game_data, ref.key)
     return PinnedValue(
         ref=ref,
@@ -231,7 +259,7 @@ def _from_ability(char: Character, game_data: GameData, ref: PinRef) -> PinnedVa
 def _from_resistance(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
     resistance = next((r for r in game_data.resistances if r.key == ref.key), None)
     if resistance is None:
-        return _missing(ref, ref.key)
+        return _missing(ref, pin_label(ref, game_data))
     spec = resistance_roll(char, game_data, ref.key)
     # Unsigned: a defence is a number to beat, not a bonus to add. Writing "+12"
     # on a Defence chip invites it into the wrong side of an attack roll.
@@ -259,7 +287,7 @@ def _from_defense_class(char: Character, game_data: GameData, ref: PinRef) -> Pi
 
 def _from_skill(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
     if not _skill_row_exists(char, game_data, ref.key):
-        return _missing(ref, skill_row_label(ref.key) if ref.key else PIN_SKILL)
+        return _missing(ref, pin_label(ref, game_data))
     spec = skill_roll(char, game_data, ref.key)
     return PinnedValue(
         ref=ref,
@@ -288,7 +316,7 @@ def _from_initiative(char: Character, game_data: GameData, ref: PinRef) -> Pinne
 def _from_power(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
     located = _locate_power(char, game_data, ref)
     if located is None:
-        return _missing(ref, "Power")
+        return _missing(ref, pin_label(ref, game_data))
     power, index = located
     specs = power_rolls(power, char, game_data)
     if not 0 <= index < len(specs):

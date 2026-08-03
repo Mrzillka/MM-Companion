@@ -111,7 +111,18 @@ clean (see Licensing below).
   `ConditionsSection` (its own block) drives it: the "+" menu applies a condition (a
   `ConditionParameterDialog` first when it needs a subject) and renders one chip per
   `AppliedCondition`; its `conditionsChanged` fans out over the signal bus so every
-  overlay refreshes. Dice/recovery/turn-economy are out of scope for now.
+  overlay refreshes. That menu is built by the shared
+  `conditions.build_condition_menu`, which all three "+" buttons use (this block's,
+  and the GM's fast-apply on a player and an NPC card) so a condition is in the
+  same place in all of them. It splits the catalog into submenus by each record's
+  `group`, titled and ordered by `_meta.conditionGroups` — an *ergonomic* axis,
+  orthogonal to `category`: a flat list of 36 is slow to search mid-round, while a
+  category is a rules fact and stays the axis the applied chips are grouped by. An
+  untagged condition is offered flat below the submenus and a ruleset declaring no
+  groups gets the flat menu back, so both are purely additive. Note
+  `QMenu.addMenu(title)` hands ownership *back* to the caller, so each submenu is
+  constructed with the menu as its parent or it is collected out from under the
+  open menu. Dice/recovery/turn-economy are out of scope for now.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
@@ -678,6 +689,36 @@ The shape:
   `GMWindow`), and it exists because every other disconnect cue **fades** after
   ten seconds; it recomputes its whole state from the bridge on every signal
   rather than mapping signals to states one by one.
+- **The two cards are one card.** A player card and an NPC card differ in what
+  they may *do* (a player's is a remote snapshot the GM can only ask to change;
+  an NPC's is the GM's own model, edited in place) but not in what a GM *reads*:
+  both open their sheet from the **portrait** alone and both hover the same
+  abilities/resistances/powers summary out of `ui/card_summary.py`. Opening used
+  to be a click anywhere on an NPC card, which fought that card's own
+  drag-to-reorder gesture — the two were told apart only by how far the pointer
+  had moved.
+- **Pinned parameters** are the strip down a card's right side: the four or five
+  numbers *this* GM wants off *this* creature. `core/rules/pins.py` is the model
+  — a `PinRef` names an ability, resistance, skill, initiative, defence DC or one
+  of a power's rolls, and `resolve_pin` turns it into a caption, a reading and a
+  `RollSpec`. **A reference, never a number**: the character underneath is live,
+  so a frozen value would be right once. Values come off the *roll* builders
+  (`resistance_roll`, not `resistance_total`), which is what folds condition
+  overlays in for free while the build math stays condition-free. A defence DC is
+  its own kind rather than a dressed-up resistance — the sheet's table shows the
+  rank, and a chip quietly showing ten more would be a trap — and a pin that no
+  longer resolves reads as a dash rather than vanishing, since a chip that
+  disappears leaves no way to remove it. `ui/pin_panel.py` is the strip (click to
+  load into the GM's roller, drag to reorder, right-click to remove; a click is a
+  release with *no* drag started, which is what keeps the three apart) and
+  `ui/pin_picker.py` the modeless browser the "+" opens. A GM also pins by
+  right-clicking a row of the sheet opened from that card: a `pin-requested`
+  topic on the block bus that the **sheet** serves rather than any block, since a
+  pin's destination is outside the sheet entirely, and which only appears once
+  `MainWindow(pin_target=True)` says there is a card. Strips persist per card in
+  `gm_pins`, seeded from `gm_default_pins` — the settings key a preferences page
+  will edit, and the reason the NPC damage default is *late-bound* ("the first
+  Damage power"), since the defaults are written long before the NPC is.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.

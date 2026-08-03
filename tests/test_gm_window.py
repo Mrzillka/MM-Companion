@@ -856,6 +856,28 @@ def test_the_menu_splits_the_catalog_into_groups(qapp: QApplication, window: GMW
     assert [a for a in menu.actions() if a.menu() is None and not a.isSeparator()] == []
 
 
+def test_the_submenus_outlive_the_call_that_built_them(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """QMenu.addMenu(title) hands ownership *back* to the caller.
+
+    So a submenu with no Python reference is collected out from under the open
+    menu — the whole grouped menu falls apart the moment the builder returns.
+    Parenting each submenu to the menu is what stops it; this proves it by
+    collecting aggressively before reading the menu back.
+    """
+    import gc
+
+    menu = build_condition_menu(window, load_game_data(), lambda _c: None)
+    gc.collect()
+    qapp.processEvents()
+    gc.collect()
+
+    submenus = [a.menu() for a in menu.actions() if a.menu() is not None]
+    assert [m.title() for m in submenus] == [g.title for g in load_game_data().condition_groups]
+    assert all(m.actions() for m in submenus)
+
+
 def _menu_condition_names(menu: QMenu) -> list[str]:
     """Every condition a menu offers, submenus and flat tail alike."""
     names: list[str] = []

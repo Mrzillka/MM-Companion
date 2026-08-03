@@ -38,6 +38,7 @@ from mm_companion.core.rules import initiative_modifier
 from mm_companion.ui import theme
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
 from mm_companion.ui.player_card import _ConditionChip
 from mm_companion.ui.sections.conditions import (
     build_condition_menu,
@@ -80,6 +81,12 @@ class NPCCard(QFrame):
     reorderPreview = Signal(str, int)
     #: The drag ended (dropped or cancelled) — hide the drop indicator.
     reorderPreviewEnded = Signal()
+    #: ``(file_name, refs)`` — this card's pinned-parameter strip changed.
+    pinsChanged = Signal(str, object)
+    #: A ``RollSpec`` — the GM clicked a pinned chip and wants it in the roller.
+    rollRequested = Signal(object)
+    #: The NPC's file name — the GM asked to pin something to this card.
+    pinPickerRequested = Signal(str)
 
     def __init__(
         self,
@@ -92,7 +99,8 @@ class NPCCard(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setFixedWidth(CARD_WIDTH)
+        # The card's own column is fixed; the pinned strip adds its width beside it.
+        self.setFixedWidth(CARD_WIDTH + PIN_PANEL_WIDTH + int(theme.metric("space.sm")) * 3)
 
         self._data = data
         self._character = character
@@ -103,7 +111,7 @@ class NPCCard(QFrame):
         #: Where a left-button press landed, to tell a drag from a click.
         self._press_pos = None
 
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout()
 
         self._name_label = QLabel(summary.name)
         name_font = self._name_label.font()
@@ -160,6 +168,14 @@ class NPCCard(QFrame):
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
+        layout.addStretch()
+
+        self.pins = install_pin_panel(self, layout, data)
+        self.pins.set_character(character)
+        self.pins.pinsChanged.connect(lambda refs: self.pinsChanged.emit(self.name_key, refs))
+        self.pins.rollRequested.connect(self.rollRequested)
+        self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.name_key))
+
         self.refresh_conditions()
         self._refresh_tooltip()
 

@@ -47,6 +47,7 @@ from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
 from mm_companion.ui.sections.conditions import (
     build_condition_menu,
     condition_display_name,
@@ -78,11 +79,18 @@ class PlayerCard(QFrame):
     setHeroPointsRequested = Signal(str, int)
     #: The player's id — the GM asked to remove this seat from the session.
     removePlayerRequested = Signal(str)
+    #: ``(player_id, refs)`` — this card's pinned-parameter strip changed.
+    pinsChanged = Signal(str, object)
+    #: A ``RollSpec`` — the GM clicked a pinned chip and wants it in the roller.
+    rollRequested = Signal(object)
+    #: The player's id — the GM asked to pin something to this card.
+    pinPickerRequested = Signal(str)
 
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setFixedWidth(CARD_WIDTH)
+        # The card's own column is fixed; the pinned strip adds its width beside it.
+        self.setFixedWidth(CARD_WIDTH + PIN_PANEL_WIDTH + int(theme.metric("space.sm")) * 3)
 
         self._data = data
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
@@ -101,7 +109,7 @@ class PlayerCard(QFrame):
         # ``_targetable``, which is also false for the GM's own card.
         self._connected = False
 
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout()
 
         self._name_label = QLabel("")
         name_font = self._name_label.font()
@@ -157,6 +165,12 @@ class PlayerCard(QFrame):
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
+        layout.addStretch()
+
+        self.pins = install_pin_panel(self, layout, data)
+        self.pins.pinsChanged.connect(lambda refs: self.pinsChanged.emit(self.player_id, refs))
+        self.pins.rollRequested.connect(self.rollRequested)
+        self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.player_id))
 
     # -- what the card is showing -----------------------------------------
 
@@ -206,6 +220,7 @@ class PlayerCard(QFrame):
         self._hero_points.set_value(int(character.characteristics.get("hero_points", 0) or 0))
         self._set_portrait(raw.get("portrait"))
         self._show_conditions()
+        self.pins.set_character(character)
         self._portrait.set_clickable(True)
         # The same hover summary an NPC card gives, so the GM can read a player's
         # numbers without opening a window for them.

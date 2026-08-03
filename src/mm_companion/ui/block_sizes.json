@@ -50,11 +50,11 @@
     "min_height": 300
   },
   "gm_players": {
-    "min_width": 250,
+    "min_width": 390,
     "min_height": 130
   },
   "gm_npcs": {
-    "min_width": 250,
+    "min_width": 390,
     "min_height": 150
   },
   "gm_rolls": {

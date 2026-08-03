@@ -28,7 +28,8 @@ from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.rules import apply_condition
+from mm_companion.core.npc import quick_npc
+from mm_companion.core.rules import PinRef, apply_condition
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
@@ -38,6 +39,7 @@ from mm_companion.ui.gm_window import GMWindow
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
+from mm_companion.ui.pin_picker import LABEL_ROLE
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions, build_condition_menu
 from mm_companion.ui.session_bridge import active_session, set_active_session
@@ -1566,3 +1568,209 @@ def test_the_launch_dialog_deletes_a_session(
 
     assert dialog._table.rowCount() == 1
     assert len(store.list_sessions()) == 1
+
+
+# -- pinned parameters -------------------------------------------------------
+
+
+def quick_npc_file(window: GMWindow, name: str = "Goon", effect: int = 6) -> str:
+    """A quick NPC saved into the cast — it has the Damage power the defaults want."""
+    character = quick_npc(
+        load_game_data(), name=name, attack=6, effect=effect, defence=6, toughness=6
+    )
+    path = library.save_character(character, directory=window._npc_dir())
+    window._register_npc(path)
+    return path.name
+
+
+def test_a_new_npc_card_starts_with_the_default_strip(window: GMWindow) -> None:
+    """DEF, ATK and the first Damage power's save DC — resolved against this NPC."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    assert card.pins.chip_texts() == ["DEF 6", "ATK +6", "Damage DC 16"]
+
+
+def test_a_new_player_card_starts_with_the_default_strip(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._on_snapshot("p0", a_character())
+
+    card = window._cards["p0"]
+    assert [v.label for v in card.pins.values()] == ["DEF", "Initiative", "Perception"]
+
+
+def test_a_players_chips_follow_their_snapshot(qapp: QApplication, window: GMWindow) -> None:
+    """A card is a view of a live sheet, so a pin is re-read, not remembered."""
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._on_snapshot("p0", a_character())
+    card = window._cards["p0"]
+    assert card.pins.chip_texts()[0] == "DEF 0"
+
+    stronger = Character.new_default(load_game_data())
+    stronger.resistances["DEF"] = 9
+    window._on_snapshot("p0", sanitize_snapshot(stronger.to_dict()))
+
+    assert card.pins.chip_texts()[0] == "DEF 9"
+
+
+def test_clicking_a_chip_loads_it_into_the_gms_roller(window: GMWindow) -> None:
+    """The end of the chain, not the signal: the roller really holds the spec."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    assert window._roller._spec is None
+
+    damage = card.pins._chips[2]
+    damage.clicked.emit(damage.value.spec)
+
+    assert window._roller._spec is not None
+    assert window._roller._spec.label == "Toughness vs. 16"
+    # A spec that names its own DC ticks the box and fills it in, so the GM does
+    # not have to remember the number the chip was showing.
+    assert window._roller._dc_spin.value() == 16
+
+
+def test_a_chip_with_nothing_to_roll_ignores_a_click(window: GMWindow) -> None:
+    """A defence DC is a difficulty; nobody throws one."""
+    name = quick_npc_file(window)
+    window._store_pins("npc:" + name, [PinRef("defense_class")])
+    window._refresh_npcs()
+    (card,) = npc_cards(window)
+
+    (chip,) = card.pins._chips
+    assert chip.text() == "DEF DC 16"
+    assert chip.rollable is False
+
+
+def test_a_strip_can_be_reordered_and_the_order_persists(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card.pins.move_pin(2, 0)  # the Damage chip to the front
+
+    assert card.pins.chip_texts() == ["Damage DC 16", "DEF 6", "ATK +6"]
+    stored = storage.load_settings()["gm_pins"]["npc:" + name]
+    assert [entry["kind"] for entry in stored] == ["power", "resistance", "ability"]
+    # And it survives the wholesale card rebuild every cast change does.
+    window._refresh_npcs()
+    assert npc_cards(window)[0].pins.chip_texts()[0] == "Damage DC 16"
+
+
+def test_a_chip_can_be_removed(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card.pins.remove_pin(1)
+
+    assert card.pins.chip_texts() == ["DEF 6", "Damage DC 16"]
+    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 2
+
+
+def test_the_picker_pins_onto_the_card_behind_it(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+    picker.pinRequested.emit(PinRef("resistance", "TOUGHNESS"))
+
+    assert card.pins.chip_texts()[-1] == "Toughness 6"
+    picker.close()
+
+
+def picker_rows(picker) -> dict[str, list[str]]:
+    """Every visible row of the picker, grouped by heading."""
+    tree = picker._tree
+    return {
+        tree.topLevelItem(i).text(0): [
+            tree.topLevelItem(i).child(c).data(0, LABEL_ROLE)
+            for c in range(tree.topLevelItem(i).childCount())
+            if not tree.topLevelItem(i).child(c).isHidden()
+        ]
+        for i in range(tree.topLevelItemCount())
+    }
+
+
+def test_the_picker_offers_this_npcs_own_powers(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+
+    groups = picker_rows(picker)
+
+    assert "Damage" in groups["Powers"]
+    assert "Affliction" in groups["Powers"]
+    picker.close()
+
+
+def test_the_pickers_filter_matches_every_word(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+
+    picker._filter.setText("tough")
+
+    shown = [row for rows in picker_rows(picker).values() for row in rows]
+    assert shown == ["Toughness"]
+    picker.close()
+
+
+def test_a_copied_npc_inherits_the_strip_it_was_copied_from(window: GMWindow) -> None:
+    """A duplicate is the same creature under a new name."""
+    name = quick_npc_file(window)
+    npc_cards(window)[0].pins.move_pin(2, 0)
+
+    window._copy_npc(name)
+
+    copy = next(c for c in npc_cards(window) if c.display_name() == "Goon-2")
+    assert copy.pins.chip_texts()[0] == "Damage DC 16"
+
+
+def test_deleting_an_npc_forgets_its_pins_but_removing_it_does_not(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that is gone can never resolve again; one merely set aside can."""
+    name = quick_npc_file(window)
+    npc_cards(window)[0].pins.remove_pin(0)
+    assert "npc:" + name in window._pins
+
+    window._remove_npc(name)
+    assert "npc:" + name in window._pins
+
+    window._register_npc(window._npc_dir() / name)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window._delete_npc(name)
+
+    assert "npc:" + name not in window._pins
+    assert "npc:" + name not in storage.load_settings()["gm_pins"]
+
+
+def test_a_departing_seat_takes_its_pins_with_it(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._on_snapshot("p0", a_character())
+    window._cards["p0"].pins.remove_pin(0)
+    assert "player:p0" in window._pins
+
+    window._show_roster([])
+
+    assert "player:p0" not in window._pins
+
+
+def test_a_pin_to_a_power_the_npc_lost_still_shows_and_can_be_taken_off(
+    window: GMWindow,
+) -> None:
+    """Rendered as a dash rather than dropped — otherwise there is no way to clear it."""
+    name = quick_npc_file(window)
+    entry = window._npc_state[name]
+    entry.character.powers = []
+    library.save_character(entry.character, path=entry.path, directory=window._npc_dir())
+    window._refresh_npcs()
+
+    (card,) = npc_cards(window)
+    assert card.pins.chip_texts()[2].endswith("—")
+    card.pins.remove_pin(2)
+    assert len(card.pins.chip_texts()) == 2

@@ -48,7 +48,16 @@ from typing import ClassVar
 #: fields on a roll record. Additive again, and refused for the same reason — an
 #: old server drops a note on the floor, and an old client renders one as a d20
 #: that rolled zero.
-PROTOCOL_VERSION = 6
+#:
+#: v7 added no message at all — it changed what silence *means*. :class:`Ping`
+#: and :class:`Pong` existed from the start and nothing ever sent one; from v7
+#: every client keeps its link warm, and both ends drop a peer that has said
+#: nothing for :data:`~.net.PEER_TIMEOUT`. A v6 client never pings, so against a
+#: v7 server it would join happily and then be reaped every ninety seconds — the
+#: same "works until it suddenly doesn't" failure v5 was bumped for. Refusing at
+#: the door also means a table cannot end up half-updated, which is what makes
+#: the relay's stock idle timeout safe to trust again.
+PROTOCOL_VERSION = 7
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -74,6 +83,12 @@ ERROR_UNKNOWN_SESSION = "unknown_session"
 #: answer as :data:`ERROR_UNKNOWN_SESSION` would give in prose, so a stranger
 #: cannot use the difference to learn which session ids exist.
 ERROR_NOT_OWNER = "not_owner"
+#: Carried by the :class:`Kicked` a server sends as it shuts down. Nobody did
+#: anything wrong — the table has closed. It matters because it is the one thing
+#: that distinguishes "the GM ended the session" from "the GM's laptop went to
+#: sleep": without it a client cannot tell them apart and spends its whole retry
+#: window redialling a session that is deliberately gone.
+REASON_SESSION_CLOSED = "session_closed"
 
 
 class ProtocolError(Exception):

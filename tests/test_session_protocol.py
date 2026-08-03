@@ -122,6 +122,16 @@ def test_hello_defaults_to_the_current_protocol_version() -> None:
     assert Hello(token="t", display_name="A").protocol_version == PROTOCOL_VERSION
 
 
+def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
+    """A deliberate tripwire, not a tautology.
+
+    v7 is what stops a mixed table: a v6 client never sends a keepalive, so a v7
+    server would reap it every ninety seconds. Changing this number is a decision
+    about who can still join, so it should not be possible to do by accident.
+    """
+    assert PROTOCOL_VERSION == 7
+
+
 def test_every_registered_type_is_reachable_by_tag() -> None:
     registry = protocol.message_types()
 

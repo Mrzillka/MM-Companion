@@ -36,9 +36,24 @@ CONNECT_TIMEOUT = 10.0
 #: laptop, a frozen process) would otherwise park ``sendall`` — and whoever is
 #: broadcasting, eventually the GM's UI thread — forever; after this long the
 #: send raises and the peer is treated as gone. Reads share the socket timeout,
-#: so both read loops treat a timed-out ``recv`` as "still idle, keep waiting"
-#: rather than a dead peer.
+#: which is what gives both read loops a regular tick to check the two deadlines
+#: below against; an expired ``recv`` on its own is not a dead peer.
 IO_TIMEOUT = 15.0
+
+#: How long a client waits, hearing nothing, before sending a
+#: :class:`~.protocol.Ping`. Deliberately the same 30 s as the relay control
+#: link's :data:`~.relay.CONTROL_PING_INTERVAL`, so the app has *one* keepalive
+#: cadence to reason about, and comfortably under the relay's 120 s idle reaper:
+#: a table that is roleplaying sends nothing of its own, and without this its
+#: connections are torn down mid-session (see :class:`mm_companion.relay.RelayLimits`).
+KEEPALIVE_INTERVAL = 30.0
+
+#: How long *either* end waits, hearing nothing at all, before treating the peer
+#: as gone. Three missed keepalives — and deliberately under the relay's 120 s,
+#: so a client starts reconnecting before the relay reaps the pair out from under
+#: it. Without this a half-open link (a black-holed connection, a suspended
+#: laptop) is invisible forever: ``recv`` simply times out and both loops wait.
+PEER_TIMEOUT = 90.0
 
 #: Bytes pulled from the socket per ``recv``. Large enough that a character
 #: snapshot arrives in a few reads, small enough to stay a cheap allocation.
@@ -236,6 +251,7 @@ class TcpListener(Listener):
         if self._closed:
             sock.close()
             return None
+        tune_socket(sock)
         return Connection(sock, (str(address[0]), int(address[1])))
 
     def close(self) -> None:
@@ -257,8 +273,32 @@ class TcpTransport(Transport):
             sock = socket.create_connection((host, port), timeout=timeout)
         except OSError as exc:
             raise TransportError(f"cannot reach {host}:{port}: {exc}") from exc
+        tune_socket(sock)
         sock.settimeout(None)
         return Connection(sock, (host, int(port)))
+
+
+def tune_socket(sock: socket.socket) -> None:
+    """Set the two socket options every session connection wants.
+
+    ``TCP_NODELAY`` because our messages are small and latency-sensitive — a roll
+    is a few hundred bytes, and Nagle waiting for an ACK that delayed-ACK is
+    sitting on adds tens of milliseconds to every one of them. ``SO_KEEPALIVE``
+    as the operating system's last-resort cleanup of a socket whose peer is
+    genuinely gone; the intervals are left alone, since tuning them means three
+    platform branches for a job :data:`KEEPALIVE_INTERVAL` now does portably.
+
+    Best effort: a platform that refuses either option is not a reason to fail a
+    connection that otherwise works.
+    """
+    for level, option in (
+        (socket.IPPROTO_TCP, socket.TCP_NODELAY),
+        (socket.SOL_SOCKET, socket.SO_KEEPALIVE),
+    ):
+        try:
+            sock.setsockopt(level, option, 1)
+        except (OSError, AttributeError):
+            pass
 
 
 def _peer_address(sock: socket.socket) -> tuple[str, int]:

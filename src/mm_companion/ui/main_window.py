@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMenu, QMessage
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.connection_indicator import install_connection_indicator
 
 CHARACTER_FILTER = "Character files (*.json)"
 
@@ -148,9 +149,19 @@ class MainWindow(QMainWindow):
         # is the GM's prep material, driven from the GM window instead. (Rolling
         # dice used to have a Tools menu here; it is the Dice block now — see
         # mm_companion.ui.sections.dice.)
+        # The one thing on this bar that does not fade: a sheet in a session says
+        # so for as long as it is, and a sheet that is not says "Offline".
+        #
+        # Only on a sheet that could *be* in one, which is the same rule as the
+        # Session menu above and for the same reason. A GM opens an NPC sheet (or
+        # a player's read-only snapshot, which returned above) while hosting, and
+        # those windows never join anything — so an indicator there would sit at
+        # "Offline" throughout a perfectly healthy session, which is exactly the
+        # false reading this widget exists to prevent.
         if not self._npc:
             session_menu = menu_bar.addMenu("&Session")
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
+            install_connection_indicator(self)
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""
@@ -209,14 +220,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
-        record_session_history(
-            code=dialog.code_text(),
-            session_id=client.session_id,
-            session_name=client.session_name,
-            display_name=dialog.display_name(),
-            player_id=client.player_id,
-            player_token=client.player_token,
-        )
+
+        def remember(*_args: object) -> None:
+            """Write the seat down on every connect, not only the first.
+
+            A reconnect can come back with a different token, and the copy on disk
+            is what a *later launch* reclaims with — so recording it once at join
+            time leaves the next session starting as a stranger.
+            """
+            record_session_history(
+                code=dialog.code_text(),
+                session_id=client.session_id,
+                session_name=client.session_name,
+                display_name=dialog.display_name(),
+                player_id=client.player_id,
+                player_token=client.player_token,
+            )
+
+        remember()
+        bridge.connected.connect(remember)
         attach_player_session(self, bridge)
 
     def _open_cost_config(self) -> None:

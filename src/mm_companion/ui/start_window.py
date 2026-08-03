@@ -167,7 +167,10 @@ class StartWindow(QMainWindow):
 
         # The launcher has no menu bar, so the Settings window the sheet reaches
         # through its Settings menu hangs off a button here — the look is
-        # changeable before ever opening a character.
+        # changeable before ever opening a character. (For the same reason there
+        # is no connection indicator here, and none is wanted: the launcher can
+        # never be *in* a session — joining opens a MainWindow and GM Mode a
+        # GMWindow, and each carries its own.)
         settings_button = QPushButton("Settings")
         settings_button.clicked.connect(self._open_settings)
         column.addWidget(settings_button)
@@ -321,14 +324,25 @@ class StartWindow(QMainWindow):
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
-        record_session_history(
-            code=dialog.code_text(),
-            session_id=client.session_id,
-            session_name=client.session_name,
-            display_name=dialog.display_name(),
-            player_id=client.player_id,
-            player_token=client.player_token,
-        )
+
+        def remember(*_args: object) -> None:
+            """Write the seat down on every connect, not only the first.
+
+            A reconnect can come back with a different token, and the copy on disk
+            is what a *later launch* reclaims with — so recording it once at join
+            time leaves the next session starting as a stranger.
+            """
+            record_session_history(
+                code=dialog.code_text(),
+                session_id=client.session_id,
+                session_name=client.session_name,
+                display_name=dialog.display_name(),
+                player_id=client.player_id,
+                player_token=client.player_token,
+            )
+
+        remember()
+        bridge.connected.connect(remember)
 
         path = dialog.character_path()
         character = library.load_character(path) if path is not None else None

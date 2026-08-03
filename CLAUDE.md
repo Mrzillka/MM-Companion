@@ -641,10 +641,43 @@ The shape:
   UPnP, `publish_session` → a `Reachability` with verbatim `advice`, and the
   `transports` registry a relay plugs into), `relay.py` (`RelayTransport`
   registered under `mmrelay://` so a relay join code just works).
+- **A link is kept warm, and a dropped one comes back.** `Ping`/`Pong` existed
+  from the start and nothing sent one, so a table that was merely *roleplayed*
+  moved no bytes and the relay reaped it after two minutes (the deployment
+  worked around that with a 4 h idle timeout). Now a client's reader thread pings
+  after `net.KEEPALIVE_INTERVAL` of silence and **either** end drops a peer after
+  `net.PEER_TIMEOUT` — which is also what makes a half-open link visible at all,
+  since `recv` otherwise just times out forever and the GM's roster shows a ghost
+  as connected. One exchange warms a whole relayed pair (the relay stamps
+  `last_active` on writes too), so there is no server heartbeat. `SessionClient`
+  then runs a state machine (`STATE_*`, published as `EVENT_STATE`) and redials
+  along `RECONNECT_DELAYS` for `RECONNECT_WINDOW`, re-presenting the
+  `player_id`/`player_token` it holds so a blip lands back in the same seat.
+  **`EVENT_DISCONNECTED` means the session is over**, not that a packet went
+  missing — a blip raises `EVENT_STATE` and nothing else, which is what stops a
+  two-second Wi-Fi drop tearing the shared roll history out of the Dice block.
+  A server that stops says so (`REASON_SESSION_CLOSED`), or a deliberate end and
+  a sleeping laptop are indistinguishable. Protocol **v7** exists for this: a v6
+  client never pings and would be reaped, so it is refused at the door.
+- **A returning player gets their own seat back**, three ways. The client's
+  redial carries the token; `JoinSessionDialog.reclaim_ids` resolves a saved seat
+  from the *code text* (it used to need a click on a history row nobody knew to
+  make); and on a token miss `SessionState.player_by_id_if_free` hands back the
+  seat the public `player_id` names — but only an **empty**, non-GM one. The
+  trade-off is written out on that method.
 - `src/mm_companion/ui/` — Qt: `session_bridge.py` (`SessionBridge`, the **only**
   place core `on_event` callbacks become signals; module-level
-  `active_session()`/`live_session()`), `gm_window.py`, `npc_window.py`,
-  `player_card.py`, `roll_history.py`, and `session_player.py`/`session_dialogs.py`.
+  `active_session()`/`live_session()`), `connection_indicator.py`, `gm_window.py`,
+  `npc_window.py`, `player_card.py`, `roll_history.py`, and
+  `session_player.py`/`session_dialogs.py`. `SessionBridge.joined` follows the
+  *socket* (False mid-blip, so a send fails honestly); `in_session` follows the
+  *session*, and `live_session()` asks that one — asking `joined` meant a roll
+  made during a blip rolled locally into the private history, a roll the table
+  never saw and the player thought it had. `ConnectionIndicator` is the menu
+  bar's corner widget (`setCornerWidget`, installed by `MainWindow` and
+  `GMWindow`), and it exists because every other disconnect cue **fades** after
+  ten seconds; it recomputes its whole state from the bridge on every signal
+  rather than mapping signals to states one by one.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.

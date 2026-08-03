@@ -167,6 +167,10 @@
       "label": "Hero point pip",
       "hint": "The medallion is square, so this is its height too."
     },
+    "column.status-dot": {
+      "label": "Connection dot",
+      "hint": "The dot beside the connection state in the menu bar corner. Round, so this is its height too."
+    },
     "family": {
       "label": "Font family",
       "hint": "Leave on the platform default unless you have a reason; the app never sets a size in a stylesheet, so an unusual family can reflow a lot."

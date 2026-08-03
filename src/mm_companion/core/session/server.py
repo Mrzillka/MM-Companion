@@ -35,7 +35,7 @@ from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 
 from . import store
 from .model import PlayerSlot, RollRecord, SessionState, tokens_match, utc_now
-from .net import IO_TIMEOUT, Connection, TcpTransport, Transport
+from .net import IO_TIMEOUT, PEER_TIMEOUT, Connection, TcpTransport, Transport
 from .protocol import (
     ERROR_BAD_TOKEN,
     ERROR_MALFORMED,
@@ -44,6 +44,7 @@ from .protocol import (
     ERROR_RATE_LIMIT,
     ERROR_SESSION_FULL,
     PROTOCOL_VERSION,
+    REASON_SESSION_CLOSED,
     ApplyCondition,
     CharacterSnapshot,
     ErrorMessage,
@@ -106,7 +107,7 @@ _JOIN_TIMEOUT = 2.0
 # Event kinds handed to ``on_event``. The payload is always a dict.
 EVENT_STARTED = "started"  # {"session_id", "host", "port"}
 EVENT_STOPPED = "stopped"  # {"session_id"}
-EVENT_PLAYER_JOINED = "player_joined"  # {"player": public slot dict, "new": bool}
+EVENT_PLAYER_JOINED = "player_joined"  # {"player": ..., "new": bool, "adopted": bool}
 EVENT_PLAYER_LEFT = "player_left"  # {"player": public slot dict}
 EVENT_ROSTER = "roster"  # {"players": [roster dicts — no tokens, no characters]}
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
@@ -114,6 +115,12 @@ EVENT_ROLL = "roll"  # a full roll dict, hidden rolls included
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
 EVENT_REFUSED = "refused"  # {"code", "message", "address"}
 EVENT_ERROR = "error"  # {"code", "message"}
+#: The listener stopped handing out connections while we still believe we are
+#: hosting — a relay whose control link died, say. Nothing is wrong with the
+#: session itself and nobody who already joined is affected, but no new player
+#: can get in, and without this the GM's window would go on saying "hosting"
+#: forever. See :meth:`SessionServer._accept_loop`.
+EVENT_LISTENER_LOST = "listener_lost"  # {"session_id"}
 
 
 class SessionServer:
@@ -228,6 +235,11 @@ class SessionServer:
                 slot.connected = False
             self._persist()
         for connection in connections:
+            # Say the table has closed before dropping the socket. A client that
+            # only saw the connection die cannot tell a deliberate end from a
+            # sleeping laptop, and would spend its whole retry window redialling
+            # a session that is not coming back.
+            self._send_quietly(connection, Kicked(reason=REASON_SESSION_CLOSED))
             connection.close()
         for thread in [self._accept_thread, *self._threads]:
             if thread is not None and thread is not threading.current_thread():
@@ -454,6 +466,12 @@ class SessionServer:
                 return
             connection = listener.accept()
             if connection is None:
+                if self._running:
+                    # Not our own ``stop`` — the listener gave up under us. A
+                    # relay whose control link died does exactly this, and the
+                    # session then looks perfectly healthy while nobody on earth
+                    # can join it. Say so rather than letting it go quiet.
+                    self._emit(EVENT_LISTENER_LOST, {"session_id": self.state.id})
                 return
             if not self._running:
                 connection.close()
@@ -525,8 +543,17 @@ class SessionServer:
             return None
 
         replaced: Connection | None = None
+        adopted = False
         with self._lock:
             slot = self.gm_slot() if claims_gm else self.state.player_by_token(message.player_token)
+            if slot is None and not claims_gm:
+                # The token missed. Before minting a second seat for someone who
+                # is plainly already on the board, let them back into the empty
+                # one they name — see ``player_by_id_if_free`` for what that does
+                # and does not allow. The Welcome below re-issues the seat's real
+                # token, so this client never comes back this way again.
+                slot = self.state.player_by_id_if_free(message.player_id)
+                adopted = slot is not None
             is_new = slot is None
             if slot is None:
                 # The GM's own connection does not take a player's place: their
@@ -588,7 +615,10 @@ class SessionServer:
             except (OSError, ProtocolError):
                 return None
 
-        self._emit(EVENT_PLAYER_JOINED, {"player": slot.public_dict(), "new": is_new})
+        self._emit(
+            EVENT_PLAYER_JOINED,
+            {"player": slot.public_dict(), "new": is_new, "adopted": adopted},
+        )
         self._broadcast_roster()
         return slot
 
@@ -608,18 +638,29 @@ class SessionServer:
 
     def _read_loop(self, connection: Connection, slot: PlayerSlot) -> None:
         stamps: list[float] = []
+        # Every client keeps its link warm (see :data:`~.net.KEEPALIVE_INTERVAL`),
+        # so silence here really is silence: past PEER_TIMEOUT this peer is gone,
+        # however healthy its socket still looks. Returning is enough — ``_serve``
+        # closes the connection and calls ``_disconnect``, which flips the slot
+        # offline and rebroadcasts the roster, so a ghost card stops claiming to
+        # be connected. Kept as a local rather than on the slot: touching
+        # ``last_seen`` per keepalive would drag ``_persist`` into a 30 s heartbeat.
+        last_rx = time.monotonic()
         while self._running and not connection.closed:
             try:
                 message = connection.receive()
             except TimeoutError:
-                # The shared IO_TIMEOUT expired on an idle recv. Only a stalled
-                # *send* means a bad peer; an idle one just has nothing to say.
+                # The shared IO_TIMEOUT expired on an idle recv — that alone is
+                # not a dead peer, it is just the tick we check the deadline on.
+                if time.monotonic() - last_rx > PEER_TIMEOUT:
+                    return
                 continue
             except ProtocolError as exc:
                 self._send_quietly(connection, ErrorMessage(code=ERROR_MALFORMED, message=str(exc)))
                 return
             if message is None:
                 return
+            last_rx = time.monotonic()
             if not self._rate_ok(stamps):
                 self._send_quietly(
                     connection,

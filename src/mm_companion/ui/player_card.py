@@ -94,6 +94,9 @@ class PlayerCard(QFrame):
         # removing a seat works even when it has gone offline (a lingering seat is
         # exactly what a GM wants to clear), but the GM can never remove itself.
         self._is_gm = False
+        # Whether the roster last said someone was in this seat. Distinct from
+        # ``_targetable``, which is also false for the GM's own card.
+        self._connected = False
 
         layout = QVBoxLayout(self)
 
@@ -182,7 +185,8 @@ class PlayerCard(QFrame):
             self._name_label.setText(name)
             self._name_label.setStyleSheet("")
         self._is_gm = bool(entry.get("is_gm"))
-        self._targetable = not self._is_gm and bool(entry.get("connected"))
+        self._connected = bool(entry.get("connected"))
+        self._targetable = not self._is_gm and self._connected
         self._condition_button.setEnabled(self._targetable)
         # Only a commandable seat takes hero-point clicks; the rest stay read-only.
         self._hero_points.setAttribute(
@@ -292,11 +296,19 @@ class PlayerCard(QFrame):
         if self._is_gm or not self.player_id:
             return
         menu = QMenu(self)
+        # "Seat" rather than "player" once they are already gone: there is nobody
+        # there to remove, and the difference is exactly what a GM tidying up
+        # after a session wants to be sure of before they click.
         menu.addAction(
-            "Remove player",
+            "Remove player" if self._connected else "Remove seat",
             lambda: self.removePlayerRequested.emit(self.player_id),
         )
         menu.exec(event.globalPos())
+
+    @property
+    def connected(self) -> bool:
+        """Whether the roster last said this seat had someone in it."""
+        return self._connected
 
 
 class _ConditionChip(QFrame):

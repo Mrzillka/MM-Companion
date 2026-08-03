@@ -68,6 +68,7 @@ from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
@@ -274,6 +275,12 @@ class GMWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
+
+        # The notice strip below fades after ten seconds by design; this does not.
+        # It is the only place a GM can look to see whether their table is still
+        # reachable — including the case where hosting is fine but the relay
+        # registration died and no new player can get in.
+        install_connection_indicator(self).set_bridge(self._bridge)
 
     def _on_block_toggled(self, key: str, visible: bool) -> None:
         if visible:
@@ -790,6 +797,11 @@ class GMWindow(QMainWindow):
     def _on_player_joined(self, payload: dict) -> None:
         player = payload.get("player", {})
         name = str(player.get("display_name", "")) or "A player"
+        # A returning player is not news the same way a new one is, and saying
+        # "joined" for both is what made a reconnect look like a second arrival.
+        if payload.get("adopted") or not payload.get("new", True):
+            self._show_notice(f"{name} rejoined.", theme.color("tint.better"))
+            return
         self._show_notice(f"{name} joined.", theme.color("tint.better"))
 
     def _on_refused(self, payload: dict) -> None:
@@ -895,10 +907,19 @@ class GMWindow(QMainWindow):
         """
         card = self._cards.get(player_id)
         name = card.display_name() if card is not None else "this player"
+        # Do not promise to disconnect someone who already is: a GM clearing a
+        # seat after the session wants to be told what actually happens, and
+        # "they will be disconnected" reads as a warning not to.
+        online = card is not None and card.connected
+        detail = (
+            "They will be disconnected."
+            if online
+            else "They are already offline; this clears their seat."
+        )
         confirm = QMessageBox.question(
             self,
-            "Remove player",
-            f"Remove {name} from the session? They will be disconnected.",
+            "Remove player" if online else "Remove seat",
+            f"Remove {name} from the session? {detail}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

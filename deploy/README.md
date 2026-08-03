@@ -59,6 +59,34 @@ cd /home/mm/MM_Companion && ./deploy/deploy.sh              # current branch
 cd /home/mm/MM_Companion && ./deploy/deploy.sh develop      # switch branches
 ```
 
+### Ordering, for the release that restores the stock idle timeout
+
+The relay never parses a session message — it is a byte pump with a six-tag
+envelope vocabulary — so upgrading it is completely decoupled from the app's
+protocol version. That cuts both ways, and one combination is dangerous:
+
+| | old app (pre-v7) | new app (v7) |
+|---|---|---|
+| **relay with the 4 h override** | works (today) | works |
+| **relay on the stock 120 s** | **breaks after 2 min** | works |
+
+An old GM and old players talk v6 to each other perfectly well and merely pass
+*through* this relay, so the protocol bump does not protect them here. Restoring
+the stock timeout on the box before the table has updated re-introduces the exact
+bug it was working around.
+
+So:
+
+1. Ship the app release carrying the keepalive (protocol v7).
+2. Confirm the table is on it. This is self-enforcing for *joining* — a v6 client
+   cannot join a v7 session at all — so once a game is actually being played,
+   everyone is v7.
+3. Only then `./deploy/deploy.sh` and `sudo systemctl restart mm-relay`.
+
+Rolling back is the reverse and is always safe: an old relay with the 4 h
+override serves a new app fine, since the keepalive is then just belt-and-braces
+against a limit that never fires.
+
 ## Reading the logs
 
 ```bash

@@ -15,17 +15,15 @@ WorkingDirectory=/home/mm/MM_Companion
 # is raised to 30 days. The hub re-registers on its own if a link is ever dropped,
 # so this is a safety valve against a leaked session, not the normal path.
 #
-# --idle-timeout is in SECONDS, and the stock 120 s assumes every peer keeps its
-# link warm. That is true of the GM's control link, which pings every 30 s, and
-# false of every data stream: a table that is roleplaying rolls nothing and edits
-# no sheet, so its connections send nothing at all and are reaped after two
-# minutes, taking the paired half with them. Raised to 4 h until the client
-# keepalive ships (SessionClient.ping exists and is wired to nothing today); put
-# it back to the default once every client pings for itself.
+# --idle-timeout is deliberately left at its stock 120 s. It used to be raised to
+# 4 h here, because nothing kept a session's data streams warm and a table that
+# was merely being roleplayed got reaped after two minutes. Protocol v7 fixed
+# that at the source: every client pings every 30 s, and one exchange keeps both
+# halves of a pair alive. See the ordering note in deploy/README.md before
+# applying this to a box a pre-v7 table is still using.
 ExecStart=/home/mm/MM_Companion/.venv/bin/python -m mm_companion.relay \
     --port 47332 \
     --session-ttl 720 \
-    --idle-timeout 14400 \
     --cert /etc/letsencrypt/live/mmcompanion.duckdns.org/fullchain.pem \
     --key /etc/letsencrypt/live/mmcompanion.duckdns.org/privkey.pem
 

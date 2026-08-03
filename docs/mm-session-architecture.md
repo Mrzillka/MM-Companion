@@ -104,6 +104,20 @@ new seat** subject to the client limit. On success it replies with `Welcome`
 history). A **mod-fingerprint mismatch is a warning**, not a refusal — the session
 works, but ids from the other end may not resolve against the mods loaded here.
 
+**Finding the right seat** has two steps, and the second is a deliberate
+weakening of the first. `player_by_token` matches the secret slot token, which is
+the real claim. If that misses, `player_by_id_if_free` will hand back the seat the
+client's *public* `player_id` names — but only when that seat is **empty** and
+**not the GM's**. Without it, a player who cleared their settings, moved machines,
+or pasted the join code by hand arrived as a second card on the GM's board while
+their first sat there greyed out forever. What it costs is that a table-mate could
+claim someone's offline seat and appear under their name; that is bounded (a live
+seat can never be taken, no character is disclosed — snapshots go to the GM's
+connection alone — and hidden rolls still need the GM token), and everyone who
+could try it already holds the join code and is sitting at the table. Matching on
+`display_name` was considered and rejected: two real players called "Sam" would
+silently become one seat.
+
 ### Two rules the server never breaks
 
 - **The server rolls.** Every roll — a player's request or the GM's own — goes
@@ -112,6 +126,53 @@ works, but ids from the other end may not resolve against the mods loaded here.
   one; a player's `hidden` flag is ignored. A hidden roll is recorded, persisted,
   and shown to the GM's own window with a 👁 marker, but it is left out of the
   wire entirely — there is nothing for a player client to peek at.
+
+### Keeping a link alive, and what happens when it dies
+
+`Ping`/`Pong` existed from the first version of the protocol and **nothing ever
+sent one** until v7. The cost of that was concrete: a relay drops a pair that has
+moved no bytes for `RelayLimits.idle_timeout` (120 s), and a table that is being
+*roleplayed* rolls nothing and edits no sheet, so it was reaped mid-session. The
+deployment worked around it by raising the timeout to four hours.
+
+Now every client keeps its own link warm. Hearing nothing for
+`net.KEEPALIVE_INTERVAL` (30 s) its reader thread sends a `Ping`; hearing nothing
+for `net.PEER_TIMEOUT` (90 s — three missed keepalives, and deliberately *under*
+the relay's 120 s) **either end** gives up on the peer. One exchange is enough for
+a whole relayed pair, because the relay stamps `last_active` on writes as well as
+reads: the ping is a read on the client's peer and a write on the session's, and
+the Pong is the reverse. So there is no separate server heartbeat.
+
+The peer deadline is the other half of the fix, and it matters on its own: before
+it, a half-open link — a black-holed connection, a suspended laptop, a NAT that
+dropped its mapping — was **invisible**. `recv` simply timed out forever on both
+sides, so a player sat in a session that was not there and the GM's roster showed
+a ghost as connected indefinitely.
+
+A connection that ends for a reason worth retrying is **redialled** in the
+background (`RECONNECT_DELAYS`, giving up after `RECONNECT_WINDOW` = 5 min),
+re-presenting the `player_id`/`player_token` already in hand — which is what makes
+a blip land back in the *same* seat with no user action. Retryable: a closed
+socket, an unreachable host, a torn frame, our own peer timeout. Terminal: a kick,
+an explicit `close()`, and a refusal in `TERMINAL_CODES` (bad token, protocol
+version, session full, rate limit) — answers that five more minutes would not
+change.
+
+One rule holds this together and is worth stating on its own:
+
+> **`EVENT_DISCONNECTED` means the session is over**, not that a packet went
+> missing. A blip raises `EVENT_STATE` and nothing else.
+
+Several things hang off that signal — the dice block swaps the table's shared roll
+history back for the private one, the sheet says "Left the session" — and firing
+it for a two-second Wi-Fi drop tells the player something false and throws away
+the table's history. A successful reconnect re-raises `EVENT_CONNECTED` with a
+fresh `Welcome`, so the roster and history repaint from it with no separate "you
+are back" path.
+
+Stopping a server **says so** (`Kicked` with `REASON_SESSION_CLOSED`), because a
+deliberate end and a sleeping laptop are otherwise indistinguishable and players
+would spend the whole retry window redialling a table that had closed.
 
 ## The connection ladder
 
@@ -144,6 +205,14 @@ call onto the GUI thread. Module-level `active_session()`/`live_session()` are t
 process-wide handle the sheet and the roller attach to without threading it
 through every constructor.
 
+Two properties that look like synonyms and are not. **`joined`** follows the
+*socket* and goes False the moment it dies, which is what makes a send fail
+honestly mid-blip. **`in_session`** follows the *session* and stays true across a
+reconnect. `live_session()` asks the second one, and the reason is a bug it once
+had: asking `joined` meant a roll made during a blip took the solo path, rolled
+locally, and landed in the private history — a roll the table never saw and the
+player thought it had. Asking `in_session` sends it, fails, and says so.
+
 The windows and widgets:
 
 - **`gm_window.py`** — the GM's console: host controls, the join code with a Copy
@@ -162,6 +231,13 @@ The windows and widgets:
   command to the player's live sheet). Both listen on the sheet's signal bus.
 - **`roll_history.py`** — `RollHistoryPanel`, the shared log shown in both the GM
   window and each player's Dice Roller.
+- **`connection_indicator.py`** — a dot and a short label in the menu bar's
+  top-right corner (`setCornerWidget`), installed by both `MainWindow` and
+  `GMWindow`. It exists because every other report of a lost session **fades**:
+  the GM's notice strip after ten seconds by design, a status-bar message the
+  same. It follows a bridge and recomputes its *whole* state from that bridge on
+  every signal rather than mapping each signal to a state — several signals arrive
+  for one transition, and one state function is what stops them disagreeing.
 
 ### Snapshot sync
 

@@ -263,6 +263,14 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
    do not match. The handshake exchanges a mod fingerprint and warns.
 4. **App-version skew** — a `PROTOCOL_VERSION` mismatch refuses the join with a
    readable message rather than failing obscurely.
+5. **A link that nobody keeps warm gets reaped.** *Closed 2026-08-03.* The relay
+   drops a pair that has moved no bytes for its idle timeout, and a table that is
+   being roleplayed sends nothing — so quiet sessions died mid-game and the
+   deployment had to run a 4 h timeout. Protocol v7 makes every client ping for
+   itself; the override is reverted in `deploy/mm-relay.service`, with the upgrade
+   ordering in `deploy/README.md` (a *pre-v7* app against a relay on the stock
+   timeout re-creates the bug, and the protocol bump does not protect it, since
+   old peers talk v6 to each other and merely pass through).
 
 ## Progress log
 
@@ -996,3 +1004,67 @@ README/CLAUDE.md updates, full regression, and deletion of this file at the merg
     is done). Also still open and now documented rather than hidden: no default
     public relay is deployed (`session_relay_url` defaults to `""`), remote-GM auth,
     live GM-side player sheets, and travelling portraits.
+
+- **2026-08-03 — Keepalive, reconnect, and the connection indicator**
+  (`fix/session-keepalive-and-reconnect`). Closes the deferred keepalive noted
+  after Phase 2 ("no keepalive timer drives `Ping` yet ... and reconnect-on-drop
+  is the UI's job") — it turned out to belong in `core`, not the UI.
+  - **Keepalive and liveness.** `net.KEEPALIVE_INTERVAL` (30 s) and
+    `net.PEER_TIMEOUT` (90 s), both driven from the existing reader threads
+    rather than a new thread — the precedent is `RelayListener._control_loop`.
+    Verified rather than assumed: the relay stamps `last_active` on **writes** as
+    well as reads (`_flush`), so one Ping→Pong warms all four timers on a pair and
+    no server heartbeat is needed. The relay's own docstring said otherwise and
+    was wrong; corrected. `net.tune_socket` adds `TCP_NODELAY` + `SO_KEEPALIVE`
+    on every session and relay socket (belt and braces; the per-platform keepalive
+    intervals are deliberately *not* tuned).
+  - **The peer deadline matters on its own.** A half-open link used to be
+    invisible — `recv` timed out forever on both ends, so a player sat in a
+    session that was not there and the GM's roster showed a ghost as connected
+    indefinitely. Both read loops now give up.
+  - **Reconnect** lives in `SessionClient`: a `STATE_*` machine published as
+    `EVENT_STATE`, `RECONNECT_DELAYS` backoff inside a 5-minute
+    `RECONNECT_WINDOW`, terminal on a kick / `TERMINAL_CODES` refusal / explicit
+    close. The load-bearing rule: **`EVENT_DISCONNECTED` still means the session
+    is over**, so a blip does not fire the handlers that swap the shared roll
+    history away and tell the player they left. A successful redial re-raises
+    `EVENT_CONNECTED` with a fresh `Welcome`, which repaints roster and history
+    for free.
+  - **Seat reuse**, the reported GM-side bug (a reconnecting player appeared as a
+    second card beside their own greyed-out one). Three layers: the redial carries
+    the in-memory token; `JoinSessionDialog.reclaim_ids` resolves from the *code
+    text* rather than needing a click on a history row nobody knew to make (the
+    dialog prefills the newest code, so the obvious way to rejoin was the broken
+    one); and `SessionState.player_by_id_if_free` adopts the **empty**, non-GM seat
+    a public `player_id` names. The trust trade-off is written out on that method
+    — `display_name` matching was rejected outright, since two players called
+    "Sam" would silently merge.
+  - **`ConnectionIndicator`** (`ui/connection_indicator.py`) in both windows'
+    menu-bar corners. Every previous disconnect cue faded after ten seconds by
+    design. Painted dot + short label, colour from semantic tint tokens read at
+    paint time; `text.muted` falls back to the widget palette, since it is allowed
+    to be a `palette()` expression `QColor` cannot parse.
+  - **`live_session()` now asks `in_session`, not `joined`** — a real bug found on
+    the way: `joined` follows the socket, so a roll made during a blip took the
+    solo path, rolled locally, and landed in the *private* history. A roll the
+    table never saw and the player thought it had.
+  - **Two things found and fixed on the way.** Stopping a server now says so
+    (`REASON_SESSION_CLOSED`), because a deliberate end and a sleeping laptop were
+    indistinguishable and players spent the whole retry window redialling a closed
+    table. And `SessionServer` emits `EVENT_LISTENER_LOST` when `accept()` gives up
+    while `_running` — a relay whose control link dies left hosting looking perfect
+    while nobody on earth could join.
+  - **Protocol v7.** A v6 client never pings and would be reaped every 90 s, so it
+    is refused at the door — which also makes a mixed table impossible, and that
+    is what makes the relay's stock idle timeout safe to restore.
+  - **Tests** — 22 new: keepalive/reaping/stall/reconnect/adoption in
+    `test_session_server.py` (with a `brisk` fixture shrinking the clocks and a
+    stub server that welcomes and then goes silent forever, which is the only
+    honest way to model a black-holed link); a matched pair in
+    `test_session_relay.py` where the client keepalive is the *single* variable
+    between a table surviving the reaper and being eaten by it; the reclaim cases
+    in `test_session_player.py`; connection-state and `listenerLost` in
+    `test_session_bridge.py`; and a new `test_connection_indicator.py`. Also fixed
+    a pre-existing race in `test_a_note_is_persisted_and_reloads_as_a_note`, which
+    waited on the in-memory list and then read the file, and lost about one run in
+    three. Full suite: **1703 passed**.

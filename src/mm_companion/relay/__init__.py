@@ -95,11 +95,19 @@ class RelayLimits:
     #: Burst allowed above the sustained rate.
     burst_bytes: int = 1024 * 1024
     #: A connection with no traffic for this long is dropped, and its paired half
-    #: with it. "Traffic" means bytes actually read off the socket, so only a peer
-    #: that keeps *sending* survives an idle stretch: the GM's control link pings
-    #: every 30 s and is safe, while a session data stream sends nothing at all
-    #: while a table talks. Until the client keepalive lands, a deployment facing
-    #: quiet tables has to raise this (see ``deploy/mm-relay.service``).
+    #: with it. "Traffic" is bytes moved in *either* direction — ``last_active`` is
+    #: stamped by both :meth:`RelayServer._read` and :meth:`RelayServer._flush` —
+    #: so being written to keeps a peer alive as surely as writing does. That is
+    #: what makes one keepalive exchange enough for a whole pair: the client's
+    #: ping is a read on its own peer and a write on the session's, and the Pong
+    #: is the reverse.
+    #:
+    #: Everything at a table now keeps its link warm: the GM's control link pings
+    #: every :data:`~mm_companion.core.session.relay.CONTROL_PING_INTERVAL`, and
+    #: every session client every :data:`~mm_companion.core.session.net.KEEPALIVE_INTERVAL`
+    #: (both 30 s). Before protocol v7 nothing did, so a table that was merely
+    #: being roleplayed sent no bytes at all and was reaped mid-session — which is
+    #: why a deployment used to have to raise this.
     idle_timeout: float = 120.0
     #: A session is closed at this age however busy it is.
     session_ttl: float = 12 * 3600.0

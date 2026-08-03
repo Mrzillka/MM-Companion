@@ -39,6 +39,7 @@ import ssl
 import time
 from dataclasses import dataclass, field
 
+from mm_companion.core.session.net import tune_socket
 from mm_companion.core.session.relay import (
     ENVELOPE_ACCEPT,
     ENVELOPE_ERROR,
@@ -261,6 +262,9 @@ class RelayServer:
         except OSError:
             return
         now = time.monotonic()
+        # Nagle hurts most here: every byte of a table's traffic is forwarded
+        # through this loop, and a delayed ACK on one hop would tax both.
+        tune_socket(sock)
         sock.setblocking(False)
         peer = _Peer(sock, address, now)
         if self._ssl_context is not None:

@@ -65,7 +65,7 @@ import urllib.parse
 from dataclasses import dataclass
 
 from . import discovery
-from .net import CONNECT_TIMEOUT, Connection, Listener, Transport, TransportError
+from .net import CONNECT_TIMEOUT, Connection, Listener, Transport, TransportError, tune_socket
 
 #: The URL scheme for a TLS relay, and the same protocol in the clear.
 RELAY_SCHEME = discovery.RELAY_SCHEME
@@ -253,6 +253,7 @@ def _dial(
         sock: socket.socket = socket.create_connection(address.address, timeout=timeout)
     except OSError as exc:
         raise RelayError(f"cannot reach the relay at {address.host}:{address.port}: {exc}") from exc
+    tune_socket(sock)
     if not address.tls:
         return sock
     context = ssl_context or ssl.create_default_context()
@@ -284,13 +285,16 @@ class RelayListener(Listener):
         *,
         ssl_context: ssl.SSLContext | None = None,
         timeout: float = CONNECT_TIMEOUT,
-        ping_interval: float = CONTROL_PING_INTERVAL,
+        ping_interval: float | None = None,
     ) -> None:
         self._address = address
         self._secret = secret
         self._ssl_context = ssl_context
         self._timeout = timeout
-        self._ping_interval = ping_interval
+        # Read at call time rather than frozen as a default argument: this
+        # interval only means anything relative to the relay's idle timeout, and
+        # a def-time default cannot be moved when that one is.
+        self._ping_interval = CONTROL_PING_INTERVAL if ping_interval is None else ping_interval
         self._incoming: queue.Queue[str | None] = queue.Queue()
         self._closed = False
 

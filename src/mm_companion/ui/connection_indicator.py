@@ -43,11 +43,29 @@ TEXT_DROPPED = "Disconnected"
 TEXT_REMOVED = "Removed"
 TEXT_HOSTING = "Hosting"
 TEXT_PUBLISHING = "Hosting…"
-TEXT_UNREACHABLE = "Hosting — no one can join"
+TEXT_LAN = "Hosting (LAN)"
+#: Short on purpose — the explanation is in the tooltip. A menu bar is no place
+#: for a sentence, and every state has to fit the width reserved below.
+TEXT_UNREACHABLE = "Unreachable"
 
 #: The token whose colour means "nothing is happening". Kept as a name so the
 #: fallback below is the only place that knows it might not be a literal.
 MUTED_TOKEN = "text.muted"
+
+#: Every string the label can hold. The widget reserves the widest of them, so
+#: the menu bar lays it out once and correctly — see :meth:`ConnectionIndicator._reserve`.
+ALL_TEXTS = (
+    TEXT_OFFLINE,
+    TEXT_CONNECTING,
+    TEXT_ONLINE,
+    TEXT_RECONNECTING,
+    TEXT_DROPPED,
+    TEXT_REMOVED,
+    TEXT_HOSTING,
+    TEXT_PUBLISHING,
+    TEXT_LAN,
+    TEXT_UNREACHABLE,
+)
 
 
 class _StatusDot(QWidget):
@@ -115,8 +133,23 @@ class ConnectionIndicator(QWidget):
         layout.setSpacing(gap)
         layout.addWidget(self._dot)
         layout.addWidget(self._label)
+        self._reserve()
 
         self._apply(TEXT_OFFLINE, MUTED_TOKEN, "This window is not in a session.")
+
+    def _reserve(self) -> None:
+        """Fix the label's width to the widest state it can ever show.
+
+        A menu bar lays its corner widget out when the *bar* is resized, and a
+        label growing from "Offline" to "Reconnecting…" resizes nothing — so the
+        widget keeps the geometry it was given and the longer text is clipped,
+        which is how the state that most needs reading becomes the one you cannot
+        read. Reserving the maximum up front means the bar's one placement is
+        always right; it also stops the read-out sliding along the bar every time
+        the link hiccups, which is worth having on its own.
+        """
+        metrics = self._label.fontMetrics()
+        self._label.setFixedWidth(max(metrics.horizontalAdvance(text) for text in ALL_TEXTS))
 
     # -- following a session ----------------------------------------------
 
@@ -229,7 +262,7 @@ class ConnectionIndicator(QWidget):
         # whether this needed UPnP, a relay, or a hand-forwarded port.
         advice = "\n".join(reachability.advice) or "Players can join."
         if not reachability.internet_reachable:
-            return (f"{TEXT_HOSTING} (LAN)", "accent", advice)
+            return (TEXT_LAN, "accent", advice)
         return (TEXT_HOSTING, "tint.better", advice)
 
     def _joined_state(self, bridge) -> tuple[str, str, str]:
@@ -276,7 +309,6 @@ class ConnectionIndicator(QWidget):
         self._dot.set_token(token)
         self.setToolTip(tooltip)
         self._label.setToolTip(tooltip)
-        self.updateGeometry()
 
     # -- what a test reads -------------------------------------------------
 

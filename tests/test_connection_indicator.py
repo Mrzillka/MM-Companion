@@ -18,10 +18,12 @@ from mm_companion.core import storage
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session.discovery import METHOD_RELAY, Reachability
 from mm_companion.ui.connection_indicator import (
+    ALL_TEXTS,
     MUTED_TOKEN,
     TEXT_CONNECTING,
     TEXT_DROPPED,
     TEXT_HOSTING,
+    TEXT_LAN,
     TEXT_OFFLINE,
     TEXT_ONLINE,
     TEXT_PUBLISHING,
@@ -207,8 +209,24 @@ def test_a_lan_only_session_says_so(pair) -> None:
     bridge.reachability = Reachability(host="192.168.1.5", port=47331, advice=("LAN only.",))
     bridge.published.emit(bridge.reachability)
 
-    assert indicator.text.endswith("(LAN)")
+    assert indicator.text == TEXT_LAN
     assert indicator.token == "accent"
+
+
+def test_every_state_fits_the_width_reserved_for_it(qapp: QApplication) -> None:
+    """The clip that made the states worth reading the ones you could not read.
+
+    A menu bar lays a corner widget out when the *bar* resizes, so a label growing
+    from "Offline" to "Reconnecting…" gets no more room and is simply cut off.
+    The widget reserves the widest state up front; this is the guard on that, and
+    on nobody later adding a state that does not fit.
+    """
+    indicator = ConnectionIndicator()
+    metrics = indicator._label.fontMetrics()
+    reserved = indicator._label.width()
+
+    for text in ALL_TEXTS:
+        assert metrics.horizontalAdvance(text) <= reserved, f"{text!r} would be clipped"
 
 
 def test_hosting_nobody_can_reach_is_flagged(pair) -> None:

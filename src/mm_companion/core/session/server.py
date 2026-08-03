@@ -224,22 +224,33 @@ class SessionServer:
         """Stop listening, drop every connection, and persist the final roster."""
         if not self._running:
             return
+
+        # Say the table has closed *first*, while the sockets are still ours.
+        # A client that only saw its connection die cannot tell a deliberate end
+        # from a sleeping laptop, and spends its whole retry window redialling a
+        # session that is not coming back — which is the whole reason this
+        # message exists. Clearing ``_running`` before sending would let every
+        # reader loop exit and close its own connection out from under us, and a
+        # farewell written to a closed socket is dropped without a sound: the
+        # failure would be timing-dependent, so it would work in testing and go
+        # wrong in the field.
+        with self._lock:
+            connections = list(self._connections.values())
+        for connection in connections:
+            self._send_quietly(connection, Kicked(reason=REASON_SESSION_CLOSED))
+
         self._running = False
         if self._listener is not None:
             self._listener.close()
         with self._lock:
-            connections = list(self._connections.values())
             self._connections.clear()
             self._welcomed.clear()
             for slot in self.state.players.values():
                 slot.connected = False
             self._persist()
         for connection in connections:
-            # Say the table has closed before dropping the socket. A client that
-            # only saw the connection die cannot tell a deliberate end from a
-            # sleeping laptop, and would spend its whole retry window redialling
-            # a session that is not coming back.
-            self._send_quietly(connection, Kicked(reason=REASON_SESSION_CLOSED))
+            # The bytes above are already with the kernel, and a graceful close
+            # still delivers them before the FIN.
             connection.close()
         for thread in [self._accept_thread, *self._threads]:
             if thread is not None and thread is not threading.current_thread():

@@ -18,9 +18,25 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+#: Shedding the chrome takes a stylesheet, not ``setFrame``/``setButtonSymbols``
+#: alone: a styled preset states a border, a radius and a padding on these widgets
+#: from the application sheet, and that outranks both. The padding matters as much
+#: as the border — the theme reserves a right-hand column for the arrows the
+#: platform style draws (see :mod:`mm_companion.ui.theme.qss`), and a locked field
+#: draws none, so it would otherwise sit its value off-centre against a gap.
+#:
+#: Deliberately widget-level rather than a ``[locked="true"]`` rule in the theme
+#: QSS: Classic emits almost no sheet at all, so an application-level locked rule
+#: would exist under some presets and not others — the very split being fixed.
+#: They state no colour, only absences, so no theme token leaks into a widget.
 _LOCKED_COMBO_STYLE = (
-    "QComboBox { border: none; background: transparent; }"
+    "QComboBox { border: none; border-radius: 0px; background: transparent; padding: 0px; }"
     "QComboBox::drop-down { width: 0px; border: none; }"
+)
+
+_LOCKED_SPIN_STYLE = (
+    "QAbstractSpinBox { border: none; border-radius: 0px; background: transparent;"
+    " padding: 0px; }"
 )
 
 
@@ -71,14 +87,23 @@ def set_widget_locked(widget: QWidget, locked: bool) -> None:
 
 def _set_spin_buttons_hidden(spin: QAbstractSpinBox, hidden: bool) -> None:
     """Hide a spin box's up/down buttons while locked, restoring whatever style
-    it was created with on unlock."""
+    it was created with on unlock.
+
+    ``setButtonSymbols`` stops the arrows being *drawn*; the stylesheet is what
+    stops the theme still reserving room for them and a box around the whole field
+    (see :data:`_LOCKED_SPIN_STYLE`). A box built with ``buttons=False`` keeps its
+    own setting through the round trip — that is what ``_orig_button_symbols`` is
+    for.
+    """
     if hidden:
         if not hasattr(spin, "_orig_button_symbols"):
             spin._orig_button_symbols = spin.buttonSymbols()
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        spin.setStyleSheet(_LOCKED_SPIN_STYLE)
     elif hasattr(spin, "_orig_button_symbols"):
         spin.setButtonSymbols(spin._orig_button_symbols)
         del spin._orig_button_symbols
+        spin.setStyleSheet("")
 
 
 def _set_text_edit_locked(edit: QTextEdit, locked: bool) -> None:

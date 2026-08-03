@@ -45,6 +45,10 @@ def make_spin_box(
         spin.setValue(value)
     if not buttons:
         spin.setButtonSymbols(QSpinBox.NoButtons)
+        # The theme reserves a right-hand column for the arrows the platform style
+        # draws (see mm_companion.ui.theme.qss). A box with none must not pay for
+        # it: on the sheet's narrow rank grids that padding is most of the cell.
+        spin.setProperty(theme.ARROWLESS_PROPERTY, True)
     if max_width is not None:
         spin.setMaximumWidth(max_width)
     if guarded:

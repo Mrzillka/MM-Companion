@@ -57,6 +57,7 @@ from mm_companion.ui.theme.loader import (
     unique_theme_id,
     workspace_theme_path,
 )
+from mm_companion.ui.theme.qss import ARROWLESS_PROPERTY
 from mm_companion.ui.theme.tokens import (
     Chrome,
     Theme,
@@ -70,11 +71,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from PySide6.QtWidgets import QApplication
 
 __all__ = [
+    "ARROWLESS_PROPERTY",
     "Chrome",
     "DEFAULT_THEME_ID",
     "Theme",
     "UnknownToken",
     "active_theme",
+    "arrow_columns",
     "asset",
     "available_themes",
     "apply",
@@ -158,9 +161,12 @@ def reset() -> None:
     # importing it up top would close the loop.
     from mm_companion.ui.block_sizes import clear_block_size_cache
 
-    global _active, _preview
+    global _active, _preview, _arrow_columns
     _active = None
     _preview = None
+    # The arrow column belongs to the base style, not to the preset — but a test
+    # that swaps styles has no other seam to invalidate it through.
+    _arrow_columns = None
     clear_theme_cache()
     clear_block_size_cache()
 
@@ -223,7 +229,91 @@ def apply(app: QApplication) -> None:
         font.setFamily(family)
         app.setFont(font)
 
-    app.setStyleSheet(qss.build(theme))
+    app.setStyleSheet(qss.build(theme, arrow_columns(app)))
+
+
+# The platform style's own arrow column, measured once. Cached because measuring
+# means clearing the stylesheet, and apply() runs on every keystroke of the theme
+# editor's live preview.
+_arrow_columns = None
+
+
+def arrow_columns(app: QApplication):
+    """How much room the platform style keeps for a spin box's / combo box's arrows.
+
+    A stylesheet that states any box on those widgets makes Qt lay the edit field
+    out from the box alone, over the top of the arrows — so the sheet has to give
+    that column back as padding, and how wide it is is a fact about the *style*
+    (50px under ``windows11``, 15px under ``Fusion``), not about the theme. Hence a
+    measurement rather than a token; :func:`mm_companion.ui.theme.qss.build` takes
+    the answer.
+
+    Measured with no sheet installed, because our own would be what distorts it.
+    That costs one extra assignment, which is why the result is remembered — and
+    why :func:`reset` drops it, so a test that swaps the base style measures again.
+    """
+    from mm_companion.ui.theme import qss
+
+    global _arrow_columns
+    if _arrow_columns is not None:
+        return _arrow_columns
+
+    from PySide6.QtWidgets import (
+        QComboBox,
+        QSpinBox,
+        QStyle,
+        QStyleOptionComboBox,
+        QStyleOptionSpinBox,
+    )
+
+    previous = app.styleSheet()
+    app.setStyleSheet("")
+    try:
+        spin = QSpinBox()
+        spin.setRange(0, 999)
+        spin.ensurePolished()
+        spin.resize(150, spin.sizeHint().height())
+        spin_option = QStyleOptionSpinBox()
+        spin_option.initFrom(spin)
+        spin_option.subControls = QStyle.SubControl.SC_All
+        spin_option.buttonSymbols = spin.buttonSymbols()
+        spin_option.frame = spin.hasFrame()
+        buttons = [
+            spin.style().subControlRect(
+                QStyle.ComplexControl.CC_SpinBox, spin_option, sub_control, spin
+            )
+            for sub_control in (QStyle.SubControl.SC_SpinBoxUp, QStyle.SubControl.SC_SpinBoxDown)
+        ]
+
+        combo = QComboBox()
+        combo.addItem("Measured")
+        combo.ensurePolished()
+        combo.resize(150, combo.sizeHint().height())
+        combo_option = QStyleOptionComboBox()
+        combo_option.initFrom(combo)
+        combo_option.subControls = QStyle.SubControl.SC_All
+        arrow = combo.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            combo_option,
+            QStyle.SubControl.SC_ComboBoxArrow,
+            combo,
+        )
+
+        spin_column = 150 - min(rect.x() for rect in buttons)
+        combo_column = 150 - arrow.x()
+        spin.deleteLater()
+        combo.deleteLater()
+    except Exception:  # pragma: no cover - a style that will not be measured
+        # Never let a paint-path fallback take the app down; the constants are a
+        # perfectly serviceable answer, just not a tailored one.
+        app.setStyleSheet(previous)
+        return qss.FALLBACK_ARROW_COLUMNS
+
+    fallback_spin, fallback_combo = qss.FALLBACK_ARROW_COLUMNS
+    # A degenerate measurement (a style that reports nothing) would silently remove
+    # the padding and put the bug back, so the fallback is the floor.
+    _arrow_columns = (max(spin_column, fallback_spin), max(combo_column, fallback_combo))
+    return _arrow_columns
 
 
 # Whether the last apply() installed a palette of our own, so switching back to a

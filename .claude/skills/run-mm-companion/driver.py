@@ -8,6 +8,7 @@ from a single command:
     python .claude/skills/run-mm-companion/driver.py start        # launcher (StartWindow)
     python .claude/skills/run-mm-companion/driver.py sheet        # editable character sheet
     python .claude/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
+    python .claude/skills/run-mm-companion/driver.py sheet-locked # the read-only view
     python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
     python .claude/skills/run-mm-companion/driver.py gm           # GM Mode, with a cast of NPCs
     python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
@@ -96,6 +97,15 @@ def build(target: str):
 
         initialize_mods()
         win = StartWindow()
+    elif target == "sheet-locked":
+        # The read-only view a saved character opens in, which is a different
+        # question from "sheet": locking sheds every field's input chrome, so it is
+        # the other half of any change to how a spin box or a combo box is dressed.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=True)
+        for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
+            win._sheet.abilities._abilities[key].setValue(value)
     elif target in ("sheet", "sheet-demo"):
         from mm_companion.ui.main_window import MainWindow
 
@@ -349,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
             "start",
             "sheet",
             "sheet-demo",
+            "sheet-locked",
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",

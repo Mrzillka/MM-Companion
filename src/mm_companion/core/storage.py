@@ -113,6 +113,37 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # key because the GM window has a different block set. See
     # :mod:`mm_companion.ui.gm_window`.
     "gm_layout": {},
+    # What a GM card's pinned-parameter strip starts with, per card kind. Each
+    # entry is a ``PinRef.to_dict()`` (see :mod:`mm_companion.core.rules.pins`).
+    #
+    # These live in settings rather than as a constant in code because the whole
+    # point is that a GM changes them; a preferences page that edits this key is
+    # the only piece still missing, and nothing else has to move when it lands.
+    # The NPC damage entry is deliberately *late-bound* — the defaults are written
+    # down long before the NPC they will describe exists, so "the first Damage
+    # power" is the only way to say it, and it stays true when the GM edits which
+    # power that is.
+    "gm_default_pins": {
+        "player": [
+            {"kind": "resistance", "key": "DEF"},
+            {"kind": "initiative"},
+            {"kind": "skill", "key": "Perception"},
+        ],
+        "npc": [
+            {"kind": "resistance", "key": "DEF"},
+            {"kind": "ability", "key": "ATK"},
+            {"kind": "power", "select": "first_damage"},
+        ],
+    },
+    # Per-card pin strips the GM has since edited, keyed ``"npc:<file name>"`` or
+    # ``"player:<player_id>"``; a card with no entry here starts from
+    # ``gm_default_pins``. Same plain-dict idiom as ``quick_rolls``.
+    #
+    # A player id is session-scoped, so someone who rejoins in a fresh seat starts
+    # from the defaults again. That is the cheap version on purpose: the honest
+    # alternative is per-session state on the server, and pins are a GM's private
+    # scratch note, not table state.
+    "gm_pins": {},
 }
 
 

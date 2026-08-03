@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -32,6 +33,8 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    PIN_INITIATIVE,
+    PinRef,
     condition_check_penalty,
     condition_speed_lines,
     condition_speed_rank_mod,
@@ -50,6 +53,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
+from mm_companion.ui.sections.stat_table import PIN_ACTION_TEXT
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.svg_assets import hero_point_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -314,6 +318,10 @@ class SystemInfoSection(QGroupBox):
     #: A sentence for the roll history — a hero point spent or gained. Carries the
     #: text, since the block that writes it down cannot see what changed here.
     noteRequested = Signal(str)
+    #: The Initiative readout was right-clicked and pinned — carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
+    #: GM opened from a card (see :meth:`set_pin_target`).
+    pinRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -323,6 +331,9 @@ class SystemInfoSection(QGroupBox):
         self._data = data
         self._character = character
         self._locked = False
+        # Whether this sheet was opened from a GM card, and so has somewhere to pin
+        # the Initiative readout to. Set by the sheet after construction.
+        self._pin_target = False
         self._by_key = {c.key: c for c in data.characteristics}
         self._editable: list[QWidget] = []
         # A GM's NPC has no point budget (see :meth:`set_npc_mode`).
@@ -435,6 +446,11 @@ class SystemInfoSection(QGroupBox):
     def _build_initiative(self) -> QWidget:
         self._initiative = QLabel("—")
         self._initiative.setToolTip(INITIATIVE_TIP)
+        # Initiative is the one readout on this block a GM pins, and the only
+        # pinnable line on the sheet that is not a table row — so the menu is hung
+        # on the label itself rather than through stat_table.
+        self._initiative.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._initiative.customContextMenuRequested.connect(self._show_initiative_pin_menu)
         # The one readout on this block that is a die roll rather than a fact. Its
         # tooltip is rewritten on every refresh, so the click hint is folded into
         # that text rather than left to attach_roll_click.
@@ -446,6 +462,17 @@ class SystemInfoSection(QGroupBox):
             tooltip=False,
         )
         return self._initiative
+
+    def _show_initiative_pin_menu(self, pos) -> None:
+        if not self._pin_target:
+            return
+        menu = QMenu(self._initiative)
+        menu.addAction(PIN_ACTION_TEXT, lambda: self.pinRequested.emit(PinRef(PIN_INITIATIVE)))
+        menu.exec(self._initiative.mapToGlobal(pos))
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether the Initiative readout offers "Pin to GM card"."""
+        self._pin_target = enabled
 
     def _build_hero_points(self) -> QWidget:
         self._hero_points = HeroPointsWidget()

@@ -18,7 +18,16 @@ from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
-from mm_companion.core.rules import RollSpec, ability_roll
+from mm_companion.core.rules import (
+    PIN_ABILITY,
+    PIN_INITIATIVE,
+    PIN_POWER,
+    PIN_RESISTANCE,
+    PIN_SKILL,
+    PinRef,
+    RollSpec,
+    ability_roll,
+)
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
@@ -678,3 +687,93 @@ def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -
 
     _chain_buttons(history.cards()[0])[0].click()
     assert sheet.dice.panel.current_spec().modifier == 0
+
+
+# -- pinning a row to a GM card ----------------------------------------------
+
+
+def test_a_sheet_offers_no_pinning_until_it_is_told_it_has_a_card(qapp: QApplication) -> None:
+    """A player's own sheet is unchanged: the action would have nowhere to go."""
+    sheet = _sheet()
+
+    assert sheet.abilities._pin_target is False
+    assert sheet.skills._pin_target is False
+    assert sheet.system_info._pin_target is False
+    assert sheet.powers._pin_target is False
+
+    sheet.set_pin_target(True)
+
+    assert sheet.abilities._pin_target is True
+    assert sheet.powers._pin_target is True
+
+
+def test_a_pin_request_leaves_the_sheet_rather_than_finding_a_block(qapp: QApplication) -> None:
+    """The one request no block answers — a card is outside the sheet entirely."""
+    sheet = _sheet()
+    seen: list[object] = []
+    sheet.pinRequested.connect(seen.append)
+
+    sheet.abilities.pinRequested.emit(PinRef(PIN_ABILITY, "STR"))
+
+    assert seen == [PinRef(PIN_ABILITY, "STR")]
+
+
+def test_every_pinnable_block_reaches_the_sheet_the_same_way(qapp: QApplication) -> None:
+    sheet = _sheet()
+    seen: list[object] = []
+    sheet.pinRequested.connect(seen.append)
+
+    sheet.abilities.pinRequested.emit(PinRef(PIN_ABILITY, "STR"))
+    sheet.resistances.pinRequested.emit(PinRef(PIN_RESISTANCE, "DEF"))
+    sheet.skills.pinRequested.emit(PinRef(PIN_SKILL, "Perception"))
+    sheet.system_info.pinRequested.emit(PinRef(PIN_INITIATIVE))
+    sheet.powers.pinRequested.emit(PinRef(PIN_POWER, "abc", 1))
+
+    assert [ref.kind for ref in seen] == [
+        PIN_ABILITY,
+        PIN_RESISTANCE,
+        PIN_SKILL,
+        PIN_INITIATIVE,
+        PIN_POWER,
+    ]
+
+
+def test_pinning_does_not_open_a_block_the_way_a_roll_does(qapp: QApplication) -> None:
+    """A roll reveals whatever serves it; a pin has no server to reveal.
+
+    Listed in QUIET_REQUESTS for that reason — hunting for a block would be the
+    sheet answering a question about itself.
+    """
+    from mm_companion.ui.blocks.bus import PIN_REQUESTED, QUIET_REQUESTS
+
+    assert PIN_REQUESTED in QUIET_REQUESTS
+
+    sheet = _sheet()
+    sheet.hide_block("dice")
+    sheet.set_pin_target(True)
+    sheet.abilities.pinRequested.emit(PinRef(PIN_ABILITY, "STR"))
+
+    assert sheet.is_block_hidden("dice") is True
+
+
+def test_a_pinned_row_names_the_same_trait_the_roll_does(qapp: QApplication) -> None:
+    """Both read the one payload the row stashed, so they cannot disagree."""
+    sheet = _sheet()
+    sheet.set_pin_target(True)
+    table = sheet.abilities.table
+    row = _stat_row(table, "STR")
+
+    key = table.item(row, COL_TOTAL).data(ROLL_ROLE)
+
+    assert sheet.abilities._pin_ref(key) == PinRef(PIN_ABILITY, "STR")
+    assert sheet.abilities._roll_spec(key).label == "Strength"
+
+
+def test_a_pinned_skill_row_keeps_its_focus_apart_from_its_parent(qapp: QApplication) -> None:
+    sheet = _sheet()
+
+    assert sheet.skills._pin_ref(("Expertise::Law", "Expertise: Law")) == PinRef(
+        PIN_SKILL, "Expertise::Law"
+    )
+    # A group header stashes nothing, so there is nothing to pin.
+    assert sheet.skills._pin_ref(None) is None

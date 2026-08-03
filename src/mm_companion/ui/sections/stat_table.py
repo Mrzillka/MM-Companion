@@ -27,6 +27,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QHeaderView,
+    QMenu,
     QSizePolicy,
     QSpinBox,
     QTableWidget,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.data_loader import TraitRange
-from mm_companion.core.rules import ConditionEffect, RollSpec
+from mm_companion.core.rules import ConditionEffect, PinRef, RollSpec
 from mm_companion.ui import theme
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, make_spin_box, readonly_item
@@ -58,6 +59,19 @@ HEADERS = ["Trait", "ABL", "Rank", "Total"]
 #: ``rollRequested.emit``).
 RollHookFactory = Callable[[str], "RollSpec | None"]
 
+#: The same shape for pinning: a factory turning a row's stashed key into the
+#: :class:`~mm_companion.core.rules.pins.PinRef` that names it. Deliberately the
+#: same ``ROLL_ROLE`` payload — a row that can be rolled is exactly a row that can
+#: be pinned, so there is nothing extra to stash and nothing that can disagree.
+#: The key is whatever that table stashed under ``ROLL_ROLE`` — a trait key for the
+#: two stat tables, a ``(row_id, display)`` tuple for Skills — so a factory takes
+#: what its own table put there.
+PinHookFactory = Callable[[object], PinRef | None]
+
+#: What the row menu calls the action. Only offered while a sheet has somewhere to
+#: pin *to* — see :meth:`~mm_companion.ui.character_sheet.CharacterSheet.set_pin_target`.
+PIN_ACTION_TEXT = "Pin to GM card"
+
 
 def build_stat_table(
     entries: list,
@@ -70,6 +84,9 @@ def build_stat_table(
     roll_spec: RollHookFactory | None = None,
     roll_sink: Callable[[RollSpec], None] | None = None,
     load_sink: Callable[[RollSpec], None] | None = None,
+    pin_ref: PinHookFactory | None = None,
+    pin_sink: Callable[[PinRef], None] | None = None,
+    can_pin: Callable[[], bool] | None = None,
 ) -> QTableWidget:
     """Build the stat table for one trait family (abilities or resistances).
 
@@ -139,6 +156,8 @@ def build_stat_table(
         table.setItem(row, COL_TOTAL, total)
         row += 1
 
+    if pin_ref is not None and pin_sink is not None:
+        install_pin_menu(table, pin_ref, pin_sink, can_pin or (lambda: True))
     if roll_spec is not None and roll_sink is not None:
         table.cellDoubleClicked.connect(lambda r, _c: _row_spec_to(table, r, roll_spec, roll_sink))
         if load_sink is not None:
@@ -150,6 +169,44 @@ def build_stat_table(
             table.cellClicked.connect(lambda r, _c: _row_spec_to(table, r, roll_spec, load_sink))
     fit_table_height(table)
     return table
+
+
+def install_pin_menu(
+    table: QTableWidget,
+    pin_ref: PinHookFactory,
+    pin_sink: Callable[[PinRef], None],
+    can_pin: Callable[[], bool],
+) -> None:
+    """Offer "Pin to GM card" on a right-clicked row, when there is a card to pin to.
+
+    Public because the Skills table builds itself rather than going through
+    :func:`build_stat_table`, and both should offer the same menu off the same
+    stashed payload.
+
+    *can_pin* is asked at menu time rather than wired once, because whether a sheet
+    has a card behind it is decided after the block is built (the GM window sets it
+    when it opens the sheet). A sheet a player opened for themselves answers False
+    and the menu never appears — there is no card, and an action that does nothing
+    is worse than none.
+    """
+
+    def show(pos) -> None:
+        if not can_pin():
+            return
+        row = table.rowAt(pos.y())
+        item = table.item(row, COL_TOTAL) if row >= 0 else None
+        key = None if item is None else item.data(ROLL_ROLE)
+        if not key:
+            return  # a separator, or a row nothing can be read off
+        ref = pin_ref(key)
+        if ref is None:
+            return
+        menu = QMenu(table)
+        menu.addAction(PIN_ACTION_TEXT, lambda: pin_sink(ref))
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    table.customContextMenuRequested.connect(show)
 
 
 def _row_spec_to(

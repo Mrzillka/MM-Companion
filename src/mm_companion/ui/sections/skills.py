@@ -46,6 +46,8 @@ from PySide6.QtWidgets import (
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
 from mm_companion.core.rules import (
+    PIN_SKILL,
+    PinRef,
     SkillModifiers,
     effective_ability,
     skill_modifiers,
@@ -61,6 +63,7 @@ from mm_companion.ui.sections.stat_table import (
     ENHANCED_TINT,
     ROLL_ROLE,
     fit_table_height,
+    install_pin_menu,
     tint_item,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -131,6 +134,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     #: A row was clicked once — show that skill in the roller's chip, ready to roll.
     loadRequested = Signal(object)
 
+    #: A row was right-clicked and pinned — carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
+    #: GM opened from a card (see :meth:`set_pin_target`).
+    pinRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -155,6 +163,9 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # be re-applied to them.
         self._editable_spins: list[QSpinBox] = []
         self._locked = False
+        # Whether this sheet was opened from a GM card, and so has somewhere to pin
+        # a row to. Set by the sheet after construction.
+        self._pin_target = False
         # Whether any row currently carries an outside bonus; drives the "+" column's
         # visibility (and, through _min_col_width, how many panels fit).
         self._show_mods = False
@@ -193,6 +204,10 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         table.cellClicked.connect(
             lambda row, _col, t=table: self._emit_row_spec(t, row, self.loadRequested)
         )
+        # The same "Pin to GM card" the two stat tables offer, off the same stashed
+        # payload — this table builds itself rather than going through
+        # build_stat_table, so it installs the menu directly.
+        install_pin_menu(table, self._pin_ref, self.pinRequested.emit, lambda: self._pin_target)
         guard_wheel(table)
         return table
 
@@ -209,6 +224,19 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             return
         row_id, display = payload
         signal.emit(skill_roll(self._character, self._data, row_id, label=display))
+
+    @staticmethod
+    def _pin_ref(payload: object) -> PinRef | None:
+        """The pin that names this row. Its ``(row_id, display)`` payload is the
+        roll's, so a pinned skill is exactly the row that was right-clicked — a
+        focus and its parent skill are different rows and stay different pins."""
+        if not isinstance(payload, tuple) or not payload:
+            return None
+        return PinRef(PIN_SKILL, str(payload[0]))
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether this block's rows offer "Pin to GM card"."""
+        self._pin_target = enabled
 
     #: Fix the table's height to exactly show every row, so it never scrolls
     #: internally and grows as focuses are added. Shared with the stat tables.

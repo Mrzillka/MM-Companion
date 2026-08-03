@@ -36,8 +36,16 @@ class NPCWindow(MainWindow):
         character: Character | None = None,
         path: Path | None = None,
         locked: bool = False,
+        pin_target: bool = False,
     ) -> None:
-        super().__init__(parent, character=character, path=path, locked=locked, npc=True)
+        super().__init__(
+            parent,
+            character=character,
+            path=path,
+            locked=locked,
+            npc=True,
+            pin_target=pin_target,
+        )
         self.sheet.set_npc_mode(True)
 
     def storage_dir(self) -> Path:

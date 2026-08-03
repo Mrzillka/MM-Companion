@@ -42,6 +42,11 @@ class MainWindow(QMainWindow):
 
     closed = Signal()
     saved = Signal()
+    #: A row of this sheet was right-clicked and pinned. Carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`, relayed straight from the
+    #: sheet. Only ever raised on a window opened with ``pin_target=True``, which
+    #: today means one a GM opened from a card.
+    pinRequested = Signal(object)
 
     def __init__(
         self,
@@ -52,6 +57,7 @@ class MainWindow(QMainWindow):
         locked: bool = True,
         gm_view: bool = False,
         npc: bool = False,
+        pin_target: bool = False,
     ) -> None:
         super().__init__(parent)
         # A GM's read-only view of a player's snapshot: force-locked, with only the
@@ -80,6 +86,10 @@ class MainWindow(QMainWindow):
         self._settings_window: QWidget | None = None
 
         self._sheet = CharacterSheet(character=character)
+        # Opened from a GM card: its rows offer "Pin to GM card", and what they pin
+        # is relayed back out to whoever opened this window.
+        self._sheet.set_pin_target(pin_target)
+        self._sheet.pinRequested.connect(self.pinRequested)
         self._build_menu_bar(locked)
         # The sheet is itself a scrolling page (it owns its scroll area), so it is
         # the central widget directly — no outer wrapper.

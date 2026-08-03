@@ -918,7 +918,14 @@ class GMWindow(QMainWindow):
         previous = self._player_windows.pop(player_id, None)
         if previous is not None:
             previous.close()
-        window = MainWindow(character=self._character_from_snapshot(snapshot), gm_view=True)
+        window = MainWindow(
+            character=self._character_from_snapshot(snapshot),
+            gm_view=True,
+            pin_target=True,
+        )
+        card = self._cards.get(player_id)
+        if card is not None:
+            window.pinRequested.connect(card.pins.add_pin)
         self._player_windows[player_id] = window
         window.show()
         window.raise_()
@@ -1386,7 +1393,10 @@ class GMWindow(QMainWindow):
             existing.raise_()
             existing.activateWindow()
             return
-        self._track_npc_window(NPCWindow(character=library.load_character(path), path=path))
+        window = NPCWindow(character=library.load_character(path), path=path, pin_target=True)
+        if entry.card is not None:
+            window.pinRequested.connect(entry.card.pins.add_pin)
+        self._track_npc_window(window)
 
     def _track_npc_window(self, window: NPCWindow) -> None:
         """Show an NPC sheet and keep it alive, watching for saves and its close."""

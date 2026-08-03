@@ -1774,3 +1774,45 @@ def test_a_pin_to_a_power_the_npc_lost_still_shows_and_can_be_taken_off(
     assert card.pins.chip_texts()[2].endswith("—")
     card.pins.remove_pin(2)
     assert len(card.pins.chip_texts()) == 2
+
+
+def test_pinning_from_an_npcs_own_sheet_lands_on_its_card(window: GMWindow) -> None:
+    """The other route in: open the sheet, right-click a row, and it is on the card."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    window._open_npc(name)
+    sheet_window = next(iter(window._npc_windows.values()))
+    assert sheet_window.sheet.abilities._pin_target is True
+
+    sheet_window.sheet.resistances.pinRequested.emit(PinRef("resistance", "TOUGHNESS"))
+
+    assert card.pins.chip_texts()[-1] == "Toughness 6"
+
+
+def test_pinning_from_a_players_read_only_sheet_lands_on_their_card(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._on_snapshot("p0", a_character())
+    card = window._cards["p0"]
+
+    window._open_player_sheet("p0")
+    sheet_window = window._player_windows["p0"]
+    sheet_window.sheet.system_info.pinRequested.emit(PinRef("defense_class"))
+
+    assert card.pins.chip_texts()[-1] == "DEF DC 10"
+    window.close()
+
+
+def test_a_players_own_sheet_never_offers_to_pin(qapp: QApplication) -> None:
+    """Nothing about a normal sheet changes: there is no card behind it."""
+    from mm_companion.ui.main_window import MainWindow
+
+    plain = MainWindow(character=Character.new_default(load_game_data()))
+    try:
+        assert plain.sheet.abilities._pin_target is False
+    finally:
+        plain._dirty = False
+        plain.close()

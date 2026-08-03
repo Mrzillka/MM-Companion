@@ -21,7 +21,9 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
@@ -37,7 +39,7 @@ from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.roll_history import HIDDEN_MARK
-from mm_companion.ui.sections.conditions import addable_conditions
+from mm_companion.ui.sections.conditions import addable_conditions, build_condition_menu
 from mm_companion.ui.session_bridge import active_session, set_active_session
 from mm_companion.ui.session_dialogs import (
     GMSessionLaunchDialog,
@@ -426,7 +428,9 @@ def test_a_card_shows_the_player_character_from_their_snapshot(
     assert card._pl_label.text() == "PL 12"
     assert card._hero_points.value() == 4
     assert card.condition_names() == ["Dazed"]
-    assert card._open_button.isEnabled() is True
+    assert card._portrait.isEnabled() is True
+    # The hover summary is the NPC card's, now on both.
+    assert "Resistances" in card.toolTip()
 
 
 def test_a_card_without_a_snapshot_says_so_and_cannot_be_opened(
@@ -437,7 +441,8 @@ def test_a_card_without_a_snapshot_says_so_and_cannot_be_opened(
 
     card = window._cards["p0"]
     assert card._character_label.text() == player_card.NO_CHARACTER
-    assert card._open_button.isEnabled() is False
+    # Nothing to open, so the portrait does not pretend otherwise.
+    assert card._portrait.toolTip() == ""
     assert card.character is None
 
 
@@ -533,7 +538,7 @@ def test_open_sheet_shows_the_character_read_only(qapp: QApplication, window: GM
     window._show_roster(roster({"display_name": "Aria"}))
     window._on_snapshot("p0", a_character(hero_name="Nightingale"))
 
-    window._cards["p0"]._open_button.click()
+    window._cards["p0"]._portrait.clicked.emit()
 
     sheet_window = window._player_windows["p0"]
     assert sheet_window.sheet.character.profile["hero_name"] == "Nightingale"
@@ -820,12 +825,43 @@ def test_the_menu_offers_the_same_conditions_the_sheet_does(
     window._show_roster(roster({"display_name": "Aria"}))
     card = window._cards["p0"]
 
-    offered = {c.name for c in card._addable_conditions}
+    menu = build_condition_menu(card, load_game_data(), lambda _c: None)
+    offered = _menu_condition_names(menu)
 
-    assert {c.name for c in addable_conditions(load_game_data())} == offered
+    assert {c.name for c in addable_conditions(load_game_data())} == set(offered)
     assert "Dazed" in offered
     # Not the object-damage ladder or the bookkeeping marker.
     assert "Normal" not in offered
+    # Every condition sits in exactly one place — a duplicate would mean a group
+    # claimed a condition another had already taken.
+    assert len(offered) == len(set(offered))
+
+
+def test_the_menu_splits_the_catalog_into_groups(qapp: QApplication, window: GMWindow) -> None:
+    """The whole point of the split: nothing is a flat 36-item list any more."""
+    data = load_game_data()
+    menu = build_condition_menu(window, data, lambda _c: None)
+
+    submenus = {
+        a.menu().title(): _menu_condition_names(a.menu()) for a in menu.actions() if a.menu()
+    }
+
+    assert set(submenus) == {g.title for g in data.condition_groups}
+    assert "Blind" in submenus["Senses"]
+    assert "Staggered" in submenus["Damage"]
+    # Nothing left over: every addable condition is grouped, so the menu has no
+    # flat tail below the submenus.
+    assert [a for a in menu.actions() if a.menu() is None and not a.isSeparator()] == []
+
+
+def _menu_condition_names(menu: QMenu) -> list[str]:
+    """Every condition a menu offers, submenus and flat tail alike."""
+    names: list[str] = []
+    for action in menu.actions():
+        if action.isSeparator():
+            continue
+        names.extend(_menu_condition_names(action.menu()) if action.menu() else [action.text()])
+    return names
 
 
 def test_picking_a_condition_sends_it_to_that_player(
@@ -1045,6 +1081,49 @@ def test_an_npc_renders_as_a_live_card_over_its_model(window: GMWindow) -> None:
     assert card.character.profile["hero_name"] == "Ogre"
     # And the GM window holds an entry keyed by the file name.
     assert "ogre.json" in window._npc_state
+
+
+def test_only_the_portrait_opens_an_npc_sheet(qapp: QApplication, window: GMWindow) -> None:
+    """The card body is the drag handle; a short drag must not open a window.
+
+    This is the bug the split fixes: the reorder gesture and "open the sheet" were
+    the same press, told apart only by how far the pointer had travelled.
+    """
+    window._register_npc(write_npc("Ogre"))
+    (card,) = npc_cards(window)
+    opened: list[str] = []
+    card.openRequested.connect(opened.append)
+
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(20, 60),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    release = QMouseEvent(
+        QEvent.Type.MouseButtonRelease,
+        QPointF(20, 60),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    card.mousePressEvent(press)
+    card.mouseReleaseEvent(release)
+    assert opened == []
+
+    card._portrait.clicked.emit()
+    assert opened == ["ogre.json"]
+
+
+def test_a_card_restates_its_hover_summary_from_the_model(window: GMWindow) -> None:
+    """Whenever a card redraws itself, the summary is re-derived rather than kept."""
+    window._register_npc(write_npc("Ogre"))
+    (card,) = npc_cards(window)
+
+    window._apply_npc_condition("ogre.json", "dazed", None)
+
+    assert card.toolTip() == card.summary_html()
 
 
 def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWindow) -> None:

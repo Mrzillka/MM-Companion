@@ -20,18 +20,22 @@ character here — the card only asks, the player's app applies it through the s
 rules resolver its own "+" uses, and the snapshot that comes back is what
 restates these chips. So what the GM sees is always the player's real state, not
 what the GM hoped it would be.
+
+What the GM *reads* off it is shared with the NPC card (see
+:mod:`~mm_companion.ui.card_summary`): the portrait is the way into the sheet, and
+hovering the card gives the full abilities / resistances / powers summary. The two
+cards used to disagree about both — a button here, a click-anywhere there; a
+summary there, none here — for no reason either could name.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -41,18 +45,18 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
+from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import (
-    addable_conditions,
+    build_condition_menu,
     condition_display_name,
     condition_tooltip,
 )
 from mm_companion.ui.sections.system_info import HeroPointsWidget
 from mm_companion.ui.session_portrait import decode_portrait
 
-#: The portrait placeholder's side, in pixels. Matches the launcher's cards.
-PORTRAIT_SIZE = 96
-#: How wide a card is. Fixed, so a row of them lines up in the flow layout.
+#: How wide the card's own column is. Fixed, so a row of them lines up in the
+#: flow layout; the pinned-parameter strip adds its own width beside it.
 CARD_WIDTH = 210
 #: Shown in place of a character name before the player pushes a snapshot.
 NO_CHARACTER = "no character yet"
@@ -82,7 +86,6 @@ class PlayerCard(QFrame):
 
         self._data = data
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
-        self._addable_conditions: list[Condition] = addable_conditions(data)
         self.player_id = ""
         self._display_name = "Player"
         self._character: Character | None = None
@@ -107,10 +110,11 @@ class PlayerCard(QFrame):
         self._name_label.setWordWrap(True)
         layout.addWidget(self._name_label)
 
-        self._portrait = QLabel("No image")
-        self._portrait.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._portrait.setFixedSize(PORTRAIT_SIZE, PORTRAIT_SIZE)
-        self._portrait.setFrameShape(QLabel.Shape.Box)
+        # The only way into this player's sheet. Dead until a snapshot arrives —
+        # there is nothing to open before then.
+        self._portrait = PortraitButton()
+        self._portrait.set_clickable(False)
+        self._portrait.clicked.connect(lambda: self.openSheetRequested.emit(self.player_id))
         layout.addWidget(self._portrait, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self._character_label = QLabel(NO_CHARACTER)
@@ -153,11 +157,6 @@ class PlayerCard(QFrame):
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
-
-        self._open_button = QPushButton("Open sheet")
-        self._open_button.setEnabled(False)
-        self._open_button.clicked.connect(lambda: self.openSheetRequested.emit(self.player_id))
-        layout.addWidget(self._open_button)
 
     # -- what the card is showing -----------------------------------------
 
@@ -207,24 +206,16 @@ class PlayerCard(QFrame):
         self._hero_points.set_value(int(character.characteristics.get("hero_points", 0) or 0))
         self._set_portrait(raw.get("portrait"))
         self._show_conditions()
-        self._open_button.setEnabled(True)
+        self._portrait.set_clickable(True)
+        # The same hover summary an NPC card gives, so the GM can read a player's
+        # numbers without opening a window for them.
+        self.setToolTip(
+            character_summary_html(character, self._data, library.display_name(character))
+        )
 
     def _set_portrait(self, data: object) -> None:
         """Show the transmitted thumbnail, or fall back to the placeholder."""
-        pixmap = decode_portrait(data)
-        if pixmap is None:
-            self._portrait.setText("No image")
-            self._portrait.setPixmap(QPixmap())
-            return
-        self._portrait.setText("")
-        self._portrait.setPixmap(
-            pixmap.scaled(
-                PORTRAIT_SIZE,
-                PORTRAIT_SIZE,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self._portrait.set_image(decode_portrait(data))
 
     # -- condition chips ---------------------------------------------------
 
@@ -261,13 +252,8 @@ class PlayerCard(QFrame):
     # -- the GM's fast-apply -----------------------------------------------
 
     def _show_condition_menu(self) -> None:
-        """The same catalog the sheet's own "+" offers, aimed at this player."""
-        menu = QMenu(self)
-        for condition in sorted(self._addable_conditions, key=lambda c: c.name):
-            menu.addAction(
-                condition.name,
-                lambda checked=False, c=condition: self._choose_condition(c),
-            )
+        """The same catalog, split the same way, the sheet's own "+" offers."""
+        menu = build_condition_menu(self, self._data, self._choose_condition)
         button = self._condition_button
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 
 from ..character import Character
 from ..data_loader import GameData
@@ -103,17 +104,22 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
     return violations
 
 
-def _iter_leaf_powers(nodes: list[PowerNode]):
+def leaf_powers(nodes: list[PowerNode]) -> Iterator[Power]:
     """Yield every leaf :class:`Power` in a powers tree, ignoring array selection.
 
     Unlike :func:`~mm_companion.core.rules.live_powers`, this descends into *all*
     children of every group — including an array's unselected alternates — because
     Power Level caps apply to the whole build, not just the currently-active branch.
+
+    Public because three places wanted it and each grew its own copy: PL
+    validation here, the GM card's hover summary, and the powers block. A tree
+    walk is not a rule, but where the walk *stops* is one, and three answers to
+    that is two too many.
     """
 
     for node in nodes:
         if isinstance(node, PowerGroup):
-            yield from _iter_leaf_powers(node.children)
+            yield from leaf_powers(node.children)
         else:
             yield node
 
@@ -148,7 +154,7 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
     attack_cap = game_data.costs.power_level.caps.get("attack_effect")
     if attack_cap is not None:
         attack_key = game_data.system.trait_keys.attack
-        for power in _iter_leaf_powers(char.powers):
+        for power in leaf_powers(char.powers):
             for effect in power.effects:
                 base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
                 if base is None or base.resistance_dc_base is None:

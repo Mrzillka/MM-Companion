@@ -321,7 +321,10 @@ class Condition:
     """A status condition that can affect a character (dazed, stunned, ...).
 
     ``category`` distinguishes general conditions from the damage/object-damage
-    ladders. ``includes`` lists ids of sub-conditions this one bundles in, and
+    ladders, and is what the sheet sorts *applied* chips by. ``group`` is the
+    finer, orthogonal split a "+" menu offers the catalog under (Senses,
+    Movement, …) — a finding aid, not a rule, since a flat list of 36 is slow to
+    search mid-round. ``includes`` lists ids of sub-conditions this one bundles in, and
     ``supersedes`` lists ids a more severe condition replaces — together these
     form the condition graph the combat state machine walks (see
     ``docs/mm-conditions-design.md`` §3). ``mechanisms`` names which engine subsystems
@@ -335,6 +338,7 @@ class Condition:
     description: str = ""
     id: str = ""
     category: str = ""
+    group: str = ""
     tooltip: str = ""
     includes: tuple[str, ...] = ()
     supersedes: tuple[str, ...] = ()
@@ -376,6 +380,25 @@ class ConditionCategory:
     category: str
     title: str
     addable: bool = True
+
+
+@dataclass(frozen=True)
+class ConditionGroup:
+    """One submenu a "+" menu splits the addable catalog into, from ``conditions.json``.
+
+    ``group`` matches a :class:`Condition`'s ``group``; ``title`` is the submenu's
+    caption. Read from ``_meta.conditionGroups`` in declared order.
+
+    Deliberately separate from :class:`ConditionCategory`, which the two axes are
+    easy to confuse: a *category* is a rules fact (this is part of the damage
+    ladder) and groups the chips already on a character; a *group* is an
+    ergonomic one (Blind and Deaf are both things you do to someone's senses) and
+    only ever shapes a menu. A ruleset that declares no groups gets the flat
+    alphabetical menu back, so this is purely additive.
+    """
+
+    group: str
+    title: str
 
 
 # --- Powers layer: base effects, modifiers (extras/flaws), and the config
@@ -1114,6 +1137,10 @@ class GameData:
     #: How the Conditions block groups its chips, from ``conditions.json``'s
     #: ``_meta.sheetSections`` — in display order.
     condition_categories: tuple[ConditionCategory, ...] = ()
+    #: How a "+" menu splits the addable catalog into submenus, from
+    #: ``conditions.json``'s ``_meta.conditionGroups`` — in display order. Empty
+    #: when a ruleset declares none, which means "offer the flat list".
+    condition_groups: tuple[ConditionGroup, ...] = ()
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1381,6 +1408,7 @@ def _parse_condition(c: dict) -> Condition:
         description=c.get("description", ""),
         id=c.get("id", ""),
         category=c.get("category", ""),
+        group=c.get("group", ""),
         tooltip=c.get("tooltip", ""),
         includes=tuple(c.get("includes", ())),
         supersedes=tuple(c.get("supersedes", ())),
@@ -1726,6 +1754,26 @@ def _parse_condition_categories(raw: dict) -> tuple[ConditionCategory, ...]:
     return tuple(parsed) or _DEFAULT_CONDITION_CATEGORIES
 
 
+def _parse_condition_groups(raw: dict) -> tuple[ConditionGroup, ...]:
+    """The "+" menu's submenus, from ``_meta.conditionGroups``.
+
+    Empty when the file declares none — unlike the categories, there is no
+    sensible default to invent here, and a menu builder handed nothing simply
+    falls back to the flat alphabetical list it used to show.
+    """
+    groups = raw.get("_meta", {}).get("conditionGroups")
+    if not isinstance(groups, list):
+        return ()
+    return tuple(
+        ConditionGroup(
+            group=str(entry["group"]),
+            title=str(entry.get("title", entry["group"])),
+        )
+        for entry in groups
+        if isinstance(entry, dict) and entry.get("group")
+    )
+
+
 def _parse_costs(raw: dict) -> Costs:
     # Tolerate unknown keys (e.g. from a mod) so they can't crash the loader.
     trait_fields = {f.name for f in fields(TraitCosts)}
@@ -1969,6 +2017,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         advantages=[_parse_advantage(a) for a in advantages_raw.get("advantages", [])],
         conditions=[_parse_condition(c) for c in conditions_raw.get("conditions", [])],
         condition_categories=_parse_condition_categories(conditions_raw),
+        condition_groups=_parse_condition_groups(conditions_raw),
         effects=[_parse_effect(e, system.ranged_distance) for e in effects_raw.get("effects", [])],
         modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),

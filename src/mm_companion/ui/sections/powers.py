@@ -100,6 +100,7 @@ from mm_companion.core.rules import (
     effect_attack_skill_bonus,
     effect_effective_rank,
     effect_stat_rows,
+    leaf_powers,
     modifier_label,
     node_display_cost,
     power_display_name,
@@ -1740,12 +1741,8 @@ class PowersSection(TitledSection):
 
     @staticmethod
     def _leaf_powers(node: PowerNode) -> list[Power]:
-        if isinstance(node, PowerGroup):
-            leaves: list[Power] = []
-            for child in node.children:
-                leaves.extend(PowersSection._leaf_powers(child))
-            return leaves
-        return [node]
+        """This node's leaves — one node's worth of :func:`leaf_powers`."""
+        return list(leaf_powers([node]))
 
     def set_locked(self, locked: bool) -> None:
         """In read-only view mode, hide the editing entry points (Add / Remove / group chrome)."""

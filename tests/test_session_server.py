@@ -964,6 +964,42 @@ def test_stopping_marks_everyone_offline(running_server, connect) -> None:
     assert srv.running is False
 
 
+def test_the_farewell_goes_out_before_anything_is_torn_down(running_server, connect) -> None:
+    """The ordering inside ``stop``, asserted directly rather than raced for.
+
+    ``stop`` used to clear ``_running`` before sending the farewell, which let
+    each reader loop exit and close its own socket first; the message then went
+    to a closed connection and was dropped without a sound. The client read a
+    bare EOF, called it a network fault, and redialled a deliberately closed
+    table for five minutes.
+
+    Reproducing that by repetition does not work — on loopback the reader threads
+    never get scheduled in time, so the buggy order passes locally and only fails
+    under the load of a full suite. So this pins the invariant that actually
+    matters: **when the farewell is written, the session is still running and the
+    socket is still open.** Both were false in the broken order.
+    """
+    srv = running_server()
+    client, _events = connect(srv, "Volt")
+    wait_for(lambda: client.player_id in srv.connected_player_ids(), message="seated")
+
+    observed: list[tuple[str, bool, bool]] = []
+    original = srv._send_quietly
+
+    def spy(connection, message):
+        observed.append((getattr(message, "TYPE", ""), srv._running, connection.closed))
+        return original(connection, message)
+
+    srv._send_quietly = spy
+    srv.stop()
+
+    farewells = [entry for entry in observed if entry[0] == "kicked"]
+    assert farewells, "stopping sent no farewell at all"
+    for _type, running, closed in farewells:
+        assert running is True, "the farewell was sent after teardown had begun"
+        assert closed is False, "the farewell was written to an already-closed socket"
+
+
 def test_the_client_reports_an_unreachable_session() -> None:
     # Bind and immediately release a port, so nothing is listening on it.
     listener = TcpTransport().listen("127.0.0.1", 0)

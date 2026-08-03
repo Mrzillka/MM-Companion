@@ -167,7 +167,10 @@ class StartWindow(QMainWindow):
 
         # The launcher has no menu bar, so the Settings window the sheet reaches
         # through its Settings menu hangs off a button here — the look is
-        # changeable before ever opening a character.
+        # changeable before ever opening a character. (For the same reason there
+        # is no connection indicator here, and none is wanted: the launcher can
+        # never be *in* a session — joining opens a MainWindow and GM Mode a
+        # GMWindow, and each carries its own.)
         settings_button = QPushButton("Settings")
         settings_button.clicked.connect(self._open_settings)
         column.addWidget(settings_button)

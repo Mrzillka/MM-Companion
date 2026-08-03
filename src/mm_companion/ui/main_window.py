@@ -149,15 +149,19 @@ class MainWindow(QMainWindow):
         # is the GM's prep material, driven from the GM window instead. (Rolling
         # dice used to have a Tools menu here; it is the Dice block now — see
         # mm_companion.ui.sections.dice.)
+        # The one thing on this bar that does not fade: a sheet in a session says
+        # so for as long as it is, and a sheet that is not says "Offline".
+        #
+        # Only on a sheet that could *be* in one, which is the same rule as the
+        # Session menu above and for the same reason. A GM opens an NPC sheet (or
+        # a player's read-only snapshot, which returned above) while hosting, and
+        # those windows never join anything — so an indicator there would sit at
+        # "Offline" throughout a perfectly healthy session, which is exactly the
+        # false reading this widget exists to prevent.
         if not self._npc:
             session_menu = menu_bar.addMenu("&Session")
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
-
-        # The one thing on this bar that does not fade: a sheet that is in a
-        # session says so for as long as it is, and a sheet that is not says
-        # "Offline". Installed even on an NPC or a GM's read-only view, where it
-        # simply never gets a bridge — fewer branches than guarding the install.
-        install_connection_indicator(self)
+            install_connection_indicator(self)
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""

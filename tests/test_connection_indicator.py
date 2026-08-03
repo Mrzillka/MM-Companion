@@ -285,6 +285,25 @@ def test_the_sheet_installs_one_in_its_menu_bar_corner(qapp: QApplication) -> No
     window.close()
 
 
+def test_a_sheet_that_can_never_join_gets_no_indicator(qapp: QApplication) -> None:
+    """An NPC sheet and a GM's read-only view of a player are the GM's own windows.
+
+    Neither ever joins anything, so an indicator on them would read "Offline" for
+    the whole of a perfectly healthy session the GM is hosting — the exact false
+    reading this widget exists to prevent.
+    """
+    from mm_companion.ui.main_window import MainWindow
+    from mm_companion.ui.npc_window import NPCWindow
+
+    npc = NPCWindow()
+    gm_view = MainWindow(gm_view=True)
+
+    assert npc.menuBar().cornerWidget(Qt.Corner.TopRightCorner) is None
+    assert gm_view.menuBar().cornerWidget(Qt.Corner.TopRightCorner) is None
+    npc.close()
+    gm_view.close()
+
+
 def test_the_gm_window_installs_one_following_its_own_bridge(qapp: QApplication) -> None:
     from mm_companion.ui.gm_window import GMWindow
 

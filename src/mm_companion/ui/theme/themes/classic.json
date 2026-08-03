@@ -82,7 +82,8 @@
     "column.settings.value": 220,
     "column.chip-button": 24,
     "column.roll-button": 28,
-    "column.hero-point": 26
+    "column.hero-point": 26,
+    "column.status-dot": 10
   },
 
   "_typography": "Point sizes, applied with QFont.setPointSizeF — never as a stylesheet font-size, which would outrank the widget font and break the power card's switched-off transition. A null family keeps the platform default.",

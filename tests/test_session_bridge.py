@@ -15,6 +15,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core import storage
+from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.client import SessionClient, SessionClientError
 from mm_companion.core.session.model import new_session
@@ -386,3 +387,74 @@ def test_stopping_forgets_that_it_was_relaying(
     bridge.host(new_session(), port=0, bind="127.0.0.1", relay_url=relay_box.base)
     bridge.stop()
     assert bridge.relaying is False
+
+
+# --------------------------------------------------------------------------
+# Connection state
+# --------------------------------------------------------------------------
+
+
+def test_the_connection_state_reaches_qt(qapp: QApplication, bridge: SessionBridge) -> None:
+    state = new_session("Table")
+    address = bridge.host(state, port=0, bind="127.0.0.1")
+    # Straight from the bound address rather than through publish(), which probes
+    # the network on a worker thread and has nothing to do with what is tested here.
+    code = discovery.JoinCode(host="127.0.0.1", port=address[1], token=state.host_token)
+
+    seen: list[tuple[str, object]] = []
+    player = SessionBridge()
+    player.connectionStateChanged.connect(lambda state, detail: seen.append((state, detail)))
+    try:
+        player.join(code, "Ada")
+        qapp.processEvents()
+
+        assert player.connection_state == session_client.STATE_ONLINE
+        assert [state for state, _ in seen] == [
+            session_client.STATE_CONNECTING,
+            session_client.STATE_ONLINE,
+        ]
+    finally:
+        player.stop()
+    assert address
+
+
+def test_a_bridge_mid_blip_is_still_in_a_session(qapp: QApplication) -> None:
+    """The distinction that keeps a roll from vanishing into the private history.
+
+    ``joined`` follows the socket and goes False the instant it dies, which is
+    what makes a send fail honestly. ``in_session`` follows the *session*, and it
+    is what ``live_session`` asks — so a roll made during a blip is still offered
+    to the table and reported as not sent, rather than rolled locally in silence.
+    """
+    bridge = SessionBridge()
+    client = SessionClient("127.0.0.1", 1, token="t", display_name="Ada")
+    client.connection_state = session_client.STATE_RECONNECTING
+    bridge._client = client
+    set_active_session(bridge)
+    try:
+        assert bridge.joined is False  # no socket
+        assert bridge.in_session is True  # but the session is not over
+        assert session_bridge.live_session() is bridge
+
+        client.connection_state = session_client.STATE_OFFLINE
+        assert bridge.in_session is False
+        assert session_bridge.live_session() is None
+    finally:
+        set_active_session(None)
+
+
+def test_a_lost_listener_reaches_qt(qapp: QApplication, bridge: SessionBridge) -> None:
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    seen: list[object] = []
+    bridge.listenerLost.connect(seen.append)
+
+    # A relay whose control link dies does exactly this: the listener stops
+    # handing out connections while the server still believes it is hosting.
+    bridge.server._listener.close()
+
+    deadline = time.monotonic() + 5.0
+    while not seen and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert seen and seen[0]["session_id"] == bridge.server.state.id

@@ -321,14 +321,25 @@ class StartWindow(QMainWindow):
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
-        record_session_history(
-            code=dialog.code_text(),
-            session_id=client.session_id,
-            session_name=client.session_name,
-            display_name=dialog.display_name(),
-            player_id=client.player_id,
-            player_token=client.player_token,
-        )
+
+        def remember(*_args: object) -> None:
+            """Write the seat down on every connect, not only the first.
+
+            A reconnect can come back with a different token, and the copy on disk
+            is what a *later launch* reclaims with — so recording it once at join
+            time leaves the next session starting as a stranger.
+            """
+            record_session_history(
+                code=dialog.code_text(),
+                session_id=client.session_id,
+                session_name=client.session_name,
+                display_name=dialog.display_name(),
+                player_id=client.player_id,
+                player_token=client.player_token,
+            )
+
+        remember()
+        bridge.connected.connect(remember)
 
         path = dialog.character_path()
         character = library.load_character(path) if path is not None else None

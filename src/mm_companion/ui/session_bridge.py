@@ -67,10 +67,18 @@ class SessionBridge(QObject):
     #: session can be reached from, and the prose to show the GM about it.
     published = Signal(object)
 
-    #: Joined a session; carries the welcome envelope as a dict.
+    #: Joined a session; carries the welcome envelope as a dict. Raised again on
+    #: every successful *re*connect, carrying a fresh welcome — so a slot that
+    #: repaints from it needs no separate "you are back" path.
     connected = Signal(object)
-    #: Left, dropped, or kicked; carries the reason.
+    #: The session is over — left, given up on, or kicked; carries the reason.
+    #: Deliberately **not** raised for a blip: see :attr:`connectionStateChanged`.
     disconnected = Signal(str)
+    #: ``(state, detail)`` — one of the client's ``STATE_*`` values and the
+    #: payload behind it (``reason``/``attempt``/``retry_in`` while reconnecting).
+    #: This is the signal to follow for "is the link healthy right now"; a
+    #: dropped connection walks reconnecting → online without the session ending.
+    connectionStateChanged = Signal(str, object)
 
     #: The roster, as a list of roster dicts (no tokens, no characters).
     rosterChanged = Signal(object)
@@ -89,6 +97,10 @@ class SessionBridge(QObject):
     snapshotReceived = Signal(str, object)
     #: A join was refused (``{"code", "message", "address"}``), host side only.
     refused = Signal(object)
+    #: The listener stopped handing out connections while we still think we are
+    #: hosting — a relay whose control link died. Host side only. Nobody already
+    #: at the table is affected, but nobody new can get in.
+    listenerLost = Signal(object)
 
     #: ``("apply" | "remove", payload)`` — the GM told this client to change a
     #: condition on its live sheet. Client side only.
@@ -120,7 +132,41 @@ class SessionBridge(QObject):
 
     @property
     def joined(self) -> bool:
+        """Whether there is a live socket to the session *right now*.
+
+        Goes False for the length of a blip, which is what makes a send fail
+        honestly. For "is this app still in a session", ask :attr:`in_session`.
+        """
         return self._client is not None and self._client.connected
+
+    @property
+    def in_session(self) -> bool:
+        """Whether this app is in a session at all, blips included.
+
+        The distinction matters at exactly one place and it is a bug worth
+        remembering: a roll made while the socket is down must still be *offered*
+        to the session, so it fails visibly. Asking :attr:`joined` instead sent it
+        down the solo path, where it rolled locally and landed in the private
+        history — a roll the table never saw and the player thought it had.
+        """
+        if self._server is not None:
+            return self._server.running
+        if self._client is None:
+            return False
+        return self._client.connection_state != session_client.STATE_OFFLINE
+
+    @property
+    def connection_state(self) -> str:
+        """The client's ``STATE_*``; a host is simply online while it is running."""
+        if self._server is not None:
+            return (
+                session_client.STATE_ONLINE
+                if self._server.running
+                else session_client.STATE_OFFLINE
+            )
+        if self._client is None:
+            return session_client.STATE_OFFLINE
+        return self._client.connection_state
 
     @property
     def server(self) -> session_server.SessionServer | None:
@@ -499,6 +545,8 @@ class SessionBridge(QObject):
             self.rollRemoved.emit(int(payload.get("seq", 0)))
         elif kind == session_server.EVENT_REFUSED:
             self.refused.emit(payload)
+        elif kind == session_server.EVENT_LISTENER_LOST:
+            self.listenerLost.emit(payload)
         elif kind == session_server.EVENT_ERROR:
             self.error.emit(str(payload.get("code", "")), str(payload.get("message", "")))
 
@@ -509,6 +557,8 @@ class SessionBridge(QObject):
             self.historyReplaced.emit(payload.get("history", []))
         elif kind == session_client.EVENT_DISCONNECTED:
             self.disconnected.emit(str(payload.get("reason", "")))
+        elif kind == session_client.EVENT_STATE:
+            self.connectionStateChanged.emit(str(payload.get("state", "")), payload)
         elif kind == session_client.EVENT_ROSTER:
             self.rosterChanged.emit(payload.get("players", []))
         elif kind == session_client.EVENT_ROLL:
@@ -560,7 +610,7 @@ def live_session() -> SessionBridge | None:
     that matters.
     """
     bridge = _active
-    if bridge is None or not (bridge.hosting or bridge.joined):
+    if bridge is None or not bridge.in_session:
         return None
     return bridge
 

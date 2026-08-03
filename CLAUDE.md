@@ -772,7 +772,7 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   3. **Stylesheet** — geometry, the object-named block chrome, and the menu/tab
      classes the native Windows style paints from the *system* theme and which
      therefore ignore the palette.
-- **Three rules, each guarded by a test in `tests/test_theme_qss.py`:**
+- **Four rules, each guarded by a test in `tests/test_theme_qss.py`:**
   1. Never select a bare `QFrame`/`QLabel`/`QGroupBox`/`QScrollArea` — every
      nested separator and label inherits it. Use an object name or a class that
      names a whole component.
@@ -782,6 +782,25 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   3. A semantic tint must clear **3.0:1** against its background — for a
      `system` preset that means against *both* a light and a dark window, since
      it cannot know which it is on. `tests/test_theme.py` enforces it per preset.
+  4. **State a complex widget's box, give its arrow column back.** One
+     `border`/`padding`/`background` on a `QSpinBox` or a `QComboBox` makes
+     `QStyleSheetStyle` compute `SC_SpinBoxEditField` from the box's own padding
+     rect, which knows nothing about the arrows — so the edit field spanned the
+     whole widget and the `QLineEdit` was laid over both arrow buttons. The arrows
+     still painted, still looked right, and the child under the cursor was the
+     line edit, which took every click and ignored it. `qss._arrow_column_rules`
+     restores a `padding-right` and is emitted for **every** preset, because the
+     focus ring alone is box enough to trigger it (Classic was fine until a field
+     was clicked into). Two things not to redo: placing the buttons yourself stops
+     the platform drawing its indicator inside them (working arrows nobody can
+     see), and Qt renders each border edge as a rectangle rather than mitring
+     them, so the CSS-triangle substitute comes out square. **How wide that column
+     is belongs to the style, not the theme** — 50px under `windows11`, 15px under
+     `Fusion` — so `theme.arrow_columns(app)` measures it once and `qss.build`
+     takes it; there is deliberately no token. A `make_spin_box(buttons=False)` box
+     carries `theme.ARROWLESS_PROPERTY` so the sheet hands the room straight back.
+     `tests/test_input_arrow_columns.py` clicks a real arrow, per preset, across
+     every base style Qt ships.
 - A plain `QWidget` ignores a stylesheet `background` unless it sets
   `WA_StyledBackground` (a `QFrame` honours it natively). If a wash you applied
   doesn't paint, that is why.
@@ -872,12 +891,23 @@ through rather than reinvent. When building new sheet widgets, use it:
   session stays alive and each new application stylesheet re-polishes all of them,
   which is quietly quadratic.
 
-The Lock pattern is threaded top-down: `MainWindow` owns the checkable Lock menu
+The Lock pattern is threaded top-down: `MainWindow` owns the checkable lock
 action, `CharacterSheet.set_locked(bool)` fans out to each section's
 `set_locked`, and sections call `set_widget_locked` on their editable widgets.
 The sheet **starts locked** (a read-only viewer, not an editor). Any new section
 with editable widgets should expose `set_locked` and be wired into
-`CharacterSheet.set_locked`.
+`CharacterSheet.set_locked`. That action lives **on the menu bar**, not in a
+menu — `menu_bar.addAction(…)` with no submenu, so one click toggles it — and its
+🔒/🔓 glyph *is* the state read-out (`_show_lock_state`). It is a play-time view
+switch reached constantly, not a preference; a GM's read-only `gm_view` window
+returns before it is built and so has none.
+
+`set_widget_locked` sheds a field's chrome with a small **widget-level**
+stylesheet (`_LOCKED_SPIN_STYLE` / `_LOCKED_COMBO_STYLE`) as well as
+`setFrame`/`setButtonSymbols`, because a styled preset's application sheet states
+a border, a radius and a padding that outrank both. It is deliberately not a
+`[locked="true"]` rule in the theme QSS: Classic emits almost no sheet, so an
+app-level rule would exist under some presets and not others.
 
 ## The mod pipeline (matters when touching data loading or startup)
 

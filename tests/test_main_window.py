@@ -96,6 +96,40 @@ def test_settings_menu_opens_the_settings_window(qapp: QApplication) -> None:
     win._settings_window.close()
 
 
+def test_the_lock_toggle_sits_on_the_bar_and_not_in_a_menu(qapp: QApplication) -> None:
+    """It is a play-time view switch, reached constantly — one click, not three.
+
+    An action added straight to a ``QMenuBar`` with no submenu behaves as a
+    button, so the bar's last entry *is* the toggle.
+    """
+    win = MainWindow(locked=True)
+
+    assert "Lock" not in _menu_labels(win, "&Settings")
+    bar_entry = win.menuBar().actions()[-1]
+    assert bar_entry is win._lock_action
+    assert bar_entry.menu() is None
+    assert bar_entry.isCheckable()
+
+
+def test_the_lock_glyph_reads_out_the_current_state(qapp: QApplication) -> None:
+    """The glyph is the state read-out — a tick two clicks deep was not."""
+    from mm_companion.ui.main_window import LOCK_GLYPH_LOCKED, LOCK_GLYPH_UNLOCKED
+
+    win = MainWindow(locked=True)
+    assert win._lock_action.text() == LOCK_GLYPH_LOCKED
+    assert win._sheet.locked is True
+
+    win._lock_action.trigger()
+
+    assert win._lock_action.text() == LOCK_GLYPH_UNLOCKED
+    assert win._sheet.locked is False
+
+    win._lock_action.trigger()
+
+    assert win._lock_action.text() == LOCK_GLYPH_LOCKED
+    assert win._sheet.locked is True
+
+
 def test_view_menu_hides_and_shows_a_block(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
     action = win._block_actions["advantages"]

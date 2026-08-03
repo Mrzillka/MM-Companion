@@ -10,7 +10,7 @@ they just wrote actually is.
 
 NPCs open **unlocked**. A saved player character opens read-only because it is
 finished and worth protecting; an NPC is working material the GM is usually still
-changing, often mid-session. The Lock action is still in the Settings menu.
+changing, often mid-session. The lock toggle is still on the menu bar.
 """
 
 from __future__ import annotations

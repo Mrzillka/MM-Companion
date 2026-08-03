@@ -15,6 +15,14 @@ from mm_companion.ui.connection_indicator import install_connection_indicator
 
 CHARACTER_FILTER = "Character files (*.json)"
 
+#: The lock toggle's two faces. It sits on the menu bar rather than inside a menu
+#: because it is a play-time view switch, not a preference — and because a glyph
+#: that *shows* the current state is worth more there than a tick two clicks deep.
+#: Emoji text on the action, matching the block title bars' 🖈 ↗ ✕, so it needs no
+#: artwork and stays legible on every preset's bar.
+LOCK_GLYPH_LOCKED = "🔒"
+LOCK_GLYPH_UNLOCKED = "🔓"
+
 
 class MainWindow(QMainWindow):
     """Main window; currently shows a single character sheet.
@@ -108,9 +116,13 @@ class MainWindow(QMainWindow):
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar.
 
-        A GM's read-only view (:attr:`_gm_view`) gets only the **View** menu — no
-        File/Settings/Session, and no Lock toggle — so a player's snapshot
-        can be looked at and rearranged but never edited, saved, or unlocked.
+        Menus first, then the lock toggle as the bar's last item — it is a widget
+        on the bar, not an entry inside a menu (see :data:`LOCK_GLYPH_LOCKED`).
+
+        A GM's read-only view (:attr:`_gm_view`) returns before either, so it gets
+        only the **View** menu — no File/Settings/Session and no lock — and a
+        player's snapshot can be looked at and rearranged but never edited, saved,
+        or unlocked.
         """
         menu_bar = self.menuBar()
 
@@ -140,11 +152,6 @@ class MainWindow(QMainWindow):
             self._cost_config_action = settings_menu.addAction("Cost config...")
             self._cost_config_action.triggered.connect(self._open_cost_config)
 
-        self._lock_action = settings_menu.addAction("Lock")
-        self._lock_action.setCheckable(True)
-        self._lock_action.setChecked(locked)
-        self._lock_action.toggled.connect(self._sheet.set_locked)
-
         # Joining a session is something a *player* does at the table; an NPC sheet
         # is the GM's prep material, driven from the GM window instead. (Rolling
         # dice used to have a Tools menu here; it is the Dice block now — see
@@ -162,6 +169,26 @@ class MainWindow(QMainWindow):
             session_menu = menu_bar.addMenu("&Session")
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
             install_connection_indicator(self)
+
+        # Last on the bar, and on the bar rather than in a menu: locking is how a
+        # sheet is read *and* how it is written, so it is reached constantly. An
+        # action added straight to a QMenuBar with no submenu behaves as a button —
+        # one click, and the glyph is the state read-out.
+        self._lock_action = menu_bar.addAction(LOCK_GLYPH_LOCKED)
+        self._lock_action.setCheckable(True)
+        self._lock_action.setChecked(locked)
+        self._lock_action.toggled.connect(self._sheet.set_locked)
+        self._lock_action.toggled.connect(self._show_lock_state)
+        self._show_lock_state(locked)
+
+    def _show_lock_state(self, locked: bool) -> None:
+        """Put the current lock state on the bar's glyph and its tooltip."""
+        self._lock_action.setText(LOCK_GLYPH_LOCKED if locked else LOCK_GLYPH_UNLOCKED)
+        self._lock_action.setToolTip(
+            "Locked — click to edit this sheet"
+            if locked
+            else "Unlocked — click to make this sheet read-only"
+        )
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""

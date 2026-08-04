@@ -741,7 +741,9 @@ The shape:
   not merge `DEFAULT_SETTINGS`, so any key added after a workspace was created
   reads back as `None`. Every setting in that module has an accessor or an inline
   fallback for this reason; a new one needs the same or it is silently dead for
-  every existing user.
+  every existing user. An **empty strip is persisted** rather than dropped to keep
+  the file tidy: a missing key is what seeds the defaults, so skipping the empty
+  ones handed a GM back the four chips they had just taken off.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.

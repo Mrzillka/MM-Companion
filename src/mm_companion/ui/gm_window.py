@@ -1096,10 +1096,15 @@ class GMWindow(QMainWindow):
             window.sheet.set_pinned(self._pins[card_key])
 
     def _persist_pins(self) -> None:
+        """Write every card's strip, **including the empty ones**.
+
+        An empty list is not the absence of an answer: it is a GM who took every
+        chip off that card on purpose, and :meth:`_pins_for` seeds the defaults
+        for a key it has never seen. Dropping the empty ones to keep the settings
+        file tidy meant a cleared strip was back at four chips after a restart.
+        """
         storage.update_settings(
-            gm_pins={
-                key: [ref.to_dict() for ref in refs] for key, refs in self._pins.items() if refs
-            }
+            gm_pins={key: [ref.to_dict() for ref in refs] for key, refs in self._pins.items()}
         )
 
     def _open_player_pin_picker(self, player_id: str) -> None:

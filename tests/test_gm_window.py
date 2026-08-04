@@ -1118,16 +1118,19 @@ def test_only_the_portrait_opens_an_npc_sheet(qapp: QApplication, window: GMWind
     opened: list[str] = []
     card.openRequested.connect(opened.append)
 
+    at = QPointF(20, 60)
     press = QMouseEvent(
         QEvent.Type.MouseButtonPress,
-        QPointF(20, 60),
+        at,
+        card.mapToGlobal(at),
         Qt.MouseButton.LeftButton,
         Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier,
     )
     release = QMouseEvent(
         QEvent.Type.MouseButtonRelease,
-        QPointF(20, 60),
+        at,
+        card.mapToGlobal(at),
         Qt.MouseButton.LeftButton,
         Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
@@ -1612,7 +1615,7 @@ def chip_index(card, caption: str) -> int:
 
 
 def test_a_new_npc_card_starts_with_the_default_strip(window: GMWindow) -> None:
-    """DEF, ATK and the first Damage power's save DC — resolved against this NPC."""
+    """DEF, Toughness, ATK and the first Damage power's attack roll."""
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
@@ -1733,6 +1736,28 @@ def test_a_chip_can_be_removed(window: GMWindow) -> None:
 
     assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "Damage +6"]
     assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 3
+
+
+def test_a_strip_the_gm_emptied_stays_empty(window: GMWindow) -> None:
+    """An empty strip is an answer, not a missing one.
+
+    A GM who takes every chip off a card means it — so it has to be written, or
+    the next launch sees no entry, seeds the defaults and hands back the four
+    chips they just removed.
+    """
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    for ref in list(card.pins.pins):
+        card.pins.remove_ref(ref)
+
+    assert storage.load_settings()["gm_pins"]["npc:" + name] == []
+
+    relaunched = GMWindow(bind="127.0.0.1")
+    try:
+        assert npc_cards(relaunched)[0].pins.chip_texts() == []
+    finally:
+        relaunched.bridge.stop()
 
 
 def test_the_picker_pins_onto_the_card_behind_it(window: GMWindow) -> None:

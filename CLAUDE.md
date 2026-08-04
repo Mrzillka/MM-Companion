@@ -111,7 +111,18 @@ clean (see Licensing below).
   `ConditionsSection` (its own block) drives it: the "+" menu applies a condition (a
   `ConditionParameterDialog` first when it needs a subject) and renders one chip per
   `AppliedCondition`; its `conditionsChanged` fans out over the signal bus so every
-  overlay refreshes. Dice/recovery/turn-economy are out of scope for now.
+  overlay refreshes. That menu is built by the shared
+  `conditions.build_condition_menu`, which all three "+" buttons use (this block's,
+  and the GM's fast-apply on a player and an NPC card) so a condition is in the
+  same place in all of them. It splits the catalog into submenus by each record's
+  `group`, titled and ordered by `_meta.conditionGroups` — an *ergonomic* axis,
+  orthogonal to `category`: a flat list of 36 is slow to search mid-round, while a
+  category is a rules fact and stays the axis the applied chips are grouped by. An
+  untagged condition is offered flat below the submenus and a ruleset declaring no
+  groups gets the flat menu back, so both are purely additive. Note
+  `QMenu.addMenu(title)` hands ownership *back* to the caller, so each submenu is
+  constructed with the menu as its parent or it is collected out from under the
+  open menu. Dice/recovery/turn-economy are out of scope for now.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
@@ -678,6 +689,78 @@ The shape:
   `GMWindow`), and it exists because every other disconnect cue **fades** after
   ten seconds; it recomputes its whole state from the bridge on every signal
   rather than mapping signals to states one by one.
+- **The two cards are one card.** A player card and an NPC card differ in what
+  they may *do* (a player's is a remote snapshot the GM can only ask to change;
+  an NPC's is the GM's own model, edited in place) but not in what a GM *reads*:
+  both open their sheet from the **portrait** alone and both hover the same
+  abilities/resistances/powers summary out of `ui/card_summary.py`. Opening used
+  to be a click anywhere on an NPC card, which fought that card's own
+  drag-to-reorder gesture — the two were told apart only by how far the pointer
+  had moved.
+- **Pinned parameters** are the strip down a card's right side: the four or five
+  numbers *this* GM wants off *this* creature. `core/rules/pins.py` is the model
+  — a `PinRef` names an ability, resistance, skill, initiative, defence DC or one
+  of a power's rolls, and `resolve_pin` turns it into a caption, a reading and a
+  `RollSpec`. **A reference, never a number**: the character underneath is live,
+  so a frozen value would be right once.
+- Three things a pin's *reading* has to get right. Values come off the **roll**
+  builders (`resistance_roll`, not `resistance_total`), which folds condition
+  overlays in for free while the build math stays condition-free — and
+  `with_conditions=False` takes them back out again for the picker, which is a
+  catalogue of the creature rather than a combat readout (the `RollSpec` is the
+  same either way, so nothing about what a chip *rolls* moves). A **defence DC**
+  is its own kind rather than a dressed-up resistance: the sheet's table shows
+  the rank, and a chip quietly showing ten more would be a trap. And a pin that
+  no longer resolves reads as a dash rather than vanishing — a chip that
+  disappears leaves no way to remove it — which is why `PinnedValue.missing` is a
+  field of its own and not `spec is None`: a **forced save** carries no spec
+  either (the wielder never rolls their own target's save; it reaches the person
+  who does as the attack's follow-up chip) but is perfectly well resolved.
+- `ui/pin_panel.py` is the strip: **click loads** into the GM's roller and
+  **double-click rolls** — the sheet's own bargain — plus drag to reorder and
+  right-click to remove. A click is a release with *no* drag started and *no*
+  double-click just handled, which is what keeps the four apart.
+  `ui/pin_picker.py` is the modeless browser the "+" opens; it unpins as well as
+  pins, and its `set_pinned` is a no-op when it already agrees — without that
+  guard the card's echo rebuilds the tree *during* a toggle, deleting the row
+  being restated.
+- A GM also pins from the sheet opened off that card, by right-clicking a row.
+  Two bus topics, `pin-requested` and `unpin-requested`, both served by the
+  **sheet** rather than any block, since a pin's destination is outside the sheet
+  entirely. Which of the two a row offers comes from `stat_table.PinMenuState`,
+  fed by `CharacterSheet.set_pinned` — pushed from the card on open *and* on
+  every change, so a sheet left open never offers to pin what is already there.
+  The menu appears at all only once `MainWindow(pin_target=True)` says there is a
+  card.
+- Strips persist per card in `gm_pins`, seeded from `gm_default_pins` — the
+  settings key the Settings window's **GM Mode page** edits, and the reason the NPC
+  damage default is *late-bound* ("the first Damage power", resolving to the
+  **attack roll** it makes — the save it forces belongs to the target), since the
+  defaults are written long before the NPC is. Read it through
+  **`storage.gm_default_pins()`**,
+  never off `load_settings()`: that returns the settings file *verbatim* and does
+  not merge `DEFAULT_SETTINGS`, so any key added after a workspace was created
+  reads back as `None`. Every setting in that module has an accessor or an inline
+  fallback for this reason; a new one needs the same or it is silently dead for
+  every existing user. An **empty strip is persisted** rather than dropped to keep
+  the file tidy: a missing key is what seeds the defaults, so skipping the empty
+  ones handed a GM back the four chips they had just taken off.
+- That page (`ui/settings/gm_page.py`, reached from the GM window's own
+  `Settings ▸ Preferences…`) is two reorderable lists, one per card kind, and its
+  shape follows from *when* a default is written. A default cannot name a power —
+  a `Power.id` belongs to one character — so the picker it opens is the
+  character-free `default_pin_choices(game_data)` rather than `available_pins`,
+  offering the traits plus the one late-bound `select="first_damage"` row; the same
+  `PinPickerDialog` serves both, with a `None` character putting it in that mode and
+  hiding its "Now" column. Writing goes through `storage.set_gm_default_pins`, which
+  merges per kind for the same reason the reader does, and the page always writes
+  **both** kinds — an omitted kind reads back as the shipped strip, while an
+  explicit `[]` is honoured. Editing the defaults deliberately leaves the board
+  alone (`_pins_for` made each card's strip its own on first sight), so
+  **Apply to cards on the board** is a separate, confirmed button:
+  `storage.clear_gm_card_pins()` plus `GMWindow.reseed_pins_from_defaults()` on
+  every open GM window — in that order, or a window still holding its old strips
+  writes them back out and undoes the clear.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.
@@ -814,11 +897,13 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   map overrides any bound. The GM window's blocks live there too, under `gm_`
   keys.
 - The look is changed in the **Settings window** (`ui/settings/`, opened from a
-  sheet's `Settings ▸ Preferences…` or the launcher's Settings button): a
-  `QListWidget` nav over a `QStackedWidget`, whose pages come from
-  `window.PAGES` — one entry today, `ThemePage`. Adding a second area of settings
-  is an entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
-  `is_dirty`, `save`, `discard`, `needs_restart`).
+  sheet's `Settings ▸ Preferences…`, the GM window's, or the launcher's Settings
+  button): a `QListWidget` nav over a `QStackedWidget`, whose pages come from
+  `window.PAGES` — `ThemePage` and `GMPage`. Adding another area of settings is an
+  entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
+  `is_dirty`, `save`, `discard`, `needs_restart`). Which page it *opens on* is the
+  caller's to say (`SettingsWindow(page=GMPage.title)`), which is how the GM window
+  lands on its own rather than on the sheet's.
 - The Themes page separates two things on purpose. **Picking** a preset writes
   through at once (`set_active_theme`), as the old menu did. **Editing** one is a
   draft: `TokenEditor` (`ui/settings/token_editor.py`) generates a form by walking

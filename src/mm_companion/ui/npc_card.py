@@ -8,11 +8,14 @@ directly: conditions apply straight onto it (persisted like any sheet edit),
 initiative is rolled here, and the whole thing can be copied. The card is keyed
 by its file name, which is the stable identity a session's cast
 (:attr:`~mm_companion.core.session.model.SessionState.npc_paths`) records.
+
+The card body's press-drag reorders it in the initiative list; the **portrait** is
+what opens its sheet (see :mod:`~mm_companion.ui.card_summary`). Those were once
+the same gesture, distinguished only by how far the pointer had moved, which meant
+a reorder that fell short of the threshold opened a window instead.
 """
 
 from __future__ import annotations
-
-from html import escape
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
@@ -31,20 +34,20 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.dice import roll_d20
 from mm_companion.core.library import CharacterSummary
-from mm_companion.core.powers import Power, PowerGroup
-from mm_companion.core.rules import effective_ability, initiative_modifier, resistance_total
+from mm_companion.core.rules import initiative_modifier
 from mm_companion.ui import theme
+from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
 from mm_companion.ui.player_card import _ConditionChip
 from mm_companion.ui.sections.conditions import (
-    addable_conditions,
+    build_condition_menu,
     condition_display_name,
     condition_tooltip,
 )
 
-#: The portrait placeholder's side, in pixels.
-PORTRAIT_SIZE = 96
-#: How wide a card is. Fixed, so a row of them lines up in the flow layout.
+#: How wide the card's own column is. Fixed, so a row of them lines up in the
+#: flow layout; the pinned-parameter strip adds its own width beside it.
 CARD_WIDTH = 210
 #: How far the pointer must move with the button down to count as a drag rather
 #: than a click, in pixels.
@@ -78,6 +81,14 @@ class NPCCard(QFrame):
     reorderPreview = Signal(str, int)
     #: The drag ended (dropped or cancelled) — hide the drop indicator.
     reorderPreviewEnded = Signal()
+    #: ``(file_name, refs)`` — this card's pinned-parameter strip changed.
+    pinsChanged = Signal(str, object)
+    #: A ``RollSpec`` — the GM clicked a pinned chip and wants it in the roller.
+    loadRequested = Signal(object)
+    #: The same, double-clicked — throw it.
+    rollRequested = Signal(object)
+    #: The NPC's file name — the GM asked to pin something to this card.
+    pinPickerRequested = Signal(str)
 
     def __init__(
         self,
@@ -90,20 +101,19 @@ class NPCCard(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setFixedWidth(CARD_WIDTH)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # The card's own column is fixed; the pinned strip adds its width beside it.
+        self.setFixedWidth(CARD_WIDTH + PIN_PANEL_WIDTH + int(theme.metric("space.sm")) * 3)
 
         self._data = data
         self._character = character
         self._summary = summary
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
-        self._addable_conditions: list[Condition] = addable_conditions(data)
         #: The file name, this card's stable identity across a refresh.
         self.name_key = summary.path.name if summary.path is not None else ""
         #: Where a left-button press landed, to tell a drag from a click.
         self._press_pos = None
 
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout()
 
         self._name_label = QLabel(summary.name)
         name_font = self._name_label.font()
@@ -112,10 +122,8 @@ class NPCCard(QFrame):
         self._name_label.setWordWrap(True)
         layout.addWidget(self._name_label)
 
-        self._portrait = QLabel("No image")
-        self._portrait.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._portrait.setFixedSize(PORTRAIT_SIZE, PORTRAIT_SIZE)
-        self._portrait.setFrameShape(QLabel.Shape.Box)
+        self._portrait = PortraitButton()
+        self._portrait.clicked.connect(lambda: self.openRequested.emit(self.name_key))
         layout.addWidget(self._portrait, alignment=Qt.AlignmentFlag.AlignHCenter)
         self._set_portrait(summary.image_path)
 
@@ -162,6 +170,15 @@ class NPCCard(QFrame):
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
+        layout.addStretch()
+
+        self.pins = install_pin_panel(self, layout, data)
+        self.pins.set_character(character)
+        self.pins.pinsChanged.connect(lambda refs: self.pinsChanged.emit(self.name_key, refs))
+        self.pins.loadRequested.connect(self.loadRequested)
+        self.pins.rollRequested.connect(self.rollRequested)
+        self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.name_key))
+
         self.refresh_conditions()
         self._refresh_tooltip()
 
@@ -202,20 +219,7 @@ class NPCCard(QFrame):
     def _set_portrait(self, image_path: str | None) -> None:
         """Show the NPC's picture (a local file, so it resolves normally)."""
         resolved = library.resolve_image_path(image_path)
-        pixmap = QPixmap(resolved) if resolved else QPixmap()
-        if pixmap.isNull():
-            self._portrait.setText("No image")
-            self._portrait.setPixmap(QPixmap())
-            return
-        self._portrait.setText("")
-        self._portrait.setPixmap(
-            pixmap.scaled(
-                PORTRAIT_SIZE,
-                PORTRAIT_SIZE,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self._portrait.set_image(QPixmap(resolved) if resolved else None)
 
     # -- hover summary -----------------------------------------------------
 
@@ -225,42 +229,7 @@ class NPCCard(QFrame):
 
     def summary_html(self) -> str:
         """A compact abilities / resistances / powers summary, as tooltip HTML."""
-        from mm_companion.ui.sections.powers import roll_lines
-
-        data, char = self._data, self._character
-        rows = [f"<b>{escape(self._summary.name)}</b>"]
-
-        abilities = ", ".join(
-            f"{escape(a.name)} {effective_ability(char, data, a.key):+d}" for a in data.abilities
-        )
-        if abilities:
-            rows.append(f"<b>Abilities</b><br>{abilities}")
-
-        resistances = ", ".join(
-            f"{escape(r.name)} {resistance_total(char, data, r.key)}" for r in data.resistances
-        )
-        if resistances:
-            rows.append(f"<b>Resistances</b><br>{resistances}")
-
-        power_lines = []
-        for power in self._leaf_powers():
-            name = escape(power.name or "Power")
-            rolls = roll_lines(power, char, data)
-            power_lines.append(f"{name}: {escape(', '.join(rolls))}" if rolls else name)
-        if power_lines:
-            rows.append("<b>Powers</b><br>" + "<br>".join(power_lines))
-
-        return "<br><br>".join(rows)
-
-    def _leaf_powers(self):
-        """Every leaf power on the NPC, descending into any groups."""
-        stack = list(self._character.powers)
-        while stack:
-            node = stack.pop(0)
-            if isinstance(node, PowerGroup):
-                stack[0:0] = node.children
-            elif isinstance(node, Power):
-                yield node
+        return character_summary_html(self._character, self._data, self._summary.name)
 
     # -- conditions --------------------------------------------------------
 
@@ -285,6 +254,12 @@ class NPCCard(QFrame):
             )
             self._chip_flow.addWidget(chip)
         self._chips.setVisible(bool(self._character.conditions))
+        # Re-derived whenever the card redraws, not kept from construction. The
+        # summary reads the *build* numbers, which no condition currently moves —
+        # so this changes nothing today. It is here because "computed once in
+        # __init__ over a mutable model" is the shape of a bug waiting for the
+        # first summary line that does depend on runtime state.
+        self._refresh_tooltip()
 
     def condition_names(self) -> list[str]:
         """The chip captions, in order — the readable form of the NPC's conditions."""
@@ -294,13 +269,8 @@ class NPCCard(QFrame):
         ]
 
     def _show_condition_menu(self) -> None:
-        """The same catalog the sheet's own "+" offers, aimed at this NPC."""
-        menu = QMenu(self)
-        for condition in sorted(self._addable_conditions, key=lambda c: c.name):
-            menu.addAction(
-                condition.name,
-                lambda checked=False, c=condition: self._choose_condition(c),
-            )
+        """The same catalog, split the same way, the sheet's own "+" offers."""
+        menu = build_condition_menu(self, self._data, self._choose_condition)
         button = self._condition_button
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
@@ -322,13 +292,13 @@ class NPCCard(QFrame):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton:
-            self._press_pos = event.pos()
+            self._press_pos = event.position().toPoint()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """While dragging, preview where the drop would land, so the GM sees it."""
         if self._press_pos is not None:
-            moved = (event.pos() - self._press_pos).manhattanLength()
+            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
             if moved >= DRAG_THRESHOLD:
                 target = self._drop_target_index(event.globalPosition().toPoint())
                 self.reorderPreview.emit(self.name_key, target)
@@ -336,14 +306,12 @@ class NPCCard(QFrame):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
-            moved = (event.pos() - self._press_pos).manhattanLength()
+            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
             self._press_pos = None
             if moved >= DRAG_THRESHOLD:
                 target = self._drop_target_index(event.globalPosition().toPoint())
                 self.reorderPreviewEnded.emit()
                 self.reorderRequested.emit(self.name_key, target)
-            elif self.rect().contains(event.pos()):
-                self.openRequested.emit(self.name_key)
         super().mouseReleaseEvent(event)
 
     def _drop_target_index(self, global_pos) -> int:

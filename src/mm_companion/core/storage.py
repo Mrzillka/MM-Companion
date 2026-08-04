@@ -13,6 +13,7 @@ directly (handy for tests and portable installs).
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -113,6 +114,48 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # key because the GM window has a different block set. See
     # :mod:`mm_companion.ui.gm_window`.
     "gm_layout": {},
+    # What a GM card's pinned-parameter strip starts with, per card kind. Each
+    # entry is a ``PinRef.to_dict()`` (see :mod:`mm_companion.core.rules.pins`).
+    # Read through :func:`gm_default_pins`, never straight off ``load_settings``:
+    # an existing workspace's file predates this key entirely.
+    #
+    # These live in settings rather than as a constant in code because the whole
+    # point is that a GM changes them: the Settings window's GM Mode page reads
+    # this through :func:`gm_default_pins` and writes it through
+    # :func:`set_gm_default_pins`, and this dict is what its "Restore shipped"
+    # button puts back.
+    # The NPC damage entry is deliberately *late-bound* — the defaults are written
+    # down long before the NPC they will describe exists, so "the first Damage
+    # power" is the only way to say it, and it stays true when the GM edits which
+    # power that is. It resolves to the **attack roll** that power makes: the chip
+    # a GM clicks when the mook swings. The save it forces is the target's to roll
+    # and arrives on their side as the attack's follow-up.
+    #
+    # Defence and Toughness lead both lists because they are the pair a GM reads
+    # together — how hard to hit, how hard to hurt.
+    "gm_default_pins": {
+        "player": [
+            {"kind": "resistance", "key": "DEF"},
+            {"kind": "resistance", "key": "TOUGHNESS"},
+            {"kind": "initiative"},
+            {"kind": "skill", "key": "Perception"},
+        ],
+        "npc": [
+            {"kind": "resistance", "key": "DEF"},
+            {"kind": "resistance", "key": "TOUGHNESS"},
+            {"kind": "ability", "key": "ATK"},
+            {"kind": "power", "select": "first_damage"},
+        ],
+    },
+    # Per-card pin strips the GM has since edited, keyed ``"npc:<file name>"`` or
+    # ``"player:<player_id>"``; a card with no entry here starts from
+    # ``gm_default_pins``. Same plain-dict idiom as ``quick_rolls``.
+    #
+    # A player id is session-scoped, so someone who rejoins in a fresh seat starts
+    # from the defaults again. That is the cheap version on purpose: the honest
+    # alternative is per-session state on the server, and pins are a GM's private
+    # scratch note, not table state.
+    "gm_pins": {},
 }
 
 
@@ -244,6 +287,51 @@ def theme_name() -> str:
     """
     value = load_settings().get("theme", "")
     return value if isinstance(value, str) else ""
+
+
+def gm_default_pins() -> dict:
+    """What a GM card's pinned-parameter strip starts with, per card kind.
+
+    The one seam for that question, and it exists because of a bug worth stating:
+    :func:`load_settings` returns the settings file **verbatim**, it does not
+    merge :data:`DEFAULT_SETTINGS` in. So a workspace created before this key
+    existed — which is every workspace that predates the feature — answers
+    ``None``, and reading it directly gave every card an empty strip. Every other
+    setting is read through a fallback for the same reason; this is that fallback.
+    """
+    stored = load_settings().get("gm_default_pins")
+    default = DEFAULT_SETTINGS["gm_default_pins"]
+    if not isinstance(stored, dict):
+        return copy.deepcopy(default)  # type: ignore[arg-type]
+    # Per *kind*, not wholesale: a settings file that names only "npc" should
+    # still get the shipped player strip rather than nothing.
+    merged = copy.deepcopy(default)  # type: ignore[arg-type]
+    merged.update({key: value for key, value in stored.items() if isinstance(value, list)})
+    return merged
+
+
+def set_gm_default_pins(pins: dict) -> None:
+    """Write the starting strips, merging *pins* over what is stored per kind.
+
+    The write half of :func:`gm_default_pins`, and it merges for the same reason
+    that one does: a caller naming only ``"npc"`` means "leave the player strip
+    alone", not "reset it to shipped". Note the asymmetry that follows — an
+    **empty list** is a real answer (a GM who wants a card to start bare) and is
+    stored as one, while a *missing* kind is no answer at all.
+    """
+    merged = gm_default_pins()
+    merged.update({key: value for key, value in pins.items() if isinstance(value, list)})
+    update_settings(gm_default_pins=merged)
+
+
+def clear_gm_card_pins() -> None:
+    """Forget every card's own strip, so each seeds from the defaults again.
+
+    The deliberate opposite of the rule :meth:`GMWindow._pins_for` normally keeps
+    — a card's strip is the GM's once the card exists — so it happens only when a
+    GM asks for it outright, from the GM Mode settings page.
+    """
+    update_settings(gm_pins={})
 
 
 def relay_url() -> str:

@@ -39,7 +39,13 @@ from mm_companion.ui.blocks import (
     default_rows,
     sync_declarative_blocks,
 )
-from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED, QUIET_REQUESTS
+from mm_companion.ui.blocks.bus import (
+    BUILD_CHANGED,
+    EDITED,
+    PIN_REQUESTED,
+    QUIET_REQUESTS,
+    UNPIN_REQUESTED,
+)
 from mm_companion.ui.pinned_panel import PinnedBoard
 
 
@@ -47,6 +53,14 @@ class CharacterSheet(QWidget):
     """Scrollable, free-form canvas of the sheet's blocks over a shared model."""
 
     edited = Signal()
+    #: A block's row was right-clicked and pinned. Carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`, and goes *out* of the sheet —
+    #: what it names belongs on a GM card, which is not part of this window. The
+    #: sheet is the only thing serving ``pin-requested``, so the topic reaches here
+    #: whichever block raised it and a mod block joins on the same terms.
+    pinRequested = Signal(object)
+    #: The same, for a row that was already pinned.
+    unpinRequested = Signal(object)
 
     def __init__(
         self,
@@ -244,6 +258,11 @@ class CharacterSheet(QWidget):
         # a mod that ships its own roller is revealed on the same terms. A quiet
         # topic is exempt: it is raised as a side effect of something else the user
         # was doing, and would open a window they never asked for (see bus.py).
+        # The requests no *block* answers: a pin's destination is a GM card, so
+        # the sheet takes them and passes them on to whoever opened the sheet.
+        self._bus.serve(PIN_REQUESTED, self.pinRequested.emit)
+        self._bus.serve(UNPIN_REQUESTED, self.unpinRequested.emit)
+
         for topic in {t for d in self._descriptors for t in d.serves} - QUIET_REQUESTS:
             self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
 
@@ -295,6 +314,34 @@ class CharacterSheet(QWidget):
         self._locked = locked
         for section in self._sections():
             section.set_locked(locked)
+
+    def set_pinned(self, refs) -> None:
+        """Tell every block which parameters are already on the GM card.
+
+        What turns a row's menu from "Pin to GM card" into "Unpin from GM card".
+        Pushed rather than pulled — a block cannot see the card — and pushed again
+        on every change, so a sheet left open beside the card never offers to pin
+        something that is already there.
+        """
+        for section in self._sections():
+            handler = getattr(section, "set_pinned", None)
+            if callable(handler):
+                handler(refs)
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether this sheet's rows offer "Pin to GM card".
+
+        Off by default, so a player's own sheet is exactly as it was — the action
+        would have nowhere to go. A GM window turns it on when it opens a sheet
+        from a card, and connects :attr:`pinRequested` to that card's strip.
+
+        Duck-typed and fanned out like :meth:`sync_session`: a mod block that
+        offers pinnable rows exposes the same method and is switched with the rest.
+        """
+        for section in self._sections():
+            handler = getattr(section, "set_pin_target", None)
+            if callable(handler):
+                handler(enabled)
 
     def sync_session(self) -> None:
         """Tell any block that cares that the session changed (joined, or ended).

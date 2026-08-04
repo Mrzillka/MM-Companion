@@ -23,6 +23,8 @@ from PySide6.QtWidgets import QSpinBox, QTableWidgetItem, QVBoxLayout, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    PIN_RESISTANCE,
+    PinRef,
     RollSpec,
     power_trait_bonuses,
     resistance_base,
@@ -32,6 +34,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_table import (
+    PinMenuState,
     apply_stat_effects,
     build_stat_table,
     set_stat_value,
@@ -55,12 +58,23 @@ class ResistancesSection(TitledSection):
     #: A row was clicked once — show this check in the roller's chip, ready to roll.
     loadRequested = Signal(object)
 
+    #: A row was right-clicked and pinned — carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
+    #: GM opened from a card (see ``set_pin_target``); the same non-build promise as
+    #: the two roll signals.
+    pinRequested = Signal(object)
+    #: The same, for a row that was already on the card.
+    unpinRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._data = data
         self._character = character
         self._locked = False
+        # Whether this sheet was opened from a GM card, and what is already on
+        # that card. Both are set by the sheet after construction.
+        self._pins = PinMenuState()
         self._resistances: dict[str, QSpinBox] = {}
         self._resistance_enh: dict[str, QTableWidgetItem] = {}
 
@@ -75,6 +89,10 @@ class ResistancesSection(TitledSection):
             roll_spec=self._roll_spec,
             roll_sink=self.rollRequested.emit,
             load_sink=self.loadRequested.emit,
+            pin_ref=self._pin_ref,
+            pin_sink=self.pinRequested.emit,
+            unpin_sink=self.unpinRequested.emit,
+            pins=self._pins,
         )
         layout.addWidget(self.table)
         # Abilities and Resistances are one fixed size, sized to the taller of the
@@ -153,6 +171,18 @@ class ResistancesSection(TitledSection):
     def _roll_spec(self, key: str) -> RollSpec:
         """This resistance's check, built fresh at click time so it is never stale."""
         return resistance_roll(self._character, self._data, key)
+
+    def _pin_ref(self, key: object) -> PinRef:
+        """The pin that names this row — the same key the roll is built from."""
+        return PinRef(PIN_RESISTANCE, str(key))
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether this block's rows offer to pin at all."""
+        self._pins.enabled = enabled
+
+    def set_pinned(self, refs) -> None:
+        """Which parameters are already on the card, so a row can offer Unpin."""
+        self._pins.set_pinned(refs)
 
     def set_locked(self, locked: bool) -> None:
         """Make the resistance spin boxes read-only labels (locked) or editable."""

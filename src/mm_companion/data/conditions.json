@@ -25,6 +25,33 @@
         "addable": false
       }
     ],
+    "conditionGroupsNote": "How a '+' menu splits the addable catalog into submenus, in display order. Unlike 'sheetSections' (which groups the *applied* chips by category), this is a finding aid: a flat list of 36 conditions is slow to search mid-round. Every condition carries a 'group'; one whose group is not listed here is offered flat at the end of the menu, so a mod's condition is never unreachable.",
+    "conditionGroups": [
+      {
+        "group": "senses",
+        "title": "Senses"
+      },
+      {
+        "group": "movement",
+        "title": "Movement"
+      },
+      {
+        "group": "action",
+        "title": "Action & Control"
+      },
+      {
+        "group": "defence",
+        "title": "Defence"
+      },
+      {
+        "group": "impairment",
+        "title": "Impairment"
+      },
+      {
+        "group": "damage",
+        "title": "Damage"
+      }
+    ],
     "damageLadder": [
       "hit",
       "dazed",
@@ -66,6 +93,7 @@
       "id": "normal",
       "name": "Normal",
       "category": "meta",
+      "group": "meta",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -82,6 +110,7 @@
       "name": "Asleep",
       "tooltip": "Unconscious. Wakes on a strong Perception check, sudden movement, or a noticeable effect.",
       "category": "condition",
+      "group": "action",
       "includes": [
         "defenseless",
         "stunned",
@@ -104,6 +133,7 @@
       "name": "Blind",
       "tooltip": "Can't see; also counts as Sight Unaware and Vulnerable, plus impaired for sight-dependent tasks.",
       "category": "condition",
+      "group": "senses",
       "includes": [
         "hindered",
         "vulnerable"
@@ -126,6 +156,7 @@
       "name": "Bound",
       "tooltip": "Physically tied up or restrained solidly enough to stop movement and struggling.",
       "category": "condition",
+      "group": "movement",
       "includes": [
         "defenseless",
         "immobile",
@@ -148,6 +179,7 @@
       "name": "Broken",
       "tooltip": "An object no longer functions.",
       "category": "object_damage_condition",
+      "group": "object",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -164,6 +196,7 @@
       "name": "Compelled",
       "tooltip": "Forced to take a single standard action per turn chosen by whoever compelled you.",
       "category": "condition",
+      "group": "action",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -186,6 +219,7 @@
       "name": "Confused",
       "tooltip": "Acts unpredictably each turn — may attack the source of confusion, act normally, do nothing, flee in fear, or lash out randomly.",
       "category": "condition",
+      "group": "action",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -224,6 +258,7 @@
       "name": "Controlled",
       "tooltip": "Another character dictates your actions each turn, though you keep your normal capabilities.",
       "category": "condition",
+      "group": "action",
       "includes": [],
       "supersedes": [
         "compelled"
@@ -248,6 +283,7 @@
       "name": "Dazed",
       "tooltip": "Limited to free actions plus one standard action per round; can't take reactions.",
       "category": "damage_condition",
+      "group": "damage",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -271,6 +307,7 @@
       "name": "Dead",
       "tooltip": "Life has ended; no further recovery checks apply.",
       "category": "damage_condition",
+      "group": "damage",
       "includes": [
         "defenseless",
         "stunned",
@@ -293,6 +330,7 @@
       "name": "Deaf",
       "tooltip": "Can't hear; counts as Hearing Unaware and is easier to catch off guard by sound.",
       "category": "condition",
+      "group": "senses",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -310,6 +348,7 @@
       "name": "Debilitated",
       "tooltip": "Has effectively lost the use of a specific trait.",
       "category": "condition",
+      "group": "impairment",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -381,6 +420,7 @@
       "name": "Defenseless",
       "tooltip": "Defense treated as 0; automatically fails Dodge resistance checks and can be hit with a routine attack.",
       "category": "condition",
+      "group": "defence",
       "includes": [],
       "supersedes": [
         "vulnerable"
@@ -403,6 +443,7 @@
       "name": "Delusion",
       "tooltip": "Highest degree of Hallucinating — the subject's whole perceived reality can be fabricated.",
       "category": "condition",
+      "group": "senses",
       "includes": [
         "unaware"
       ],
@@ -430,6 +471,7 @@
       "name": "Destroyed",
       "tooltip": "An object is completely wrecked, in pieces or fragments.",
       "category": "object_damage_condition",
+      "group": "object",
       "includes": [],
       "supersedes": [
         "broken"
@@ -449,6 +491,7 @@
       "name": "Disabled",
       "tooltip": "-5 penalty on all checks, or on a specific named category of checks.",
       "category": "condition",
+      "group": "action",
       "includes": [],
       "supersedes": [
         "impaired"
@@ -490,6 +533,7 @@
       "name": "Dying",
       "tooltip": "Incapacitated and at serious risk of death; makes a stabilization check each turn.",
       "category": "damage_condition",
+      "group": "damage",
       "includes": [
         "incapacitated"
       ],
@@ -517,6 +561,7 @@
       "name": "Exhausted",
       "tooltip": "Worn out from overexertion — reduced effectiveness and half speed.",
       "category": "condition",
+      "group": "movement",
       "includes": [
         "disabled",
         "hindered"
@@ -545,6 +590,7 @@
       "name": "Fatigued",
       "tooltip": "Tired from exertion — minor penalties and reduced speed.",
       "category": "condition",
+      "group": "movement",
       "includes": [
         "impaired",
         "hindered"
@@ -571,6 +617,7 @@
       "name": "Figment",
       "tooltip": "Mildest degree of Hallucinating — small, believable changes to perception.",
       "category": "condition",
+      "group": "senses",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -593,6 +640,7 @@
       "name": "Frightened",
       "tooltip": "-5 penalty on checks related to the source of fear, and can't willingly approach it.",
       "category": "condition",
+      "group": "impairment",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -616,6 +664,7 @@
       "name": "Hallucinating",
       "tooltip": "Perceiving things that aren't real; severity ranges from Figment to Phantasm to Delusion.",
       "category": "condition",
+      "group": "senses",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -638,6 +687,7 @@
       "name": "Hindered",
       "tooltip": "Movement speed halved.",
       "category": "condition",
+      "group": "movement",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -655,6 +705,7 @@
       "name": "Hit",
       "tooltip": "Minor damage taken; stacking -1 penalty on further Damage resistance checks per Hit.",
       "category": "damage_condition",
+      "group": "damage",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -684,6 +735,7 @@
       "name": "Immobile",
       "tooltip": "Can't move from your current spot, though you can still act.",
       "category": "condition",
+      "group": "movement",
       "includes": [],
       "supersedes": [
         "hindered"
@@ -703,6 +755,7 @@
       "name": "Impaired",
       "tooltip": "-2 penalty on checks, either all of them or a named category.",
       "category": "condition",
+      "group": "impairment",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -742,6 +795,7 @@
       "name": "Incapacitated",
       "tooltip": "Down and out of the fight, usually knocked prone as well.",
       "category": "damage_condition",
+      "group": "damage",
       "includes": [
         "defenseless",
         "stunned",
@@ -773,6 +827,7 @@
       "name": "Paralyzed",
       "tooltip": "Frozen and unable to act physically, though still mentally aware and able to take purely mental actions.",
       "category": "condition",
+      "group": "action",
       "includes": [
         "defenseless",
         "immobile"
@@ -794,6 +849,7 @@
       "name": "Phantasm",
       "tooltip": "Middle degree of Hallucinating — larger, more complex false perceptions.",
       "category": "condition",
+      "group": "senses",
       "includes": [],
       "supersedes": [
         "figment"
@@ -818,6 +874,7 @@
       "name": "Prone",
       "tooltip": "Lying down — penalty on close attacks made, bonus for close attacks against you, penalty for ranged attacks against you, and reduced ground speed.",
       "category": "condition",
+      "group": "movement",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -841,6 +898,7 @@
       "name": "Restrained",
       "tooltip": "Held or bound; becomes Immobile instead of Hindered if anchored to something fixed.",
       "category": "condition",
+      "group": "movement",
       "includes": [
         "hindered",
         "vulnerable"
@@ -861,6 +919,7 @@
       "name": "Staggered",
       "tooltip": "Badly hurt — limited actions and reduced speed.",
       "category": "damage_condition",
+      "group": "damage",
       "includes": [
         "dazed",
         "hindered"
@@ -889,6 +948,7 @@
       "name": "Stunned",
       "tooltip": "Can't take any action at all, including free actions and reactions; Dodge rank halved.",
       "category": "damage_condition",
+      "group": "damage",
       "includes": [],
       "supersedes": [
         "dazed"
@@ -915,6 +975,7 @@
       "name": "Surprised",
       "tooltip": "Caught completely off guard; normally lasts just one round.",
       "category": "condition",
+      "group": "action",
       "includes": [
         "stunned",
         "vulnerable"
@@ -935,6 +996,7 @@
       "name": "Susceptible",
       "tooltip": "Penalty on resistance checks against a specific effect or descriptor, equal to half that effect's rank.",
       "category": "condition",
+      "group": "defence",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -960,6 +1022,7 @@
       "name": "Transformed",
       "tooltip": "Some or all of the character's traits are altered, sometimes drastically.",
       "category": "condition",
+      "group": "impairment",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -985,6 +1048,7 @@
       "name": "Unaware",
       "tooltip": "Oblivious to your surroundings, or to a specific sense if named (e.g. Sight Unaware); fails related Perception checks automatically.",
       "category": "condition",
+      "group": "senses",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -1020,6 +1084,7 @@
       "name": "Vulnerable",
       "tooltip": "Defense and Dodge ranks are halved (round down).",
       "category": "condition",
+      "group": "defence",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
@@ -1040,6 +1105,7 @@
       "name": "Weakness",
       "tooltip": "Penalty on resistance checks against a specific effect, and the best possible outcome is capped at one degree of failure.",
       "category": "condition",
+      "group": "defence",
       "includes": [],
       "supersedes": [],
       "mechanisms": [

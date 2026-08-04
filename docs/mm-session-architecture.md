@@ -221,8 +221,16 @@ The windows and widgets:
   history).
 - **`player_card.py`** — one card per connected player (never the GM's own seat):
   portrait (the transmitted thumbnail, else a placeholder), name, PL, hero points,
-  condition chips (each with a hover hint), "Open sheet", and a "+" that
-  fast-applies a condition onto that player's live sheet.
+  condition chips (each with a hover hint), and a "+" that fast-applies a
+  condition onto that player's live sheet.
+- **`card_summary.py`** — the half of a card that is the same on both kinds. A
+  player's card and an NPC's differ in what they may *do* (a player's is a remote
+  snapshot the GM can only ask to change; an NPC's is the GM's own model, edited in
+  place) but not in what a GM *reads*, so both hover the same abilities /
+  resistances / powers summary and both open their sheet from the **portrait
+  alone**. Opening used to be a click anywhere on an NPC card, which fought that
+  card's own drag-to-reorder gesture — the two were told apart only by how far the
+  pointer had moved.
 - **`npc_window.py`** — an NPC is an ordinary `Character` in a simplified sheet
   (the point-pool row replaced by an *estimated* PL). NPCs are GM-only and never
   go on the wire; they live in the workspace `gm_characters/` dir.
@@ -238,6 +246,82 @@ The windows and widgets:
   same. It follows a bridge and recomputes its *whole* state from that bridge on
   every signal rather than mapping each signal to a state — several signals arrive
   for one transition, and one state function is what stops them disagreeing.
+
+### Pinned parameters: the strip down a card's right side
+
+The four or five numbers *this* GM wants off *this* creature, without opening its
+sheet. `core/rules/pins.py` is the model and is pure Python like the rest of
+`core`: a **`PinRef`** names an ability, a resistance, a skill, initiative, a
+defence DC or one of a power's rolls, and `resolve_pin` turns it into a caption, a
+reading and a `RollSpec`. A reference, **never a number** — the character
+underneath is live, so a frozen value would be right once and then quietly wrong.
+
+Three things the *reading* has to get right, each of which was a bug first:
+
+- **Values come off the roll builders** (`resistance_roll`, not
+  `resistance_total`), which folds the condition overlays in for free while the
+  build math itself stays condition-free — and `with_conditions=False` takes them
+  back out again for the picker, which is a catalogue of the creature rather than a
+  combat readout. The `RollSpec` is identical either way, so nothing about what a
+  chip *rolls* moves with it.
+- **A defence DC is its own kind**, not a dressed-up resistance. The sheet's table
+  shows the rank, and a chip quietly showing ten more would be a trap.
+- **A pin that no longer resolves reads as a dash** rather than vanishing; a chip
+  that disappears leaves no way to remove it. That is why `PinnedValue.missing` is
+  a field of its own rather than `spec is None` — a **forced save** carries no spec
+  either (the wielder never rolls their own target's save; it reaches the person
+  who does as the attack's follow-up chip) but is perfectly well resolved.
+
+`ui/pin_panel.py` is the strip: **click loads** into the GM's roller and
+**double-click rolls**, the same bargain the sheet strikes everywhere else, plus
+drag to reorder and right-click to remove. A click is a release with *no* drag
+started and *no* double-click just handled, which is what keeps the four gestures
+apart. `ui/pin_picker.py` is the modeless browser the "+" opens; it unpins as well
+as pins, and its `set_pinned` is a no-op when it already agrees — without that
+guard the card's echo rebuilds the tree *during* a toggle, deleting the row being
+restated.
+
+A GM also pins from the sheet opened off that card, by right-clicking a row. Two
+bus topics — `pin-requested` and `unpin-requested` — served by the **sheet**
+rather than by any block, since a pin's destination is outside the sheet entirely.
+Which of the two a row offers comes from `stat_table.PinMenuState`, fed by
+`CharacterSheet.set_pinned`, pushed from the card on open *and* on every change so
+a sheet left open never offers to pin what is already there.
+
+Strips persist per card in the `gm_pins` setting, seeded from `gm_default_pins`.
+Three details:
+
+- The NPC damage default is **late-bound** — "the first Damage power", resolving to
+  the **attack roll** it makes, since the save it forces belongs to the target —
+  because the defaults are written long before the NPC is.
+- An **empty strip is written**, not dropped for tidiness. A GM who took every chip
+  off a card meant it, and a missing key is what seeds the defaults.
+- Read the setting through **`storage.gm_default_pins()`**, never off
+  `load_settings()`: that returns the settings file verbatim and does not merge
+  `DEFAULT_SETTINGS`, so a key added after a workspace was created reads back as
+  `None` — which is exactly how this shipped once with every strip empty.
+
+### Editing the defaults
+
+The GM window has a **Settings** menu of its own, opening the app's Settings window
+on its **GM Mode** page (`ui/settings/gm_page.py`) — two reorderable lists, one per
+card kind, over `gm_default_pins`.
+
+*When* a default is written down is the whole shape of that page. It predates the
+card it will seed, so it cannot name that character's things: a `Power.id` belongs
+to one character, and the only power a default may name is the late-bound
+`select="first_damage"`. So the page opens the **same** `PinPickerDialog` the cards
+do, with a `None` character putting it in defaults mode — listing
+`default_pin_choices(game_data)` instead of `available_pins(char, …)` and hiding the
+"Now" column, since there is nobody to read a value off.
+
+Editing the defaults deliberately does **not** reach the board: `_pins_for` wrote
+each card's strip into `gm_pins` the first time it saw the card, precisely so a
+later change here cannot rearrange what is in play. **Apply to cards on the board**
+is the confirmed override — `storage.clear_gm_card_pins()`, then
+`GMWindow.reseed_pins_from_defaults()` on every open GM window. That order matters:
+a window still holding its old strips in memory writes them straight back out on its
+next edit and undoes the clear.
 
 ### Snapshot sync
 

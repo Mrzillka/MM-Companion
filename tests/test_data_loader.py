@@ -83,6 +83,24 @@ def test_condition_graph_references_known_ids() -> None:
             assert ref in condition_ids
 
 
+def test_every_addable_condition_lands_in_a_declared_group() -> None:
+    """A typo in a ``group`` would exile a condition to the menu's flat tail.
+
+    Nothing breaks when that happens — :func:`build_condition_menu` still offers
+    it — which is exactly why it needs a test: the only symptom is a condition
+    quietly sitting on its own below the submenus.
+    """
+    data = load_game_data()
+    declared = {g.group for g in data.condition_groups}
+    assert declared, "the base ruleset declares condition groups"
+
+    addable = {c.category for c in data.condition_categories if c.addable}
+    for condition in data.conditions:
+        assert condition.group, f"{condition.id} carries no group"
+        if condition.category in addable:
+            assert condition.group in declared, f"{condition.id} is in an undeclared group"
+
+
 def test_costs_are_loaded() -> None:
     data = load_game_data()
     assert data.costs.traits.ability_per_rank == 2

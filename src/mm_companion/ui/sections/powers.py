@@ -73,6 +73,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -93,6 +94,8 @@ from mm_companion.core.powers import (
     power_is_homerule,
 )
 from mm_companion.core.rules import (
+    PIN_POWER,
+    PinRef,
     active_array_child,
     array_alternate_cost,
     array_base_index,
@@ -100,6 +103,7 @@ from mm_companion.core.rules import (
     effect_attack_skill_bonus,
     effect_effective_rank,
     effect_stat_rows,
+    leaf_powers,
     modifier_label,
     node_display_cost,
     power_display_name,
@@ -114,6 +118,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
+from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, muted_style, tinted_style
 
@@ -796,6 +801,13 @@ class PowersSection(TitledSection):
     # not mark the character dirty — the sheet wires this to the same refreshes as
     # ``changed`` minus the unsaved-changes flag.
     runtimeChanged = Signal()
+    #: A card's roll line was right-clicked and pinned — carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
+    #: GM opened from a card (see :meth:`set_pin_target`).
+    pinRequested = Signal(object)
+    #: The same, for a line that was already on the card.
+    unpinRequested = Signal(object)
+
     #: A card's 🎲 was pressed — roll that line. Carries a
     #: :class:`~mm_companion.core.rules.RollSpec`. Neither a build change nor a
     #: runtime one: rolling a power changes nothing about the power.
@@ -816,6 +828,9 @@ class PowersSection(TitledSection):
         self._data = data
         self._character = character
         self._locked = False
+        # Whether this sheet was opened from a GM card, and what is already on
+        # that card. Both are set by the sheet after construction.
+        self._pins = PinMenuState()
         # Per node id, how switched-off that node's card currently *looks* (0 live, 1
         # fully off). Survives the card teardown a toggle triggers, so the replacement
         # card can ease on from where its predecessor was — see _show_activation.
@@ -1601,14 +1616,26 @@ class PowersSection(TitledSection):
         # Enough of a gap that two neighbouring lines' borders read as two targets
         # rather than one box with a rule through it.
         layout.setSpacing(int(theme.metric("space.xs")))
-        for spec in specs:
-            layout.addWidget(self._roll_line(spec))
+        for index, spec in enumerate(specs):
+            layout.addWidget(self._roll_line(spec, power, index))
         return host
 
-    def _roll_line(self, spec) -> QWidget:
-        """One dice-footer line: its ``🎲``, if the wielder rolls it, then its text."""
+    def _roll_line(self, spec, power: Power, index: int) -> QWidget:
+        """One dice-footer line: its ``🎲``, if the wielder rolls it, then its text.
+
+        *power* and *index* are carried only so the line can be pinned to a GM
+        card — a :class:`~mm_companion.core.rules.pins.PinRef` names a roll by
+        which entry of :func:`~mm_companion.core.rules.power_rolls` it is. The
+        **resistance** line is pinnable too, even though the wielder never rolls
+        it: "what save does this force" is the number a GM most wants on a mook's
+        card.
+        """
         rollable = not spec.rolled_by_target
         row = _RollLine(rollable)
+        row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        row.customContextMenuRequested.connect(
+            lambda pos, r=row, pid=power.id, i=index: self._show_roll_pin_menu(r, pos, pid, i)
+        )
         line = QHBoxLayout(row)
         pad = int(theme.metric("space.xs"))
         line.setContentsMargins(pad, pad, pad, pad)
@@ -1632,6 +1659,23 @@ class PowersSection(TitledSection):
         label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
         line.addWidget(label, stretch=1)
         return row
+
+    def _show_roll_pin_menu(self, row: QWidget, pos, power_id: str, index: int) -> None:
+        if not self._pins.enabled:
+            return
+        ref = PinRef(PIN_POWER, power_id, index)
+        sink = self.unpinRequested if self._pins.is_pinned(ref) else self.pinRequested
+        menu = QMenu(row)
+        menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
+        menu.exec(row.mapToGlobal(pos))
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether a card's roll lines offer to pin at all."""
+        self._pins.enabled = enabled
+
+    def set_pinned(self, refs) -> None:
+        """Which parameters are already on the card, so a line can offer Unpin."""
+        self._pins.set_pinned(refs)
 
     def _rolls(self, power: Power):
         """Every roll the power calls for, as specs; see :func:`~mm_companion.core.
@@ -1740,12 +1784,8 @@ class PowersSection(TitledSection):
 
     @staticmethod
     def _leaf_powers(node: PowerNode) -> list[Power]:
-        if isinstance(node, PowerGroup):
-            leaves: list[Power] = []
-            for child in node.children:
-                leaves.extend(PowersSection._leaf_powers(child))
-            return leaves
-        return [node]
+        """This node's leaves — one node's worth of :func:`leaf_powers`."""
+        return list(leaf_powers([node]))
 
     def set_locked(self, locked: bool) -> None:
         """In read-only view mode, hide the editing entry points (Add / Remove / group chrome)."""

@@ -44,6 +44,7 @@ penalty/mod fields), plus a short `tooltip` line per record.
 Condition
 ├── id, name
 ├── category: "condition" | "damage_condition" | "object_damage_condition" | "meta"
+├── group: string             // which "+" menu submenu this is offered from — a finding aid, see below
 ├── includes: string[]        // conditions this one bundles (umbrella) — see §3
 ├── supersedes: string[]      // less-severe conditions this one replaces — see §3
 ├── mechanisms: string[]      // which engine subsystems touch this (§4) — the dispatch tags
@@ -68,6 +69,23 @@ The typed effect fields exist so the engine never parses `effect` prose. `Impair
 `penalty: -2`; `Hindered` carries `speedRankMod: -1`; `Prone` carries an `attackMods` block;
 `Vulnerable` carries `defenseMod: { defense: "halve", dodge: "halve" }`; `Hit` carries
 `stackingRule`; `Confused` carries `randomTable`. Add a field, not a special case.
+
+### `group` vs `category`: two axes, on purpose
+
+`category` is a **rules fact** — whether a condition sits on the damage ladder, and
+the axis the applied chips on a sheet are grouped by. `group` is **ergonomics**: it
+is what splits a "+" menu into submenus (Senses, Movement, Action & Control,
+Defence, Impairment, Damage), because a flat list of 36 conditions is slow to
+search in the middle of a round. The titles and their display order come from
+`_meta.conditionGroups`; a condition whose group is not listed there — a mod's,
+say — is offered flat below the submenus, and a ruleset that declares no groups at
+all gets the flat menu back. Both directions are purely additive, so neither the
+grouping nor its absence can make a condition unreachable.
+
+All three "+" buttons build this menu through the one shared
+`ui/sections/conditions.py::build_condition_menu` — the sheet's Conditions block,
+and the GM's fast-apply on a player card and an NPC card — so a condition is in the
+same place wherever it is applied from.
 
 ---
 

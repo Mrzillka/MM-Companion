@@ -318,21 +318,32 @@ def build(target: str):
     elif target == "gm":
         # GM Mode with a cast already in it, so the NPC panel is not an empty
         # state: two NPCs are written into the workspace gm_characters/ dir and
-        # registered with the session exactly as "Create NPC" would.
+        # registered with the session exactly as "Create NPC" would. Built through
+        # quick_npc so they have the Damage power a card's default pinned strip
+        # reads its third chip from — a cast of statless placeholders would show
+        # that chip as a dash and say nothing about how the card really looks.
         from mm_companion.core import library
-        from mm_companion.core.character import Character
         from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
         from mm_companion.ui.gm_window import GMWindow
 
         data = load_game_data()
         win = GMWindow(bind="127.0.0.1")
-        for name, ranks in (("Bank Robber", 2), ("Ogre", 9)):
-            npc = Character.new_default(data)
-            npc.profile["hero_name"] = name
-            for key in ("STR", "STA", "AGL", "FGT"):
-                if key in npc.abilities:
-                    npc.abilities[key] = ranks
+        for name, rank in (("Bank Robber", 4), ("Ogre", 9)):
+            npc = quick_npc(data, name=name, attack=rank, effect=rank, defence=rank, toughness=rank)
             win._register_npc(library.save_character(npc, directory=win._npc_dir()))
+    elif target == "gm-settings":
+        # The GM Mode settings page, reached the way a GM reaches it: build the GM
+        # window and fire its own Settings ▸ Preferences… handler, so the shot is of
+        # the window that opens rather than one constructed to look like it — which
+        # is what proves the menu lands on this page and not on Themes.
+        from mm_companion.ui.gm_window import GMWindow
+
+        gm = GMWindow(bind="127.0.0.1")
+        gm.show()
+        gm._open_settings()
+        win = gm._settings_window
+        win._gm_owner = gm  # keep the GM window alive for the shot
     elif target == "npc":
         from mm_companion.ui.npc_window import NPCWindow
 
@@ -373,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
             "settings",
             "settings-demo",
             "gm",
+            "gm-settings",
             "npc",
             "all",
         ],

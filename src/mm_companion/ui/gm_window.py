@@ -210,6 +210,10 @@ class GMWindow(QMainWindow):
         self._pins: dict[str, list[PinRef]] = _load_pins()
         # Pin pickers open on a card, keyed the same way, kept referenced while up.
         self._pin_pickers: dict[str, PinPickerDialog] = {}
+        # Sheets opened from a card, so a change to that card's strip can be pushed
+        # into their row menus. A list per card: an NPC's sheet and a player's are
+        # both singular in practice, but nothing here needs to insist on it.
+        self._pin_sheets: dict[str, list] = {}
         # The manual (un-rolled) order of the cast, by file name. Rolled NPCs sort
         # above this by initiative; dragging a card sets its place here.
         self._manual_order: list[str] = []
@@ -880,7 +884,8 @@ class GMWindow(QMainWindow):
                 card.setHeroPointsRequested.connect(self._set_hero_points)
                 card.removePlayerRequested.connect(self._remove_player)
                 card.pinsChanged.connect(lambda pid, refs: self._store_pins(_player_key(pid), refs))
-                card.rollRequested.connect(self._roller.load_spec)
+                card.loadRequested.connect(self._roller.load_spec)
+                card.rollRequested.connect(self._roller.roll_spec)
                 card.pinPickerRequested.connect(self._open_player_pin_picker)
                 card.pins.set_pins(self._pins_for(_player_key(player_id), "player"))
                 self._cards[player_id] = card
@@ -925,7 +930,7 @@ class GMWindow(QMainWindow):
         )
         card = self._cards.get(player_id)
         if card is not None:
-            window.pinRequested.connect(card.pins.add_pin)
+            self._attach_pin_sheet(window, card)
         self._player_windows[player_id] = window
         window.show()
         window.raise_()
@@ -1070,17 +1075,25 @@ class GMWindow(QMainWindow):
         already on the board.
         """
         if key not in self._pins:
-            self._pins[key] = default_pins(kind, storage.load_settings().get("gm_default_pins"))
+            self._pins[key] = default_pins(kind, storage.gm_default_pins())
             self._persist_pins()
         return self._pins[key]
 
     def _store_pins(self, card_key: str, refs: object) -> None:
-        """A card's strip was edited — remember it and tell any open picker."""
+        """A card's strip was edited — remember it, and restate it everywhere.
+
+        Both a picker and an opened sheet offer to pin *and* to unpin, and each
+        picks which from what it was last told is on the card. So a change made in
+        any of the three has to reach the other two, or a menu ends up offering to
+        pin something that is already there.
+        """
         self._pins[card_key] = list(refs) if isinstance(refs, list) else []
         self._persist_pins()
         picker = self._pin_pickers.get(card_key)
         if picker is not None:
             picker.set_pinned(self._pins[card_key])
+        for window in self._pin_sheets.get(card_key, ()):
+            window.sheet.set_pinned(self._pins[card_key])
 
     def _persist_pins(self) -> None:
         storage.update_settings(
@@ -1117,15 +1130,44 @@ class GMWindow(QMainWindow):
         picker = PinPickerDialog(character, self._data, card.pins.pins, self, title=title)
         picker.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         picker.pinRequested.connect(card.pins.add_pin)
+        picker.unpinRequested.connect(card.pins.remove_ref)
         picker.destroyed.connect(lambda *_: self._pin_pickers.pop(card_key, None))
         self._pin_pickers[card_key] = picker
         picker.show()
+
+    def _attach_pin_sheet(self, window, card) -> None:
+        """Wire a sheet opened from *card* to that card's strip, both directions.
+
+        The sheet's rows pin and unpin onto the card; the card tells the sheet what
+        is on it, now and on every later change, so a sheet left open beside the
+        card never goes stale.
+        """
+        card_key = self._card_key(card)
+        window.pinRequested.connect(card.pins.add_pin)
+        window.unpinRequested.connect(card.pins.remove_ref)
+        window.sheet.set_pinned(card.pins.pins)
+        sheets = self._pin_sheets.setdefault(card_key, [])
+        sheets.append(window)
+        window.destroyed.connect(lambda *_: self._drop_pin_sheet(card_key, window))
+
+    def _drop_pin_sheet(self, card_key: str, window) -> None:
+        sheets = self._pin_sheets.get(card_key)
+        if sheets is None:
+            return
+        self._pin_sheets[card_key] = [w for w in sheets if w is not window]
+
+    @staticmethod
+    def _card_key(card) -> str:
+        """A card's pin-store key, from whichever identity that card carries."""
+        name_key = getattr(card, "name_key", "")
+        return _npc_key(name_key) if name_key else _player_key(card.player_id)
 
     def _forget_pins(self, card_key: str) -> None:
         """Drop a card's strip for good — the seat or the NPC is gone."""
         picker = self._pin_pickers.pop(card_key, None)
         if picker is not None:
             picker.close()
+        self._pin_sheets.pop(card_key, None)
         if self._pins.pop(card_key, None) is not None:
             self._persist_pins()
 
@@ -1223,7 +1265,8 @@ class GMWindow(QMainWindow):
             card.reorderPreview.connect(self._show_npc_drop_indicator)
             card.reorderPreviewEnded.connect(self._npc_drop_indicator.hide_indicator)
             card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
-            card.rollRequested.connect(self._roller.load_spec)
+            card.loadRequested.connect(self._roller.load_spec)
+            card.rollRequested.connect(self._roller.roll_spec)
             card.pinPickerRequested.connect(self._open_npc_pin_picker)
             card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
             entry.card = card
@@ -1395,7 +1438,7 @@ class GMWindow(QMainWindow):
             return
         window = NPCWindow(character=library.load_character(path), path=path, pin_target=True)
         if entry.card is not None:
-            window.pinRequested.connect(entry.card.pins.add_pin)
+            self._attach_pin_sheet(window, entry.card)
         self._track_npc_window(window)
 
     def _track_npc_window(self, window: NPCWindow) -> None:
@@ -1494,6 +1537,12 @@ class GMWindow(QMainWindow):
                 pass  # an unwritable workspace is not worth a dialog mid-session
         if entry.card is not None:
             entry.card.refresh_conditions()
+            # And the pinned numbers, which a condition moves: a Vulnerable NPC's
+            # Defence chip must read what the GM should actually use. The chips
+            # resolve from the model, so this is only a matter of asking them to.
+            # (A player's card gets this for free — a condition there comes back as
+            # a fresh snapshot, which restates the whole card.)
+            entry.card.pins.refresh()
 
     # -- small view helpers ------------------------------------------------
 

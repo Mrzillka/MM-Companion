@@ -13,6 +13,7 @@ directly (handy for tests and portable installs).
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -115,6 +116,8 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "gm_layout": {},
     # What a GM card's pinned-parameter strip starts with, per card kind. Each
     # entry is a ``PinRef.to_dict()`` (see :mod:`mm_companion.core.rules.pins`).
+    # Read through :func:`gm_default_pins`, never straight off ``load_settings``:
+    # an existing workspace's file predates this key entirely.
     #
     # These live in settings rather than as a constant in code because the whole
     # point is that a GM changes them; a preferences page that edits this key is
@@ -123,14 +126,19 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # down long before the NPC they will describe exists, so "the first Damage
     # power" is the only way to say it, and it stays true when the GM edits which
     # power that is.
+    #
+    # Defence and Toughness lead both lists because they are the pair a GM reads
+    # together — how hard to hit, how hard to hurt.
     "gm_default_pins": {
         "player": [
             {"kind": "resistance", "key": "DEF"},
+            {"kind": "resistance", "key": "TOUGHNESS"},
             {"kind": "initiative"},
             {"kind": "skill", "key": "Perception"},
         ],
         "npc": [
             {"kind": "resistance", "key": "DEF"},
+            {"kind": "resistance", "key": "TOUGHNESS"},
             {"kind": "ability", "key": "ATK"},
             {"kind": "power", "select": "first_damage"},
         ],
@@ -275,6 +283,27 @@ def theme_name() -> str:
     """
     value = load_settings().get("theme", "")
     return value if isinstance(value, str) else ""
+
+
+def gm_default_pins() -> dict:
+    """What a GM card's pinned-parameter strip starts with, per card kind.
+
+    The one seam for that question, and it exists because of a bug worth stating:
+    :func:`load_settings` returns the settings file **verbatim**, it does not
+    merge :data:`DEFAULT_SETTINGS` in. So a workspace created before this key
+    existed — which is every workspace that predates the feature — answers
+    ``None``, and reading it directly gave every card an empty strip. Every other
+    setting is read through a fallback for the same reason; this is that fallback.
+    """
+    stored = load_settings().get("gm_default_pins")
+    default = DEFAULT_SETTINGS["gm_default_pins"]
+    if not isinstance(stored, dict):
+        return copy.deepcopy(default)  # type: ignore[arg-type]
+    # Per *kind*, not wholesale: a settings file that names only "npc" should
+    # still get the shipped player strip rather than nothing.
+    merged = copy.deepcopy(default)  # type: ignore[arg-type]
+    merged.update({key: value for key, value in stored.items() if isinstance(value, list)})
+    return merged
 
 
 def relay_url() -> str:

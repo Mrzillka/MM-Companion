@@ -32,7 +32,11 @@ from mm_companion.core.rules import (
     power_trait_bonuses,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_table import apply_stat_effects, build_stat_table
+from mm_companion.ui.sections.stat_table import (
+    PinMenuState,
+    apply_stat_effects,
+    build_stat_table,
+)
 from mm_companion.ui.sections.titled_section import TitledSection
 
 
@@ -62,6 +66,8 @@ class AbilitiesSection(TitledSection):
     #: GM opened from a card (see ``set_pin_target``); the same non-build promise as
     #: the two roll signals.
     pinRequested = Signal(object)
+    #: The same, for a row that was already on the card.
+    unpinRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -69,9 +75,9 @@ class AbilitiesSection(TitledSection):
         self._data = data
         self._character = character
         self._locked = False
-        # Whether this sheet was opened from a GM card, and so has
-        # somewhere to pin a row to. Set by the sheet after construction.
-        self._pin_target = False
+        # Whether this sheet was opened from a GM card, and what is already on
+        # that card. Both are set by the sheet after construction.
+        self._pins = PinMenuState()
         self._abilities: dict[str, QSpinBox] = {}
         # The Total cells that show a power-boosted trait's enhanced value.
         self._ability_enh: dict[str, QTableWidgetItem] = {}
@@ -89,7 +95,8 @@ class AbilitiesSection(TitledSection):
             load_sink=self.loadRequested.emit,
             pin_ref=self._pin_ref,
             pin_sink=self.pinRequested.emit,
-            can_pin=lambda: self._pin_target,
+            unpin_sink=self.unpinRequested.emit,
+            pins=self._pins,
         )
         layout.addWidget(self.table)
         layout.addStretch()  # top-aligned, so it lines up with Resistances beside it
@@ -130,8 +137,12 @@ class AbilitiesSection(TitledSection):
         return PinRef(PIN_ABILITY, str(key))
 
     def set_pin_target(self, enabled: bool) -> None:
-        """Whether this block's rows offer "Pin to GM card"."""
-        self._pin_target = enabled
+        """Whether this block's rows offer to pin at all."""
+        self._pins.enabled = enabled
+
+    def set_pinned(self, refs) -> None:
+        """Which parameters are already on the card, so a row can offer Unpin."""
+        self._pins.set_pinned(refs)
 
     def set_locked(self, locked: bool) -> None:
         """Make the ability spin boxes read-only labels (locked) or editable."""

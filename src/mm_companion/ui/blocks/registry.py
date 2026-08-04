@@ -37,6 +37,7 @@ from mm_companion.ui.blocks.bus import (
     NOTE_REQUESTED,
     PIN_REQUESTED,
     ROLL_REQUESTED,
+    UNPIN_REQUESTED,
 )
 from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.sections import (
@@ -109,7 +110,11 @@ def default_pin_lines() -> list[list[str]]:
 # line a GM can pin to that character's card — same rows, same stashed key. The
 # sheet serves the topic (the card is outside the sheet entirely) and the menu
 # only appears once it says there is a card, so a player's own sheet is unchanged.
-_ROLLS = {"rollRequested": (ROLL_REQUESTED,), "pinRequested": (PIN_REQUESTED,)}
+_ROLLS = {
+    "rollRequested": (ROLL_REQUESTED,),
+    "pinRequested": (PIN_REQUESTED,),
+    "unpinRequested": (UNPIN_REQUESTED,),
+}
 
 # A *stat readout* also loads on a single click, so the sliders and the DC can be
 # set before anything is thrown. A power card's roll line does not: it is an

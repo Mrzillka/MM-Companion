@@ -68,9 +68,37 @@ RollHookFactory = Callable[[str], "RollSpec | None"]
 #: what its own table put there.
 PinHookFactory = Callable[[object], PinRef | None]
 
-#: What the row menu calls the action. Only offered while a sheet has somewhere to
-#: pin *to* — see :meth:`~mm_companion.ui.character_sheet.CharacterSheet.set_pin_target`.
+#: What the row menu calls the action, and its opposite. Only offered while a
+#: sheet has somewhere to pin *to* — see
+#: :meth:`~mm_companion.ui.character_sheet.CharacterSheet.set_pin_target` — and
+#: which of the two shows depends on
+#: :meth:`~mm_companion.ui.character_sheet.CharacterSheet.set_pinned`.
 PIN_ACTION_TEXT = "Pin to GM card"
+UNPIN_ACTION_TEXT = "Unpin from GM card"
+
+
+class PinMenuState:
+    """What a block needs to offer "Pin to GM card" on its rows.
+
+    Three questions the menu asks at click time rather than at build time,
+    because all three are answered *after* the block is built: is there a card
+    behind this sheet at all, is this row already on it, and where do the two
+    answers go. Held in one object so the four pinnable blocks share the
+    bookkeeping instead of each keeping the same pair of fields.
+    """
+
+    def __init__(self) -> None:
+        self.enabled = False
+        self._pinned: set[PinRef] = set()
+
+    def set_pinned(self, refs) -> None:
+        self._pinned = {ref for ref in (refs or ()) if isinstance(ref, PinRef)}
+
+    def is_pinned(self, ref: PinRef) -> bool:
+        return ref in self._pinned
+
+    def action_text(self, ref: PinRef) -> str:
+        return UNPIN_ACTION_TEXT if self.is_pinned(ref) else PIN_ACTION_TEXT
 
 
 def build_stat_table(
@@ -86,7 +114,8 @@ def build_stat_table(
     load_sink: Callable[[RollSpec], None] | None = None,
     pin_ref: PinHookFactory | None = None,
     pin_sink: Callable[[PinRef], None] | None = None,
-    can_pin: Callable[[], bool] | None = None,
+    unpin_sink: Callable[[PinRef], None] | None = None,
+    pins: PinMenuState | None = None,
 ) -> QTableWidget:
     """Build the stat table for one trait family (abilities or resistances).
 
@@ -156,8 +185,8 @@ def build_stat_table(
         table.setItem(row, COL_TOTAL, total)
         row += 1
 
-    if pin_ref is not None and pin_sink is not None:
-        install_pin_menu(table, pin_ref, pin_sink, can_pin or (lambda: True))
+    if pin_ref is not None and pin_sink is not None and unpin_sink is not None:
+        install_pin_menu(table, pin_ref, pin_sink, unpin_sink, pins or PinMenuState())
     if roll_spec is not None and roll_sink is not None:
         table.cellDoubleClicked.connect(lambda r, _c: _row_spec_to(table, r, roll_spec, roll_sink))
         if load_sink is not None:
@@ -175,23 +204,25 @@ def install_pin_menu(
     table: QTableWidget,
     pin_ref: PinHookFactory,
     pin_sink: Callable[[PinRef], None],
-    can_pin: Callable[[], bool],
+    unpin_sink: Callable[[PinRef], None],
+    pins: PinMenuState,
 ) -> None:
-    """Offer "Pin to GM card" on a right-clicked row, when there is a card to pin to.
+    """Offer Pin / Unpin on a right-clicked row, when there is a card to pin to.
 
     Public because the Skills table builds itself rather than going through
     :func:`build_stat_table`, and both should offer the same menu off the same
     stashed payload.
 
-    *can_pin* is asked at menu time rather than wired once, because whether a sheet
-    has a card behind it is decided after the block is built (the GM window sets it
-    when it opens the sheet). A sheet a player opened for themselves answers False
-    and the menu never appears — there is no card, and an action that does nothing
-    is worse than none.
+    *pins* is consulted at menu time rather than wired once, because both of its
+    answers arrive after the block is built — the GM window says there is a card
+    when it opens the sheet, and says what is on that card every time the strip
+    changes. A sheet a player opened for themselves is never enabled and shows no
+    menu at all: there is no card, and an action that does nothing is worse than
+    none.
     """
 
     def show(pos) -> None:
-        if not can_pin():
+        if not pins.enabled:
             return
         row = table.rowAt(pos.y())
         item = table.item(row, COL_TOTAL) if row >= 0 else None
@@ -201,8 +232,9 @@ def install_pin_menu(
         ref = pin_ref(key)
         if ref is None:
             return
+        sink = unpin_sink if pins.is_pinned(ref) else pin_sink
         menu = QMenu(table)
-        menu.addAction(PIN_ACTION_TEXT, lambda: pin_sink(ref))
+        menu.addAction(pins.action_text(ref), lambda: sink(ref))
         menu.exec(table.viewport().mapToGlobal(pos))
 
     table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)

@@ -65,6 +65,11 @@ Request topic           Payload / server
                         by the **sheet**, not a block — a GM right-clicking a
                         stat row wants it on the card this sheet was opened
                         from, which is outside the sheet entirely
+``unpin-requested``     the same, the other way. Two topics rather than one
+                        toggling payload: a block knows which of the two it is
+                        offering (it is told what is already pinned), and a
+                        toggle whose menu label can go stale is the kind of
+                        clever that misfires
 ======================  ====================================================
 
 A request normally *reveals* the block that serves it (a roll is no use happening
@@ -95,6 +100,7 @@ ROLL_REQUESTED = "roll-requested"
 LOAD_REQUESTED = "load-requested"
 NOTE_REQUESTED = "note-requested"
 PIN_REQUESTED = "pin-requested"
+UNPIN_REQUESTED = "unpin-requested"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
@@ -105,10 +111,11 @@ PIN_REQUESTED = "pin-requested"
 #: the two roll topics: someone who clicks a stat line has asked to see it loaded, so
 #: loading it into a closed block is exactly the "the app ignored my click" failure
 #: revealing the server exists to prevent.
-#: ``pin-requested`` is quiet for a different reason from a note: nothing in the
-#: sheet serves it at all (see the table above), so there is no block to reveal —
-#: and hunting for one would be the sheet answering a question about itself.
-QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED})
+#: The two pin topics are quiet for a different reason from a note: nothing in
+#: the sheet serves them at all (see the table above), so there is no block to
+#: reveal — and hunting for one would be the sheet answering a question about
+#: itself.
+QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED})
 
 Handler = Callable[[], None]
 RequestHandler = Callable[[object], None]

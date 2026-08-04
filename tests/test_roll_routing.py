@@ -696,15 +696,15 @@ def test_a_sheet_offers_no_pinning_until_it_is_told_it_has_a_card(qapp: QApplica
     """A player's own sheet is unchanged: the action would have nowhere to go."""
     sheet = _sheet()
 
-    assert sheet.abilities._pin_target is False
-    assert sheet.skills._pin_target is False
-    assert sheet.system_info._pin_target is False
-    assert sheet.powers._pin_target is False
+    assert sheet.abilities._pins.enabled is False
+    assert sheet.skills._pins.enabled is False
+    assert sheet.system_info._pins.enabled is False
+    assert sheet.powers._pins.enabled is False
 
     sheet.set_pin_target(True)
 
-    assert sheet.abilities._pin_target is True
-    assert sheet.powers._pin_target is True
+    assert sheet.abilities._pins.enabled is True
+    assert sheet.powers._pins.enabled is True
 
 
 def test_a_pin_request_leaves_the_sheet_rather_than_finding_a_block(qapp: QApplication) -> None:

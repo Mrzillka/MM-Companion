@@ -702,23 +702,45 @@ The shape:
   — a `PinRef` names an ability, resistance, skill, initiative, defence DC or one
   of a power's rolls, and `resolve_pin` turns it into a caption, a reading and a
   `RollSpec`. **A reference, never a number**: the character underneath is live,
-  so a frozen value would be right once. Values come off the *roll* builders
-  (`resistance_roll`, not `resistance_total`), which is what folds condition
-  overlays in for free while the build math stays condition-free. A defence DC is
-  its own kind rather than a dressed-up resistance — the sheet's table shows the
-  rank, and a chip quietly showing ten more would be a trap — and a pin that no
-  longer resolves reads as a dash rather than vanishing, since a chip that
-  disappears leaves no way to remove it. `ui/pin_panel.py` is the strip (click to
-  load into the GM's roller, drag to reorder, right-click to remove; a click is a
-  release with *no* drag started, which is what keeps the three apart) and
-  `ui/pin_picker.py` the modeless browser the "+" opens. A GM also pins by
-  right-clicking a row of the sheet opened from that card: a `pin-requested`
-  topic on the block bus that the **sheet** serves rather than any block, since a
-  pin's destination is outside the sheet entirely, and which only appears once
-  `MainWindow(pin_target=True)` says there is a card. Strips persist per card in
-  `gm_pins`, seeded from `gm_default_pins` — the settings key a preferences page
-  will edit, and the reason the NPC damage default is *late-bound* ("the first
-  Damage power"), since the defaults are written long before the NPC is.
+  so a frozen value would be right once.
+- Three things a pin's *reading* has to get right. Values come off the **roll**
+  builders (`resistance_roll`, not `resistance_total`), which folds condition
+  overlays in for free while the build math stays condition-free — and
+  `with_conditions=False` takes them back out again for the picker, which is a
+  catalogue of the creature rather than a combat readout (the `RollSpec` is the
+  same either way, so nothing about what a chip *rolls* moves). A **defence DC**
+  is its own kind rather than a dressed-up resistance: the sheet's table shows
+  the rank, and a chip quietly showing ten more would be a trap. And a pin that
+  no longer resolves reads as a dash rather than vanishing — a chip that
+  disappears leaves no way to remove it — which is why `PinnedValue.missing` is a
+  field of its own and not `spec is None`: a **forced save** carries no spec
+  either (the wielder never rolls their own target's save; it reaches the person
+  who does as the attack's follow-up chip) but is perfectly well resolved.
+- `ui/pin_panel.py` is the strip: **click loads** into the GM's roller and
+  **double-click rolls** — the sheet's own bargain — plus drag to reorder and
+  right-click to remove. A click is a release with *no* drag started and *no*
+  double-click just handled, which is what keeps the four apart.
+  `ui/pin_picker.py` is the modeless browser the "+" opens; it unpins as well as
+  pins, and its `set_pinned` is a no-op when it already agrees — without that
+  guard the card's echo rebuilds the tree *during* a toggle, deleting the row
+  being restated.
+- A GM also pins from the sheet opened off that card, by right-clicking a row.
+  Two bus topics, `pin-requested` and `unpin-requested`, both served by the
+  **sheet** rather than any block, since a pin's destination is outside the sheet
+  entirely. Which of the two a row offers comes from `stat_table.PinMenuState`,
+  fed by `CharacterSheet.set_pinned` — pushed from the card on open *and* on
+  every change, so a sheet left open never offers to pin what is already there.
+  The menu appears at all only once `MainWindow(pin_target=True)` says there is a
+  card.
+- Strips persist per card in `gm_pins`, seeded from `gm_default_pins` — the
+  settings key a preferences page will edit, and the reason the NPC damage
+  default is *late-bound* ("the first Damage power"), since the defaults are
+  written long before the NPC is. Read it through **`storage.gm_default_pins()`**,
+  never off `load_settings()`: that returns the settings file *verbatim* and does
+  not merge `DEFAULT_SETTINGS`, so any key added after a workspace was created
+  reads back as `None`. Every setting in that module has an accessor or an inline
+  fallback for this reason; a new one needs the same or it is silently dead for
+  every existing user.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.

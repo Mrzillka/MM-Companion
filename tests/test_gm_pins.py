@@ -131,6 +131,12 @@ def test_a_power_pin_reads_an_attack_as_a_bonus_and_a_save_as_a_dc(
 
     assert (attack.label, attack.value) == ("Damage", "+6")
     assert (save.label, save.value) == ("Damage", "DC 16")
+    # The wielder rolls the attack; the *target* rolls the save, and it already
+    # reaches them as the follow-up chip on the attack's history card. So the save
+    # chip is read, not thrown — and is not "missing" either.
+    assert attack.spec is not None
+    assert save.spec is None
+    assert save.missing is False
 
 
 # -- the late-bound default ---------------------------------------------------
@@ -166,6 +172,7 @@ def test_the_npc_defaults_are_the_three_a_gm_asked_for(goon: Character, data: Ga
 
     assert [(v.label, v.value) for v in values] == [
         ("DEF", "6"),
+        ("Toughness", "6"),
         ("ATK", "+6"),
         ("Damage", "DC 16"),
     ]
@@ -177,7 +184,7 @@ def test_the_player_defaults_are_the_three_a_gm_asked_for(data: GameData) -> Non
     refs = default_pins("player", DEFAULT_SETTINGS["gm_default_pins"])
 
     labels = [v.label for v in resolve_pins(character, data, refs)]
-    assert labels == ["DEF", "Initiative", "Perception"]
+    assert labels == ["DEF", "Toughness", "Initiative", "Perception"]
 
 
 def test_defaults_for_an_unknown_card_kind_are_simply_empty() -> None:
@@ -300,3 +307,50 @@ def test_everything_offered_by_the_picker_resolves(goon: Character, data: GameDa
     for group in available_pins(goon, data):
         for value in group.values:
             assert resolve_pin(goon, data, value.ref).missing is False, value.label
+
+
+def test_the_same_pin_reads_two_ways_and_rolls_one(goon: Character, data: GameData) -> None:
+    """The chip and the picker disagree about the number, and only the number.
+
+    A chip is read mid-fight, so it shows what to actually use. The picker is a
+    catalogue, so it shows what the creature is. The RollSpec is the same either
+    way, which is what stops the split reaching anything that matters.
+    """
+    apply_condition(goon, "vulnerable", data)
+    ref = PinRef(PIN_RESISTANCE, "DODGE")
+
+    live = resolve_pin(goon, data, ref)
+    base = resolve_pin(goon, data, ref, with_conditions=False)
+
+    assert (live.value, base.value) == ("3", "6")
+    assert live.spec == base.spec
+    assert live.hint == base.hint  # the reason travels either way
+
+
+def test_the_split_reaches_every_trait_kind(goon: Character, data: GameData) -> None:
+    goon.skill_ranks["Perception"] = 4
+    apply_condition(goon, "impaired", data, parameter="Perception")
+    apply_condition(goon, "fatigued", data)
+
+    for ref in (
+        PinRef(PIN_ABILITY, "AGL"),
+        PinRef(PIN_RESISTANCE, "DODGE"),
+        PinRef(PIN_SKILL, "Perception"),
+        PinRef(PIN_INITIATIVE),
+    ):
+        live = resolve_pin(goon, data, ref)
+        base = resolve_pin(goon, data, ref, with_conditions=False)
+        assert live.label == base.label
+        assert live.spec == base.spec
+
+
+def test_available_pins_can_be_asked_for_base_numbers(goon: Character, data: GameData) -> None:
+    apply_condition(goon, "vulnerable", data)
+
+    def dodge(**kwargs) -> str:
+        groups = available_pins(goon, data, **kwargs)
+        resistances = next(g for g in groups if g.title == "Resistances").values
+        return next(v.value for v in resistances if v.label == "Dodge")
+
+    assert dodge(with_conditions=False) == "6"
+    assert dodge() == "3"

@@ -53,7 +53,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
-from mm_companion.ui.sections.stat_table import PIN_ACTION_TEXT
+from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.svg_assets import hero_point_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -322,6 +322,8 @@ class SystemInfoSection(QGroupBox):
     #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
     #: GM opened from a card (see :meth:`set_pin_target`).
     pinRequested = Signal(object)
+    #: The same, for a readout that was already on the card.
+    unpinRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -331,9 +333,9 @@ class SystemInfoSection(QGroupBox):
         self._data = data
         self._character = character
         self._locked = False
-        # Whether this sheet was opened from a GM card, and so has somewhere to pin
-        # the Initiative readout to. Set by the sheet after construction.
-        self._pin_target = False
+        # Whether this sheet was opened from a GM card, and what is already on
+        # that card. Both are set by the sheet after construction.
+        self._pins = PinMenuState()
         self._by_key = {c.key: c for c in data.characteristics}
         self._editable: list[QWidget] = []
         # A GM's NPC has no point budget (see :meth:`set_npc_mode`).
@@ -464,15 +466,21 @@ class SystemInfoSection(QGroupBox):
         return self._initiative
 
     def _show_initiative_pin_menu(self, pos) -> None:
-        if not self._pin_target:
+        if not self._pins.enabled:
             return
+        ref = PinRef(PIN_INITIATIVE)
+        sink = self.unpinRequested if self._pins.is_pinned(ref) else self.pinRequested
         menu = QMenu(self._initiative)
-        menu.addAction(PIN_ACTION_TEXT, lambda: self.pinRequested.emit(PinRef(PIN_INITIATIVE)))
+        menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
         menu.exec(self._initiative.mapToGlobal(pos))
 
     def set_pin_target(self, enabled: bool) -> None:
-        """Whether the Initiative readout offers "Pin to GM card"."""
-        self._pin_target = enabled
+        """Whether the Initiative readout offers to pin at all."""
+        self._pins.enabled = enabled
+
+    def set_pinned(self, refs) -> None:
+        """Which parameters are already on the card, so the readout can offer Unpin."""
+        self._pins.set_pinned(refs)
 
     def _build_hero_points(self) -> QWidget:
         self._hero_points = HeroPointsWidget()

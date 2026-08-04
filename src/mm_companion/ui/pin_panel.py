@@ -5,11 +5,12 @@ keeps asking it for. Which numbers is the GM's choice, stored as
 :class:`~mm_companion.core.rules.pins.PinRef`\\ s and resolved fresh on every
 redraw — see that module for why a pin is a reference and never a value.
 
-Three gestures, and the reasons they don't collide:
+Four gestures, and the reasons they don't collide:
 
-- **click** loads the chip's roll into the GM's roller, the same load-then-throw
-  the character sheet uses. A click is a *release with no drag started*, so it
-  cannot be confused with the third gesture below.
+- **click** loads the chip's roll into the GM's roller and **double-click**
+  throws it — the same bargain the character sheet's stat rows strike, so the
+  sliders and the DC box can be set before anything is rolled. A click is a
+  *release with no drag started*, so it cannot be confused with the drag below.
 - **drag** reorders. It starts only once the pointer has travelled
   :data:`DRAG_THRESHOLD`, which is what leaves a plain click alone. A ``QDrag``
   rather than the NPC card's hand-rolled press/move maths, because the strip is a
@@ -74,8 +75,11 @@ class PinChip(QFrame):
     a dash. The last is deliberately still here to be removed rather than gone.
     """
 
-    #: This chip's ``RollSpec`` — the GM clicked it.
-    clicked = Signal(object)
+    #: This chip's ``RollSpec`` — the GM clicked it once, and wants it in the
+    #: roller's chip without the die moving.
+    loadRequested = Signal(object)
+    #: The same spec, double-clicked — throw it.
+    rollRequested = Signal(object)
     #: This chip's index in the strip — the GM asked to take it off.
     removeRequested = Signal(int)
 
@@ -85,6 +89,9 @@ class PinChip(QFrame):
         self._index = index
         self._press_pos: QPoint | None = None
         self._dragging = False
+        # Set by a double-click so the release that ends it is not read as a
+        # second, post-roll load.
+        self._rolled = False
 
         self.setFrameShape(QFrame.Shape.NoFrame)
         self._restyle()
@@ -144,12 +151,28 @@ class PinChip(QFrame):
             Qt.CursorShape.PointingHandCursor if self.rollable else Qt.CursorShape.ArrowCursor
         )
 
-    # -- the three gestures -------------------------------------------------
+    # -- the four gestures -------------------------------------------------
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_pos = event.position().toPoint()
             self._dragging = False
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Throw the chip's roll.
+
+        Qt delivers press → release → **doubleClick** → release, so the first
+        release has already loaded the spec and the trailing one would load it
+        again *after* the roll. ``_rolled`` swallows that last one; the leading
+        load is left alone, since it is the same spec either way.
+        """
+        if event.button() != Qt.MouseButton.LeftButton or self._value.spec is None:
+            event.accept()
+            return
+        self._rolled = True
+        self._press_pos = None
+        self.rollRequested.emit(self._value.spec)
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -178,11 +201,13 @@ class PinChip(QFrame):
             event.button() == Qt.MouseButton.LeftButton
             and self._press_pos is not None
             and not self._dragging
+            and not self._rolled
             and self.rect().contains(event.position().toPoint())
         )
         self._press_pos = None
+        self._rolled = False
         if was_click and self._value.spec is not None:
-            self.clicked.emit(self._value.spec)
+            self.loadRequested.emit(self._value.spec)
         event.accept()
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -198,7 +223,9 @@ class PinPanel(QWidget):
 
     #: The strip's new order/content, as a list of :class:`PinRef`.
     pinsChanged = Signal(object)
-    #: A chip's ``RollSpec`` — the GM wants it in the roller.
+    #: A chip's ``RollSpec`` — the GM wants it in the roller, undisturbed.
+    loadRequested = Signal(object)
+    #: The same, double-clicked — throw it.
     rollRequested = Signal(object)
     #: The GM asked to add a pin (the "+").
     pickRequested = Signal()
@@ -292,7 +319,8 @@ class PinPanel(QWidget):
 
         for index, value in enumerate(self.values()):
             chip = PinChip(value, index)
-            chip.clicked.connect(self.rollRequested)
+            chip.loadRequested.connect(self.loadRequested)
+            chip.rollRequested.connect(self.rollRequested)
             chip.removeRequested.connect(self.remove_pin)
             self._chip_layout.addWidget(chip)
             self._chips.append(chip)
@@ -316,6 +344,21 @@ class PinPanel(QWidget):
         del self._pins[index]
         self.refresh()
         self.pinsChanged.emit(self.pins)
+
+    def remove_ref(self, ref: PinRef) -> bool:
+        """Take *ref* off the strip wherever it sits. Returns whether it was there.
+
+        By identity rather than position, because the two places that unpin from
+        *outside* the strip — the picker and the open sheet's row menu — know which
+        parameter they mean and have no idea where its chip ended up after the GM
+        dragged things around.
+        """
+        if ref not in self._pins:
+            return False
+        self._pins.remove(ref)
+        self.refresh()
+        self.pinsChanged.emit(self.pins)
+        return True
 
     def move_pin(self, from_index: int, to_index: int) -> None:
         """Move the pin at *from_index* to sit at *to_index*.

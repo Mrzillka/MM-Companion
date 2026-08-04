@@ -82,6 +82,8 @@ class PlayerCard(QFrame):
     #: ``(player_id, refs)`` — this card's pinned-parameter strip changed.
     pinsChanged = Signal(str, object)
     #: A ``RollSpec`` — the GM clicked a pinned chip and wants it in the roller.
+    loadRequested = Signal(object)
+    #: The same, double-clicked — throw it.
     rollRequested = Signal(object)
     #: The player's id — the GM asked to pin something to this card.
     pinPickerRequested = Signal(str)
@@ -169,6 +171,7 @@ class PlayerCard(QFrame):
 
         self.pins = install_pin_panel(self, layout, data)
         self.pins.pinsChanged.connect(lambda refs: self.pinsChanged.emit(self.player_id, refs))
+        self.pins.loadRequested.connect(self.loadRequested)
         self.pins.rollRequested.connect(self.rollRequested)
         self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.player_id))
 

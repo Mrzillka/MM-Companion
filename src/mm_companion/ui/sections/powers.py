@@ -118,7 +118,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
-from mm_companion.ui.sections.stat_table import PIN_ACTION_TEXT
+from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, muted_style, tinted_style
 
@@ -805,6 +805,8 @@ class PowersSection(TitledSection):
     #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
     #: GM opened from a card (see :meth:`set_pin_target`).
     pinRequested = Signal(object)
+    #: The same, for a line that was already on the card.
+    unpinRequested = Signal(object)
 
     #: A card's 🎲 was pressed — roll that line. Carries a
     #: :class:`~mm_companion.core.rules.RollSpec`. Neither a build change nor a
@@ -826,9 +828,9 @@ class PowersSection(TitledSection):
         self._data = data
         self._character = character
         self._locked = False
-        # Whether this sheet was opened from a GM card, and so has somewhere to pin
-        # a roll line to. Set by the sheet after construction.
-        self._pin_target = False
+        # Whether this sheet was opened from a GM card, and what is already on
+        # that card. Both are set by the sheet after construction.
+        self._pins = PinMenuState()
         # Per node id, how switched-off that node's card currently *looks* (0 live, 1
         # fully off). Survives the card teardown a toggle triggers, so the replacement
         # card can ease on from where its predecessor was — see _show_activation.
@@ -1659,18 +1661,21 @@ class PowersSection(TitledSection):
         return row
 
     def _show_roll_pin_menu(self, row: QWidget, pos, power_id: str, index: int) -> None:
-        if not self._pin_target:
+        if not self._pins.enabled:
             return
+        ref = PinRef(PIN_POWER, power_id, index)
+        sink = self.unpinRequested if self._pins.is_pinned(ref) else self.pinRequested
         menu = QMenu(row)
-        menu.addAction(
-            PIN_ACTION_TEXT,
-            lambda: self.pinRequested.emit(PinRef(PIN_POWER, power_id, index)),
-        )
+        menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
         menu.exec(row.mapToGlobal(pos))
 
     def set_pin_target(self, enabled: bool) -> None:
-        """Whether a card's roll lines offer "Pin to GM card"."""
-        self._pin_target = enabled
+        """Whether a card's roll lines offer to pin at all."""
+        self._pins.enabled = enabled
+
+    def set_pinned(self, refs) -> None:
+        """Which parameters are already on the card, so a line can offer Unpin."""
+        self._pins.set_pinned(refs)
 
     def _rolls(self, power: Power):
         """Every roll the power calls for, as specs; see :func:`~mm_companion.core.

@@ -64,3 +64,58 @@ def test_update_settings_merges_and_persists_a_layout(_home: Path) -> None:
     assert result["layout"] == {"window_geometry": "geo", "dock_state": "state"}
     assert result["theme"] == DEFAULT_SETTINGS["theme"]
     assert load_settings()["layout"]["dock_state"] == "state"
+
+
+# -- reading a setting an older workspace has never heard of -----------------
+
+
+def _drop_key(key: str) -> None:
+    """Make the workspace look like one written before *key* existed."""
+    settings = load_settings()
+    settings.pop(key, None)
+    save_settings(settings)
+
+
+def test_gm_default_pins_survives_a_workspace_that_predates_the_key(_home: Path) -> None:
+    """The bug this accessor exists for.
+
+    ``load_settings`` returns the file verbatim — it does **not** merge
+    ``DEFAULT_SETTINGS`` — so every workspace created before the pins feature
+    answers ``None`` for this key. Read directly, that gave every GM card an empty
+    strip; the whole feature looked unimplemented.
+    """
+    ensure_workspace()
+    _drop_key("gm_default_pins")
+    assert load_settings().get("gm_default_pins") is None
+
+    assert storage.gm_default_pins() == DEFAULT_SETTINGS["gm_default_pins"]
+
+
+def test_gm_default_pins_prefers_what_the_gm_stored(_home: Path) -> None:
+    ensure_workspace()
+    update_settings(gm_default_pins={"npc": [{"kind": "initiative"}]})
+
+    pins = storage.gm_default_pins()
+
+    assert pins["npc"] == [{"kind": "initiative"}]
+    # Filled in per *kind*: a file naming only "npc" still gets the shipped player
+    # strip rather than nothing.
+    assert pins["player"] == DEFAULT_SETTINGS["gm_default_pins"]["player"]
+
+
+def test_gm_default_pins_hands_back_a_copy(_home: Path) -> None:
+    """The caller mutating what it got must not rewrite the shipped defaults."""
+    ensure_workspace()
+
+    storage.gm_default_pins()["npc"].clear()
+
+    assert storage.gm_default_pins()["npc"] == DEFAULT_SETTINGS["gm_default_pins"]["npc"]
+
+
+def test_gm_default_pins_ignores_a_hand_edited_mess(_home: Path) -> None:
+    ensure_workspace()
+    update_settings(gm_default_pins="nonsense")
+    assert storage.gm_default_pins() == DEFAULT_SETTINGS["gm_default_pins"]
+
+    update_settings(gm_default_pins={"npc": "not a list"})
+    assert storage.gm_default_pins() == DEFAULT_SETTINGS["gm_default_pins"]

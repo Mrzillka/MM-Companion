@@ -47,6 +47,8 @@ class MainWindow(QMainWindow):
     #: sheet. Only ever raised on a window opened with ``pin_target=True``, which
     #: today means one a GM opened from a card.
     pinRequested = Signal(object)
+    #: The same, for a row that was already pinned.
+    unpinRequested = Signal(object)
 
     def __init__(
         self,
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
         # is relayed back out to whoever opened this window.
         self._sheet.set_pin_target(pin_target)
         self._sheet.pinRequested.connect(self.pinRequested)
+        self._sheet.unpinRequested.connect(self.unpinRequested)
         self._build_menu_bar(locked)
         # The sheet is itself a scrolling page (it owns its scroll area), so it is
         # the central widget directly — no outer wrapper.

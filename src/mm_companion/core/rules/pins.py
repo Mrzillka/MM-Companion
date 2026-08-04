@@ -42,7 +42,13 @@ from dataclasses import dataclass, replace
 from ..character import Character
 from ..data_loader import GameData
 from ..powers import Power, PowerEffectInstance
-from .derived import defense_class
+from .derived import (
+    defense_class,
+    effective_ability,
+    initiative_modifier,
+    resistance_total,
+    skill_total,
+)
 from .rolls import (
     KIND_POWER_SAVE,
     RollSpec,
@@ -174,19 +180,36 @@ class PinGroup:
 # -- resolving ---------------------------------------------------------------
 
 
-def resolve_pin(char: Character | None, game_data: GameData, ref: PinRef) -> PinnedValue:
-    """What *ref* currently reads on *char*. Never raises, never returns ``None``."""
+def resolve_pin(
+    char: Character | None,
+    game_data: GameData,
+    ref: PinRef,
+    *,
+    with_conditions: bool = True,
+) -> PinnedValue:
+    """What *ref* currently reads on *char*. Never raises, never returns ``None``.
+
+    *with_conditions* is the one thing a **chip** and the **picker** disagree
+    about, and only about the number shown — the :class:`RollSpec` is the same
+    either way, so nothing about what a chip *rolls* moves. A chip is read
+    mid-fight, so it shows the number to actually use, condition penalties and
+    all. The picker is a catalogue of the character, so it shows what the
+    character *is*: browsing a Vulnerable creature's traits to decide what is
+    worth pinning is not the moment to be shown its halved Dodge.
+    """
     if char is None:
         return _missing(ref, pin_label(ref, game_data))
     if ref.kind == PIN_ABILITY:
-        return _from_ability(char, game_data, ref)
+        return _from_ability(char, game_data, ref, with_conditions)
     if ref.kind == PIN_RESISTANCE:
-        return _from_resistance(char, game_data, ref)
+        return _from_resistance(char, game_data, ref, with_conditions)
     if ref.kind == PIN_SKILL:
-        return _from_skill(char, game_data, ref)
+        return _from_skill(char, game_data, ref, with_conditions)
     if ref.kind == PIN_INITIATIVE:
-        return _from_initiative(char, game_data, ref)
+        return _from_initiative(char, game_data, ref, with_conditions)
     if ref.kind == PIN_POWER:
+        # A power's numbers are condition-free already: an effect's rank and the
+        # DC it sets are build facts, so there is nothing here to strip out.
         return _from_power(char, game_data, ref)
     if ref.kind == PIN_DEFENSE_CLASS:
         return _from_defense_class(char, game_data, ref)
@@ -194,10 +217,14 @@ def resolve_pin(char: Character | None, game_data: GameData, ref: PinRef) -> Pin
 
 
 def resolve_pins(
-    char: Character | None, game_data: GameData, refs: list[PinRef]
+    char: Character | None,
+    game_data: GameData,
+    refs: list[PinRef],
+    *,
+    with_conditions: bool = True,
 ) -> list[PinnedValue]:
     """:func:`resolve_pin` over a whole strip, in order."""
-    return [resolve_pin(char, game_data, ref) for ref in refs]
+    return [resolve_pin(char, game_data, r, with_conditions=with_conditions) for r in refs]
 
 
 def pin_label(ref: PinRef, game_data: GameData) -> str:
@@ -242,31 +269,37 @@ def _signed(value: int) -> str:
     return f"{value:+d}"
 
 
-def _from_ability(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
+def _from_ability(
+    char: Character, game_data: GameData, ref: PinRef, with_conditions: bool = True
+) -> PinnedValue:
     ability = next((a for a in game_data.abilities if a.key == ref.key), None)
     if ability is None:
         return _missing(ref, pin_label(ref, game_data))
     spec = ability_roll(char, game_data, ref.key)
+    shown = spec.modifier if with_conditions else effective_ability(char, game_data, ref.key)
     return PinnedValue(
         ref=ref,
         label=ability.abbr or ability.key,
-        value=_signed(spec.modifier),
+        value=_signed(shown),
         spec=spec,
         hint=_hint(ability.name, spec),
     )
 
 
-def _from_resistance(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
+def _from_resistance(
+    char: Character, game_data: GameData, ref: PinRef, with_conditions: bool = True
+) -> PinnedValue:
     resistance = next((r for r in game_data.resistances if r.key == ref.key), None)
     if resistance is None:
         return _missing(ref, pin_label(ref, game_data))
     spec = resistance_roll(char, game_data, ref.key)
+    shown = spec.modifier if with_conditions else resistance_total(char, game_data, ref.key)
     # Unsigned: a defence is a number to beat, not a bonus to add. Writing "+12"
     # on a Defence chip invites it into the wrong side of an attack roll.
     return PinnedValue(
         ref=ref,
         label=resistance.abbr or resistance.name,
-        value=str(spec.modifier),
+        value=str(shown),
         spec=spec,
         hint=_hint(resistance.name, spec),
     )
@@ -285,21 +318,27 @@ def _from_defense_class(char: Character, game_data: GameData, ref: PinRef) -> Pi
     )
 
 
-def _from_skill(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
+def _from_skill(
+    char: Character, game_data: GameData, ref: PinRef, with_conditions: bool = True
+) -> PinnedValue:
     if not _skill_row_exists(char, game_data, ref.key):
         return _missing(ref, pin_label(ref, game_data))
     spec = skill_roll(char, game_data, ref.key)
+    shown = spec.modifier if with_conditions else skill_total(char, game_data, ref.key)
     return PinnedValue(
         ref=ref,
         label=spec.label,
-        value=_signed(spec.modifier),
+        value=_signed(shown),
         spec=spec,
         hint=_hint(spec.label, spec),
     )
 
 
-def _from_initiative(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
+def _from_initiative(
+    char: Character, game_data: GameData, ref: PinRef, with_conditions: bool = True
+) -> PinnedValue:
     spec = initiative_roll(char, game_data)
+    shown = spec.modifier if with_conditions else initiative_modifier(char, game_data)
     label = next(
         (t.label for t in game_data.system.derived_traits if t.key == PIN_INITIATIVE),
         spec.label,
@@ -307,7 +346,7 @@ def _from_initiative(char: Character, game_data: GameData, ref: PinRef) -> Pinne
     return PinnedValue(
         ref=ref,
         label=label,
-        value=_signed(spec.modifier),
+        value=_signed(shown),
         spec=spec,
         hint=_hint(label, spec),
     )
@@ -322,17 +361,18 @@ def _from_power(char: Character, game_data: GameData, ref: PinRef) -> PinnedValu
     if not 0 <= index < len(specs):
         return _missing(ref, power.name or "Power")
     spec = specs[index]
+    # A save the target rolls is a *difficulty*, so it reads as one and carries no
+    # spec: the wielder never makes their own target's save. It already reaches the
+    # person who does as the follow-up chip on the attack's history card, so a
+    # rollable chip here would throw a second, meaningless die. Exactly the rule a
+    # power card's dice footer already follows — a 🎲 only on the lines the wielder
+    # rolls — now on the card too. Anything the wielder *does* roll stays rollable.
+    resisted = spec.rolled_by_target and spec.dc is not None
     return PinnedValue(
         ref=replace(ref, key=power.id, index=index, select=""),
         label=_power_chip_label(power, spec),
-        # A save the target rolls is a *difficulty*, so it reads as one; anything
-        # the wielder rolls is a bonus. Both are on the spec already.
-        value=(
-            f"DC {spec.dc}"
-            if spec.rolled_by_target and spec.dc is not None
-            else _signed(spec.modifier)
-        ),
-        spec=spec,
+        value=f"DC {spec.dc}" if resisted else _signed(spec.modifier),
+        spec=None if resisted else spec,
         hint=_hint(power.name or "Power", spec),
     )
 
@@ -412,7 +452,9 @@ def _skill_row_exists(char: Character, game_data: GameData, row_id: str) -> bool
 # -- what can be pinned ------------------------------------------------------
 
 
-def available_pins(char: Character, game_data: GameData) -> list[PinGroup]:
+def available_pins(
+    char: Character, game_data: GameData, *, with_conditions: bool = True
+) -> list[PinGroup]:
     """Every parameter of *char* a GM could pin, grouped for the picker.
 
     Deliberately the whole surface rather than a curated shortlist: which numbers
@@ -420,45 +462,39 @@ def available_pins(char: Character, game_data: GameData) -> list[PinGroup]:
     """
     groups: list[PinGroup] = []
 
+    def read(ref: PinRef) -> PinnedValue:
+        return resolve_pin(char, game_data, ref, with_conditions=with_conditions)
+
     groups.append(
         PinGroup(
             "Abilities",
-            tuple(
-                resolve_pin(char, game_data, PinRef(PIN_ABILITY, a.key))
-                for a in game_data.abilities
-            ),
+            tuple(read(PinRef(PIN_ABILITY, a.key)) for a in game_data.abilities),
         )
     )
     groups.append(
         PinGroup(
             "Resistances",
-            tuple(
-                resolve_pin(char, game_data, PinRef(PIN_RESISTANCE, r.key))
-                for r in game_data.resistances
-            ),
+            tuple(read(PinRef(PIN_RESISTANCE, r.key)) for r in game_data.resistances),
         )
     )
     groups.append(
         PinGroup(
             "Derived",
             (
-                resolve_pin(char, game_data, PinRef(PIN_INITIATIVE)),
-                resolve_pin(char, game_data, PinRef(PIN_DEFENSE_CLASS)),
+                read(PinRef(PIN_INITIATIVE)),
+                read(PinRef(PIN_DEFENSE_CLASS)),
             ),
         )
     )
 
-    skills = tuple(
-        resolve_pin(char, game_data, PinRef(PIN_SKILL, row_id))
-        for row_id in _skill_rows(char, game_data)
-    )
+    skills = tuple(read(PinRef(PIN_SKILL, row_id)) for row_id in _skill_rows(char, game_data))
     if skills:
         groups.append(PinGroup("Skills", skills))
 
     powers: list[PinnedValue] = []
     for power in leaf_powers(char.powers):
         for index in range(len(power_rolls(power, char, game_data))):
-            powers.append(resolve_pin(char, game_data, PinRef(PIN_POWER, power.id, index)))
+            powers.append(read(PinRef(PIN_POWER, power.id, index)))
     if powers:
         groups.append(PinGroup("Powers", tuple(powers)))
 

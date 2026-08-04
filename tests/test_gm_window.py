@@ -39,7 +39,7 @@ from mm_companion.ui.gm_window import GMWindow
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
-from mm_companion.ui.pin_picker import LABEL_ROLE
+from mm_companion.ui.pin_picker import LABEL_ROLE, PIN_ROLE
 from mm_companion.ui.roll_history import HIDDEN_MARK
 from mm_companion.ui.sections.conditions import addable_conditions, build_condition_menu
 from mm_companion.ui.session_bridge import active_session, set_active_session
@@ -1605,12 +1605,18 @@ def quick_npc_file(window: GMWindow, name: str = "Goon", effect: int = 6) -> str
     return path.name
 
 
+def chip_index(card, caption: str) -> int:
+    """Where *caption* sits in the strip. By name, so adding a default pin to the
+    shipped list does not renumber every test that touches a chip."""
+    return next(i for i, text in enumerate(card.pins.chip_texts()) if text.startswith(caption))
+
+
 def test_a_new_npc_card_starts_with_the_default_strip(window: GMWindow) -> None:
     """DEF, ATK and the first Damage power's save DC — resolved against this NPC."""
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    assert card.pins.chip_texts() == ["DEF 6", "ATK +6", "Damage DC 16"]
+    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage DC 16"]
 
 
 def test_a_new_player_card_starts_with_the_default_strip(
@@ -1621,7 +1627,12 @@ def test_a_new_player_card_starts_with_the_default_strip(
     window._on_snapshot("p0", a_character())
 
     card = window._cards["p0"]
-    assert [v.label for v in card.pins.values()] == ["DEF", "Initiative", "Perception"]
+    assert [v.label for v in card.pins.values()] == [
+        "DEF",
+        "Toughness",
+        "Initiative",
+        "Perception",
+    ]
 
 
 def test_a_players_chips_follow_their_snapshot(qapp: QApplication, window: GMWindow) -> None:
@@ -1639,20 +1650,42 @@ def test_a_players_chips_follow_their_snapshot(qapp: QApplication, window: GMWin
     assert card.pins.chip_texts()[0] == "DEF 9"
 
 
-def test_clicking_a_chip_loads_it_into_the_gms_roller(window: GMWindow) -> None:
-    """The end of the chain, not the signal: the roller really holds the spec."""
+def test_clicking_a_chip_loads_it_and_double_clicking_rolls_it(window: GMWindow) -> None:
+    """The end of the chain, not the signal: the roller really holds the spec.
+
+    The same bargain a stat row on the sheet strikes — one click to load, so the
+    sliders and the DC box can be set, and two to throw.
+    """
     quick_npc_file(window)
     (card,) = npc_cards(window)
     assert window._roller._spec is None
 
-    damage = card.pins._chips[2]
-    damage.clicked.emit(damage.value.spec)
+    attack = card.pins._chips[chip_index(card, "ATK")]
+    attack.loadRequested.emit(attack.value.spec)
 
     assert window._roller._spec is not None
-    assert window._roller._spec.label == "Toughness vs. 16"
-    # A spec that names its own DC ticks the box and fills it in, so the GM does
-    # not have to remember the number the chip was showing.
-    assert window._roller._dc_spin.value() == 16
+    assert window._roller._spec.label == "Attack"
+    assert window._roller._rolling is False  # loaded, not thrown
+
+    attack.rollRequested.emit(attack.value.spec)
+
+    assert window._roller._rolling is True
+
+
+def test_a_forced_save_chip_is_read_rather_than_rolled(window: GMWindow) -> None:
+    """The wielder never makes their own target's save.
+
+    It already reaches the person who does as the follow-up chip on the attack's
+    history card, so a rollable chip here would throw a second, meaningless die.
+    """
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    damage = card.pins._chips[chip_index(card, "Damage")]
+
+    assert damage.text() == "Damage DC 16"
+    assert damage.rollable is False
+    assert damage.value.missing is False  # read-only, not broken
 
 
 def test_a_chip_with_nothing_to_roll_ignores_a_click(window: GMWindow) -> None:
@@ -1671,11 +1704,16 @@ def test_a_strip_can_be_reordered_and_the_order_persists(window: GMWindow) -> No
     name = quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    card.pins.move_pin(2, 0)  # the Damage chip to the front
+    card.pins.move_pin(chip_index(card, "Damage"), 0)
 
-    assert card.pins.chip_texts() == ["Damage DC 16", "DEF 6", "ATK +6"]
+    assert card.pins.chip_texts()[0] == "Damage DC 16"
     stored = storage.load_settings()["gm_pins"]["npc:" + name]
-    assert [entry["kind"] for entry in stored] == ["power", "resistance", "ability"]
+    assert [entry["kind"] for entry in stored] == [
+        "power",
+        "resistance",
+        "resistance",
+        "ability",
+    ]
     # And it survives the wholesale card rebuild every cast change does.
     window._refresh_npcs()
     assert npc_cards(window)[0].pins.chip_texts()[0] == "Damage DC 16"
@@ -1685,10 +1723,10 @@ def test_a_chip_can_be_removed(window: GMWindow) -> None:
     name = quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    card.pins.remove_pin(1)
+    card.pins.remove_pin(chip_index(card, "ATK"))
 
-    assert card.pins.chip_texts() == ["DEF 6", "Damage DC 16"]
-    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 2
+    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "Damage DC 16"]
+    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 3
 
 
 def test_the_picker_pins_onto_the_card_behind_it(window: GMWindow) -> None:
@@ -1697,9 +1735,9 @@ def test_the_picker_pins_onto_the_card_behind_it(window: GMWindow) -> None:
 
     window._open_npc_pin_picker(name)
     picker = window._pin_pickers["npc:" + name]
-    picker.pinRequested.emit(PinRef("resistance", "TOUGHNESS"))
+    picker.pinRequested.emit(PinRef("resistance", "WILL"))
 
-    assert card.pins.chip_texts()[-1] == "Toughness 6"
+    assert card.pins.chip_texts()[-1] == "Will 0"
     picker.close()
 
 
@@ -1743,7 +1781,8 @@ def test_the_pickers_filter_matches_every_word(window: GMWindow) -> None:
 def test_a_copied_npc_inherits_the_strip_it_was_copied_from(window: GMWindow) -> None:
     """A duplicate is the same creature under a new name."""
     name = quick_npc_file(window)
-    npc_cards(window)[0].pins.move_pin(2, 0)
+    card = npc_cards(window)[0]
+    card.pins.move_pin(chip_index(card, "Damage"), 0)
 
     window._copy_npc(name)
 
@@ -1793,9 +1832,12 @@ def test_a_pin_to_a_power_the_npc_lost_still_shows_and_can_be_taken_off(
     window._refresh_npcs()
 
     (card,) = npc_cards(window)
-    assert card.pins.chip_texts()[2].endswith("—")
-    card.pins.remove_pin(2)
-    assert len(card.pins.chip_texts()) == 2
+    # Captioned "Power" rather than by the name it had — there is nothing left to
+    # read the name off.
+    index = chip_index(card, "Power")
+    assert card.pins.chip_texts()[index].endswith("—")
+    card.pins.remove_pin(index)
+    assert len(card.pins.chip_texts()) == 3
 
 
 def test_pinning_from_an_npcs_own_sheet_lands_on_its_card(window: GMWindow) -> None:
@@ -1805,11 +1847,11 @@ def test_pinning_from_an_npcs_own_sheet_lands_on_its_card(window: GMWindow) -> N
 
     window._open_npc(name)
     sheet_window = next(iter(window._npc_windows.values()))
-    assert sheet_window.sheet.abilities._pin_target is True
+    assert sheet_window.sheet.abilities._pins.enabled is True
 
-    sheet_window.sheet.resistances.pinRequested.emit(PinRef("resistance", "TOUGHNESS"))
+    sheet_window.sheet.resistances.pinRequested.emit(PinRef("resistance", "WILL"))
 
-    assert card.pins.chip_texts()[-1] == "Toughness 6"
+    assert card.pins.chip_texts()[-1] == "Will 0"
 
 
 def test_pinning_from_a_players_read_only_sheet_lands_on_their_card(
@@ -1834,7 +1876,168 @@ def test_a_players_own_sheet_never_offers_to_pin(qapp: QApplication) -> None:
 
     plain = MainWindow(character=Character.new_default(load_game_data()))
     try:
-        assert plain.sheet.abilities._pin_target is False
+        assert plain.sheet.abilities._pins.enabled is False
     finally:
         plain._dirty = False
         plain.close()
+
+
+def test_a_card_on_an_older_workspace_still_gets_its_default_strip(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """The bug that made the whole feature look unimplemented.
+
+    settings.json is only written with the shipped defaults when the workspace is
+    *created*, so every existing user's file has no gm_default_pins key at all.
+    Read straight off load_settings that came back None and every card came up
+    empty.
+    """
+    settings = storage.load_settings()
+    settings.pop("gm_default_pins", None)
+    storage.save_settings(settings)
+
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage DC 16"]
+
+
+def test_the_picker_unpins_what_is_already_on_the_card(window: GMWindow) -> None:
+    """The card's own ✕ used to be the only way off, and the GM is already here."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+
+    picker.unpinRequested.emit(PinRef("resistance", "DEF"))
+
+    assert "DEF 6" not in card.pins.chip_texts()
+    picker.close()
+
+
+def test_a_pickers_row_menu_says_which_way_it_will_go(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+
+    assert picker_row_action(picker, "Resistances", "DEF") == "Unpin"  # a default
+    assert picker_row_action(picker, "Resistances", "Will") == "Pin"
+
+    picker.close()
+
+
+def test_double_clicking_a_picker_row_toggles_it(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+    row = picker_row(picker, "Resistances", "Will")
+
+    picker._toggle(row)
+    assert card.pins.chip_texts()[-1] == "Will 0"
+    assert picker_row_action(picker, "Resistances", "Will") == "Unpin"
+
+    picker._toggle(row)
+    assert "Will 0" not in card.pins.chip_texts()
+    assert picker_row_action(picker, "Resistances", "Will") == "Pin"
+    picker.close()
+
+
+def test_the_picker_shows_the_characters_own_numbers(window: GMWindow) -> None:
+    """A catalogue, not a combat readout.
+
+    Deciding what is worth pinning is not the moment to be shown a halved Dodge —
+    while the chip on the card, which is what gets read mid-fight, keeps it.
+    """
+    name = quick_npc_file(window)
+    window._apply_npc_condition(name, "vulnerable", None)
+    (card,) = npc_cards(window)
+
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+
+    assert picker_row(picker, "Resistances", "Dodge").text(1) == "6"
+    assert card.pins.chip_texts()[0] == "DEF 3"  # halved, as the GM must actually use it
+    picker.close()
+
+
+def picker_row(picker, group_title: str, caption: str):
+    """One row of the picker's tree, by its group heading and caption."""
+    tree = picker._tree
+    group = next(
+        tree.topLevelItem(i)
+        for i in range(tree.topLevelItemCount())
+        if tree.topLevelItem(i).text(0) == group_title
+    )
+    return next(
+        group.child(c)
+        for c in range(group.childCount())
+        if group.child(c).data(0, LABEL_ROLE) == caption
+    )
+
+
+def picker_row_action(picker, group_title: str, caption: str) -> str:
+    """What that row's right-click menu offers — asked of the dialog itself."""
+    row = picker_row(picker, group_title, caption)
+    return picker.action_text(row.data(0, PIN_ROLE))
+
+
+def test_a_sheet_row_offers_unpin_once_the_card_has_it(window: GMWindow) -> None:
+    """The complaint that started this: the sheet kept offering to pin what was
+    already pinned. It knows now, because the card tells it."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    window._open_npc(name)
+    sheet = next(iter(window._npc_windows.values())).sheet
+
+    # DEF is a default, so it is on the card before the sheet ever opened.
+    assert sheet.resistances._pins.action_text(PinRef("resistance", "DEF")) == "Unpin from GM card"
+    assert sheet.resistances._pins.action_text(PinRef("resistance", "WILL")) == "Pin to GM card"
+
+    sheet.resistances.pinRequested.emit(PinRef("resistance", "WILL"))
+
+    assert card.pins.chip_texts()[-1] == "Will 0"
+    assert sheet.resistances._pins.action_text(PinRef("resistance", "WILL")) == "Unpin from GM card"
+
+
+def test_unpinning_from_the_sheet_takes_it_off_the_card(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    window._open_npc(name)
+    sheet = next(iter(window._npc_windows.values())).sheet
+
+    sheet.resistances.unpinRequested.emit(PinRef("resistance", "DEF"))
+
+    assert "DEF 6" not in card.pins.chip_texts()
+    assert sheet.resistances._pins.action_text(PinRef("resistance", "DEF")) == "Pin to GM card"
+
+
+def test_the_card_corrects_a_sheet_that_was_left_open(window: GMWindow) -> None:
+    """A strip changed from the card (or the picker) must reach the sheet's menus.
+
+    Otherwise the sheet goes on offering Unpin for something the GM already
+    removed with the chip's own ✕.
+    """
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    window._open_npc(name)
+    sheet = next(iter(window._npc_windows.values())).sheet
+    ref = PinRef("resistance", "DEF")
+    assert sheet.resistances._pins.is_pinned(ref) is True
+
+    card.pins.remove_ref(ref)
+
+    assert sheet.resistances._pins.is_pinned(ref) is False
+
+
+def test_every_pinnable_block_learns_what_is_on_the_card(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    window._open_npc(name)
+    sheet = next(iter(window._npc_windows.values())).sheet
+
+    sheet.set_pinned([PinRef("initiative"), PinRef("skill", "Perception"), PinRef("power", "x", 1)])
+
+    assert sheet.system_info._pins.is_pinned(PinRef("initiative")) is True
+    assert sheet.skills._pins.is_pinned(PinRef("skill", "Perception")) is True
+    assert sheet.powers._pins.is_pinned(PinRef("power", "x", 1)) is True
+    assert sheet.abilities._pins.is_pinned(PinRef("ability", "STR")) is False

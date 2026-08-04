@@ -2,10 +2,20 @@
 
 The list a GM opens, filters, and right-clicks. It shows the *whole* surface —
 abilities, resistances, the derived readouts, every skill row, every roll each
-power calls for — with each row's current reading beside it, because "which of
-these do I want" is answered by seeing them.
+power calls for — with each row's reading beside it, because "which of these do I
+want" is answered by seeing them.
 
-**Modeless**, which is the one real design decision here. A GM pinning things is
+Those readings are the character's **own** numbers, with no condition penalties
+folded in (``with_conditions=False``). This is a catalogue, not a combat readout:
+browsing a Vulnerable creature's traits to decide what is worth pinning is not the
+moment to be shown its halved Dodge. The chip on the card is the other way round,
+and :func:`~mm_companion.core.rules.pins.resolve_pin` explains why.
+
+It **unpins** as well as pins — right-click flips to Unpin on a row that is
+already on the card, and a double-click toggles — because the card's own ✕ was
+otherwise the only way off, and the GM is already here.
+
+**Modeless**, which is the one real design decision. A GM pinning things is
 usually pinning three of them, and a modal dialog would make that three round
 trips; this one emits :attr:`PinPickerDialog.pinRequested` as each is chosen and
 the card fills in behind it.
@@ -40,19 +50,23 @@ PIN_ROLE = Qt.ItemDataRole.UserRole
 #: on and taken off without the caption accumulating pushpins.
 LABEL_ROLE = Qt.ItemDataRole.UserRole + 1
 
-HELP_TEXT = "Right-click a row (or double-click it) to pin it to the card."
+HELP_TEXT = "Right-click a row (or double-click it) to pin or unpin it."
 
 
 class PinPickerDialog(QDialog):
-    """Browse a character's parameters and pin them to a GM card.
+    """Browse a character's parameters and pin them to (or unpin them from) a GM card.
 
     *pinned* seeds which rows read as already on the card; the dialog keeps that
-    set up to date itself as rows are pinned, so a GM can see what they have just
-    done without the owner having to push it back.
+    set up to date itself as rows are toggled, so a GM sees what they have just
+    done without the owner having to push it back — and
+    :meth:`set_pinned` is how the card corrects it when the strip changes from the
+    other end.
     """
 
     #: The :class:`PinRef` for a row the GM chose.
     pinRequested = Signal(object)
+    #: The :class:`PinRef` for a row the GM took back off the card.
+    unpinRequested = Signal(object)
 
     def __init__(
         self,
@@ -90,7 +104,7 @@ class PinPickerDialog(QDialog):
         self._tree.setRootIsDecorated(True)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_row_menu)
-        self._tree.itemDoubleClicked.connect(lambda item, _c: self._pin(item))
+        self._tree.itemDoubleClicked.connect(lambda item, _c: self._toggle(item))
         layout.addWidget(self._tree, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -104,7 +118,7 @@ class PinPickerDialog(QDialog):
     def reload(self) -> None:
         """Rebuild the list from the character, keeping the filter in place."""
         self._tree.clear()
-        for group in available_pins(self._character, self._data):
+        for group in available_pins(self._character, self._data, with_conditions=False):
             parent = QTreeWidgetItem([group.title, ""])
             parent.setFlags(Qt.ItemFlag.ItemIsEnabled)  # a heading, not a choice
             self._tree.addTopLevelItem(parent)
@@ -146,17 +160,34 @@ class PinPickerDialog(QDialog):
     # -- pinning -------------------------------------------------------------
 
     def set_pinned(self, pinned: list[PinRef]) -> None:
-        """Tell the dialog which refs are on the card now."""
-        self._pinned = set(pinned)
+        """Tell the dialog which refs are on the card now.
+
+        A no-op when it already agrees, which is the common case: the card echoes
+        every change back here, including the ones this dialog just made. Without
+        the guard that echo rebuilds the tree *during* :meth:`_toggle`, deleting
+        the very row it is about to restate.
+        """
+        wanted = set(pinned)
+        if wanted == self._pinned:
+            return
+        self._pinned = wanted
         self.reload()
 
-    def _pin(self, item: QTreeWidgetItem | None) -> None:
+    def _toggle(self, item: QTreeWidgetItem | None) -> None:
+        """Put this row on the card, or take it off — whichever it isn't."""
         ref = None if item is None else item.data(0, PIN_ROLE)
         if not isinstance(ref, PinRef):
             return  # a group heading
-        self._pinned.add(ref)
-        self._mark_pinned(item, True)
-        self.pinRequested.emit(ref)
+        pinned = ref not in self._pinned
+        # The row is restated *before* the signal goes out: the card echoes the
+        # change back through set_pinned, and this row must already be consistent
+        # with what that echo will say.
+        if pinned:
+            self._pinned.add(ref)
+        else:
+            self._pinned.discard(ref)
+        self._mark_pinned(item, pinned)
+        (self.pinRequested if pinned else self.unpinRequested).emit(ref)
 
     def _show_row_menu(self, pos) -> None:
         item = self._tree.itemAt(pos)
@@ -164,8 +195,12 @@ class PinPickerDialog(QDialog):
         if not isinstance(ref, PinRef):
             return
         menu = QMenu(self._tree)
-        menu.addAction("Pin", lambda: self._pin(item))
+        menu.addAction(self.action_text(ref), lambda: self._toggle(item))
         menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def action_text(self, ref: PinRef) -> str:
+        """What this row's menu offers — the flip side of where the pin already is."""
+        return "Unpin" if ref in self._pinned else "Pin"
 
     # -- filtering -----------------------------------------------------------
 

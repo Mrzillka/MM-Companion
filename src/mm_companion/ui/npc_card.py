@@ -292,13 +292,13 @@ class NPCCard(QFrame):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton:
-            self._press_pos = event.pos()
+            self._press_pos = event.position().toPoint()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """While dragging, preview where the drop would land, so the GM sees it."""
         if self._press_pos is not None:
-            moved = (event.pos() - self._press_pos).manhattanLength()
+            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
             if moved >= DRAG_THRESHOLD:
                 target = self._drop_target_index(event.globalPosition().toPoint())
                 self.reorderPreview.emit(self.name_key, target)
@@ -306,7 +306,7 @@ class NPCCard(QFrame):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
-            moved = (event.pos() - self._press_pos).manhattanLength()
+            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
             self._press_pos = None
             if moved >= DRAG_THRESHOLD:
                 target = self._drop_target_index(event.globalPosition().toPoint())

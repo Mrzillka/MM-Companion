@@ -137,7 +137,7 @@ class PortraitButton(QLabel):
         if (
             self._clickable
             and event.button() == Qt.MouseButton.LeftButton
-            and self.rect().contains(event.pos())
+            and self.rect().contains(event.position().toPoint())
         ):
             self.clicked.emit()
         event.accept()

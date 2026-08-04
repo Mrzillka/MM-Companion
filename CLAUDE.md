@@ -733,10 +733,11 @@ The shape:
   The menu appears at all only once `MainWindow(pin_target=True)` says there is a
   card.
 - Strips persist per card in `gm_pins`, seeded from `gm_default_pins` — the
-  settings key a preferences page will edit, and the reason the NPC damage
-  default is *late-bound* ("the first Damage power", resolving to the **attack
-  roll** it makes — the save it forces belongs to the target), since the defaults
-  are written long before the NPC is. Read it through **`storage.gm_default_pins()`**,
+  settings key the Settings window's **GM Mode page** edits, and the reason the NPC
+  damage default is *late-bound* ("the first Damage power", resolving to the
+  **attack roll** it makes — the save it forces belongs to the target), since the
+  defaults are written long before the NPC is. Read it through
+  **`storage.gm_default_pins()`**,
   never off `load_settings()`: that returns the settings file *verbatim* and does
   not merge `DEFAULT_SETTINGS`, so any key added after a workspace was created
   reads back as `None`. Every setting in that module has an accessor or an inline
@@ -744,6 +745,22 @@ The shape:
   every existing user. An **empty strip is persisted** rather than dropped to keep
   the file tidy: a missing key is what seeds the defaults, so skipping the empty
   ones handed a GM back the four chips they had just taken off.
+- That page (`ui/settings/gm_page.py`, reached from the GM window's own
+  `Settings ▸ Preferences…`) is two reorderable lists, one per card kind, and its
+  shape follows from *when* a default is written. A default cannot name a power —
+  a `Power.id` belongs to one character — so the picker it opens is the
+  character-free `default_pin_choices(game_data)` rather than `available_pins`,
+  offering the traits plus the one late-bound `select="first_damage"` row; the same
+  `PinPickerDialog` serves both, with a `None` character putting it in that mode and
+  hiding its "Now" column. Writing goes through `storage.set_gm_default_pins`, which
+  merges per kind for the same reason the reader does, and the page always writes
+  **both** kinds — an omitted kind reads back as the shipped strip, while an
+  explicit `[]` is honoured. Editing the defaults deliberately leaves the board
+  alone (`_pins_for` made each card's strip its own on first sight), so
+  **Apply to cards on the board** is a separate, confirmed button:
+  `storage.clear_gm_card_pins()` plus `GMWindow.reseed_pins_from_defaults()` on
+  every open GM window — in that order, or a window still holding its old strips
+  writes them back out and undoes the clear.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.
@@ -880,11 +897,13 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   map overrides any bound. The GM window's blocks live there too, under `gm_`
   keys.
 - The look is changed in the **Settings window** (`ui/settings/`, opened from a
-  sheet's `Settings ▸ Preferences…` or the launcher's Settings button): a
-  `QListWidget` nav over a `QStackedWidget`, whose pages come from
-  `window.PAGES` — one entry today, `ThemePage`. Adding a second area of settings
-  is an entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
-  `is_dirty`, `save`, `discard`, `needs_restart`).
+  sheet's `Settings ▸ Preferences…`, the GM window's, or the launcher's Settings
+  button): a `QListWidget` nav over a `QStackedWidget`, whose pages come from
+  `window.PAGES` — `ThemePage` and `GMPage`. Adding another area of settings is an
+  entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
+  `is_dirty`, `save`, `discard`, `needs_restart`). Which page it *opens on* is the
+  caller's to say (`SettingsWindow(page=GMPage.title)`), which is how the GM window
+  lands on its own rather than on the sheet's.
 - The Themes page separates two things on purpose. **Picking** a preset writes
   through at once (`set_active_theme`), as the old menu did. **Editing** one is a
   draft: `TokenEditor` (`ui/settings/token_editor.py`) generates a form by walking

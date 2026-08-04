@@ -25,6 +25,7 @@ from mm_companion.core.rules import (
     PinRef,
     apply_condition,
     available_pins,
+    default_pin_choices,
     default_pins,
     parse_pins,
     pin_label,
@@ -193,6 +194,50 @@ def test_the_player_defaults_are_the_three_a_gm_asked_for(data: GameData) -> Non
 def test_defaults_for_an_unknown_card_kind_are_simply_empty() -> None:
     assert default_pins("dragon", DEFAULT_SETTINGS["gm_default_pins"]) == []
     assert default_pins("npc", None) == []
+
+
+# -- what a default may name --------------------------------------------------
+
+
+def test_the_defaults_picker_offers_no_concrete_power(data: GameData) -> None:
+    """A power id is per-character, and a default is written before the card is.
+
+    So the only power a default may name is the late-bound one — offering the
+    concrete kind would be offering pins that resolve to nothing on every card but
+    the one they were read off.
+    """
+    powers = [ref for group in default_pin_choices(data) for ref in _refs(group)]
+    power_refs = [ref for ref in powers if ref.kind == PIN_POWER]
+
+    assert power_refs == [PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)]
+
+
+def test_the_defaults_picker_covers_the_character_free_traits(data: GameData) -> None:
+    groups = {group.title: [v.ref for v in group.values] for group in default_pin_choices(data)}
+
+    assert set(groups) == {"Abilities", "Resistances", "Derived", "Skills", "Powers"}
+    assert PinRef(PIN_ABILITY, "ATK") in groups["Abilities"]
+    assert PinRef(PIN_RESISTANCE, "DEF") in groups["Resistances"]
+    assert groups["Derived"] == [PinRef(PIN_INITIATIVE), PinRef(PIN_DEFENSE_CLASS)]
+    assert PinRef(PIN_SKILL, "Perception") in groups["Skills"]
+
+
+def test_every_offered_default_is_captioned_and_storable(data: GameData) -> None:
+    for group in default_pin_choices(data):
+        for value in group.values:
+            assert value.label
+            assert value.value == ""  # no character, so no reading
+            assert PinRef.from_dict(value.ref.to_dict()) == value.ref
+
+
+def test_the_late_bound_damage_pin_is_named_before_it_resolves(data: GameData) -> None:
+    """It is the one power pin written down while unresolved, so "Power" won't do."""
+    assert pin_label(PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE), data) == "First Damage"
+    assert pin_label(PinRef(PIN_POWER, key="abc123"), data) == "Power"
+
+
+def _refs(group) -> list[PinRef]:
+    return [value.ref for value in group.values]
 
 
 # -- conditions come through for free ----------------------------------------

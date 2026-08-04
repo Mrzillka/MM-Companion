@@ -253,6 +253,11 @@ def pin_label(ref: PinRef, game_data: GameData) -> str:
             (t.label for t in game_data.system.derived_traits if t.key == PIN_INITIATIVE),
             "Initiative",
         )
+    if ref.select == SELECT_FIRST_DAMAGE:
+        # Named rather than left as the flat "Power", because this is the one power
+        # pin that is *written down* while unresolved — it is what the defaults
+        # editor lists, and what a card shows before a character reaches it.
+        return "First Damage"
     return "Power"
 
 
@@ -513,9 +518,55 @@ def _skill_rows(char: Character, game_data: GameData) -> list[str]:
     row the character bought — which is where the focuses and specializations
     come from, since those exist only once taken.
     """
-    rows = [s.name for s in game_data.skills if not s.focused]
+    rows = _catalog_skill_rows(game_data)
     rows.extend(row for row in char.skill_ranks if row not in rows)
     return rows
+
+
+def _catalog_skill_rows(game_data: GameData) -> list[str]:
+    """The skill rows that exist without a character — the unfocused catalog."""
+    return [s.name for s in game_data.skills if not s.focused]
+
+
+def default_pin_choices(game_data: GameData) -> list[PinGroup]:
+    """Every parameter a *default* strip may name, grouped for the picker.
+
+    The character-free counterpart of :func:`available_pins`, and it is a smaller
+    set for a reason rather than an omission: a default is written down before the
+    card it will seed exists, so it cannot name that character's things. A power
+    pin in particular is a :attr:`~mm_companion.core.powers.Power.id`, which is
+    per-character — the only power a default can name is the late-bound
+    :data:`SELECT_FIRST_DAMAGE`, and a picker that offered concrete ones would be
+    offering pins that resolve to nothing on every card but the one they came from.
+
+    The values carry no reading (``value=""``): there is no character to read them
+    off, and the picker hides that column when it is showing this list.
+    """
+
+    def choice(ref: PinRef) -> PinnedValue:
+        return PinnedValue(ref=ref, label=pin_label(ref, game_data), value="")
+
+    groups = [
+        PinGroup(
+            "Abilities",
+            tuple(choice(PinRef(PIN_ABILITY, a.key)) for a in game_data.abilities),
+        ),
+        PinGroup(
+            "Resistances",
+            tuple(choice(PinRef(PIN_RESISTANCE, r.key)) for r in game_data.resistances),
+        ),
+        PinGroup(
+            "Derived",
+            (choice(PinRef(PIN_INITIATIVE)), choice(PinRef(PIN_DEFENSE_CLASS))),
+        ),
+    ]
+    skills = tuple(choice(PinRef(PIN_SKILL, row_id)) for row_id in _catalog_skill_rows(game_data))
+    if skills:
+        groups.append(PinGroup("Skills", skills))
+    groups.append(
+        PinGroup("Powers", (choice(PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)),)),
+    )
+    return groups
 
 
 # -- defaults ----------------------------------------------------------------
@@ -534,8 +585,9 @@ def default_pins(kind: str, raw: object) -> list[PinRef]:
 
     *raw* is the whole ``gm_default_pins`` setting, so this is one lookup plus
     :func:`parse_pins`. It reads from settings rather than from a constant here
-    because the point of the defaults is that a GM can change them — the settings
-    page that will edit that key is the only thing still missing.
+    because the point of the defaults is that a GM can change them, which they do
+    on the Settings window's GM Mode page — see :func:`default_pin_choices` for
+    what such a strip is allowed to name.
     """
     if not isinstance(raw, dict):
         return []

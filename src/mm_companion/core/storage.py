@@ -120,8 +120,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # an existing workspace's file predates this key entirely.
     #
     # These live in settings rather than as a constant in code because the whole
-    # point is that a GM changes them; a preferences page that edits this key is
-    # the only piece still missing, and nothing else has to move when it lands.
+    # point is that a GM changes them: the Settings window's GM Mode page reads
+    # this through :func:`gm_default_pins` and writes it through
+    # :func:`set_gm_default_pins`, and this dict is what its "Restore shipped"
+    # button puts back.
     # The NPC damage entry is deliberately *late-bound* — the defaults are written
     # down long before the NPC they will describe exists, so "the first Damage
     # power" is the only way to say it, and it stays true when the GM edits which
@@ -306,6 +308,30 @@ def gm_default_pins() -> dict:
     merged = copy.deepcopy(default)  # type: ignore[arg-type]
     merged.update({key: value for key, value in stored.items() if isinstance(value, list)})
     return merged
+
+
+def set_gm_default_pins(pins: dict) -> None:
+    """Write the starting strips, merging *pins* over what is stored per kind.
+
+    The write half of :func:`gm_default_pins`, and it merges for the same reason
+    that one does: a caller naming only ``"npc"`` means "leave the player strip
+    alone", not "reset it to shipped". Note the asymmetry that follows — an
+    **empty list** is a real answer (a GM who wants a card to start bare) and is
+    stored as one, while a *missing* kind is no answer at all.
+    """
+    merged = gm_default_pins()
+    merged.update({key: value for key, value in pins.items() if isinstance(value, list)})
+    update_settings(gm_default_pins=merged)
+
+
+def clear_gm_card_pins() -> None:
+    """Forget every card's own strip, so each seeds from the defaults again.
+
+    The deliberate opposite of the rule :meth:`GMWindow._pins_for` normally keeps
+    — a card's strip is the GM's once the card exists — so it happens only when a
+    GM asks for it outright, from the GM Mode settings page.
+    """
+    update_settings(gm_pins={})
 
 
 def relay_url() -> str:

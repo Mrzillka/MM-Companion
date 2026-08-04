@@ -332,6 +332,18 @@ def build(target: str):
         for name, rank in (("Bank Robber", 4), ("Ogre", 9)):
             npc = quick_npc(data, name=name, attack=rank, effect=rank, defence=rank, toughness=rank)
             win._register_npc(library.save_character(npc, directory=win._npc_dir()))
+    elif target == "gm-settings":
+        # The GM Mode settings page, reached the way a GM reaches it: build the GM
+        # window and fire its own Settings ▸ Preferences… handler, so the shot is of
+        # the window that opens rather than one constructed to look like it — which
+        # is what proves the menu lands on this page and not on Themes.
+        from mm_companion.ui.gm_window import GMWindow
+
+        gm = GMWindow(bind="127.0.0.1")
+        gm.show()
+        gm._open_settings()
+        win = gm._settings_window
+        win._gm_owner = gm  # keep the GM window alive for the shot
     elif target == "npc":
         from mm_companion.ui.npc_window import NPCWindow
 
@@ -372,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
             "settings",
             "settings-demo",
             "gm",
+            "gm-settings",
             "npc",
             "all",
         ],

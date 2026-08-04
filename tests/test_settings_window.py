@@ -81,7 +81,20 @@ def custom_theme(page: ThemePage, name: str = "Mine") -> str:
 def test_the_nav_lists_the_pages_and_drives_the_stack(window) -> None:
     labels = [window._nav.item(i).text() for i in range(window._nav.count())]
 
-    assert labels == ["Themes"]
+    assert labels == ["Themes", "GM Mode"]
+    assert window._stack.currentWidget() is window._pages[0]
+
+
+def test_a_caller_can_say_which_page_to_open_on(qapp) -> None:
+    """The GM window opens its own page, not the one the sheet cares about."""
+    window = SettingsWindow(page="GM Mode")
+
+    assert window._stack.currentWidget().title == "GM Mode"
+
+
+def test_an_unknown_page_name_falls_back_to_the_first(qapp) -> None:
+    window = SettingsWindow(page="Nonexistent")
+
     assert window._stack.currentWidget() is window._pages[0]
 
 

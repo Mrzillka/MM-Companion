@@ -1,9 +1,13 @@
 """The Settings window: a list of pages on the left, the current one on the right.
 
-One page so far. The window knows nothing about what any of them configure — it
-picks names out of :data:`PAGES`, shows one at a time, and on close asks each in
-turn whether it has unsaved work and whether what it did needs a relaunch. Adding
-a second area of settings is an entry in that tuple.
+The window knows nothing about what any of them configure — it picks names out of
+:data:`PAGES`, shows one at a time, and on close asks each in turn whether it has
+unsaved work and whether what it did needs a relaunch. Adding another area of
+settings is an entry in that tuple.
+
+Which page it opens *on* is the caller's to say (``page=``), so a window that has
+its own page — the GM window — lands there rather than making its way past the
+one the sheet cares about.
 
 Non-modal and opened with ``.show()``, like the Mod Manager: changing the look
 while a character sheet is open beside it is the point, not an accident.
@@ -26,11 +30,12 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui import theme
 from mm_companion.ui.app_restart import restart_app
+from mm_companion.ui.settings.gm_page import GMPage
 from mm_companion.ui.settings.page import SettingsPage
 from mm_companion.ui.settings.theme_page import ThemePage
 
 #: Every page the window offers, in the order the left-hand list shows them.
-PAGES: tuple[type[SettingsPage], ...] = (ThemePage,)
+PAGES: tuple[type[SettingsPage], ...] = (ThemePage, GMPage)
 
 #: The window's own size. Not a token: a preset says how things *look*, not how
 #: big a utility window opens, and the Mod Manager sets its own the same way.
@@ -40,7 +45,7 @@ DEFAULT_SIZE = (900, 640)
 class SettingsWindow(QMainWindow):
     """Application settings, one page per area."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, page: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.resize(*DEFAULT_SIZE)
@@ -55,18 +60,26 @@ class SettingsWindow(QMainWindow):
         self._stack = QStackedWidget()
         self._pages: list[SettingsPage] = []
         for page_class in PAGES:
-            page = page_class(self)
-            self._pages.append(page)
-            self._nav.addItem(page.title)
-            self._stack.addWidget(page)
+            built = page_class(self)
+            self._pages.append(built)
+            self._nav.addItem(built.title)
+            self._stack.addWidget(built)
         self._nav.currentRowChanged.connect(self._stack.setCurrentIndex)
-        self._nav.setCurrentRow(0)
+        self._nav.setCurrentRow(self._row_for(page))
 
         body.addWidget(self._nav)
         body.addWidget(self._stack, stretch=1)
         outer.addLayout(body)
         outer.addLayout(self._build_bottom_bar())
         self.setCentralWidget(central)
+
+    def _row_for(self, page: str) -> int:
+        """Which nav row *page* names, by :attr:`SettingsPage.title`.
+
+        An unknown name (or none) falls back to the first page rather than
+        raising: this is where a window opens, not a promise it made.
+        """
+        return next((i for i, p in enumerate(self._pages) if p.title == page), 0)
 
     def _build_bottom_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()

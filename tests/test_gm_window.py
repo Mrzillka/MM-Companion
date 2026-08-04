@@ -1760,6 +1760,60 @@ def test_a_strip_the_gm_emptied_stays_empty(window: GMWindow) -> None:
         relaunched.bridge.stop()
 
 
+def test_the_gm_reaches_the_settings_window_from_its_own_menu(window: GMWindow) -> None:
+    """And lands on the GM page, not the one the character sheet cares about."""
+    menus = [a.text() for a in window.menuBar().actions()]
+    assert "&Settings" in menus
+
+    window._open_settings()
+    try:
+        assert window._settings_window._stack.currentWidget().title == "GM Mode"
+    finally:
+        window._settings_window.close()
+
+
+def test_applying_the_defaults_reseeds_a_card_the_gm_had_tailored(window: GMWindow) -> None:
+    """The deliberate exception to "a card's strip is its own once it exists"."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    for ref in list(card.pins.pins):
+        card.pins.remove_ref(ref)
+    assert card.pins.chip_texts() == []
+
+    window.reseed_pins_from_defaults()
+
+    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage +6"]
+    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 4
+
+
+def test_reseeding_restates_an_open_picker(window: GMWindow) -> None:
+    """Or its menu offers to pin something the card already has back."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card.pins.remove_pin(chip_index(card, "ATK"))
+    window._open_npc_pin_picker(name)
+    picker = window._pin_pickers["npc:" + name]
+    assert picker.action_text(PinRef("ability", "ATK")) == "Pin"
+
+    window.reseed_pins_from_defaults()
+
+    assert picker.action_text(PinRef("ability", "ATK")) == "Unpin"
+    picker.close()
+
+
+def test_reseeding_forgets_the_cards_that_are_not_on_the_board(window: GMWindow) -> None:
+    """So they seed from the *new* defaults when they are next seen."""
+    name = quick_npc_file(window)
+    npc_cards(window)[0].pins.remove_pin(0)
+    window._remove_npc(name)
+    assert "npc:" + name in window._pins
+
+    window.reseed_pins_from_defaults()
+
+    assert "npc:" + name not in window._pins
+    assert "npc:" + name not in storage.load_settings()["gm_pins"]
+
+
 def test_the_picker_pins_onto_the_card_behind_it(window: GMWindow) -> None:
     name = quick_npc_file(window)
     (card,) = npc_cards(window)
@@ -1863,9 +1917,9 @@ def test_a_pin_to_a_power_the_npc_lost_still_shows_and_can_be_taken_off(
     window._refresh_npcs()
 
     (card,) = npc_cards(window)
-    # Captioned "Power" rather than by the name it had — there is nothing left to
-    # read the name off.
-    index = chip_index(card, "Power")
+    # Captioned by what the pin *says* rather than by the name it had — there is
+    # nothing left to read the name off.
+    index = chip_index(card, "First Damage")
     assert card.pins.chip_texts()[index].endswith("—")
     card.pins.remove_pin(index)
     assert len(card.pins.chip_texts()) == 3

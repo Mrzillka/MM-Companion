@@ -288,8 +288,8 @@ Which of the two a row offers comes from `stat_table.PinMenuState`, fed by
 `CharacterSheet.set_pinned`, pushed from the card on open *and* on every change so
 a sheet left open never offers to pin what is already there.
 
-Strips persist per card in the `gm_pins` setting, seeded from `gm_default_pins`
-(the key a preferences page will edit). Three details:
+Strips persist per card in the `gm_pins` setting, seeded from `gm_default_pins`.
+Three details:
 
 - The NPC damage default is **late-bound** — "the first Damage power", resolving to
   the **attack roll** it makes, since the save it forces belongs to the target —
@@ -300,6 +300,28 @@ Strips persist per card in the `gm_pins` setting, seeded from `gm_default_pins`
   `load_settings()`: that returns the settings file verbatim and does not merge
   `DEFAULT_SETTINGS`, so a key added after a workspace was created reads back as
   `None` — which is exactly how this shipped once with every strip empty.
+
+### Editing the defaults
+
+The GM window has a **Settings** menu of its own, opening the app's Settings window
+on its **GM Mode** page (`ui/settings/gm_page.py`) — two reorderable lists, one per
+card kind, over `gm_default_pins`.
+
+*When* a default is written down is the whole shape of that page. It predates the
+card it will seed, so it cannot name that character's things: a `Power.id` belongs
+to one character, and the only power a default may name is the late-bound
+`select="first_damage"`. So the page opens the **same** `PinPickerDialog` the cards
+do, with a `None` character putting it in defaults mode — listing
+`default_pin_choices(game_data)` instead of `available_pins(char, …)` and hiding the
+"Now" column, since there is nobody to read a value off.
+
+Editing the defaults deliberately does **not** reach the board: `_pins_for` wrote
+each card's strip into `gm_pins` the first time it saw the card, precisely so a
+later change here cannot rearrange what is in play. **Apply to cards on the board**
+is the confirmed override — `storage.clear_gm_card_pins()`, then
+`GMWindow.reseed_pins_from_defaults()` on every open GM window. That order matters:
+a window still holding its old strips in memory writes them straight back out on its
+next edit and undoes the clear.
 
 ### Snapshot sync
 

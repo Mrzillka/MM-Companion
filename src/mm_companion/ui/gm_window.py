@@ -214,6 +214,8 @@ class GMWindow(QMainWindow):
         # into their row menus. A list per card: an NPC's sheet and a player's are
         # both singular in practice, but nothing here needs to insist on it.
         self._pin_sheets: dict[str, list] = {}
+        # The Settings window, kept referenced while open like the sheets above.
+        self._settings_window: QWidget | None = None
         # The manual (un-rolled) order of the cast, by file name. Rolled NPCs sort
         # above this by initiative; dragging a card sets its place here.
         self._manual_order: list[str] = []
@@ -301,11 +303,14 @@ class GMWindow(QMainWindow):
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extra + 2)
 
     def _build_menu(self) -> None:
-        """A Session menu (copy the join code) and a View menu (show/hide blocks)."""
+        """Session (copy the join code), Settings, and View (show/hide blocks)."""
         session_menu = self.menuBar().addMenu("&Session")
         self._copy_code_action = session_menu.addAction("Copy join code")
         self._copy_code_action.setEnabled(False)
         self._copy_code_action.triggered.connect(self._copy_code)
+
+        settings_menu = self.menuBar().addMenu("&Settings")
+        settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
 
         view_menu = self.menuBar().addMenu("&View")
         self._block_actions: dict[str, object] = {}
@@ -1079,6 +1084,34 @@ class GMWindow(QMainWindow):
             self._persist_pins()
         return self._pins[key]
 
+    def reseed_pins_from_defaults(self) -> None:
+        """Throw every card's own strip away and seed them all from the defaults.
+
+        The deliberate exception to the rule :meth:`_pins_for` keeps — a card's
+        strip is the GM's once the card exists — so nothing calls this but the GM
+        Mode settings page, on an explicit, confirmed ask.
+
+        Cleared first, then re-seeded card by card: what that drops is the entries
+        for cards *not* on the board (a player who left, an NPC file not loaded),
+        which is the point. Those are gone from the settings file, so they seed
+        from the new defaults the next time they are seen.
+        """
+        defaults = storage.gm_default_pins()
+        self._pins.clear()
+        cards = [(_player_key(pid), "player", card) for pid, card in self._cards.items()]
+        cards += [
+            (_npc_key(name), "npc", entry.card)
+            for name, entry in self._npc_state.items()
+            if entry.card is not None
+        ]
+        for card_key, kind, card in cards:
+            refs = default_pins(kind, defaults)
+            # set_pins is silent by design (a load, not an edit), so the strip is
+            # stored explicitly — which is also what restates an open picker or sheet.
+            card.pins.set_pins(refs)
+            self._store_pins(card_key, refs)
+        self._persist_pins()
+
     def _store_pins(self, card_key: str, refs: object) -> None:
         """A card's strip was edited — remember it, and restate it everywhere.
 
@@ -1604,6 +1637,20 @@ class GMWindow(QMainWindow):
         if clipboard is not None:
             clipboard.setText(self._join_code)
         self._show_notice("Join code copied — send it to your players.", theme.color("accent"))
+
+    def _open_settings(self) -> None:
+        """Open the Settings window on the GM page (Settings ▸ Preferences).
+
+        The same window the character sheet opens, landing on the page this window
+        is the one that cares about. Imported here rather than at module scope, the
+        way the sheet's opener does it, and kept referenced so it is not collected
+        the moment this method returns.
+        """
+        from mm_companion.ui.settings import GMPage, SettingsWindow
+
+        window = SettingsWindow(page=GMPage.title)
+        self._settings_window = window
+        window.show()
 
     # -- lifecycle ---------------------------------------------------------
 

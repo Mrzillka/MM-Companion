@@ -41,7 +41,13 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import PinnedValue, PinRef, available_pins
+from mm_companion.core.rules import (
+    PinGroup,
+    PinnedValue,
+    PinRef,
+    available_pins,
+    default_pin_choices,
+)
 from mm_companion.ui.widgets import muted_style
 
 #: Where a row keeps the :class:`PinRef` it would pin.
@@ -61,6 +67,12 @@ class PinPickerDialog(QDialog):
     done without the owner having to push it back — and
     :meth:`set_pinned` is how the card corrects it when the strip changes from the
     other end.
+
+    A ``None`` *character* puts it in **defaults** mode, which is what the GM Mode
+    settings page opens: it lists
+    :func:`~mm_companion.core.rules.pins.default_pin_choices` — the pins a strip
+    can name before there is anyone to read them off — and drops the "Now" column,
+    which would otherwise be a blank beside every row.
     """
 
     #: The :class:`PinRef` for a row the GM chose.
@@ -70,7 +82,7 @@ class PinPickerDialog(QDialog):
 
     def __init__(
         self,
-        character: Character,
+        character: Character | None,
         data: GameData,
         pinned: list[PinRef] | None = None,
         parent: QWidget | None = None,
@@ -105,6 +117,7 @@ class PinPickerDialog(QDialog):
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_row_menu)
         self._tree.itemDoubleClicked.connect(lambda item, _c: self._toggle(item))
+        self._tree.setColumnHidden(1, character is None)
         layout.addWidget(self._tree, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -118,7 +131,7 @@ class PinPickerDialog(QDialog):
     def reload(self) -> None:
         """Rebuild the list from the character, keeping the filter in place."""
         self._tree.clear()
-        for group in available_pins(self._character, self._data, with_conditions=False):
+        for group in self._groups():
             parent = QTreeWidgetItem([group.title, ""])
             parent.setFlags(Qt.ItemFlag.ItemIsEnabled)  # a heading, not a choice
             self._tree.addTopLevelItem(parent)
@@ -127,6 +140,12 @@ class PinPickerDialog(QDialog):
             parent.setExpanded(True)
         self._tree.resizeColumnToContents(0)
         self._apply_filter(self._filter.text())
+
+    def _groups(self) -> list[PinGroup]:
+        """What this picker is browsing — a character, or what a default may name."""
+        if self._character is None:
+            return default_pin_choices(self._data)
+        return available_pins(self._character, self._data, with_conditions=False)
 
     def _row(self, value: PinnedValue) -> QTreeWidgetItem:
         """One pinnable value. Its roll's prose goes in the tooltip, which is how

@@ -734,8 +734,9 @@ The shape:
   card.
 - Strips persist per card in `gm_pins`, seeded from `gm_default_pins` — the
   settings key a preferences page will edit, and the reason the NPC damage
-  default is *late-bound* ("the first Damage power"), since the defaults are
-  written long before the NPC is. Read it through **`storage.gm_default_pins()`**,
+  default is *late-bound* ("the first Damage power", resolving to the **attack
+  roll** it makes — the save it forces belongs to the target), since the defaults
+  are written long before the NPC is. Read it through **`storage.gm_default_pins()`**,
   never off `load_settings()`: that returns the settings file *verbatim* and does
   not merge `DEFAULT_SETTINGS`, so any key added after a workspace was created
   reads back as `None`. Every setting in that module has an accessor or an inline

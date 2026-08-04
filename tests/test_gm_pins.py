@@ -145,7 +145,10 @@ def test_a_power_pin_reads_an_attack_as_a_bonus_and_a_save_as_a_dc(
 def test_the_first_damage_default_finds_the_damage_power(goon: Character, data: GameData) -> None:
     value = resolve_pin(goon, data, PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE))
 
-    assert (value.label, value.value) == ("Damage", "DC 16")
+    # The *attack roll*, which is the chip a GM clicks when the mook swings —
+    # not the save it forces, which is the target's to roll.
+    assert (value.label, value.value) == ("Damage", "+6")
+    assert value.spec is not None and value.spec.kind == "power-check"
     # Resolving pins it down: the returned ref names the power outright, so a
     # picker can tell "already pinned" from "not yet".
     assert value.ref.key == next(p for p in goon.powers if p.name == "Damage").id
@@ -157,13 +160,13 @@ def test_the_first_damage_default_follows_the_powers_the_npc_actually_has(
 ) -> None:
     """Late binding earns its keep here: the default was written before this NPC."""
     weak, strong = (
-        quick_npc(data, name=n, attack=4, effect=rank, defence=4, toughness=4)
-        for n, rank in (("Weak", 4), ("Strong", 12))
+        quick_npc(data, name=n, attack=attack, effect=4, defence=4, toughness=4)
+        for n, attack in (("Weak", 3), ("Strong", 11))
     )
     ref = PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)
 
-    assert resolve_pin(weak, data, ref).value == "DC 14"
-    assert resolve_pin(strong, data, ref).value == "DC 22"
+    assert resolve_pin(weak, data, ref).value == "+3"
+    assert resolve_pin(strong, data, ref).value == "+11"
 
 
 def test_the_npc_defaults_are_the_three_a_gm_asked_for(goon: Character, data: GameData) -> None:
@@ -174,7 +177,7 @@ def test_the_npc_defaults_are_the_three_a_gm_asked_for(goon: Character, data: Ga
         ("DEF", "6"),
         ("Toughness", "6"),
         ("ATK", "+6"),
-        ("Damage", "DC 16"),
+        ("Damage", "+6"),
     ]
 
 

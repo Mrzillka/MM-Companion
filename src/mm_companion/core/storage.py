@@ -125,7 +125,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # The NPC damage entry is deliberately *late-bound* — the defaults are written
     # down long before the NPC they will describe exists, so "the first Damage
     # power" is the only way to say it, and it stays true when the GM edits which
-    # power that is.
+    # power that is. It resolves to the **attack roll** that power makes: the chip
+    # a GM clicks when the mook swings. The save it forces is the target's to roll
+    # and arrives on their side as the attack's follow-up.
     #
     # Defence and Toughness lead both lists because they are the pair a GM reads
     # together — how hard to hit, how hard to hurt.

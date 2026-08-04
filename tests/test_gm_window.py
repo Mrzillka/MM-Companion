@@ -1616,7 +1616,7 @@ def test_a_new_npc_card_starts_with_the_default_strip(window: GMWindow) -> None:
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage DC 16"]
+    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage +6"]
 
 
 def test_a_new_player_card_starts_with_the_default_strip(
@@ -1677,15 +1677,21 @@ def test_a_forced_save_chip_is_read_rather_than_rolled(window: GMWindow) -> None
 
     It already reaches the person who does as the follow-up chip on the attack's
     history card, so a rollable chip here would throw a second, meaningless die.
+    The *attack* on the same power stays rollable — that one is the wielder's, and
+    is what the NPC default pins.
     """
-    quick_npc_file(window)
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    power_id = card.character.powers[0].id
+    window._store_pins("npc:" + name, [PinRef("power", power_id, 0), PinRef("power", power_id, 1)])
+    window._refresh_npcs()
     (card,) = npc_cards(window)
 
-    damage = card.pins._chips[chip_index(card, "Damage")]
+    attack, save = card.pins._chips
 
-    assert damage.text() == "Damage DC 16"
-    assert damage.rollable is False
-    assert damage.value.missing is False  # read-only, not broken
+    assert (attack.text(), attack.rollable) == ("Damage +6", True)
+    assert (save.text(), save.rollable) == ("Damage DC 16", False)
+    assert save.value.missing is False  # read-only, not broken
 
 
 def test_a_chip_with_nothing_to_roll_ignores_a_click(window: GMWindow) -> None:
@@ -1706,7 +1712,7 @@ def test_a_strip_can_be_reordered_and_the_order_persists(window: GMWindow) -> No
 
     card.pins.move_pin(chip_index(card, "Damage"), 0)
 
-    assert card.pins.chip_texts()[0] == "Damage DC 16"
+    assert card.pins.chip_texts()[0] == "Damage +6"
     stored = storage.load_settings()["gm_pins"]["npc:" + name]
     assert [entry["kind"] for entry in stored] == [
         "power",
@@ -1716,7 +1722,7 @@ def test_a_strip_can_be_reordered_and_the_order_persists(window: GMWindow) -> No
     ]
     # And it survives the wholesale card rebuild every cast change does.
     window._refresh_npcs()
-    assert npc_cards(window)[0].pins.chip_texts()[0] == "Damage DC 16"
+    assert npc_cards(window)[0].pins.chip_texts()[0] == "Damage +6"
 
 
 def test_a_chip_can_be_removed(window: GMWindow) -> None:
@@ -1725,7 +1731,7 @@ def test_a_chip_can_be_removed(window: GMWindow) -> None:
 
     card.pins.remove_pin(chip_index(card, "ATK"))
 
-    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "Damage DC 16"]
+    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "Damage +6"]
     assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 3
 
 
@@ -1787,7 +1793,7 @@ def test_a_copied_npc_inherits_the_strip_it_was_copied_from(window: GMWindow) ->
     window._copy_npc(name)
 
     copy = next(c for c in npc_cards(window) if c.display_name() == "Goon-2")
-    assert copy.pins.chip_texts()[0] == "Damage DC 16"
+    assert copy.pins.chip_texts()[0] == "Damage +6"
 
 
 def test_deleting_an_npc_forgets_its_pins_but_removing_it_does_not(
@@ -1899,7 +1905,7 @@ def test_a_card_on_an_older_workspace_still_gets_its_default_strip(
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage DC 16"]
+    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage +6"]
 
 
 def test_the_picker_unpins_what_is_already_on_the_card(window: GMWindow) -> None:

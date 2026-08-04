@@ -50,6 +50,7 @@ from .derived import (
     skill_total,
 )
 from .rolls import (
+    KIND_POWER_CHECK,
     KIND_POWER_SAVE,
     RollSpec,
     ability_roll,
@@ -85,8 +86,8 @@ PIN_KINDS = (
 )
 
 #: A late-bound power pin: whichever power carries a Damage effect first, and the
-#: save that effect forces. What an NPC card starts with, since the defaults are
-#: written before the NPC is.
+#: roll its wielder makes with it. What an NPC card starts with, since the
+#: defaults are written before the NPC is.
 SELECT_FIRST_DAMAGE = "first_damage"
 
 #: Shown in place of a number a pin can no longer reach.
@@ -386,16 +387,20 @@ def _locate_power(char: Character, game_data: GameData, ref: PinRef) -> tuple[Po
 
 
 def _first_damage_roll(char: Character, game_data: GameData) -> tuple[Power, int] | None:
-    """The first Damage power and the index of the save it forces.
+    """The first Damage power and the index of the roll its wielder makes.
 
-    The *save*, not the attack check, because "how hard does it hit" is the
-    question a GM asks of a mook — the attack bonus is a separate pin.
+    The **attack check**, not the save it forces: this is the chip a GM clicks
+    when the mook swings, and the save is the target's to roll. An auto-hit
+    Damage (Perception range, say) has no check at all, and there the save is the
+    only thing left to show — better a difficulty the GM can read than a dash.
     """
     for power in leaf_powers(char.powers):
         if not any(_is_damage(e) for e in power.effects):
             continue
         specs = power_rolls(power, char, game_data)
-        index = next((i for i, s in enumerate(specs) if s.kind == KIND_POWER_SAVE), None)
+        index = next((i for i, s in enumerate(specs) if s.kind == KIND_POWER_CHECK), None)
+        if index is None:
+            index = next((i for i, s in enumerate(specs) if s.kind == KIND_POWER_SAVE), None)
         if index is not None:
             return power, index
     return None

@@ -60,6 +60,12 @@ if TYPE_CHECKING:  # the board is the canvas's *view* for pinned blocks, not a d
 # an older version is rejected and the default applies.
 SCHEMA_VERSION = 6
 
+#: Whether a block popped out of the app stays above other applications unless
+#: told otherwise. It does: a floated block's whole purpose is to be read beside
+#: somebody else's window, and one that sinks behind that window the moment it is
+#: clicked is a block nobody can use.
+DEFAULT_ON_TOP = True
+
 
 @dataclass(frozen=True)
 class DropSlot:
@@ -254,7 +260,12 @@ class BlockCanvas(QWidget):
         # block key, rather than on the window: dragging a block out and docking it
         # back destroys and rebuilds the window, so anything held on the window
         # itself is lost the first time the user moves it.
-        self._on_top: set[str] = set()
+        #
+        # A *mapping* and not a set, because absence has to mean "never asked"
+        # rather than "no": a block is popped out precisely to sit beside somebody
+        # else's window, so on top is the useful default (DEFAULT_ON_TOP) and only
+        # an explicit choice can say otherwise. See :meth:`_wants_on_top`.
+        self._on_top: dict[str, bool] = {}
         # Whether the floated windows are currently stood down (compact mode).
         self._windows_suspended = False
         self._rows: list[list[str]] = []
@@ -525,13 +536,18 @@ class BlockCanvas(QWidget):
 
         ``on_top`` is an *optional* addition read tolerantly on the way back in, so
         it needed no schema bump and a layout saved without it still restores — the
-        same terms ``hidden_anchors`` joined on.
+        same terms ``hidden_anchors`` joined on. It is written **both ways**, not
+        only when true: absence means the default, and the default is on, so a
+        block deliberately let fall behind has to say so or it comes back on top.
         """
         geo = self._windows[key].geometry()
-        entry = {"x": geo.x(), "y": geo.y(), "w": geo.width(), "h": geo.height()}
-        if key in self._on_top:
-            entry["on_top"] = True
-        return entry
+        return {
+            "x": geo.x(),
+            "y": geo.y(),
+            "w": geo.width(),
+            "h": geo.height(),
+            "on_top": self._wants_on_top(key),
+        }
 
     def apply_arrangement(self, model: dict) -> bool:
         """Replace the arrangement with *model*; returns False (leaving the current
@@ -706,9 +722,10 @@ class BlockCanvas(QWidget):
         self._detach(key)
         self._hidden.discard(key)
 
+        on_top = self._wants_on_top(key)
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
-        frame.title_bar.set_floating(True, on_top=key in self._on_top)
+        frame.title_bar.set_floating(True, on_top=on_top)
         frame.show()
         self._apply_window_min_width(window, frame)
         width = max(old_size.width(), frame.sizeHint().width(), frame.minimumWidth())
@@ -723,7 +740,7 @@ class BlockCanvas(QWidget):
         self._windows[key] = window
         # Before the first show(), which is what makes the flag free — see
         # :func:`~mm_companion.ui.frameless.apply_window_flags`.
-        window.set_on_top(key in self._on_top)
+        window.set_on_top(on_top)
         window.show()
 
         self._relayout()
@@ -753,11 +770,9 @@ class BlockCanvas(QWidget):
     def _make_floating(self, key: str, geom: dict) -> None:
         """Restore *key* as a floating window at *geom* (used by apply_arrangement)."""
         frame = self._frames[key]
-        on_top = bool(geom.get("on_top"))
-        if on_top:
-            self._on_top.add(key)
-        else:
-            self._on_top.discard(key)
+        # Absent means the default, which is on — see :meth:`_wants_on_top`.
+        on_top = bool(geom.get("on_top", DEFAULT_ON_TOP))
+        self._on_top[key] = on_top
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
         frame.title_bar.set_floating(True, on_top=on_top)
@@ -1076,17 +1091,27 @@ class BlockCanvas(QWidget):
 
     # -- floated windows -----------------------------------------------------
 
+    def _wants_on_top(self, key: str) -> bool:
+        """Whether *key* would float above other applications, asked or not.
+
+        The default is on: a block is popped out of the app to be read *beside*
+        something else, and one that immediately disappears behind the window it
+        was meant to accompany is no use. Falling behind is the exception, and
+        only :meth:`set_block_on_top` records it.
+        """
+        return self._on_top.get(key, DEFAULT_ON_TOP)
+
     def set_block_on_top(self, key: str, on_top: bool) -> None:
         """Keep floated block *key* above other applications, or let it fall behind.
 
         Remembered whether or not the block is currently floating, so popping it
         out again puts it back where the user left it — the answer is about this
         block, not about the particular window it happens to be in right now.
+        Only a decision is recorded — here, or by a restored layout that carried
+        one — which is what keeps "never asked" (and so the default) tellable
+        apart from "asked for off".
         """
-        if on_top:
-            self._on_top.add(key)
-        else:
-            self._on_top.discard(key)
+        self._on_top[key] = bool(on_top)
         window = self._windows.get(key)
         if window is not None:
             window.set_on_top(on_top)
@@ -1094,8 +1119,12 @@ class BlockCanvas(QWidget):
         self.arrangement_changed.emit()
 
     def is_block_on_top(self, key: str) -> bool:
-        """Whether floated block *key* is pinned above other applications."""
-        return key in self._on_top
+        """Whether block *key* stays above other applications while it is floated.
+
+        Answers for a docked block too — as "it would" — since the choice belongs
+        to the block rather than to any window it is in at the time.
+        """
+        return self._wants_on_top(key)
 
     def set_windows_suspended(self, suspended: bool) -> None:
         """Take the floated windows off the screen while the host is compact.
@@ -1110,7 +1139,7 @@ class BlockCanvas(QWidget):
             return
         self._windows_suspended = suspended
         for key, window in self._windows.items():
-            if key in self._on_top:
+            if self._wants_on_top(key):
                 continue
             window.setVisible(not suspended)
 

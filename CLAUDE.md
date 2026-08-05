@@ -393,20 +393,32 @@ fixes above buy is that the valve stops firing when the window had room all alon
 The pinned strip's argument taken one step further: mid-fight the only part of the app
 anyone touches is the roller, so `ui/compact.py` collapses the **whole window** to a
 small, frameless, always-on-top mini roller — the Roll box across the top, the quick
-rolls beside a smaller die, the history filling the rest. `⤡` in the **menu bar's
-right-hand corner** enters; `⤢` on the mini strip, `Esc`, or that same toggle leaves.
-- The toggle is a *widget in the corner strip*, not a menu-bar action, because it has to
-  sit **left of the connection indicator** and a corner widget is the only thing a menu
-  bar lays out right of its actions. `ui/menu_corner.py` is that strip: it orders its
-  children by an explicit **slot**, since a sheet installs the indicator before the
-  toggle and the GM window after it, and whoever arrives first must not decide the
-  layout. `window.connection_indicator` still points at the indicator itself — a later
-  `set_bridge` looks it up there and must not find a container. A window that puts
-  nothing in the corner never gets one (a GM's read-only view keeps its bare bar, and so
-  has no compact mode at all: the GM rolls from their own window).
-- The roller itself carries **no shrink button**. It had one, and it cost a row of the
-  panel's height in every window it appeared in — including the pinned strip, where
-  height is the scarce thing.
+rolls beside a smaller die, the history filling the rest. A **round `⤡` button floating
+over the roller's bottom-right corner** enters; `⤢` on the mini strip, `Esc`, or that
+same button leaves.
+- **The button rides the roller, not the menu bar.** It sat in the bar's right-hand
+  corner once and was close to invisible there — a thin grey glyph at the far end of a
+  bar nobody looks at, saying nothing about dice. So `CompactOverlayButton` floats over
+  the thing it acts on, the way a meeting app parks its controls over the video. It
+  covers a corner of one history card, which is the price and a cheap one. Three
+  consequences. It is **in no layout** — a plain child of its host, placed by hand from
+  an event filter on the host's `Resize`/`Show` and `raise_()`d, so the roller is laid
+  out as though it were not there. It is styled by a **stylesheet on the widget itself**
+  from tokens every preset defines (`accent`, `text.on-badge`, `border.card`) — Classic
+  emits no `QToolButton` rules at all, so a theme-QSS rule would exist under some presets
+  and not others, the same bargain `ui/lock.py` strikes. And **closing the Dice block
+  closes the way in**, which is honest: compact mode has nothing else to show, and
+  `enter()` already no-ops when the surface lends no roller.
+- There is **one** button, re-parented between the roller and the mini page's scroll area
+  — the same rule the roller itself follows below. Two would be two states to keep in
+  step, and the one showing the wrong glyph would be whichever was off screen. The mini
+  page hands over its *scroll area* rather than itself, so the button never lands on the
+  `QSizeGrip` that is the only way to resize a frameless window.
+- The **roll panel** carries no shrink button, and the button's host is the
+  `DiceRollerView` rather than the panel for that reason: among the roll controls it cost
+  a row of the panel's height in every window it appeared in — including the pinned
+  strip, where height is the scarce thing. Over the view it lands on the history, which
+  has room. A window's menu bar is back to holding nothing but the connection indicator.
 - **The mini roller is the roller, moved.** Nothing builds a second one: the controller
   asks its *surface* to hand the live panel and history over and gives them back on the
   way out, so a loaded spec, the quick-roll strip, a tumble in flight and — the one that
@@ -416,10 +428,14 @@ right-hand corner** enters; `⤢` on the mini strip, `Esc`, or that same toggle 
   strip and a floating window, including the rule that a widget still parented to a
   container Qt is about to free goes with it.
 - A **surface** is anything with `release_roller()` (the panel and the history widget,
-  or `None`) and `restore_roller()`. `CharacterSheet` duck-types over its blocks for it
-  like `sync_session`, so a mod's roller joins on the same terms; `GMWindow` answers for
+  or `None`), `restore_roller()`, and `compact_anchor()` (the widget the round button
+  floats over). `CharacterSheet` duck-types over its blocks for all three like
+  `sync_session`, so a mod's roller joins on the same terms; `GMWindow` answers for
   itself, since its roller is a bare `DiceRollerPanel` beside a `gm=True` history rather
-  than a `DiceRollerView`. A surface that lends nothing simply has no compact mode.
+  than a `DiceRollerView`, and its anchor is the Rolls group box. A surface that lends
+  nothing simply has no compact mode — including no button, since there is nowhere to put
+  one. Note this is now the *only* gate: a GM's read-only view of a player sheet has a
+  roller, so it has compact mode too, where the old menu-bar toggle denied it one.
 - The compact arrangement is a **third shape** beside the reflow's row and column, and
   while it is in force `sync_reflow` stands down — it is chosen, not derived from the
   room available. It is also **not only a mode**: it turned out to be a good roller in
@@ -452,7 +468,11 @@ right-hand corner** enters; `⤢` on the mini strip, `Esc`, or that same toggle 
   left on screen is precisely what compact mode was asked to clear. So the controller
   asks its surface to `suspend_windows(True)`, which hides every floated block **except
   the ones pinned on top**: keeping a block beside the mini roller is what pinning it is
-  for, and hiding it would make the pin meaningless.
+  for, and hiding it would make the pin meaningless. Since on top is now the *default*
+  for a floated block, that means compact mode leaves them alone unless the user has
+  explicitly sent one behind — which follows from the two rules and is the right reading
+  of both: a block popped out is a block wanted beside things, and `✕` is how you say
+  otherwise.
 - Persistence splits in two, and must: `compact` in settings holds the *mini* window's
   size and the always-on-top pin (read through `storage.compact_settings()`, never off
   `load_settings()`), while `saved_geometry()` hands `_persist_layout` the blob captured
@@ -594,7 +614,8 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   top* in a window — and `TitleBar.set_floating` swaps the two (checkable there,
   a plain action elsewhere; `↗` hides, since a window is already popped out).
   That is one glyph honestly read, not a pun: pinning is what it says, and what it
-  pins to is whatever the block is beside.
+  pins to is whatever the block is beside. In a window it opens **already lit** —
+  staying on top is the default, see the canvas bullet below.
 - `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
   arrangement — `_rows` (an ordered list of rows, each an ordered list of block
   keys), `_windows` (floated blocks), `_hidden` (closed blocks), and `_pinned`
@@ -610,10 +631,16 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   outcomes without synthetic mouse events). **Which floated blocks stay on top lives
   in `_on_top`, keyed by block** and not on the `BlockWindow`: dragging a block out
   and docking it back destroys and rebuilds that window, so anything held on the
-  window is lost the first time it moves. It persists in the `floating` entry as an
-  optional `on_top`, read tolerantly and so needing no `SCHEMA_VERSION` bump — the
-  `hidden_anchors` precedent. Note the asymmetry: *moving* a block keeps the choice
-  across a dock (popping it out again puts it back the way it was left), while
+  window is lost the first time it moves. **A popped-out block stays on top by
+  default** (`DEFAULT_ON_TOP`) — it was popped out to be read *beside* something, and
+  one that sinks behind that window the moment it is clicked is no use — which is why
+  `_on_top` is a `dict[str, bool]` and not a set: absence has to mean "never asked"
+  rather than "no", and only an explicit `set_block_on_top` (or a restored layout
+  carrying one) records the exception. Ask `_wants_on_top`, never `key in _on_top`. It
+  persists in the `floating` entry as `on_top`, read tolerantly and so needing no
+  `SCHEMA_VERSION` bump — the `hidden_anchors` precedent — but written **both ways**,
+  since absence now means the default. Note the asymmetry: *moving* a block keeps the
+  choice across a dock (popping it out again puts it back the way it was left), while
   *restoring a layout* is authoritative and clears it. The default arrangement is supplied by
   the sheet from the block registry's `default_rows()` (grouping descriptors by
   their default row/col): the Name & Details block beside the Character Image, then

@@ -294,9 +294,9 @@ def test_escape_leaves_compact_and_does_nothing_otherwise(window: MainWindow) ->
     assert not window._compact._escape.isEnabled()
 
 
-def test_the_corner_glyph_follows_the_mode_however_it_changed(window: MainWindow) -> None:
+def test_the_glyph_follows_the_mode_however_it_changed(window: MainWindow) -> None:
     """Driven by the controller, so Escape and the mini strip keep the state honest."""
-    button = window._compact_button
+    button = window._compact.button
     assert not button.isChecked()
 
     button.click()
@@ -312,34 +312,67 @@ def test_the_corner_glyph_follows_the_mode_however_it_changed(window: MainWindow
     assert button.text() == "⤡"
 
 
-def test_the_roller_carries_no_shrink_button_of_its_own(window: MainWindow) -> None:
-    """The way in is the menu-bar corner, and only that.
+def test_the_button_floats_over_the_roller_and_moves_with_it(window: MainWindow) -> None:
+    """One button, re-parented — the same rule the roller itself follows.
 
-    A button on the Roll box cost a row of the panel's height in every window it
-    appeared in — including the pinned strip, where height is the scarce thing.
+    Two buttons would be two states to keep in step, and the one showing the
+    wrong glyph would be whichever happened to be off screen.
+    """
+    button = window._compact.button
+    view = window.sheet.dice.view
+    assert button.parentWidget() is view
+
+    window._compact.enter()
+
+    assert button is window._compact.button
+    assert button.parentWidget() is window._compact.page.overlay_host
+
+    window._compact.leave()
+
+    assert button.parentWidget() is view
+
+
+def test_the_button_sits_in_the_hosts_bottom_right_corner(
+    qapp: QApplication, window: MainWindow
+) -> None:
+    """In no layout at all: it is placed by hand and raised over the roller."""
+    _on_screen(qapp, window)
+    button = window._compact.button
+    host = window.sheet.dice.view
+
+    assert host.rect().contains(button.geometry())
+    # Nearer the far corner than the near one, on both axes.
+    assert button.geometry().center().x() > host.rect().center().x()
+    assert button.geometry().center().y() > host.rect().center().y()
+
+
+def test_the_gm_windows_button_floats_over_its_rolls_block(gm: GMWindow) -> None:
+    """The GM's roller is a bare panel beside a history, so the window answers itself."""
+    assert gm._compact.button.parentWidget() is gm._rolls_box
+
+
+def test_the_roll_panel_carries_no_shrink_button_of_its_own(window: MainWindow) -> None:
+    """The button belongs to the *view*, never to the Roll box.
+
+    A button among the roll controls cost a row of the panel's height in every
+    window it appeared in — including the pinned strip, where height is the
+    scarce thing. Over the view it lands on the history, which has room.
     """
     panel = window.sheet.dice.panel
 
-    assert not hasattr(panel, "_compact_button")
+    assert window._compact.button.parentWidget() is not panel
     assert not hasattr(panel, "compactRequested")
     assert not hasattr(window.sheet.dice, "compactRequested")
     assert not hasattr(window.sheet, "compactRequested")
 
 
-def test_the_toggle_sits_left_of_the_connection_indicator(window: MainWindow) -> None:
-    """Whichever order the two were installed in — the strip orders by slot."""
-    corner = window.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
-    layout = corner.layout()
-
-    assert layout.indexOf(window._compact_button) < layout.indexOf(window.connection_indicator)
-
-
-def test_the_gm_window_orders_its_corner_the_same_way(gm: GMWindow) -> None:
-    """And it installs the two the other way round, which is the point of the slots."""
-    corner = gm.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
-    layout = corner.layout()
-
-    assert layout.indexOf(gm._compact_button) < layout.indexOf(gm.connection_indicator)
+def test_the_menu_bar_carries_no_compact_toggle(window: MainWindow, gm: GMWindow) -> None:
+    """It was almost invisible there, and nothing about it said "dice roller"."""
+    for win in (window, gm):
+        assert not hasattr(win, "_compact_button")
+        # The corner is the connection indicator itself again, with no strip
+        # around it — there is nothing left to share it with.
+        assert win.menuBar().cornerWidget(Qt.Corner.TopRightCorner) is win.connection_indicator
 
 
 # -- the roller's layout as a preference -------------------------------------
@@ -398,23 +431,26 @@ def test_the_general_page_applies_to_open_windows_without_a_relaunch(
 # -- floated blocks ----------------------------------------------------------
 
 
-def test_a_floated_block_is_frameless_and_pins_itself_on_top(window: MainWindow) -> None:
+def test_a_floated_block_comes_out_frameless_and_already_on_top(window: MainWindow) -> None:
+    """On top without being asked: a block is popped out to sit *beside* something."""
     sheet = window.sheet
     sheet.float_block("abilities")
     floated = sheet.canvas.block_window("abilities")
     bar = sheet.block_frame("abilities").title_bar
 
     assert floated.windowFlags() & Qt.WindowType.FramelessWindowHint
-    assert not (floated.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
-    # The 🖈 means "stay on top" in a window of its own, and says so.
+    assert floated.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert sheet.canvas.is_block_on_top("abilities")
+    # The 🖈 means "stay on top" in a window of its own, and starts lit.
     assert bar._pin_button.isCheckable()
+    assert bar._pin_button.isChecked()
     assert not bar._float_button.isVisibleTo(bar)  # already popped out
 
-    bar._pin_button.setChecked(True)
+    bar._pin_button.setChecked(False)
     bar._pin_clicked()
 
-    assert sheet.canvas.is_block_on_top("abilities")
-    assert floated.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert not sheet.canvas.is_block_on_top("abilities")
+    assert not (floated.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
 
 
 def test_the_pin_goes_back_to_meaning_the_strip_once_docked(window: MainWindow) -> None:
@@ -429,35 +465,40 @@ def test_the_pin_goes_back_to_meaning_the_strip_once_docked(window: MainWindow) 
     assert bar._float_button.isVisibleTo(bar)
 
 
-def test_the_on_top_choice_survives_docking_and_floating_again(window: MainWindow) -> None:
-    """It is remembered by *block*, not by the window — a drag destroys the window."""
+def test_letting_a_block_fall_behind_survives_docking_and_floating_again(
+    window: MainWindow,
+) -> None:
+    """The exception is remembered by *block*, not by the window — a drag destroys that."""
     sheet = window.sheet
     sheet.float_block("abilities")
-    sheet.canvas.set_block_on_top("abilities", True)
+    sheet.canvas.set_block_on_top("abilities", False)
 
     sheet.dock_block("abilities", 0, 0)
     sheet.float_block("abilities")
 
-    assert sheet.canvas.is_block_on_top("abilities")
-    assert sheet.canvas.block_window("abilities").windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert not sheet.canvas.is_block_on_top("abilities")
+    flags = sheet.canvas.block_window("abilities").windowFlags()
+    assert not (flags & Qt.WindowType.WindowStaysOnTopHint)
 
 
-def test_the_arrangement_carries_the_on_top_flag(window: MainWindow) -> None:
+def test_the_arrangement_carries_the_on_top_flag_both_ways(window: MainWindow) -> None:
+    """Written even when false: absence now means the default, and the default is on."""
     sheet = window.sheet
     sheet.float_block("abilities")
-    sheet.canvas.set_block_on_top("abilities", True)
+    assert sheet.arrangement()["floating"]["abilities"]["on_top"] is True
 
+    sheet.canvas.set_block_on_top("abilities", False)
     saved = sheet.arrangement()
-    assert saved["floating"]["abilities"]["on_top"] is True
+    assert saved["floating"]["abilities"]["on_top"] is False
 
     sheet.reset_layout()
-    assert not sheet.canvas.is_block_on_top("abilities")
+    assert sheet.canvas.is_block_on_top("abilities")  # cleared back to the default
 
     assert sheet.canvas.apply_arrangement(saved)
-    assert sheet.canvas.is_block_on_top("abilities")
+    assert not sheet.canvas.is_block_on_top("abilities")
 
 
-def test_an_old_layout_without_the_flag_still_restores(window: MainWindow) -> None:
+def test_a_layout_saved_without_the_flag_restores_on_top(window: MainWindow) -> None:
     """Read tolerantly, so it needed no schema bump — the hidden_anchors precedent."""
     sheet = window.sheet
     sheet.float_block("abilities")
@@ -465,7 +506,7 @@ def test_an_old_layout_without_the_flag_still_restores(window: MainWindow) -> No
     saved["floating"]["abilities"].pop("on_top", None)
 
     assert sheet.canvas.apply_arrangement(saved)
-    assert not sheet.canvas.is_block_on_top("abilities")
+    assert sheet.canvas.is_block_on_top("abilities")
 
 
 def test_compact_clears_the_loose_windows_but_keeps_the_pinned_one(window: MainWindow) -> None:
@@ -473,7 +514,7 @@ def test_compact_clears_the_loose_windows_but_keeps_the_pinned_one(window: MainW
     sheet = window.sheet
     sheet.float_block("abilities")
     sheet.float_block("skills")
-    sheet.canvas.set_block_on_top("skills", True)
+    sheet.canvas.set_block_on_top("abilities", False)
     loose = sheet.canvas.block_window("abilities")
     pinned = sheet.canvas.block_window("skills")
 

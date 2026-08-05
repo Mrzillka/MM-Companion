@@ -19,9 +19,8 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.compact import CompactController, compact_toggle, show_compact_state
+from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
-from mm_companion.ui.menu_corner import SLOT_COMPACT, corner_area
 
 CHARACTER_FILTER = "Character files (*.json)"
 
@@ -104,10 +103,11 @@ class MainWindow(QMainWindow):
         self._sheet.pinRequested.connect(self.pinRequested)
         self._sheet.unpinRequested.connect(self.unpinRequested)
         # Compact mode: the whole window collapsed to just the dice roller. The
-        # controller owns the mini page and borrows the roller out of the sheet
-        # when it is asked for; see :mod:`mm_companion.ui.compact`.
+        # controller owns the mini page, borrows the roller out of the sheet when
+        # it is asked for, and floats its own round shrink button over the roller
+        # — so there is nothing to add to the menu bar; see
+        # :mod:`mm_companion.ui.compact`.
         self._compact = CompactController(self, self._sheet, self._sheet)
-        self._compact.compactChanged.connect(self._show_compact_state)
         self._build_menu_bar(locked)
         # The sheet is a scrolling page in its own right (it owns its scroll area),
         # so the only thing this wrapper is for is having the compact page beside
@@ -217,8 +217,6 @@ class MainWindow(QMainWindow):
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
             install_connection_indicator(self)
 
-        self._add_compact_button()
-
         # Last on the bar, and on the bar rather than in a menu: locking is how a
         # sheet is read *and* how it is written, so it is reached constantly. An
         # action added straight to a QMenuBar with no submenu behaves as a button —
@@ -229,26 +227,6 @@ class MainWindow(QMainWindow):
         self._lock_action.toggled.connect(self._sheet.set_locked)
         self._lock_action.toggled.connect(self._show_lock_state)
         self._show_lock_state(locked)
-
-    def _add_compact_button(self) -> None:
-        """The compact-mode toggle, in the bar's right-hand corner strip.
-
-        A widget rather than a menu-bar action, because it belongs *left of* the
-        connection indicator and the corner is the only thing right of the actions
-        (see :mod:`mm_companion.ui.menu_corner`).
-        """
-        self._compact_button = compact_toggle(self._compact.toggle)
-        corner_area(self).add(self._compact_button, slot=SLOT_COMPACT)
-        self._show_compact_state(False)
-
-    def _show_compact_state(self, compact: bool) -> None:
-        """Put the current compact state on the corner glyph and its tooltip.
-
-        Driven by the controller's signal rather than by the button's own toggle,
-        so the state still tells the truth when the mode was changed some other
-        way — a double-click on the mini strip, or Escape.
-        """
-        show_compact_state(getattr(self, "_compact_button", None), compact)
 
     def _show_lock_state(self, locked: bool) -> None:
         """Put the current lock state on the bar's glyph and its tooltip."""

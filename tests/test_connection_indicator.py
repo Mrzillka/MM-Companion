@@ -32,7 +32,6 @@ from mm_companion.ui.connection_indicator import (
     TEXT_UNREACHABLE,
     ConnectionIndicator,
 )
-from mm_companion.ui.menu_corner import SLOT_INDICATOR
 
 
 @pytest.fixture(scope="module")
@@ -276,17 +275,9 @@ def test_dropping_the_bridge_goes_quiet(pair) -> None:
 
 
 def _corner_indicator(window) -> ConnectionIndicator | None:
-    """The indicator in *window*'s menu-bar corner strip, if it has one.
-
-    The corner holds a :class:`~mm_companion.ui.menu_corner.MenuCorner` now, not
-    the indicator itself — the compact-mode toggle shares that strip and has to
-    sit left of it, and a corner widget is the only thing a menu bar puts right
-    of its actions.
-    """
+    """The indicator in *window*'s menu-bar corner, if it has one."""
     corner = window.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
-    if corner is None:
-        return None
-    return corner.widget_at(SLOT_INDICATOR)
+    return corner if isinstance(corner, ConnectionIndicator) else None
 
 
 def test_the_sheet_installs_one_in_its_menu_bar_corner(qapp: QApplication) -> None:
@@ -296,8 +287,7 @@ def test_the_sheet_installs_one_in_its_menu_bar_corner(qapp: QApplication) -> No
 
     indicator = _corner_indicator(window)
     assert isinstance(indicator, ConnectionIndicator)
-    # Still stashed on the window as the indicator itself, not as the strip — a
-    # later set_bridge looks it up there.
+    # Also stashed on the window, which is where a later set_bridge looks.
     assert indicator is window.connection_indicator
     window.close()
 
@@ -308,10 +298,6 @@ def test_a_sheet_that_can_never_join_gets_no_indicator(qapp: QApplication) -> No
     Neither ever joins anything, so an indicator on them would read "Offline" for
     the whole of a perfectly healthy session the GM is hosting — the exact false
     reading this widget exists to prevent.
-
-    They differ in what else is in the corner: an NPC sheet still gets the
-    compact-mode toggle, so it *has* a corner strip with no indicator in it, while
-    a GM's read-only view has no corner at all — its bar is deliberately bare.
     """
     from mm_companion.ui.main_window import MainWindow
     from mm_companion.ui.npc_window import NPCWindow
@@ -319,8 +305,7 @@ def test_a_sheet_that_can_never_join_gets_no_indicator(qapp: QApplication) -> No
     npc = NPCWindow()
     gm_view = MainWindow(gm_view=True)
 
-    assert _corner_indicator(npc) is None
-    assert npc.menuBar().cornerWidget(Qt.Corner.TopRightCorner) is not None
+    assert npc.menuBar().cornerWidget(Qt.Corner.TopRightCorner) is None
     assert gm_view.menuBar().cornerWidget(Qt.Corner.TopRightCorner) is None
     npc.close()
     gm_view.close()

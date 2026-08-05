@@ -73,6 +73,8 @@
     "compact.height": 560,
     "compact.min-width": 200,
     "compact.min-height": 150,
+    "_compact.button": "The diameter of the round button that floats over the roller's bottom-right corner and is the only way in and out of compact mode. Big enough to be found without hunting, small enough that the slice of roll history it covers is one card's corner.",
+    "compact.button": 34,
 
     "card.margins": [8, 6, 8, 6],
     "card.margins.off": [5, 3, 5, 3],
@@ -106,6 +108,7 @@
     "size.dice-face": 40.0,
     "size.dice-face.compact": 24.0,
     "size.roll-readout": 16.0,
+    "size.compact-button": 15.0,
     "scale.inactive": 0.9
   },
 

@@ -7,8 +7,12 @@ for pinning the Dice block taken one step further: the window shrinks to a small
 always-on-top mini roller, laid out as the Roll box across the top, the quick
 rolls beside the die under it, and the history filling the rest.
 
-Three pieces, smallest first:
+Four pieces, smallest first:
 
+* :class:`CompactOverlayButton` — the round button floating over the roller's
+  bottom-right corner, which is the only way in and the only way out. It rides
+  the roller rather than the menu bar because that is the thing it acts on, and
+  because a grey glyph on a menu bar is close to invisible.
 * :class:`CompactStrip` — the mini window's own title bar. It has to exist
   because the window is **frameless** while compact: there is no OS title bar to
   drag it by, so this is the drag handle, and it carries the always-on-top pin,
@@ -43,12 +47,11 @@ the animation and the geometry.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from PySide6.QtCore import (
     QAbstractAnimation,
     QByteArray,
     QEasingCurve,
+    QEvent,
     QObject,
     QPoint,
     QPropertyAnimation,
@@ -73,64 +76,133 @@ from mm_companion.ui import theme
 from mm_companion.ui.frameless import apply_window_flags, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
 
-#: The menu-bar toggle's two faces. It rides the bar rather than a menu, beside
-#: the sheet's lock and for the same reason: shrinking to the dice roller is a
-#: play-time view switch reached constantly, not a preference — and a glyph that
-#: *shows* the current state is worth more there than a tick two clicks deep.
+#: The button's two faces.
 COMPACT_GLYPH_FULL = "⤡"
 COMPACT_GLYPH_COMPACT = "⤢"
 
 
-def compact_toggle(on_toggle: Callable[[], None]) -> QToolButton:
-    """The corner strip's compact-mode button, built the same way for both windows.
+class CompactOverlayButton(QToolButton):
+    """The round button floating over the dice roller's bottom-right corner.
 
-    A widget rather than a menu-bar action because it has to sit *left of* the
-    connection indicator, and a corner widget is the only thing a menu bar puts
-    right of its actions (see :mod:`mm_companion.ui.menu_corner`).
+    The way in and out of compact mode, and the only one. It used to be a glyph
+    in the menu bar's corner, which was a bad home twice over: nothing at the far
+    end of a bar nobody looks at says "shrink to the dice roller", and a thin
+    grey `⤡` on a menu bar is close to invisible. So it moved onto the thing it
+    acts on — a floating action button over the roll history, the way a meeting
+    app parks its controls over the video. It covers a corner of one history
+    card, which is the price and a cheap one.
 
-    Its width is pinned across both glyphs for the reason
-    :meth:`~mm_companion.ui.connection_indicator.ConnectionIndicator._reserve`
-    documents: the bar lays its corner widget out when the *bar* resizes, so
-    anything that changes size in there afterwards is clipped rather than
-    re-placed.
+    Two implementation notes worth keeping.
+
+    **It is styled by a stylesheet on the widget itself**, not by a rule in the
+    theme's application sheet, which is the same bargain :mod:`~mm_companion.ui.lock`
+    strikes and here it is forced: Classic emits no ``QToolButton`` rules at all,
+    so an app-level rule would exist under some presets and not others. Only
+    tokens *every* preset defines are used — Classic has no ``surface.*`` group.
+
+    **It is in no layout.** It is a plain child of its host, moved to the host's
+    bottom-right corner from an event filter and raised above its siblings, which
+    is what "floating" means here: the roller underneath is laid out as though
+    the button were not there.
     """
-    button = QToolButton()
-    button.setCheckable(True)
-    button.setAutoRaise(True)
-    button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.setText(COMPACT_GLYPH_FULL)
-    # Not a tab stop. It is window chrome, reached with the mouse — and on a locked
-    # sheet, whose fields shed their focus chrome, it was the first focusable thing
-    # in the window, so it opened wearing a focus ring that reads exactly like the
-    # lit "on" state a few lines below.
-    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    metrics = button.fontMetrics()
-    widest = max(
-        metrics.horizontalAdvance(glyph) for glyph in (COMPACT_GLYPH_FULL, COMPACT_GLYPH_COMPACT)
-    )
-    button.setFixedWidth(widest + 2 * int(theme.metric("space.md")))
-    # The signal carries the button's own new checked state, which is not the
-    # answer — the controller decides, and says so on compactChanged.
-    button.clicked.connect(lambda _checked=False: on_toggle())
-    return button
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._host: QWidget | None = None
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Not a tab stop. It is chrome, reached with the mouse — and on a locked
+        # sheet, whose fields shed their focus chrome, a focusable button opens
+        # wearing a focus ring that reads exactly like a lit "on" state.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        diameter = int(theme.metric("compact.button"))
+        self.setFixedSize(diameter, diameter)
+        # The glyph's size goes on the font, never in the sheet below: a
+        # stylesheet ``font-size`` outranks a widget's QFont everywhere in the app.
+        font = self.font()
+        font.setPointSizeF(theme.font_size("size.compact-button"))
+        self.setFont(font)
+        self.setStyleSheet(_overlay_style(diameter))
+        self.set_compact(False)
+
+    def attach(self, host: QWidget | None) -> None:
+        """Move the button onto *host*, or nowhere at all.
+
+        Called by the controller as the roller moves between its block and the
+        mini window — the button follows it, rather than a second one being built
+        at the other end. ``None`` parks it: a surface with no roller to sit on
+        has no compact mode either, and this is where that ends up looking like
+        nothing on screen.
+        """
+        if self._host is host:
+            return
+        if self._host is not None:
+            self._host.removeEventFilter(self)
+        self._host = host
+        self.setParent(host)
+        if host is None:
+            self.hide()
+            return
+        host.installEventFilter(self)
+        self._place()
+        self.raise_()
+        self.show()
+
+    def set_compact(self, compact: bool) -> None:
+        """Say which way the button now goes.
+
+        Driven by :attr:`CompactController.compactChanged` rather than by its own
+        click, so it still tells the truth when the mode changed some other way —
+        Escape, or a double-click on the mini window's strip.
+        """
+        self.setChecked(compact)
+        self.setText(COMPACT_GLYPH_COMPACT if compact else COMPACT_GLYPH_FULL)
+        self.setToolTip(
+            "Give the rest of the window back"
+            if compact
+            else "Shrink the window to just the dice roller, on top of everything else"
+        )
+
+    def eventFilter(self, watched: QObject, event) -> bool:
+        if watched is self._host and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        ):
+            self._place()
+            self.raise_()
+        return super().eventFilter(watched, event)
+
+    def _place(self) -> None:
+        """Sit in the host's bottom-right corner, one margin in from each edge."""
+        if self._host is None:
+            return
+        inset = int(theme.metric("space.md"))
+        rect = self._host.rect()
+        self.move(
+            rect.right() - self.width() - inset + 1,
+            rect.bottom() - self.height() - inset + 1,
+        )
 
 
-def show_compact_state(button: QToolButton | None, compact: bool) -> None:
-    """Put the current mode on *button*'s glyph, its tooltip and its checked state.
+def _overlay_style(diameter: int) -> str:
+    """The round button's own stylesheet, in tokens every preset defines.
 
-    Driven by :attr:`CompactController.compactChanged` rather than by the button's
-    own toggle, so it still tells the truth when the mode was changed some other
-    way — a double-click on the mini strip, or Escape. Tolerates ``None`` for the
-    windows that carry no toggle at all.
+    Filled with the accent rather than a surface colour so it reads as a control
+    laid *over* the history rather than a hole cut in it, and bordered so it stays
+    separate from whatever card happens to be underneath.
     """
-    if button is None:
-        return
-    button.setChecked(compact)
-    button.setText(COMPACT_GLYPH_COMPACT if compact else COMPACT_GLYPH_FULL)
-    button.setToolTip(
-        "Give the rest of the window back"
-        if compact
-        else "Shrink the window to just the dice roller, on top of everything else"
+    border = int(theme.metric("border.width"))
+    return (
+        "QToolButton {"
+        f" background: {theme.color('accent')};"
+        f" color: {theme.color('text.on-badge')};"
+        f" border: {border}px solid {theme.color('border.card')};"
+        f" border-radius: {diameter // 2}px; }}\n"
+        # A hair of the history showing through is the whole hover cue: there is
+        # no lighten/darken helper in the theme layer, and inventing one for a
+        # single button would be a colour rule living outside the tokens.
+        f"QToolButton:hover {{ background: {theme.wash('accent', 0.85)}; }}\n"
+        f"QToolButton:pressed {{ background: {theme.wash('accent', 0.7)}; }}"
     )
 
 
@@ -294,6 +366,16 @@ class CompactPage(QWidget):
         # resize it with the mouse.
         layout.addWidget(size_grip_row())
 
+    @property
+    def overlay_host(self) -> QWidget:
+        """What the shrink button sits on while the roller is here.
+
+        The scroll area rather than the page itself, deliberately: the page's
+        bottom row is the size grip, and a round button dropped on top of it
+        would take the only way to resize a frameless window away.
+        """
+        return self._scroll
+
     def adopt(self, panel: QWidget, history: QWidget) -> None:
         """Take the roller in: the controls above, the history filling the rest."""
         self._body_box.addWidget(panel)
@@ -360,6 +442,14 @@ class CompactController(QObject):
         self.page.strip.closeRequested.connect(window.close)
         self.page.strip.onTopToggled.connect(self._set_on_top)
 
+        # One button, moved between the roller's two homes — the same rule the
+        # roller itself follows. Two buttons would be two states to keep in step,
+        # and the one showing the wrong glyph would be whichever was off screen.
+        self.button = CompactOverlayButton()
+        self.button.clicked.connect(lambda _checked=False: self.toggle())
+        self.compactChanged.connect(self.button.set_compact)
+        self.button.attach(self._anchor())
+
         # Escape is the other way out. Disabled while the window is its full self,
         # so it goes on doing whatever it did before.
         self._escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), window)
@@ -370,6 +460,17 @@ class CompactController(QObject):
     def is_compact(self) -> bool:
         """Whether the window is currently the mini roller."""
         return self._compact
+
+    def _anchor(self) -> QWidget | None:
+        """Where the shrink button sits while the window is its full self.
+
+        Duck-typed like the roller loan itself: a surface names the widget the
+        button should float over — the dice-roller view, the GM's Rolls box — and
+        one that names nothing simply has no compact mode, which is the same
+        answer it gives by lending no roller.
+        """
+        handler = getattr(self._surface, "compact_anchor", None)
+        return handler() if callable(handler) else None
 
     def saved_geometry(self) -> QByteArray | None:
         """The window's ``saveGeometry`` blob from before it shrank, or ``None``.
@@ -423,6 +524,7 @@ class CompactController(QObject):
         self._compact = True
 
         self.page.adopt(panel, history)
+        self.button.attach(self.page.overlay_host)
         panel.set_compact(True)
         # Hiding the content is what actually frees the window to shrink: a hidden
         # widget is left out of its layout's minimum, and the sheet's page and
@@ -466,6 +568,7 @@ class CompactController(QObject):
         self._roller = None
         self.page.release()
         self._surface.restore_roller()
+        self.button.attach(self._anchor())
         panel.set_compact(False)
         self.page.hide()
         self._content.show()

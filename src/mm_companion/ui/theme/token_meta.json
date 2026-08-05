@@ -166,6 +166,7 @@
       "hint": "How small the mini roller may be dragged before it starts scrolling instead."
     },
     "compact.min-height": {"label": "Minimum height", "hint": "In pixels."},
+    "compact.button": {"label": "Shrink button", "hint": "The diameter of the round button floating over the roller's bottom-right corner, in pixels."},
     "column.stat.spin": {"label": "Ability / resistance spin box"},
     "column.skill.name": {"label": "Skill name"},
     "column.skill.spin": {"label": "Skill rank spin box"},
@@ -199,6 +200,7 @@
     "size.dice-face": {"label": "Die face"},
     "size.dice-face.compact": {"label": "Die face (compact mode)", "hint": "On the smaller die."},
     "size.roll-readout": {"label": "Roll readout"},
+    "size.compact-button": {"label": "Shrink button glyph", "hint": "The arrow inside the round button over the roller. Sized against compact.button, the circle it has to fill."},
     "scale.inactive": {
       "label": "Switched-off card",
       "hint": "How much a switched-off power card shrinks. 1.0 is no change."

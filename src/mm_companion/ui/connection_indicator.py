@@ -30,7 +30,6 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from mm_companion.core.session import client as session_client
 from mm_companion.ui import theme
-from mm_companion.ui.menu_corner import SLOT_INDICATOR, corner_area
 from mm_companion.ui.theme.tokens import is_literal_color
 from mm_companion.ui.widgets import muted_style, tinted_style
 
@@ -327,15 +326,13 @@ class ConnectionIndicator(QWidget):
 def install_connection_indicator(window) -> ConnectionIndicator:
     """Put an indicator in *window*'s menu-bar corner and hand it back.
 
-    The menu bar reparents the corner strip, and takes its size into account when
-    laying the menus out, so nothing else has to make room for it. The indicator
-    shares that strip with the compact-mode toggle and takes the outer slot (see
-    :mod:`mm_companion.ui.menu_corner`), but is still stashed on the window as
-    ``connection_indicator`` itself — a later ``set_bridge``, since the player
-    side only learns which session it is in after the join dialog, looks the
-    indicator up there and must not find a container instead.
+    The menu bar reparents the widget, and takes its size into account when
+    laying the menus out, so nothing else has to make room for it. It is also
+    stashed on the window as ``connection_indicator``, because the player side
+    only learns which session it is in after the join dialog and looks the
+    indicator up there to call ``set_bridge`` on it.
     """
     indicator = ConnectionIndicator(window)
-    corner_area(window).add(indicator, slot=SLOT_INDICATOR)
+    window.menuBar().setCornerWidget(indicator, Qt.Corner.TopRightCorner)
     window.connection_indicator = indicator
     return indicator

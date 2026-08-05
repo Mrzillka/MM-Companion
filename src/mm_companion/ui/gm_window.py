@@ -74,12 +74,11 @@ from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
-from mm_companion.ui.compact import CompactController, compact_toggle, show_compact_state
+from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.menu_corner import SLOT_COMPACT, corner_area
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
@@ -286,7 +285,8 @@ class GMWindow(QMainWindow):
 
         # The same compact mode a player's sheet has, over the same roller — the
         # GM's is a bare panel beside a GM history rather than a DiceRollerView, so
-        # this window supplies its own release_roller/restore_roller.
+        # this window supplies its own release_roller/restore_roller, and its own
+        # compact_anchor for the round shrink button to float over.
         self._compact = CompactController(self, self, self._full)
         self._compact.page.strip.set_title(self.windowTitle())
 
@@ -340,24 +340,11 @@ class GMWindow(QMainWindow):
         view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
 
-        # In the bar's corner strip rather than in a menu: a play-time view switch,
-        # reached constantly, whose glyph is its own state read-out. It goes in
-        # before the indicator below and still lands left of it — the strip orders
-        # by slot, not by arrival (see menu_corner).
-        self._compact_button = compact_toggle(self._compact.toggle)
-        corner_area(self).add(self._compact_button, slot=SLOT_COMPACT)
-        self._compact.compactChanged.connect(self._show_compact_state)
-        self._show_compact_state(False)
-
         # The notice strip below fades after ten seconds by design; this does not.
         # It is the only place a GM can look to see whether their table is still
         # reachable — including the case where hosting is fine but the relay
         # registration died and no new player can get in.
         install_connection_indicator(self).set_bridge(self._bridge)
-
-    def _show_compact_state(self, compact: bool) -> None:
-        """Put the current compact state on the corner glyph and its tooltip."""
-        show_compact_state(self._compact_button, compact)
 
     def _on_block_toggled(self, key: str, visible: bool) -> None:
         if visible:
@@ -504,9 +491,10 @@ class GMWindow(QMainWindow):
         — so it is not hidden by the players' apps agreeing to ignore it, it
         simply never reaches them.
         """
-        box = QGroupBox("Rolls")
-        # Held so compact mode can take the two out and put them back; see
-        # :meth:`release_roller`.
+        # Held so compact mode can take the roller out and put it back, and so the
+        # shrink button has something to float over; see :meth:`release_roller`
+        # and :meth:`compact_anchor`.
+        self._rolls_box = box = QGroupBox("Rolls")
         self._rolls_layout = layout = QHBoxLayout(box)
 
         self._roller = DiceRollerPanel(hidden_option=True)
@@ -546,6 +534,10 @@ class GMWindow(QMainWindow):
         for widget in (self._roller, self._history):
             self._rolls_layout.removeWidget(widget)
         return (self._roller, self._history)
+
+    def compact_anchor(self) -> QWidget:
+        """What the shrink button floats over: the Rolls block, history and all."""
+        return self._rolls_box
 
     def suspend_windows(self, suspended: bool) -> None:
         """Stand this window's floated blocks down while it is compact (pinned ones stay)."""

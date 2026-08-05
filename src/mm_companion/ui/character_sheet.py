@@ -338,6 +338,26 @@ class CharacterSheet(QWidget):
                 handler()
                 return
 
+    def compact_anchor(self) -> QWidget | None:
+        """The widget compact mode's shrink button floats over, or ``None``.
+
+        The third of the duck-typed set above, and swept for the same way: the
+        sheet does not name the Dice block, it asks each block in turn, and a
+        sheet whose roller a mod replaced with something that offers none answers
+        ``None`` — no button, and no compact mode, exactly as lending no roller
+        already meant.
+
+        Closing the Dice block from the View menu is not that case and needs no
+        code: the button is a child of the roller, so it goes wherever the roller
+        goes, including out of sight. Which is the honest answer too — compact
+        mode would have nothing to show.
+        """
+        for section in self._sections():
+            handler = getattr(section, "compact_anchor", None)
+            if callable(handler):
+                return handler()
+        return None
+
     def suspend_windows(self, suspended: bool) -> None:
         """Take this sheet's floated block windows off the screen, or bring them back.
 

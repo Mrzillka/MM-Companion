@@ -142,6 +142,17 @@ class DiceSection(QGroupBox):
         """Take the roller back into the block."""
         self.view.restore_roller()
 
+    def compact_anchor(self) -> QWidget:
+        """What the shrink button floats over: the roller view, history and all.
+
+        The *view* and not the panel, deliberately. The panel is the controls,
+        and a button parked there would cost it a row of height in every window
+        it appears in — including the pinned strip, where height is the scarce
+        thing and where a shrink button of the panel's own already lived once.
+        Over the view it lands on the history instead, which has pixels to spare.
+        """
+        return self.view
+
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference (the Settings page changed it)."""
         self.view.sync_dice_layout()

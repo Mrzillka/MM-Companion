@@ -22,7 +22,10 @@ Both composites **reflow to the space they are given** (see
 :mod:`mm_companion.ui.reflow`), each deciding from its own width, which is what
 lets the one Dice block suit the tall narrow right-hand pinned strip *and* a short
 wide bottom one: a column of four parts, ``[panel][history]``, or one row of four
-as the room grows.
+as the room grows. There is a fourth shape the reflow does *not* choose — the
+compact one, where the whole window has shrunk to the roller alone and the panel
+puts its quick rolls beside the die (:meth:`DiceRollerPanel.set_compact`, driven
+by :mod:`mm_companion.ui.compact`).
 
 **In a session the panel does not roll.** It asks the session — the server
 resolves every roll and broadcasts the result, so nobody reports their own
@@ -57,6 +60,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -86,11 +90,6 @@ from mm_companion.ui.svg_assets import die_resource, svg_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, tinted_style
 
-# How big the die is drawn, and the button around it. The artwork is vector, so
-# this is the size it is *rasterised* at rather than a bitmap scaled to fit.
-DIE_SIZE = 160
-DIE_BUTTON_SIZE = 180
-
 # The quick-roll list is stored under this settings key as a list of plain dicts
 # ``{"bonus": int, "penalty": int, "dc": int | None, "name"?: str}`` so no Qt
 # types leak into the JSON settings layer.
@@ -117,18 +116,23 @@ NO_ANSWER = "The session did not answer, so nothing was rolled."
 NOT_SENT = "The roll could not be sent to the session."
 
 
-def d20_pixmap(ratio: float = 1.0) -> QPixmap:
-    """The theme's d20 drawing at :data:`DIE_SIZE`, for a screen of *ratio*.
+def d20_pixmap(ratio: float = 1.0, size: int | None = None) -> QPixmap:
+    """The theme's d20 drawing, *size* pixels square, for a screen of *ratio*.
 
     A thin wrapper over :func:`~mm_companion.ui.svg_assets.svg_pixmap`, which does
     the loading, the aspect-ratio fitting and the caching. The die is not square,
-    so it is fitted into the square icon rather than stretched to it.
+    so it is fitted into the square icon rather than stretched to it. The artwork
+    is vector, so *size* is what it is **rasterised** at rather than a bitmap
+    scaled to fit — which is why compact mode's smaller die is a second render
+    (one more entry in that function's cache) and not a scaled-down pixmap.
 
-    Which of the bundled drawings that is comes from the ``assets.die`` token, read
-    here at call time rather than held in a constant — the point of the token is
-    that a preset switch changes it.
+    Both the size and which of the bundled drawings it is are theme tokens read
+    here at call time rather than held in constants — the point of a token is that
+    a preset switch changes it.
     """
-    return svg_pixmap(die_resource(theme.asset("die")), QSize(DIE_SIZE, DIE_SIZE), ratio)
+    if size is None:
+        size = int(theme.metric("die.size"))
+    return svg_pixmap(die_resource(theme.asset("die")), QSize(size, size), ratio)
 
 
 def degree_text(result: CheckResult | None) -> str:
@@ -359,6 +363,12 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: :meth:`DiceRollerView._redivide`).
     quickRollsChanged = Signal()
 
+    #: The ``⤡`` button was clicked: shrink the whole window to just this roller.
+    #: The panel cannot do that itself — it has no idea which window it is in, and
+    #: in compact mode it is not even in the same one it started in — so it says so
+    #: and whoever hosts it (see :mod:`mm_companion.ui.compact`) decides.
+    compactRequested = Signal()
+
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
         self._hidden_option = hidden_option
@@ -379,12 +389,23 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
         self._localizer: Callable[[RollSpec], RollSpec] | None = None
         self._quick_rolls: list[dict] = self._load_quick_rolls()
+        # Whether the panel is in its fixed compact shape (see :meth:`set_compact`),
+        # in which case the width-driven reflow stands down.
+        self._compact = False
 
         # The three reflowing parts, in order. The layout's *direction* is what the
         # reflow changes, so the parts are added once and never re-parented.
         self._settings_part = self._build_roll_settings()
         self._die_part = self._build_die()
         self._quick_part = self._build_quick_rolls()
+        # Holds the quick rolls beside the die in compact mode, and nothing at all
+        # the rest of the time. Built once so the two parts have a stable place to
+        # move to and back from.
+        self._pair = QWidget(self)
+        self._pair.setVisible(False)
+        self._pair_box = QHBoxLayout(self._pair)
+        self._pair_box.setContentsMargins(0, 0, 0, 0)
+        self._pair_box.setSpacing(self.REFLOW_SPACING)
 
         self._box = QBoxLayout(QBoxLayout.Direction.TopToBottom, self)
         self._box.setContentsMargins(0, 0, 0, 0)
@@ -423,7 +444,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         if row:
             # Across a row the die keeps its fixed 180px and the other two share the
             # slack. Each part is also top-aligned, so a short one (the Roll grid is
-            # 108px tall) sits at the top of a tall strip instead of having its rows
+            # a little over 100px tall) sits at the top of a tall strip instead of having its rows
             # spread down the whole height. Note this is per *item*: the one-argument
             # setAlignment places the layout inside its widget, which is not the same
             # thing and would leave the parts stretched.
@@ -435,6 +456,68 @@ class DiceRollerPanel(ReflowBox, QWidget):
                 self._box.setStretchFactor(part, 0)
                 self._box.setAlignment(part, Qt.AlignmentFlag(0))
             self._box.insertStretch(self._box.indexOf(self._quick_part))
+
+    def sync_reflow(self) -> bool:
+        """Re-run the width-driven reflow — unless the compact shape is in force.
+
+        Compact mode is a *chosen* arrangement rather than one derived from the
+        room available, so the reflow stands down entirely while it lasts. Without
+        this the panel would flip itself back to a plain column the first time the
+        mini window was resized.
+        """
+        if self._compact:
+            return False
+        return super().sync_reflow()
+
+    def set_compact(self, compact: bool) -> None:
+        """Put the parts in the compact shape — the Roll box, then quick rolls | die.
+
+        The third arrangement, beside the reflow's row and column: the settings
+        across the top with the quick rolls and the die side by side under them, so
+        the mini window is as short as it can be while still showing every control.
+        The quick rolls take the slack because their chips wrap; the die keeps its
+        fixed square, at ``die.size.compact`` rather than its full size.
+
+        Only the layout changes — like :meth:`apply_reflow`, nothing is rebuilt, so
+        a roll in flight, a loaded spec and the quick-roll strip all survive the
+        move. The parts *are* re-parented here (into :attr:`_pair` and back), which
+        the reflow never does; that is why each direction ends by handing them back
+        to a layout before the old one can be emptied.
+        """
+        compact = bool(compact)
+        if compact == self._compact:
+            return
+        self._compact = compact
+        if compact:
+            self._box.removeWidget(self._quick_part)
+            self._box.removeWidget(self._die_part)
+            self._pair_box.addWidget(self._quick_part, stretch=1)
+            self._pair_box.addWidget(self._die_part, stretch=0)
+            self._pair_box.setAlignment(self._quick_part, Qt.AlignmentFlag.AlignTop)
+            self._pair_box.setAlignment(self._die_part, Qt.AlignmentFlag.AlignTop)
+            self._pair.setVisible(True)
+            self._box.setDirection(QBoxLayout.Direction.TopToBottom)
+            for index in reversed(range(self._box.count())):
+                if self._box.itemAt(index).widget() is None:
+                    self._box.takeAt(index)
+            self._box.addWidget(self._pair)
+            self._box.setStretchFactor(self._settings_part, 0)
+            self._box.setStretchFactor(self._pair, 0)
+            self.set_die_size("die.size.compact", "size.dice-face.compact")
+        else:
+            self._pair_box.removeWidget(self._quick_part)
+            self._pair_box.removeWidget(self._die_part)
+            self._box.removeWidget(self._pair)
+            self._pair.setVisible(False)
+            self._box.addWidget(self._die_part)
+            self._box.addWidget(self._quick_part)
+            self.set_die_size("die.size", "size.dice-face")
+            # The reflow owns the arrangement again, and the width it last decided
+            # from is the mini window's — so re-derive it rather than trusting it.
+            self.apply_reflow(self.is_row)
+            self.sync_reflow()
+        self._compact_button.setVisible(not compact)
+        self.updateGeometry()
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         super().resizeEvent(event)
@@ -449,19 +532,34 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # pixels above its 15px minimum — a groove too short to aim at, let alone drag.
         grid.setColumnStretch(1, 1)
 
+        # The way into compact mode. It rides the Roll box rather than a menu bar
+        # because that is what the roller carries with it: the GM window embeds this
+        # same panel, so putting the button here is what makes compact mode one
+        # feature for both windows instead of two. Monochrome glyph on an auto-raise
+        # tool button, like a block title bar's 🖈 / ↗ / ✕.
+        self._compact_button = QToolButton()
+        self._compact_button.setText("⤡")
+        self._compact_button.setAutoRaise(True)
+        self._compact_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._compact_button.setToolTip(
+            "Shrink the window to just the dice roller, on top of everything else"
+        )
+        self._compact_button.clicked.connect(self.compactRequested)
+        grid.addWidget(self._compact_button, 0, 0, 1, 3, Qt.AlignmentFlag.AlignRight)
+
         self._spec_chip = self._build_spec_chip()
-        grid.addWidget(self._spec_chip, 0, 0, 1, 3)
+        grid.addWidget(self._spec_chip, 1, 0, 1, 3)
 
         self._bonus_slider, self._bonus_spin = self._make_slider_spin(0, 20)
         self._penalty_slider, self._penalty_spin = self._make_slider_spin(0, 20)
 
-        grid.addWidget(QLabel("Bonus"), 1, 0)
-        grid.addWidget(self._bonus_slider, 1, 1)
-        grid.addWidget(self._bonus_spin, 1, 2)
+        grid.addWidget(QLabel("Bonus"), 2, 0)
+        grid.addWidget(self._bonus_slider, 2, 1)
+        grid.addWidget(self._bonus_spin, 2, 2)
 
-        grid.addWidget(QLabel("Penalty"), 2, 0)
-        grid.addWidget(self._penalty_slider, 2, 1)
-        grid.addWidget(self._penalty_spin, 2, 2)
+        grid.addWidget(QLabel("Penalty"), 3, 0)
+        grid.addWidget(self._penalty_slider, 3, 1)
+        grid.addWidget(self._penalty_spin, 3, 2)
 
         self._dc_check = QCheckBox("Difficulty Class")
         self._dc_spin = make_spin_box(0, 60, value=15)
@@ -470,8 +568,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # Spanning the label *and* slider columns: on its own in column 0 this
         # checkbox's caption is by far the widest thing there and would hold that
         # column open to its width, stealing the room from the sliders beside it.
-        grid.addWidget(self._dc_check, 3, 0, 1, 2)
-        grid.addWidget(self._dc_spin, 3, 2)
+        grid.addWidget(self._dc_check, 4, 0, 1, 2)
+        grid.addWidget(self._dc_spin, 4, 2)
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
@@ -480,7 +578,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         )
         self._hidden_check.setVisible(self._hidden_option)
         if self._hidden_option:
-            grid.addWidget(self._hidden_check, 4, 0, 1, 3)
+            grid.addWidget(self._hidden_check, 5, 0, 1, 3)
 
         return group
 
@@ -540,19 +638,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._die_button.setFlat(True)
         self._die_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._die_button.setToolTip("Click to roll")
-        self._die_button.setIcon(QIcon(d20_pixmap(self.devicePixelRatioF())))
-        self._die_button.setIconSize(QSize(DIE_SIZE, DIE_SIZE))
-        self._die_button.setFixedSize(DIE_BUTTON_SIZE, DIE_BUTTON_SIZE)
         self._die_button.clicked.connect(self._start_roll)
 
         self._face = QLabel("?")
         self._face.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._face.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        font = QFont()
-        font.setPointSizeF(theme.font_size("size.dice-face"))
-        font.setBold(True)
-        self._face.setFont(font)
         self._face.setStyleSheet(f"color: {theme.color('dice.face')};")
+        self.set_die_size("die.size", "size.dice-face")
 
         grid.addWidget(self._die_button, 0, 0)
         grid.addWidget(self._face, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -564,6 +656,28 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._readout.setTextFormat(Qt.TextFormat.RichText)
         column.addWidget(self._readout)
         return part
+
+    def set_die_size(self, size_token: str, face_token: str) -> None:
+        """Draw the die at the size *size_token* names, with *face_token*'s numeral.
+
+        Two tokens rather than one because the pair only reads right together: a
+        40pt face on compact mode's 96px die overflows it. The face size goes on
+        the label's :class:`QFont` and never into a stylesheet, which would outrank
+        the widget font.
+
+        The artwork is re-rasterised rather than scaled, so the small die is as
+        crisp as the large one.
+        """
+        size = int(theme.metric(size_token))
+        padding = int(theme.metric("die.padding"))
+        self._die_button.setIcon(QIcon(d20_pixmap(self.devicePixelRatioF(), size)))
+        self._die_button.setIconSize(QSize(size, size))
+        self._die_button.setFixedSize(size + padding, size + padding)
+
+        font = QFont()
+        font.setPointSizeF(theme.font_size(face_token))
+        font.setBold(True)
+        self._face.setFont(font)
 
     def _build_quick_rolls(self) -> QGroupBox:
         group = QGroupBox("Quick rolls")
@@ -1209,6 +1323,12 @@ class DiceRollerView(ReflowBox, QWidget):
         # PinnedBoard._remember_dragged_extent relies on — and it is what lets the
         # row keep re-dividing itself on resize without overriding a chosen split.
         self._user_sized = False
+        # Whether the panel and the history are out on loan to a compact window
+        # (see :meth:`release_roller`). While they are, this view is an empty
+        # splitter nobody can see, so every arrangement decision it would otherwise
+        # make from its own width is meaningless — and would be made against parts
+        # that are being laid out by somebody else.
+        self._lent = False
         self._splitter.splitterMoved.connect(self._on_handle_dragged)
         # A resize arrives before the parts' own minimums have settled — the pinned
         # strip converges its thickness over several deferred turns — and the division
@@ -1305,9 +1425,15 @@ class DiceRollerView(ReflowBox, QWidget):
         self._divide_row()
         self._settle.start(0)  # and again once everything has settled
 
+    def sync_reflow(self) -> bool:
+        """Re-run the width-driven reflow — unless the parts are out on loan."""
+        if self._lent:
+            return False
+        return super().sync_reflow()
+
     def _divide_row(self) -> None:
         """Re-divide a row between the panel and the history (a no-op otherwise)."""
-        if self.is_row and not self._user_sized:
+        if self.is_row and not self._user_sized and not self._lent:
             self._splitter.setSizes(self._row_sizes())
 
     def _redivide(self) -> None:
@@ -1319,7 +1445,7 @@ class DiceRollerView(ReflowBox, QWidget):
         what the panel *contains* has to divide the space again explicitly. A split the
         user dragged is still left alone.
         """
-        if self._user_sized:
+        if self._user_sized or self._lent:
             return
         self._splitter.setSizes(self._row_sizes() if self.is_row else self._column_sizes())
 
@@ -1435,6 +1561,45 @@ class DiceRollerView(ReflowBox, QWidget):
         """Let go of the session — the host block or window is going away."""
         self._session_history.detach()
         self._follow(None)
+
+    # -- compact mode --------------------------------------------------------
+
+    def release_roller(self) -> tuple[DiceRollerPanel, QWidget]:
+        """Hand the panel and the history over to a compact window, and stand down.
+
+        The mini roller is **this** roller moved, not a second one built beside it:
+        the loaded spec, the quick-roll strip, the tumble in flight and — the one
+        that would really show — the session history and its bridge all carry on
+        because the widgets themselves carry on. A second view would have meant a
+        second attachment to the table and the same rolls listed twice.
+
+        The two are taken out of the splitter and handed back bare, in the order
+        they belong in; the caller owns them until :meth:`restore_roller`. Reversed
+        exactly by that method, so the splitter is left empty rather than rebuilt.
+        """
+        self._lent = True
+        for part in self.reflow_parts():
+            part.setParent(self)
+            part.hide()
+        return (self.panel, self._history_part)
+
+    def restore_roller(self) -> None:
+        """Take the panel and the history back into the splitter."""
+        self._lent = False
+        for index, part in enumerate(self.reflow_parts()):
+            self._splitter.insertWidget(index, part)
+            part.show()
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        # The split is the compact window's leftover, chosen for a shape this is
+        # not — so forget it and re-derive, twice: the parts have only just been
+        # re-parented, and their hints tell the truth on the following turn. The
+        # same two-pass idiom a quick roll coming or going needs.
+        self._user_sized = False
+        self.updateGeometry()
+        self.sync_reflow()
+        self._redivide()
+        self._settle.start(0)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt override)
         self._sync_session()

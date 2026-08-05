@@ -156,6 +156,16 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # alternative is per-session state on the server, and pins are a GM's private
     # scratch note, not table state.
     "gm_pins": {},
+    # Compact mode — the mini dice roller a window collapses to (see
+    # :mod:`mm_companion.ui.compact`). Read through :func:`compact_settings`.
+    #
+    # Note what is *not* here: whether a window is currently compact. That is a
+    # play-time view switch like the sheet's lock, not a preference, and reopening
+    # into a dice-only window would leave someone hunting for the rest of the app.
+    # ``width``/``height`` of 0 mean "take the theme's compact.width/height", so a
+    # preset with tighter padding still opens at its own size until the user drags
+    # the mini window to one they prefer.
+    "compact": {"on_top": True, "width": 0, "height": 0},
 }
 
 
@@ -332,6 +342,39 @@ def clear_gm_card_pins() -> None:
     GM asks for it outright, from the GM Mode settings page.
     """
     update_settings(gm_pins={})
+
+
+def compact_settings() -> dict:
+    """The mini dice roller's remembered size and its always-on-top preference.
+
+    The same fallback :func:`gm_default_pins` exists for, and for the same reason:
+    :func:`load_settings` hands the file back verbatim, so a workspace older than
+    this key answers ``None``. Merged per key rather than wholesale, so a file
+    naming only ``on_top`` still gets the shipped size.
+    """
+    stored = load_settings().get("compact")
+    merged = copy.deepcopy(DEFAULT_SETTINGS["compact"])  # type: ignore[arg-type]
+    if not isinstance(stored, dict):
+        return merged
+    if isinstance(stored.get("on_top"), bool):
+        merged["on_top"] = stored["on_top"]
+    for key in ("width", "height"):
+        value = stored.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            merged[key] = value
+    return merged
+
+
+def set_compact_settings(**changes: object) -> None:
+    """Write some of the compact-mode preferences, leaving the rest alone.
+
+    The write half of :func:`compact_settings`. Merges for the write half's usual
+    reason: dragging the mini window to a new size must not also reset whether it
+    stays on top.
+    """
+    merged = compact_settings()
+    merged.update({key: value for key, value in changes.items() if key in merged})
+    update_settings(compact=merged)
 
 
 def relay_url() -> str:

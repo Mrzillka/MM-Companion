@@ -6,11 +6,24 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Signal
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMenu, QMessageBox, QWidget
+from PySide6.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.compact import (
+    COMPACT_GLYPH_COMPACT,
+    COMPACT_GLYPH_FULL,
+    CompactController,
+)
 from mm_companion.ui.connection_indicator import install_connection_indicator
 
 CHARACTER_FILTER = "Character files (*.json)"
@@ -93,10 +106,23 @@ class MainWindow(QMainWindow):
         self._sheet.set_pin_target(pin_target)
         self._sheet.pinRequested.connect(self.pinRequested)
         self._sheet.unpinRequested.connect(self.unpinRequested)
+        # Compact mode: the whole window collapsed to just the dice roller. The
+        # controller owns the mini page and borrows the roller out of the sheet
+        # when it is asked for; see :mod:`mm_companion.ui.compact`.
+        self._compact = CompactController(self, self._sheet, self._sheet)
+        self._sheet.compactRequested.connect(self._compact.toggle)
+        self._compact.compactChanged.connect(self._show_compact_state)
         self._build_menu_bar(locked)
-        # The sheet is itself a scrolling page (it owns its scroll area), so it is
-        # the central widget directly — no outer wrapper.
-        self.setCentralWidget(self._sheet)
+        # The sheet is a scrolling page in its own right (it owns its scroll area),
+        # so the only thing this wrapper is for is having the compact page beside
+        # it: one of the two is always hidden, and a hidden widget is left out of
+        # the layout's minimum, which is what lets the window shrink to the roller.
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self._sheet)
+        central_layout.addWidget(self._compact.page)
+        self.setCentralWidget(central)
         self._update_title()
 
         # New characters open unlocked for editing; otherwise the sheet is a
@@ -152,6 +178,9 @@ class MainWindow(QMainWindow):
         self._build_view_menu(menu_bar)
 
         if self._gm_view:
+            # Not even the compact toggle: this bar is deliberately bare, and the
+            # GM has their own roller in the GM window. Compact mode still *works*
+            # here — the roller's own ⤡ is on every panel — it just gets no chrome.
             return
 
         settings_menu = menu_bar.addMenu("&Settings")
@@ -183,6 +212,8 @@ class MainWindow(QMainWindow):
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
             install_connection_indicator(self)
 
+        self._add_compact_action(menu_bar)
+
         # Last on the bar, and on the bar rather than in a menu: locking is how a
         # sheet is read *and* how it is written, so it is reached constantly. An
         # action added straight to a QMenuBar with no submenu behaves as a button —
@@ -193,6 +224,31 @@ class MainWindow(QMainWindow):
         self._lock_action.toggled.connect(self._sheet.set_locked)
         self._lock_action.toggled.connect(self._show_lock_state)
         self._show_lock_state(locked)
+
+    def _add_compact_action(self, menu_bar) -> None:
+        """The compact-mode toggle, on the bar beside the lock (see the glyphs)."""
+        self._compact_action = menu_bar.addAction(COMPACT_GLYPH_FULL)
+        self._compact_action.setCheckable(True)
+        self._compact_action.triggered.connect(self._compact.toggle)
+        self._show_compact_state(False)
+
+    def _show_compact_state(self, compact: bool) -> None:
+        """Put the current compact state on the bar's glyph and its tooltip.
+
+        Driven by the controller's signal rather than by the action's own toggle,
+        so the tick still tells the truth when the mode was changed some other way
+        — the roller's own button, a double-click on the mini strip, or Escape.
+        """
+        action = getattr(self, "_compact_action", None)
+        if action is None:
+            return
+        action.setChecked(compact)
+        action.setText(COMPACT_GLYPH_COMPACT if compact else COMPACT_GLYPH_FULL)
+        action.setToolTip(
+            "Give the rest of the window back"
+            if compact
+            else "Shrink the window to just the dice roller, on top of everything else"
+        )
 
     def _show_lock_state(self, locked: bool) -> None:
         """Put the current lock state on the bar's glyph and its tooltip."""
@@ -365,8 +421,16 @@ class MainWindow(QMainWindow):
         self._sheet.restore_layout(layout.get("dock_state"))
 
     def _persist_layout(self) -> None:
-        """Save the window geometry and block arrangement as a global preference."""
-        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        """Save the window geometry and block arrangement as a global preference.
+
+        A window closed while compact remembers what it was **before** it shrank:
+        this key is shared by every sheet, so persisting 380x560 here would open
+        every character that size from then on. The mini window's own size is
+        remembered separately, by the controller.
+        """
+        self._compact.remember_size()
+        state = self._compact.saved_geometry() or self.saveGeometry()
+        geometry = bytes(state.toBase64()).decode("ascii")
         storage.update_settings(
             layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
         )
@@ -409,6 +473,9 @@ class MainWindow(QMainWindow):
         name = library.display_name(self._sheet.character)
         marker = "*" if self._dirty else ""
         self.setWindowTitle(f"{self.TITLE} — {marker}{name}")
+        # The mini window is frameless, so its strip is the only place the title
+        # shows at all — including the unsaved-changes marker.
+        self._compact.page.strip.set_title(f"{marker}{name}")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Guard unsaved changes, announce the close, then close normally."""

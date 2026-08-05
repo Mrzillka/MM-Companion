@@ -61,6 +61,10 @@ class CharacterSheet(QWidget):
     pinRequested = Signal(object)
     #: The same, for a row that was already pinned.
     unpinRequested = Signal(object)
+    #: A block asked for compact mode — shrink the window to just the dice roller.
+    #: Relayed out for the same reason the two pin topics are: what it asks for is
+    #: the *window's* shape, which no block can see from inside the sheet.
+    compactRequested = Signal()
 
     def __init__(
         self,
@@ -263,6 +267,15 @@ class CharacterSheet(QWidget):
         self._bus.serve(PIN_REQUESTED, self.pinRequested.emit)
         self._bus.serve(UNPIN_REQUESTED, self.unpinRequested.emit)
 
+        # Compact mode travels as a plain Qt signal rather than a bus topic: the bus
+        # carries what blocks say to *each other*, and this is a block talking past
+        # the sheet to the window. Duck-typed like sync_session, so a mod's own
+        # roller block is found on the same terms as the shipped one.
+        for section in self._sections():
+            signal = getattr(section, "compactRequested", None)
+            if signal is not None and hasattr(signal, "connect"):
+                signal.connect(self.compactRequested)
+
         for topic in {t for d in self._descriptors for t in d.serves} - QUIET_REQUESTS:
             self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
 
@@ -314,6 +327,29 @@ class CharacterSheet(QWidget):
         self._locked = locked
         for section in self._sections():
             section.set_locked(locked)
+
+    def release_roller(self) -> tuple[QWidget, QWidget] | None:
+        """Lend the dice roller out to a compact window, or ``None`` if there is none.
+
+        The sheet is what a window can see, so it is the sheet that answers "give me
+        your roller" — but it does not name the Dice block to do it. Duck-typed over
+        the blocks like :meth:`sync_session`, first one wins; a sheet whose roller
+        block a mod replaced (or a user closed the feature out of) answers ``None``
+        and the window simply has no compact mode.
+        """
+        for section in self._sections():
+            handler = getattr(section, "release_roller", None)
+            if callable(handler):
+                return handler()
+        return None
+
+    def restore_roller(self) -> None:
+        """Take the dice roller back into its block."""
+        for section in self._sections():
+            handler = getattr(section, "restore_roller", None)
+            if callable(handler):
+                handler()
+                return
 
     def set_pinned(self, refs) -> None:
         """Tell every block which parameters are already on the GM card.

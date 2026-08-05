@@ -357,6 +357,55 @@ clean (see Licensing below).
   for a pinned block (a page row is wide enough for anything), so `dice` is 360 — under
   that its column arrangement clips in a side strip.
 
+## Compact mode (matters when touching the roller or either window)
+
+The pinned strip's argument taken one step further: mid-fight the only part of the app
+anyone touches is the roller, so `ui/compact.py` collapses the **whole window** to a
+small, frameless, always-on-top mini roller — the Roll box across the top, the quick
+rolls beside a smaller die, the history filling the rest. `⤡` on the Roll box enters
+(and so is on the GM's panel too, which is what makes this *one* feature for both
+windows); `⤢` on the mini strip, `Esc`, or the `⤢` action beside the sheet's 🔒 leaves.
+- **The mini roller is the roller, moved.** Nothing builds a second one: the controller
+  asks its *surface* to hand the live panel and history over and gives them back on the
+  way out, so a loaded spec, the quick-roll strip, a tumble in flight and — the one that
+  would really show — the session history and its attachment to the table all carry
+  across. A second roller would have been a second seat at the table and every roll
+  twice. Same borrow-and-return the canvas performs moving a block between the page, the
+  strip and a floating window, including the rule that a widget still parented to a
+  container Qt is about to free goes with it.
+- A **surface** is anything with `release_roller()` (the panel and the history widget,
+  or `None`) and `restore_roller()`. `CharacterSheet` duck-types over its blocks for it
+  like `sync_session`, so a mod's roller joins on the same terms; `GMWindow` answers for
+  itself, since its roller is a bare `DiceRollerPanel` beside a `gm=True` history rather
+  than a `DiceRollerView`. A surface that lends nothing simply has no compact mode.
+- `DiceRollerPanel.set_compact` is a **third arrangement** beside the reflow's row and
+  column, and while it is in force `sync_reflow` stands down — this shape is chosen, not
+  derived from the room available. `DiceRollerView` does the same while its parts are
+  out on loan (`_lent`), and `restore_roller` ends with the usual two-pass
+  `updateGeometry` → `_redivide` → `_settle.start(0)`.
+- Three things the window has to get right. **Hiding the outgoing content is what frees
+  it to shrink** — a hidden widget is left out of its layout's minimum, and both
+  `CharacterSheet._update_min_width` and `PinnedPanel.minimumSizeHint` otherwise hold it
+  open. **Window flags change before the animation, never during it**: Qt hides a window
+  whose flags change and the platform recreates it, so the geometry is re-applied right
+  after the `show()`. And a **maximized** window cannot be resized, so it is dropped to
+  normal on the way in and re-maximized on the way out.
+- The mini window is frameless, so it supplies what the OS frame would have: the strip
+  is the drag handle and carries the title, and a `QSizeGrip` is the only way to resize.
+  It goes **as small as it is dragged** — the roller lives in a `QScrollArea`, which does
+  not pass its child's minimum on, so the only floor is `compact.min-width/height` and
+  under that the die and history scroll.
+- Persistence splits in two, and must: `compact` in settings holds the *mini* window's
+  size and the always-on-top pin (read through `storage.compact_settings()`, never off
+  `load_settings()`), while `saved_geometry()` hands `_persist_layout` the blob captured
+  **before** the shrink — the `layout` key is shared by every sheet, so writing 380×560
+  there would open every character that size. Being compact is deliberately *not*
+  persisted: it is a play-time view switch like the lock, and relaunching into a
+  dice-only window would leave someone hunting for the rest of the app.
+- `ANIMATION_MS` is a class attribute so `tests/conftest.py` can zero it, exactly as it
+  does `PowersSection.TRANSITION_MS`; a window that is not on screen jumps rather than
+  eases, so a test asserts on the resting state without an event loop.
+
 ## Rolling from the sheet (matters when touching the roller or a stat block)
 
 Any stat line on the sheet can be rolled: **click** an ability, resistance, skill or

@@ -74,6 +74,11 @@ from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.compact import (
+    COMPACT_GLYPH_COMPACT,
+    COMPACT_GLYPH_FULL,
+    CompactController,
+)
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.drop_feedback import DropIndicator
@@ -271,14 +276,29 @@ class GMWindow(QMainWindow):
         self._board = PinnedBoard(self._scroll, self._canvas)
         self._canvas.set_pinned_board(self._board)
 
+        # Everything that is the GM window proper, so compact mode can hide it in
+        # one move and the window is free to shrink to the roller alone.
+        self._full = QWidget()
+        full_layout = QVBoxLayout(self._full)
+        full_layout.setContentsMargins(0, 0, 0, 0)
+        full_layout.addWidget(self._board, stretch=1)
+        # A persistent strip along the bottom, not a draggable block: the hosting
+        # status and the reachability advice, then a transient notice line.
+        full_layout.addWidget(self._build_status_strip())
+        full_layout.addWidget(self._build_notice())
+
+        # The same compact mode a player's sheet has, over the same roller — the
+        # GM's is a bare panel beside a GM history rather than a DiceRollerView, so
+        # this window supplies its own release_roller/restore_roller.
+        self._compact = CompactController(self, self, self._full)
+        self._compact.page.strip.set_title(self.windowTitle())
+        self._roller.compactRequested.connect(self._compact.toggle)
+
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.addWidget(self._board, stretch=1)
-        # A persistent strip along the bottom, not a draggable block: the hosting
-        # status and the reachability advice, then a transient notice line.
-        central_layout.addWidget(self._build_status_strip())
-        central_layout.addWidget(self._build_notice())
+        central_layout.addWidget(self._full, stretch=1)
+        central_layout.addWidget(self._compact.page)
         self.setCentralWidget(central)
 
         self._canvas.arrangement_changed.connect(self._update_min_width)
@@ -324,11 +344,29 @@ class GMWindow(QMainWindow):
         view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
 
+        # On the bar rather than in a menu, like the sheet's lock: a play-time view
+        # switch, reached constantly, whose glyph is its own state read-out.
+        self._compact_action = self.menuBar().addAction(COMPACT_GLYPH_FULL)
+        self._compact_action.setCheckable(True)
+        self._compact_action.triggered.connect(self._compact.toggle)
+        self._compact.compactChanged.connect(self._show_compact_state)
+        self._show_compact_state(False)
+
         # The notice strip below fades after ten seconds by design; this does not.
         # It is the only place a GM can look to see whether their table is still
         # reachable — including the case where hosting is fine but the relay
         # registration died and no new player can get in.
         install_connection_indicator(self).set_bridge(self._bridge)
+
+    def _show_compact_state(self, compact: bool) -> None:
+        """Put the current compact state on the bar's glyph and its tooltip."""
+        self._compact_action.setChecked(compact)
+        self._compact_action.setText(COMPACT_GLYPH_COMPACT if compact else COMPACT_GLYPH_FULL)
+        self._compact_action.setToolTip(
+            "Give the rest of the window back"
+            if compact
+            else "Shrink the window to just the dice roller, on top of everything else"
+        )
 
     def _on_block_toggled(self, key: str, visible: bool) -> None:
         if visible:
@@ -367,8 +405,15 @@ class GMWindow(QMainWindow):
                 pass
 
     def _persist_layout(self) -> None:
-        """Save the GM window's geometry and block arrangement as a global preference."""
-        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        """Save the GM window's geometry and block arrangement as a global preference.
+
+        A window closed while compact is remembered at the size it was *before* it
+        shrank; the mini window's own size is kept separately (see
+        :mod:`mm_companion.ui.compact`).
+        """
+        self._compact.remember_size()
+        state = self._compact.saved_geometry() or self.saveGeometry()
+        geometry = bytes(state.toBase64()).decode("ascii")
         try:
             storage.update_settings(
                 gm_layout={
@@ -469,7 +514,9 @@ class GMWindow(QMainWindow):
         simply never reaches them.
         """
         box = QGroupBox("Rolls")
-        layout = QHBoxLayout(box)
+        # Held so compact mode can take the two out and put them back; see
+        # :meth:`release_roller`.
+        self._rolls_layout = layout = QHBoxLayout(box)
 
         self._roller = DiceRollerPanel(hidden_option=True)
         # While hosting, a roll made here goes through the server like everyone
@@ -493,6 +540,28 @@ class GMWindow(QMainWindow):
         self._roller.sessionRollRevealed.connect(self._history.release_roll)
         layout.addWidget(self._history, stretch=1)
         return box
+
+    # -- compact mode --------------------------------------------------------
+
+    def release_roller(self) -> tuple[QWidget, QWidget]:
+        """Lend the roller and the shared history to compact mode.
+
+        The GM window's roll surface is a bare panel beside a GM history rather
+        than a :class:`~mm_companion.ui.dice_roller.DiceRollerView`, so it answers
+        the borrow itself. Same contract, same reason for it: these are the live
+        widgets, still attached to the table, so the GM's hidden-roll switch and
+        the ✕ on every card carry into the mini window unchanged.
+        """
+        for widget in (self._roller, self._history):
+            self._rolls_layout.removeWidget(widget)
+        return (self._roller, self._history)
+
+    def restore_roller(self) -> None:
+        """Take the roller and the history back into the Rolls block."""
+        self._rolls_layout.addWidget(self._roller)
+        self._rolls_layout.addWidget(self._history, stretch=1)
+        self._roller.show()
+        self._history.show()
 
     def _sync_quick_roll_state(self) -> None:
         """Push the roller's quick-roll strip into the history's stars."""

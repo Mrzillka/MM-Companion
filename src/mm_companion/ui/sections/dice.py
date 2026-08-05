@@ -30,6 +30,7 @@ Two things about it are deliberately unlike its neighbours:
 
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
@@ -43,6 +44,11 @@ from mm_companion.ui.session_bridge import live_session
 class DiceSection(QGroupBox):
     """A d20 roller as a sheet block (see the module docstring)."""
 
+    #: The roller's ``⤡`` was clicked: shrink the whole window to just the roller.
+    #: Re-published from the panel so the block is what the sheet finds, which is
+    #: what lets a mod's own roller block offer compact mode on the same terms.
+    compactRequested = Signal()
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         strip_groupbox_caption(self)
@@ -55,6 +61,7 @@ class DiceSection(QGroupBox):
         # Every spec that reaches the roller — from the bus, or from a follow-up chip
         # on a history card — passes through here on its way in.
         self.view.panel.set_localizer(self._localize)
+        self.view.panel.compactRequested.connect(self.compactRequested)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
@@ -125,3 +132,19 @@ class DiceSection(QGroupBox):
 
     def set_locked(self, locked: bool) -> None:
         """No-op: rolling is a play action, available in the read-only view too."""
+
+    # -- compact mode --------------------------------------------------------
+
+    def release_roller(self) -> tuple[QWidget, QWidget]:
+        """Lend the roller out to a compact window — see
+        :meth:`~mm_companion.ui.dice_roller.DiceRollerView.release_roller`.
+
+        This block keeps answering the bus while the roller is away: a stat row
+        clicked on the sheet behind still loads into the mini window's chip,
+        because ``self.view.panel`` is the very same panel wherever it is parented.
+        """
+        return self.view.release_roller()
+
+    def restore_roller(self) -> None:
+        """Take the roller back into the block."""
+        self.view.restore_roller()

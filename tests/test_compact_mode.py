@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QAbstractAnimation, QPropertyAnimation, QRect, Qt
+from PySide6.QtCore import QAbstractAnimation, QPoint, QPropertyAnimation, QRect, Qt
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core import storage
@@ -507,6 +507,52 @@ def test_a_layout_saved_without_the_flag_restores_on_top(window: MainWindow) -> 
 
     assert sheet.canvas.apply_arrangement(saved)
     assert sheet.canvas.is_block_on_top("abilities")
+
+
+def test_a_block_dragged_while_compact_stays_floating(
+    qapp: QApplication, window: MainWindow
+) -> None:
+    """The page is hidden but keeps its geometry, so a hit test would still "find" a slot.
+
+    Which docked the block into a page nobody could see: it simply vanished, with
+    no way back but the View menu.
+    """
+    _on_screen(qapp, window)
+    sheet = window.sheet
+    sheet.float_block("abilities")
+    canvas = sheet.canvas
+    floated = canvas.block_window("abilities")
+    over_the_page = canvas.mapToGlobal(canvas.rect().center())
+
+    window._compact.enter()
+    _settle(qapp)
+    assert not canvas.accepts_drops()
+
+    canvas.title_bar_pressed("abilities", over_the_page)
+    canvas.title_bar_moved("abilities", over_the_page + QPoint(120, 120))
+    canvas.title_bar_released("abilities", over_the_page + QPoint(120, 120))
+
+    assert canvas.block_window("abilities") is floated
+    assert not canvas.is_hidden("abilities")
+    assert not canvas.is_pinned("abilities")
+
+    window._compact.leave()
+    _settle(qapp)
+    assert canvas.accepts_drops()
+
+
+def test_shrinking_mid_drag_drops_the_gesture(qapp: QApplication, window: MainWindow) -> None:
+    """A drag in flight when the window shrank is aiming at a page that has gone."""
+    _on_screen(qapp, window)
+    canvas = window.sheet.canvas
+    origin = canvas.mapToGlobal(canvas.rect().center())
+    canvas.title_bar_pressed("abilities", origin)
+    canvas.title_bar_moved("abilities", origin + QPoint(80, 80))
+    assert canvas._drag_active
+
+    window._compact.enter()
+
+    assert not canvas._drag_active
 
 
 def test_compact_clears_the_loose_windows_but_keeps_the_pinned_one(window: MainWindow) -> None:

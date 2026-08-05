@@ -1061,6 +1061,10 @@ class BlockCanvas(QWidget):
 
     def title_bar_released(self, key: str, global_pos: QPoint) -> None:
         active = self._drag_active and self._drag_key == key
+        if not self.accepts_drops():
+            # Compact: the block was only ever being moved, so leave it floating.
+            self._end_drag()
+            return
         pin_at = self._pin_hit_test(global_pos)
         self._end_drag()
         if not active:
@@ -1142,6 +1146,21 @@ class BlockCanvas(QWidget):
             if self._wants_on_top(key):
                 continue
             window.setVisible(not suspended)
+        if suspended:
+            # A drag in flight when the window shrank would be aiming at a page
+            # that is no longer there; see :meth:`accepts_drops`.
+            self._end_drag()
+
+    def accepts_drops(self) -> bool:
+        """Whether a dragged block may land on the page or the pinned strip now.
+
+        Not while the host is compact. The page and the strip are hidden behind
+        the mini roller, but **a hidden widget keeps its last geometry**, so a hit
+        test still happily reports a slot under the cursor — and the block docks
+        into a page nobody can see and is simply gone, with no way to get it back
+        but the View menu. While compact, dragging a floated block just moves it.
+        """
+        return not self._windows_suspended
 
     @staticmethod
     def _start_distance() -> int:
@@ -1160,6 +1179,13 @@ class BlockCanvas(QWidget):
 
     def update_drag(self, global_pos: QPoint) -> None:
         """Refresh the drop indicator and edge auto-scroll for a cursor position."""
+        if not self.accepts_drops():
+            # No insert line and no auto-scroll either: both would be promising a
+            # landing place that the drop itself is going to refuse.
+            self._indicator.hide_indicator()
+            if self._board is not None:
+                self._board.hide_drop()
+            return
         pin_at = self._pin_hit_test(global_pos)
         if pin_at is not None:
             # Over the strip: it owns the feedback, and the page shows none — two

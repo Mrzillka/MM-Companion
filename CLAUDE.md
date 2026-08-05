@@ -473,6 +473,14 @@ same button leaves.
   explicitly sent one behind — which follows from the two rules and is the right reading
   of both: a block popped out is a block wanted beside things, and `✕` is how you say
   otherwise.
+- The blocks that stay are still **draggable**, and that is where `BlockCanvas.accepts_drops`
+  earns its keep: while suspended, a drag is a plain move and nothing may land. A hidden
+  widget keeps its last geometry, so `_hit_test` over where the page *used to be* still
+  reports a perfectly good `DropSlot` — and the block docked into a page nobody could see
+  and vanished, recoverable only from the View menu. `update_drag` shows no insert line
+  and does not auto-scroll for the same reason (both would promise a landing the drop
+  refuses), and entering compact mid-drag ends the gesture rather than letting it finish
+  against a page that has gone.
 - Persistence splits in two, and must: `compact` in settings holds the *mini* window's
   size and the always-on-top pin (read through `storage.compact_settings()`, never off
   `load_settings()`), while `saved_geometry()` hands `_persist_layout` the blob captured

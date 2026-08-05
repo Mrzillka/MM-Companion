@@ -19,12 +19,9 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.compact import (
-    COMPACT_GLYPH_COMPACT,
-    COMPACT_GLYPH_FULL,
-    CompactController,
-)
+from mm_companion.ui.compact import CompactController, compact_toggle, show_compact_state
 from mm_companion.ui.connection_indicator import install_connection_indicator
+from mm_companion.ui.menu_corner import SLOT_COMPACT, corner_area
 
 CHARACTER_FILTER = "Character files (*.json)"
 
@@ -110,7 +107,6 @@ class MainWindow(QMainWindow):
         # controller owns the mini page and borrows the roller out of the sheet
         # when it is asked for; see :mod:`mm_companion.ui.compact`.
         self._compact = CompactController(self, self._sheet, self._sheet)
-        self._sheet.compactRequested.connect(self._compact.toggle)
         self._compact.compactChanged.connect(self._show_compact_state)
         self._build_menu_bar(locked)
         # The sheet is a scrolling page in its own right (it owns its scroll area),
@@ -143,6 +139,15 @@ class MainWindow(QMainWindow):
     def path(self) -> Path | None:
         """The file this sheet is saved to, or ``None`` until the first save."""
         return self._path
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the dice roller's layout preference.
+
+        Found by name rather than by type: the Settings window walks the open
+        windows looking for anything that answers this, so it needs no import of
+        the sheet or the GM window to reach either of them.
+        """
+        self._sheet.sync_dice_layout()
 
     def storage_dir(self) -> Path:
         """The workspace directory this window's Open/Save dialogs start in."""
@@ -212,7 +217,7 @@ class MainWindow(QMainWindow):
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
             install_connection_indicator(self)
 
-        self._add_compact_action(menu_bar)
+        self._add_compact_button()
 
         # Last on the bar, and on the bar rather than in a menu: locking is how a
         # sheet is read *and* how it is written, so it is reached constantly. An
@@ -225,30 +230,25 @@ class MainWindow(QMainWindow):
         self._lock_action.toggled.connect(self._show_lock_state)
         self._show_lock_state(locked)
 
-    def _add_compact_action(self, menu_bar) -> None:
-        """The compact-mode toggle, on the bar beside the lock (see the glyphs)."""
-        self._compact_action = menu_bar.addAction(COMPACT_GLYPH_FULL)
-        self._compact_action.setCheckable(True)
-        self._compact_action.triggered.connect(self._compact.toggle)
+    def _add_compact_button(self) -> None:
+        """The compact-mode toggle, in the bar's right-hand corner strip.
+
+        A widget rather than a menu-bar action, because it belongs *left of* the
+        connection indicator and the corner is the only thing right of the actions
+        (see :mod:`mm_companion.ui.menu_corner`).
+        """
+        self._compact_button = compact_toggle(self._compact.toggle)
+        corner_area(self).add(self._compact_button, slot=SLOT_COMPACT)
         self._show_compact_state(False)
 
     def _show_compact_state(self, compact: bool) -> None:
-        """Put the current compact state on the bar's glyph and its tooltip.
+        """Put the current compact state on the corner glyph and its tooltip.
 
-        Driven by the controller's signal rather than by the action's own toggle,
-        so the tick still tells the truth when the mode was changed some other way
-        — the roller's own button, a double-click on the mini strip, or Escape.
+        Driven by the controller's signal rather than by the button's own toggle,
+        so the state still tells the truth when the mode was changed some other
+        way — a double-click on the mini strip, or Escape.
         """
-        action = getattr(self, "_compact_action", None)
-        if action is None:
-            return
-        action.setChecked(compact)
-        action.setText(COMPACT_GLYPH_COMPACT if compact else COMPACT_GLYPH_FULL)
-        action.setToolTip(
-            "Give the rest of the window back"
-            if compact
-            else "Shrink the window to just the dice roller, on top of everything else"
-        )
+        show_compact_state(getattr(self, "_compact_button", None), compact)
 
     def _show_lock_state(self, locked: bool) -> None:
         """Put the current lock state on the bar's glyph and its tooltip."""

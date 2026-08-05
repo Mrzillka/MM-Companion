@@ -294,22 +294,198 @@ def test_escape_leaves_compact_and_does_nothing_otherwise(window: MainWindow) ->
     assert not window._compact._escape.isEnabled()
 
 
-def test_the_menu_bar_glyph_follows_the_mode_however_it_changed(window: MainWindow) -> None:
-    """Driven by the controller, so the roller's own button keeps the tick honest."""
-    action = window._compact_action
-    assert not action.isChecked()
+def test_the_corner_glyph_follows_the_mode_however_it_changed(window: MainWindow) -> None:
+    """Driven by the controller, so Escape and the mini strip keep the state honest."""
+    button = window._compact_button
+    assert not button.isChecked()
 
-    window.sheet.dice.panel.compactRequested.emit()
+    button.click()
 
     assert window._compact.is_compact
-    assert action.isChecked()
-    assert action.text() == "⤢"
+    assert button.isChecked()
+    assert button.text() == "⤢"
 
     window._compact.page.strip.expandRequested.emit()
 
     assert not window._compact.is_compact
-    assert not action.isChecked()
-    assert action.text() == "⤡"
+    assert not button.isChecked()
+    assert button.text() == "⤡"
+
+
+def test_the_roller_carries_no_shrink_button_of_its_own(window: MainWindow) -> None:
+    """The way in is the menu-bar corner, and only that.
+
+    A button on the Roll box cost a row of the panel's height in every window it
+    appeared in — including the pinned strip, where height is the scarce thing.
+    """
+    panel = window.sheet.dice.panel
+
+    assert not hasattr(panel, "_compact_button")
+    assert not hasattr(panel, "compactRequested")
+    assert not hasattr(window.sheet.dice, "compactRequested")
+    assert not hasattr(window.sheet, "compactRequested")
+
+
+def test_the_toggle_sits_left_of_the_connection_indicator(window: MainWindow) -> None:
+    """Whichever order the two were installed in — the strip orders by slot."""
+    corner = window.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
+    layout = corner.layout()
+
+    assert layout.indexOf(window._compact_button) < layout.indexOf(window.connection_indicator)
+
+
+def test_the_gm_window_orders_its_corner_the_same_way(gm: GMWindow) -> None:
+    """And it installs the two the other way round, which is the point of the slots."""
+    corner = gm.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
+    layout = corner.layout()
+
+    assert layout.indexOf(gm._compact_button) < layout.indexOf(gm.connection_indicator)
+
+
+# -- the roller's layout as a preference -------------------------------------
+
+
+def test_the_layout_preference_shapes_the_block_from_birth(qapp: QApplication) -> None:
+    storage.set_dice_layout(storage.DICE_LAYOUT_COMPACT)
+
+    window = MainWindow(locked=False)
+    panel = window.sheet.dice.panel
+
+    assert panel._quick_part.parentWidget() is panel._pair
+    window._dirty = False
+
+
+def test_leaving_compact_mode_does_not_undo_the_preference(window: MainWindow) -> None:
+    """The two reasons the panel might be compact are kept apart for exactly this."""
+    window.sync_dice_layout()  # "auto" — the shipped default
+    window._compact.enter()
+    window._compact.leave()
+    panel = window.sheet.dice.panel
+    assert panel._quick_part.parentWidget() is panel
+
+    storage.set_dice_layout(storage.DICE_LAYOUT_COMPACT)
+    window.sync_dice_layout()
+    assert panel._quick_part.parentWidget() is panel._pair
+
+    window._compact.enter()
+    window._compact.leave()
+
+    assert panel._quick_part.parentWidget() is panel._pair
+
+
+def test_the_general_page_applies_to_open_windows_without_a_relaunch(
+    window: MainWindow,
+) -> None:
+    from mm_companion.ui.settings import SettingsWindow
+
+    panel = window.sheet.dice.panel
+    settings = SettingsWindow()
+    page = settings._pages[0]
+    assert page.title == "General"
+    assert not page.is_dirty()
+
+    page._compact_check.setChecked(True)
+    assert page.is_dirty()
+    page.save()
+
+    assert storage.dice_layout() == storage.DICE_LAYOUT_COMPACT
+    assert not page.is_dirty()
+    assert page.needs_restart() is False
+    assert panel._quick_part.parentWidget() is panel._pair
+    settings.close()
+
+
+# -- floated blocks ----------------------------------------------------------
+
+
+def test_a_floated_block_is_frameless_and_pins_itself_on_top(window: MainWindow) -> None:
+    sheet = window.sheet
+    sheet.float_block("abilities")
+    floated = sheet.canvas.block_window("abilities")
+    bar = sheet.block_frame("abilities").title_bar
+
+    assert floated.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert not (floated.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    # The 🖈 means "stay on top" in a window of its own, and says so.
+    assert bar._pin_button.isCheckable()
+    assert not bar._float_button.isVisibleTo(bar)  # already popped out
+
+    bar._pin_button.setChecked(True)
+    bar._pin_clicked()
+
+    assert sheet.canvas.is_block_on_top("abilities")
+    assert floated.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+
+def test_the_pin_goes_back_to_meaning_the_strip_once_docked(window: MainWindow) -> None:
+    sheet = window.sheet
+    sheet.float_block("abilities")
+    bar = sheet.block_frame("abilities").title_bar
+    assert bar._pin_button.isCheckable()
+
+    sheet.dock_block("abilities", 0, 0)
+
+    assert not bar._pin_button.isCheckable()
+    assert bar._float_button.isVisibleTo(bar)
+
+
+def test_the_on_top_choice_survives_docking_and_floating_again(window: MainWindow) -> None:
+    """It is remembered by *block*, not by the window — a drag destroys the window."""
+    sheet = window.sheet
+    sheet.float_block("abilities")
+    sheet.canvas.set_block_on_top("abilities", True)
+
+    sheet.dock_block("abilities", 0, 0)
+    sheet.float_block("abilities")
+
+    assert sheet.canvas.is_block_on_top("abilities")
+    assert sheet.canvas.block_window("abilities").windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+
+def test_the_arrangement_carries_the_on_top_flag(window: MainWindow) -> None:
+    sheet = window.sheet
+    sheet.float_block("abilities")
+    sheet.canvas.set_block_on_top("abilities", True)
+
+    saved = sheet.arrangement()
+    assert saved["floating"]["abilities"]["on_top"] is True
+
+    sheet.reset_layout()
+    assert not sheet.canvas.is_block_on_top("abilities")
+
+    assert sheet.canvas.apply_arrangement(saved)
+    assert sheet.canvas.is_block_on_top("abilities")
+
+
+def test_an_old_layout_without_the_flag_still_restores(window: MainWindow) -> None:
+    """Read tolerantly, so it needed no schema bump — the hidden_anchors precedent."""
+    sheet = window.sheet
+    sheet.float_block("abilities")
+    saved = sheet.arrangement()
+    saved["floating"]["abilities"].pop("on_top", None)
+
+    assert sheet.canvas.apply_arrangement(saved)
+    assert not sheet.canvas.is_block_on_top("abilities")
+
+
+def test_compact_clears_the_loose_windows_but_keeps_the_pinned_one(window: MainWindow) -> None:
+    """Compact mode is "put the app out of the way", and loose blocks are the app."""
+    sheet = window.sheet
+    sheet.float_block("abilities")
+    sheet.float_block("skills")
+    sheet.canvas.set_block_on_top("skills", True)
+    loose = sheet.canvas.block_window("abilities")
+    pinned = sheet.canvas.block_window("skills")
+
+    window._compact.enter()
+
+    assert loose.isHidden()
+    assert not pinned.isHidden()
+
+    window._compact.leave()
+
+    assert not loose.isHidden()
+    assert not pinned.isHidden()
 
 
 # -- the animation -----------------------------------------------------------

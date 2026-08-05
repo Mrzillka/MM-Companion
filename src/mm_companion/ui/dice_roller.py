@@ -60,7 +60,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSplitter,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -74,6 +73,7 @@ from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
+    HISTORY_FLOOR_HEIGHT,
     MAX_QUICK_ROLLS,
     MIN_HISTORY_HEIGHT,
     MIN_HISTORY_WIDTH,
@@ -357,17 +357,19 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: so one's own card lands as the die settles, not the instant the server answers.
     sessionRollRevealed = Signal(object)
 
-    #: The quick-roll strip gained, lost or renamed a chip. Two consequences, both
-    #: outside this panel: a paired history's stars have to be re-lit, and the space
-    #: this panel was given no longer matches what it needs (see
-    #: :meth:`DiceRollerView._redivide`).
+    #: The quick-roll strip gained, lost or renamed a chip, so a paired history's
+    #: stars have to be re-lit. The *space* that costs is :attr:`contentChanged`'s
+    #: business, raised alongside it.
     quickRollsChanged = Signal()
 
-    #: The ``⤡`` button was clicked: shrink the whole window to just this roller.
-    #: The panel cannot do that itself — it has no idea which window it is in, and
-    #: in compact mode it is not even in the same one it started in — so it says so
-    #: and whoever hosts it (see :mod:`mm_companion.ui.compact`) decides.
-    compactRequested = Signal()
+    #: The panel's content changed shape — a chip came or went, a spec was loaded or
+    #: cleared. Whatever holds the panel has to share its space out again, because a
+    #: splitter child with no stretch keeps the pixels it was given and a minimum
+    #: going *down* provokes no resize at all. Raised alongside
+    #: :attr:`quickRollsChanged` rather than folded into it: that one is about *what
+    #: is in* the strip (the histories' stars), this one about how much room the
+    #: panel now needs.
+    contentChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
@@ -389,9 +391,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
         self._localizer: Callable[[RollSpec], RollSpec] | None = None
         self._quick_rolls: list[dict] = self._load_quick_rolls()
-        # Whether the panel is in its fixed compact shape (see :meth:`set_compact`),
-        # in which case the width-driven reflow stands down.
+        # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
+        # in which case the width-driven reflow stands down — and the two separate
+        # reasons it might be: the window has shrunk to the roller alone, or the
+        # user prefers this shape everywhere.
         self._compact = False
+        self._window_compact = False
+        self._prefer_compact = storage.dice_layout() == storage.DICE_LAYOUT_COMPACT
 
         # The three reflowing parts, in order. The layout's *direction* is what the
         # reflow changes, so the parts are added once and never re-parented.
@@ -415,6 +421,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
 
         self._rebuild_quick_strip()
         self.init_reflow()
+        # And then, if the user prefers it, straight into the compact shape — the
+        # reflow has to have laid the parts out once before they can be moved.
+        self._apply_shape()
 
     # -- construction --------------------------------------------------------
 
@@ -460,23 +469,38 @@ class DiceRollerPanel(ReflowBox, QWidget):
     def sync_reflow(self) -> bool:
         """Re-run the width-driven reflow — unless the compact shape is in force.
 
-        Compact mode is a *chosen* arrangement rather than one derived from the
-        room available, so the reflow stands down entirely while it lasts. Without
-        this the panel would flip itself back to a plain column the first time the
-        mini window was resized.
+        The compact shape is *chosen* — by the window shrinking, or by the user's
+        preference — rather than derived from the room available, so the reflow
+        stands down entirely while it lasts. Without this the panel would flip
+        itself back to a plain column the first time it was resized.
         """
         if self._compact:
             return False
         return super().sync_reflow()
 
     def set_compact(self, compact: bool) -> None:
+        """Whether the *window* has shrunk to this roller alone."""
+        self._window_compact = bool(compact)
+        self._apply_shape()
+
+    def set_layout_preference(self, compact: bool) -> None:
+        """Whether the user has asked for the compact shape everywhere, always.
+
+        The other of the two reasons this panel might be compact, and they are kept
+        apart on purpose: leaving compact mode must not undo the preference, which
+        one shared flag would have done the first time someone expanded the window.
+        """
+        self._prefer_compact = bool(compact)
+        self._apply_shape()
+
+    def _apply_shape(self) -> None:
         """Put the parts in the compact shape — the Roll box, then quick rolls | die.
 
         The third arrangement, beside the reflow's row and column: the settings
         across the top with the quick rolls and the die side by side under them, so
-        the mini window is as short as it can be while still showing every control.
-        The quick rolls take the slack because their chips wrap; the die keeps its
-        fixed square, at ``die.size.compact`` rather than its full size.
+        the roller is as short as it can be while still showing every control. The
+        quick rolls take the slack because their chips wrap; the die keeps its fixed
+        square, at ``die.size.compact`` rather than its full size.
 
         Only the layout changes — like :meth:`apply_reflow`, nothing is rebuilt, so
         a roll in flight, a loaded spec and the quick-roll strip all survive the
@@ -484,7 +508,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         the reflow never does; that is why each direction ends by handing them back
         to a layout before the old one can be emptied.
         """
-        compact = bool(compact)
+        compact = self._window_compact or self._prefer_compact
         if compact == self._compact:
             return
         self._compact = compact
@@ -516,8 +540,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
             # from is the mini window's — so re-derive it rather than trusting it.
             self.apply_reflow(self.is_row)
             self.sync_reflow()
-        self._compact_button.setVisible(not compact)
         self.updateGeometry()
+        self.contentChanged.emit()
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         super().resizeEvent(event)
@@ -532,34 +556,19 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # pixels above its 15px minimum — a groove too short to aim at, let alone drag.
         grid.setColumnStretch(1, 1)
 
-        # The way into compact mode. It rides the Roll box rather than a menu bar
-        # because that is what the roller carries with it: the GM window embeds this
-        # same panel, so putting the button here is what makes compact mode one
-        # feature for both windows instead of two. Monochrome glyph on an auto-raise
-        # tool button, like a block title bar's 🖈 / ↗ / ✕.
-        self._compact_button = QToolButton()
-        self._compact_button.setText("⤡")
-        self._compact_button.setAutoRaise(True)
-        self._compact_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._compact_button.setToolTip(
-            "Shrink the window to just the dice roller, on top of everything else"
-        )
-        self._compact_button.clicked.connect(self.compactRequested)
-        grid.addWidget(self._compact_button, 0, 0, 1, 3, Qt.AlignmentFlag.AlignRight)
-
         self._spec_chip = self._build_spec_chip()
-        grid.addWidget(self._spec_chip, 1, 0, 1, 3)
+        grid.addWidget(self._spec_chip, 0, 0, 1, 3)
 
         self._bonus_slider, self._bonus_spin = self._make_slider_spin(0, 20)
         self._penalty_slider, self._penalty_spin = self._make_slider_spin(0, 20)
 
-        grid.addWidget(QLabel("Bonus"), 2, 0)
-        grid.addWidget(self._bonus_slider, 2, 1)
-        grid.addWidget(self._bonus_spin, 2, 2)
+        grid.addWidget(QLabel("Bonus"), 1, 0)
+        grid.addWidget(self._bonus_slider, 1, 1)
+        grid.addWidget(self._bonus_spin, 1, 2)
 
-        grid.addWidget(QLabel("Penalty"), 3, 0)
-        grid.addWidget(self._penalty_slider, 3, 1)
-        grid.addWidget(self._penalty_spin, 3, 2)
+        grid.addWidget(QLabel("Penalty"), 2, 0)
+        grid.addWidget(self._penalty_slider, 2, 1)
+        grid.addWidget(self._penalty_spin, 2, 2)
 
         self._dc_check = QCheckBox("Difficulty Class")
         self._dc_spin = make_spin_box(0, 60, value=15)
@@ -568,8 +577,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # Spanning the label *and* slider columns: on its own in column 0 this
         # checkbox's caption is by far the widest thing there and would hold that
         # column open to its width, stealing the room from the sliders beside it.
-        grid.addWidget(self._dc_check, 4, 0, 1, 2)
-        grid.addWidget(self._dc_spin, 4, 2)
+        grid.addWidget(self._dc_check, 3, 0, 1, 2)
+        grid.addWidget(self._dc_spin, 3, 2)
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
@@ -578,7 +587,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         )
         self._hidden_check.setVisible(self._hidden_option)
         if self._hidden_option:
-            grid.addWidget(self._hidden_check, 5, 0, 1, 3)
+            grid.addWidget(self._hidden_check, 4, 0, 1, 3)
 
         return group
 
@@ -743,6 +752,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._spec_label.setText(spec_caption(spec))
             self._spec_chip.setToolTip(spec.hint)
         self.updateGeometry()
+        # Showing the chip makes this panel taller — the bug this used to cause is
+        # written up on :attr:`contentChanged`.
+        self.contentChanged.emit()
 
     def roll_spec(self, spec: RollSpec | None) -> bool:
         """Load *spec* and roll it at once. ``False`` if a die is already tumbling.
@@ -1138,6 +1150,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._quick_flow.addWidget(self._make_quick_chip(entry, index))
         self.updateGeometry()
         self.quickRollsChanged.emit()
+        self.contentChanged.emit()
 
     def _make_quick_chip(self, entry: dict, index: int) -> QWidget:
         chip = QFrame()
@@ -1208,13 +1221,16 @@ class LocalRollHistory(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
-        # The same two floors the shared history pins, and for the same reason: these
-        # cards carry the same headline and star, and a scroll area asks for nothing on
-        # its own — so without them the history is squeezed to a sliver, or to the one
-        # card that fits in whatever height is left over.
+        # The same floors the shared history pins, and for the same reasons: these
+        # cards carry the same headline and star, and a scroll area asks for nothing
+        # on its own — so without them the history is squeezed to a sliver.
         self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
-        self._scroll.setMinimumHeight(MIN_HISTORY_HEIGHT)
+        self._scroll.setMinimumHeight(HISTORY_FLOOR_HEIGHT)
         layout.addWidget(self._scroll)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Two cards' worth, however long the log is — see the shared history's."""
+        return QSize(MIN_HISTORY_WIDTH, MIN_HISTORY_HEIGHT)
 
     def set_quick_roll_state(self, saved_keys: set, room: bool) -> None:
         """Tell every card what the quick-roll strip holds, so its star can show it.
@@ -1311,7 +1327,8 @@ class DiceRollerView(ReflowBox, QWidget):
 
         self._history_part = self._build_history_panel()
         # Connected only now that the histories exist for it to reach.
-        self.panel.quickRollsChanged.connect(self._on_quick_rolls_changed)
+        self.panel.quickRollsChanged.connect(self._sync_quick_roll_state)
+        self.panel.contentChanged.connect(self._on_panel_resized)
         self._splitter = QSplitter(Qt.Orientation.Vertical, self)
         self._splitter.setChildrenCollapsible(False)
         for part in self.reflow_parts():
@@ -1449,14 +1466,19 @@ class DiceRollerView(ReflowBox, QWidget):
             return
         self._splitter.setSizes(self._row_sizes() if self.is_row else self._column_sizes())
 
-    def _on_quick_rolls_changed(self) -> None:
-        """A chip came, went or was renamed: re-light the stars and re-divide.
+    def _on_panel_resized(self) -> None:
+        """The panel needs a different amount of room: share the space out again.
 
-        The re-division runs twice, and needs to: the chips just dropped are deleted
-        later, so the panel's size hint only tells the truth on the following turn —
-        the same reason the deferred :attr:`_settle` pass exists for a resize.
+        A splitter child with no stretch keeps the pixels it was given, and a
+        minimum going *down* provokes no resize at all — so neither direction
+        corrects itself. Without this the panel simply kept its old share **plus**
+        whatever had just appeared in it, and the block grew past the window instead
+        of the history giving the room back.
+
+        It runs twice, and needs to: a chip just dropped is deleted *later*, so the
+        panel's size hint only tells the truth on the following turn — the same
+        reason the deferred :attr:`_settle` pass exists for a resize.
         """
-        self._sync_quick_roll_state()
         self._redivide()
         self._settle.start(0)
 
@@ -1582,6 +1604,10 @@ class DiceRollerView(ReflowBox, QWidget):
             part.setParent(self)
             part.hide()
         return (self.panel, self._history_part)
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the layout preference — the Settings page just changed it."""
+        self.panel.set_layout_preference(storage.dice_layout() == storage.DICE_LAYOUT_COMPACT)
 
     def restore_roller(self) -> None:
         """Take the panel and the history back into the splitter."""

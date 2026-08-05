@@ -51,7 +51,8 @@ def window(qapp):
 
 @pytest.fixture
 def page(window) -> ThemePage:
-    return window._pages[0]
+    """The Themes page, found by type — it is no longer the first one."""
+    return next(p for p in window._pages if isinstance(p, ThemePage))
 
 
 def say(monkeypatch, answer: QMessageBox.StandardButton) -> None:
@@ -81,7 +82,7 @@ def custom_theme(page: ThemePage, name: str = "Mine") -> str:
 def test_the_nav_lists_the_pages_and_drives_the_stack(window) -> None:
     labels = [window._nav.item(i).text() for i in range(window._nav.count())]
 
-    assert labels == ["Themes", "GM Mode"]
+    assert labels == ["General", "Themes", "GM Mode"]
     assert window._stack.currentWidget() is window._pages[0]
 
 

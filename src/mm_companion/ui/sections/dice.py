@@ -30,7 +30,6 @@ Two things about it are deliberately unlike its neighbours:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
@@ -44,11 +43,6 @@ from mm_companion.ui.session_bridge import live_session
 class DiceSection(QGroupBox):
     """A d20 roller as a sheet block (see the module docstring)."""
 
-    #: The roller's ``⤡`` was clicked: shrink the whole window to just the roller.
-    #: Re-published from the panel so the block is what the sheet finds, which is
-    #: what lets a mod's own roller block offer compact mode on the same terms.
-    compactRequested = Signal()
-
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         strip_groupbox_caption(self)
@@ -61,7 +55,6 @@ class DiceSection(QGroupBox):
         # Every spec that reaches the roller — from the bus, or from a follow-up chip
         # on a history card — passes through here on its way in.
         self.view.panel.set_localizer(self._localize)
-        self.view.panel.compactRequested.connect(self.compactRequested)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
@@ -148,3 +141,7 @@ class DiceSection(QGroupBox):
     def restore_roller(self) -> None:
         """Take the roller back into the block."""
         self.view.restore_roller()
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the roller's layout preference (the Settings page changed it)."""
+        self.view.sync_dice_layout()

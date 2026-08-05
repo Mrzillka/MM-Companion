@@ -22,6 +22,7 @@ from mm_companion.core import storage
 from mm_companion.core.session.model import new_session
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
+    HISTORY_FLOOR_HEIGHT,
     MAX_CARDS,
     MIN_HISTORY_HEIGHT,
     MIN_HISTORY_WIDTH,
@@ -242,9 +243,17 @@ def test_a_card_built_after_the_strip_was_told_starts_out_lit(panel: RollHistory
     assert panel.cards()[0].star.is_saved() is True
 
 
-def test_the_history_is_never_squeezed_below_two_cards(panel: RollHistoryPanel) -> None:
+def test_the_history_asks_for_two_cards_and_settles_for_one(panel: RollHistoryPanel) -> None:
+    """Width is a real minimum; height is only what it asks for.
+
+    The height has to give, because the history is the elastic part of the Dice
+    block — when the roll panel above it grows, this is what finds the room rather
+    than the block growing past the window. The width does not: the roller's
+    row/column reflow reads it as a genuine floor.
+    """
     assert panel._scroll.minimumWidth() == MIN_HISTORY_WIDTH
-    assert panel._scroll.minimumHeight() == MIN_HISTORY_HEIGHT
+    assert panel._scroll.minimumHeight() == HISTORY_FLOOR_HEIGHT
+    assert panel.sizeHint().height() == MIN_HISTORY_HEIGHT
 
 
 # -- deferring one's own roll until the die settles -------------------------

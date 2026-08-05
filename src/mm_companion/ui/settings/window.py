@@ -30,12 +30,14 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui import theme
 from mm_companion.ui.app_restart import restart_app
+from mm_companion.ui.settings.general_page import GeneralPage
 from mm_companion.ui.settings.gm_page import GMPage
 from mm_companion.ui.settings.page import SettingsPage
 from mm_companion.ui.settings.theme_page import ThemePage
 
-#: Every page the window offers, in the order the left-hand list shows them.
-PAGES: tuple[type[SettingsPage], ...] = (ThemePage, GMPage)
+#: Every page the window offers, in the order the left-hand list shows them. The
+#: first is also where a caller that names no page lands.
+PAGES: tuple[type[SettingsPage], ...] = (GeneralPage, ThemePage, GMPage)
 
 #: The window's own size. Not a token: a preset says how things *look*, not how
 #: big a utility window opens, and the Mod Manager sets its own the same way.

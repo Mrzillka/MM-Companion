@@ -61,10 +61,6 @@ class CharacterSheet(QWidget):
     pinRequested = Signal(object)
     #: The same, for a row that was already pinned.
     unpinRequested = Signal(object)
-    #: A block asked for compact mode — shrink the window to just the dice roller.
-    #: Relayed out for the same reason the two pin topics are: what it asks for is
-    #: the *window's* shape, which no block can see from inside the sheet.
-    compactRequested = Signal()
 
     def __init__(
         self,
@@ -267,15 +263,6 @@ class CharacterSheet(QWidget):
         self._bus.serve(PIN_REQUESTED, self.pinRequested.emit)
         self._bus.serve(UNPIN_REQUESTED, self.unpinRequested.emit)
 
-        # Compact mode travels as a plain Qt signal rather than a bus topic: the bus
-        # carries what blocks say to *each other*, and this is a block talking past
-        # the sheet to the window. Duck-typed like sync_session, so a mod's own
-        # roller block is found on the same terms as the shipped one.
-        for section in self._sections():
-            signal = getattr(section, "compactRequested", None)
-            if signal is not None and hasattr(signal, "connect"):
-                signal.connect(self.compactRequested)
-
         for topic in {t for d in self._descriptors for t in d.serves} - QUIET_REQUESTS:
             self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
 
@@ -350,6 +337,21 @@ class CharacterSheet(QWidget):
             if callable(handler):
                 handler()
                 return
+
+    def suspend_windows(self, suspended: bool) -> None:
+        """Take this sheet's floated block windows off the screen, or bring them back.
+
+        What compact mode asks for on the way in and out: the blocks pinned above
+        other applications stay, the rest go with the sheet.
+        """
+        self._canvas.set_windows_suspended(suspended)
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the roller's layout preference, fanned out like :meth:`sync_session`."""
+        for section in self._sections():
+            handler = getattr(section, "sync_dice_layout", None)
+            if callable(handler):
+                handler()
 
     def set_pinned(self, refs) -> None:
         """Tell every block which parameters are already on the GM card.

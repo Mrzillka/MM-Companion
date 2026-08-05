@@ -74,15 +74,12 @@ from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
-from mm_companion.ui.compact import (
-    COMPACT_GLYPH_COMPACT,
-    COMPACT_GLYPH_FULL,
-    CompactController,
-)
+from mm_companion.ui.compact import CompactController, compact_toggle, show_compact_state
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.menu_corner import SLOT_COMPACT, corner_area
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
@@ -292,7 +289,6 @@ class GMWindow(QMainWindow):
         # this window supplies its own release_roller/restore_roller.
         self._compact = CompactController(self, self, self._full)
         self._compact.page.strip.set_title(self.windowTitle())
-        self._roller.compactRequested.connect(self._compact.toggle)
 
         central = QWidget()
         central_layout = QVBoxLayout(central)
@@ -344,11 +340,12 @@ class GMWindow(QMainWindow):
         view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
 
-        # On the bar rather than in a menu, like the sheet's lock: a play-time view
-        # switch, reached constantly, whose glyph is its own state read-out.
-        self._compact_action = self.menuBar().addAction(COMPACT_GLYPH_FULL)
-        self._compact_action.setCheckable(True)
-        self._compact_action.triggered.connect(self._compact.toggle)
+        # In the bar's corner strip rather than in a menu: a play-time view switch,
+        # reached constantly, whose glyph is its own state read-out. It goes in
+        # before the indicator below and still lands left of it — the strip orders
+        # by slot, not by arrival (see menu_corner).
+        self._compact_button = compact_toggle(self._compact.toggle)
+        corner_area(self).add(self._compact_button, slot=SLOT_COMPACT)
         self._compact.compactChanged.connect(self._show_compact_state)
         self._show_compact_state(False)
 
@@ -359,14 +356,8 @@ class GMWindow(QMainWindow):
         install_connection_indicator(self).set_bridge(self._bridge)
 
     def _show_compact_state(self, compact: bool) -> None:
-        """Put the current compact state on the bar's glyph and its tooltip."""
-        self._compact_action.setChecked(compact)
-        self._compact_action.setText(COMPACT_GLYPH_COMPACT if compact else COMPACT_GLYPH_FULL)
-        self._compact_action.setToolTip(
-            "Give the rest of the window back"
-            if compact
-            else "Shrink the window to just the dice roller, on top of everything else"
-        )
+        """Put the current compact state on the corner glyph and its tooltip."""
+        show_compact_state(self._compact_button, compact)
 
     def _on_block_toggled(self, key: str, visible: bool) -> None:
         if visible:
@@ -555,6 +546,14 @@ class GMWindow(QMainWindow):
         for widget in (self._roller, self._history):
             self._rolls_layout.removeWidget(widget)
         return (self._roller, self._history)
+
+    def suspend_windows(self, suspended: bool) -> None:
+        """Stand this window's floated blocks down while it is compact (pinned ones stay)."""
+        self._canvas.set_windows_suspended(suspended)
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the roller's layout preference (see ``MainWindow.sync_dice_layout``)."""
+        self._roller.set_layout_preference(storage.dice_layout() == storage.DICE_LAYOUT_COMPACT)
 
     def restore_roller(self) -> None:
         """Take the roller and the history back into the Rolls block."""

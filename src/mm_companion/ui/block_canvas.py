@@ -250,6 +250,13 @@ class BlockCanvas(QWidget):
             self._frames[key] = frame
 
         self._windows: dict[str, BlockWindow] = {}
+        # Which floated blocks are pinned above other applications. Kept here, by
+        # block key, rather than on the window: dragging a block out and docking it
+        # back destroys and rebuilds the window, so anything held on the window
+        # itself is lost the first time the user moves it.
+        self._on_top: set[str] = set()
+        # Whether the floated windows are currently stood down (compact mode).
+        self._windows_suspended = False
         self._rows: list[list[str]] = []
         self._hidden: set[str] = set()
         # Where each hidden block was closed from, so reopening restores it there.
@@ -514,8 +521,17 @@ class BlockCanvas(QWidget):
         }
 
     def _window_geometry(self, key: str) -> dict:
+        """Where a floated block's window is, and whether it stays on top.
+
+        ``on_top`` is an *optional* addition read tolerantly on the way back in, so
+        it needed no schema bump and a layout saved without it still restores — the
+        same terms ``hidden_anchors`` joined on.
+        """
         geo = self._windows[key].geometry()
-        return {"x": geo.x(), "y": geo.y(), "w": geo.width(), "h": geo.height()}
+        entry = {"x": geo.x(), "y": geo.y(), "w": geo.width(), "h": geo.height()}
+        if key in self._on_top:
+            entry["on_top"] = True
+        return entry
 
     def apply_arrangement(self, model: dict) -> bool:
         """Replace the arrangement with *model*; returns False (leaving the current
@@ -533,6 +549,9 @@ class BlockCanvas(QWidget):
 
         for key in list(self._windows):
             self._destroy_window(key)
+        # A restored layout is authoritative about what stays on top; only
+        # *moving* a block keeps that choice across a dock (see set_block_on_top).
+        self._on_top.clear()
         was_hidden = self._hidden
         self._rows = rows
         self._hidden = set(hidden)
@@ -670,6 +689,9 @@ class BlockCanvas(QWidget):
             return
         frame = self._frames[key]
         frame.setParent(self)  # rescue the frame before the window is destroyed
+        # Back to meaning "pin to the strip": the block is about to have one again.
+        # The *choice* is kept in `_on_top`, so popping it out later restores it.
+        frame.title_bar.set_floating(False)
         frame.hide()
         window.hide()
         window.deleteLater()
@@ -686,6 +708,7 @@ class BlockCanvas(QWidget):
 
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
+        frame.title_bar.set_floating(True, on_top=key in self._on_top)
         frame.show()
         self._apply_window_min_width(window, frame)
         width = max(old_size.width(), frame.sizeHint().width(), frame.minimumWidth())
@@ -698,6 +721,9 @@ class BlockCanvas(QWidget):
             pos = QPoint(old_global.x() + 24, old_global.y() + 24)
         window.setGeometry(pos.x(), pos.y(), width, height)
         self._windows[key] = window
+        # Before the first show(), which is what makes the flag free — see
+        # :func:`~mm_companion.ui.frameless.apply_window_flags`.
+        window.set_on_top(key in self._on_top)
         window.show()
 
         self._relayout()
@@ -727,12 +753,19 @@ class BlockCanvas(QWidget):
     def _make_floating(self, key: str, geom: dict) -> None:
         """Restore *key* as a floating window at *geom* (used by apply_arrangement)."""
         frame = self._frames[key]
+        on_top = bool(geom.get("on_top"))
+        if on_top:
+            self._on_top.add(key)
+        else:
+            self._on_top.discard(key)
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
+        frame.title_bar.set_floating(True, on_top=on_top)
         frame.show()
         self._apply_window_min_width(window, frame)
         window.setGeometry(geom["x"], geom["y"], geom["w"], geom["h"])
         self._windows[key] = window
+        window.set_on_top(on_top)
         window.show()
 
     def _place(self, key: str, slot: DropSlot) -> None:
@@ -1036,6 +1069,50 @@ class BlockCanvas(QWidget):
             self.unpin_block(key)
         else:
             self.pin_block(key)
+
+    def request_on_top(self, key: str, on_top: bool) -> None:
+        """The same pin button, in a window: above other applications, or not."""
+        self.set_block_on_top(key, on_top)
+
+    # -- floated windows -----------------------------------------------------
+
+    def set_block_on_top(self, key: str, on_top: bool) -> None:
+        """Keep floated block *key* above other applications, or let it fall behind.
+
+        Remembered whether or not the block is currently floating, so popping it
+        out again puts it back where the user left it — the answer is about this
+        block, not about the particular window it happens to be in right now.
+        """
+        if on_top:
+            self._on_top.add(key)
+        else:
+            self._on_top.discard(key)
+        window = self._windows.get(key)
+        if window is not None:
+            window.set_on_top(on_top)
+            self._frames[key].title_bar.set_floating(True, on_top=on_top)
+        self.arrangement_changed.emit()
+
+    def is_block_on_top(self, key: str) -> bool:
+        """Whether floated block *key* is pinned above other applications."""
+        return key in self._on_top
+
+    def set_windows_suspended(self, suspended: bool) -> None:
+        """Take the floated windows off the screen while the host is compact.
+
+        Compact mode means "put the app out of the way", and a scatter of loose
+        block windows left behind is exactly the thing it was asked to clear. The
+        ones pinned on top stay: keeping a block beside the mini roller is what
+        pinning it *for*, and hiding it would make the pin meaningless.
+        """
+        suspended = bool(suspended)
+        if suspended == self._windows_suspended:
+            return
+        self._windows_suspended = suspended
+        for key, window in self._windows.items():
+            if key in self._on_top:
+                continue
+            window.setVisible(not suspended)
 
     @staticmethod
     def _start_distance() -> int:

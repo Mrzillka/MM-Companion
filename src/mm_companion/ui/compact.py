@@ -43,6 +43,8 @@ the animation and the geometry.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import (
     QAbstractAnimation,
     QByteArray,
@@ -61,7 +63,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QScrollArea,
-    QSizeGrip,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -69,6 +70,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.ui import theme
+from mm_companion.ui.frameless import apply_window_flags, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
 
 #: The menu-bar toggle's two faces. It rides the bar rather than a menu, beside
@@ -77,6 +79,59 @@ from mm_companion.ui.widgets import ElidingLabel
 #: *shows* the current state is worth more there than a tick two clicks deep.
 COMPACT_GLYPH_FULL = "⤡"
 COMPACT_GLYPH_COMPACT = "⤢"
+
+
+def compact_toggle(on_toggle: Callable[[], None]) -> QToolButton:
+    """The corner strip's compact-mode button, built the same way for both windows.
+
+    A widget rather than a menu-bar action because it has to sit *left of* the
+    connection indicator, and a corner widget is the only thing a menu bar puts
+    right of its actions (see :mod:`mm_companion.ui.menu_corner`).
+
+    Its width is pinned across both glyphs for the reason
+    :meth:`~mm_companion.ui.connection_indicator.ConnectionIndicator._reserve`
+    documents: the bar lays its corner widget out when the *bar* resizes, so
+    anything that changes size in there afterwards is clipped rather than
+    re-placed.
+    """
+    button = QToolButton()
+    button.setCheckable(True)
+    button.setAutoRaise(True)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setText(COMPACT_GLYPH_FULL)
+    # Not a tab stop. It is window chrome, reached with the mouse — and on a locked
+    # sheet, whose fields shed their focus chrome, it was the first focusable thing
+    # in the window, so it opened wearing a focus ring that reads exactly like the
+    # lit "on" state a few lines below.
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    metrics = button.fontMetrics()
+    widest = max(
+        metrics.horizontalAdvance(glyph) for glyph in (COMPACT_GLYPH_FULL, COMPACT_GLYPH_COMPACT)
+    )
+    button.setFixedWidth(widest + 2 * int(theme.metric("space.md")))
+    # The signal carries the button's own new checked state, which is not the
+    # answer — the controller decides, and says so on compactChanged.
+    button.clicked.connect(lambda _checked=False: on_toggle())
+    return button
+
+
+def show_compact_state(button: QToolButton | None, compact: bool) -> None:
+    """Put the current mode on *button*'s glyph, its tooltip and its checked state.
+
+    Driven by :attr:`CompactController.compactChanged` rather than by the button's
+    own toggle, so it still tells the truth when the mode was changed some other
+    way — a double-click on the mini strip, or Escape. Tolerates ``None`` for the
+    windows that carry no toggle at all.
+    """
+    if button is None:
+        return
+    button.setChecked(compact)
+    button.setText(COMPACT_GLYPH_COMPACT if compact else COMPACT_GLYPH_FULL)
+    button.setToolTip(
+        "Give the rest of the window back"
+        if compact
+        else "Shrink the window to just the dice roller, on top of everything else"
+    )
 
 
 class CompactStrip(QFrame):
@@ -236,14 +291,8 @@ class CompactPage(QWidget):
         layout.addWidget(self._scroll, stretch=1)
 
         # A frameless window has no resize border, so this is the only way to
-        # resize it with the mouse. It sits in a row of its own rather than over
-        # the history, where it would cover a card's buttons.
-        grip_row = QWidget()
-        grip_box = QHBoxLayout(grip_row)
-        grip_box.setContentsMargins(0, 0, 0, 0)
-        grip_box.addStretch()
-        grip_box.addWidget(QSizeGrip(grip_row))
-        layout.addWidget(grip_row)
+        # resize it with the mouse.
+        layout.addWidget(size_grip_row())
 
     def adopt(self, panel: QWidget, history: QWidget) -> None:
         """Take the roller in: the controls above, the history filling the rest."""
@@ -381,6 +430,10 @@ class CompactController(QObject):
         self._content.hide()
         self.page.show()
         self._window.menuBar().hide()
+        # Loose block windows are separate top-level windows, so hiding the content
+        # never touched them — and a scatter of them left on screen is exactly what
+        # compact mode was asked to clear. The ones pinned on top stay.
+        self._suspend_windows(True)
 
         preferences = storage.compact_settings()
         self.page.strip.set_on_top(preferences["on_top"])
@@ -416,8 +469,19 @@ class CompactController(QObject):
         panel.set_compact(False)
         self.page.hide()
         self._content.show()
+        self._suspend_windows(False)
         if self._was_maximized:
             self._window.showMaximized()
+
+    def _suspend_windows(self, suspended: bool) -> None:
+        """Stand the surface's floated block windows down, if it has any.
+
+        Duck-typed like the borrow itself: a surface with no loose windows — or a
+        host that has never heard of them — simply does not offer this.
+        """
+        handler = getattr(self._surface, "suspend_windows", None)
+        if callable(handler):
+            handler(suspended)
 
     def _set_on_top(self, on_top: bool) -> None:
         storage.set_compact_settings(on_top=bool(on_top))
@@ -429,19 +493,11 @@ class CompactController(QObject):
     def _apply_flags(self, *, frameless: bool, on_top: bool) -> None:
         """Take the OS frame away (or give it back), keeping the window where it is.
 
-        Qt hides a window whose flags change and the platform recreates it, so the
-        geometry has to be re-applied afterwards — and this must happen while
-        nothing is animating. A window that was never shown is left alone: a test
-        that only constructs one must not have it thrown onto the screen.
+        Shared with a floated block, which makes the same trade — see
+        :func:`~mm_companion.ui.frameless.apply_window_flags` for the ordering rule
+        this must obey.
         """
-        window = self._window
-        visible = window.isVisible()
-        geometry = window.geometry()
-        window.setWindowFlag(Qt.WindowType.FramelessWindowHint, frameless)
-        window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
-        if visible:
-            window.show()
-            window.setGeometry(geometry)
+        apply_window_flags(self._window, frameless=frameless, on_top=on_top)
 
     def _compact_target(self, preferences: dict) -> QRect:
         """Where and how big the mini window goes.

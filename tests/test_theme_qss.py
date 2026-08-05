@@ -63,6 +63,22 @@ def test_a_styled_preset_dresses_the_blocks_and_the_native_chrome(presets, theme
         assert expected in sheet
 
 
+@pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light", "crimson-gold"])
+def test_a_styled_preset_says_what_a_checked_tool_button_looks_like(presets, theme_id: str) -> None:
+    """The regression: a checkable tool button that looked exactly like an unchecked one.
+
+    Stating a tool button's box at all makes ``QStyleSheetStyle`` take the whole box
+    over and stop painting the platform's sunken/checked panel — so the mini
+    roller's always-on-top pin, and a floated block's, simply gave no sign of being
+    on. The resting border has to stay drawn (in ``transparent``) for the same
+    reason ``QuickRollStar``'s does: otherwise the glyph jumps as it lights up.
+    """
+    sheet = qss.build(presets[theme_id])
+
+    assert "QToolButton:checked" in sheet
+    assert "border: none" not in sheet.split("/* buttons */")[1]
+
+
 @pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light"])
 def test_a_styled_preset_carries_its_colour_in_a_palette(presets, theme_id: str) -> None:
     from mm_companion.ui.theme.palette import build_palette

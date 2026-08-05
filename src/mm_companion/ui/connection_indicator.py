@@ -327,10 +327,10 @@ def install_connection_indicator(window) -> ConnectionIndicator:
     """Put an indicator in *window*'s menu-bar corner and hand it back.
 
     The menu bar reparents the widget, and takes its size into account when
-    laying the menus out, so nothing else has to make room for it. Also stashed
-    on the window as ``connection_indicator`` so a later ``set_bridge`` — the
-    player side only learns which session it is in after the join dialog — can
-    find it without threading a reference through three constructors.
+    laying the menus out, so nothing else has to make room for it. It is also
+    stashed on the window as ``connection_indicator``, because the player side
+    only learns which session it is in after the join dialog and looks the
+    indicator up there to call ``set_bridge`` on it.
     """
     indicator = ConnectionIndicator(window)
     window.menuBar().setCornerWidget(indicator, Qt.Corner.TopRightCorner)

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
 
 
@@ -47,6 +48,7 @@ class DragHost(Protocol):
     def request_float(self, key: str) -> None: ...
     def request_hide(self, key: str) -> None: ...
     def request_pin(self, key: str) -> None: ...
+    def request_on_top(self, key: str, on_top: bool) -> None: ...
 
 
 class TitleBar(QFrame):
@@ -55,6 +57,13 @@ class TitleBar(QFrame):
     Left-drag on the bar drives the canvas drag gesture; the buttons park the
     block in the pinned strip, pop it out into its own window, or hide it. Clicks
     on the buttons are consumed by them, so they never start a drag.
+
+    The ``🖈`` button **means different things in different homes**, which is not a
+    trick but the honest reading of one glyph: on the page or in the strip it pins
+    the block *to the strip*, and in its own window — where the strip is not
+    somewhere it can go without ceasing to be a window — it pins the window *above
+    other applications*. Pinning is what the glyph says; what it pins to is
+    whatever the block is currently beside. :meth:`set_floating` swaps the two.
     """
 
     def __init__(self, key: str, title: str, host: DragHost, parent: QWidget | None = None) -> None:
@@ -77,18 +86,17 @@ class TitleBar(QFrame):
         self._label.setObjectName("blockTitleLabel")
         layout.addWidget(self._label, stretch=1)
 
+        # Whether this block is in a window of its own, which is what the pin
+        # button means by "pin" — see the class docstring.
+        self._floating = False
         self._pin_button = QToolButton()
         # U+1F588 black pushpin, not U+1F4CC: the plain symbol keeps the title bar
         # monochrome like its ↗ and ✕ neighbours, where the emoji pushpin would put
         # a colour glyph in every block's header.
         self._pin_button.setText("🖈")
         self._pin_button.setAutoRaise(True)
-        self._pin_button.setToolTip(
-            "Pin this block to the fixed strip (or drag it there); "
-            "click again to send it back to the page"
-        )
         self._pin_button.setCursor(Qt.CursorShape.ArrowCursor)
-        self._pin_button.clicked.connect(lambda: self._host.request_pin(self._key))
+        self._pin_button.clicked.connect(self._pin_clicked)
         layout.addWidget(self._pin_button)
 
         self._float_button = QToolButton()
@@ -106,6 +114,38 @@ class TitleBar(QFrame):
         self._close_button.setCursor(Qt.CursorShape.ArrowCursor)
         self._close_button.clicked.connect(lambda: self._host.request_hide(self._key))
         layout.addWidget(self._close_button)
+
+        # Last, once every button it dresses exists.
+        self.set_floating(False)
+
+    def set_floating(self, floating: bool, *, on_top: bool = False) -> None:
+        """Say which home this block is in, which decides what its ``🖈`` pins.
+
+        In a window of its own the pin is a **toggle** — the window stays above
+        other applications, or it does not — so it is checkable there and a plain
+        action everywhere else. The float button goes with it: a window already is
+        popped out, and ``↗`` on it would do nothing.
+        """
+        self._floating = bool(floating)
+        self._float_button.setVisible(not self._floating)
+        self._pin_button.setCheckable(self._floating)
+        if self._floating:
+            self._pin_button.setChecked(bool(on_top))
+            self._pin_button.setToolTip(describe_on_top(on_top))
+            return
+        self._pin_button.setChecked(False)
+        self._pin_button.setToolTip(
+            "Pin this block to the fixed strip (or drag it there); "
+            "click again to send it back to the page"
+        )
+
+    def _pin_clicked(self) -> None:
+        if self._floating:
+            on_top = self._pin_button.isChecked()
+            self.set_floating(True, on_top=on_top)  # refresh the tooltip
+            self._host.request_on_top(self._key, on_top)
+            return
+        self._host.request_pin(self._key)
 
     def set_title(self, text: str) -> None:
         """Update the drag handle's caption (a section reports its live title here)."""
@@ -312,10 +352,19 @@ class BlockWindow(QWidget):
     docked, where the whole sheet scrolls as one page and each block shows all
     of its content. The scroll area only ever scrolls vertically; the frame's
     width tracks the window.
+
+    It is **frameless**, and that is a trade rather than a decoration: a popped-out
+    block spends its life beside somebody else's application, where the OS title
+    bar is most of what makes it read as a document rather than a tool. What the
+    frame was doing is supplied instead by the block's own title bar (drag, and the
+    ``✕`` that hides it) and a :class:`QSizeGrip` in the corner. The flags are set
+    here, before the first ``show()``, because changing them on a visible window
+    costs a hide/recreate cycle (see
+    :func:`~mm_companion.ui.frameless.apply_window_flags`).
     """
 
     def __init__(self, key: str, host: DragHost, parent: QWidget | None = None) -> None:
-        super().__init__(parent, Qt.WindowType.Tool)
+        super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self._key = key
         self._host = host
         self.setObjectName("blockWindow")
@@ -331,6 +380,11 @@ class BlockWindow(QWidget):
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self._scroll)
+        layout.addWidget(size_grip_row(self))
+
+    def set_on_top(self, on_top: bool) -> None:
+        """Keep this window above other applications, or let it fall behind."""
+        apply_window_flags(self, frameless=True, on_top=bool(on_top))
 
     def set_frame(self, frame: BlockFrame) -> None:
         """Host *frame*, giving the window the frame's title as its window title."""

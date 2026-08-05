@@ -274,14 +274,21 @@ def test_dropping_the_bridge_goes_quiet(pair) -> None:
     assert indicator.text == TEXT_OFFLINE
 
 
+def _corner_indicator(window) -> ConnectionIndicator | None:
+    """The indicator in *window*'s menu-bar corner, if it has one."""
+    corner = window.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
+    return corner if isinstance(corner, ConnectionIndicator) else None
+
+
 def test_the_sheet_installs_one_in_its_menu_bar_corner(qapp: QApplication) -> None:
     from mm_companion.ui.main_window import MainWindow
 
     window = MainWindow()
-    corner = window.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
 
-    assert isinstance(corner, ConnectionIndicator)
-    assert corner is window.connection_indicator
+    indicator = _corner_indicator(window)
+    assert isinstance(indicator, ConnectionIndicator)
+    # Also stashed on the window, which is where a later set_bridge looks.
+    assert indicator is window.connection_indicator
     window.close()
 
 
@@ -308,10 +315,10 @@ def test_the_gm_window_installs_one_following_its_own_bridge(qapp: QApplication)
     from mm_companion.ui.gm_window import GMWindow
 
     window = GMWindow()
-    corner = window.menuBar().cornerWidget(Qt.Corner.TopRightCorner)
 
-    assert isinstance(corner, ConnectionIndicator)
+    indicator = _corner_indicator(window)
+    assert isinstance(indicator, ConnectionIndicator)
     # Already following the window's bridge — a GM window owns one from birth,
     # unlike a sheet, which only learns its session at the join dialog.
-    assert corner._bridge is window.bridge
+    assert indicator._bridge is window.bridge
     window.close()

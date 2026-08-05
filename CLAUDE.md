@@ -290,11 +290,12 @@ clean (see Licensing below).
   and `core.storage` directly), so it publishes nothing on the bus — a roll must never
   mark the sheet dirty, though it does **serve** `roll-requested`, see "Rolling from
   the sheet" below — and its `set_locked` is a **no-op**, since rolling is a
-  mid-play action like a power's on/off switch. Its history keeps an inner scroll area,
-  the same deliberate exception the GM window's `gm_rolls` block makes, with a
-  `MIN_HISTORY_WIDTH` **and** `MIN_HISTORY_HEIGHT` floor (a scroll area asks for nothing
-  on its own, so without them a history is squeezed to an unreadable sliver, or to the
-  one card that fits in whatever height is left over). A session can be joined long
+  mid-play action like a power's on/off switch. **Its history is the only thing in the
+  block allowed to scroll** — the block itself never does, and neither does the strip
+  around it (see "The Dice block's height" below). That history keeps an inner scroll
+  area, the same deliberate exception the GM window's `gm_rolls` block makes, with a
+  `MIN_HISTORY_WIDTH` floor (a scroll area asks for nothing on its own, so without it a
+  history is squeezed to an unreadable sliver). A session can be joined long
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
@@ -348,14 +349,186 @@ clean (see Licensing below).
   `_column_sizes`). A splitter child with no stretch keeps the pixels it was given: when
   the panel's minimum *shrinks* the splitter simply leaves it where it was, and Qt sends
   no resize — a minimum going down provokes nothing. Removing a quick roll used to leave
-  a permanent gap above the strip for exactly this reason. So `_rebuild_quick_strip`
-  emits `quickRollsChanged` and calls `updateGeometry` (what makes the `BlockFrame` ask
-  again), and the view re-divides **twice** — now, and on the next turn, since the
-  dropped chips are `deleteLater`'d and the size hint only tells the truth once they are
-  gone. A split the user dragged is still left alone (`_user_sized`).
+  a permanent gap above the strip for exactly this reason. So anything that changes what
+  the panel holds emits **`contentChanged`** and calls `updateGeometry` (what makes the
+  `BlockFrame` ask again), and the view re-divides **twice** — now, and on the next turn,
+  since dropped chips are `deleteLater`'d and the size hint only tells the truth once
+  they are gone. A split the user dragged is still left alone (`_user_sized`).
+  `quickRollsChanged` is the *sibling* topic and stays about what is *in* the strip (the
+  histories' stars); conflating the two is how `load_spec` came to change the panel's
+  height while telling nobody.
 - A block's `min_width` in `ui/block_sizes.json` is what sets the **strip's** thickness
   for a pinned block (a page row is wide enough for anything), so `dice` is 360 — under
   that its column arrangement clips in a side strip.
+
+### The Dice block's height (the rule: it never scrolls, and neither does the strip)
+
+The block's minimum is *exactly* its content — no more, and no less — and the roll
+history is the one thing inside it that scrolls. Four separate things make that true,
+and the bug that motivated them was a single click: loading a stat into the roller
+shows the spec chip, the panel grows ~50px, and the strip answered with a scrollbar.
+- **The panel says when it changed size** (`contentChanged`, above). Without it the
+  splitter kept handing the panel its old share *plus* the chip.
+- **The history is the elastic part**, and its two heights are deliberately different
+  numbers: `MIN_HISTORY_HEIGHT` (200) is what it *asks* for, `HISTORY_FLOOR_HEIGHT` (90)
+  is the hard `setMinimumHeight`. It is a list with its own scroll area, so shortening it
+  is the honest way to find room; pinning 200 as a minimum meant it could never give a
+  pixel back.
+- **A history's `sizeHint` is capped** at those two cards. A `QScrollArea` otherwise
+  reports its inner widget's hint, and a block's minimum is its content's *preferred*
+  height — so the block's minimum used to climb with every roll, all session. Both halves
+  are one thing and live in one place: `roll_history.size_history_scroll(scroll)` plus a
+  `sizeHint` returning `HISTORY_SIZE_HINT`, taken by both `RollHistoryPanel` and
+  `LocalRollHistory` — as far as a layout is concerned those two *are* the same widget,
+  and differ only in where their cards come from.
+- **The strip re-reports its minimum** when the content below it changes
+  (`PinnedPanel.eventFilter` on a `LayoutRequest` from its splitter). This is the one Qt
+  cannot do itself: a `QScrollArea`'s own minimum does not depend on its child, so the
+  invalidation chain frame → strip → board → window is broken exactly there, and the
+  window kept a minimum computed before the block grew.
+
+Both of the strip's scrollbars stay on `AsNeeded`. They are the documented valve for a
+strip asked to hold more than the display can show — `PinnedPanel.minimumSizeHint` is
+capped at the usable screen, and past that a bar beats clipping a block. What the four
+fixes above buy is that the valve stops firing when the window had room all along.
+
+## Compact mode (matters when touching the roller or either window)
+
+The pinned strip's argument taken one step further: mid-fight the only part of the app
+anyone touches is the roller, so `ui/compact.py` collapses the **whole window** to a
+small, frameless, always-on-top mini roller — the Roll box across the top, the quick
+rolls beside a smaller die, the history filling the rest. A **round `⤡` button floating
+over the roller's bottom-right corner** enters, as does **`Ctrl+Shift+D`**; `⤢` on the
+mini strip, `Esc`, or that same button leaves.
+- **The button rides the roller, not the menu bar.** It sat in the bar's right-hand
+  corner once and was close to invisible there — a thin grey glyph at the far end of a
+  bar nobody looks at, saying nothing about dice. So `CompactOverlayButton` floats over
+  the thing it acts on, the way a meeting app parks its controls over the video. It
+  covers a corner of one history card, which is the price and a cheap one. Four
+  consequences. It is **in no layout** — a plain child of its host, placed by hand from
+  an event filter on the host's `Resize`/`Show` and `raise_()`d, so the roller is laid
+  out as though it were not there (and `attach(None)` parks it back on the *window*,
+  never on nothing: re-parenting to `None` promotes a widget to a top-level one, which
+  both the General settings page and the tests' teardown then sweep up). It is styled by
+  a **stylesheet on the widget itself**
+  from tokens every preset defines (`accent`, `text.on-badge`, `border.card`) — Classic
+  emits no `QToolButton` rules at all, so a theme-QSS rule would exist under some presets
+  and not others, the same bargain `ui/lock.py` strikes. It sits **flush in the corner**,
+  which is a choice between two overlaps rather than a way of avoiding one — the
+  bottom-right of a scrolling list of cards is never empty. There it clips the tail of
+  the history's own scroll bar (the down-arrow and the last of the trough), which costs
+  nothing anyone reaches for since the wheel and the thumb are untouched; insetting by a
+  scroll bar's width to spare it was tried and is **worse**, landing the button squarely
+  on a card's `✕`, a discrete control with no other way to hit it. And
+  **closing the Dice block closes the way in** — `enter()` checks
+  `compact_anchor().isVisibleTo(window)`, which it has to now that a shortcut exists: the
+  button being a child of the block used to enforce that on its own.
+- The two ways in are **not the same affordance**. The button is the discoverable one,
+  which is the whole reason it left the menu bar; `Ctrl+Shift+D` (the only shortcut in
+  `src/`) is what makes compact mode reachable without a mouse at all, and it is the only
+  way at all into the GM's read-only view of a player sheet, whose menu bar is
+  deliberately bare.
+- There is **one** button, re-parented between the roller and the mini page's scroll area
+  — the same rule the roller itself follows below. Two would be two states to keep in
+  step, and the one showing the wrong glyph would be whichever was off screen. The mini
+  page hands over its *scroll area* rather than itself, so the button never lands on the
+  `QSizeGrip` that is the only way to resize a frameless window.
+- The **roll panel** carries no shrink button, and the button's host is the
+  `DiceRollerView` rather than the panel for that reason: among the roll controls it cost
+  a row of the panel's height in every window it appeared in — including the pinned
+  strip, where height is the scarce thing. Over the view it lands on the history, which
+  has room. A window's menu bar is back to holding nothing but the connection indicator.
+- **The mini roller is the roller, moved.** Nothing builds a second one: the controller
+  asks its *surface* to hand the live panel and history over and gives them back on the
+  way out, so a loaded spec, the quick-roll strip, a tumble in flight and — the one that
+  would really show — the session history and its attachment to the table all carry
+  across. A second roller would have been a second seat at the table and every roll
+  twice. Same borrow-and-return the canvas performs moving a block between the page, the
+  strip and a floating window, including the rule that a widget still parented to a
+  container Qt is about to free goes with it.
+- A **surface** is anything with `release_roller()` (the panel and the history widget,
+  or `None`), `restore_roller()`, and `compact_anchor()` (the widget the round button
+  floats over). `CharacterSheet` duck-types over its blocks for all three like
+  `sync_session`, so a mod's roller joins on the same terms; `GMWindow` answers for
+  itself, since its roller is a bare `DiceRollerPanel` beside a `gm=True` history rather
+  than a `DiceRollerView`, and its anchor is the Rolls group box. A surface that lends
+  nothing simply has no compact mode — including no button, since there is nowhere to put
+  one. Note this is now the *only* gate: a GM's read-only view of a player sheet has a
+  roller, so it has compact mode too, where the old menu-bar toggle denied it one.
+- The compact arrangement is a **third shape** beside the reflow's row and column, and
+  while it is in force `sync_reflow` stands down — it is chosen, not derived from the
+  room available. It is also **not only a mode**: it turned out to be a good roller in
+  its own right, so `dice_layout` in settings (`auto` / `compact`, read through
+  `storage.dice_layout()`, edited on the Settings window's General page) pins it
+  everywhere. Hence two flags on the panel, `_window_compact` and `_prefer_compact`,
+  resolved by one `_apply_shape()`: leaving compact mode must not undo the preference,
+  which a single flag did the first time anyone expanded the window. The page applies it
+  live by walking the open top-level windows for anything answering `sync_dice_layout` —
+  duck-typed, so it imports neither the sheet nor the GM window. `DiceRollerView` stands
+  its reflow down the same way while its parts are out on loan (`_lent`), and
+  `restore_roller` ends with the usual two-pass
+  `updateGeometry` → `_redivide` → `_settle.start(0)`.
+- Three things the window has to get right. **Hiding the outgoing content is what frees
+  it to shrink** — a hidden widget is left out of its layout's minimum, and both
+  `CharacterSheet._update_min_width` and `PinnedPanel.minimumSizeHint` otherwise hold it
+  open. **Window flags change before the animation, never during it**: Qt hides a window
+  whose flags change and the platform recreates it, so the geometry is re-applied right
+  after the `show()`. And a **maximized** window cannot be resized, so it is dropped to
+  normal on the way in and re-maximized on the way out.
+- A **transition is atomic**: `enter`/`leave` both open with `_settle_animation`, which
+  lands whatever is still easing — geometry *and* its pending `on_finished` — before the
+  next one starts. Both toggles read and write the window's geometry (`saveGeometry`
+  going in, `remember_size` coming out) and a frame of an ease is neither of the two
+  sizes anyone chose: toggling inside the 180 ms wrote a half-grown rectangle into the
+  **shared** `layout` key, so every character sheet opened at it. Note Qt does *not* emit
+  `finished` for an animation merely stopped, which is why the finisher is held on the
+  controller and run by hand.
+- The mini window is frameless, so it supplies what the OS frame would have: the strip
+  is the drag handle and carries the title — the **only** place a caption shows, so it
+  follows `windowTitleChanged` rather than being seeded once (the GM window retitles
+  itself with the session it is hosting); a host wanting something shorter calls
+  `set_title` *after* `setWindowTitle`, which is what `MainWindow._update_title` does to
+  show `*Name` rather than the whole window title. A `QSizeGrip` is the only way to
+  resize.
+  Both halves live in `ui/frameless.py` (`apply_window_flags`, `size_grip_row`) because a
+  **floated block makes exactly the same trade** — see below. It goes **as small as it is
+  dragged** — the roller lives in a `QScrollArea`, which does not pass its child's
+  minimum on, so the only floor is `compact.min-width/height` and under that the die and
+  history scroll.
+- **Floated blocks mostly stay.** A `BlockWindow` is a child of the *window*, not the
+  sheet, so hiding the content never touched one; the controller asks its surface to
+  `suspend_windows(True)`, which hides every floated block **except the ones pinned on
+  top**. Read that with the other rule in hand, because together they are not what the
+  sentence sounds like: on top is a floated block's **default**, so for anyone who has
+  not gone out of their way, entering compact mode hides *nothing*. That is intended, and
+  it is the right reading of both rules — a block popped out is a block wanted beside
+  things, so it goes on sitting beside the mini roller too, and `✕` is how you say
+  otherwise. What `suspend_windows` actually clears is the narrower case: the blocks a
+  user explicitly sent behind, which are the ones not being read. Do not "fix" the
+  test at `tests/test_compact_mode.py` that calls `set_block_on_top(…, False)` first —
+  that call is the point of it.
+- The **flag** matters more than what it hides, and that is the other reason
+  `suspend_windows` is called on every entry regardless: `_windows_suspended` is what
+  `accepts_drops` reads (next bullet), and that guard has to be on whenever the page is
+  behind the mini roller.
+- The blocks that stay are still **draggable**, and that is where `BlockCanvas.accepts_drops`
+  earns its keep: while suspended, a drag is a plain move and nothing may land. A hidden
+  widget keeps its last geometry, so `_hit_test` over where the page *used to be* still
+  reports a perfectly good `DropSlot` — and the block docked into a page nobody could see
+  and vanished, recoverable only from the View menu. `update_drag` shows no insert line
+  and does not auto-scroll for the same reason (both would promise a landing the drop
+  refuses), and entering compact mid-drag ends the gesture rather than letting it finish
+  against a page that has gone.
+- Persistence splits in two, and must: `compact` in settings holds the *mini* window's
+  size and the always-on-top pin (read through `storage.compact_settings()`, never off
+  `load_settings()`), while `saved_geometry()` hands `_persist_layout` the blob captured
+  **before** the shrink — the `layout` key is shared by every sheet, so writing 380×560
+  there would open every character that size. Being compact is deliberately *not*
+  persisted: it is a play-time view switch like the lock, and relaunching into a
+  dice-only window would leave someone hunting for the rest of the app.
+- `ANIMATION_MS` is a class attribute so `tests/conftest.py` can zero it, exactly as it
+  does `PowersSection.TRANSITION_MS`; a window that is not on screen jumps rather than
+  eases, so a test asserts on the resting state without an event loop.
 
 ## Rolling from the sheet (matters when touching the roller or a stat block)
 
@@ -477,6 +650,18 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   inner scroll area, sized to its content. A floated block moves into a
   `BlockWindow` (a top-level window owned by the sheet); its title bar reuses the
   same drag gesture, so you drag it back onto the page to re-dock.
+  A floated `BlockWindow` is **frameless and can be pinned above other
+  applications**, the same trade the mini roller makes and through the same
+  `ui/frameless.py` helpers: a popped-out block spends its life beside somebody
+  else's window, where the OS title bar is most of what makes it read as a document.
+  The block's own title bar was already the drag handle and its `✕` already hides
+  the block, so all the frame owed was a `QSizeGrip`. The `🖈` **means what the
+  block's current home makes it mean** — pin *to the strip* on the page, pin *on
+  top* in a window — and `TitleBar.set_floating` swaps the two (checkable there,
+  a plain action elsewhere; `↗` hides, since a window is already popped out).
+  That is one glyph honestly read, not a pun: pinning is what it says, and what it
+  pins to is whatever the block is beside. In a window it opens **already lit** —
+  staying on top is the default, see the canvas bullet below.
 - `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
   arrangement — `_rows` (an ordered list of rows, each an ordered list of block
   keys), `_windows` (floated blocks), `_hidden` (closed blocks), and `_pinned`
@@ -486,9 +671,23 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   gesture (float-out at drag start, `_hit_test` → a `DropIndicator`, dock-on-drop,
   pin-on-drop over the strip, or leave-floating), plus edge auto-scroll. Structural
   ops `float_block`, `dock_block`, `show_block`/`hide_block`,
-  `pin_block`/`unpin_block`/`set_pin_edge`/`set_pin_align`, `arrangement`,
+  `pin_block`/`unpin_block`/`set_pin_edge`/`set_pin_align`, `set_block_on_top`,
+  `set_windows_suspended`, `arrangement`,
   `apply_arrangement`, `default_arrangement` are the headless-testable seams (drag
-  outcomes without synthetic mouse events). The default arrangement is supplied by
+  outcomes without synthetic mouse events). **Which floated blocks stay on top lives
+  in `_on_top`, keyed by block** and not on the `BlockWindow`: dragging a block out
+  and docking it back destroys and rebuilds that window, so anything held on the
+  window is lost the first time it moves. **A popped-out block stays on top by
+  default** (`DEFAULT_ON_TOP`) — it was popped out to be read *beside* something, and
+  one that sinks behind that window the moment it is clicked is no use — which is why
+  `_on_top` is a `dict[str, bool]` and not a set: absence has to mean "never asked"
+  rather than "no", and only an explicit `set_block_on_top` (or a restored layout
+  carrying one) records the exception. Ask `_wants_on_top`, never `key in _on_top`. It
+  persists in the `floating` entry as `on_top`, read tolerantly and so needing no
+  `SCHEMA_VERSION` bump — the `hidden_anchors` precedent — but written **both ways**,
+  since absence now means the default. Note the asymmetry: *moving* a block keeps the
+  choice across a dock (popping it out again puts it back the way it was left), while
+  *restoring a layout* is authoritative and clears it. The default arrangement is supplied by
   the sheet from the block registry's `default_rows()` (grouping descriptors by
   their default row/col): the Name & Details block beside the Character Image, then
   the System / Power Level block full width, the Abilities | Resistances pair, then
@@ -899,11 +1098,13 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
 - The look is changed in the **Settings window** (`ui/settings/`, opened from a
   sheet's `Settings ▸ Preferences…`, the GM window's, or the launcher's Settings
   button): a `QListWidget` nav over a `QStackedWidget`, whose pages come from
-  `window.PAGES` — `ThemePage` and `GMPage`. Adding another area of settings is an
+  `window.PAGES` — `GeneralPage`, `ThemePage` and `GMPage`. Adding another area of
+  settings is an
   entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
   `is_dirty`, `save`, `discard`, `needs_restart`). Which page it *opens on* is the
   caller's to say (`SettingsWindow(page=GMPage.title)`), which is how the GM window
-  lands on its own rather than on the sheet's.
+  lands on its own rather than on the sheet's; a caller that names none gets the
+  **first**, so the tuple's order is a decision and not an accident.
 - The Themes page separates two things on purpose. **Picking** a preset writes
   through at once (`set_active_theme`), as the old menu did. **Editing** one is a
   draft: `TokenEditor` (`ui/settings/token_editor.py`) generates a form by walking

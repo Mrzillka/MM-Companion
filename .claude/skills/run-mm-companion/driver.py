@@ -10,6 +10,8 @@ from a single command:
     python .claude/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
     python .claude/skills/run-mm-companion/driver.py sheet-locked # the read-only view
     python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+    python .claude/skills/run-mm-companion/driver.py compact      # the window shrunk to the roller
+    python .claude/skills/run-mm-companion/driver.py compact-gm   # the same, from the GM window
     python .claude/skills/run-mm-companion/driver.py gm           # GM Mode, with a cast of NPCs
     python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
     python .claude/skills/run-mm-companion/driver.py all           # start + sheet + constructor
@@ -237,6 +239,9 @@ def build(target: str):
             win._driver_bridge = bridge  # keep it alive for the screenshot
             return win
 
+        # Load the attack first: the *spec* is what carries the save it forces, so
+        # without this the card comes out with no follow-up chip to click.
+        panel.load_spec(attack)
         panel._dc_check.setChecked(True)
         panel._dc_spin.setValue(12)  # the target's Defense
         dice_module.roll_d20 = lambda *a, **k: 14  # a hit, deterministically
@@ -251,6 +256,42 @@ def build(target: str):
         panel._bonus_spin.setValue(4)  # the target's Toughness
         dice_module.roll_d20 = lambda *a, **k: 6  # and it fails
         panel._finish_roll()
+        return win
+    elif target in ("compact", "compact-gm"):
+        # Compact mode: the whole window collapsed to just the roller, frameless and
+        # on top. Two variants because the two windows lend *different* roll
+        # surfaces to the same mini page — the sheet a DiceRollerView's panel and
+        # history, the GM a bare panel beside the shared GM history — and a shot of
+        # only one would say nothing about whether the seam holds for both.
+        if target == "compact-gm":
+            from mm_companion.ui.gm_window import GMWindow
+
+            win = GMWindow(bind="127.0.0.1")
+            win.show()
+            panel = win._roller
+        else:
+            from mm_companion.ui.main_window import MainWindow
+
+            win = MainWindow(locked=False)
+            win.show()
+            panel = win._sheet.dice.panel
+
+        # Fill the roller in first, so the mini window is not an empty state: a
+        # loaded trait in the chip, a couple of quick-roll chips beside the die and
+        # two resolved rolls in the history under it.
+        from mm_companion.core.rules import RollSpec
+
+        panel.load_spec(RollSpec(label="Athletics", modifier=9))
+        panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
+        panel._add_quick_roll({"bonus": 8, "penalty": 0, "dc": None}, name="Toughness")
+        panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+        panel._dc_check.setChecked(True)
+        panel._dc_spin.setValue(15)
+        panel._finish_roll()
+        panel._dc_check.setChecked(False)
+        panel._finish_roll()
+
+        win._compact.enter()
         return win
     elif target in ("dice-bottom", "dice-bottom-demo"):
         # The Dice block in a *bottom* strip — short and wide, so its four parts
@@ -381,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
             "roll-demo-table",
             "dice-bottom",
             "dice-bottom-demo",
+            "compact",
+            "compact-gm",
             "settings",
             "settings-demo",
             "gm",

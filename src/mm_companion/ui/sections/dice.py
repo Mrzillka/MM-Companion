@@ -125,3 +125,34 @@ class DiceSection(QGroupBox):
 
     def set_locked(self, locked: bool) -> None:
         """No-op: rolling is a play action, available in the read-only view too."""
+
+    # -- compact mode --------------------------------------------------------
+
+    def release_roller(self) -> tuple[QWidget, QWidget]:
+        """Lend the roller out to a compact window — see
+        :meth:`~mm_companion.ui.dice_roller.DiceRollerView.release_roller`.
+
+        This block keeps answering the bus while the roller is away: a stat row
+        clicked on the sheet behind still loads into the mini window's chip,
+        because ``self.view.panel`` is the very same panel wherever it is parented.
+        """
+        return self.view.release_roller()
+
+    def restore_roller(self) -> None:
+        """Take the roller back into the block."""
+        self.view.restore_roller()
+
+    def compact_anchor(self) -> QWidget:
+        """What the shrink button floats over: the roller view, history and all.
+
+        The *view* and not the panel, deliberately. The panel is the controls,
+        and a button parked there would cost it a row of height in every window
+        it appears in — including the pinned strip, where height is the scarce
+        thing and where a shrink button of the panel's own already lived once.
+        Over the view it lands on the history instead, which has pixels to spare.
+        """
+        return self.view
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the roller's layout preference (the Settings page changed it)."""
+        self.view.sync_dice_layout()

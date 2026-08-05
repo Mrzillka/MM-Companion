@@ -23,6 +23,7 @@ from mm_companion.core import storage
 from mm_companion.core.session.relay import RELAY_SCHEME_PLAIN
 from mm_companion.relay import RelayServer
 from mm_companion.ui import theme
+from mm_companion.ui.compact import CompactController
 from mm_companion.ui.sections.powers import PowersSection
 
 
@@ -86,6 +87,21 @@ def _instant_power_card_transitions():
     PowersSection.TRANSITION_MS = 0
     yield
     PowersSection.TRANSITION_MS = original
+
+
+@pytest.fixture(autouse=True)
+def _instant_compact_transitions():
+    """Let a window snap between full and compact rather than easing over a timer.
+
+    The sibling of :func:`_instant_power_card_transitions`, and it exists for the
+    same reason: the geometry a test reads right after a toggle would otherwise be
+    the animation's first frame, and no frame ever runs without an event loop. A
+    test about the animation itself restores a real duration.
+    """
+    original = CompactController.ANIMATION_MS
+    CompactController.ANIMATION_MS = 0
+    yield
+    CompactController.ANIMATION_MS = original
 
 
 @pytest.fixture(autouse=True)

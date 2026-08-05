@@ -74,6 +74,7 @@ from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.drop_feedback import DropIndicator
@@ -271,14 +272,30 @@ class GMWindow(QMainWindow):
         self._board = PinnedBoard(self._scroll, self._canvas)
         self._canvas.set_pinned_board(self._board)
 
+        # Everything that is the GM window proper, so compact mode can hide it in
+        # one move and the window is free to shrink to the roller alone.
+        self._full = QWidget()
+        full_layout = QVBoxLayout(self._full)
+        full_layout.setContentsMargins(0, 0, 0, 0)
+        full_layout.addWidget(self._board, stretch=1)
+        # A persistent strip along the bottom, not a draggable block: the hosting
+        # status and the reachability advice, then a transient notice line.
+        full_layout.addWidget(self._build_status_strip())
+        full_layout.addWidget(self._build_notice())
+
+        # The same compact mode a player's sheet has, over the same roller — the
+        # GM's is a bare panel beside a GM history rather than a DiceRollerView, so
+        # this window supplies its own release_roller/restore_roller, and its own
+        # compact_anchor for the round shrink button to float over.
+        # The mini window's caption follows `windowTitleChanged`, so it picks up
+        # the session name this window retitles itself with on its own.
+        self._compact = CompactController(self, self, self._full)
+
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.addWidget(self._board, stretch=1)
-        # A persistent strip along the bottom, not a draggable block: the hosting
-        # status and the reachability advice, then a transient notice line.
-        central_layout.addWidget(self._build_status_strip())
-        central_layout.addWidget(self._build_notice())
+        central_layout.addWidget(self._full, stretch=1)
+        central_layout.addWidget(self._compact.page)
         self.setCentralWidget(central)
 
         self._canvas.arrangement_changed.connect(self._update_min_width)
@@ -367,8 +384,15 @@ class GMWindow(QMainWindow):
                 pass
 
     def _persist_layout(self) -> None:
-        """Save the GM window's geometry and block arrangement as a global preference."""
-        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        """Save the GM window's geometry and block arrangement as a global preference.
+
+        A window closed while compact is remembered at the size it was *before* it
+        shrank; the mini window's own size is kept separately (see
+        :mod:`mm_companion.ui.compact`).
+        """
+        self._compact.remember_size()
+        state = self._compact.saved_geometry() or self.saveGeometry()
+        geometry = bytes(state.toBase64()).decode("ascii")
         try:
             storage.update_settings(
                 gm_layout={
@@ -468,8 +492,11 @@ class GMWindow(QMainWindow):
         — so it is not hidden by the players' apps agreeing to ignore it, it
         simply never reaches them.
         """
-        box = QGroupBox("Rolls")
-        layout = QHBoxLayout(box)
+        # Held so compact mode can take the roller out and put it back, and so the
+        # shrink button has something to float over; see :meth:`release_roller`
+        # and :meth:`compact_anchor`.
+        self._rolls_box = box = QGroupBox("Rolls")
+        self._rolls_layout = layout = QHBoxLayout(box)
 
         self._roller = DiceRollerPanel(hidden_option=True)
         # While hosting, a roll made here goes through the server like everyone
@@ -493,6 +520,40 @@ class GMWindow(QMainWindow):
         self._roller.sessionRollRevealed.connect(self._history.release_roll)
         layout.addWidget(self._history, stretch=1)
         return box
+
+    # -- compact mode --------------------------------------------------------
+
+    def release_roller(self) -> tuple[QWidget, QWidget]:
+        """Lend the roller and the shared history to compact mode.
+
+        The GM window's roll surface is a bare panel beside a GM history rather
+        than a :class:`~mm_companion.ui.dice_roller.DiceRollerView`, so it answers
+        the borrow itself. Same contract, same reason for it: these are the live
+        widgets, still attached to the table, so the GM's hidden-roll switch and
+        the ✕ on every card carry into the mini window unchanged.
+        """
+        for widget in (self._roller, self._history):
+            self._rolls_layout.removeWidget(widget)
+        return (self._roller, self._history)
+
+    def compact_anchor(self) -> QWidget:
+        """What the shrink button floats over: the Rolls block, history and all."""
+        return self._rolls_box
+
+    def suspend_windows(self, suspended: bool) -> None:
+        """Stand this window's floated blocks down while it is compact (pinned ones stay)."""
+        self._canvas.set_windows_suspended(suspended)
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the roller's layout preference (see ``MainWindow.sync_dice_layout``)."""
+        self._roller.set_layout_preference(storage.dice_layout() == storage.DICE_LAYOUT_COMPACT)
+
+    def restore_roller(self) -> None:
+        """Take the roller and the history back into the Rolls block."""
+        self._rolls_layout.addWidget(self._roller)
+        self._rolls_layout.addWidget(self._history, stretch=1)
+        self._roller.show()
+        self._history.show()
 
     def _sync_quick_roll_state(self) -> None:
         """Push the roller's quick-roll strip into the history's stars."""

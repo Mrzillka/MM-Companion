@@ -37,7 +37,7 @@ Four rules constrain everything below, each learned from a real breakage:
 
 from __future__ import annotations
 
-from mm_companion.ui.theme.tokens import Theme, UnknownToken
+from mm_companion.ui.theme.tokens import Theme, UnknownToken, rgba
 
 #: Widget classes that take a focus ring. Every one of them is either wheel-guarded
 #: (see :mod:`mm_companion.ui.wheel_guard`, where a control ignores the wheel until
@@ -278,6 +278,20 @@ def _chrome_rules(theme: Theme) -> str:
             f"QTabBar::tab:hover {{ color: {text}; }}",
             # Buttons. autoRaise tool buttons (the block title bar's ↗ and ✕) stay
             # flat until hovered, so the title bar keeps reading as one strip.
+            #
+            # The resting border is drawn *transparent* rather than dropped, and a
+            # checked one is stated outright, because of a bug worth remembering:
+            # once a stylesheet states a tool button's box, QStyleSheetStyle takes
+            # the whole box over and stops painting the platform's sunken/checked
+            # panel. Without a :checked rule a checkable tool button — the mini
+            # roller's always-on-top pin, a floated block's — painted exactly like
+            # an unchecked one, which on the dark presets meant invisible. And
+            # `border: none` here would make the glyph jump sideways the moment it
+            # lit up; that is the same lesson QuickRollStar carries.
+            #
+            # The lit state is the accent, not surface.card: on both dark presets
+            # surface.card is *darker* than the title bar it sits on (~1.05:1),
+            # which is also why hover barely reads there.
             "/* buttons */\n"
             f"QPushButton {{\n"
             f"    border: {width}px solid {border};\n"
@@ -285,8 +299,12 @@ def _chrome_rules(theme: Theme) -> str:
             f"    padding: {m('space.xs')}px {m('space.lg')}px;\n"
             f"}}\n"
             f"QPushButton:hover {{ border-color: {c('accent')}; }}\n"
-            f"QToolButton {{ background: transparent; border: none; }}\n"
-            f"QToolButton:hover {{ background: {c('surface.card', block)}; "
-            f"border-radius: {radius_field}px; }}",
+            f"QToolButton {{ background: transparent;"
+            f" border: {width}px solid transparent;"
+            f" border-radius: {radius_field}px; }}\n"
+            f"QToolButton:hover {{ background: {c('surface.card', block)}; }}\n"
+            f"QToolButton:checked {{ background: {rgba(c('accent'), 0.25)};"
+            f" border-color: {c('accent')}; }}\n"
+            f"QToolButton:checked:hover {{ background: {rgba(c('accent'), 0.35)}; }}",
         )
     )

@@ -60,6 +60,12 @@ if TYPE_CHECKING:  # the board is the canvas's *view* for pinned blocks, not a d
 # an older version is rejected and the default applies.
 SCHEMA_VERSION = 6
 
+#: Whether a block popped out of the app stays above other applications unless
+#: told otherwise. It does: a floated block's whole purpose is to be read beside
+#: somebody else's window, and one that sinks behind that window the moment it is
+#: clicked is a block nobody can use.
+DEFAULT_ON_TOP = True
+
 
 @dataclass(frozen=True)
 class DropSlot:
@@ -250,6 +256,18 @@ class BlockCanvas(QWidget):
             self._frames[key] = frame
 
         self._windows: dict[str, BlockWindow] = {}
+        # Which floated blocks are pinned above other applications. Kept here, by
+        # block key, rather than on the window: dragging a block out and docking it
+        # back destroys and rebuilds the window, so anything held on the window
+        # itself is lost the first time the user moves it.
+        #
+        # A *mapping* and not a set, because absence has to mean "never asked"
+        # rather than "no": a block is popped out precisely to sit beside somebody
+        # else's window, so on top is the useful default (DEFAULT_ON_TOP) and only
+        # an explicit choice can say otherwise. See :meth:`_wants_on_top`.
+        self._on_top: dict[str, bool] = {}
+        # Whether the floated windows are currently stood down (compact mode).
+        self._windows_suspended = False
         self._rows: list[list[str]] = []
         self._hidden: set[str] = set()
         # Where each hidden block was closed from, so reopening restores it there.
@@ -514,8 +532,22 @@ class BlockCanvas(QWidget):
         }
 
     def _window_geometry(self, key: str) -> dict:
+        """Where a floated block's window is, and whether it stays on top.
+
+        ``on_top`` is an *optional* addition read tolerantly on the way back in, so
+        it needed no schema bump and a layout saved without it still restores — the
+        same terms ``hidden_anchors`` joined on. It is written **both ways**, not
+        only when true: absence means the default, and the default is on, so a
+        block deliberately let fall behind has to say so or it comes back on top.
+        """
         geo = self._windows[key].geometry()
-        return {"x": geo.x(), "y": geo.y(), "w": geo.width(), "h": geo.height()}
+        return {
+            "x": geo.x(),
+            "y": geo.y(),
+            "w": geo.width(),
+            "h": geo.height(),
+            "on_top": self._wants_on_top(key),
+        }
 
     def apply_arrangement(self, model: dict) -> bool:
         """Replace the arrangement with *model*; returns False (leaving the current
@@ -533,6 +565,9 @@ class BlockCanvas(QWidget):
 
         for key in list(self._windows):
             self._destroy_window(key)
+        # A restored layout is authoritative about what stays on top; only
+        # *moving* a block keeps that choice across a dock (see set_block_on_top).
+        self._on_top.clear()
         was_hidden = self._hidden
         self._rows = rows
         self._hidden = set(hidden)
@@ -670,6 +705,9 @@ class BlockCanvas(QWidget):
             return
         frame = self._frames[key]
         frame.setParent(self)  # rescue the frame before the window is destroyed
+        # Back to meaning "pin to the strip": the block is about to have one again.
+        # The *choice* is kept in `_on_top`, so popping it out later restores it.
+        frame.title_bar.set_floating(False)
         frame.hide()
         window.hide()
         window.deleteLater()
@@ -684,8 +722,10 @@ class BlockCanvas(QWidget):
         self._detach(key)
         self._hidden.discard(key)
 
+        on_top = self._wants_on_top(key)
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
+        frame.title_bar.set_floating(True, on_top=on_top)
         frame.show()
         self._apply_window_min_width(window, frame)
         width = max(old_size.width(), frame.sizeHint().width(), frame.minimumWidth())
@@ -698,6 +738,9 @@ class BlockCanvas(QWidget):
             pos = QPoint(old_global.x() + 24, old_global.y() + 24)
         window.setGeometry(pos.x(), pos.y(), width, height)
         self._windows[key] = window
+        # Before the first show(), which is what makes the flag free — see
+        # :func:`~mm_companion.ui.frameless.apply_window_flags`.
+        window.set_on_top(on_top)
         window.show()
 
         self._relayout()
@@ -727,12 +770,17 @@ class BlockCanvas(QWidget):
     def _make_floating(self, key: str, geom: dict) -> None:
         """Restore *key* as a floating window at *geom* (used by apply_arrangement)."""
         frame = self._frames[key]
+        # Absent means the default, which is on — see :meth:`_wants_on_top`.
+        on_top = bool(geom.get("on_top", DEFAULT_ON_TOP))
+        self._on_top[key] = on_top
         window = BlockWindow(key, self, self.window())
         window.set_frame(frame)
+        frame.title_bar.set_floating(True, on_top=on_top)
         frame.show()
         self._apply_window_min_width(window, frame)
         window.setGeometry(geom["x"], geom["y"], geom["w"], geom["h"])
         self._windows[key] = window
+        window.set_on_top(on_top)
         window.show()
 
     def _place(self, key: str, slot: DropSlot) -> None:
@@ -1013,6 +1061,10 @@ class BlockCanvas(QWidget):
 
     def title_bar_released(self, key: str, global_pos: QPoint) -> None:
         active = self._drag_active and self._drag_key == key
+        if not self.accepts_drops():
+            # Compact: the block was only ever being moved, so leave it floating.
+            self._end_drag()
+            return
         pin_at = self._pin_hit_test(global_pos)
         self._end_drag()
         if not active:
@@ -1037,6 +1089,88 @@ class BlockCanvas(QWidget):
         else:
             self.pin_block(key)
 
+    def request_on_top(self, key: str, on_top: bool) -> None:
+        """The same pin button, in a window: above other applications, or not."""
+        self.set_block_on_top(key, on_top)
+
+    # -- floated windows -----------------------------------------------------
+
+    def _wants_on_top(self, key: str) -> bool:
+        """Whether *key* would float above other applications, asked or not.
+
+        The default is on: a block is popped out of the app to be read *beside*
+        something else, and one that immediately disappears behind the window it
+        was meant to accompany is no use. Falling behind is the exception, and
+        only :meth:`set_block_on_top` records it.
+        """
+        return self._on_top.get(key, DEFAULT_ON_TOP)
+
+    def set_block_on_top(self, key: str, on_top: bool) -> None:
+        """Keep floated block *key* above other applications, or let it fall behind.
+
+        Remembered whether or not the block is currently floating, so popping it
+        out again puts it back where the user left it — the answer is about this
+        block, not about the particular window it happens to be in right now.
+        Only a decision is recorded — here, or by a restored layout that carried
+        one — which is what keeps "never asked" (and so the default) tellable
+        apart from "asked for off".
+        """
+        self._on_top[key] = bool(on_top)
+        window = self._windows.get(key)
+        if window is not None:
+            window.set_on_top(on_top)
+            self._frames[key].title_bar.set_floating(True, on_top=on_top)
+        self.arrangement_changed.emit()
+
+    def is_block_on_top(self, key: str) -> bool:
+        """Whether block *key* stays above other applications while it is floated.
+
+        Answers for a docked block too — as "it would" — since the choice belongs
+        to the block rather than to any window it is in at the time.
+        """
+        return self._wants_on_top(key)
+
+    def set_windows_suspended(self, suspended: bool) -> None:
+        """Take the floated windows off the screen while the host is compact.
+
+        The ones pinned on top stay, and be clear about what that means in
+        practice: on top is the **default** (:data:`DEFAULT_ON_TOP`), so for anyone
+        who has not gone out of their way this hides nothing at all. That is the
+        intended reading of the two rules together — a block popped out of the app
+        was popped out to sit beside something, so it goes on doing that beside the
+        mini roller too, and ``✕`` is how you close one you are done with. What this
+        clears is the narrower case it says: the blocks a user has explicitly sent
+        behind, which are the ones not being read right now.
+
+        The flag itself matters more than what it hides. It is what
+        :meth:`accepts_drops` reads, and that guard is on whenever the host is
+        compact — it is what stops a dragged block docking into a page nobody can
+        see.
+        """
+        suspended = bool(suspended)
+        if suspended == self._windows_suspended:
+            return
+        self._windows_suspended = suspended
+        for key, window in self._windows.items():
+            if self._wants_on_top(key):
+                continue
+            window.setVisible(not suspended)
+        if suspended:
+            # A drag in flight when the window shrank would be aiming at a page
+            # that is no longer there; see :meth:`accepts_drops`.
+            self._end_drag()
+
+    def accepts_drops(self) -> bool:
+        """Whether a dragged block may land on the page or the pinned strip now.
+
+        Not while the host is compact. The page and the strip are hidden behind
+        the mini roller, but **a hidden widget keeps its last geometry**, so a hit
+        test still happily reports a slot under the cursor — and the block docks
+        into a page nobody can see and is simply gone, with no way to get it back
+        but the View menu. While compact, dragging a floated block just moves it.
+        """
+        return not self._windows_suspended
+
     @staticmethod
     def _start_distance() -> int:
         from PySide6.QtWidgets import QApplication
@@ -1054,6 +1188,13 @@ class BlockCanvas(QWidget):
 
     def update_drag(self, global_pos: QPoint) -> None:
         """Refresh the drop indicator and edge auto-scroll for a cursor position."""
+        if not self.accepts_drops():
+            # No insert line and no auto-scroll either: both would be promising a
+            # landing place that the drop itself is going to refuse.
+            self._indicator.hide_indicator()
+            if self._board is not None:
+                self._board.hide_drop()
+            return
         pin_at = self._pin_hit_test(global_pos)
         if pin_at is not None:
             # Over the strip: it owns the feedback, and the page shows none — two

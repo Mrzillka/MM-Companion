@@ -73,10 +73,8 @@ from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
-    HISTORY_FLOOR_HEIGHT,
+    HISTORY_SIZE_HINT,
     MAX_QUICK_ROLLS,
-    MIN_HISTORY_HEIGHT,
-    MIN_HISTORY_WIDTH,
     NoteCard,
     QuickRollStar,
     RollHistoryPanel,
@@ -84,6 +82,7 @@ from mm_companion.ui.roll_history import (
     degree_label,
     escape_rich_text,
     quick_roll_key,
+    size_history_scroll,
 )
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.svg_assets import die_resource, svg_pixmap
@@ -527,7 +526,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._box.addWidget(self._pair)
             self._box.setStretchFactor(self._settings_part, 0)
             self._box.setStretchFactor(self._pair, 0)
-            self.set_die_size("die.size.compact", "size.dice-face.compact")
+            self._set_die_size("die.size.compact", "size.dice-face.compact")
         else:
             self._pair_box.removeWidget(self._quick_part)
             self._pair_box.removeWidget(self._die_part)
@@ -535,7 +534,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._pair.setVisible(False)
             self._box.addWidget(self._die_part)
             self._box.addWidget(self._quick_part)
-            self.set_die_size("die.size", "size.dice-face")
+            self._set_die_size("die.size", "size.dice-face")
             # The reflow owns the arrangement again, and the width it last decided
             # from is the mini window's — so re-derive it rather than trusting it.
             self.apply_reflow(self.is_row)
@@ -653,7 +652,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._face.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._face.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._face.setStyleSheet(f"color: {theme.color('dice.face')};")
-        self.set_die_size("die.size", "size.dice-face")
+        self._set_die_size("die.size", "size.dice-face")
 
         grid.addWidget(self._die_button, 0, 0)
         grid.addWidget(self._face, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -666,7 +665,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         column.addWidget(self._readout)
         return part
 
-    def set_die_size(self, size_token: str, face_token: str) -> None:
+    def _set_die_size(self, size_token: str, face_token: str) -> None:
         """Draw the die at the size *size_token* names, with *face_token*'s numeral.
 
         Two tokens rather than one because the pair only reads right together: a
@@ -1221,16 +1220,15 @@ class LocalRollHistory(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
-        # The same floors the shared history pins, and for the same reasons: these
-        # cards carry the same headline and star, and a scroll area asks for nothing
-        # on its own — so without them the history is squeezed to a sliver.
-        self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
-        self._scroll.setMinimumHeight(HISTORY_FLOOR_HEIGHT)
+        # The same floors and the same hint the shared history takes, from the one
+        # place both get them: these two are the same widget as far as a layout is
+        # concerned, and differ only in where their cards come from.
+        size_history_scroll(self._scroll)
         layout.addWidget(self._scroll)
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Two cards' worth, however long the log is — see the shared history's."""
-        return QSize(MIN_HISTORY_WIDTH, MIN_HISTORY_HEIGHT)
+        """Two cards' worth, however long the log is — see :func:`size_history_scroll`."""
+        return HISTORY_SIZE_HINT
 
     def set_quick_roll_state(self, saved_keys: set, room: bool) -> None:
         """Tell every card what the quick-roll strip holds, so its star can show it.

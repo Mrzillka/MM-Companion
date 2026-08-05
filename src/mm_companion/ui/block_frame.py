@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
-from mm_companion.ui.frameless import apply_window_flags, size_grip_row
+from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
 
 
@@ -131,11 +131,7 @@ class TitleBar(QFrame):
         self._pin_button.setCheckable(self._floating)
         if self._floating:
             self._pin_button.setChecked(bool(on_top))
-            self._pin_button.setToolTip(
-                "Staying on top of other windows — click to let it fall behind"
-                if on_top
-                else "Keep this window on top of other applications"
-            )
+            self._pin_button.setToolTip(describe_on_top(on_top))
             return
         self._pin_button.setChecked(False)
         self._pin_button.setToolTip(

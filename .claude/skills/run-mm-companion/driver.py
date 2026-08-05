@@ -239,6 +239,9 @@ def build(target: str):
             win._driver_bridge = bridge  # keep it alive for the screenshot
             return win
 
+        # Load the attack first: the *spec* is what carries the save it forces, so
+        # without this the card comes out with no follow-up chip to click.
+        panel.load_spec(attack)
         panel._dc_check.setChecked(True)
         panel._dc_spin.setValue(12)  # the target's Defense
         dice_module.roll_d20 = lambda *a, **k: 14  # a hit, deterministically

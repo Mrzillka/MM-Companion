@@ -362,7 +362,9 @@ class CharacterSheet(QWidget):
         """Take this sheet's floated block windows off the screen, or bring them back.
 
         What compact mode asks for on the way in and out: the blocks pinned above
-        other applications stay, the rest go with the sheet.
+        other applications stay, the rest go with the sheet — and since on top is
+        the default, in practice that usually means they all stay. See
+        :meth:`~mm_companion.ui.block_canvas.BlockCanvas.set_windows_suspended`.
         """
         self._canvas.set_windows_suspended(suspended)
 

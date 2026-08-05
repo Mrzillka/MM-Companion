@@ -9,14 +9,29 @@ both then owe the user the two things that chrome was doing: a way to move the
 window, and a way to resize it.
 
 Moving is each window's own business (both already have a drag handle: a block's
-title bar, the mini roller's strip). Resizing and the flags are the same job
-twice, so they live here.
+title bar, the mini roller's strip). Resizing, the flags, and the sentence the
+always-on-top ``🖈`` says about itself are the same job twice, so they live here.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QSizeGrip, QWidget
+
+
+def describe_on_top(on_top: bool) -> str:
+    """What a ``🖈`` that pins a *window* says about itself, either way round.
+
+    Both frameless windows carry that button and it means the same thing on both,
+    so the sentence lives here beside the flag it describes rather than being
+    written out twice — once on the mini roller's strip, once on a floated block's
+    title bar — and drifting.
+    """
+    return (
+        "Staying on top of other windows — click to let it fall behind"
+        if on_top
+        else "Keep this window on top of other applications"
+    )
 
 
 def apply_window_flags(window: QWidget, *, frameless: bool, on_top: bool) -> None:

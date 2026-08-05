@@ -287,8 +287,9 @@ class GMWindow(QMainWindow):
         # GM's is a bare panel beside a GM history rather than a DiceRollerView, so
         # this window supplies its own release_roller/restore_roller, and its own
         # compact_anchor for the round shrink button to float over.
+        # The mini window's caption follows `windowTitleChanged`, so it picks up
+        # the session name this window retitles itself with on its own.
         self._compact = CompactController(self, self, self._full)
-        self._compact.page.strip.set_title(self.windowTitle())
 
         central = QWidget()
         central_layout = QVBoxLayout(central)

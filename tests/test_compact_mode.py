@@ -157,6 +157,21 @@ def test_a_sheet_with_no_roller_has_no_compact_mode(window: MainWindow) -> None:
     assert not window.sheet.isHidden()
 
 
+def test_a_closed_dice_block_has_no_compact_mode(window: MainWindow) -> None:
+    """Closing the roller closes the way in — the keyboard's way too.
+
+    This used to hold only by accident: the shrink button is a child of the block,
+    so hiding the block took the button out of sight with it. The shortcut walks
+    straight past that, so ``enter`` checks the roller is on screen itself.
+    """
+    window.sheet.hide_block("dice")
+
+    window._compact._shortcut.activated.emit()
+
+    assert not window._compact.is_compact
+    assert not window.sheet.isHidden()
+
+
 # -- the compact arrangement -------------------------------------------------
 
 
@@ -294,6 +309,22 @@ def test_escape_leaves_compact_and_does_nothing_otherwise(window: MainWindow) ->
     assert not window._compact._escape.isEnabled()
 
 
+def test_the_shortcut_gets_in_as_well_as_out(window: MainWindow) -> None:
+    """Escape only ever left. Ctrl+Shift+D is the way *in* without a mouse.
+
+    Which matters most where there is no other chrome at all: the GM's read-only
+    view of a player's sheet has a roller, so it has compact mode, but its menu
+    bar is deliberately bare.
+    """
+    assert window._compact._shortcut.isEnabled()
+
+    window._compact._shortcut.activated.emit()
+    assert window._compact.is_compact
+
+    window._compact._shortcut.activated.emit()
+    assert not window._compact.is_compact
+
+
 def test_the_glyph_follows_the_mode_however_it_changed(window: MainWindow) -> None:
     """Driven by the controller, so Escape and the mini strip keep the state honest."""
     button = window._compact.button
@@ -344,6 +375,24 @@ def test_the_button_sits_in_the_hosts_bottom_right_corner(
     # Nearer the far corner than the near one, on both axes.
     assert button.geometry().center().x() > host.rect().center().x()
     assert button.geometry().center().y() > host.rect().center().y()
+
+
+def test_the_button_stays_flush_in_the_corner(qapp: QApplication, window: MainWindow) -> None:
+    """Flush is a choice between two overlaps, not an oversight.
+
+    The bottom-right of a scrolling list of cards is never empty. Here the button
+    clips the tail of the history's own scroll bar, which costs nothing anyone
+    reaches for. Insetting by a scroll bar's width to spare it was tried and is
+    worse — it lands the button squarely on a card's ``✕``, a discrete control
+    with no other way to hit it.
+    """
+    _on_screen(qapp, window)
+    button = window._compact.button
+    host = window.sheet.dice.view
+    inset = int(theme.metric("space.md"))
+
+    assert host.rect().right() - button.geometry().right() == inset
+    assert host.rect().bottom() - button.geometry().bottom() == inset
 
 
 def test_the_gm_windows_button_floats_over_its_rolls_block(gm: GMWindow) -> None:
@@ -618,6 +667,39 @@ def test_the_roller_is_handed_back_only_once_the_window_has_grown(
     assert window.sheet.dice.view.isAncestorOf(panel)
 
 
+def test_toggling_mid_ease_never_records_a_half_size(
+    qapp: QApplication, window: MainWindow
+) -> None:
+    """A transition is atomic: one still easing lands outright before the next starts.
+
+    Both toggles read and write the window's geometry — ``saveGeometry`` going in,
+    ``remember_size`` coming out — and a frame of an ease is neither of the two
+    sizes anyone chose. Left unsettled, clicking the round button back and forth
+    inside the 180 ms wrote a half-grown rectangle into the *shared* ``layout``
+    setting, so every character sheet opened at it.
+    """
+    window._compact.ANIMATION_MS = 400
+    _on_screen(qapp, window)
+    full = QRect(window.geometry())
+
+    window._compact.enter()
+    _running_animation(window).setCurrentTime(120)  # half-shrunk, and no size at all
+    assert window.width() != full.width()
+    assert window.width() != int(theme.metric("compact.width"))
+
+    window._compact.leave()
+
+    # What the mini window is remembered at is what it was asked to be, not the
+    # frame it happened to be showing.
+    assert storage.compact_settings()["width"] == int(theme.metric("compact.width"))
+    assert storage.compact_settings()["height"] == int(theme.metric("compact.height"))
+
+    _running_animation(window).setCurrentTime(120)  # and now half-*grown*
+    window._compact.enter()
+
+    assert window._compact._normal_geometry == full
+
+
 # -- the GM window -----------------------------------------------------------
 
 
@@ -647,6 +729,31 @@ def test_the_gm_window_lends_its_own_roller_the_same_way(gm: GMWindow) -> None:
     assert gm._rolls_layout.indexOf(history) >= 0
     assert not gm._full.isHidden()
     assert roller._quick_part.parentWidget() is roller
+
+
+def test_the_gm_strip_caption_follows_the_window_title(gm: GMWindow) -> None:
+    """The mini window is frameless, so the strip is the *only* place a title shows.
+
+    And the GM window retitles itself as soon as it knows what it is hosting, so a
+    caption seeded once in the constructor read "GM Mode" for the whole session.
+    """
+    # It has already retitled itself once, for the session it is hosting — which
+    # a caption seeded in the constructor missed by a hair.
+    assert gm._compact.page.strip._label.text() == gm.windowTitle() != "GM Mode"
+
+    gm.setWindowTitle("GM Mode — The Table")
+
+    assert gm._compact.page.strip._label.text() == "GM Mode — The Table"
+
+
+def test_the_sheets_strip_keeps_its_own_shorter_caption(window: MainWindow) -> None:
+    """A host wanting something shorter than the window title just says so after.
+
+    ``MainWindow._update_title`` runs its ``set_title`` *after* ``setWindowTitle``,
+    so the signal that keeps the GM's honest does not overwrite this one.
+    """
+    assert window._compact.page.strip._label.text() == "Unnamed Character"
+    assert window.windowTitle() != "Unnamed Character"
 
 
 def test_the_gm_keeps_the_hidden_roll_switch_in_the_mini_window(gm: GMWindow) -> None:

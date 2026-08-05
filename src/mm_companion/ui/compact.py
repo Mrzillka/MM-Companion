@@ -39,13 +39,19 @@ history widget, or ``None`` when it has no roller) and ``restore_roller()``.
 Both hosts implement it in three lines, which is what makes compact mode one
 feature for the player's sheet and the GM window rather than two.
 
-One ordering rule is load-bearing and easy to get wrong: **window flags change
-before the animation, never during it.** Qt hides a window whose flags change
+Two ordering rules are load-bearing and easy to get wrong. **Window flags change
+before the animation, never during it** — Qt hides a window whose flags change
 and the platform recreates it, so a ``setWindowFlag`` mid-animation loses both
-the animation and the geometry.
+the animation and the geometry. And **a transition is atomic**: one still easing
+is landed outright before the next starts
+(:meth:`CompactController._settle_animation`), because both toggles read and
+write the window's geometry and a frame of an ease is neither of the two sizes
+anyone chose.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from PySide6.QtCore import (
     QAbstractAnimation,
@@ -73,7 +79,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.ui import theme
-from mm_companion.ui.frameless import apply_window_flags, size_grip_row
+from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
 
 #: The button's two faces.
@@ -109,6 +115,11 @@ class CompactOverlayButton(QToolButton):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._host: QWidget | None = None
+        # Where the button waits when it has no host. Not ``None``: re-parenting a
+        # widget to nothing promotes it to a *top-level* one, and two things in the
+        # app walk `QApplication.topLevelWidgets()` looking for windows — the
+        # General settings page, and the tests' teardown.
+        self._park = parent
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # Not a tab stop. It is chrome, reached with the mouse — and on a locked
@@ -139,7 +150,7 @@ class CompactOverlayButton(QToolButton):
         if self._host is not None:
             self._host.removeEventFilter(self)
         self._host = host
-        self.setParent(host)
+        self.setParent(host if host is not None else self._park)
         if host is None:
             self.hide()
             return
@@ -173,7 +184,19 @@ class CompactOverlayButton(QToolButton):
         return super().eventFilter(watched, event)
 
     def _place(self) -> None:
-        """Sit in the host's bottom-right corner, one margin in from each edge."""
+        """Sit in the host's bottom-right corner, one margin in from each edge.
+
+        Flush in the corner, and that is a choice between two overlaps rather than
+        a way of avoiding one: the host is always something with a roll history in
+        it, and the bottom-right of a scrolling list of cards is never empty. Here
+        the button clips the tail of the history's own scroll bar — its down-arrow
+        and the last stretch of trough — which costs nothing anyone reaches for,
+        since the wheel, the thumb and the rest of the trough are all still there.
+        Insetting by a scroll bar's width to spare it was tried and is worse: it
+        lands the button squarely on the card's ``✕``, which is a discrete control
+        with no other way to hit it. A corner of one card is the price, and this is
+        the cheapest corner.
+        """
         if self._host is None:
             return
         inset = int(theme.metric("space.md"))
@@ -289,11 +312,7 @@ class CompactStrip(QFrame):
         self.onTopToggled.emit(checked)
 
     def _describe_pin(self, on_top: bool) -> None:
-        self._pin_button.setToolTip(
-            "Staying on top of other windows — click to let it fall behind"
-            if on_top
-            else "Keep this window on top of the others"
-        )
+        self._pin_button.setToolTip(describe_on_top(on_top))
 
     # -- dragging the window -------------------------------------------------
 
@@ -435,17 +454,29 @@ class CompactController(QObject):
         # The borrowed pair, held only for as long as the loan lasts.
         self._roller: tuple[QWidget, QWidget] | None = None
         self._animation: QPropertyAnimation | None = None
+        # What the running animation still owes when it lands, held here rather
+        # than only on the animation's `finished` so :meth:`_settle_animation` can
+        # run it after cutting the ease short.
+        self._on_finished: Callable[[], None] | None = None
 
         self.page = CompactPage()
         self.page.hide()
         self.page.strip.expandRequested.connect(self.leave)
         self.page.strip.closeRequested.connect(window.close)
         self.page.strip.onTopToggled.connect(self._set_on_top)
+        # The mini window is frameless, so the strip is the only place a caption
+        # shows at all — and both hosts retitle themselves while running (a
+        # character's name and its unsaved marker; the session the GM is hosting).
+        # Following the signal is what keeps it from going stale; a host wanting a
+        # shorter caption than the window's own just calls `set_title` afterwards,
+        # which is what MainWindow does.
+        self.page.strip.set_title(window.windowTitle())
+        window.windowTitleChanged.connect(self.page.strip.set_title)
 
         # One button, moved between the roller's two homes — the same rule the
         # roller itself follows. Two buttons would be two states to keep in step,
         # and the one showing the wrong glyph would be whichever was off screen.
-        self.button = CompactOverlayButton()
+        self.button = CompactOverlayButton(window)
         self.button.clicked.connect(lambda _checked=False: self.toggle())
         self.compactChanged.connect(self.button.set_compact)
         self.button.attach(self._anchor())
@@ -455,6 +486,12 @@ class CompactController(QObject):
         self._escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), window)
         self._escape.setEnabled(False)
         self._escape.activated.connect(self.leave)
+        # And the way *in* from the keyboard. The round button is the discoverable
+        # way and stays the only chrome, but it was also the only way at all —
+        # which left the GM's read-only view of a player sheet, whose menu bar is
+        # deliberately bare, reachable by mouse alone.
+        self._shortcut = QShortcut(QKeySequence("Ctrl+Shift+D"), window)
+        self._shortcut.activated.connect(self.toggle)
 
     @property
     def is_compact(self) -> bool:
@@ -485,7 +522,12 @@ class CompactController(QObject):
         return self._normal_state if self._compact else None
 
     def remember_size(self) -> None:
-        """Store the mini window's current size as the one to reopen at (else nothing)."""
+        """Store the mini window's current size as the one to reopen at (else nothing).
+
+        Both callers settle any transition in flight first, which they must: a
+        geometry read mid-ease is a frame of the animation rather than a size
+        anyone chose.
+        """
         if not self._compact:
             return
         geometry = self._window.geometry()
@@ -504,7 +546,16 @@ class CompactController(QObject):
         block a mod replaced with something that does not offer one simply has no
         compact mode, rather than a window that empties itself.
         """
+        self._settle_animation()
         if self._compact:
+            return
+        # A roller nobody can see is not a roller to shrink to: closing the Dice
+        # block closes the way in. That used to hold only because the button is a
+        # child of the block and went out of sight with it, which the keyboard
+        # shortcut walks straight past. `isVisibleTo` rather than `isVisible` so a
+        # window that has simply not been shown yet still counts.
+        anchor = self._anchor()
+        if anchor is None or not anchor.isVisibleTo(self._window):
             return
         roller = self._surface.release_roller()
         if roller is None:
@@ -546,6 +597,7 @@ class CompactController(QObject):
 
     def leave(self) -> None:
         """Give the full window back, and the roller with it."""
+        self._settle_animation()
         if not self._compact:
             return
         self.remember_size()
@@ -580,7 +632,10 @@ class CompactController(QObject):
         """Stand the surface's floated block windows down, if it has any.
 
         Duck-typed like the borrow itself: a surface with no loose windows — or a
-        host that has never heard of them — simply does not offer this.
+        host that has never heard of them — simply does not offer this. What
+        actually goes is only the blocks explicitly sent behind, since on top is a
+        floated block's default; see
+        :meth:`~mm_companion.ui.block_canvas.BlockCanvas.set_windows_suspended`.
         """
         handler = getattr(self._surface, "suspend_windows", None)
         if callable(handler):
@@ -619,7 +674,7 @@ class CompactController(QObject):
             rect = _clamped(rect, screen.availableGeometry())
         return rect
 
-    def _animate_to(self, target: QRect, on_finished=None) -> None:
+    def _animate_to(self, target: QRect, on_finished: Callable[[], None] | None = None) -> None:
         """Ease the window to *target*, or jump there when there is nothing to see.
 
         A zeroed duration cuts straight to the end, which is what lets a test
@@ -628,9 +683,7 @@ class CompactController(QObject):
         depend on the event loop.
         """
         window = self._window
-        if self._animation is not None:
-            self._animation.stop()
-            self._animation = None
+        self._settle_animation()
         if self.ANIMATION_MS <= 0 or not window.isVisible():
             window.setGeometry(target)
             if on_finished is not None:
@@ -641,14 +694,41 @@ class CompactController(QObject):
         animation.setEndValue(QRect(target))
         animation.setDuration(self.ANIMATION_MS)
         animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        if on_finished is not None:
-            animation.finished.connect(on_finished)
-        animation.finished.connect(self._clear_animation)
+        animation.finished.connect(self._on_animation_landed)
         self._animation = animation
+        self._on_finished = on_finished
         animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
-    def _clear_animation(self) -> None:
+    def _settle_animation(self) -> None:
+        """Jump a transition still easing to its end, before another one starts.
+
+        The two toggles read and write geometry — ``saveGeometry`` on the way in,
+        :meth:`remember_size` on the way out — and a window part-way through an
+        ease has neither of the two sizes anyone chose. Left unsettled, clicking
+        the round button back and forth inside the 180 ms wrote a half-grown
+        rectangle into the *shared* ``layout`` setting, so every character sheet
+        opened at it, and a half-shrunk one into the mini window's own.
+
+        So a transition is atomic: whatever is in flight lands first, geometry and
+        pending work and all, and only then does the next one start. Qt does not
+        emit ``finished`` for an animation that is merely stopped, which is exactly
+        why the finisher has to be held here and run by hand.
+        """
+        animation, self._animation = self._animation, None
+        finisher, self._on_finished = self._on_finished, None
+        if animation is None:
+            return
+        animation.stop()
+        self._window.setGeometry(animation.endValue())
+        if finisher is not None:
+            finisher()
+
+    def _on_animation_landed(self) -> None:
+        """The ease reached its end on its own: run what it owed, and let it go."""
+        finisher, self._on_finished = self._on_finished, None
         self._animation = None
+        if finisher is not None:
+            finisher()
 
 
 def _clamped(rect: QRect, bounds: QRect) -> QRect:

@@ -88,6 +88,31 @@ MIN_HISTORY_HEIGHT = 200
 #: :data:`MIN_HISTORY_WIDTH` as a real minimum.
 HISTORY_FLOOR_HEIGHT = 90
 
+
+def size_history_scroll(scroll: QScrollArea) -> None:
+    """Give a history's scroll area its floors, and hand back the size to ask for.
+
+    Both histories — the private :class:`~mm_companion.ui.dice_roller.LocalRollHistory`
+    and the shared :class:`RollHistoryPanel` — are the same widget in every way
+    that matters to a layout: a scrolling list of the same cards. So the three
+    numbers that make one behave live here once, rather than being restated in a
+    module that only differs in where its cards come from.
+
+    Pair it with ``sizeHint`` returning :data:`HISTORY_SIZE_HINT`, which is the
+    half a scroll area cannot be told: left alone it reports its *inner widget's*
+    hint, so a history grew with every roll — and since a block's minimum is its
+    content's preferred height, the Dice block's minimum climbed all session until
+    the pinned strip could no longer fit it. A history is a scrolling list; what it
+    wants is a readable window onto the log, not the whole log.
+    """
+    scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
+    scroll.setMinimumHeight(HISTORY_FLOOR_HEIGHT)
+
+
+#: What a history asks for: two cards' worth, however long the log actually is.
+#: See :func:`size_history_scroll` for the half of the bargain it belongs to.
+HISTORY_SIZE_HINT = QSize(MIN_HISTORY_WIDTH, MIN_HISTORY_HEIGHT)
+
 #: How many quick rolls the strip holds. A cap rather than a scroll: the strip
 #: shares the Dice block with the roll controls and the die, so an unbounded list
 #: of chips ratchets the block — and the pinned strip holding it — ever taller. Six
@@ -519,20 +544,12 @@ class RollHistoryPanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
-        self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
-        self._scroll.setMinimumHeight(HISTORY_FLOOR_HEIGHT)
+        size_history_scroll(self._scroll)
         layout.addWidget(self._scroll)
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Ask for two cards' worth, however long the log actually is.
-
-        Left to itself a ``QScrollArea`` reports its *inner widget's* hint, so this
-        one grew with every roll — and since a block's minimum is its content's
-        preferred height, the Dice block's minimum climbed all session until the
-        strip could no longer fit it. A history is a scrolling list: what it wants
-        is a readable window onto the log, not the whole log.
-        """
-        return QSize(MIN_HISTORY_WIDTH, MIN_HISTORY_HEIGHT)
+        """Two cards' worth, however long the log is — see :func:`size_history_scroll`."""
+        return HISTORY_SIZE_HINT
 
     # -- the quick-roll strip's state --------------------------------------
 

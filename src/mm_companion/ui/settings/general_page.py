@@ -74,6 +74,10 @@ class GeneralPage(SettingsPage):
 
     def _build_dice_layout(self) -> QWidget:
         self._compact_check = QCheckBox("Always use the compact roller layout")
+        # A "Saved." line left standing over a box that has since been ticked again
+        # is a lie about the state of the settings file, so the line goes the
+        # moment the answer changes.
+        self._compact_check.toggled.connect(lambda _checked: self._set_status(""))
         return self._compact_check
 
     def _build_actions(self) -> QHBoxLayout:

@@ -1133,10 +1133,19 @@ class BlockCanvas(QWidget):
     def set_windows_suspended(self, suspended: bool) -> None:
         """Take the floated windows off the screen while the host is compact.
 
-        Compact mode means "put the app out of the way", and a scatter of loose
-        block windows left behind is exactly the thing it was asked to clear. The
-        ones pinned on top stay: keeping a block beside the mini roller is what
-        pinning it *for*, and hiding it would make the pin meaningless.
+        The ones pinned on top stay, and be clear about what that means in
+        practice: on top is the **default** (:data:`DEFAULT_ON_TOP`), so for anyone
+        who has not gone out of their way this hides nothing at all. That is the
+        intended reading of the two rules together — a block popped out of the app
+        was popped out to sit beside something, so it goes on doing that beside the
+        mini roller too, and ``✕`` is how you close one you are done with. What this
+        clears is the narrower case it says: the blocks a user has explicitly sent
+        behind, which are the ones not being read right now.
+
+        The flag itself matters more than what it hides. It is what
+        :meth:`accepts_drops` reads, and that guard is on whenever the host is
+        compact — it is what stops a dragged block docking into a page nobody can
+        see.
         """
         suspended = bool(suspended)
         if suspended == self._windows_suspended:

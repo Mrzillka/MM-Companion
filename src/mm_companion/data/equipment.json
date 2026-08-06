@@ -1,0 +1,2109 @@
+{
+  "_meta": {
+    "description": "Equipment catalog for Mutants & Masterminds 4e character creation. All 'description' fields are short, original text written for this project's UI (always-visible label copy), not taken from the rulebook. Mechanical fields (category, cost, costKind) reflect game rules/facts, not copyrighted prose. Companion to equipment-design.json (full mechanics + implementation tags) and mm-equipment-design.md.",
+    "currency": "Equipment Points, granted 5 per rank of advantages:equipment.",
+    "equipmentPointsByAdvantageRank": {
+      "1": 5,
+      "2": 10,
+      "3": 15,
+      "4": 20,
+      "5": 25,
+      "6": 30,
+      "7": 35,
+      "8": 40,
+      "9": 45,
+      "10": 50,
+      "11": 55,
+      "12": 60,
+      "13": 65,
+      "14": 70,
+      "15": 75,
+      "16": 80,
+      "17": 85,
+      "18": 90,
+      "19": 95,
+      "20": 100
+    },
+    "categoryKey": {
+      "utility": "A small gadget, mostly built from the Feature effect or a low-rank utility effect",
+      "close_weapon": "A hand-held weapon used in close combat",
+      "ranged_weapon": "A projectile, thrown, or energy weapon",
+      "accessory": "An add-on fitted to another weapon rather than used on its own",
+      "grenade": "A thrown area attack, consumed on use",
+      "explosive": "A placed area attack, consumed on use",
+      "armor": "Worn protection, normally a Protection effect",
+      "shield": "A carried defence granting Enhanced Defense; requires active use",
+      "kit": "A bundle or array of other items, priced as a build rather than a fixed line",
+      "vehicle": "A built platform with its own Size/Strength/Toughness/Defense/Speed trait costs",
+      "installation": "A built fixed structure with its own Size/Toughness/Feature trait costs"
+    },
+    "costKindKey": {
+      "fixed": "A flat Equipment Point cost",
+      "ranked": "Cost varies over a small number of defined ranks",
+      "per_rank": "1 Equipment Point per rank",
+      "built": "Assembled from components or trait tables; no single printed cost"
+    },
+    "stackingNote": "Equipment bonuses never stack with each other or with other bonus sources — only the highest applies.",
+    "reconfigureNote": "Equipment Points can be reallocated at the start of each adventure, or between scenes with access to a headquarters or cache."
+  },
+  "equipment": [
+    {
+      "id": "antitoxin",
+      "name": "Antitoxin",
+      "category": "utility",
+      "subcategory": "defensive",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Grants +5 on resistance checks against toxins."
+    },
+    {
+      "id": "flare_goggles",
+      "name": "Flare Goggles",
+      "category": "utility",
+      "subcategory": "defensive",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Protective eyewear granting Resistance to visual Dazzle effects."
+    },
+    {
+      "id": "fire_extinguisher",
+      "name": "Fire Extinguisher",
+      "category": "utility",
+      "subcategory": "defensive",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Puts out a small fire as a simple action; holds two charges."
+    },
+    {
+      "id": "gas_mask",
+      "name": "Gas Mask",
+      "category": "utility",
+      "subcategory": "defensive",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Filter mask granting Immunity to inhaled and face-directed gases."
+    },
+    {
+      "id": "rebreather",
+      "name": "Rebreather",
+      "category": "utility",
+      "subcategory": "defensive",
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "A small air supply granting Immunity to Suffocation for a few minutes."
+    },
+    {
+      "id": "binoculars",
+      "name": "Binoculars",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Lets you make visual Perception checks at greater distance."
+    },
+    {
+      "id": "burglary_tools",
+      "name": "Burglary Tools",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Lock picks and bypass tools; removes the no-tools penalty for those tasks."
+    },
+    {
+      "id": "commlink",
+      "name": "Commlink",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Concealable radio earpiece for short-range team communication."
+    },
+    {
+      "id": "cutting_torch",
+      "name": "Cutting Torch",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "High-temperature flame that cuts through most materials, given time."
+    },
+    {
+      "id": "evidence_kit",
+      "name": "Evidence Kit",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "ranked",
+      "description": "Field tools for gathering evidence; a second rank adds a portable lab.",
+      "costNote": "1-2 points"
+    },
+    {
+      "id": "first_aid_kit",
+      "name": "First-Aid Kit",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Supplies and tools for using the Treatment skill."
+    },
+    {
+      "id": "flashlight",
+      "name": "Flashlight",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Negates darkness concealment within a cone of light."
+    },
+    {
+      "id": "mini_computer",
+      "name": "Mini-Computer",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "A wearable computer providing the tools for Technology checks."
+    },
+    {
+      "id": "multi_tool",
+      "name": "Multi-Tool",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Folding tool set; softens the improvised-tools penalty from -5 to -2."
+    },
+    {
+      "id": "night_vision_goggles",
+      "name": "Night Vision Goggles",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Light-gathering goggles granting Low-Light Vision while worn."
+    },
+    {
+      "id": "restraints",
+      "name": "Restraints",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Cuffs for a helpless target: DC 20 to slip, Toughness 5 to break."
+    },
+    {
+      "id": "tracer",
+      "name": "Tracer",
+      "category": "utility",
+      "subcategory": "general",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Adhesive radio transmitter you plant on a target to follow it."
+    },
+    {
+      "id": "climbing_cable",
+      "name": "Climbing Cable",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Winch-driven cable that walks you up sheer walls."
+    },
+    {
+      "id": "climbing_gear",
+      "name": "Climbing Gear",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Ropes and hardware giving +2 on Athletics checks to climb."
+    },
+    {
+      "id": "glider",
+      "name": "Glider",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 6,
+      "costKind": "fixed",
+      "description": "A deployable parawing granting gliding flight."
+    },
+    {
+      "id": "parachute",
+      "name": "Parachute",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Slows a fall to a safe landing speed."
+    },
+    {
+      "id": "roller_skates",
+      "name": "Roller-Skates",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Wheeled shoes giving +5 on Athletics checks to move faster."
+    },
+    {
+      "id": "skateboard",
+      "name": "Skateboard",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "A board giving +5 on Athletics checks to move faster."
+    },
+    {
+      "id": "stealth_suit",
+      "name": "Stealth Suit",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Camouflage clothing giving +5 on Stealth checks to stay unseen."
+    },
+    {
+      "id": "swing_line",
+      "name": "Swing Line",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "Grapple gun or line projector granting the Swinging movement mode."
+    },
+    {
+      "id": "bicycle",
+      "name": "Bicycle",
+      "category": "utility",
+      "subcategory": "movement",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "A bicycle: +1 Speed rank, not really a vehicle."
+    },
+    {
+      "id": "axe",
+      "name": "Axe",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 5,
+      "costKind": "fixed",
+      "description": "Chopping blade; crits on 19-20 and shatters what it hits."
+    },
+    {
+      "id": "brass_knuckles",
+      "name": "Brass Knuckles",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Metal knuckles adding +1 to unarmed damage."
+    },
+    {
+      "id": "chain",
+      "name": "Chain",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 6,
+      "costKind": "fixed",
+      "description": "A weighted length of chain that grabs, trips, and reaches."
+    },
+    {
+      "id": "chainsaw",
+      "name": "Chainsaw",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 9,
+      "costKind": "fixed",
+      "description": "A power tool turned weapon; brutal and armor-chewing."
+    },
+    {
+      "id": "club",
+      "name": "Club",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "The simplest bludgeon; batons are often paired."
+    },
+    {
+      "id": "dagger",
+      "name": "Dagger",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "A short blade with a wide critical threat range."
+    },
+    {
+      "id": "flail",
+      "name": "Flail",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 5,
+      "costKind": "fixed",
+      "description": "A weight on a chain that disarms and reaches."
+    },
+    {
+      "id": "garrote",
+      "name": "Garrote",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "An assassin's cord for choking a grabbed victim."
+    },
+    {
+      "id": "hammer",
+      "name": "Hammer",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 4,
+      "costKind": "fixed",
+      "description": "A heavy war hammer, excellent for smashing objects."
+    },
+    {
+      "id": "hook_sword",
+      "name": "Hook Sword",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 7,
+      "costKind": "fixed",
+      "description": "Paired hooked blades for tripping, disarming, and reach."
+    },
+    {
+      "id": "javelin",
+      "name": "Javelin",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A light spear, best thrown but usable up close."
+    },
+    {
+      "id": "katar",
+      "name": "Katar",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A punch dagger that drives through armor."
+    },
+    {
+      "id": "mace",
+      "name": "Mace",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A flanged or spiked head on a haft."
+    },
+    {
+      "id": "pepper_spray",
+      "name": "Pepper Spray",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 4,
+      "costKind": "fixed",
+      "description": "A chemical spray that blinds at arm's length."
+    },
+    {
+      "id": "sai",
+      "name": "Sai",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "Tapering batons that catch and bind opposing weapons."
+    },
+    {
+      "id": "sash",
+      "name": "Sash",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A length of cloth wielded to entangle at a distance."
+    },
+    {
+      "id": "spear",
+      "name": "Spear",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 4,
+      "costKind": "fixed",
+      "description": "A pointed haft with reach; throwable."
+    },
+    {
+      "id": "staff",
+      "name": "Staff",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A long wooden or metal pole, struck at two targets."
+    },
+    {
+      "id": "stun_gun",
+      "name": "Stun Gun",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 5,
+      "costKind": "fixed",
+      "description": "A contact electroshock weapon."
+    },
+    {
+      "id": "sword",
+      "name": "Sword",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A long blade for slashing or thrusting."
+    },
+    {
+      "id": "tonfa",
+      "name": "Tonfa",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A side-handled baton that guards as well as strikes."
+    },
+    {
+      "id": "trident",
+      "name": "Trident",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 5,
+      "costKind": "fixed",
+      "description": "A three-tined spear with reach and disarming tines."
+    },
+    {
+      "id": "war_fan",
+      "name": "War Fan",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A bladed folding fan, easily hidden."
+    },
+    {
+      "id": "whip",
+      "name": "Whip",
+      "category": "close_weapon",
+      "subcategory": null,
+      "cost": 5,
+      "costKind": "fixed",
+      "description": "A long lash that snags and trips at range."
+    },
+    {
+      "id": "holdout_pistol",
+      "name": "Holdout Pistol",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 5,
+      "costKind": "fixed",
+      "description": "A palm-sized backup gun, easy to hide."
+    },
+    {
+      "id": "light_pistol",
+      "name": "Light Pistol",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 6,
+      "costKind": "fixed",
+      "description": "A standard semi-automatic sidearm."
+    },
+    {
+      "id": "heavy_pistol",
+      "name": "Heavy Pistol",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 8,
+      "costKind": "fixed",
+      "description": "A high-caliber handgun."
+    },
+    {
+      "id": "rifle",
+      "name": "Rifle",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 8,
+      "costKind": "fixed",
+      "description": "A long-barreled two-handed firearm."
+    },
+    {
+      "id": "rifle_high_power",
+      "name": "Rifle, High-Power",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 10,
+      "costKind": "fixed",
+      "description": "A heavier-caliber rifle."
+    },
+    {
+      "id": "assault_rifle",
+      "name": "Assault Rifle",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 15,
+      "costKind": "fixed",
+      "description": "A select-fire military rifle."
+    },
+    {
+      "id": "sniper_rifle",
+      "name": "Sniper Rifle",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 11,
+      "costKind": "fixed",
+      "description": "A long-range precision rifle."
+    },
+    {
+      "id": "shotgun",
+      "name": "Shotgun",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 10,
+      "costKind": "fixed",
+      "description": "Fires slugs for full damage or shot for a wider, shallower hit."
+    },
+    {
+      "id": "machine_pistol",
+      "name": "Machine Pistol",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 9,
+      "costKind": "fixed",
+      "description": "A compact automatic pistol."
+    },
+    {
+      "id": "submachine_gun",
+      "name": "Submachine Gun",
+      "category": "ranged_weapon",
+      "subcategory": "firearms",
+      "cost": 12,
+      "costKind": "fixed",
+      "description": "An automatic carbine firing pistol rounds."
+    },
+    {
+      "id": "air_gun",
+      "name": "Air Gun",
+      "category": "ranged_weapon",
+      "subcategory": "other_guns",
+      "cost": 10,
+      "costKind": "fixed",
+      "description": "Fires a blast of compressed air to knock down and stun."
+    },
+    {
+      "id": "dart_gun",
+      "name": "Dart Gun",
+      "category": "ranged_weapon",
+      "subcategory": "other_guns",
+      "cost": 5,
+      "costKind": "fixed",
+      "description": "Fires hypodermic darts carrying drugs or poison."
+    },
+    {
+      "id": "flare_gun",
+      "name": "Flare Gun",
+      "category": "ranged_weapon",
+      "subcategory": "other_guns",
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "A signal flare that lights up the sky."
+    },
+    {
+      "id": "paintball_gun",
+      "name": "Paintball Gun",
+      "category": "ranged_weapon",
+      "subcategory": "other_guns",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Fires gel pellets; harmless unless the load is changed."
+    },
+    {
+      "id": "bow",
+      "name": "Bow",
+      "category": "ranged_weapon",
+      "subcategory": "bows",
+      "cost": 6,
+      "costKind": "fixed",
+      "description": "A drawn bow; the classic trick-arrow platform."
+    },
+    {
+      "id": "crossbow",
+      "name": "Crossbow",
+      "category": "ranged_weapon",
+      "subcategory": "bows",
+      "cost": 7,
+      "costKind": "fixed",
+      "description": "A mechanical bow with a wider crit range."
+    },
+    {
+      "id": "blowgun",
+      "name": "Blowgun",
+      "category": "ranged_weapon",
+      "subcategory": "thrown",
+      "cost": 4,
+      "costKind": "fixed",
+      "description": "Breath-fired darts carrying poison."
+    },
+    {
+      "id": "bolos",
+      "name": "Bolos",
+      "category": "ranged_weapon",
+      "subcategory": "thrown",
+      "cost": 8,
+      "costKind": "fixed",
+      "description": "Weighted cords that tangle a target's legs."
+    },
+    {
+      "id": "boomerang",
+      "name": "Boomerang",
+      "category": "ranged_weapon",
+      "subcategory": "thrown",
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "A thrown blade that returns to your hand."
+    },
+    {
+      "id": "chakram",
+      "name": "Chakram",
+      "category": "ranged_weapon",
+      "subcategory": "thrown",
+      "cost": 7,
+      "costKind": "fixed",
+      "description": "A sharpened throwing ring."
+    },
+    {
+      "id": "javelin_thrown",
+      "name": "Javelin (thrown)",
+      "category": "ranged_weapon",
+      "subcategory": "thrown",
+      "cost": 4,
+      "costKind": "fixed",
+      "description": "A javelin priced as a thrown ranged weapon."
+    },
+    {
+      "id": "shuriken",
+      "name": "Shuriken",
+      "category": "ranged_weapon",
+      "subcategory": "thrown",
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "Thrown stars, flung in handfuls."
+    },
+    {
+      "id": "blaster_pistol",
+      "name": "Blaster Pistol",
+      "category": "ranged_weapon",
+      "subcategory": "energy",
+      "cost": 10,
+      "costKind": "fixed",
+      "description": "A sidearm firing bolts of energy."
+    },
+    {
+      "id": "blaster_rifle",
+      "name": "Blaster Rifle",
+      "category": "ranged_weapon",
+      "subcategory": "energy",
+      "cost": 16,
+      "costKind": "fixed",
+      "description": "A rifle-sized energy weapon."
+    },
+    {
+      "id": "taser",
+      "name": "Taser",
+      "category": "ranged_weapon",
+      "subcategory": "energy",
+      "cost": 10,
+      "costKind": "fixed",
+      "description": "Fires darts trailing wires that deliver a shock."
+    },
+    {
+      "id": "flamethrower",
+      "name": "Flamethrower",
+      "category": "ranged_weapon",
+      "subcategory": "heavy",
+      "cost": 13,
+      "costKind": "fixed",
+      "description": "Sprays burning fuel in a cone or line."
+    },
+    {
+      "id": "grenade_launcher",
+      "name": "Grenade Launcher",
+      "category": "ranged_weapon",
+      "subcategory": "heavy",
+      "cost": 15,
+      "costKind": "fixed",
+      "description": "Lobs grenades well beyond throwing range."
+    },
+    {
+      "id": "machine_gun",
+      "name": "Machine Gun",
+      "category": "ranged_weapon",
+      "subcategory": "heavy",
+      "cost": 14,
+      "costKind": "fixed",
+      "description": "A crew- or mount-served automatic weapon."
+    },
+    {
+      "id": "rocket_launcher",
+      "name": "Rocket Launcher",
+      "category": "ranged_weapon",
+      "subcategory": "heavy",
+      "cost": 27,
+      "costKind": "fixed",
+      "description": "An anti-armor rocket with a lethal blast radius."
+    },
+    {
+      "id": "laser_sight",
+      "name": "Laser Sight",
+      "category": "accessory",
+      "subcategory": null,
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Adds Accurate (+2 attack) to a ranged weapon."
+    },
+    {
+      "id": "stun_ammo",
+      "name": "Stun Ammo",
+      "category": "accessory",
+      "subcategory": null,
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Non-lethal rounds or blunt arrows; swap as a simple action."
+    },
+    {
+      "id": "suppressor",
+      "name": "Suppressor",
+      "category": "accessory",
+      "subcategory": null,
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Muffles a ballistic weapon, giving it Subtle 1."
+    },
+    {
+      "id": "targeting_scope",
+      "name": "Targeting Scope",
+      "category": "accessory",
+      "subcategory": null,
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Grants Improved Aim with the weapon it is fitted to."
+    },
+    {
+      "id": "frag_grenade",
+      "name": "Fragmentation Grenade",
+      "category": "grenade",
+      "subcategory": "grenades",
+      "cost": 15,
+      "costKind": "fixed",
+      "description": "Sprays shrapnel through a sphere."
+    },
+    {
+      "id": "smoke_grenade",
+      "name": "Smoke Grenade",
+      "category": "grenade",
+      "subcategory": "grenades",
+      "cost": 8,
+      "costKind": "fixed",
+      "description": "Fills an area with sight-blocking smoke."
+    },
+    {
+      "id": "flash_grenade",
+      "name": "Flash Grenade",
+      "category": "grenade",
+      "subcategory": "grenades",
+      "cost": 12,
+      "costKind": "fixed",
+      "description": "A blinding burst of light."
+    },
+    {
+      "id": "flash_bang_grenade",
+      "name": "Flash-Bang Grenade",
+      "category": "grenade",
+      "subcategory": "grenades",
+      "cost": 16,
+      "costKind": "fixed",
+      "description": "A burst of light and noise that blinds and deafens."
+    },
+    {
+      "id": "sleep_gas_grenade",
+      "name": "Sleep Gas Grenade",
+      "category": "grenade",
+      "subcategory": "grenades",
+      "cost": 12,
+      "costKind": "fixed",
+      "description": "Gas that drops targets into unconsciousness."
+    },
+    {
+      "id": "tear_gas_grenade",
+      "name": "Tear Gas Grenade",
+      "category": "grenade",
+      "subcategory": "grenades",
+      "cost": 16,
+      "costKind": "fixed",
+      "description": "Irritant gas that blinds and sickens."
+    },
+    {
+      "id": "dynamite",
+      "name": "Dynamite",
+      "category": "explosive",
+      "subcategory": "explosives",
+      "cost": 15,
+      "costKind": "fixed",
+      "description": "A stick of dynamite; doubling the charge adds a Damage rank."
+    },
+    {
+      "id": "plastic_explosive",
+      "name": "Plastic Explosive",
+      "category": "explosive",
+      "subcategory": "explosives",
+      "cost": 30,
+      "costKind": "fixed",
+      "description": "A shapeable charge; doubling the charge adds a Damage rank."
+    },
+    {
+      "id": "leather_armor",
+      "name": "Leather",
+      "category": "armor",
+      "subcategory": "archaic",
+      "cost": 1,
+      "costKind": "fixed",
+      "description": "Boiled leather or a heavy leather jacket."
+    },
+    {
+      "id": "chain_mail",
+      "name": "Chain-Mail",
+      "category": "armor",
+      "subcategory": "archaic",
+      "cost": 7,
+      "costKind": "fixed",
+      "description": "A shirt of heavy metal links."
+    },
+    {
+      "id": "plate_mail",
+      "name": "Plate-Mail",
+      "category": "armor",
+      "subcategory": "archaic",
+      "cost": 11,
+      "costKind": "fixed",
+      "description": "Mail reinforced with plate."
+    },
+    {
+      "id": "full_plate",
+      "name": "Full Plate",
+      "category": "armor",
+      "subcategory": "archaic",
+      "cost": 14,
+      "costKind": "fixed",
+      "description": "A full articulated suit of plate."
+    },
+    {
+      "id": "armor_cloth",
+      "name": "Armor Cloth",
+      "category": "armor",
+      "subcategory": "modern",
+      "cost": 1,
+      "costKind": "per_rank",
+      "description": "Toughened fabric that hardens your own Toughness.",
+      "costNote": "1 point per rank"
+    },
+    {
+      "id": "undercover_shirt",
+      "name": "Undercover Shirt",
+      "category": "armor",
+      "subcategory": "modern",
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "Thin ballistic armor worn under street clothes."
+    },
+    {
+      "id": "bulletproof_vest",
+      "name": "Bulletproof Vest",
+      "category": "armor",
+      "subcategory": "modern",
+      "cost": 4,
+      "costKind": "fixed",
+      "description": "A police- or military-issue ballistic vest."
+    },
+    {
+      "id": "armored_costume",
+      "name": "Armored Costume",
+      "category": "armor",
+      "subcategory": "modern",
+      "cost": 1,
+      "costKind": "per_rank",
+      "description": "A super-fabric uniform bought at whatever Protection you can afford.",
+      "costNote": "1 point per rank"
+    },
+    {
+      "id": "fire_resistant",
+      "name": "Fire Resistant",
+      "category": "armor",
+      "subcategory": "modern",
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "Flame-retardant treatment granting Resistance to fire Damage."
+    },
+    {
+      "id": "small_shield",
+      "name": "Small Shield",
+      "category": "shield",
+      "subcategory": "shields",
+      "cost": 2,
+      "costKind": "fixed",
+      "description": "A hand shield covering the forearm."
+    },
+    {
+      "id": "medium_shield",
+      "name": "Medium Shield",
+      "category": "shield",
+      "subcategory": "shields",
+      "cost": 4,
+      "costKind": "fixed",
+      "description": "An arm shield covering much of the torso."
+    },
+    {
+      "id": "large_shield",
+      "name": "Large Shield",
+      "category": "shield",
+      "subcategory": "shields",
+      "cost": 6,
+      "costKind": "fixed",
+      "description": "A kite or tower shield covering most of the body."
+    },
+    {
+      "id": "utility_kit",
+      "name": "Utility Kit",
+      "category": "kit",
+      "subcategory": null,
+      "cost": 25,
+      "costKind": "built",
+      "description": "A belt or bag holding a weapon array plus a spread of small gadgets.",
+      "costNote": "25 points as printed (Equipment rank 5)"
+    },
+    {
+      "id": "trick_arrows",
+      "name": "Trick Arrows",
+      "category": "kit",
+      "subcategory": null,
+      "cost": null,
+      "costKind": "built",
+      "description": "A quiver of specialised arrowheads, usable one at a time.",
+      "costNote": "Array: full cost of the costliest arrow plus 1 point per alternate"
+    },
+    {
+      "id": "omni_equipment",
+      "name": "Omni-Equipment",
+      "category": "kit",
+      "subcategory": null,
+      "cost": null,
+      "costKind": "built",
+      "description": "Optional: a reconfigurable 5-point pool of equipment, swapped as a free action.",
+      "costNote": "Variable 1 with Removable: Equipment = 2 Power Points (not Equipment Points)"
+    }
+  ],
+  "vehicleFeatures": [
+    {
+      "id": "alarm",
+      "name": "Alarm",
+      "cost": 1,
+      "repeatable": true,
+      "description": "An intrusion alarm; extra ranks raise the DC to beat it."
+    },
+    {
+      "id": "autopilot",
+      "name": "Autopilot",
+      "cost": 1,
+      "repeatable": true,
+      "description": "The vehicle can fly or drive itself."
+    },
+    {
+      "id": "caltrops",
+      "name": "Caltrops",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Dispenses tire-wrecking spikes behind you."
+    },
+    {
+      "id": "communications",
+      "name": "Communications",
+      "cost": 1,
+      "repeatable": true,
+      "description": "A radio or comms suite for talking to similar systems."
+    },
+    {
+      "id": "computer",
+      "name": "Computer",
+      "cost": 1,
+      "repeatable": false,
+      "description": "An on-board computer running routine operations."
+    },
+    {
+      "id": "dual_size",
+      "name": "Dual Size",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Bigger inside than out; pay for the interior, shrink the exterior."
+    },
+    {
+      "id": "hidden_compartments",
+      "name": "Hidden Compartments",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Concealed cargo space; extra ranks raise the DC to find it."
+    },
+    {
+      "id": "navigation_system",
+      "name": "Navigation System",
+      "cost": 1,
+      "repeatable": false,
+      "description": "+5 on navigation-related skill checks."
+    },
+    {
+      "id": "oil_slick",
+      "name": "Oil Slick",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Lays down a slick that forces pursuers to fight for control."
+    },
+    {
+      "id": "remote_control",
+      "name": "Remote Control",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Operate the vehicle from a distance."
+    },
+    {
+      "id": "rooms",
+      "name": "Rooms",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Installation Features built into a large vehicle."
+    }
+  ],
+  "vehicleModifiers": [
+    {
+      "id": "durable",
+      "name": "Durable",
+      "cost": 1,
+      "costKind": "per_rank_flat",
+      "description": "The vehicle takes damage like a character, not like equipment."
+    },
+    {
+      "id": "minion",
+      "name": "Minion",
+      "cost": -1,
+      "costKind": "per_rank_flat",
+      "description": "The vehicle is a minion: one failed Toughness check destroys it."
+    },
+    {
+      "id": "summonable",
+      "name": "Summonable",
+      "cost": 1,
+      "costKind": "per_rank_flat",
+      "description": "Call the vehicle to you as a standard action; dismiss it as a free action."
+    }
+  ],
+  "stockVehicles": [
+    {
+      "id": "motorcycle",
+      "name": "Motorcycle",
+      "class": "ground",
+      "size": 0,
+      "strength": 2,
+      "speed": 8,
+      "defenseModifier": 0,
+      "toughness": 7,
+      "cost": 10,
+      "costKind": "fixed"
+    },
+    {
+      "id": "car",
+      "name": "Car",
+      "class": "ground",
+      "size": 1,
+      "strength": 5,
+      "speed": 7,
+      "defenseModifier": -1,
+      "toughness": 8,
+      "cost": 10,
+      "costKind": "fixed"
+    },
+    {
+      "id": "police_cruiser",
+      "name": "Police Cruiser",
+      "class": "ground",
+      "size": 1,
+      "strength": 6,
+      "speed": 8,
+      "defenseModifier": -1,
+      "toughness": 9,
+      "cost": 13,
+      "costKind": "fixed"
+    },
+    {
+      "id": "limousine",
+      "name": "Limousine",
+      "class": "ground",
+      "size": 2,
+      "strength": 8,
+      "speed": 7,
+      "defenseModifier": -2,
+      "toughness": 9,
+      "cost": 14,
+      "costKind": "fixed"
+    },
+    {
+      "id": "truck",
+      "name": "Truck",
+      "class": "ground",
+      "size": 2,
+      "strength": 9,
+      "speed": 7,
+      "defenseModifier": -2,
+      "toughness": 9,
+      "cost": 15,
+      "costKind": "fixed"
+    },
+    {
+      "id": "armored_car",
+      "name": "Armored Car",
+      "class": "ground",
+      "size": 2,
+      "strength": 8,
+      "speed": 7,
+      "defenseModifier": -2,
+      "toughness": 12,
+      "cost": 23,
+      "costKind": "fixed"
+    },
+    {
+      "id": "tank",
+      "name": "Tank",
+      "class": "ground",
+      "size": 2,
+      "strength": 10,
+      "speed": 6,
+      "defenseModifier": -2,
+      "toughness": 12,
+      "cost": 76,
+      "costKind": "fixed"
+    },
+    {
+      "id": "apc",
+      "name": "APC",
+      "class": "ground",
+      "size": 2,
+      "strength": 12,
+      "speed": 6,
+      "defenseModifier": -2,
+      "toughness": 12,
+      "cost": 46,
+      "costKind": "fixed"
+    },
+    {
+      "id": "bus",
+      "name": "Bus",
+      "class": "ground",
+      "size": 3,
+      "strength": 12,
+      "speed": 7,
+      "defenseModifier": -3,
+      "toughness": 11,
+      "cost": 17,
+      "costKind": "fixed"
+    },
+    {
+      "id": "semi",
+      "name": "Semi",
+      "class": "ground",
+      "size": 3,
+      "strength": 13,
+      "speed": 7,
+      "defenseModifier": -3,
+      "toughness": 11,
+      "cost": 18,
+      "costKind": "fixed"
+    },
+    {
+      "id": "train_engine",
+      "name": "Train Engine",
+      "class": "ground",
+      "size": 2,
+      "strength": 10,
+      "speed": 7,
+      "defenseModifier": -2,
+      "toughness": 10,
+      "cost": 16,
+      "costKind": "fixed"
+    },
+    {
+      "id": "jet_ski",
+      "name": "Jet-Ski",
+      "class": "water",
+      "size": 0,
+      "strength": 2,
+      "speed": 7,
+      "defenseModifier": 0,
+      "toughness": 7,
+      "cost": 10,
+      "costKind": "fixed"
+    },
+    {
+      "id": "sailboat",
+      "name": "Sailboat",
+      "class": "water",
+      "size": 2,
+      "strength": 6,
+      "speed": 5,
+      "defenseModifier": -1,
+      "toughness": 6,
+      "cost": 6,
+      "costKind": "fixed"
+    },
+    {
+      "id": "speedboat",
+      "name": "Speedboat",
+      "class": "water",
+      "size": 1,
+      "strength": 6,
+      "speed": 8,
+      "defenseModifier": -1,
+      "toughness": 7,
+      "cost": 12,
+      "costKind": "fixed"
+    },
+    {
+      "id": "yacht",
+      "name": "Yacht",
+      "class": "water",
+      "size": 2,
+      "strength": 10,
+      "speed": 7,
+      "defenseModifier": -2,
+      "toughness": 9,
+      "cost": 15,
+      "costKind": "fixed"
+    },
+    {
+      "id": "cutter",
+      "name": "Cutter",
+      "class": "water",
+      "size": 3,
+      "strength": 13,
+      "speed": 7,
+      "defenseModifier": -3,
+      "toughness": 12,
+      "cost": 37,
+      "costKind": "fixed"
+    },
+    {
+      "id": "destroyer",
+      "name": "Destroyer",
+      "class": "water",
+      "size": 4,
+      "strength": 16,
+      "speed": 7,
+      "defenseModifier": -4,
+      "toughness": 14,
+      "cost": 50,
+      "costKind": "fixed"
+    },
+    {
+      "id": "cruise_ship",
+      "name": "Cruise Ship",
+      "class": "water",
+      "size": 5,
+      "strength": 20,
+      "speed": 7,
+      "defenseModifier": -5,
+      "toughness": 15,
+      "cost": 25,
+      "costKind": "fixed"
+    },
+    {
+      "id": "battleship",
+      "name": "Battleship",
+      "class": "water",
+      "size": 5,
+      "strength": 20,
+      "speed": 7,
+      "defenseModifier": -5,
+      "toughness": 16,
+      "cost": 76,
+      "costKind": "fixed"
+    },
+    {
+      "id": "submarine",
+      "name": "Submarine",
+      "class": "water",
+      "size": 4,
+      "strength": 16,
+      "speed": 4,
+      "defenseModifier": -4,
+      "toughness": 13,
+      "cost": 39,
+      "costKind": "fixed"
+    },
+    {
+      "id": "two_seater_plane",
+      "name": "Two-Seater Plane",
+      "class": "air",
+      "size": 1,
+      "strength": 6,
+      "speed": 8,
+      "defenseModifier": -1,
+      "toughness": 8,
+      "cost": 13,
+      "costKind": "fixed"
+    },
+    {
+      "id": "helicopter",
+      "name": "Helicopter",
+      "class": "air",
+      "size": 2,
+      "strength": 8,
+      "speed": 9,
+      "defenseModifier": -2,
+      "toughness": 9,
+      "cost": 24,
+      "costKind": "fixed"
+    },
+    {
+      "id": "military_copter",
+      "name": "Military Copter",
+      "class": "air",
+      "size": 2,
+      "strength": 8,
+      "speed": 10,
+      "defenseModifier": -2,
+      "toughness": 11,
+      "cost": 70,
+      "costKind": "fixed"
+    },
+    {
+      "id": "private_jet",
+      "name": "Private Jet",
+      "class": "air",
+      "size": 3,
+      "strength": 12,
+      "speed": 10,
+      "defenseModifier": -3,
+      "toughness": 11,
+      "cost": 30,
+      "costKind": "fixed"
+    },
+    {
+      "id": "jumbo_jet",
+      "name": "Jumbo Jet",
+      "class": "air",
+      "size": 4,
+      "strength": 16,
+      "speed": 9,
+      "defenseModifier": -4,
+      "toughness": 13,
+      "cost": 32,
+      "costKind": "fixed"
+    },
+    {
+      "id": "fighter_jet",
+      "name": "Fighter Jet",
+      "class": "air",
+      "size": 3,
+      "strength": 10,
+      "speed": 14,
+      "defenseModifier": -3,
+      "toughness": 10,
+      "cost": 89,
+      "costKind": "fixed"
+    },
+    {
+      "id": "bomber",
+      "name": "Bomber",
+      "class": "air",
+      "size": 4,
+      "strength": 13,
+      "speed": 11,
+      "defenseModifier": -4,
+      "toughness": 13,
+      "cost": 87,
+      "costKind": "fixed"
+    },
+    {
+      "id": "space_shuttle",
+      "name": "Space Shuttle",
+      "class": "space",
+      "size": 4,
+      "strength": 16,
+      "speed": 14,
+      "defenseModifier": -4,
+      "toughness": 13,
+      "cost": 42,
+      "costKind": "fixed"
+    },
+    {
+      "id": "space_fighter",
+      "name": "Space Fighter",
+      "class": "space",
+      "size": 3,
+      "strength": 10,
+      "speed": 16,
+      "defenseModifier": -3,
+      "toughness": 11,
+      "cost": 60,
+      "costKind": "fixed"
+    },
+    {
+      "id": "space_cruiser",
+      "name": "Space Cruiser",
+      "class": "space",
+      "size": 4,
+      "strength": 18,
+      "speed": 16,
+      "defenseModifier": -4,
+      "toughness": 15,
+      "cost": 116,
+      "costKind": "fixed"
+    },
+    {
+      "id": "space_battleship",
+      "name": "Space Battleship",
+      "class": "space",
+      "size": 5,
+      "strength": 22,
+      "speed": 18,
+      "defenseModifier": -5,
+      "toughness": 18,
+      "cost": 139,
+      "costKind": "fixed"
+    },
+    {
+      "id": "dimension_hopper",
+      "name": "Dimension Hopper",
+      "class": "exotic",
+      "size": 2,
+      "strength": 8,
+      "speed": null,
+      "defenseModifier": -2,
+      "toughness": 9,
+      "cost": null,
+      "costKind": "built"
+    },
+    {
+      "id": "mole_machine",
+      "name": "Mole Machine",
+      "class": "exotic",
+      "size": 2,
+      "strength": 11,
+      "speed": 6,
+      "defenseModifier": -2,
+      "toughness": 12,
+      "cost": 18,
+      "costKind": "fixed"
+    },
+    {
+      "id": "time_machine",
+      "name": "Time Machine",
+      "class": "exotic",
+      "size": 2,
+      "strength": 8,
+      "speed": null,
+      "defenseModifier": -2,
+      "toughness": 9,
+      "cost": null,
+      "costKind": "built"
+    }
+  ],
+  "installationFeatures": [
+    {
+      "id": "combat_simulator",
+      "name": "Combat Simulator",
+      "cost": 1,
+      "repeatable": true,
+      "description": "A training room that can simulate any attack effect up to the installation's Power Level."
+    },
+    {
+      "id": "communications",
+      "name": "Communications",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Broad-band transmit and receive, including monitoring emergency channels."
+    },
+    {
+      "id": "computer_system",
+      "name": "Computer System",
+      "cost": 1,
+      "repeatable": false,
+      "description": "A base-wide computer that can automate routine functions."
+    },
+    {
+      "id": "concealed",
+      "name": "Concealed",
+      "cost": 1,
+      "repeatable": true,
+      "description": "The installation is hidden; harder to find in the first place."
+    },
+    {
+      "id": "defense_system",
+      "name": "Defense System",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Weapon emplacements defending the site."
+    },
+    {
+      "id": "deathtraps",
+      "name": "Deathtraps",
+      "cost": 1,
+      "repeatable": true,
+      "description": "The villainous version of a defense system: elaborate traps."
+    },
+    {
+      "id": "dimensional_portal",
+      "name": "Dimensional Portal",
+      "cost": 1,
+      "repeatable": true,
+      "description": "A two-way gateway to another dimension."
+    },
+    {
+      "id": "dock",
+      "name": "Dock",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Berths and dry-dock facilities for water vehicles."
+    },
+    {
+      "id": "dual_size",
+      "name": "Dual Size",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Larger on the inside than the outside."
+    },
+    {
+      "id": "effect",
+      "name": "Effect",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Any approved power effect built into the installation."
+    },
+    {
+      "id": "fire_prevention_system",
+      "name": "Fire Prevention System",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Automatic fire suppression at the installation's Power Level."
+    },
+    {
+      "id": "garage",
+      "name": "Garage",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Housing and maintenance for ground vehicles."
+    },
+    {
+      "id": "grounds",
+      "name": "Grounds",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Extensive land around the structure."
+    },
+    {
+      "id": "gym",
+      "name": "Gym",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Exercise and training facilities, optionally with a pool."
+    },
+    {
+      "id": "hangar",
+      "name": "Hangar",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Housing, launch, and maintenance for air and space vehicles."
+    },
+    {
+      "id": "habitat",
+      "name": "Habitat",
+      "cost": 1,
+      "repeatable": false,
+      "description": "An artificial environment for plants or animals."
+    },
+    {
+      "id": "holding_cells",
+      "name": "Holding Cells",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Cells for prisoners; each extra rank adds one listed benefit."
+    },
+    {
+      "id": "infirmary",
+      "name": "Infirmary",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Medical facilities supporting full use of the Treatment skill."
+    },
+    {
+      "id": "intelligent",
+      "name": "Intelligent",
+      "cost": 1,
+      "repeatable": false,
+      "description": "The installation itself is aware and can act."
+    },
+    {
+      "id": "isolated",
+      "name": "Isolated",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Situated somewhere remote and hard to reach."
+    },
+    {
+      "id": "laboratory",
+      "name": "Laboratory",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Scientific facilities for research and analysis."
+    },
+    {
+      "id": "library",
+      "name": "Library",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Research collection supporting Expertise checks."
+    },
+    {
+      "id": "living_space",
+      "name": "Living Space",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Full-time accommodation for a number of residents."
+    },
+    {
+      "id": "movable",
+      "name": "Movable",
+      "cost": 1,
+      "repeatable": false,
+      "description": "The whole structure can relocate, slowly."
+    },
+    {
+      "id": "personnel",
+      "name": "Personnel",
+      "cost": 1,
+      "repeatable": false,
+      "description": "A staff of minions who maintain the place."
+    },
+    {
+      "id": "power_system",
+      "name": "Power System",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Self-contained generators plus emergency backup."
+    },
+    {
+      "id": "remote_feature",
+      "name": "Remote Feature",
+      "cost": 1,
+      "repeatable": true,
+      "description": "One Feature sits apart from the main structure."
+    },
+    {
+      "id": "sealed",
+      "name": "Sealed",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Closed off from the outside world entirely."
+    },
+    {
+      "id": "secret",
+      "name": "Secret",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Hiding in plain sight; nobody knows it is an installation."
+    },
+    {
+      "id": "security_system",
+      "name": "Security System",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Locks and alarms; extra ranks raise the DC to defeat them."
+    },
+    {
+      "id": "self_repairing",
+      "name": "Self-Repairing",
+      "cost": 1,
+      "repeatable": true,
+      "description": "The structure heals its own damage over time."
+    },
+    {
+      "id": "teleport_lock",
+      "name": "Teleport Lock",
+      "cost": 1,
+      "repeatable": false,
+      "description": "A homing beacon that makes Teleport to the installation Accurate."
+    },
+    {
+      "id": "temporal_limbo",
+      "name": "Temporal Limbo",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Time inside runs at half or twice the outside rate."
+    },
+    {
+      "id": "trophy_room",
+      "name": "Trophy Room",
+      "cost": 1,
+      "repeatable": false,
+      "description": "A display of souvenirs; a source of hooks and Hero Point feats."
+    },
+    {
+      "id": "variable_environment",
+      "name": "Variable Environment",
+      "cost": 1,
+      "repeatable": false,
+      "description": "Full Environment control over temperature, gravity, and atmosphere."
+    },
+    {
+      "id": "workshop",
+      "name": "Workshop",
+      "cost": 1,
+      "repeatable": true,
+      "description": "Tools and benches for building and repairing things."
+    }
+  ],
+  "stockInstallations": [
+    {
+      "id": "abandoned_warehouse",
+      "name": "Abandoned Warehouse",
+      "size": 4,
+      "toughness": 8,
+      "cost": 14,
+      "features": [
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:concealed",
+        "installationFeatures:garage",
+        "installationFeatures:gym",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system"
+      ]
+    },
+    {
+      "id": "moon_base",
+      "name": "Moon-Base",
+      "size": 9,
+      "toughness": 2,
+      "cost": 39,
+      "features": [
+        "installationFeatures:combat_simulator",
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:defense_system",
+        "installationFeatures:fire_prevention_system",
+        "installationFeatures:gym",
+        "installationFeatures:hangar",
+        "installationFeatures:holding_cells",
+        "installationFeatures:infirmary",
+        "installationFeatures:isolated",
+        "installationFeatures:laboratory",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system",
+        "installationFeatures:workshop"
+      ]
+    },
+    {
+      "id": "orbiting_satellite",
+      "name": "Orbiting Satellite",
+      "size": 8,
+      "toughness": 20,
+      "cost": 37,
+      "features": [
+        "installationFeatures:combat_simulator",
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:defense_system",
+        "installationFeatures:fire_prevention_system",
+        "installationFeatures:gym",
+        "installationFeatures:hangar",
+        "installationFeatures:holding_cells",
+        "installationFeatures:infirmary",
+        "installationFeatures:isolated",
+        "installationFeatures:laboratory",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system"
+      ]
+    },
+    {
+      "id": "sanctum_sanctorum",
+      "name": "Sanctum Sanctorum",
+      "size": 4,
+      "toughness": 10,
+      "cost": 15,
+      "features": [
+        "installationFeatures:concealed",
+        "installationFeatures:dual_size",
+        "installationFeatures:laboratory",
+        "installationFeatures:library",
+        "installationFeatures:living_space",
+        "installationFeatures:security_system",
+        "installationFeatures:workshop"
+      ]
+    },
+    {
+      "id": "sea_base",
+      "name": "Sea-Base",
+      "size": 6,
+      "toughness": 14,
+      "cost": 23,
+      "features": [
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:concealed",
+        "installationFeatures:dock",
+        "installationFeatures:fire_prevention_system",
+        "installationFeatures:isolated",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system"
+      ]
+    },
+    {
+      "id": "skyscraper",
+      "name": "Skyscraper (5 Floors)",
+      "size": 5,
+      "toughness": 10,
+      "cost": 20,
+      "features": [
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:defense_system",
+        "installationFeatures:fire_prevention_system",
+        "installationFeatures:gym",
+        "installationFeatures:hangar",
+        "installationFeatures:infirmary",
+        "installationFeatures:laboratory",
+        "installationFeatures:library",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system",
+        "installationFeatures:workshop"
+      ]
+    },
+    {
+      "id": "stately_manor",
+      "name": "Stately Manor",
+      "size": 5,
+      "toughness": 10,
+      "cost": 23,
+      "features": [
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:concealed",
+        "installationFeatures:dock",
+        "installationFeatures:garage",
+        "installationFeatures:gym",
+        "installationFeatures:hangar",
+        "installationFeatures:infirmary",
+        "installationFeatures:laboratory",
+        "installationFeatures:library",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system",
+        "installationFeatures:workshop"
+      ]
+    },
+    {
+      "id": "underground_lair",
+      "name": "Underground Lair",
+      "size": 5,
+      "toughness": 14,
+      "cost": 25,
+      "features": [
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:concealed",
+        "installationFeatures:defense_system",
+        "installationFeatures:garage",
+        "installationFeatures:holding_cells",
+        "installationFeatures:isolated",
+        "installationFeatures:laboratory",
+        "installationFeatures:library",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system"
+      ]
+    },
+    {
+      "id": "urban_fortress",
+      "name": "Urban Fortress",
+      "size": 4,
+      "toughness": 12,
+      "cost": 26,
+      "features": [
+        "installationFeatures:combat_simulator",
+        "installationFeatures:communications",
+        "installationFeatures:computer_system",
+        "installationFeatures:concealed",
+        "installationFeatures:defense_system",
+        "installationFeatures:fire_prevention_system",
+        "installationFeatures:garage",
+        "installationFeatures:gym",
+        "installationFeatures:holding_cells",
+        "installationFeatures:infirmary",
+        "installationFeatures:living_space",
+        "installationFeatures:power_system",
+        "installationFeatures:security_system",
+        "installationFeatures:workshop"
+      ]
+    }
+  ],
+  "vehicleSizeTable": [
+    {
+      "sizeRank": 0,
+      "examples": [
+        "Motorcycle"
+      ],
+      "strength": 2,
+      "toughness": 5,
+      "defense": 0
+    },
+    {
+      "sizeRank": 1,
+      "examples": [
+        "Car",
+        "Truck"
+      ],
+      "strength": 4,
+      "toughness": 6,
+      "defense": -1
+    },
+    {
+      "sizeRank": 2,
+      "examples": [
+        "Stretch limo",
+        "SUV",
+        "Tank"
+      ],
+      "strength": 6,
+      "toughness": 7,
+      "defense": -2
+    },
+    {
+      "sizeRank": 3,
+      "examples": [
+        "Semi",
+        "Yacht",
+        "Fighter jet"
+      ],
+      "strength": 8,
+      "toughness": 8,
+      "defense": -3
+    },
+    {
+      "sizeRank": 4,
+      "examples": [
+        "Passenger jet"
+      ],
+      "strength": 10,
+      "toughness": 9,
+      "defense": -4
+    },
+    {
+      "sizeRank": 5,
+      "examples": [
+        "Space transport"
+      ],
+      "strength": 12,
+      "toughness": 10,
+      "defense": -5
+    }
+  ],
+  "installationSizeTable": [
+    {
+      "sizeRank": 1,
+      "cost": -4,
+      "examples": [
+        "Room"
+      ]
+    },
+    {
+      "sizeRank": 2,
+      "cost": -3,
+      "examples": [
+        "Loft"
+      ]
+    },
+    {
+      "sizeRank": 3,
+      "cost": -2,
+      "examples": [
+        "Apartment"
+      ]
+    },
+    {
+      "sizeRank": 4,
+      "cost": -1,
+      "examples": [
+        "Townhouse"
+      ]
+    },
+    {
+      "sizeRank": 5,
+      "cost": 0,
+      "examples": [
+        "House"
+      ]
+    },
+    {
+      "sizeRank": 6,
+      "cost": 1,
+      "examples": [
+        "Warehouse"
+      ]
+    },
+    {
+      "sizeRank": 7,
+      "cost": 2,
+      "examples": [
+        "Mansion",
+        "Cave complex"
+      ]
+    },
+    {
+      "sizeRank": 8,
+      "cost": 3,
+      "examples": [
+        "Castle"
+      ]
+    },
+    {
+      "sizeRank": 9,
+      "cost": 4,
+      "examples": [
+        "Skyscraper"
+      ]
+    },
+    {
+      "sizeRank": 10,
+      "cost": 5,
+      "examples": [
+        "City block",
+        "Private estate"
+      ]
+    },
+    {
+      "sizeRank": 11,
+      "cost": 6,
+      "examples": [
+        "Small town",
+        "Sprawling installation"
+      ]
+    }
+  ]
+}

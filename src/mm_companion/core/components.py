@@ -36,6 +36,22 @@ GATE_TOGGLE = "toggle"  # a Sustained/Continuous switch the player sets
 GATE_LIMITED = "limited"  # a free-text condition the player self-applies (informational)
 GATE_REQUIRES_EFFECT = "requires_effect"  # only while another named effect is active
 
+# statIntegration.apply — what a :class:`TraitBoost` record *means* once its effect is
+# active. Each kind is a registered applier in :mod:`mm_companion.core.rules.appliers`
+# that turns the record and a rank into trait contributions; a mod registers another.
+APPLY_BONUS = "bonus"  # add the amount to a numeric trait (the historical rule)
+APPLY_PENALTY_REMOVED = "penalty_removed"  # cancel that much of a standing penalty
+APPLY_PENALTY_REPLACED = "penalty_replaced"  # leave a smaller penalty in its place
+APPLY_SPEED = "speed"  # grant ranks of a named movement mode
+APPLY_SENSE = "sense"  # grant ranks of a named sense quality
+APPLY_KINDS = (
+    APPLY_BONUS,
+    APPLY_PENALTY_REMOVED,
+    APPLY_PENALTY_REPLACED,
+    APPLY_SPEED,
+    APPLY_SENSE,
+)
+
 # Condition mechanism tags — which engine subsystem a condition feeds
 # (``docs/mm-conditions-design.md`` §4). Each names one place in the derived-stats /
 # turn-resolution layer; the condition supplies data, the subsystem does the math.
@@ -70,18 +86,27 @@ MECHANISMS = (
 
 @dataclass(frozen=True)
 class TraitBoost:
-    """An effect adds its rank to a trait (Enhanced Trait, Protection).
+    """An effect's *stat effect* — what it does to a trait (Enhanced Trait, Protection).
 
     ``affects`` is the set of trait categories the effect can raise
     (``ability``/``resistance``/``defense``/``skill``/…); ``target`` is the fixed
     trait key for a baked-in booster like Protection (``"TOUGHNESS"``), left ``""``
     when ``configurable`` and the player picks the target at build time (stored on
     the instance's ``config['target']``).
+
+    ``apply`` names which of :data:`APPLY_KINDS` interprets the record, and
+    ``per_rank``/``flat`` say what it is worth at a given rank
+    (``flat + rank × per_rank``). The defaults are M&M's own rule — one kind of
+    bonus, worth exactly the effect's rank — so a record that states neither
+    behaves as it always did.
     """
 
     affects: frozenset[str] = frozenset()
     target: str = ""
     configurable: bool = False
+    apply: str = APPLY_BONUS
+    per_rank: int = 1
+    flat: int = 0
 
 
 @dataclass(frozen=True)

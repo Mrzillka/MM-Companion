@@ -127,7 +127,7 @@ Leave `stockVehicles` / installations unparsed this phase — Phases 9–10 own 
 *Verify:* `tests/test_equipment_data.py` (new) + `tests/test_data_loader.py`.
 
 ### Phase 2 — Data-driven stat appliers (the core powers refactor)
-**Status: todo**
+**Status: done**
 
 This is the "all effects that influence stats should be data driven, something like
 `apply(bonus, stat, rank)`" ask, and it lands in the powers layer first so equipment
@@ -392,3 +392,76 @@ proving `_deep_merge` gives catalog extension and per-field override for free) p
 
 Next: **Phase 2 — Data-driven stat appliers**, the powers-layer refactor. Its guard is
 that `tests/test_derived_stats.py` must pass *unedited*.
+
+### 2026-08-06 — Phase 2: Data-driven stat appliers
+
+**Shipped.** `core/rules/appliers.py` (new, the lowest rules layer) now owns both halves
+of the split: *what a stat effect means* (a registry of appliers) and *how several of
+them net on one trait* (the stacking resolver). `power_trait_bonuses` no longer decides
+either. **No existing test was edited** and the whole suite passes (2010), which is the
+guard the plan asked for.
+
+*The vocabulary is in `components.py`*, beside `PATTERNS`/`GATE_*` where the other
+enum vocabularies live — `APPLY_BONUS`/`PENALTY_REMOVED`/`PENALTY_REPLACED`/`SPEED`/
+`SENSE` + `APPLY_KINDS`. `TraitBoost` grew three fields (`apply`, `per_rank`, `flat`)
+and *is* the stat-effect data record now; its docstring says so. All three default to
+M&M's own rule (a `bonus` worth exactly the rank), so a record stating none of them —
+including every mod's — behaves as it always did. `statIntegration` parses `apply` /
+`amountPerRank` / `amountFlat`, and `effects.json` gained an `applyNote` + `applyKey`
+doc block plus an explicit `"apply": "bonus"` on the two effects that actually carry
+one (`enhanced_trait`, `protection`), so an author sees the vocabulary in the data.
+
+*The registry.* `STAT_APPLIERS` keyed by apply kind, `register_stat_applier` the mod
+hook, `apply_stat_effect(kind, ctx)` the call — an **unregistered kind yields nothing
+rather than raising**, so an effect naming a disabled mod's kind simply grants no
+bonus. An applier takes one `ApplyContext` (record, rank, resolved target, source,
+game data, plus the granter's `stacking`/`group`) and returns `TraitContribution`s;
+`ApplyContext.amount` is the `flat + rank × per_rank` arithmetic in one place.
+All five kinds ship. `bonus` is today's behaviour exactly; `speed`/`sense`/the two
+penalty kinds land in their own categories that **nothing reads yet** — `movement.py`
+is still the movement authority, and the penalty kinds are the Phase 6/8 seam. They
+are registered rather than stubbed so a mod or an equipment record can route to them
+today.
+
+*The resolver.* `resolve_contributions` nets one trait; `resolve_bonuses` does a whole
+sheet. Within a group the `sum` contributions add and the largest `max` one joins
+them; between groups the larger total **wins outright** rather than adding. So
+powers-plus-advantages keep summing (no sheet's numbers move) while equipment will
+`max()` against itself and against powers, and an item flagged "stacks" adds on top of
+its group's winner. Everything that lost is returned in `TraitBonus.superseded` as
+`SupersededBonus(source, amount, beaten_by)` — that is what Phase 5's card annotation
+reads. Ties go to the group seen first, which is always the powers group.
+
+*Four things worth knowing next session:*
+- **`power_trait_bonuses` is now the powers-*only* view** and keeps its three fixed
+  keys; the sheet-wide number is the new **`derived.trait_bonuses`**, which
+  `effective_ability` / `resistance_total` / `skill_bonus` read. Today they differ only
+  by the advantages. `AbilitiesSection`/`ResistancesSection` still call
+  `power_trait_bonuses` for their enhancement column — **Phase 5 must point them at
+  `trait_bonuses`**, or worn gear will raise the total without showing in that column.
+- **Advantages became contributions too** (`derived.advantage_contributions`), gathered
+  *after* the powers so `skill_bonus`'s source order is unchanged. No shipped advantage
+  carries `skillBonusPerRank`, so the test builds a synthetic `Advantage` via
+  `dataclasses.replace(data, advantages=[...])` — reuse that trick.
+- **`_boost_target` vs `_resolved_trait_target`.** The first is the raw target
+  (whatever kind of trait it names) and feeds the appliers; the second is it narrowed
+  to numeric traits and still feeds the game-terms "Enhances" row. Do not merge them.
+  The old `affects`-must-be-numeric gate moved *into* the `bonus` applier
+  (`BOOST_TRAIT_CATEGORIES`), which is why a hand-edited Enhanced Senses naming a skill
+  still grants nothing.
+- `_trait_category` moved to `appliers.trait_category` (public); `runtime._trait_bonus`
+  is gone, replaced by `derived._trait_bonus` over the new resolver.
+
+*Not done, by design:* nothing gathers `GROUP_EQUIPMENT` contributions yet — Phase 3
+builds the items, and the applier layer is already waiting for them. Docs are Phase 11's
+(`CLAUDE.md` and `docs/mm-powers-architecture.md` still describe the old hardcoded rule;
+`docs/modding.md`'s registry table does not list `STAT_APPLIERS` yet).
+
+*Verified:* `tests/test_stat_appliers.py` (new, 25 tests — the registry and its mod
+hook, per-rank/flat arithmetic, each shipped kind's category, gathering off a live
+power, and eight resolver cases covering sum/max/cross-group/ties/superseded) plus the
+**unedited** `test_powers`, `test_derived_stats`, `test_conditions`, `test_data_loader`,
+`test_powers_section`, `test_power_constructor`, `test_roll_specs`, `test_roll_routing`,
+`test_gm_pins`, `test_ui_wiring`. Full suite: **2010 passed**. `ruff` and `black` clean.
+
+Next: **Phase 3 — Equipment model and cost engine**.

@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 
 from . import mods as mods_module
-from .components import Integration, TraitBoost
+from .components import APPLY_BONUS, Integration, TraitBoost
 
 DATA_PACKAGE = "mm_companion"
 
@@ -1672,13 +1672,25 @@ def _parse_integration(raw: dict, configurable: bool) -> Integration:
     the player targets (``configurable``, e.g. Enhanced Trait) or that carry a fixed
     ``target`` (e.g. Protection). ``affects`` is the ``"a|b"`` category string split
     into a set.
+
+    ``apply``/``amountPerRank``/``amountFlat`` say which applier reads the record and
+    what it is worth (see :mod:`mm_companion.core.rules.appliers`). All three default
+    to the historical rule — a ``bonus`` worth the effect's rank — so an effect that
+    states none of them, in this ruleset or a mod's, behaves exactly as before.
     """
 
     affects = frozenset(a for a in raw.get("affects", "").split("|") if a)
     target = raw.get("target", "")
     boost = None
     if configurable or target:
-        boost = TraitBoost(affects=affects, target=target, configurable=configurable)
+        boost = TraitBoost(
+            affects=affects,
+            target=target,
+            configurable=configurable,
+            apply=raw.get("apply", APPLY_BONUS),
+            per_rank=int(raw.get("amountPerRank", 1)),
+            flat=int(raw.get("amountFlat", 0)),
+        )
     return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
 
 

@@ -284,7 +284,7 @@ _BASE_BLOCKS = [
         # folds in Strength) and its *budget* is a rank of the Equipment advantage, so
         # an advantage edit has to reach it.
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
-        {},
+        _ROLLS,  # the 🎲 beside each line of a weapon card's dice footer
         {},
     ),
     (

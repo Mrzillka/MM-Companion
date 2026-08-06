@@ -22,18 +22,31 @@ from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.equipment import PER_RANK_COST_KINDS, EquipmentItem
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    MISSING_VALUE,
+    PIN_EQUIPMENT,
+    PinRef,
+    available_pins,
     build_item_from_entry,
     equipment_advantage_rank,
     equipment_budget,
     equipment_contributions,
     equipment_points_remaining,
     equipment_points_spent,
+    equipment_speed_lines,
     equipment_violations,
+    estimated_power_level,
     item_ep_cost,
     item_is_stock,
     item_rank,
+    movement_mode_lines,
+    pin_label,
+    power_level_violations,
+    power_pl_violations,
     power_points_spent,
+    power_rolls,
     resistance_total,
+    resolve_pin,
+    speed_lines,
     trait_bonuses,
     worn_items,
 )
@@ -413,3 +426,169 @@ def test_a_sheet_without_gear_is_untouched(data, hero) -> None:
 
     assert equipment_contributions(hero, data) == ()
     assert resistance_total(hero, data, "TOUGHNESS") == 4
+
+
+# --- rolling and derived wiring (Phase 6) ----------------------------------------------
+
+
+def test_a_weapon_rolls_like_an_attack_power(data, hero) -> None:
+    """The whole point of the wrapping model: ``power_rolls`` takes ``item.build`` as-is."""
+    hero.abilities["ATK"] = 4
+    item = _item(data, "axe")
+
+    specs = power_rolls(item.build, hero, data)
+
+    attack, save = specs
+    assert attack.modifier == 4 and attack.dc is None and not attack.rolled_by_target
+    # The wielder never makes their own target's save — it travels as the follow-up.
+    assert save.rolled_by_target and save.dc is not None
+    assert attack.follow_up is not None and attack.follow_up.dc == save.dc
+
+
+def test_gear_that_rolls_nothing_has_no_rolls(data, hero) -> None:
+    assert power_rolls(_item(data, "antitoxin").build, hero, data) == []
+
+
+def test_a_pin_reads_one_of_an_items_rolls(data, hero) -> None:
+    hero.abilities["ATK"] = 4
+    item = _item(data, "axe")
+    hero.equipment = [item]
+
+    value = resolve_pin(hero, data, PinRef(PIN_EQUIPMENT, item.id, 0))
+
+    assert value.label == "Axe"
+    assert value.value == "+4"
+    assert value.spec is not None and not value.missing
+
+
+def test_an_items_forced_save_pins_as_a_difficulty_nobody_rolls(data, hero) -> None:
+    item = _item(data, "axe")
+    hero.equipment = [item]
+
+    value = resolve_pin(hero, data, PinRef(PIN_EQUIPMENT, item.id, 1))
+
+    assert value.value.startswith("DC ")
+    assert value.spec is None  # a difficulty is read, not thrown
+    assert not value.missing
+
+
+def test_a_pin_names_the_item_not_its_build(data, hero) -> None:
+    """The resolved ref must find the item again, and gear is indexed by its own id."""
+    item = _item(data, "axe")
+    hero.equipment = [item]
+
+    resolved = resolve_pin(hero, data, PinRef(PIN_EQUIPMENT, item.id, 0)).ref
+
+    assert resolved.key == item.id != item.build.id
+    assert resolve_pin(hero, data, resolved).missing is False
+
+
+def test_a_pin_to_gear_that_was_sold_reads_as_a_dash(data, hero) -> None:
+    value = resolve_pin(hero, data, PinRef(PIN_EQUIPMENT, "gone", 0))
+
+    assert value.missing and value.value == MISSING_VALUE
+    assert pin_label(PinRef(PIN_EQUIPMENT, "gone"), data) == "Equipment"
+
+
+def test_a_stowed_item_still_resolves_its_pin(data, hero) -> None:
+    """Wearing is a runtime flag a GM flips constantly; a chip must not empty with it."""
+    item = _item(data, "axe")
+    item.worn = False
+    hero.equipment = [item]
+
+    assert not resolve_pin(hero, data, PinRef(PIN_EQUIPMENT, item.id, 0)).missing
+
+
+def test_the_picker_offers_gear_that_rolls_and_nothing_else(data, hero) -> None:
+    hero.equipment = [_item(data, "axe"), _item(data, "antitoxin")]
+
+    groups = {group.title: group for group in available_pins(hero, data)}
+
+    assert [v.label for v in groups["Equipment"].values] == ["Axe", "Axe"]
+
+
+def test_the_picker_has_no_equipment_group_without_gear(data, hero) -> None:
+    assert "Equipment" not in {group.title for group in available_pins(hero, data)}
+
+
+def test_worn_gear_reaches_the_speed_readout(data, hero) -> None:
+    """A glider flies, and the Speed block should say so — named by the *item*."""
+    hero.equipment = [_item(data, "glider")]
+
+    lines = equipment_speed_lines(hero, data)
+
+    assert [line.label for line in lines] == ["Glider 6"]
+    # ...and the sheet's own readout is the base line plus that one.
+    assert [line.label for line in speed_lines(hero, data)][1:] == ["Glider 6"]
+
+
+def test_the_base_ground_line_stays_first(data, hero) -> None:
+    """What lets the condition overlay keep landing on ``lines[0]``."""
+    hero.equipment = [_item(data, "glider")]
+
+    assert speed_lines(hero, data)[0].label == "Base"
+
+
+def test_stowed_gear_grants_no_speed(data, hero) -> None:
+    item = _item(data, "glider")
+    item.worn = False
+    hero.equipment = [item]
+
+    assert equipment_speed_lines(hero, data) == []
+
+
+def test_worn_gear_grants_movement_modes_too(data, hero) -> None:
+    """Gear-granted Swinging shows beside gear-granted Flight, named by the capability."""
+    item = _item(data, "swing_line")
+    effect = item.build.effects[0]
+    effect.rank = 2
+    effect.config["modes"] = [{"id": "swinging", "tier": 1}]
+    hero.equipment = [item]
+
+    assert [line.label for line in movement_mode_lines(hero, data)] == ["Swinging"]
+
+    item.worn = False
+
+    assert movement_mode_lines(hero, data) == []
+
+
+def test_a_weapons_attack_counts_toward_the_estimated_power_level(data) -> None:
+    """A mook whose whole threat is its rifle used to estimate at 0."""
+    char = Character()
+    char.abilities["ATK"] = 6
+    assert estimated_power_level(char, data) == 0
+
+    char.equipment = [_item(data, "axe")]
+
+    assert estimated_power_level(char, data) > 0
+
+
+def test_a_sheathed_weapon_still_counts_toward_power_level(data) -> None:
+    """A PL cap is a statement about the build; sheathing a sword validates nothing."""
+    char = Character()
+    char.abilities["ATK"] = 6
+    char.equipment = [_item(data, "axe")]
+    armed = estimated_power_level(char, data)
+
+    char.equipment[0].worn = False
+
+    assert estimated_power_level(char, data) == armed
+
+
+def test_armour_toughness_counts_against_the_paired_cap(data, hero) -> None:
+    """Gear does not buy its way out of Power Level (design doc §2)."""
+    hero.power_level = 1
+    assert power_level_violations(hero, data) == []
+
+    hero.equipment = [_item(data, "armored_costume", rank=10)]
+
+    assert any("Toughness" in message for message in power_level_violations(hero, data))
+
+
+def test_an_over_ranked_weapon_marks_its_own_card(data, hero) -> None:
+    """The per-build cap is the same seam a power card reads."""
+    hero.power_level = 1
+    hero.abilities["ATK"] = 10
+    item = _item(data, "axe")
+
+    assert power_pl_violations(item.build, hero, data)

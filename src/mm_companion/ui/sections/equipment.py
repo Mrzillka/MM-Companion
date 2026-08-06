@@ -51,6 +51,8 @@ from mm_companion.core.data_loader import EquipmentEntry, GameData
 from mm_companion.core.equipment import PER_RANK_COST_KINDS, EquipmentItem
 from mm_companion.core.powers import power_is_homerule
 from mm_companion.core.rules import (
+    PIN_EQUIPMENT,
+    PinRef,
     SupersededItemBonus,
     build_item_from_entry,
     debilitated_traits,
@@ -61,12 +63,14 @@ from mm_companion.core.rules import (
     item_superseded,
     power_has_custom_modifier,
     power_pl_violations,
+    power_rolls,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.cards import DraggableCard, DragHandle, NodeList, effects_block
+from mm_companion.ui.cards import DraggableCard, DragHandle, NodeList, RollsFooter, effects_block
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog
+from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
-from mm_companion.ui.widgets import BOLD_STYLE, muted_style, tinted_style
+from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, muted_style, tinted_style
 
 #: The two drag payloads this board uses. They are *not* the powers block's
 #: :data:`~mm_companion.ui.cards.NODE_MIME`, and they are not each other's: a format is
@@ -157,6 +161,13 @@ class EquipmentSection(TitledSection):
     #: the build and is not persisted, so — exactly like a power's on/off toggle — it
     #: must not mark the character dirty.
     runtimeChanged = Signal()
+    #: A line of an item's dice footer was clicked, carrying its
+    #: :class:`~mm_companion.core.rules.RollSpec` to whichever block answers rolls.
+    #: Rolling a weapon is a play action like wearing one, so it marks nothing dirty.
+    rollRequested = Signal(object)
+    #: A GM asked for one of an item's rolls on (or off) the card beside this sheet.
+    pinRequested = Signal(object)  # PinRef
+    unpinRequested = Signal(object)  # PinRef
 
     #: How long a card takes to ease between its worn and stowed looks. A class
     #: attribute so tests can zero it, the same way ``PowersSection.TRANSITION_MS`` is.
@@ -173,6 +184,9 @@ class EquipmentSection(TitledSection):
         self._character = character
         self._locked = False
         self._picker: EquipmentPickerDialog | None = None
+        # Whether there is a GM card beside this sheet, and what is already on it.
+        # Live state read at menu time, so set_pin_target/set_pinned need no rebuild.
+        self._pins = PinMenuState()
         # Per item id, how stowed that item's card currently *looks* (0 worn, 1 fully
         # stowed). Survives the card teardown a toggle triggers, so the replacement
         # card eases on from where its predecessor was — see _show_worn.
@@ -462,8 +476,52 @@ class EquipmentSection(TitledSection):
         if superseded is not None:
             layout.addWidget(superseded)
 
+        # The numbers that come up mid-play, one line per roll. An item that rolls
+        # nothing — a first-aid kit, a suit of armour — gets neither the footer nor its
+        # rule, the same bargain a passive power's card strikes.
+        rolls = self._rolls_block(item)
+        if rolls is not None:
+            layout.addWidget(hline_separator())
+            layout.addWidget(rolls)
+
         self._show_worn(card, item)
         return card
+
+    def _rolls_block(self, item: EquipmentItem) -> QWidget | None:
+        """An item's dice footer — a weapon's attack, and the save it forces.
+
+        Drawn by the powers block's own :class:`~mm_companion.ui.cards.RollsFooter` from
+        the specs :func:`~mm_companion.core.rules.power_rolls` derives off
+        ``item.build``, so a sword and a Damage power roll the same way: the attack line
+        carries a ``🎲``, the resistance line is written down but unbuttoned (the wielder
+        never makes their own target's save — it reaches the person who does as the
+        follow-up chip on the attack's history card), and the whole line is the target.
+
+        A **stowed** item keeps its footer. Its card is dimmed because it grants nothing
+        while stowed, but drawing a sheathed sword is one motion and a roll is not a
+        build fact — refusing the die here would only teach people to click the card
+        twice first.
+        """
+        specs = power_rolls(item.build, self._character, self._data)
+        if not specs:
+            return None
+        footer = RollsFooter(
+            specs,
+            pins=self._pins,
+            pin_ref=lambda index, iid=item.id: PinRef(PIN_EQUIPMENT, iid, index),
+        )
+        footer.rollRequested.connect(self.rollRequested)
+        footer.pinRequested.connect(self.pinRequested)
+        footer.unpinRequested.connect(self.unpinRequested)
+        return footer
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether an item's roll lines offer to pin at all."""
+        self._pins.enabled = enabled
+
+    def set_pinned(self, refs) -> None:
+        """Which parameters are already on the card, so a line can offer Unpin."""
+        self._pins.set_pinned(refs)
 
     def _header_row(self, item: EquipmentItem, card: DraggableCard) -> QWidget:
         """Name and markers on the left; the item's price and its ``✕`` on the right.

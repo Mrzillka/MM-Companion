@@ -209,7 +209,7 @@ jacket is a play action and must not dirty the sheet).
 `run-mm-companion`.
 
 ### Phase 6 — Rolling and derived wiring
-**Status: todo**
+**Status: done**
 
 Weapon cards get their dice footer from `power_rolls(item.build, char, data)` — attack
 line, the forced save written down but unbuttoned (`rolled_by_target`), the follow-up
@@ -719,3 +719,94 @@ clean. Eyes on the real app under both `classic` (dark, over budget) and
 `parchment-light` (under budget).
 
 Next: **Phase 6 — Rolling and derived wiring**.
+
+### 2026-08-06 — Phase 6: Rolling and derived wiring
+
+**Shipped.** Gear rolls, pins, and moves the character. A weapon card now carries the
+Powers block's own dice footer, `PIN_EQUIPMENT` puts one of an item's rolls on a GM card,
+worn gear reaches the Speed readout, and a rifle counts toward an NPC's estimated Power
+Level. Suite: **2098 passed** (was 2074); no existing test was edited beyond one import
+and one two-line helper inlining in `test_roll_routing.py`.
+
+*The dice footer is the powers footer.* `EquipmentSection._rolls_block` builds a
+`RollsFooter` from `power_rolls(item.build, …)` — the same specs, the same widget, so a
+sword and a Damage power roll identically: the attack line is a bordered click target end
+to end, the resistance line is written down but unbuttoned, and the save reaches whoever
+makes it as the follow-up chip on the attack's history card. An item that rolls nothing
+gets neither footer nor rule. The section gained `rollRequested`/`pinRequested`/
+`unpinRequested` and the `set_pin_target`/`set_pinned` pair the sheet duck-types over, and
+its registry row gained `_ROLLS` — that one word *is* the wiring, since no block names
+another.
+
+*Four decisions worth keeping:*
+- **A stowed weapon keeps its footer.** The card is dimmed because a stowed item grants
+  nothing, but drawing a sheathed sword is one motion and a roll is not a build fact.
+  Refusing the die there would only teach people to click the card twice first.
+- **`PIN_EQUIPMENT` is its own kind, not a `PIN_POWER` at the item's build.** A ref's
+  `key` has to name something the resolver can *find*: gear lives in
+  `Character.equipment`, which `leaf_powers` does not walk, and an item's build carries a
+  different id that nothing indexes by. That last point is why `_from_build_roll` takes
+  `key` as a parameter rather than reading `build.id` — writing the build's id into the
+  resolved ref would have produced a chip that could never be resolved again. There is a
+  test for exactly that (`test_a_pin_names_the_item_not_its_build`).
+- **A pin resolves off *every* item, worn or not.** Wearing is runtime state a GM flips
+  constantly and which is not even persisted; a chip that emptied to a dash the moment a
+  sword was sheathed would be the strip rearranging itself mid-fight. The picker likewise
+  offers only gear that actually *rolls* — a catalogue listing every crowbar would bury
+  the two entries a GM came for.
+- **`_power_chip_label` became `_build_chip_label`** and `_from_power`'s whole tail became
+  `_from_build_roll`, shared by both kinds. Only *where the build was found* differs.
+
+*Speed.* `movement.equipment_speed_lines` is the new seam, and `speed_lines` appends it —
+so `condition_speed_lines`, `SystemInfoSection` and everything downstream picked gear up
+without a line of UI change. Two things about it: a gear line is named by the **item**
+(`"Glider 6"`, not `"Flight 6"`) because that is what the thing *is* and two worn items
+granting the same effect would otherwise read identically, whereas a power's own title is
+arbitrary and `Flight` is the mechanic — so the powers labels are untouched; and the base
+ground line stays **first**, which is what lets the condition overlay keep landing on
+`lines[0]`. `_build_speed_lines` is the shared per-build walk, the movement twin of
+`build_contributions`.
+
+`movement_mode_lines` was extended over worn gear the same way (`_build_mode_lines`),
+beyond the phase's brief: showing gear-granted Flight while hiding gear-granted Swinging
+is a distinction the sheet cannot justify. It is **inert against the shipped catalog**
+today — `build_item_from_entry` does not populate an `allocation` config, so the swing
+line/climbing cable/parachute build an Enhanced Movement with no modes chosen. The path is
+tested with a hand-configured item; **Phase 7 or 8 should map an entry's
+`implementation` keys onto allocation options** and it will light up.
+
+*Power Level.* Two halves, and only one was missing:
+- **Armour Toughness against the paired cap was already correct** as of Phase 3 —
+  `power_level_violations` reads `resistance_total`, into which equipment contributions
+  already flow. That is now stated in its docstring and held by a test rather than being
+  true by accident.
+- **`estimated_power_level` did not walk gear**, so a mook whose whole threat was the
+  rifle it carried estimated at 0. New `validation.offensive_builds(char)` yields the leaf
+  powers *and* every item's build, and the attack-cap loop reads it. **Every** item, not
+  only the worn ones: a PL cap is a statement about the build, and a sheet that passed
+  validation by sheathing its sword would be validating nothing.
+
+*Deliberately not done:*
+- **No late-bound equipment default.** `SELECT_FIRST_DAMAGE` still walks powers only, so
+  an NPC whose damage comes from a rifle starts with a dashed chip. Extending it means
+  deciding what the resolved ref writes back (a `PIN_POWER` select resolving to an
+  equipment key would be unresolvable later), which is a bigger change than the hole
+  warrants. A `select="first_weapon"` on `PIN_EQUIPMENT` is the shape if it is wanted.
+- The GM card's hover summary (`ui/card_summary.py`) still lists powers only.
+- Vehicle speed specifically is **Phase 9** — this phase built the seam it will arrive
+  through, and a stock vehicle's speed will reach the readout via `equipment_speed_lines`
+  once `stockVehicles` is parsed.
+- Docs remain Phase 11's (`CLAUDE.md` still describes neither the Equipment block nor
+  its roll routing).
+
+*Verified:* 17 new cases in `tests/test_equipment.py` (the roll shape and its follow-up,
+five pin cases including the item-id-not-build-id trap, the speed lines in both wear
+states, the movement modes, and four PL cases) and 8 in `tests/test_equipment_section.py`
+(the footer's rollable/inert split, no footer on armour, the stowed card keeping one, a
+click that rolls without editing or toggling, the pin ref, the no-card guard, and the
+wear-to-Speed round trip over the bus), plus one end-to-end routing case in
+`tests/test_roll_routing.py`. Full suite **2098 passed**; `ruff` and `black` clean. Eyes
+on the real app via `driver.py equipment-demo` — the sword's footer, the stowed
+crossbow's dimmed one, and armour with none.
+
+Next: **Phase 7 — Custom items via the constructor**.

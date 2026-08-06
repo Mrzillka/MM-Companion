@@ -14,8 +14,14 @@ from PySide6.QtWidgets import QApplication, QLabel
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
-from mm_companion.core.rules import build_item_from_entry, item_superseded
-from mm_companion.ui.cards import DraggableCard, NodeList
+from mm_companion.core.rules import (
+    PIN_EQUIPMENT,
+    PinRef,
+    build_item_from_entry,
+    item_superseded,
+    resolve_pin,
+)
+from mm_companion.ui.cards import DraggableCard, NodeList, RollLine, RollsFooter
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.equipment import (
     EQUIPMENT_GROUP_MIME,
@@ -412,3 +418,102 @@ def test_an_empty_block_says_so(qapp, data) -> None:
 
     section._add_entry(data.equipment_catalog()["sword"])
     assert section._empty.isVisibleTo(section) is False
+
+
+# -- the dice footer (Phase 6) --------------------------------------------------------
+
+
+def _roll_lines(card) -> list[RollLine]:
+    return card.findChildren(RollLine)
+
+
+def _card(section, item) -> DraggableCard:
+    return next(c for c in section.findChildren(DraggableCard) if c.node_id == item.id)
+
+
+def test_a_weapon_card_carries_a_dice_footer(qapp, data) -> None:
+    """The powers card's footer, from the same specs — an item wraps a real Power."""
+    char = _hero(data, "sword")
+    section = _section(data, char)
+
+    lines = _roll_lines(_card(section, char.equipment[0]))
+
+    # An attack and the save it forces are two rolls made by two people: a line each.
+    assert len(lines) == 2
+    # Only the attack is the wielder's. The save reaches whoever makes it as the
+    # follow-up chip on the attack's history card.
+    assert [line.is_rollable() for line in lines] == [True, False]
+
+
+def test_gear_that_rolls_nothing_has_no_footer(qapp, data) -> None:
+    """No placeholder line, and no rule above a footer that is not there."""
+    char = _hero(data, "leather_armor")
+    section = _section(data, char)
+
+    assert _roll_lines(_card(section, char.equipment[0])) == []
+
+
+def test_a_stowed_weapon_keeps_its_footer(qapp, data) -> None:
+    """Drawing a sheathed sword is one motion; a roll is not a build fact."""
+    char = _hero(data, "sword")
+    char.equipment[0].worn = False
+    section = _section(data, char)
+
+    assert len(_roll_lines(_card(section, char.equipment[0]))) == 2
+
+
+def test_clicking_a_roll_line_asks_for_the_roll_and_changes_nothing(qapp, data) -> None:
+    char = _hero(data, "sword")
+    section = _section(data, char)
+    item = char.equipment[0]
+    seen: list = []
+    edits: list[int] = []
+    section.rollRequested.connect(seen.append)
+    section.changed.connect(lambda: edits.append(1))
+    section.runtimeChanged.connect(lambda: edits.append(1))
+
+    line = next(line for line in _roll_lines(_card(section, item)) if line.is_rollable())
+    line.clicked.emit()
+
+    assert len(seen) == 1 and seen[0].dc is None  # the attack, not the save
+    assert edits == []  # rolling is neither an edit nor a wear toggle
+    assert item.worn is True  # and the click did not reach the card's switch
+
+
+def test_a_roll_line_pins_by_naming_the_item(qapp, data) -> None:
+    """A pin is a reference: the item's own id, plus which of its rolls."""
+    char = _hero(data, "sword")
+    section = _section(data, char)
+    section.set_pin_target(True)
+    item = char.equipment[0]
+
+    footer = _card(section, item).findChild(RollsFooter)
+    ref = footer._pin_ref(0)
+
+    assert ref == PinRef(PIN_EQUIPMENT, item.id, 0)
+    assert not resolve_pin(char, data, ref).missing
+
+
+def test_no_pin_menu_without_a_card_beside_the_sheet(qapp, data) -> None:
+    char = _hero(data, "sword")
+    section = _section(data, char)
+    asked: list = []
+    section.pinRequested.connect(asked.append)
+
+    footer = _card(section, char.equipment[0]).findChild(RollsFooter)
+    footer._show_pin_menu(footer, footer.rect().center(), 0)  # must not raise or emit
+
+    assert asked == []
+
+
+def test_wearing_a_glider_reaches_the_speed_readout(qapp, data) -> None:
+    """End to end over the bus: the wear toggle raises DERIVED_CHANGED, and the
+    System block recomputes its Speed lines off it."""
+    char = _hero(data, "glider")
+    sheet = CharacterSheet(data, char)
+
+    assert "Glider" in sheet.system_info._speed._lines_label.text()
+
+    sheet.equipment._toggle_worn(char.equipment[0])
+
+    assert "Glider" not in sheet.system_info._speed._lines_label.text()

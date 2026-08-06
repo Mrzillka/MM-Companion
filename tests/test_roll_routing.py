@@ -27,6 +27,7 @@ from mm_companion.core.rules import (
     PinRef,
     RollSpec,
     ability_roll,
+    build_item_from_entry,
 )
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
@@ -399,6 +400,29 @@ def test_the_resistance_line_is_written_down_but_stays_inert(qapp: QApplication)
     assert len(inert) == 1
     # Its press bubbles, so the card under it keeps working as the power's switch.
     assert inert[0].cursor().shape() is Qt.CursorShape.ArrowCursor
+
+
+def test_an_equipment_card_rolls_through_the_same_channel(qapp: QApplication) -> None:
+    """Gear joins the bus on exactly the terms the Powers block does.
+
+    No block names another: the Equipment descriptor declares it *requests*
+    ``roll-requested`` and the Dice block declares it *serves* it, and that is the
+    whole wiring. Wearing the sword is untouched — a roll is a play action, not a
+    build edit and not a wear toggle.
+    """
+    data = load_game_data()
+    char = _hero(data)
+    char.equipment.append(build_item_from_entry(data.equipment_catalog()["sword"], data))
+    sheet = CharacterSheet(data, char)
+
+    lines = sheet.equipment.findChildren(_RollLine)
+    rollable = [line for line in lines if line.is_rollable()]
+    assert len(rollable) == 1
+    _click(rollable[0])
+
+    spec = sheet.dice.panel.current_spec()
+    assert spec is not None and spec.follow_up is not None  # the attack, forcing a save
+    assert char.equipment[0].worn is True
 
 
 # -- the sliders, the DC, and the wire ---------------------------------------

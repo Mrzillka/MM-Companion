@@ -1,0 +1,415 @@
+"""The equipment model and its cost engine (Phase 3 of the Equipment feature).
+
+Two things are being proved here, and the second is the one that would fail quietly.
+
+*The model.* An :class:`EquipmentItem` wraps a real
+:class:`~mm_companion.core.powers.Power`, so the whole powers rules layer works on
+gear unchanged, and a catalog entry builds into that power faithfully.
+
+*The two currencies.* Power Points buy ranks of the Equipment advantage; Equipment
+Points buy the items. Neither is ever a term in the other, and the Removable discount
+— which the advantage has already paid for — is never applied a second time. Both
+failures are silent: the sheet would simply show a wrong total.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from mm_companion.core import storage
+from mm_companion.core.character import AdvantageSelection, Character
+from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.equipment import PER_RANK_COST_KINDS, EquipmentItem
+from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+from mm_companion.core.rules import (
+    build_item_from_entry,
+    equipment_advantage_rank,
+    equipment_budget,
+    equipment_contributions,
+    equipment_points_remaining,
+    equipment_points_spent,
+    equipment_violations,
+    item_ep_cost,
+    item_is_stock,
+    item_rank,
+    power_points_spent,
+    resistance_total,
+    trait_bonuses,
+    worn_items,
+)
+
+
+@pytest.fixture
+def data():
+    return load_game_data()
+
+
+@pytest.fixture
+def hero(data):
+    """A blank character with 5 ranks of Equipment — a 25-point kit."""
+    char = Character.new_default(data)
+    char.advantages.append(AdvantageSelection(name="Equipment", rank=5))
+    return char
+
+
+def _item(data, catalog_id: str, *, rank: int = 1) -> EquipmentItem:
+    return build_item_from_entry(data.equipment_catalog()[catalog_id], data, rank=rank)
+
+
+# --- the model -------------------------------------------------------------------------
+
+
+def test_item_wraps_a_real_power(data) -> None:
+    item = _item(data, "axe")
+    assert isinstance(item.build, Power)
+    assert item.build.name == "Axe"
+    assert item.catalog_id == "axe"
+    assert item.category == data.equipment_catalog()["axe"].category
+    assert item.name == "Axe"
+
+
+def test_item_round_trips_but_worn_does_not(data) -> None:
+    """``worn`` is runtime state, exactly like a power's ``activated``.
+
+    Taking a jacket off is a play action, not a build edit, so it is left out of the
+    save and a loaded character comes up wearing everything.
+    """
+    item = _item(data, "axe")
+    item.worn = False
+    item.stacks = True
+    item.ep_override = 3
+
+    restored = EquipmentItem.from_dict(item.to_dict())
+
+    assert restored.id == item.id
+    assert restored.catalog_id == "axe"
+    assert restored.build.to_dict() == item.build.to_dict()
+    assert restored.stacks is True
+    assert restored.ep_override == 3
+    assert restored.worn is True  # runtime, not persisted
+    assert "worn" not in item.to_dict()
+
+
+def test_character_round_trips_equipment(data, hero) -> None:
+    hero.equipment.append(_item(data, "axe"))
+    hero.equipment_group_order = ["armor", "weapon"]
+
+    restored = Character.from_dict(hero.to_dict())
+
+    assert [i.catalog_id for i in restored.equipment] == ["axe"]
+    assert restored.equipment[0].build.effects[0].effect_id == "damage"
+    assert restored.equipment_group_order == ["armor", "weapon"]
+
+
+def test_a_save_without_equipment_still_loads(data) -> None:
+    """No schema bump: an older save carries neither key and loads unchanged."""
+    raw = Character.new_default(data).to_dict()
+    assert "equipment" not in raw and "equipment_group_order" not in raw
+
+    restored = Character.from_dict(raw)
+
+    assert restored.equipment == []
+    assert restored.equipment_group_order == []
+
+
+def test_worn_items_filters_on_the_runtime_flag(data, hero) -> None:
+    worn, stowed = _item(data, "axe"), _item(data, "crossbow")
+    stowed.worn = False
+    hero.equipment += [worn, stowed]
+
+    assert [i.catalog_id for i in worn_items(hero)] == ["axe"]
+
+
+# --- building an item from the catalog --------------------------------------------------
+
+
+def test_every_catalog_entry_builds_into_a_power(data) -> None:
+    """The catalog's refs all resolve, so no item silently builds into nothing."""
+    effects = {e.id for e in data.effects}
+    modifiers = set(data.modifier_catalog())
+
+    for entry in data.equipment:
+        item = build_item_from_entry(entry, data)
+        assert len(item.build.effects) == len(entry.effects)
+        for instance in item.build.effects:
+            assert instance.effect_id in effects
+            assert instance.rank >= 1
+            for selection in (*instance.extras, *instance.flaws):
+                assert selection.modifier_id in modifiers
+
+
+def test_strength_based_becomes_the_ability_folding_modifier(data) -> None:
+    """The catalog's ``strengthBased`` flag ticks the effect's own checkbox.
+
+    Found through the data — a config field that ``toggles`` a modifier which
+    ``adds_ability`` — so nothing here names Strength or Damage.
+    """
+    axe = _item(data, "axe")
+    effect = axe.build.effects[0]
+
+    assert [s.modifier_id for s in effect.extras] == ["strength_based"]
+    assert effect.config["strengthBased"] is True
+
+
+def test_printed_qualities_land_in_the_effect_config(data) -> None:
+    """An Affliction's resistance and its degree ladder come off the printed line.
+
+    Which config key holds each degree is declared by the effect's own
+    ``resistanceOutcomes``, not named here.
+    """
+    spray = _item(data, "pepper_spray").build.effects[0]
+
+    assert spray.config["resistance"] == "Fortitude"
+    assert spray.config["degree1"] == ["disabled"]
+    assert spray.config["degree2"] == ["unaware"]
+    assert spray.config["configuration"] == "dazzle"
+    assert spray.descriptors == ["chemical"]
+
+
+def test_entry_modifiers_split_into_extras_and_flaws(data) -> None:
+    """Which bucket a printed modifier lands in comes off its own record's category."""
+    blowgun = _item(data, "blowgun").build.effects[0]
+
+    assert {s.modifier_id for s in blowgun.extras} == {"ranged"}
+    assert {s.modifier_id for s in blowgun.flaws} == {"diminished_range", "resistible"}
+
+
+def test_a_purchased_rank_reaches_the_open_ranked_effect(data) -> None:
+    """Armored Costume prints no rank — the player buys it."""
+    assert _item(data, "armored_costume", rank=7).build.effects[0].rank == 7
+    assert _item(data, "armored_costume").build.effects[0].rank == 1
+    # A ref that *does* print a rank keeps it, whatever is passed.
+    assert _item(data, "axe", rank=7).build.effects[0].rank == 3
+
+
+# --- the Removable discount is never reapplied -------------------------------------------
+
+
+def test_the_removable_flaw_is_never_built_onto_an_item(data) -> None:
+    """Omni-Equipment is the one entry that legitimately prints Removable.
+
+    An item is already removable — that is what equipment *is* — and the Equipment
+    advantage already paid for the discount. Charging the flaw again would make every
+    affected item quietly cheap.
+    """
+    catalog = data.modifier_catalog()
+    assert any(
+        catalog[ref.modifier].gate == "removable"
+        for ref in data.equipment_catalog()["omni_equipment"].modifiers
+    )
+
+    for entry in data.equipment:
+        item = build_item_from_entry(entry, data)
+        for instance in item.build.effects:
+            gates = {catalog[s.modifier_id].gate for s in (*instance.extras, *instance.flaws)}
+            assert "removable" not in gates
+
+
+def test_a_hand_edited_removable_is_stripped_before_pricing(data, hero) -> None:
+    """Belt and braces: a build that carries the flaw anyway is priced without it."""
+    plain = EquipmentItem(
+        build=Power(name="Blaster", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
+    )
+    discounted = EquipmentItem(
+        build=Power(
+            name="Blaster",
+            effects=[
+                PowerEffectInstance(
+                    effect_id="damage",
+                    rank=8,
+                    flaws=[ModifierSelection(modifier_id="removable")],
+                )
+            ],
+        )
+    )
+
+    assert item_ep_cost(discounted, data, hero) == item_ep_cost(plain, data, hero) == 8
+
+
+# --- what an item costs -------------------------------------------------------------------
+
+
+def test_a_stock_item_costs_exactly_what_the_catalog_prints(data, hero) -> None:
+    for entry in data.equipment:
+        if entry.cost is None or entry.cost_kind in PER_RANK_COST_KINDS:
+            continue
+        item = build_item_from_entry(entry, data)
+        assert item_is_stock(item, data)
+        assert item_ep_cost(item, data, hero) == entry.cost, entry.id
+
+
+def test_a_per_rank_item_multiplies_its_printed_price(data, hero) -> None:
+    entry = data.equipment_catalog()["armored_costume"]
+    assert entry.cost_kind in PER_RANK_COST_KINDS
+
+    item = build_item_from_entry(entry, data, rank=6)
+
+    assert item_rank(item) == 6
+    assert item_ep_cost(item, data, hero) == entry.cost * 6
+
+
+def test_an_edited_item_is_priced_from_its_effects(data, hero) -> None:
+    """Once the build diverges from the catalog, the printed price no longer applies."""
+    item = _item(data, "axe")
+    assert item_ep_cost(item, data, hero) == 5
+
+    item.build.effects[0].rank = 9
+
+    assert not item_is_stock(item, data)
+    assert item_ep_cost(item, data, hero) > 5
+
+
+def test_a_custom_item_is_never_stock(data, hero) -> None:
+    custom = EquipmentItem(
+        build=Power(name="Ray Gun", effects=[PowerEffectInstance(effect_id="damage", rank=4)])
+    )
+
+    assert not item_is_stock(custom, data)
+    assert item_ep_cost(custom, data, hero) == 4
+
+
+def test_ep_override_replaces_the_derived_price(data, hero) -> None:
+    item = _item(data, "axe")
+    item.ep_override = 2
+
+    assert item_ep_cost(item, data, hero) == 2
+
+
+# --- the budget ---------------------------------------------------------------------------
+
+
+def test_budget_is_advantage_rank_times_the_ruleset_rate(data, hero) -> None:
+    assert equipment_advantage_rank(hero, data) == 5
+    assert equipment_budget(hero, data) == 5 * data.equipment_rules.points_per_advantage_rank
+
+
+def test_no_equipment_advantage_is_a_zero_budget(data) -> None:
+    assert equipment_budget(Character.new_default(data), data) == 0
+
+
+def test_spend_counts_stowed_gear_too(data, hero) -> None:
+    """``worn`` is runtime; the price is build state. Taking it off is not a refund."""
+    axe, bow = _item(data, "axe"), _item(data, "crossbow")
+    bow.worn = False
+    hero.equipment += [axe, bow]
+
+    expected = item_ep_cost(axe, data, hero) + item_ep_cost(bow, data, hero)
+    assert equipment_points_spent(hero, data) == expected
+    assert equipment_points_remaining(hero, data) == 25 - expected
+
+
+def test_overspend_warns_and_names_both_numbers(data, hero) -> None:
+    hero.equipment = [_item(data, "armored_costume", rank=30)]
+
+    violations = equipment_violations(hero, data)
+
+    assert len(violations) == 1
+    assert "30" in violations[0] and "25" in violations[0]
+    assert equipment_points_remaining(hero, data) < 0
+
+
+def test_gear_without_the_advantage_is_a_violation(data) -> None:
+    char = Character.new_default(data)
+    char.equipment = [_item(data, "axe")]
+
+    assert equipment_violations(char, data)
+
+
+def test_no_gear_is_never_a_violation(data) -> None:
+    assert equipment_violations(Character.new_default(data), data) == []
+
+
+def test_equipment_enforcement_is_its_own_seam() -> None:
+    assert storage.equipment_enforcement() == storage.EQUIPMENT_ENFORCE_WARN
+    storage.update_settings(equipment_enforcement=storage.EQUIPMENT_ENFORCE_BLOCK)
+    assert storage.equipment_enforcement() == storage.EQUIPMENT_ENFORCE_BLOCK
+    storage.update_settings(equipment_enforcement="nonsense")
+    assert storage.equipment_enforcement() == storage.EQUIPMENT_ENFORCE_WARN
+
+
+# --- the two currencies never mix -----------------------------------------------------------
+
+
+def test_equipment_never_reaches_the_power_point_total(data, hero) -> None:
+    before = power_points_spent(hero, data)
+
+    hero.equipment = [_item(data, "armored_costume", rank=8), _item(data, "axe")]
+
+    assert power_points_spent(hero, data) == before
+    assert equipment_points_spent(hero, data) > 0
+
+
+def test_power_points_never_pay_for_gear(data, hero) -> None:
+    """A power raising Toughness costs PP and nothing in EP."""
+    hero.powers.append(
+        Power(name="Force Field", effects=[PowerEffectInstance(effect_id="protection", rank=6)])
+    )
+
+    assert equipment_points_spent(hero, data) == 0
+    assert power_points_spent(hero, data) > equipment_advantage_rank(hero, data)
+
+
+# --- what worn gear contributes ---------------------------------------------------------
+
+
+def test_worn_armour_raises_toughness(data, hero) -> None:
+    hero.equipment = [_item(data, "armored_costume", rank=6)]
+
+    assert resistance_total(hero, data, "TOUGHNESS") == 6
+    assert equipment_contributions(hero, data)
+
+
+def test_stowed_armour_contributes_nothing(data, hero) -> None:
+    item = _item(data, "armored_costume", rank=6)
+    item.worn = False
+    hero.equipment = [item]
+
+    assert equipment_contributions(hero, data) == ()
+    assert resistance_total(hero, data, "TOUGHNESS") == 0
+
+
+def test_two_pieces_of_armour_do_not_stack(data, hero) -> None:
+    """Only the best applies, and the card is told what beat it."""
+    best = _item(data, "armored_costume", rank=6)
+    worse = _item(data, "armored_costume", rank=4)
+    worse.build.name = "Flak Vest"
+    hero.equipment = [best, worse]
+
+    assert resistance_total(hero, data, "TOUGHNESS") == 6
+    bonus = trait_bonuses(hero, data)["resistance"]["TOUGHNESS"]
+    assert [s.source for s in bonus.superseded] == ["Flak Vest"]
+    assert bonus.superseded[0].beaten_by == "Armored Costume"
+
+
+def test_the_stacks_homerule_opts_one_item_back_in(data, hero) -> None:
+    best = _item(data, "armored_costume", rank=6)
+    extra = _item(data, "armored_costume", rank=4)
+    extra.build.name = "Underlayer"
+    extra.stacks = True
+    hero.equipment = [best, extra]
+
+    assert resistance_total(hero, data, "TOUGHNESS") == 10
+
+
+def test_gear_does_not_stack_with_a_power_either(data, hero) -> None:
+    """M&M grants the better of the two, never their sum."""
+    hero.powers.append(
+        Power(name="Force Field", effects=[PowerEffectInstance(effect_id="protection", rank=8)])
+    )
+    hero.equipment = [_item(data, "armored_costume", rank=6)]
+
+    assert resistance_total(hero, data, "TOUGHNESS") == 8
+
+    hero.powers.clear()
+
+    assert resistance_total(hero, data, "TOUGHNESS") == 6
+
+
+def test_a_sheet_without_gear_is_untouched(data, hero) -> None:
+    """The guard on Phase 3: no equipment, no change to any derived number."""
+    hero.powers.append(
+        Power(name="Force Field", effects=[PowerEffectInstance(effect_id="protection", rank=4)])
+    )
+
+    assert equipment_contributions(hero, data) == ()
+    assert resistance_total(hero, data, "TOUGHNESS") == 4

@@ -23,12 +23,15 @@ from ..components import (
     RESOURCE_POOL,
 )
 from ..data_loader import GameData
+from ..equipment import EquipmentItem
 from ..powers import STRUCTURE_ARRAY, Power, PowerEffectInstance, PowerGroup, PowerNode
 from ..registry import Registry
 from .appliers import (
     BOOST_TRAIT_CATEGORIES,
+    GROUP_EQUIPMENT,
     GROUP_POWERS,
     NUMERIC_CATEGORIES,
+    STACK_MAX,
     STACK_SUM,
     ApplyContext,
     TraitBonus,
@@ -311,44 +314,112 @@ def power_has_custom_modifier(power: Power, game_data: GameData) -> bool:
     return False
 
 
-def power_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
-    """Every stat contribution the character's live powers currently make.
+def build_contributions(
+    power: Power,
+    char: Character,
+    game_data: GameData,
+    *,
+    stacking: str = STACK_SUM,
+    group: str = GROUP_POWERS,
+) -> tuple[TraitContribution, ...]:
+    """Every stat contribution **one** assembled build currently makes.
 
-    A power contributes when one of its effects carries a
-    :class:`~mm_companion.core.components.TraitBoost` — an Enhanced-Trait-style effect
-    (a ``configurable`` boost, the target read from the instance ``config['target']``)
-    or a fixed-target one like Protection — *and* that effect is currently active
-    (:func:`effect_is_active`, so a switched-off or suppressed power drops out).
+    An effect contributes when it carries a
+    :class:`~mm_companion.core.components.TraitBoost` — an Enhanced-Trait-style boost
+    (``configurable``, the target read from the instance ``config['target']``) or a
+    fixed-target one like Protection — *and* is currently active
+    (:func:`effect_is_active`, so a switched-off or suppressed one drops out).
 
     What the record then *means* is not decided here: the boost's ``apply`` kind picks
     an applier out of :data:`~.appliers.STAT_APPLIERS`, which yields the contributions
     (a numeric trait bonus for ``bonus``, a movement grant for ``speed``, and so on).
-    Everything a power grants is bought with Power Points, so it is gathered into the
+
+    ``stacking`` and ``group`` are the *granter's* terms and travel onto every
+    contribution: a power stacks within the Power-Point group, a worn item is
+    exclusive within the equipment one. This is the seam equipment shares with
+    powers — an item's :attr:`~mm_companion.core.equipment.EquipmentItem.build` is a
+    real :class:`~mm_companion.core.powers.Power`, so it is gathered by this same
+    function rather than a parallel one that could drift.
+    """
+
+    contributions: list[TraitContribution] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None or base.integration is None:
+            continue
+        boost = base.integration.trait_boost
+        if boost is None:
+            continue  # not a stat effect at all
+        if not effect_is_active(power, effect, base, game_data, char):
+            continue  # switched off, suppressed, or not a standing bonus
+        context = ApplyContext(
+            record=boost,
+            rank=effect.rank,
+            target=_boost_target(effect, boost),
+            source=power.name or base.name,
+            game_data=game_data,
+            stacking=stacking,
+            group=group,
+        )
+        contributions.extend(apply_stat_effect(boost.apply, context))
+    return tuple(contributions)
+
+
+def power_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
+    """Every stat contribution the character's live powers currently make.
+
+    :func:`build_contributions` over every :func:`live_powers` build. Everything a
+    power grants is bought with Power Points, so it is gathered into the
     :data:`~.appliers.GROUP_POWERS` group as a stacking contribution — several powers
     boosting one trait add up, exactly as they always have.
     """
 
     contributions: list[TraitContribution] = []
     for power in live_powers(char.powers):
-        for effect in power.effects:
-            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-            if base is None or base.integration is None:
-                continue
-            boost = base.integration.trait_boost
-            if boost is None:
-                continue  # not a stat effect at all
-            if not effect_is_active(power, effect, base, game_data, char):
-                continue  # switched off, suppressed, or not a standing bonus
-            context = ApplyContext(
-                record=boost,
-                rank=effect.rank,
-                target=_boost_target(effect, boost),
-                source=power.name or base.name,
-                game_data=game_data,
-                stacking=STACK_SUM,
-                group=GROUP_POWERS,
+        contributions.extend(
+            build_contributions(power, char, game_data, stacking=STACK_SUM, group=GROUP_POWERS)
+        )
+    return tuple(contributions)
+
+
+def worn_items(char: Character) -> list[EquipmentItem]:
+    """The character's gear that is currently being worn or carried.
+
+    Wearing is the equipment answer to a power's on/off switch, and it is *runtime*
+    state: an item the player has taken off keeps its Equipment Point price (it is
+    still owned — see :func:`~.equipment.equipment_points_spent`) but grants nothing.
+    """
+
+    return [item for item in char.equipment if item.worn]
+
+
+def equipment_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
+    """Every stat contribution the character's **worn** gear currently makes.
+
+    The equipment twin of :func:`power_contributions`, and deliberately the same code
+    underneath (:func:`build_contributions`) — an item is a real build, so anything
+    true of a power's Protection is true of a suit of armour's.
+
+    Two things differ, and both are the no-stacking rule
+    (``docs/mm-equipment-design.md`` §3). The contributions land in the
+    :data:`~.appliers.GROUP_EQUIPMENT` group, which is compared against the powers
+    group with ``max`` rather than added to it; and within that group each item is
+    :data:`~.appliers.STACK_MAX` — only the best piece of armour counts — unless its
+    owner ticked :attr:`~mm_companion.core.equipment.EquipmentItem.stacks`, the
+    per-item homerule that opts one item back into adding on top.
+    """
+
+    contributions: list[TraitContribution] = []
+    for item in worn_items(char):
+        contributions.extend(
+            build_contributions(
+                item.build,
+                char,
+                game_data,
+                stacking=STACK_SUM if item.stacks else STACK_MAX,
+                group=GROUP_EQUIPMENT,
             )
-            contributions.extend(apply_stat_effect(boost.apply, context))
+        )
     return tuple(contributions)
 
 

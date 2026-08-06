@@ -20,7 +20,7 @@ from .appliers import (
     resolve_contributions,
 )
 from .conditions import ConditionEffect, condition_scope_penalty
-from .runtime import power_contributions
+from .runtime import equipment_contributions, power_contributions
 
 
 def advantage_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
@@ -61,12 +61,22 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     """Every stat contribution standing on the sheet, in the order the sheet grants them.
 
     The one place the derived totals gather what is raising a trait: the active powers
-    (:func:`~.runtime.power_contributions`) and then the advantages
-    (:func:`advantage_contributions`). Conditions are deliberately absent — they are a
-    display-only overlay and never part of the build.
+    (:func:`~.runtime.power_contributions`), then the advantages
+    (:func:`advantage_contributions`), then the worn gear
+    (:func:`~.runtime.equipment_contributions`). Conditions are deliberately absent —
+    they are a display-only overlay and never part of the build.
+
+    Order matters twice over. The first two are the Power-Point group and *sum*, so a
+    sheet with no equipment nets exactly what it always did; the gear arrives last in
+    its own group, where the resolver takes the better of the two rather than adding
+    them, and a tie goes to whichever group was seen first — the powers.
     """
 
-    return power_contributions(char, game_data) + advantage_contributions(char, game_data)
+    return (
+        power_contributions(char, game_data)
+        + advantage_contributions(char, game_data)
+        + equipment_contributions(char, game_data)
+    )
 
 
 def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:

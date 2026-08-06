@@ -155,7 +155,7 @@ effect's rank, added to the target, and multiple powers stack"). Split those apa
 `tests/test_powers.py`, `tests/test_conditions.py`.
 
 ### Phase 3 — Equipment model and cost engine
-**Status: todo**
+**Status: done**
 
 `core/equipment.py` with `EquipmentItem`; `Character.equipment` and
 `equipment_group_order` wired through `to_dict`/`from_dict` (a save without them loads
@@ -465,3 +465,99 @@ power, and eight resolver cases covering sum/max/cross-group/ties/superseded) pl
 `test_gm_pins`, `test_ui_wiring`. Full suite: **2010 passed**. `ruff` and `black` clean.
 
 Next: **Phase 3 — Equipment model and cost engine**.
+
+### 2026-08-06 — Phase 3: Equipment model and cost engine
+
+**Shipped.** `core/equipment.py` (the model) and `core/rules/equipment.py` (the budget,
+the price, and the catalog → `Power` builder). Gear is **live**: a worn item's bonus
+reaches the sheet through the Phase 2 applier layer, does not stack, and says what beat
+it. No existing test was edited; the suite is **2043 passed** (was 2010).
+
+*The model.* `EquipmentItem` wraps a real `Power` in `build`, alongside `catalog_id`,
+`category`, `worn`, `stacks`, `ep_override`, `id`. Three decisions worth keeping:
+- **`worn` is runtime, not persisted** — the same bargain a power's `activated` makes,
+  and the reason Phase 5's wear toggle may omit `EDITED` from its bus tables. A loaded
+  character comes up wearing everything. `stacks` and `ep_override` *are* build state.
+- **`category` is copied off the entry at pick time** rather than looked up, so a card
+  still has a home when a disabled mod takes its entry away.
+- `Character.equipment` / `equipment_group_order` are **omitted from `to_dict` when
+  empty**, so a save written before equipment existed round-trips byte-for-byte. No
+  schema bump.
+
+*The builder.* `build_item_from_entry(entry, game_data, rank=1)` turns a catalog record
+into a `Power`. Every mapping is found through the *data*, never by naming a key:
+- `strengthBased` → the effect's config field that `toggles` a modifier which
+  `adds_ability`, so the checkbox is ticked **and** the modifier attached. Nothing in
+  Python says "Strength" or "Damage".
+- `resistance` → the config field whose own `overrides` is `"resistance"`.
+- `degrees[i]` → the key named by `base.resistance_outcomes[i].config_key` (Affliction's
+  `resistanceOutcomes` already declares `degree1/2/3`).
+- `configuration` ("snare", "stun") has no declared field, so it is kept under a
+  `"configuration"` config key rather than dropped.
+- Entry modifiers split into extras/flaws by the `Modifier.category` on the record.
+All 106 entries build; every fixed-price entry then prices at exactly its printed cost
+(there is a test that walks the whole catalog).
+
+*The removable rule, enforced twice.* `_entry_modifier_selections` drops any modifier
+whose `gate == "removable"` — which is how the `omni_equipment` trap Phase 1 flagged is
+handled, with no per-item special case — and `_undiscounted` strips one off a build
+before pricing it, for a hand-edited save or an imported power. Both are tested.
+
+*The price.* `item_ep_cost` answers in three steps: `ep_override`; else the catalog's
+printed cost when `item_is_stock` (× rank for the `per_rank`/`ranked` kinds); else
+`power_total_cost` of the undiscounted build. `item_is_stock` compares a `_build_signature`
+(structure, cost_override, and per effect the id/rank/modifiers/config — **ids, names and
+runtime flags excluded**) against a freshly built entry *at this item's own rank*, so a
+ranked item is stock at every rank. The cost-kind vocabulary (`COST_FIXED`/`RANKED`/
+`PER_RANK`/`BUILT`, `PER_RANK_COST_KINDS`) lives in `core/equipment.py` beside the model,
+the same way `STRUCTURES` and the `components` patterns do.
+
+*Two things done slightly ahead of the listed scope, deliberately:*
+- **`equipment_contributions` and `worn_items` live in `core/rules/runtime.py`**, not in
+  `rules/equipment.py`, and are re-exported from it (that module has an `__all__` now).
+  They had to: `rules/equipment.py` imports `powers_cost` → `derived`, and `derived`
+  needs the contributions, so defining them there is a cycle. Runtime is the honest home
+  anyway — it is the "what is currently live on the sheet" layer.
+- **`derived.trait_contributions` now folds equipment in**, third after powers and
+  advantages. Without it the model would be inert data and Phase 5 would be doing rules
+  work in the UI. Order matters: the first two are the Power-Point group and sum, gear
+  arrives last in its own group, and a tie goes to the group seen first — the powers.
+  A sheet with no gear contributes nothing, which is why no derived number moved.
+- The shared gatherer is the new **`runtime.build_contributions(power, char, data, *,
+  stacking, group)`**; `power_contributions` is now a loop over `live_powers` calling it,
+  and `equipment_contributions` the same loop over `worn_items` with `GROUP_EQUIPMENT`
+  and `STACK_MAX` (or `STACK_SUM` for an item flagged `stacks`). One code path, so gear
+  and powers cannot drift.
+
+*Also:* `storage.equipment_enforcement()` + `EQUIPMENT_ENFORCE_WARN`/`_BLOCK` and the
+`DEFAULT_SETTINGS` entry — a **separate** setting from `pl_enforcement`, since the two
+are different currencies and a table may police one and not the other.
+
+*Deliberately not done:*
+- The five accessories with modifiers but no effects (`flashlight`, `sash`,
+  `laser_sight`, `suppressor`, `armor_cloth`) build an **empty** power. That is correct
+  for now — they have their printed price and grant nothing loose — but attaching them
+  to a host weapon is **Phase 8**, and it is what makes their modifiers mean anything.
+- `EquipmentEffectRef.extra` (`senseAffected`, `overcome`, `degreeNote`,
+  `rankIsPurchased`) is **not** copied into the instance config. It stays on the catalog
+  record for the phase that renders it (5/6), rather than being guessed into a config
+  key no effect declares.
+- Nothing reads `equipment_violations` yet (Phase 5's budget bar), and equipment
+  contributions do **not** yet reach `power_pl_violations` — armour Toughness against the
+  paired cap is Phase 6, as planned.
+- **`AbilitiesSection`/`ResistancesSection` still call `power_trait_bonuses`** for their
+  enhancement column, so worn gear raises the *total* without showing in that column.
+  This was flagged in the Phase 2 log and remains **Phase 5's job**: point them at
+  `derived.trait_bonuses`.
+
+*Verified:* `tests/test_equipment.py` (new, 32 tests — model round-trip and the
+non-persisted `worn`, the whole catalog building, the three data-driven config mappings,
+the removable rule twice over, printed vs derived vs override pricing, the budget and its
+two violations, both directions of currency separation, and the five stacking cases) plus
+the **unedited** `test_equipment_data`, `test_stat_appliers`, `test_derived_stats`,
+`test_powers`, `test_character`, `test_library`, `test_conditions`, `test_data_loader`.
+Full suite: **2043 passed**. `ruff` and `black` clean.
+
+Next: **Phase 4 — Card renderer refactor** (extract `ui/cards/` out of the 1794-line
+`ui/sections/powers.py`). Its guard is that `tests/test_powers_section.py` and
+`tests/test_power_constructor.py` pass *unedited*.

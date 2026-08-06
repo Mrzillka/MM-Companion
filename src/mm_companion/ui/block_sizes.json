@@ -45,6 +45,10 @@
     "min_width": 240,
     "min_height": 180
   },
+  "equipment": {
+    "min_width": 240,
+    "min_height": 180
+  },
   "dice": {
     "min_width": 360,
     "min_height": 300

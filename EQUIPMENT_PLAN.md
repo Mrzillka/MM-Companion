@@ -186,7 +186,7 @@ hands the highlight back via `QCursor.pos()`). All three are documented in `CLAU
 **unchanged**, plus eyes on the real app via `run-mm-companion`.
 
 ### Phase 5 — The Equipment block
-**Status: todo**
+**Status: done**
 
 `ui/sections/equipment.py`, registered in `ui/blocks/registry.py` with a `block_sizes.json`
 entry and the bus tables Powers uses (`changed` → `BUILD_CHANGED`/`ENHANCEMENTS_CHANGED`/
@@ -632,3 +632,90 @@ enhancement column, so worn gear raises the *total* without showing in that colu
 Point them at `derived.trait_bonuses`.
 
 Next: **Phase 5 — The Equipment block**.
+
+### 2026-08-06 — Phase 5: The Equipment block
+
+**Shipped.** Gear is on the sheet. `ui/sections/equipment.py` (the block),
+`ui/sections/equipment_picker.py` (the catalog), one more row in the block registry, and
+the enhancement-column fix carried since Phase 2. Suite: **2074 passed** (was 2043);
+`test_powers_section` and `test_power_constructor` pass **unedited**.
+
+*The block.* Budget bar (a `QProgressBar` + a `18 / 25 EP` readout, accent under budget
+and `tint.worse` + `⚠` over it), an "Add Equipment" button opening the picker,
+auto-grouped cards, and the block title left as a plain `"Equipment"` — `set_priced_title`
+is specifically the *Power Point* subtotal and gear spends none, so duplicating the bar
+in the title would have been the wrong currency in the wrong place.
+
+*The card is the powers card.* `effects_block(item.build, char, data)` draws the whole
+per-effect table, so an item and a power show the same breakdown from the same code —
+which is the Phase 3/4 shape paying off. What the section adds is the `⚠` PL marker,
+the `⌂` homerule badge (three ways in: a Dev-mode override or custom modifier on the
+build, an `ep_override`, **or** `item.stacks` — the no-stacking opt-out is a homerule by
+construction), the EP price, and the "superseded by" line.
+
+*Five decisions worth keeping:*
+- **Two mime types, and that is the whole cross-board safety.** `EQUIPMENT_MIME` for
+  item cards, `EQUIPMENT_GROUP_MIME` for group cards, neither being the powers block's
+  `NODE_MIME`. That is exactly the seam Phase 4 built the `mime=` keyword for. A group
+  card and its members therefore share one drop stack without a drop ever having to
+  guess which kind it was carrying.
+- **`NodeList` grew two keyword seams**, both defaulting to today's powers behaviour:
+  `combinable=False` drops the combine half of the vocabulary (a drop is always a
+  reorder — equipment groups *itself*, a drag may not invent one), and `accepts` is the
+  per-group admission rule. A refusal shows: the list owns a `DropFeedback` scoped to
+  `#nodeList` with `WA_StyledBackground` set, since a plain `QWidget` paints no
+  stylesheet background. `_clear_hints` deliberately does **not** clear the reject wash —
+  the two are put up in sequence (hints down, then dress) and clearing one must not undo
+  the other.
+- **The flat model list is laid out group by group.** `Character.equipment` is flat and
+  the groups are derived from `category`, so `_reflow` rewrites the list in group order
+  after every move. That is what makes a within-group reorder a plain splice *and* what
+  persists an arrangement with no new field. `equipment_group_order` keeps categories the
+  character currently owns nothing in, on the end, so emptying and refilling a group puts
+  it back where its owner left it.
+- **Every item is a switch**, unlike a power (which gets one only if it has something to
+  gate). Wearing is a fact about the character whether or not the item grants a bonus, so
+  every card is clickable, dims the same eased way, and stays clickable in the **locked**
+  read-only sheet — it emits `runtimeChanged`, never `changed`.
+- **`item_superseded` is in `core/rules/equipment.py`, not the widget.** It gathers the
+  item's own contributions through the same `build_contributions` the sheet uses, then
+  looks them up in the resolved sheet-wide bonuses and returns
+  `SupersededItemBonus(stat, category, amount, beaten_by)`. A stowed item supersedes
+  nothing — it is already dimmed, which is the honest explanation there.
+
+*The carried-forward fix, done:* `AbilitiesSection`/`ResistancesSection` now read
+`derived.trait_bonuses(...).get(category, {})` instead of `power_trait_bonuses`, so worn
+gear appears in the enhancement column rather than silently raising the total. Two tests
+hold it. `power_trait_bonuses` is untouched and still the powers-only view.
+
+*Tests that legitimately changed* (none of them a powers test): the four block-set
+enumerations — `test_ui_wiring.test_sheet_exposes_all_blocks`, `test_block_registry`'s
+`BASE_KEYS`/`EXPECTED_DEFAULT_ROWS`, `test_block_sizes.SHEET_BLOCKS`, and the hardcoded
+arrangement in `test_block_canvas` — all of which spell the block set out and so must
+name a twelfth block. `conftest`'s `_instant_power_card_transitions` now zeroes
+`EquipmentSection.TRANSITION_MS` too.
+
+*Deliberately not done — Phase 6 owns it:* **no dice footer on a weapon card**, no
+`rollRequested`/`pinRequested`, and so no `_ROLLS` in the registry row. The plan assigns
+rolling, the equipment pin kind, vehicle speed into `SystemInfoSection`, and equipment
+contributions reaching `power_pl_violations` to that phase together. Also deferred: the
+✎ edit button (Phase 7 owns the constructor's gear mode, and opening today's PP-labelled
+constructor on an item would misprice it on screen), and therefore any way to re-rank a
+stock item after adding it — the picker asks for the rank once, for the six non-`fixed`
+entries, via a `QInputDialog` with no upper bound (how high a rank may go is a PL
+question and the card's `⚠` already answers it).
+
+*Also:* `driver.py` gained an `equipment-demo` target (two categories, one stowed item,
+one outclassed piece of armour) — the surface Phases 6–10 will keep screenshotting.
+
+*Verified:* `tests/test_equipment_section.py` (new, 31 tests — grouping and its three
+order rules, both drag axes, cross-group refusal down to `DropFeedback.state`, the mime
+split, the wear switch and its runtime/locked contracts, the budget bar in both states,
+currency separation, the superseded annotation four ways, the enhancement columns, and
+the picker) plus the **unedited** `test_powers_section`, `test_power_constructor`,
+`test_powers`, `test_derived_stats`, `test_stat_appliers`, `test_equipment`,
+`test_equipment_data`, `test_conditions`. Full suite **2074 passed**; `ruff` and `black`
+clean. Eyes on the real app under both `classic` (dark, over budget) and
+`parchment-light` (under budget).
+
+Next: **Phase 6 — Rolling and derived wiring**.

@@ -23,15 +23,20 @@ layer reads as one API.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ..character import Character
 from ..components import GATE_REMOVABLE
 from ..data_loader import EquipmentEntry, GameData
 from ..equipment import PER_RANK_COST_KINDS, EquipmentItem
 from ..powers import ModifierSelection, Power, PowerEffectInstance
+from .appliers import GROUP_EQUIPMENT, STACK_MAX, STACK_SUM
+from .derived import trait_bonuses
 from .powers_cost import power_total_cost
-from .runtime import equipment_contributions, worn_items
+from .runtime import build_contributions, equipment_contributions, worn_items
 
 __all__ = [
+    "SupersededItemBonus",
     "build_item_from_entry",
     "equipment_advantage_rank",
     "equipment_budget",
@@ -42,6 +47,7 @@ __all__ = [
     "item_ep_cost",
     "item_is_stock",
     "item_rank",
+    "item_superseded",
     "worn_items",
 ]
 
@@ -314,6 +320,72 @@ def equipment_points_remaining(char: Character, game_data: GameData) -> int:
     """Unspent Equipment Points (budget minus spend; may go negative)."""
 
     return equipment_budget(char, game_data) - equipment_points_spent(char, game_data)
+
+
+# --- what an item is not currently granting ---------------------------------------------
+
+
+@dataclass(frozen=True)
+class SupersededItemBonus:
+    """A bonus one worn item grants that nothing on the sheet is reading.
+
+    Equipment bonuses do not stack (``docs/mm-equipment-design.md`` §3), so a second
+    suit of armour, or one outclassed by a power, sits on the sheet contributing
+    nothing. A silently inert number reads as a bug, so the item's card says what beat
+    it — ``stat`` and ``category`` name the trait, ``amount`` what this item offered,
+    and ``beaten_by`` the source that won.
+    """
+
+    stat: str
+    category: str
+    amount: int
+    beaten_by: str
+
+
+def item_superseded(
+    item: EquipmentItem, char: Character, game_data: GameData
+) -> tuple[SupersededItemBonus, ...]:
+    """Which of a worn item's bonuses lost to something better, and to what.
+
+    The item's own contributions are gathered the same way the sheet gathers them
+    (:func:`~.runtime.build_contributions`) and then looked up in the *resolved*
+    sheet-wide bonuses: a contribution the resolver reported as
+    :class:`~.appliers.SupersededBonus` is one this item is not granting. An item
+    that is not worn contributes nothing at all and so supersedes nothing — its card
+    is already dimmed, which is the honest explanation there.
+    """
+
+    if not item.worn:
+        return ()
+
+    own = build_contributions(
+        item.build,
+        char,
+        game_data,
+        stacking=STACK_SUM if item.stacks else STACK_MAX,
+        group=GROUP_EQUIPMENT,
+    )
+    if not own:
+        return ()
+
+    resolved = trait_bonuses(char, game_data)
+    beaten: list[SupersededItemBonus] = []
+    for contribution in own:
+        bonus = resolved.get(contribution.category, {}).get(contribution.stat)
+        if bonus is None:
+            continue
+        for loser in bonus.superseded:
+            if loser.source == contribution.source and loser.amount == contribution.amount:
+                beaten.append(
+                    SupersededItemBonus(
+                        stat=contribution.stat,
+                        category=contribution.category,
+                        amount=contribution.amount,
+                        beaten_by=loser.beaten_by,
+                    )
+                )
+                break
+    return tuple(beaten)
 
 
 def equipment_violations(char: Character, game_data: GameData) -> list[str]:

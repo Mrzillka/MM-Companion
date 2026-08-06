@@ -241,6 +241,7 @@ def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
         "complications",
         "skills",
         "powers",
+        "equipment",
         "dice",
     }
     # Every block is placed exactly once across the arrangement — the rows on the

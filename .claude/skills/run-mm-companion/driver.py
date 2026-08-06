@@ -121,6 +121,28 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target == "equipment-demo":
+        # The Equipment block with gear on it: two categories (so the automatic
+        # grouping and the group order show), a stowed item beside a worn one, and
+        # a piece of armour outclassed by a better one so its "superseded by" line
+        # renders. Only this block is left visible — the shot is about the cards.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=3))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("sword", "crossbow", "leather_armor", "chain_mail"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+        char.equipment[1].worn = False  # the crossbow is stowed
+        sheet.equipment.refresh()
+        for key in sheet.block_keys():
+            if key != "equipment":
+                sheet.hide_block(key)
+        win.resize(760, 720)
     elif target in ("sheet-pinned", "sheet-pinned-bottom"):
         # The pinned strip with something in it: two blocks parked outside the
         # scrolling page. The bottom variant also moves the strip to another edge,
@@ -412,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet",
             "sheet-demo",
             "sheet-locked",
+            "equipment-demo",
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",

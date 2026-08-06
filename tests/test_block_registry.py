@@ -25,6 +25,7 @@ BASE_KEYS = {
     "complications",
     "skills",
     "powers",
+    "equipment",
     "dice",
 }
 
@@ -37,6 +38,7 @@ EXPECTED_DEFAULT_ROWS = [
     ["complications"],
     ["skills"],
     ["powers"],
+    ["equipment"],
 ]
 
 

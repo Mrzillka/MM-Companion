@@ -6,12 +6,15 @@ into a *gap* to reorder or move, drop *onto* a card (or a group's bar) to combin
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
 
 from mm_companion.ui import theme
 from mm_companion.ui.cards.drag import NODE_MIME
+from mm_companion.ui.drop_feedback import DropFeedback
 
 
 class GroupHeader(QWidget):
@@ -66,17 +69,42 @@ class NodeList(QWidget):
     over a card's *body* offers to **combine** (the target card is highlighted); a drag
     near a gap offers to **reorder/move** (a thin insertion line). Dropping emits the
     matching request for the section to apply against the model.
+
+    Two seams let a board that is *not* a tree reuse the same list. ``combinable``
+    ``False`` drops the combine half of the vocabulary, so every position resolves to
+    a reorder gap — an equipment group is a fact about the item (a weapon is not
+    armour), not something a drop may invent. ``accepts`` is that group's admission
+    rule: given the dragged node's id it says whether this list will take it, and a
+    refusal is *shown* (:meth:`DropFeedback.show_reject`) rather than left to a bare
+    ``ignore()``, which is invisible whenever something else under the pointer accepts.
     """
 
     combineRequested = Signal(str, str)  # source id, target (drop-on) id
     moveRequested = Signal(str, str, int)  # source id, parent id (""=top), gap index
 
     def __init__(
-        self, parent_id: str = "", parent: QWidget | None = None, *, mime: str = NODE_MIME
+        self,
+        parent_id: str = "",
+        parent: QWidget | None = None,
+        *,
+        mime: str = NODE_MIME,
+        combinable: bool = True,
+        accepts: Callable[[str], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self.parent_id = parent_id
         self._mime = mime
+        self._combinable = combinable
+        self._accepts = accepts
+        self._drops: DropFeedback | None = None
+        if accepts is not None:
+            # A plain QWidget ignores a stylesheet background unless it is told to
+            # paint one, so the reject wash would otherwise be a border and nothing
+            # else. Scoped by object name: an unscoped rule would dress every card
+            # and label inside the list.
+            self.setObjectName("nodeList")
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self._drops = DropFeedback(self, "#nodeList", radius="radius.group")
         self.setAcceptDrops(True)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -117,11 +145,17 @@ class NodeList(QWidget):
         """Resolve a drop at vertical position *y* to a combine or reorder target.
 
         Returns ``("combine", pos, node_id, widget)`` for the body of an entry, or
-        ``("reorder", gap_index, "", None)`` near a boundary / below all entries.
+        ``("reorder", gap_index, "", None)`` near a boundary / below all entries. A
+        list built ``combinable=False`` never returns the first kind: the whole height
+        of a card is a reorder gap, split at its midpoint.
         """
         for pos, (node_id, widget) in enumerate(self._entries):
             top = widget.y()
             height = widget.height()
+            if not self._combinable:
+                if y < top + height * 0.5:
+                    return ("reorder", pos, "", None)
+                continue
             if y < top + height * 0.25:
                 return ("reorder", pos, "", None)
             if y < top + height * 0.75:
@@ -142,16 +176,40 @@ class NodeList(QWidget):
         self._highlight.raise_()
 
     def _clear_hints(self) -> None:
+        """Take the insert line and the combine outline down.
+
+        Deliberately *not* the reject wash: a refusal is shown by clearing the
+        placement hints first and then dressing the list, so the two are never up
+        at once and clearing one must not undo the other.
+        """
         self._indicator.hide()
         self._layout.removeWidget(self._indicator)
         self._highlight.hide()
 
+    def _source_id(self, event) -> str:
+        """The dragged node's id, or ``""`` when the payload isn't ours."""
+        if not event.mimeData().hasFormat(self._mime):
+            return ""
+        return bytes(event.mimeData().data(self._mime)).decode("ascii")
+
+    def _refuses(self, source: str) -> bool:
+        """Whether this list turns *source* away — and says so when it does."""
+        if not source or self._accepts is None or self._accepts(source):
+            return False
+        self._clear_hints()
+        if self._drops is not None:
+            self._drops.show_reject()
+        return True
+
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasFormat(self._mime):
-            event.acceptProposedAction()
+        source = self._source_id(event)
+        if not source or self._refuses(source):
+            return
+        event.acceptProposedAction()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if not event.mimeData().hasFormat(self._mime):
+        source = self._source_id(event)
+        if not source or self._refuses(source):
             return
         event.acceptProposedAction()
         kind, index, _node_id, widget = self._target(event.position().toPoint().y())
@@ -162,13 +220,19 @@ class NodeList(QWidget):
 
     def dragLeaveEvent(self, event: object) -> None:  # noqa: ARG002
         self._clear_hints()
+        if self._drops is not None:
+            self._drops.clear()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        if not event.mimeData().hasFormat(self._mime):
+        source = self._source_id(event)
+        if not source:
             return
-        source = bytes(event.mimeData().data(self._mime)).decode("ascii")
+        if self._refuses(source):
+            return
         kind, index, node_id, _widget = self._target(event.position().toPoint().y())
         self._clear_hints()
+        if self._drops is not None:
+            self._drops.clear()
         event.acceptProposedAction()
         if kind == "combine":
             self.combineRequested.emit(source, node_id)

@@ -28,6 +28,7 @@ SHEET_BLOCKS = {
     "complications",
     "skills",
     "powers",
+    "equipment",
     "dice",
 }
 # The GM window's blocks live in the same file under a gm_ prefix, so a theme can

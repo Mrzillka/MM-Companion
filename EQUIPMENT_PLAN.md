@@ -169,7 +169,7 @@ edited — and **never** the `removable` discount), the spend/remaining pair, an
 *Verify:* `tests/test_equipment.py` (new), `tests/test_character.py`, `tests/test_library.py`.
 
 ### Phase 4 — Card renderer refactor
-**Status: todo**
+**Status: done**
 
 Pure refactor, no feature. Extract from the 1794-line `ui/sections/powers.py` into a
 shared `ui/cards/` package: `_DraggableCard` (with `set_off_progress` and the
@@ -561,3 +561,74 @@ Full suite: **2043 passed**. `ruff` and `black` clean.
 Next: **Phase 4 — Card renderer refactor** (extract `ui/cards/` out of the 1794-line
 `ui/sections/powers.py`). Its guard is that `tests/test_powers_section.py` and
 `tests/test_power_constructor.py` pass *unedited*.
+
+### 2026-08-06 — Phase 4: Card renderer refactor
+
+**Shipped.** `ui/cards/` is the shared card package; `ui/sections/powers.py` is a
+consumer of it and went 1795 → 1002 lines. Pure move — **no test was edited** and the
+suite is **2043 passed**, the same number Phase 3 left.
+
+*The five modules*, split by what a piece is rather than by what powers needed:
+- `cards/drag.py` — `DragHandle` (the ⠿ grip) and `NODE_MIME`, the drag payload's
+  format.
+- `cards/card.py` — `DraggableCard` with `set_off_progress` and the hover rules,
+  plus `lerp`, `card_ancestors_of` and the new `hand_back_highlight`.
+- `cards/node_list.py` — `NodeList` and `GroupHeader`, the two drop targets.
+- `cards/rolls.py` — `RollLine` and the new `RollsFooter`.
+- `cards/effects.py` — the per-effect body: `effects_block`, `effect_summary`,
+  `modifiers_column`, `terms_grid`, `effect_title`, `modifier_names`, `role_note`,
+  `structure_header`, `terms_style`, and the two stretch constants.
+
+*Four decisions worth keeping:*
+- **The mime type is a parameter, not a constant in shared code.** Every widget that
+  reads or writes the payload takes `mime=NODE_MIME` as a keyword-only argument.
+  Without that seam, an Equipment block built on the same cards would advertise the
+  *same* format and a power card could be dragged into it (and vice versa) — the drop
+  would resolve an id the other board has never heard of. Phase 5 passes its own.
+- **`_effects_block` and the roll footer were extracted too**, beyond the five names
+  the phase listed. Both are the card's *body* and an equipment item wraps a real
+  `Power`, so leaving them behind would have had Phase 5 copying ~120 lines that then
+  drift. `cards/effects.py` is free functions over `(power/effect, character, data)`
+  because the two sections hold their model differently and neither owns the drawing.
+- **`RollsFooter` takes a `pin_ref` callback**, `Callable[[int], PinRef]`, instead of
+  knowing about `PIN_POWER`. A pin names a roll by *which entry of the card's roll
+  list* it is, so the footer only needs the index → ref mapping; Phase 6 passes an
+  equipment ref through the same seam. `pins` is the section's own live
+  `PinMenuState`, read at menu time, so `set_pin_target`/`set_pinned` keep working
+  without rebuilding the cards. A footer given no `pin_ref` installs no context menu
+  at all.
+- **`_set_hovered` became public `set_hovered`** on the card: the roll line stands its
+  enclosing cards down across a module boundary now. The `_hovered` *attribute* is
+  untouched — two tests read it directly.
+
+*The three load-bearing invariants survived, and each is checked by an unedited test:*
+font sizes on the `QFont` and never in a stylesheet (`test_a_cards_type_scales…`),
+leaf-only background wash (`test_a_hovered_group_lights_its_outline_but_does_not_fill`),
+one card lit at a time (`test_hovering…` ×2). `hand_back_highlight` is the second half
+of that last rule factored out of the two `leaveEvent`s that had it copied.
+
+*The compatibility shim.* `powers.py` keeps `_DraggableCard = DraggableCard` and four
+siblings at module level. Four test files import those spellings, and the phase's guard
+is that they pass *unedited* — so the old names stay as aliases onto the shared classes
+rather than the tests being rewritten. Anything new should import from
+`mm_companion.ui.cards`.
+
+*Not moved, deliberately:* `_ModeToggle` (Independent/Array/Linked is a *powers*
+structure, not card machinery), the whole tree model (`_locate`, `_on_combine`,
+`_on_move`, `_collapse_singletons`, `_normalize_arrays`), and everything about what a
+click means (`_activation_role`, `_arm_activation`, `_show_activation`, the runtime
+setters). Those are the section's job and Equipment will answer them differently —
+every item is worn independently, with no array exclusivity.
+
+*Verified:* `test_powers_section` (55), `test_power_constructor`, `test_roll_routing`,
+`test_ui_wiring` — 200 passed, **unedited** — then the full suite at **2043 passed**.
+`ruff` and `black` clean. Eyes on the real app via a driver script: a sheet with a leaf
+attack card, a switched-off gated card, a Linked group and an Array group all render as
+before, including the dim/type-scale/padding of the off card and its accent edge.
+
+*Still outstanding for Phase 5*, carried from the Phase 2 and 3 logs:
+**`AbilitiesSection`/`ResistancesSection` still call `power_trait_bonuses`** for their
+enhancement column, so worn gear raises the *total* without showing in that column.
+Point them at `derived.trait_bonuses`.
+
+Next: **Phase 5 — The Equipment block**.

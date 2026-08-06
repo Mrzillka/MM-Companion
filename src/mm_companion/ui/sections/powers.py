@@ -36,6 +36,13 @@ a distinct highlight. A group's title bar carries an Independent / Array / Linke
 mode toggle (the same three choices the Constructor offers for a single power's own
 effects) that decides how its members' costs combine.
 
+The **cards themselves** live in :mod:`mm_companion.ui.cards` — the frame and its
+on/off look, the grip, the drop-target lists, the dice footer, the per-effect summary.
+This section is the part that knows about *powers*: the tree, what a click on a card
+means, what a group's mode does to its members' costs. The Equipment block draws its
+items from the same pieces (an item wraps a real ``Power``), so a change to how a card
+looks or behaves reaches both.
+
 It follows the standard section contract (``data`` + ``character`` constructor,
 ``changed`` signal, ``set_locked``) so it slots into the sheet like the others, and —
 because saved powers live on the model — a loaded character repopulates its list at
@@ -44,38 +51,14 @@ construction.
 
 from __future__ import annotations
 
-from PySide6.QtCore import (
-    QAbstractAnimation,
-    QEasingCurve,
-    QEvent,
-    QMimeData,
-    QPoint,
-    Qt,
-    QVariantAnimation,
-    Signal,
-)
-from PySide6.QtGui import (
-    QCursor,
-    QDrag,
-    QDragEnterEvent,
-    QDragMoveEvent,
-    QDropEvent,
-    QEnterEvent,
-    QMouseEvent,
-)
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QVariantAnimation, Signal
 from PySide6.QtWidgets import (
-    QApplication,
     QButtonGroup,
-    QFrame,
-    QGraphicsOpacityEffect,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
-    QMenu,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -86,9 +69,7 @@ from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
     STRUCTURE_INDEPENDENT,
     STRUCTURE_LINKED,
-    ModifierSelection,
     Power,
-    PowerEffectInstance,
     PowerGroup,
     PowerNode,
     power_is_homerule,
@@ -97,14 +78,8 @@ from mm_companion.core.rules import (
     PIN_POWER,
     PinRef,
     active_array_child,
-    array_alternate_cost,
-    array_base_index,
     debilitated_traits,
-    effect_attack_skill_bonus,
-    effect_effective_rank,
-    effect_stat_rows,
     leaf_powers,
-    modifier_label,
     node_display_cost,
     power_display_name,
     power_has_custom_modifier,
@@ -116,27 +91,28 @@ from mm_companion.core.rules import (
     powers_points_spent,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.cards import (
+    DraggableCard,
+    DragHandle,
+    GroupHeader,
+    NodeList,
+    RollLine,
+    RollsFooter,
+    effects_block,
+)
 from mm_companion.ui.power_constructor import PowerConstructorWindow
-from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, muted_style, tinted_style
 
-
-def _terms_style() -> TermsGridStyle:
-    """The card's copy of the terms grid: small, unbolded type.
-
-    The numbers read as reference rather than as the point of the card. The size
-    is set on the QFont (see :class:`TermsGridStyle`) so it scales with a
-    switched-off card's transition instead of being pinned by a stylesheet.
-    """
-    return TermsGridStyle(point_size=theme.font_size("size.terms"), bold_changed=False)
-
-
-# How an effect's row divides between what was bought (extras/flaws) and what it costs
-# at the table (the game terms).
-_MODIFIER_STRETCH = 1
-_TERMS_STRETCH = 2
+# The card machinery moved to :mod:`mm_companion.ui.cards` so the Equipment block could
+# draw the same cards. These are the spellings anything that reached into this module
+# already imports; the classes themselves are the shared ones.
+_DraggableCard = DraggableCard
+_DragHandle = DragHandle
+_GroupHeader = GroupHeader
+_NodeList = NodeList
+_RollLine = RollLine
 
 # What a click on a card does, by activation role (see _activation_role).
 _CLICK_HINTS = {
@@ -145,21 +121,12 @@ _CLICK_HINTS = {
     "select": "Click this card to make it the array's live alternate; its siblings switch off.",
 }
 
-# Drag-and-drop payload: the dragged node's stable id (a Power.id or PowerGroup.id).
-# A tree position needs parent context, not a bare index, so drops resolve the id.
-_POWER_MIME = "application/x-mm-power-node"
-
 # What each group mode is called on its title bar.
 _MODE_LABELS = {
     STRUCTURE_INDEPENDENT: "Group of powers",
     STRUCTURE_ARRAY: "Group of alternate effects",
     STRUCTURE_LINKED: "Group of linked powers",
 }
-
-
-def _lerp(start: float, end: float, progress: float) -> float:
-    """*start* at ``progress`` 0, *end* at 1 — one frame of a card's on/off transition."""
-    return start + (end - start) * progress
 
 
 def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
@@ -172,39 +139,6 @@ def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
     """
 
     return power_roll_lines(power, character, data)
-
-
-class _DragHandle(QLabel):
-    """The ``⠿`` grip at the head of a card; a press-drag on it starts the drag.
-
-    It only *detects* the gesture (a left-press moved past the platform drag
-    threshold) and emits :attr:`dragStarted`; the owning card builds and runs the
-    actual :class:`QDrag`, so the grip stays a dumb, reusable handle.
-    """
-
-    dragStarted = Signal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("⠿", parent)
-        self._press: QPoint | None = None
-        self.setToolTip("Drag to reorder, or drop onto another power to group them")
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setStyleSheet(muted_style())
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._press = event.position().toPoint()
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._press is None or not (event.buttons() & Qt.MouseButton.LeftButton):
-            return
-        moved = (event.position().toPoint() - self._press).manhattanLength()
-        if moved >= QApplication.startDragDistance():
-            self._press = None
-            self.dragStarted.emit()
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: ARG002
-        self._press = None
 
 
 class _ModeToggle(QWidget):
@@ -259,536 +193,6 @@ class _ModeToggle(QWidget):
     def set_toggle_enabled(self, enabled: bool) -> None:
         for button in self._buttons.values():
             button.setEnabled(enabled)
-
-
-def _card_ancestors_of(widget: QWidget) -> list[_DraggableCard]:
-    """The cards enclosing *widget*, innermost first.
-
-    Shared by the cards themselves and by the clickable lines of a card's dice
-    footer: both have to stand an enclosing card down when the pointer arrives, so
-    that exactly one thing is lit and it is the thing a click would reach.
-    """
-    cards: list[_DraggableCard] = []
-    node = widget.parentWidget()
-    while node is not None:
-        if isinstance(node, _DraggableCard):
-            cards.append(node)
-        node = node.parentWidget()
-    return cards
-
-
-class _DraggableCard(QFrame):
-    """A stat-block card (leaf power or group) that can be picked up by its grip.
-
-    It carries the id of the tree node it renders; when its grip fires, it launches a
-    :class:`QDrag` carrying that id (with a snapshot of the card as the drag cursor)
-    so the enclosing :class:`_NodeList` — or a group title bar — can drop it.
-
-    The card body is also the power's **on/off switch**: a card marked
-    :meth:`set_clickable` emits :attr:`clicked` on a left click that isn't a drag, and
-    *accepts* the press so the click stops there. A card left un-clickable ignores the
-    press instead, letting it bubble up to an enclosing card — which is how clicking a
-    member of a Linked group toggles the whole group. Clicks that land on a real child
-    control (the grip, ✎, ✕, a group's mode buttons) never reach the card at all,
-    because those widgets consume the press themselves.
-
-    It owns both halves of *showing* that switch:
-
-    - :meth:`set_off_progress` is the switched-off look as a continuous quantity
-      (``0.0`` fully on, ``1.0`` fully off), interpolating opacity, type size and
-      padding together, so the section can animate a flip rather than cut to it.
-    - a clickable card advertises itself before it is touched — a standing accent
-      edge down its left side, and an accent border while the pointer is over it
-      (a leaf card also fills faintly; a group only outlines, since a fill would
-      paint behind all of its members). Exactly one card is lit at a time: the
-      innermost clickable one under the pointer, enclosing cards standing down.
-      An inert card stays flat and never lights up.
-    """
-
-    clicked = Signal()
-
-    def __init__(self, node_id: str, group: bool = False, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.node_id = node_id
-        self._is_group = group
-        self.setObjectName("groupCard" if group else "powerCard")
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        # Never shrink below the height its content needs — a card always shows all of
-        # its rows (the block, not the card, grows and the page scrolls).
-        policy = self.sizePolicy()
-        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
-        self._clickable = False
-        self._hovered = False
-        self._press: QPoint | None = None
-        self._off = 0.0
-        # Base point sizes, captured on the first set_off_progress call (i.e. once the
-        # card is fully built), so scaling is always relative to the built size and
-        # never compounds across frames.
-        self._base_points: list[tuple[QWidget, float]] | None = None
-        self._restyle()
-
-    # -- the switched-off look --------------------------------------------
-    def set_off_progress(self, progress: float) -> None:
-        """Show this card *progress* of the way to its switched-off state.
-
-        ``0.0`` is the live look and ``1.0`` the receded one; anything between is a
-        frame of the transition. All three cues move together — the card dims, its
-        type steps down and its padding tightens — so the whole card reads as one
-        object easing out rather than as three separate changes.
-        """
-        progress = max(0.0, min(1.0, float(progress)))
-        self._off = progress
-        self._apply_opacity(progress)
-        self._apply_fonts(progress)
-        self._apply_metrics(progress)
-
-    def off_progress(self) -> float:
-        return self._off
-
-    def _apply_opacity(self, progress: float) -> None:
-        if progress <= 0.0:
-            # A live card carries no effect at all: a graphics effect forces the card's
-            # whole subtree to paint through an offscreen buffer, which is worth paying
-            # for only while it is actually dimmed (same rule as BlockCanvas._fade_in).
-            if self.graphicsEffect() is not None:
-                self.setGraphicsEffect(None)
-            return
-        effect = self.graphicsEffect()
-        if not isinstance(effect, QGraphicsOpacityEffect):
-            effect = QGraphicsOpacityEffect(self)
-            self.setGraphicsEffect(effect)
-        effect.setOpacity(_lerp(1.0, theme.metric("opacity.inactive"), progress))
-
-    def _apply_fonts(self, progress: float) -> None:
-        if self._base_points is None:
-            self._base_points = [(w, w.font().pointSizeF()) for w in self._own_widgets()]
-        scale = _lerp(1.0, theme.font_size("scale.inactive"), progress)
-        for widget, base in self._base_points:
-            font = widget.font()
-            font.setPointSizeF(base * scale)
-            widget.setFont(font)
-
-    def _own_widgets(self) -> list[QWidget]:
-        """This card and the chrome it owns — never a nested card's own widgets.
-
-        A group card contains member cards, and each of those scales itself; walking
-        into them here would have the two fight over the same labels' fonts.
-        """
-        mine = [self]
-        for widget in self.findChildren(QWidget):
-            node = widget.parentWidget()
-            while node is not None and not isinstance(node, _DraggableCard):
-                node = node.parentWidget()
-            if node is self:
-                mine.append(widget)
-        return mine
-
-    def _apply_metrics(self, progress: float) -> None:
-        layout = self.layout()
-        if layout is None:
-            return
-        prefix = "group" if self._is_group else "card"
-        live, off = theme.box(f"{prefix}.margins"), theme.box(f"{prefix}.margins.off")
-        margins = (round(_lerp(a, b, progress)) for a, b in zip(live, off, strict=True))
-        layout.setContentsMargins(*margins)
-        spacing = _lerp(theme.metric("card.spacing"), theme.metric("card.spacing.off"), progress)
-        layout.setSpacing(round(spacing))
-
-    # -- clickability -----------------------------------------------------
-    def set_clickable(self, clickable: bool) -> None:
-        """Arm (or disarm) the whole card as a click target."""
-        self._clickable = clickable
-        self.setCursor(
-            Qt.CursorShape.PointingHandCursor if clickable else Qt.CursorShape.ArrowCursor
-        )
-        self._restyle()
-
-    def is_clickable(self) -> bool:
-        return self._clickable
-
-    def _restyle(self) -> None:
-        """Rebuild the card's own frame style from clickability and hover.
-
-        Every rule is scoped to the card's object name so it dresses the frame alone —
-        an unscoped border here would be inherited by every child QFrame (the
-        separators) and every label inside the card.
-        """
-        width = int(theme.metric("border.width"))
-        accent = theme.color("accent")
-        if self._is_group:
-            border, radius = theme.color("border.group"), theme.metric("radius.group")
-        else:
-            # Spelled out rather than left to the native StyledPanel: once a stylesheet
-            # dresses this frame at all (for the accent edge), it owns every border, so
-            # the plain state has to name the one it replaces.
-            border, radius = theme.color("border.card"), theme.metric("radius.card")
-        rules = [f"border: {width}px solid {border};", f"border-radius: {int(radius)}px;"]
-        if self._clickable:
-            # A standing edge says "this one is a switch" without needing a hover, and
-            # the border confirms the one the pointer is actually on.
-            if self._hovered:
-                rules.append(f"border: {width}px solid {accent};")
-                # Only a leaf card fills. A stylesheet background paints behind every
-                # child, so washing a *group* would flood its whole subtree — its
-                # outline lights instead, and its members stay as they were.
-                if not self._is_group:
-                    rules.append(f"background: {theme.wash('accent', 0.10)};")
-            edge = int(theme.metric("border.width.accent-edge"))
-            rules.append(f"border-left: {edge}px solid {accent};")
-        self.setStyleSheet(f"#{self.objectName()} {{ {' '.join(rules)} }}")
-
-    def _set_hovered(self, hovered: bool) -> None:
-        hovered = hovered and self._clickable
-        if hovered != self._hovered:
-            self._hovered = hovered
-            self._restyle()
-
-    def _card_ancestors(self) -> list[_DraggableCard]:
-        """The enclosing cards, innermost first."""
-        return _card_ancestors_of(self)
-
-    def enterEvent(self, event: QEnterEvent) -> None:
-        """Light this card — and only this one.
-
-        Qt hands Enter to the widget the pointer moved *into* but sends Leave only as
-        far up as the common ancestor, so crossing from a group card onto one of its
-        members never un-hovers the group. Standing the ancestors down here is what
-        keeps exactly one card lit: the innermost clickable one, which is the one a
-        click would actually reach.
-
-        An *inert* card stands nobody down — its press bubbles up to the enclosing
-        card, so that card is still the switch and has to stay lit. This is the case
-        for a Linked group's members, which are driven by their group.
-        """
-        super().enterEvent(event)
-        self._set_hovered(True)
-        if not self._clickable:
-            return
-        for ancestor in self._card_ancestors():
-            ancestor._set_hovered(False)
-
-    def leaveEvent(self, event: QEvent) -> None:
-        """Unlight this card, handing the highlight back to an enclosing one.
-
-        The ancestor this card muted on the way in gets no Enter of its own when the
-        pointer steps back out onto its body — it was never left — so the hand-back has
-        to happen here. Whether the pointer is still inside it is read from the cursor
-        rather than from ``underMouse()``, whose flag Qt may already have cleared by
-        the time this child's Leave is delivered.
-
-        Inert ancestors are stepped over rather than stopped at: ``_set_hovered``
-        no-ops on a card that isn't clickable, so handing the highlight to one would
-        just drop it — and the clickable card further out, which is what a click there
-        would actually reach, would stay dark until the pointer left the group entirely.
-        """
-        super().leaveEvent(event)
-        self._set_hovered(False)
-        cursor = QCursor.pos()
-        for ancestor in self._card_ancestors():
-            if not ancestor.is_clickable():
-                continue
-            if ancestor.rect().contains(ancestor.mapFromGlobal(cursor)):
-                ancestor._set_hovered(True)
-                break
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if not self._clickable or event.button() != Qt.MouseButton.LeftButton:
-            event.ignore()  # let an enclosing card handle it
-            return
-        self._press = event.position().toPoint()
-        event.accept()
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        press, self._press = self._press, None
-        if press is None or event.button() != Qt.MouseButton.LeftButton:
-            event.ignore()
-            return
-        event.accept()
-        released = event.position().toPoint()
-        # A press that wandered (a drag or a mis-click released elsewhere) isn't a click.
-        if (released - press).manhattanLength() >= QApplication.startDragDistance():
-            return
-        if self.rect().contains(released):
-            self.clicked.emit()
-
-    def start_drag(self) -> None:
-        drag = QDrag(self)
-        mime = QMimeData()
-        mime.setData(_POWER_MIME, self.node_id.encode("ascii"))
-        drag.setMimeData(mime)
-        pixmap = self.grab()
-        drag.setPixmap(pixmap)
-        drag.setHotSpot(QPoint(pixmap.width() // 2, 12))
-        drag.exec(Qt.DropAction.MoveAction)
-
-
-class _RollLine(QFrame):
-    """One line of a power card's dice footer — the whole line is the roll button.
-
-    The ``🎲`` used to be a real :class:`QPushButton`, and that was doing one job
-    beyond looking like a die: a button consumes its own press, so the click never
-    reached :meth:`_DraggableCard.mousePressEvent` and rolling a power could not be
-    mistaken for switching it on. Widening the target to the whole line means this
-    frame has to take that job over — hence the explicit ``accept()`` below, and why
-    the line cannot simply be a :class:`QLabel`, which would let the press through
-    and toggle the card underneath.
-
-    A line the *target* rolls is inert: no border, no hover, no cursor, and its press
-    is deliberately left to bubble, so the card under it keeps working as the power's
-    on/off switch. The wielder never makes their own target's save; that roll reaches
-    the person who does as the follow-up chip on the attack's history card.
-    """
-
-    clicked = Signal()
-
-    def __init__(self, rollable: bool, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("rollLine")
-        self._rollable = rollable
-        self._hovered = False
-        self._press: QPoint | None = None
-        if rollable:
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._restyle()
-
-    def is_rollable(self) -> bool:
-        return self._rollable
-
-    def _restyle(self) -> None:
-        """Dress the line from its own object name — never a bare selector.
-
-        The same scoping rule (and the same reason) as
-        :meth:`_DraggableCard._restyle`: an unscoped border here would be inherited
-        by the line's own label, and by every other frame in the card.
-        """
-        if not self._rollable:
-            self.setStyleSheet(f"#{self.objectName()} {{ border: none; }}")
-            return
-        width = int(theme.metric("border.width"))
-        # At rest, a washed-out version of the same hue the line's text already
-        # carries: enough to read as a target without competing with the card's own
-        # edge, and unmistakably the *dice* affordance rather than the switch.
-        border = theme.color("accent.dice") if self._hovered else theme.wash("accent.dice", 0.45)
-        rules = [
-            f"border: {width}px solid {border};",
-            f"border-radius: {int(theme.metric('radius.chip'))}px;",
-        ]
-        if self._hovered:
-            rules.append(f"background: {theme.wash('accent.dice', 0.10)};")
-        self.setStyleSheet(f"#{self.objectName()} {{ {' '.join(rules)} }}")
-
-    def _set_hovered(self, hovered: bool) -> None:
-        hovered = hovered and self._rollable
-        if hovered != self._hovered:
-            self._hovered = hovered
-            self._restyle()
-
-    def enterEvent(self, event: QEnterEvent) -> None:
-        """Light this line, and stand the enclosing card down.
-
-        Otherwise the card stays lit as the power's on/off switch while the pointer
-        is over a line that does something else entirely — the same one-thing-lit
-        rule :meth:`_DraggableCard.enterEvent` keeps between nested cards.
-        """
-        super().enterEvent(event)
-        self._set_hovered(True)
-        if not self._rollable:
-            return
-        for card in _card_ancestors_of(self):
-            card._set_hovered(False)
-
-    def leaveEvent(self, event: QEvent) -> None:
-        """Unlight, handing the highlight back to a clickable card still under the pointer."""
-        super().leaveEvent(event)
-        self._set_hovered(False)
-        if not self._rollable:
-            return
-        cursor = QCursor.pos()
-        for card in _card_ancestors_of(self):
-            if not card.is_clickable():
-                continue
-            if card.rect().contains(card.mapFromGlobal(cursor)):
-                card._set_hovered(True)
-                break
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if not self._rollable or event.button() != Qt.MouseButton.LeftButton:
-            event.ignore()  # let the enclosing card switch the power instead
-            return
-        self._press = event.position().toPoint()
-        event.accept()
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        press, self._press = self._press, None
-        if press is None or event.button() != Qt.MouseButton.LeftButton:
-            event.ignore()
-            return
-        event.accept()
-        released = event.position().toPoint()
-        if (released - press).manhattanLength() >= QApplication.startDragDistance():
-            return
-        if self.rect().contains(released):
-            self.clicked.emit()
-
-
-class _GroupHeader(QWidget):
-    """A group's title bar, which also acts as a drop target that *wraps* the group.
-
-    Dropping a card onto a group's bar groups the whole group with the dragged node
-    into a new parent group (the way to nest a group beside a peer). Joining a group
-    as another member is done by dropping into its body instead (handled by the
-    group's inner :class:`_NodeList`).
-    """
-
-    powerDropped = Signal(str)  # the dropped node's id
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("groupHeader")
-        self.setAcceptDrops(True)
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasFormat(_POWER_MIME):
-            event.acceptProposedAction()
-            # Scoped to this widget by object name: a selector-less stylesheet applies
-            # to every child too, so the wash would also tint the group's name and its
-            # ✎/✕ and mode buttons rather than just the bar behind them.
-            self.setStyleSheet(
-                f"#groupHeader {{ background: {theme.wash('accent.dice', 0.25)};"
-                f" border-radius: {int(theme.metric('radius.header'))}px; }}"
-            )
-
-    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if event.mimeData().hasFormat(_POWER_MIME):
-            event.acceptProposedAction()
-
-    def dragLeaveEvent(self, event: object) -> None:  # noqa: ARG002
-        self.setStyleSheet("")
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        self.setStyleSheet("")
-        if not event.mimeData().hasFormat(_POWER_MIME):
-            return
-        source = bytes(event.mimeData().data(_POWER_MIME)).decode("ascii")
-        event.acceptProposedAction()
-        self.powerDropped.emit(source)
-
-
-class _NodeList(QWidget):
-    """A vertical stack of cards for one level of the tree; a drop target for both.
-
-    Renders the ordered nodes of one list — the character's top-level ``powers``
-    (``parent_id`` empty) or a group's children (``parent_id`` = the group id). A drag
-    over a card's *body* offers to **combine** (the target card is highlighted); a drag
-    near a gap offers to **reorder/move** (a thin insertion line). Dropping emits the
-    matching request for the section to apply against the model.
-    """
-
-    combineRequested = Signal(str, str)  # source id, target (drop-on) id
-    moveRequested = Signal(str, str, int)  # source id, parent id (""=top), gap index
-
-    def __init__(self, parent_id: str = "", parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.parent_id = parent_id
-        self.setAcceptDrops(True)
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._entries: list[tuple[str, QWidget]] = []
-        self._indicator = QFrame(self)
-        self._indicator.setFrameShape(QFrame.Shape.HLine)
-        self._indicator.setFixedHeight(2)
-        self._indicator.setStyleSheet(f"background: {theme.color('accent.dice')}; border: none;")
-        self._indicator.hide()
-        # A translucent outline laid over a card to mark it as the combine target.
-        self._highlight = QFrame(self)
-        self._highlight.setStyleSheet(
-            f"border: {int(theme.metric('border.width.emphasis'))}px solid"
-            f" {theme.color('accent.dice')};"
-            f" border-radius: {int(theme.metric('radius.group'))}px;"
-            f" background: {theme.wash('accent.dice', 0.15)};"
-        )
-        self._highlight.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._highlight.hide()
-
-    def clear(self) -> None:
-        """Remove every card (keeping the reusable indicator/highlight overlays)."""
-        for index in reversed(range(self._layout.count())):
-            widget = self._layout.itemAt(index).widget()
-            if widget is not None and widget is not self._indicator:
-                self._layout.takeAt(index)
-                widget.setParent(None)
-                widget.deleteLater()
-        self._entries = []
-        self._clear_hints()
-
-    def add_entry(self, node_id: str, widget: QWidget) -> None:
-        self._entries.append((node_id, widget))
-        self._layout.addWidget(widget)
-
-    # -- drop handling ----------------------------------------------------
-    def _target(self, y: int) -> tuple[str, int, str, QWidget | None]:
-        """Resolve a drop at vertical position *y* to a combine or reorder target.
-
-        Returns ``("combine", pos, node_id, widget)`` for the body of an entry, or
-        ``("reorder", gap_index, "", None)`` near a boundary / below all entries.
-        """
-        for pos, (node_id, widget) in enumerate(self._entries):
-            top = widget.y()
-            height = widget.height()
-            if y < top + height * 0.25:
-                return ("reorder", pos, "", None)
-            if y < top + height * 0.75:
-                return ("combine", pos, node_id, widget)
-        return ("reorder", len(self._entries), "", None)
-
-    def _show_reorder(self, index: int) -> None:
-        self._highlight.hide()
-        self._layout.removeWidget(self._indicator)
-        self._layout.insertWidget(index, self._indicator)
-        self._indicator.show()
-
-    def _show_combine(self, widget: QWidget) -> None:
-        self._indicator.hide()
-        self._layout.removeWidget(self._indicator)
-        self._highlight.setGeometry(widget.geometry())
-        self._highlight.show()
-        self._highlight.raise_()
-
-    def _clear_hints(self) -> None:
-        self._indicator.hide()
-        self._layout.removeWidget(self._indicator)
-        self._highlight.hide()
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasFormat(_POWER_MIME):
-            event.acceptProposedAction()
-
-    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if not event.mimeData().hasFormat(_POWER_MIME):
-            return
-        event.acceptProposedAction()
-        kind, index, _node_id, widget = self._target(event.position().toPoint().y())
-        if kind == "combine" and widget is not None:
-            self._show_combine(widget)
-        else:
-            self._show_reorder(index)
-
-    def dragLeaveEvent(self, event: object) -> None:  # noqa: ARG002
-        self._clear_hints()
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        if not event.mimeData().hasFormat(_POWER_MIME):
-            return
-        source = bytes(event.mimeData().data(_POWER_MIME)).decode("ascii")
-        kind, index, node_id, _widget = self._target(event.position().toPoint().y())
-        self._clear_hints()
-        event.acceptProposedAction()
-        if kind == "combine":
-            self.combineRequested.emit(source, node_id)
-        else:
-            self.moveRequested.emit(source, self.parent_id, index)
 
 
 class PowersSection(TitledSection):
@@ -847,7 +251,7 @@ class PowersSection(TitledSection):
 
         # The saved powers stack above the Add button, one card each; the top-level
         # list is the root of the drag-and-drop tree.
-        self._list_host = _NodeList("")
+        self._list_host = NodeList("")
         self._list_host.combineRequested.connect(self._on_combine)
         self._list_host.moveRequested.connect(self._on_move)
         layout.addWidget(self._list_host)
@@ -1080,7 +484,7 @@ class PowersSection(TitledSection):
         array) is clicked on its title bar the same way a leaf card is clicked on its
         body — and dims as a whole, members included, when it is switched off.
         """
-        card = _DraggableCard(group.id, group=True)
+        card = DraggableCard(group.id, group=True)
         self._arm_activation(card, group, parent, interactive)
         layout = QVBoxLayout(card)
         layout.addWidget(self._group_header(group, card, parent))
@@ -1090,7 +494,7 @@ class PowersSection(TitledSection):
         child_interactive = interactive and (
             self._group_is_active(group) if group.mode == STRUCTURE_LINKED else True
         )
-        inner = _NodeList(group.id)
+        inner = NodeList(group.id)
         inner.combineRequested.connect(self._on_combine)
         inner.moveRequested.connect(self._on_move)
         for child in group.children:
@@ -1106,7 +510,7 @@ class PowersSection(TitledSection):
     def _group_header(
         self,
         group: PowerGroup,
-        card: _DraggableCard,
+        card: DraggableCard,
         parent: PowerGroup | None,
     ) -> QWidget:
         """The group's title bar: grip, name + rename, mode toggle, cost, ungroup.
@@ -1114,12 +518,12 @@ class PowersSection(TitledSection):
         The bar carries no activation control of its own — it is a plain widget, so a
         click on it falls through to the group card, which is the switch.
         """
-        header = _GroupHeader()
+        header = GroupHeader()
         header.powerDropped.connect(lambda src, gid=group.id: self._on_combine(src, gid))
         row = QHBoxLayout(header)
         row.setContentsMargins(0, 0, 0, 0)
 
-        grip = _DragHandle()
+        grip = DragHandle()
         grip.setToolTip("Drag to move this group, or drop a power here to group it with this one")
         grip.dragStarted.connect(card.start_drag)
         row.addWidget(grip)
@@ -1242,7 +646,7 @@ class PowersSection(TitledSection):
 
     def _arm_activation(
         self,
-        card: _DraggableCard,
+        card: DraggableCard,
         node: PowerNode,
         parent: PowerGroup | None,
         interactive: bool,
@@ -1250,7 +654,7 @@ class PowersSection(TitledSection):
         """Make the card its power's switch, if the power has one to offer.
 
         The card *is* the control — there is no separate checkbox — so the whole frame
-        becomes the click target, and says so (see :meth:`_DraggableCard.set_clickable`).
+        becomes the click target, and says so (see :meth:`DraggableCard.set_clickable`).
         ``interactive`` is ``False`` for a card inside a switched-off Linked group, which
         still shows its state but can't be clicked back on past its group.
         """
@@ -1262,7 +666,7 @@ class PowersSection(TitledSection):
         card.clicked.connect(lambda n=node, p=parent, r=role: self._on_card_clicked(n, p, r))
 
     def _show_activation(
-        self, card: _DraggableCard, node: PowerNode, parent: PowerGroup | None
+        self, card: DraggableCard, node: PowerNode, parent: PowerGroup | None
     ) -> None:
         """Put the card into its on/off look, easing there when the state just changed.
 
@@ -1293,7 +697,7 @@ class PowersSection(TitledSection):
         ease.valueChanged.connect(lambda value, c=card, i=node.id: self._on_ease(c, i, value))
         ease.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
-    def _on_ease(self, card: _DraggableCard, node_id: str, progress: float) -> None:
+    def _on_ease(self, card: DraggableCard, node_id: str, progress: float) -> None:
         card.set_off_progress(progress)
         self._card_off[node_id] = progress
 
@@ -1350,7 +754,7 @@ class PowersSection(TitledSection):
         The card body doubles as the power's on/off switch — see
         :meth:`_arm_activation` and :meth:`_show_activation`.
         """
-        card = _DraggableCard(power.id)
+        card = DraggableCard(power.id)
         self._arm_activation(card, power, parent, interactive)
         layout = QVBoxLayout(card)
         layout.addWidget(self._header_row(power, card, parent))
@@ -1377,7 +781,7 @@ class PowersSection(TitledSection):
     def _header_row(
         self,
         power: Power,
-        card: _DraggableCard,
+        card: DraggableCard,
         parent: PowerGroup | None,
     ) -> QWidget:
         """Name + PL warning on the left; the cost and edit/remove chrome on the right,
@@ -1393,7 +797,7 @@ class PowersSection(TitledSection):
         layout = QHBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        grip = _DragHandle()
+        grip = DragHandle()
         grip.dragStarted.connect(card.start_drag)
         layout.addWidget(grip)
         grip.setVisible(not self._locked)
@@ -1457,139 +861,16 @@ class PowersSection(TitledSection):
         remove.setVisible(not self._locked)
         return host
 
-    # -- effect summary (name + extras/flaws + game terms) ----------------
+    # -- effect summary and dice footer -----------------------------------
     def _effects_block(self, power: Power) -> QWidget | None:
-        """A stacked, per-effect summary; ``None`` for a power with no effects.
+        """The per-effect summary — each effect's extras/flaws beside its game terms.
 
-        A composite power leads with its structure line (what Linked or Array means for
-        the effects below), which used to live only in the card's hover tooltip.
+        Drawn by :mod:`mm_companion.ui.cards.effects`, which the Equipment block
+        renders its items with too: an item wraps a real :class:`Power`, so both
+        cards show the same breakdown from the same code.
         """
-        if not power.effects:
-            return None
-        host = QWidget()
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(6, 0, 0, 0)
-        layout.setSpacing(3)
-        header = self._structure_header(power)
-        if header:
-            line = QLabel(header)
-            line.setStyleSheet(muted_style(italic=True))
-            layout.addWidget(line)
-        for index, effect in enumerate(power.effects):
-            layout.addWidget(self._effect_summary(power, effect, index))
-        return host
+        return effects_block(power, self._character, self._data)
 
-    def _effect_summary(self, power: Power, effect: PowerEffectInstance, index: int) -> QWidget:
-        """One effect: its name and effective rank, a composite role note, then its
-        attached extras (green) and flaws (red) *beside* its game-term table.
-
-        The two sit side by side rather than stacked: what a player bought (the
-        modifiers) and what it costs them at the table (the terms) are read together,
-        and a card is a wide, shallow thing, so the width is there for the taking.
-        """
-        box = QWidget()
-        layout = QVBoxLayout(box)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        title = QLabel(self._effect_title(effect))
-        title.setStyleSheet(BOLD_STYLE)
-        header.addWidget(title)
-        note = self._role_note(power, index)
-        if note:
-            role = QLabel(note)
-            role.setStyleSheet(muted_style(italic=True))
-            header.addWidget(role)
-        header.addStretch()
-        layout.addLayout(header)
-
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(10)
-        modifiers = self._modifiers_column(effect)
-        if modifiers is not None:
-            body.addWidget(modifiers, _MODIFIER_STRETCH)
-        # An effect with nothing bought onto it has no column to sit beside, so the
-        # terms take the whole width rather than leaving a third of the card blank.
-        body.addLayout(self._terms_grid(effect), _TERMS_STRETCH)
-        layout.addLayout(body)
-        return box
-
-    def _modifiers_column(self, effect: PowerEffectInstance) -> QWidget | None:
-        """The effect's extras (green) over its flaws (red); ``None`` when it has neither."""
-        extras = self._modifier_names(effect.extras)
-        flaws = self._modifier_names(effect.flaws)
-        if not extras and not flaws:
-            return None
-        column = QWidget()
-        layout = QVBoxLayout(column)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        for caption, names, token in (
-            ("Extras: ", extras, "tint.better"),
-            ("Flaws: ", flaws, "tint.worse"),
-        ):
-            if not names:
-                continue
-            label = QLabel(caption + ", ".join(names))
-            label.setWordWrap(True)
-            label.setStyleSheet(tinted_style(token, bold=False))
-            layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignTop)
-        layout.addStretch()
-        return column
-
-    def _terms_grid(self, effect: PowerEffectInstance) -> QGridLayout:
-        """The effect's game terms as a compact, always-visible label/value table.
-
-        The same rows the Power Constructor's ``PowerTermsView`` shows — Type, Range,
-        Action, Duration, checks, measures, derived readouts — but typeset to recede:
-        small text, muted labels, two pairs per line so the table stays short. A value a
-        modifier changed keeps its green/red tint (with the base value on its tooltip),
-        because that is the part worth noticing at a glance.
-        """
-        attack_bonus = effect_attack_skill_bonus(effect, self._character, self._data)
-        rows = effect_stat_rows(effect, self._data, self._character, attack_bonus)
-        grid = build_terms_grid(rows, _terms_style())
-        grid.setContentsMargins(0, 1, 0, 0)
-        grid.setVerticalSpacing(0)
-        return grid
-
-    def _effect_title(self, effect: PowerEffectInstance) -> str:
-        """``"Damage 8"`` — the effect's name at its effective rank (a Strength-Based
-        Damage folds in the wielder's Strength, matching the constructor)."""
-        base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
-        rank = effect_effective_rank(effect, self._data, self._character)
-        return f"{base.name if base else effect.effect_id} {rank}"
-
-    def _modifier_names(self, selections: list[ModifierSelection]) -> list[str]:
-        """Resolve each selection to its modifier name, tagging a ranked one taken
-        above rank 1 with its rank (e.g. ``"Accurate ×2"``) and a modifier with a
-        typed free-text detail with it (e.g. ``"Limited (only at night)"``)."""
-        catalog = self._data.modifier_catalog()
-        names: list[str] = []
-        for selection in selections:
-            modifier = catalog.get(selection.modifier_id)
-            if modifier is None:
-                continue
-            names.append(modifier_label(modifier, selection, rank_sep=" ×"))
-        return names
-
-    def _role_note(self, power: Power, index: int) -> str:
-        """A composite effect's part: ``"base"``/``"alternate …"`` for an array or
-        ``"linked"``; empty for a single or independent-multi effect."""
-        if len(power.effects) < 2:
-            return ""
-        if power.structure == STRUCTURE_LINKED:
-            return "linked"
-        if power.structure == STRUCTURE_ARRAY:
-            if index == array_base_index(power, self._data, self._character):
-                return "base"
-            return f"alternate ({array_alternate_cost(self._data)} pt)"
-        return ""
-
-    # -- roll block -------------------------------------------------------
     def _rolls_block(self, power: Power) -> QWidget | None:
         """The card's dice footer, one line per roll; ``None`` when nothing is rolled.
 
@@ -1597,77 +878,24 @@ class PowersSection(TitledSection):
         gets no footer at all rather than a line saying so: the absence *is* the answer,
         and a placeholder on every passive power is pure noise.
 
-        A line the *wielder* rolls is a click target end to end — a bordered strip
-        that lights on hover, so what can be rolled is obvious without hunting for a
-        small glyph. A resistance line is not, because the wielder never makes their
-        own target's save. That roll reaches the person who does make it as the
-        follow-up chip on the attack's history card. The line still reads (it is what
-        the power does), indented to keep the column of text straight.
-
-        Consuming the press is the load-bearing part, and :class:`_RollLine` explains
-        why: the card underneath is the power's on/off switch.
+        A pin names a roll by *which entry of* :func:`~mm_companion.core.rules.
+        power_rolls` it is, so the footer is handed the power's id and turns a line
+        index into a :class:`~mm_companion.core.rules.pins.PinRef` — including for
+        the resistance line, which the wielder never rolls but which is the number a
+        GM most wants on a mook's card.
         """
         specs = self._rolls(power)
         if not specs:
             return None
-        host = QWidget()
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(0, 0, 0, 0)
-        # Enough of a gap that two neighbouring lines' borders read as two targets
-        # rather than one box with a rule through it.
-        layout.setSpacing(int(theme.metric("space.xs")))
-        for index, spec in enumerate(specs):
-            layout.addWidget(self._roll_line(spec, power, index))
-        return host
-
-    def _roll_line(self, spec, power: Power, index: int) -> QWidget:
-        """One dice-footer line: its ``🎲``, if the wielder rolls it, then its text.
-
-        *power* and *index* are carried only so the line can be pinned to a GM
-        card — a :class:`~mm_companion.core.rules.pins.PinRef` names a roll by
-        which entry of :func:`~mm_companion.core.rules.power_rolls` it is. The
-        **resistance** line is pinnable too, even though the wielder never rolls
-        it: "what save does this force" is the number a GM most wants on a mook's
-        card.
-        """
-        rollable = not spec.rolled_by_target
-        row = _RollLine(rollable)
-        row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        row.customContextMenuRequested.connect(
-            lambda pos, r=row, pid=power.id, i=index: self._show_roll_pin_menu(r, pos, pid, i)
+        footer = RollsFooter(
+            specs,
+            pins=self._pins,
+            pin_ref=lambda index, pid=power.id: PinRef(PIN_POWER, pid, index),
         )
-        line = QHBoxLayout(row)
-        pad = int(theme.metric("space.xs"))
-        line.setContentsMargins(pad, pad, pad, pad)
-        line.setSpacing(int(theme.metric("space.sm")))
-        glyph_width = int(theme.metric("column.roll-button"))
-
-        if rollable:
-            row.setToolTip(spec.hint or f"Roll {spec.label}")
-            row.clicked.connect(lambda s=spec: self.rollRequested.emit(s))
-            glyph = QLabel("🎲")
-            glyph.setFixedWidth(glyph_width)
-            glyph.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-            line.addWidget(glyph)
-        else:
-            # No die, but the same indent, so the lines read as one column.
-            line.addSpacing(glyph_width)
-
-        label = QLabel(spec.label)
-        label.setWordWrap(True)
-        label.setToolTip(spec.hint)
-        label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
-        line.addWidget(label, stretch=1)
-        return row
-
-    def _show_roll_pin_menu(self, row: QWidget, pos, power_id: str, index: int) -> None:
-        if not self._pins.enabled:
-            return
-        ref = PinRef(PIN_POWER, power_id, index)
-        sink = self.unpinRequested if self._pins.is_pinned(ref) else self.pinRequested
-        menu = QMenu(row)
-        menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
-        menu.exec(row.mapToGlobal(pos))
+        footer.rollRequested.connect(self.rollRequested)
+        footer.pinRequested.connect(self.pinRequested)
+        footer.unpinRequested.connect(self.unpinRequested)
+        return footer
 
     def set_pin_target(self, enabled: bool) -> None:
         """Whether a card's roll lines offer to pin at all."""
@@ -1686,17 +914,6 @@ class PowersSection(TitledSection):
         """One entry per die roll the power calls for; see module-level
         :func:`roll_lines`."""
         return roll_lines(power, self._character, self._data)
-
-    @staticmethod
-    def _structure_header(power: Power) -> str:
-        """What a composite power's structure means, as the card's lead-in line."""
-        if len(power.effects) < 2:
-            return ""
-        if power.structure == STRUCTURE_LINKED:
-            return "Linked (all effects activate together)"
-        if power.structure == STRUCTURE_ARRAY:
-            return "Array (one effect active at a time)"
-        return ""
 
     def _remove_power(self, power: Power) -> None:
         located = self._locate(power.id)

@@ -1,28 +1,14 @@
 {
   "_meta": {
-    "description": "Equipment catalog for Mutants & Masterminds 4e character creation. All 'description' fields are short, original text written for this project's UI (always-visible label copy), not taken from the rulebook. Mechanical fields (category, cost, costKind) reflect game rules/facts, not copyrighted prose. Companion to equipment-design.json (full mechanics + implementation tags) and mm-equipment-design.md.",
-    "currency": "Equipment Points, granted 5 per rank of advantages:equipment.",
-    "equipmentPointsByAdvantageRank": {
-      "1": 5,
-      "2": 10,
-      "3": 15,
-      "4": 20,
-      "5": 25,
-      "6": 30,
-      "7": 35,
-      "8": 40,
-      "9": 45,
-      "10": 50,
-      "11": 55,
-      "12": 60,
-      "13": 65,
-      "14": 70,
-      "15": 75,
-      "16": 80,
-      "17": 85,
-      "18": 90,
-      "19": 95,
-      "20": 100
+    "description": "Equipment catalog for Mutants & Masterminds 4e character creation. All 'description' fields are short, original text written for this project's UI (always-visible label copy), not taken from the rulebook. Mechanical fields (category, cost, costKind, effects, modifiers, grants, critical, patterns, implementation) reflect game rules/facts, not copyrighted prose. Companion to docs/design-data/equipment-design.json (the full design reference, including per-item notes and the vehicle/installation trait tables) and docs/mm-equipment-design.md.",
+    "currency": {
+      "name": "Equipment Point",
+      "abbreviation": "EP",
+      "source": "advantages:equipment",
+      "pointsPerAdvantageRank": 5,
+      "note": "Equipment is a bundle of power effects carried at the top tier of the Removable flaw. Rather than applying that flaw item by item, the Equipment advantage hands out 5 Equipment Points per rank and items are priced at their undiscounted effect cost. The flaw's limitations still apply in play even though its discount is not recomputed.",
+      "reconfigure": "At the start of each adventure, or between scenes with access to a headquarters or cache.",
+      "notAPower": "Equipment does not count as a power. A character built purely from equipment can still be described as having no powers."
     },
     "categoryKey": {
       "utility": "A small gadget, mostly built from the Feature effect or a low-rank utility effect",
@@ -37,14 +23,69 @@
       "vehicle": "A built platform with its own Size/Strength/Toughness/Defense/Speed trait costs",
       "installation": "A built fixed structure with its own Size/Toughness/Feature trait costs"
     },
+    "equipmentCategoriesNote": "How the character sheet's Equipment block groups its cards, in display order. 'id' matches an item's 'category'; 'title' is the heading shown above that group. A mod adding a category should add a row here so its items get a group of their own instead of being folded into the last one.",
+    "equipmentCategories": [
+      {
+        "id": "close_weapon",
+        "title": "Close Weapons"
+      },
+      {
+        "id": "ranged_weapon",
+        "title": "Ranged Weapons"
+      },
+      {
+        "id": "accessory",
+        "title": "Accessories"
+      },
+      {
+        "id": "grenade",
+        "title": "Grenades"
+      },
+      {
+        "id": "explosive",
+        "title": "Explosives"
+      },
+      {
+        "id": "armor",
+        "title": "Armor"
+      },
+      {
+        "id": "shield",
+        "title": "Shields"
+      },
+      {
+        "id": "utility",
+        "title": "Utility"
+      },
+      {
+        "id": "kit",
+        "title": "Kits"
+      },
+      {
+        "id": "vehicle",
+        "title": "Vehicles"
+      },
+      {
+        "id": "installation",
+        "title": "Installations"
+      }
+    ],
     "costKindKey": {
       "fixed": "A flat Equipment Point cost",
       "ranked": "Cost varies over a small number of defined ranks",
       "per_rank": "1 Equipment Point per rank",
       "built": "Assembled from components or trait tables; no single printed cost"
     },
-    "stackingNote": "Equipment bonuses never stack with each other or with other bonus sources — only the highest applies.",
-    "reconfigureNote": "Equipment Points can be reallocated at the start of each adventure, or between scenes with access to a headquarters or cache."
+    "stackingRule": {
+      "rule": "Equipment bonuses do not stack with each other or with bonuses from other sources — only the single highest applicable bonus applies.",
+      "appliesTo": [
+        "resistances.toughness",
+        "combat.defense",
+        "skill bonuses",
+        "sense qualities"
+      ],
+      "engineNote": "Compute equipment contributions as max(), not sum(), per target stat, and then take max() again against non-equipment sources. This is why a character with high native Protection gains nothing from armour."
+    }
   },
   "equipment": [
     {
@@ -54,7 +95,17 @@
       "subcategory": "defensive",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Grants +5 on resistance checks against toxins."
+      "description": "Grants +5 on resistance checks against toxins.",
+      "patterns": [
+        "consumable",
+        "conditional_bonus_item"
+      ],
+      "implementation": {
+        "target": "resistances.fortitude_vs_toxin",
+        "bonus": 5,
+        "conditionFlag": "applied_antitoxin",
+        "consumedOnUse": true
+      }
     },
     {
       "id": "flare_goggles",
@@ -63,7 +114,25 @@
       "subcategory": "defensive",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Protective eyewear granting Resistance to visual Dazzle effects."
+      "description": "Protective eyewear granting Resistance to visual Dazzle effects.",
+      "effects": [
+        {
+          "effect": "effects:immunity",
+          "rank": 1,
+          "config": {
+            "scope": "resistance",
+            "target": "affliction:dazzle(visual)"
+          }
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.vs_visual_dazzle",
+        "kind": "resistance",
+        "requiresWorn": true
+      }
     },
     {
       "id": "fire_extinguisher",
@@ -72,7 +141,17 @@
       "subcategory": "defensive",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Puts out a small fire as a simple action; holds two charges."
+      "description": "Puts out a small fire as a simple action; holds two charges.",
+      "patterns": [
+        "consumable"
+      ],
+      "implementation": {
+        "action": "simple",
+        "maxFireRank": 2,
+        "radiusDistanceRank": 0,
+        "charges": 2,
+        "rechargeable": "between adventures"
+      }
     },
     {
       "id": "gas_mask",
@@ -81,7 +160,24 @@
       "subcategory": "defensive",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Filter mask granting Immunity to inhaled and face-directed gases."
+      "description": "Filter mask granting Immunity to inhaled and face-directed gases.",
+      "effects": [
+        {
+          "effect": "effects:immunity",
+          "config": {
+            "scope": "descriptor",
+            "target": "inhaled gases"
+          }
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "immunities",
+        "value": "inhaled_gases",
+        "requiresWorn": true
+      }
     },
     {
       "id": "rebreather",
@@ -90,7 +186,27 @@
       "subcategory": "defensive",
       "cost": 2,
       "costKind": "fixed",
-      "description": "A small air supply granting Immunity to Suffocation for a few minutes."
+      "description": "A small air supply granting Immunity to Suffocation for a few minutes.",
+      "effects": [
+        {
+          "effect": "effects:immunity",
+          "config": {
+            "scope": "effect",
+            "target": "affliction:suffocation"
+          }
+        }
+      ],
+      "patterns": [
+        "passive_trait_item",
+        "consumable"
+      ],
+      "implementation": {
+        "target": "immunities",
+        "value": "suffocation",
+        "requiresWorn": true,
+        "durationMinutes": "few",
+        "exhaustionIsComplication": true
+      }
     },
     {
       "id": "binoculars",
@@ -99,7 +215,30 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Lets you make visual Perception checks at greater distance."
+      "description": "Lets you make visual Perception checks at greater distance.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_senses",
+          "rank": 1,
+          "config": {
+            "senses": [
+              {
+                "quality": "extended",
+                "sense": "vision",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ],
+      "patterns": [
+        "sense_item"
+      ],
+      "implementation": {
+        "target": "senses.vision.extended",
+        "ranks": 1,
+        "requiresHeld": true
+      }
     },
     {
       "id": "burglary_tools",
@@ -108,7 +247,15 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Lock picks and bypass tools; removes the no-tools penalty for those tasks."
+      "description": "Lock picks and bypass tools; removes the no-tools penalty for those tasks.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:technology",
+        "scope": "locks_and_security",
+        "penaltyRemoved": 5
+      }
     },
     {
       "id": "commlink",
@@ -117,7 +264,30 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Concealable radio earpiece for short-range team communication."
+      "description": "Concealable radio earpiece for short-range team communication.",
+      "effects": [
+        {
+          "effect": "effects:communication",
+          "rank": 1,
+          "config": {
+            "medium": "radio"
+          }
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:limited",
+          "note": "One-Way"
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "communication.radio",
+        "rank": 1,
+        "oneWay": true
+      }
     },
     {
       "id": "cutting_torch",
@@ -126,7 +296,29 @@
       "subcategory": "general",
       "cost": 2,
       "costKind": "fixed",
-      "description": "High-temperature flame that cuts through most materials, given time."
+      "description": "High-temperature flame that cuts through most materials, given time.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "descriptors": [
+            "heat"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:penetrating",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "objectsOnly": false
+      }
     },
     {
       "id": "evidence_kit",
@@ -135,8 +327,17 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "ranked",
+      "costNote": "1-2 points",
       "description": "Field tools for gathering evidence; a second rank adds a portable lab.",
-      "costNote": "1-2 points"
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:investigation",
+        "rank1Scope": "gather_evidence",
+        "rank2Scope": "analyze_evidence",
+        "maxRank": 2
+      }
     },
     {
       "id": "first_aid_kit",
@@ -145,7 +346,14 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Supplies and tools for using the Treatment skill."
+      "description": "Supplies and tools for using the Treatment skill.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:treatment",
+        "penaltyRemoved": 5
+      }
     },
     {
       "id": "flashlight",
@@ -154,7 +362,20 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Negates darkness concealment within a cone of light."
+      "description": "Negates darkness concealment within a cone of light.",
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Cone"
+        }
+      ],
+      "patterns": [
+        "utility_effect_item"
+      ],
+      "implementation": {
+        "counters": "concealment(darkness)",
+        "areaShape": "cone"
+      }
     },
     {
       "id": "mini_computer",
@@ -163,7 +384,15 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "A wearable computer providing the tools for Technology checks."
+      "description": "A wearable computer providing the tools for Technology checks.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:technology",
+        "scope": "computers",
+        "penaltyRemoved": 5
+      }
     },
     {
       "id": "multi_tool",
@@ -172,7 +401,18 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Folding tool set; softens the improvised-tools penalty from -5 to -2."
+      "description": "Folding tool set; softens the improvised-tools penalty from -5 to -2.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "*",
+        "penaltyReplacement": {
+          "from": -5,
+          "to": -2
+        },
+        "gmDiscretion": true
+      }
     },
     {
       "id": "night_vision_goggles",
@@ -181,7 +421,29 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Light-gathering goggles granting Low-Light Vision while worn."
+      "description": "Light-gathering goggles granting Low-Light Vision while worn.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_senses",
+          "rank": 1,
+          "config": {
+            "senses": [
+              {
+                "quality": "low_light_vision",
+                "sense": "vision",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ],
+      "patterns": [
+        "sense_item"
+      ],
+      "implementation": {
+        "target": "senses.vision.low_light",
+        "requiresWorn": true
+      }
     },
     {
       "id": "restraints",
@@ -190,7 +452,20 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Cuffs for a helpless target: DC 20 to slip, Toughness 5 to break."
+      "description": "Cuffs for a helpless target: DC 20 to slip, Toughness 5 to break.",
+      "patterns": [
+        "utility_effect_item",
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "requiresTargetCondition": [
+          "conditions:defenseless",
+          "unresisting"
+        ],
+        "escapeDC": 20,
+        "escapeSkill": "skills:sleight_of_hand",
+        "toughness": 5
+      }
     },
     {
       "id": "tracer",
@@ -199,7 +474,25 @@
       "subcategory": "general",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Adhesive radio transmitter you plant on a target to follow it."
+      "description": "Adhesive radio transmitter you plant on a target to follow it.",
+      "effects": [
+        {
+          "effect": "effects:communication",
+          "rank": 1,
+          "config": {
+            "medium": "radio"
+          }
+        }
+      ],
+      "patterns": [
+        "utility_effect_item"
+      ],
+      "implementation": {
+        "plantCheck": "attack check (action time) or skills:sleight_of_hand (narrative time)",
+        "noticeDC": "higher of 20 or the planter's Sleight of Hand result",
+        "noticeSkill": "skills:perception",
+        "communicationRank": 1
+      }
     },
     {
       "id": "climbing_cable",
@@ -208,7 +501,28 @@
       "subcategory": "movement",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Winch-driven cable that walks you up sheer walls."
+      "description": "Winch-driven cable that walks you up sheer walls.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_movement",
+          "rank": 1,
+          "config": {
+            "modes": [
+              {
+                "mode": "wall_crawling",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ],
+      "patterns": [
+        "movement_item"
+      ],
+      "implementation": {
+        "target": "movement.wall_crawling",
+        "ranks": 1
+      }
     },
     {
       "id": "climbing_gear",
@@ -217,7 +531,15 @@
       "subcategory": "movement",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Ropes and hardware giving +2 on Athletics checks to climb."
+      "description": "Ropes and hardware giving +2 on Athletics checks to climb.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:athletics",
+        "scope": "climb",
+        "bonus": 2
+      }
     },
     {
       "id": "glider",
@@ -226,7 +548,27 @@
       "subcategory": "movement",
       "cost": 6,
       "costKind": "fixed",
-      "description": "A deployable parawing granting gliding flight."
+      "description": "A deployable parawing granting gliding flight.",
+      "effects": [
+        {
+          "effect": "effects:flight",
+          "rank": 6
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:limited",
+          "note": "Gliding"
+        }
+      ],
+      "patterns": [
+        "movement_item"
+      ],
+      "implementation": {
+        "target": "movement.flight",
+        "ranks": 6,
+        "gliding": true
+      }
     },
     {
       "id": "parachute",
@@ -235,7 +577,27 @@
       "subcategory": "movement",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Slows a fall to a safe landing speed."
+      "description": "Slows a fall to a safe landing speed.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_movement",
+          "rank": 1,
+          "config": {
+            "modes": [
+              {
+                "mode": "safe_fall",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ],
+      "patterns": [
+        "movement_item"
+      ],
+      "implementation": {
+        "target": "movement.safe_fall"
+      }
     },
     {
       "id": "roller_skates",
@@ -244,7 +606,16 @@
       "subcategory": "movement",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Wheeled shoes giving +5 on Athletics checks to move faster."
+      "description": "Wheeled shoes giving +5 on Athletics checks to move faster.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:athletics",
+        "scope": "move_faster",
+        "bonus": 5,
+        "requiresSuitableSurface": true
+      }
     },
     {
       "id": "skateboard",
@@ -253,7 +624,16 @@
       "subcategory": "movement",
       "cost": 1,
       "costKind": "fixed",
-      "description": "A board giving +5 on Athletics checks to move faster."
+      "description": "A board giving +5 on Athletics checks to move faster.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:athletics",
+        "scope": "move_faster",
+        "bonus": 5,
+        "requiresSuitableSurface": true
+      }
     },
     {
       "id": "stealth_suit",
@@ -262,7 +642,16 @@
       "subcategory": "movement",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Camouflage clothing giving +5 on Stealth checks to stay unseen."
+      "description": "Camouflage clothing giving +5 on Stealth checks to stay unseen.",
+      "patterns": [
+        "skill_aid"
+      ],
+      "implementation": {
+        "skill": "skills:stealth",
+        "scope": "remain_unseen",
+        "bonus": 5,
+        "requiresWorn": true
+      }
     },
     {
       "id": "swing_line",
@@ -271,7 +660,27 @@
       "subcategory": "movement",
       "cost": 2,
       "costKind": "fixed",
-      "description": "Grapple gun or line projector granting the Swinging movement mode."
+      "description": "Grapple gun or line projector granting the Swinging movement mode.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_movement",
+          "rank": 2,
+          "config": {
+            "modes": [
+              {
+                "mode": "swinging",
+                "tier": 2
+              }
+            ]
+          }
+        }
+      ],
+      "patterns": [
+        "movement_item"
+      ],
+      "implementation": {
+        "target": "movement.swinging"
+      }
     },
     {
       "id": "bicycle",
@@ -280,7 +689,20 @@
       "subcategory": "movement",
       "cost": 1,
       "costKind": "fixed",
-      "description": "A bicycle: +1 Speed rank, not really a vehicle."
+      "description": "A bicycle: +1 Speed rank, not really a vehicle.",
+      "effects": [
+        {
+          "effect": "effects:speed",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "movement_item"
+      ],
+      "implementation": {
+        "target": "movement.speed",
+        "ranks": 1
+      }
     },
     {
       "id": "axe",
@@ -289,7 +711,37 @@
       "subcategory": null,
       "cost": 5,
       "costKind": "fixed",
-      "description": "Chopping blade; crits on 19-20 and shatters what it hits."
+      "description": "Chopping blade; crits on 19-20 and shatters what it hits.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": true,
+          "descriptors": [
+            "slashing"
+          ]
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical",
+          "advantages:improved_smash"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "brass_knuckles",
@@ -298,7 +750,31 @@
       "subcategory": null,
       "cost": 1,
       "costKind": "fixed",
-      "description": "Metal knuckles adding +1 to unarmed damage."
+      "description": "Metal knuckles adding +1 to unarmed damage.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": false,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "chain",
@@ -307,7 +783,43 @@
       "subcategory": null,
       "cost": 6,
       "costKind": "fixed",
-      "description": "A weighted length of chain that grabs, trips, and reaches."
+      "description": "A weighted length of chain that grabs, trips, and reaches.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": false,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:reach",
+          "rank": 2
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_grab",
+          "advantages:improved_trip"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "chainsaw",
@@ -316,7 +828,42 @@
       "subcategory": null,
       "cost": 9,
       "costKind": "fixed",
-      "description": "A power tool turned weapon; brutal and armor-chewing."
+      "description": "A power tool turned weapon; brutal and armor-chewing.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 6,
+          "strengthBased": false,
+          "descriptors": [
+            "slashing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:penetrating",
+          "rank": 2
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "club",
@@ -325,7 +872,31 @@
       "subcategory": null,
       "cost": 2,
       "costKind": "fixed",
-      "description": "The simplest bludgeon; batons are often paired."
+      "description": "The simplest bludgeon; batons are often paired.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": true,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "dagger",
@@ -334,7 +905,36 @@
       "subcategory": null,
       "cost": 2,
       "costKind": "fixed",
-      "description": "A short blade with a wide critical threat range."
+      "description": "A short blade with a wide critical threat range.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": true,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "flail",
@@ -343,7 +943,43 @@
       "subcategory": null,
       "cost": 5,
       "costKind": "fixed",
-      "description": "A weight on a chain that disarms and reaches."
+      "description": "A weight on a chain that disarms and reaches.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": true,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:reach",
+          "rank": 1
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical",
+          "advantages:improved_disarm"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "garrote",
@@ -352,7 +988,23 @@
       "subcategory": null,
       "cost": 1,
       "costKind": "fixed",
-      "description": "An assassin's cord for choking a grabbed victim."
+      "description": "An assassin's cord for choking a grabbed victim.",
+      "grants": {
+        "advantages": [
+          "advantages:sleeper_hold"
+        ]
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "requiresGrab": true,
+        "sleeperHoldOverride": {
+          "thirdDegree": "conditions:incapacitated",
+          "thirdDegreeNote": "Unconscious rather than Asleep; continued holding past that imposes Dying."
+        }
+      }
     },
     {
       "id": "hammer",
@@ -361,7 +1013,36 @@
       "subcategory": null,
       "cost": 4,
       "costKind": "fixed",
-      "description": "A heavy war hammer, excellent for smashing objects."
+      "description": "A heavy war hammer, excellent for smashing objects.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": true,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_smash"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "hook_sword",
@@ -370,7 +1051,43 @@
       "subcategory": null,
       "cost": 7,
       "costKind": "fixed",
-      "description": "Paired hooked blades for tripping, disarming, and reach."
+      "description": "Paired hooked blades for tripping, disarming, and reach.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": true,
+          "descriptors": [
+            "slashing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:reach",
+          "rank": 1
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_disarm",
+          "advantages:improved_trip"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "javelin",
@@ -379,7 +1096,41 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A light spear, best thrown but usable up close."
+      "description": "A light spear, best thrown but usable up close.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": true,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:thrown"
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "katar",
@@ -388,7 +1139,37 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A punch dagger that drives through armor."
+      "description": "A punch dagger that drives through armor.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": true,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:penetrating",
+          "rank": 1
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "mace",
@@ -397,7 +1178,36 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A flanged or spiked head on a haft."
+      "description": "A flanged or spiked head on a haft.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": true,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "pepper_spray",
@@ -406,7 +1216,45 @@
       "subcategory": null,
       "cost": 4,
       "costKind": "fixed",
-      "description": "A chemical spray that blinds at arm's length."
+      "description": "A chemical spray that blinds at arm's length.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 4,
+          "configuration": "dazzle",
+          "resistance": "Fortitude",
+          "senseAffected": "vision",
+          "degrees": [
+            [
+              "disabled"
+            ],
+            [
+              "unaware"
+            ],
+            [
+              "extend_overcome_interval"
+            ]
+          ],
+          "descriptors": [
+            "chemical"
+          ]
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard",
+        "senseDependent": true
+      }
     },
     {
       "id": "sai",
@@ -415,7 +1263,38 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "Tapering batons that catch and bind opposing weapons."
+      "description": "Tapering batons that catch and bind opposing weapons.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": true,
+          "descriptors": [
+            "bludgeoning",
+            "piercing"
+          ]
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_disarm",
+          "advantages:weapon_bind"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "sash",
@@ -424,7 +1303,25 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A length of cloth wielded to entangle at a distance."
+      "description": "A length of cloth wielded to entangle at a distance.",
+      "modifiers": [
+        {
+          "modifier": "modifiers:reach",
+          "rank": 1
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_grab"
+        ]
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "noDamageEffect": true
+      }
     },
     {
       "id": "spear",
@@ -433,7 +1330,45 @@
       "subcategory": null,
       "cost": 4,
       "costKind": "fixed",
-      "description": "A pointed haft with reach; throwable."
+      "description": "A pointed haft with reach; throwable.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": true,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:reach",
+          "rank": 1
+        },
+        {
+          "modifier": "modifiers:thrown"
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "staff",
@@ -442,7 +1377,36 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A long wooden or metal pole, struck at two targets."
+      "description": "A long wooden or metal pole, struck at two targets.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": true,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:split"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "stun_gun",
@@ -451,7 +1415,43 @@
       "subcategory": null,
       "cost": 5,
       "costKind": "fixed",
-      "description": "A contact electroshock weapon."
+      "description": "A contact electroshock weapon.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 5,
+          "configuration": "stun",
+          "resistance": "Fortitude",
+          "degrees": [
+            [
+              "dazed"
+            ],
+            [
+              "stunned"
+            ],
+            [
+              "incapacitated"
+            ]
+          ],
+          "descriptors": [
+            "electrical"
+          ]
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "sword",
@@ -460,7 +1460,31 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A long blade for slashing or thrusting."
+      "description": "A long blade for slashing or thrusting.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": true,
+          "descriptors": [
+            "slashing"
+          ]
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "tonfa",
@@ -469,7 +1493,29 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A side-handled baton that guards as well as strikes."
+      "description": "A side-handled baton that guards as well as strikes.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": true,
+          "descriptors": []
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "trident",
@@ -478,7 +1524,43 @@
       "subcategory": null,
       "cost": 5,
       "costKind": "fixed",
-      "description": "A three-tined spear with reach and disarming tines."
+      "description": "A three-tined spear with reach and disarming tines.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": true,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:reach",
+          "rank": 1
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical",
+          "advantages:improved_disarm"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "war_fan",
@@ -487,7 +1569,37 @@
       "subcategory": null,
       "cost": 3,
       "costKind": "fixed",
-      "description": "A bladed folding fan, easily hidden."
+      "description": "A bladed folding fan, easily hidden.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": true,
+          "descriptors": [
+            "slashing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:subtle",
+          "rank": 1
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "whip",
@@ -496,7 +1608,43 @@
       "subcategory": null,
       "cost": 5,
       "costKind": "fixed",
-      "description": "A long lash that snags and trips at range."
+      "description": "A long lash that snags and trips at range.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": false,
+          "descriptors": [
+            "slashing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:reach",
+          "rank": 2
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_disarm",
+          "advantages:improved_trip"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "close",
+        "action": "standard"
+      }
     },
     {
       "id": "holdout_pistol",
@@ -505,7 +1653,40 @@
       "subcategory": "firearms",
       "cost": 5,
       "costKind": "fixed",
-      "description": "A palm-sized backup gun, easy to hide."
+      "description": "A palm-sized backup gun, easy to hide.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:subtle",
+          "rank": 1
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "light_pistol",
@@ -514,7 +1695,36 @@
       "subcategory": "firearms",
       "cost": 6,
       "costKind": "fixed",
-      "description": "A standard semi-automatic sidearm."
+      "description": "A standard semi-automatic sidearm.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "heavy_pistol",
@@ -523,7 +1733,36 @@
       "subcategory": "firearms",
       "cost": 8,
       "costKind": "fixed",
-      "description": "A high-caliber handgun."
+      "description": "A high-caliber handgun.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 4,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "rifle",
@@ -532,7 +1771,36 @@
       "subcategory": "firearms",
       "cost": 8,
       "costKind": "fixed",
-      "description": "A long-barreled two-handed firearm."
+      "description": "A long-barreled two-handed firearm.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 4,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "rifle_high_power",
@@ -541,7 +1809,36 @@
       "subcategory": "firearms",
       "cost": 10,
       "costKind": "fixed",
-      "description": "A heavier-caliber rifle."
+      "description": "A heavier-caliber rifle.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "assault_rifle",
@@ -550,7 +1847,39 @@
       "subcategory": "firearms",
       "cost": 15,
       "costKind": "fixed",
-      "description": "A select-fire military rifle."
+      "description": "A select-fire military rifle.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:multiattack"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "sniper_rifle",
@@ -559,7 +1888,40 @@
       "subcategory": "firearms",
       "cost": 11,
       "costKind": "fixed",
-      "description": "A long-range precision rifle."
+      "description": "A long-range precision rifle.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:extended_range",
+          "rank": 1
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "shotgun",
@@ -568,7 +1930,53 @@
       "subcategory": "firearms",
       "cost": 10,
       "costKind": "fixed",
-      "description": "Fires slugs for full damage or shot for a wider, shallower hit."
+      "description": "Fires slugs for full damage or shot for a wider, shallower hit.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "ammoModes": [
+          {
+            "id": "slug",
+            "label": "Solid slug",
+            "effect": "normal ballistic Damage 5"
+          },
+          {
+            "id": "shot",
+            "label": "Shot",
+            "grants": [
+              "modifiers:accurate"
+            ],
+            "limitedRanks": 2,
+            "limitedNote": "2 ranks of Damage become Limited to targets without Hardened Protection"
+          }
+        ],
+        "switchAmmoAction": "simple"
+      }
     },
     {
       "id": "machine_pistol",
@@ -577,7 +1985,39 @@
       "subcategory": "firearms",
       "cost": 9,
       "costKind": "fixed",
-      "description": "A compact automatic pistol."
+      "description": "A compact automatic pistol.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:multiattack"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "submachine_gun",
@@ -586,7 +2026,39 @@
       "subcategory": "firearms",
       "cost": 12,
       "costKind": "fixed",
-      "description": "An automatic carbine firing pistol rounds."
+      "description": "An automatic carbine firing pistol rounds.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 4,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:multiattack"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "air_gun",
@@ -595,7 +2067,48 @@
       "subcategory": "other_guns",
       "cost": 10,
       "costKind": "fixed",
-      "description": "Fires a blast of compressed air to knock down and stun."
+      "description": "Fires a blast of compressed air to knock down and stun.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 5,
+          "configuration": "stun",
+          "resistance": "Fortitude",
+          "degrees": [
+            [
+              "dazed"
+            ],
+            [
+              "stunned"
+            ],
+            [
+              "incapacitated"
+            ]
+          ],
+          "descriptors": [
+            "concussive"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "dart_gun",
@@ -604,7 +2117,53 @@
       "subcategory": "other_guns",
       "cost": 5,
       "costKind": "fixed",
-      "description": "Fires hypodermic darts carrying drugs or poison."
+      "description": "Fires hypodermic darts carrying drugs or poison.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 5,
+          "configuration": "toxin",
+          "resistance": "Fortitude",
+          "degrees": [
+            [
+              "impaired"
+            ],
+            [
+              "disabled"
+            ],
+            [
+              "incapacitated"
+            ]
+          ],
+          "descriptors": [
+            "chemical"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:resistible",
+          "note": "Toughness first"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "resolution": "Toughness resistance check first (does the dart penetrate?); on failure, Fortitude against the Toxin."
+      }
     },
     {
       "id": "flare_gun",
@@ -613,7 +2172,37 @@
       "subcategory": "other_guns",
       "cost": 2,
       "costKind": "fixed",
-      "description": "A signal flare that lights up the sky."
+      "description": "A signal flare that lights up the sky.",
+      "effects": [
+        {
+          "effect": "effects:environment",
+          "rank": 2,
+          "config": {
+            "hazard": "illumination"
+          }
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "shots": 1,
+        "improvisedAttack": {
+          "damageRank": 4,
+          "descriptors": [
+            "burning",
+            "impact"
+          ],
+          "mayIgnite": true
+        }
+      }
     },
     {
       "id": "paintball_gun",
@@ -622,7 +2211,26 @@
       "subcategory": "other_guns",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Fires gel pellets; harmless unless the load is changed."
+      "description": "Fires gel pellets; harmless unless the load is changed.",
+      "effects": [
+        {
+          "effect": "effects:feature",
+          "rank": 1
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "alternateBuild": "Ranged Affliction when loaded with acid, contact poison, or similar"
+      }
     },
     {
       "id": "bow",
@@ -631,7 +2239,36 @@
       "subcategory": "bows",
       "cost": 6,
       "costKind": "fixed",
-      "description": "A drawn bow; the classic trick-arrow platform."
+      "description": "A drawn bow; the classic trick-arrow platform.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": false,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "crossbow",
@@ -640,7 +2277,41 @@
       "subcategory": "bows",
       "cost": 7,
       "costKind": "fixed",
-      "description": "A mechanical bow with a wider crit range."
+      "description": "A mechanical bow with a wider crit range.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": false,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "blowgun",
@@ -649,7 +2320,50 @@
       "subcategory": "thrown",
       "cost": 4,
       "costKind": "fixed",
-      "description": "Breath-fired darts carrying poison."
+      "description": "Breath-fired darts carrying poison.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 5,
+          "configuration": "toxin",
+          "resistance": "Fortitude",
+          "degrees": [
+            [
+              "impaired"
+            ],
+            [
+              "disabled"
+            ],
+            [
+              "incapacitated"
+            ]
+          ],
+          "descriptors": [
+            "chemical"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:diminished_range",
+          "rank": 1
+        },
+        {
+          "modifier": "modifiers:resistible",
+          "note": "Toughness first"
+        }
+      ],
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "resolution": "Toughness resistance check first; on failure, Fortitude against the Toxin."
+      }
     },
     {
       "id": "bolos",
@@ -658,7 +2372,52 @@
       "subcategory": "thrown",
       "cost": 8,
       "costKind": "fixed",
-      "description": "Weighted cords that tangle a target's legs."
+      "description": "Weighted cords that tangle a target's legs.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 4,
+          "configuration": "snare",
+          "resistance": "Dodge",
+          "degrees": [
+            [
+              "hindered",
+              "vulnerable"
+            ],
+            [
+              "defenseless",
+              "immobile"
+            ]
+          ],
+          "overcome": "skills:sleight_of_hand or Damage vs. Effect DC"
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:extra_condition"
+        },
+        {
+          "modifier": "modifiers:limited",
+          "note": "Limited Degree"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "boomerang",
@@ -667,7 +2426,38 @@
       "subcategory": "thrown",
       "cost": 2,
       "costKind": "fixed",
-      "description": "A thrown blade that returns to your hand."
+      "description": "A thrown blade that returns to your hand.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": false,
+          "descriptors": [
+            "bludgeoning"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "returnsToWielder": true,
+        "tacticalNote": "Commonly used to set up a Feint, striking a Vulnerable target on the return arc next turn."
+      }
     },
     {
       "id": "chakram",
@@ -676,7 +2466,41 @@
       "subcategory": "thrown",
       "cost": 7,
       "costKind": "fixed",
-      "description": "A sharpened throwing ring."
+      "description": "A sharpened throwing ring.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 3,
+          "strengthBased": false,
+          "descriptors": [
+            "slashing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "grants": {
+        "advantages": [
+          "advantages:improved_critical"
+        ]
+      },
+      "critical": {
+        "threatRange": [
+          19,
+          20
+        ],
+        "improvedCriticalRanks": 1
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "javelin_thrown",
@@ -685,7 +2509,36 @@
       "subcategory": "thrown",
       "cost": 4,
       "costKind": "fixed",
-      "description": "A javelin priced as a thrown ranged weapon."
+      "description": "A javelin priced as a thrown ranged weapon.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 2,
+          "strengthBased": false,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "shuriken",
@@ -694,7 +2547,39 @@
       "subcategory": "thrown",
       "cost": 3,
       "costKind": "fixed",
-      "description": "Thrown stars, flung in handfuls."
+      "description": "Thrown stars, flung in handfuls.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 1,
+          "strengthBased": false,
+          "descriptors": [
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:multiattack"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "blaster_pistol",
@@ -703,7 +2588,36 @@
       "subcategory": "energy",
       "cost": 10,
       "costKind": "fixed",
-      "description": "A sidearm firing bolts of energy."
+      "description": "A sidearm firing bolts of energy.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "strengthBased": false,
+          "descriptors": [
+            "kinetic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "blaster_rifle",
@@ -712,7 +2626,36 @@
       "subcategory": "energy",
       "cost": 16,
       "costKind": "fixed",
-      "description": "A rifle-sized energy weapon."
+      "description": "A rifle-sized energy weapon.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 8,
+          "strengthBased": false,
+          "descriptors": [
+            "kinetic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "taser",
@@ -721,7 +2664,48 @@
       "subcategory": "energy",
       "cost": 10,
       "costKind": "fixed",
-      "description": "Fires darts trailing wires that deliver a shock."
+      "description": "Fires darts trailing wires that deliver a shock.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 5,
+          "configuration": "stun",
+          "resistance": "Fortitude",
+          "degrees": [
+            [
+              "dazed"
+            ],
+            [
+              "stunned"
+            ],
+            [
+              "incapacitated"
+            ]
+          ],
+          "descriptors": [
+            "electrical"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "flamethrower",
@@ -730,7 +2714,38 @@
       "subcategory": "heavy",
       "cost": 13,
       "costKind": "fixed",
-      "description": "Sprays burning fuel in a cone or line."
+      "description": "Sprays burning fuel in a cone or line.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 6,
+          "strengthBased": false,
+          "descriptors": [
+            "fire"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Cone or Line, switchable as a free action"
+        }
+      ],
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "areaShapes": [
+          "cone",
+          "line"
+        ],
+        "switchShapeAction": "free"
+      }
     },
     {
       "id": "grenade_launcher",
@@ -739,7 +2754,34 @@
       "subcategory": "heavy",
       "cost": 15,
       "costKind": "fixed",
-      "description": "Lobs grenades well beyond throwing range."
+      "description": "Lobs grenades well beyond throwing range.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "strengthBased": false,
+          "descriptors": [
+            "explosive"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        }
+      ],
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "ammunition": "grenade catalogue entries"
+      }
     },
     {
       "id": "machine_gun",
@@ -748,7 +2790,39 @@
       "subcategory": "heavy",
       "cost": 14,
       "costKind": "fixed",
-      "description": "A crew- or mount-served automatic weapon."
+      "description": "A crew- or mount-served automatic weapon.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 7,
+          "strengthBased": false,
+          "descriptors": [
+            "ballistic"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:multiattack"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard"
+      }
     },
     {
       "id": "rocket_launcher",
@@ -757,7 +2831,45 @@
       "subcategory": "heavy",
       "cost": 27,
       "costKind": "fixed",
-      "description": "An anti-armor rocket with a lethal blast radius."
+      "description": "An anti-armor rocket with a lethal blast radius.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 10,
+          "strengthBased": false,
+          "descriptors": [
+            "explosive"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:ranged"
+        },
+        {
+          "modifier": "modifiers:area_effect",
+          "rank": 7,
+          "note": "Sphere Area 7 secondary"
+        }
+      ],
+      "critical": {
+        "threatRange": [
+          20,
+          20
+        ],
+        "improvedCriticalRanks": 0
+      },
+      "patterns": [
+        "attack_item"
+      ],
+      "implementation": {
+        "range": "ranged",
+        "action": "standard",
+        "primaryTargetDamageRank": 10,
+        "areaDamageRank": 7,
+        "shotsBeforeReload": "1-2",
+        "reloadAction": "standard (cannot fire that turn)"
+      }
     },
     {
       "id": "laser_sight",
@@ -766,7 +2878,21 @@
       "subcategory": null,
       "cost": 1,
       "costKind": "fixed",
-      "description": "Adds Accurate (+2 attack) to a ranged weapon."
+      "description": "Adds Accurate (+2 attack) to a ranged weapon.",
+      "modifiers": [
+        {
+          "modifier": "modifiers:accurate",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "accessory"
+      ],
+      "implementation": {
+        "attachesTo": "ranged_weapon",
+        "target": "attackBonus",
+        "bonus": 2
+      }
     },
     {
       "id": "stun_ammo",
@@ -775,7 +2901,17 @@
       "subcategory": null,
       "cost": 1,
       "costKind": "fixed",
-      "description": "Non-lethal rounds or blunt arrows; swap as a simple action."
+      "description": "Non-lethal rounds or blunt arrows; swap as a simple action.",
+      "patterns": [
+        "accessory"
+      ],
+      "implementation": {
+        "attachesTo": [
+          "ranged_weapon"
+        ],
+        "damageType": "nonlethal",
+        "switchAction": "simple"
+      }
     },
     {
       "id": "suppressor",
@@ -784,7 +2920,21 @@
       "subcategory": null,
       "cost": 1,
       "costKind": "fixed",
-      "description": "Muffles a ballistic weapon, giving it Subtle 1."
+      "description": "Muffles a ballistic weapon, giving it Subtle 1.",
+      "modifiers": [
+        {
+          "modifier": "modifiers:subtle",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "accessory"
+      ],
+      "implementation": {
+        "attachesTo": "ranged_weapon",
+        "detectDC": 20,
+        "detectSkill": "skills:perception"
+      }
     },
     {
       "id": "targeting_scope",
@@ -793,7 +2943,19 @@
       "subcategory": null,
       "cost": 1,
       "costKind": "fixed",
-      "description": "Grants Improved Aim with the weapon it is fitted to."
+      "description": "Grants Improved Aim with the weapon it is fitted to.",
+      "grants": {
+        "advantages": [
+          "advantages:improved_aim"
+        ]
+      },
+      "patterns": [
+        "accessory"
+      ],
+      "implementation": {
+        "attachesTo": "ranged_weapon",
+        "scope": "this_weapon_only"
+      }
     },
     {
       "id": "frag_grenade",
@@ -802,7 +2964,33 @@
       "subcategory": "grenades",
       "cost": 15,
       "costKind": "fixed",
-      "description": "Sprays shrapnel through a sphere."
+      "description": "Sprays shrapnel through a sphere.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "descriptors": [
+            "explosive",
+            "piercing"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 15,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "smoke_grenade",
@@ -811,7 +2999,37 @@
       "subcategory": "grenades",
       "cost": 8,
       "costKind": "fixed",
-      "description": "Fills an area with sight-blocking smoke."
+      "description": "Fills an area with sight-blocking smoke.",
+      "effects": [
+        {
+          "effect": "effects:obscure",
+          "rank": 4,
+          "config": {
+            "senses": [
+              "vision"
+            ]
+          }
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        },
+        {
+          "modifier": "modifiers:short_term"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 14,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "flash_grenade",
@@ -820,7 +3038,43 @@
       "subcategory": "grenades",
       "cost": 12,
       "costKind": "fixed",
-      "description": "A blinding burst of light."
+      "description": "A blinding burst of light.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 4,
+          "configuration": "dazzle",
+          "resistance": "Fortitude",
+          "senseAffected": "vision",
+          "degrees": [
+            [
+              "disabled"
+            ],
+            [
+              "unaware"
+            ],
+            [
+              "extend_overcome_interval"
+            ]
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 14,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "flash_bang_grenade",
@@ -829,7 +3083,46 @@
       "subcategory": "grenades",
       "cost": 16,
       "costKind": "fixed",
-      "description": "A burst of light and noise that blinds and deafens."
+      "description": "A burst of light and noise that blinds and deafens.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 4,
+          "configuration": "dazzle",
+          "resistance": "Fortitude",
+          "senseAffected": [
+            "vision",
+            "hearing"
+          ],
+          "degrees": [
+            [
+              "disabled"
+            ],
+            [
+              "unaware"
+            ],
+            [
+              "extend_overcome_interval"
+            ]
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 14,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "sleep_gas_grenade",
@@ -838,7 +3131,45 @@
       "subcategory": "grenades",
       "cost": 12,
       "costKind": "fixed",
-      "description": "Gas that drops targets into unconsciousness."
+      "description": "Gas that drops targets into unconsciousness.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 4,
+          "configuration": "stun",
+          "resistance": "Fortitude",
+          "degrees": [
+            [
+              "dazed"
+            ],
+            [
+              "stunned"
+            ],
+            [
+              "asleep"
+            ]
+          ],
+          "descriptors": [
+            "chemical"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 14,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "tear_gas_grenade",
@@ -847,7 +3178,50 @@
       "subcategory": "grenades",
       "cost": 16,
       "costKind": "fixed",
-      "description": "Irritant gas that blinds and sickens."
+      "description": "Irritant gas that blinds and sickens.",
+      "effects": [
+        {
+          "effect": "effects:affliction",
+          "rank": 4,
+          "resistance": "Fortitude",
+          "degrees": [
+            [
+              "dazed",
+              "disabled"
+            ],
+            [
+              "stunned",
+              "unaware"
+            ],
+            [
+              "incapacitated"
+            ]
+          ],
+          "degreeNote": "The Disabled and Unaware conditions apply to vision only.",
+          "descriptors": [
+            "chemical"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        },
+        {
+          "modifier": "modifiers:extra_condition"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 14,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "dynamite",
@@ -856,7 +3230,32 @@
       "subcategory": "explosives",
       "cost": 15,
       "costKind": "fixed",
-      "description": "A stick of dynamite; doubling the charge adds a Damage rank."
+      "description": "A stick of dynamite; doubling the charge adds a Damage rank.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 5,
+          "descriptors": [
+            "explosive"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 15,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "plastic_explosive",
@@ -865,7 +3264,32 @@
       "subcategory": "explosives",
       "cost": 30,
       "costKind": "fixed",
-      "description": "A shapeable charge; doubling the charge adds a Damage rank."
+      "description": "A shapeable charge; doubling the charge adds a Damage rank.",
+      "effects": [
+        {
+          "effect": "effects:damage",
+          "rank": 10,
+          "descriptors": [
+            "explosive"
+          ]
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:area_effect",
+          "note": "Sphere"
+        }
+      ],
+      "patterns": [
+        "attack_item",
+        "consumable"
+      ],
+      "implementation": {
+        "range": "ranged (thrown)",
+        "action": "standard",
+        "dodgeDC": 20,
+        "consumedOnUse": true
+      }
     },
     {
       "id": "leather_armor",
@@ -874,7 +3298,21 @@
       "subcategory": "archaic",
       "cost": 1,
       "costKind": "fixed",
-      "description": "Boiled leather or a heavy leather jacket."
+      "description": "Boiled leather or a heavy leather jacket.",
+      "effects": [
+        {
+          "effect": "effects:protection",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "chain_mail",
@@ -883,7 +3321,27 @@
       "subcategory": "archaic",
       "cost": 7,
       "costKind": "fixed",
-      "description": "A shirt of heavy metal links."
+      "description": "A shirt of heavy metal links.",
+      "effects": [
+        {
+          "effect": "effects:protection",
+          "rank": 3
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:hardened",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "plate_mail",
@@ -892,7 +3350,27 @@
       "subcategory": "archaic",
       "cost": 11,
       "costKind": "fixed",
-      "description": "Mail reinforced with plate."
+      "description": "Mail reinforced with plate.",
+      "effects": [
+        {
+          "effect": "effects:protection",
+          "rank": 5
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:hardened",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "full_plate",
@@ -901,7 +3379,27 @@
       "subcategory": "archaic",
       "cost": 14,
       "costKind": "fixed",
-      "description": "A full articulated suit of plate."
+      "description": "A full articulated suit of plate.",
+      "effects": [
+        {
+          "effect": "effects:protection",
+          "rank": 6
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:hardened",
+          "rank": 2
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "armor_cloth",
@@ -910,8 +3408,23 @@
       "subcategory": "modern",
       "cost": 1,
       "costKind": "per_rank",
+      "costNote": "1 point per rank",
       "description": "Toughened fabric that hardens your own Toughness.",
-      "costNote": "1 point per rank"
+      "modifiers": [
+        {
+          "modifier": "modifiers:hardened",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness.hardened",
+        "perRank": 1,
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "undercover_shirt",
@@ -920,7 +3433,35 @@
       "subcategory": "modern",
       "cost": 3,
       "costKind": "fixed",
-      "description": "Thin ballistic armor worn under street clothes."
+      "description": "Thin ballistic armor worn under street clothes.",
+      "effects": [
+        {
+          "effect": "effects:protection",
+          "rank": 2
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:limited",
+          "note": "Ballistic damage only"
+        },
+        {
+          "modifier": "modifiers:hardened",
+          "rank": 1
+        },
+        {
+          "modifier": "modifiers:subtle",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "bulletproof_vest",
@@ -929,7 +3470,35 @@
       "subcategory": "modern",
       "cost": 4,
       "costKind": "fixed",
-      "description": "A police- or military-issue ballistic vest."
+      "description": "A police- or military-issue ballistic vest.",
+      "effects": [
+        {
+          "effect": "effects:protection",
+          "rank": 4
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:limited",
+          "note": "Ballistic damage only"
+        },
+        {
+          "modifier": "modifiers:hardened",
+          "rank": 1
+        },
+        {
+          "modifier": "modifiers:subtle",
+          "rank": 1
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "armored_costume",
@@ -938,8 +3507,27 @@
       "subcategory": "modern",
       "cost": 1,
       "costKind": "per_rank",
+      "costNote": "1 point per rank",
       "description": "A super-fabric uniform bought at whatever Protection you can afford.",
-      "costNote": "1 point per rank"
+      "effects": [
+        {
+          "effect": "effects:protection",
+          "rankIsPurchased": true
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness",
+        "perRank": 1,
+        "maxRank": "power level cap on Toughness (GM may set lower)",
+        "optionalExtras": [
+          "modifiers:hardened"
+        ],
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "fire_resistant",
@@ -948,7 +3536,26 @@
       "subcategory": "modern",
       "cost": 3,
       "costKind": "fixed",
-      "description": "Flame-retardant treatment granting Resistance to fire Damage."
+      "description": "Flame-retardant treatment granting Resistance to fire Damage.",
+      "effects": [
+        {
+          "effect": "effects:immunity",
+          "rank": 1,
+          "config": {
+            "scope": "resistance",
+            "target": "damage(fire)"
+          }
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "resistances.toughness_vs_fire",
+        "kind": "resistance",
+        "requiresWorn": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "small_shield",
@@ -957,7 +3564,27 @@
       "subcategory": "shields",
       "cost": 2,
       "costKind": "fixed",
-      "description": "A hand shield covering the forearm."
+      "description": "A hand shield covering the forearm.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_trait",
+          "rank": 1,
+          "config": {
+            "target": "combat.defense"
+          }
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "combat.defense",
+        "perRank": 1,
+        "ranks": 1,
+        "requiresHeld": true,
+        "requiresActiveUse": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "medium_shield",
@@ -966,7 +3593,27 @@
       "subcategory": "shields",
       "cost": 4,
       "costKind": "fixed",
-      "description": "An arm shield covering much of the torso."
+      "description": "An arm shield covering much of the torso.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_trait",
+          "rank": 2,
+          "config": {
+            "target": "combat.defense"
+          }
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "combat.defense",
+        "perRank": 1,
+        "ranks": 2,
+        "requiresHeld": true,
+        "requiresActiveUse": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "large_shield",
@@ -975,7 +3622,27 @@
       "subcategory": "shields",
       "cost": 6,
       "costKind": "fixed",
-      "description": "A kite or tower shield covering most of the body."
+      "description": "A kite or tower shield covering most of the body.",
+      "effects": [
+        {
+          "effect": "effects:enhanced_trait",
+          "rank": 3,
+          "config": {
+            "target": "combat.defense"
+          }
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ],
+      "implementation": {
+        "target": "combat.defense",
+        "perRank": 1,
+        "ranks": 3,
+        "requiresHeld": true,
+        "requiresActiveUse": true,
+        "stacking": "highest_only"
+      }
     },
     {
       "id": "utility_kit",
@@ -984,8 +3651,85 @@
       "subcategory": null,
       "cost": 25,
       "costKind": "built",
+      "costNote": "25 points as printed (Equipment rank 5)",
       "description": "A belt or bag holding a weapon array plus a spread of small gadgets.",
-      "costNote": "25 points as printed (Equipment rank 5)"
+      "patterns": [
+        "container_array"
+      ],
+      "implementation": {
+        "components": [
+          {
+            "kind": "array",
+            "name": "Weapons Array",
+            "arrayPoints": 10,
+            "cost": 16,
+            "alternates": [
+              {
+                "name": "Bolos",
+                "effect": "effects:affliction",
+                "configuration": "snare",
+                "rank": 5
+              },
+              {
+                "name": "Boomerangs",
+                "effect": "effects:damage",
+                "rank": 2,
+                "strengthBased": true,
+                "modifiers": [
+                  "modifiers:ranged"
+                ]
+              },
+              {
+                "name": "Brass Knuckles",
+                "effect": "effects:damage",
+                "rank": 2,
+                "note": "Strike"
+              },
+              {
+                "name": "Gas Grenades",
+                "effect": "effects:affliction",
+                "configuration": "toxin",
+                "rank": 5,
+                "modifiers": [
+                  "modifiers:area_effect"
+                ]
+              },
+              {
+                "name": "Smoke Grenades",
+                "effect": "effects:obscure",
+                "rank": 5,
+                "senses": [
+                  "vision"
+                ]
+              },
+              {
+                "name": "Stun Grenades",
+                "effect": "effects:affliction",
+                "configuration": "stun",
+                "rank": 5,
+                "modifiers": [
+                  "modifiers:area_effect"
+                ]
+              }
+            ]
+          },
+          {
+            "kind": "items",
+            "name": "Utilities",
+            "cost": 9,
+            "items": [
+              "climbing_cable",
+              "evidence_kit",
+              "flashlight",
+              "gas_mask",
+              "multi_tool",
+              "rebreather",
+              "swing_line",
+              "tracer"
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "trick_arrows",
@@ -994,8 +3738,109 @@
       "subcategory": null,
       "cost": null,
       "costKind": "built",
+      "costNote": "Array: full cost of the costliest arrow plus 1 point per alternate",
       "description": "A quiver of specialised arrowheads, usable one at a time.",
-      "costNote": "Array: full cost of the costliest arrow plus 1 point per alternate"
+      "patterns": [
+        "container_array"
+      ],
+      "implementation": {
+        "structure": "array",
+        "alternates": [
+          {
+            "id": "bolas",
+            "effect": "effects:affliction",
+            "configuration": "snare"
+          },
+          {
+            "id": "boomerang",
+            "modifiers": [
+              "modifiers:homing"
+            ]
+          },
+          {
+            "id": "boxing_glove",
+            "effect": "effects:damage",
+            "descriptors": [
+              "bludgeoning"
+            ]
+          },
+          {
+            "id": "cable",
+            "effect": "effects:enhanced_movement",
+            "mode": "swinging"
+          },
+          {
+            "id": "capture",
+            "effect": "effects:affliction",
+            "configuration": "snare"
+          },
+          {
+            "id": "cold",
+            "effect": "effects:affliction",
+            "configuration": "snare",
+            "descriptors": [
+              "cold"
+            ]
+          },
+          {
+            "id": "explosive",
+            "effect": "effects:damage",
+            "modifiers": [
+              "modifiers:area_effect"
+            ]
+          },
+          {
+            "id": "flash",
+            "effect": "effects:affliction",
+            "configuration": "dazzle",
+            "senseAffected": "vision"
+          },
+          {
+            "id": "gas",
+            "effect": "effects:affliction",
+            "configuration": "toxin",
+            "modifiers": [
+              "modifiers:area_effect"
+            ]
+          },
+          {
+            "id": "net",
+            "effect": "effects:affliction",
+            "configuration": "snare"
+          },
+          {
+            "id": "smoke",
+            "effect": "effects:obscure",
+            "senses": [
+              "vision"
+            ]
+          },
+          {
+            "id": "screamer",
+            "effect": "effects:affliction",
+            "configuration": "dazzle|stun",
+            "senseAffected": "hearing",
+            "modifiers": [
+              "modifiers:area_effect"
+            ]
+          },
+          {
+            "id": "taser",
+            "effect": "effects:affliction",
+            "configuration": "stun",
+            "descriptors": [
+              "electrical"
+            ]
+          },
+          {
+            "id": "tracer",
+            "effect": "effects:communication",
+            "medium": "radio",
+            "note": "No damage; may be treated as a glancing or failed attack."
+          }
+        ],
+        "complication": "Running out of arrows"
+      }
     },
     {
       "id": "omni_equipment",
@@ -1004,8 +3849,39 @@
       "subcategory": null,
       "cost": null,
       "costKind": "built",
+      "costNote": "Variable 1 with Removable: Equipment = 2 Power Points (not Equipment Points)",
       "description": "Optional: a reconfigurable 5-point pool of equipment, swapped as a free action.",
-      "costNote": "Variable 1 with Removable: Equipment = 2 Power Points (not Equipment Points)"
+      "effects": [
+        {
+          "effect": "effects:variable",
+          "rank": 1,
+          "config": {
+            "pool": "5 points of equipment effects",
+            "duration": "Constant",
+            "changeAction": "free"
+          }
+        }
+      ],
+      "modifiers": [
+        {
+          "modifier": "modifiers:removable",
+          "note": "Equipment tier, -8 points"
+        }
+      ],
+      "patterns": [
+        "container_array",
+        "gm_adjudicated"
+      ],
+      "implementation": {
+        "powerPointCost": 2,
+        "equipmentPointPool": 5,
+        "reconfigureAction": "free",
+        "reconfigureTiming": "on your turn",
+        "asAdvantageVariant": {
+          "pointsPerRank": 5,
+          "ranksPerBlock": 2
+        }
+      }
     }
   ],
   "vehicleFeatures": [

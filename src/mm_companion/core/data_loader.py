@@ -9,8 +9,8 @@ content.
 Content is aggregated from several files: the core traits live in their own
 files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 ``resistances.json``), the richer 4e catalogs come from theirs (``skills.json``,
-``advantages.json``, ``conditions.json``) and the point-cost constants from
-``costs.json``.
+``advantages.json``, ``conditions.json``), the gear catalog from
+``equipment.json``, and the point-cost constants from ``costs.json``.
 """
 
 from __future__ import annotations
@@ -1027,6 +1027,152 @@ class Movement:
     round_seconds: int = 6
 
 
+# --- Equipment: the gear catalog, its grouping axis, and the rules constants
+#     that govern the second currency (from ``equipment.json``). ---------------
+@dataclass(frozen=True)
+class EquipmentEffectRef:
+    """One base effect an item is built from, as named by a catalog entry.
+
+    ``effect`` is a bare :class:`Effect` id — the JSON writes it namespaced
+    (``"effects:damage"``) and the loader unqualifies it, so the catalog reads as
+    the design reference does while the record carries something that indexes
+    straight into :attr:`GameData.effects`.
+
+    The remaining fields are the qualities an item's printed line fixes: the
+    ``rank`` it comes at, whether its Damage is ``strength_based``, its
+    ``descriptors``, and the effect's own configuration — ``config`` for the
+    keyed form an effect's config fields take, ``configuration`` for a named
+    preset ("stun", "toxin"), plus the ``resistance`` it is checked against and
+    the condition ``degrees`` an Affliction inflicts. Nothing is *built* here;
+    turning these into a real :class:`~mm_companion.core.powers.Power` is the
+    equipment rules layer's job.
+    """
+
+    effect: str
+    rank: int | None = None
+    strength_based: bool = False
+    descriptors: tuple[str, ...] = ()
+    config: dict = field(default_factory=dict)
+    configuration: str = ""
+    resistance: str = ""
+    degrees: tuple[tuple[str, ...], ...] = ()
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class EquipmentModifierRef:
+    """One extra or flaw a catalog entry applies to its effect.
+
+    ``modifier`` is a bare :class:`Modifier` id (unqualified as above); ``rank``
+    is its rank where it takes one; ``note`` is the printed qualification the
+    table gives ("Ballistic damage only") and is display copy, not a rule.
+    """
+
+    modifier: str
+    rank: int | None = None
+    note: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class CriticalProfile:
+    """An item's critical-hit profile: the natural rolls that threaten, and the
+    ranks of Improved Critical that ``threat_range`` already reflects."""
+
+    threat_range: tuple[int, int] = (20, 20)
+    improved_critical_ranks: int = 0
+
+
+@dataclass(frozen=True)
+class EquipmentEntry:
+    """One item of the equipment catalog (from ``equipment.json``).
+
+    ``cost`` is the item's printed Equipment Point price — ``None`` for a
+    ``cost_kind`` of ``"built"``, which has no single printed number because the
+    item is assembled from a trait table. Equipment Points are a *second
+    currency*: they are bought by ranks of the Equipment advantage and never mix
+    with Power Points (see :class:`EquipmentRules`).
+
+    ``effects``/``modifiers`` are the build the item's printed line describes,
+    ``grants`` the advantages it hands its wielder (``{"advantages": (...)}``,
+    ids unqualified), ``critical`` its threat range, and ``patterns`` the
+    behavioural tags (``"attack_item"``, ``"passive_trait_item"``, …) named in
+    ``docs/mm-equipment-design.md`` §2.
+
+    ``implementation`` is deliberately an open bag rather than typed fields: it
+    is the per-item mechanical detail the engine grows into over time (ranges,
+    charges, attachment hosts, ammo modes), and its keys are as varied as the
+    catalog. Reading one is a matter for the phase that needs it; retaining it
+    whole is what lets that happen without another data migration.
+    """
+
+    id: str
+    name: str
+    category: str = ""
+    subcategory: str = ""
+    cost: int | None = None
+    cost_kind: str = "fixed"
+    cost_note: str = ""
+    description: str = ""
+    effects: tuple[EquipmentEffectRef, ...] = ()
+    modifiers: tuple[EquipmentModifierRef, ...] = ()
+    grants: dict = field(default_factory=dict)
+    critical: CriticalProfile | None = None
+    patterns: tuple[str, ...] = ()
+    implementation: dict = field(default_factory=dict)
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class EquipmentCategory:
+    """One group the Equipment block sorts its cards into, from
+    ``_meta.equipmentCategories`` — in display order.
+
+    ``id`` matches an :class:`EquipmentEntry`'s ``category``; ``title`` is the
+    heading shown above that group; ``description`` is the category's own
+    one-liner from ``_meta.categoryKey``.
+
+    The same split the conditions layer makes between a rules fact and a display
+    axis: the category *is* a rules fact here (a weapon is not armour, and a
+    weapon may not be dragged into the armour group), but which order the groups
+    come in and what they are called is presentation, so it lives in ``_meta``
+    where a mod can add a row rather than having its items folded into someone
+    else's group.
+    """
+
+    id: str
+    title: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class EquipmentRules:
+    """The constants governing equipment as a whole, from ``equipment.json``'s ``_meta``.
+
+    ``points_per_advantage_rank`` × the character's rank of the ``advantage``
+    is the Equipment Point budget. ``currency_name``/``currency_abbreviation``
+    name that second currency for the UI.
+
+    ``stacking_targets`` are the stats the no-stacking rule governs: equipment
+    contributions to one of them resolve as ``max()`` among themselves and
+    ``max()`` again against non-equipment sources — never a sum of the two
+    maxima. ``cost_kinds`` maps each ``cost_kind`` to its explanation.
+    """
+
+    currency_name: str = "Equipment Point"
+    currency_abbreviation: str = "EP"
+    advantage: str = "equipment"
+    points_per_advantage_rank: int = 5
+    stacking_rule: str = ""
+    stacking_targets: tuple[str, ...] = ()
+    cost_kinds: dict = field(default_factory=dict)
+    #: Unrecognised ``_meta`` keys, retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
 # --- Derived readouts & declarative blocks: per-effect Tier-5 readouts and the
 #     data-described sheet blocks a data-only mod can add. ---------------------
 @dataclass(frozen=True)
@@ -1141,6 +1287,13 @@ class GameData:
     #: ``conditions.json``'s ``_meta.conditionGroups`` — in display order. Empty
     #: when a ruleset declares none, which means "offer the flat list".
     condition_groups: tuple[ConditionGroup, ...] = ()
+    #: The gear catalog, from ``equipment.json``.
+    equipment: tuple[EquipmentEntry, ...] = ()
+    #: How the Equipment block groups its cards, from ``equipment.json``'s
+    #: ``_meta.equipmentCategories`` — in display order.
+    equipment_categories: tuple[EquipmentCategory, ...] = ()
+    #: The Equipment Point currency and the no-stacking rule's targets.
+    equipment_rules: EquipmentRules = field(default_factory=EquipmentRules)
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1159,6 +1312,11 @@ class GameData:
         """A single ``id -> Condition`` lookup, for the condition resolver in ``rules``."""
 
         return {c.id: c for c in self.conditions}
+
+    def equipment_catalog(self) -> dict[str, EquipmentEntry]:
+        """A single ``id -> EquipmentEntry`` lookup, for the equipment rules layer."""
+
+        return {e.id: e for e in self.equipment}
 
 
 # ===========================================================================
@@ -1730,6 +1888,157 @@ def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
     return result
 
 
+def _unqualify(ref: object) -> str:
+    """``"effects:damage"`` -> ``"damage"``; a bare id passes through.
+
+    The equipment catalog names its effects, modifiers and advantages with the
+    file they live in, which reads well in the data and is how the design
+    reference writes them, but is not how those records are keyed. Splitting on
+    the last colon is mechanical, so a mod inventing a namespace of its own gets
+    the same treatment without the loader knowing anything about it.
+    """
+
+    return str(ref or "").rsplit(":", 1)[-1]
+
+
+def _parse_equipment_effect_ref(raw: dict) -> EquipmentEffectRef:
+    rank = raw.get("rank")
+    return EquipmentEffectRef(
+        effect=_unqualify(raw.get("effect")),
+        rank=None if rank is None else int(rank),
+        strength_based=bool(raw.get("strengthBased", False)),
+        descriptors=tuple(str(d) for d in raw.get("descriptors", ())),
+        config=dict(raw.get("config", {})),
+        configuration=str(raw.get("configuration", "")),
+        resistance=str(raw.get("resistance", "")),
+        degrees=tuple(tuple(str(c) for c in degree) for degree in raw.get("degrees", ())),
+        extra=_extras(
+            raw,
+            "effect",
+            "rank",
+            "strengthBased",
+            "descriptors",
+            "config",
+            "configuration",
+            "resistance",
+            "degrees",
+        ),
+    )
+
+
+def _parse_equipment_modifier_ref(raw: dict) -> EquipmentModifierRef:
+    rank = raw.get("rank")
+    return EquipmentModifierRef(
+        modifier=_unqualify(raw.get("modifier")),
+        rank=None if rank is None else int(rank),
+        note=str(raw.get("note", "")),
+        extra=_extras(raw, "modifier", "rank", "note"),
+    )
+
+
+def _parse_critical(raw: dict | None) -> CriticalProfile | None:
+    if not isinstance(raw, dict):
+        return None
+    threat = tuple(int(v) for v in raw.get("threatRange", ()))[:2]
+    return CriticalProfile(
+        threat_range=threat if len(threat) == 2 else (20, 20),
+        improved_critical_ranks=int(raw.get("improvedCriticalRanks", 0)),
+    )
+
+
+def _parse_equipment_entry(raw: dict) -> EquipmentEntry:
+    cost = raw.get("cost")
+    return EquipmentEntry(
+        id=str(raw["id"]),
+        name=str(raw.get("name", raw["id"])),
+        category=str(raw.get("category", "")),
+        subcategory=str(raw.get("subcategory") or ""),
+        cost=None if cost is None else int(cost),
+        cost_kind=str(raw.get("costKind", "fixed")),
+        cost_note=str(raw.get("costNote", "")),
+        description=str(raw.get("description", "")),
+        effects=tuple(_parse_equipment_effect_ref(e) for e in raw.get("effects", ())),
+        modifiers=tuple(_parse_equipment_modifier_ref(m) for m in raw.get("modifiers", ())),
+        # Values are lists of ids in the same namespaced form as the refs above.
+        grants={
+            str(key): tuple(_unqualify(v) for v in values)
+            for key, values in raw.get("grants", {}).items()
+        },
+        critical=_parse_critical(raw.get("critical")),
+        patterns=tuple(str(p) for p in raw.get("patterns", ())),
+        implementation=dict(raw.get("implementation", {})),
+        extra=_extras(
+            raw,
+            "id",
+            "name",
+            "category",
+            "subcategory",
+            "cost",
+            "costKind",
+            "costNote",
+            "description",
+            "effects",
+            "modifiers",
+            "grants",
+            "critical",
+            "patterns",
+            "implementation",
+        ),
+    )
+
+
+def _parse_equipment_categories(raw: dict) -> tuple[EquipmentCategory, ...]:
+    """The Equipment block's groups, from ``_meta.equipmentCategories``.
+
+    Empty when a ruleset declares none — like the condition groups, and unlike
+    the condition *categories*, there is nothing sensible to invent, and a block
+    handed nothing falls back to grouping by the raw category id.
+    """
+
+    meta = raw.get("_meta", {})
+    descriptions = meta.get("categoryKey", {})
+    entries = meta.get("equipmentCategories")
+    if not isinstance(entries, list):
+        return ()
+    return tuple(
+        EquipmentCategory(
+            id=str(entry["id"]),
+            title=str(entry.get("title", entry["id"])),
+            description=str(descriptions.get(entry["id"], "")),
+        )
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("id")
+    )
+
+
+def _parse_equipment_rules(raw: dict) -> EquipmentRules:
+    meta = raw.get("_meta", {})
+    currency = meta.get("currency", {})
+    stacking = meta.get("stackingRule", {})
+    defaults = EquipmentRules()
+    return EquipmentRules(
+        currency_name=str(currency.get("name", defaults.currency_name)),
+        currency_abbreviation=str(currency.get("abbreviation", defaults.currency_abbreviation)),
+        advantage=_unqualify(currency.get("source")) or defaults.advantage,
+        points_per_advantage_rank=int(
+            currency.get("pointsPerAdvantageRank", defaults.points_per_advantage_rank)
+        ),
+        stacking_rule=str(stacking.get("rule", "")),
+        stacking_targets=tuple(str(t) for t in stacking.get("appliesTo", ())),
+        cost_kinds=dict(meta.get("costKindKey", {})),
+        extra=_extras(
+            meta,
+            "currency",
+            "categoryKey",
+            "equipmentCategories",
+            "equipmentCategoriesNote",
+            "costKindKey",
+            "stackingRule",
+            "description",
+        ),
+    )
+
+
 #: Used when ``conditions.json`` carries no ``_meta.sheetSections`` (an older file, or
 #: a mod's), so the Conditions block still groups the base categories sensibly.
 _DEFAULT_CONDITION_CATEGORIES = (
@@ -2000,6 +2309,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     system_raw = content.get("system.json", {})
     measurements_raw = content.get("measurements.json", {})
     movement_raw = content.get("movement.json", {})
+    equipment_raw = content.get("equipment.json", {})
     blocks_raw = content.get("blocks.json", {})
 
     # Parsed first: an effect's own ``rangeDistance`` block overrides only the keys it
@@ -2027,6 +2337,9 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
+        equipment=tuple(_parse_equipment_entry(e) for e in equipment_raw.get("equipment", [])),
+        equipment_categories=_parse_equipment_categories(equipment_raw),
+        equipment_rules=_parse_equipment_rules(equipment_raw),
         system=system,
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
     )

@@ -47,7 +47,7 @@ assembling it from scratch.
 
 | File | What it is |
 | --- | --- |
-| `src/mm_companion/data/equipment.json` | The **shipped** catalog: 106 items, 34 stock vehicles, 11 vehicle features, 3 vehicle modifiers, 9 stock installations, 36 installation features, and the two size tables. Currently the *thin* label form (`id`/`name`/`category`/`subcategory`/`cost`/`costKind`/`description`). |
+| `src/mm_companion/data/equipment.json` | The **shipped** catalog: 106 items, 34 stock vehicles, 11 vehicle features, 3 vehicle modifiers, 9 stock installations, 36 installation features, and the two size tables. Since Phase 1 each item also carries its mechanics (`effects`/`modifiers`/`grants`/`critical`/`patterns`/`implementation`), and `_meta` carries `currency`, `equipmentCategories` and `stackingRule`. |
 | `docs/design-data/equipment-design.json` | The **rich reference**: per item `effects[]`, `modifiers[]`, `grants`, `critical`, `patterns[]`, `implementation{}`, plus a large `_meta` (stacking rule, Strength-Based divisor, vehicle/installation trait tables, printed discrepancies). Not shipped. |
 | `docs/mm-equipment-design.md` | The written rules guide — read §2 (patterns), §3 (no-stacking), §4 (Strength-Based divisor), §7 (schema). |
 
@@ -107,7 +107,7 @@ dated entry to the progress log, and committing to `feature/equipment`.
 The `feature/equipment` branch off `develop`, this file, and the `/equipment` skill.
 
 ### Phase 1 — Data layer
-**Status: todo**
+**Status: done**
 
 Promote the mechanical fields from `docs/design-data/equipment-design.json` into
 `src/mm_companion/data/equipment.json`: per item `effects[]`, `modifiers[]`, `grants`,
@@ -320,3 +320,75 @@ Wrote this plan and the `/equipment` skill. Four decisions taken with the user: 
 wrapping model shape, no-stacking enforced by default with a per-item opt-out checkbox,
 budget warn-with-a-seam, and stock vehicles before custom platforms. No code changed.
 Next: **Phase 1 — Data layer**.
+
+### 2026-08-06 — Phase 1: Data layer
+
+**Shipped.** `src/mm_companion/data/equipment.json` now carries the mechanics, and
+`core/data_loader.py` parses them. `equipment.json` was added to `data/mod.json`'s
+`files` list — until now it shipped but was never loaded by anything.
+
+*The promotion.* All 106 items gained `effects[]`, `modifiers[]`, `grants`, `critical`,
+`patterns[]` and `implementation{}` from `docs/design-data/equipment-design.json`. The
+ids and their order were already identical in both files, so it was a clean per-id
+merge. Empty values (`"grants": {}`, `"effects": []`, `"critical": null`) are *omitted*
+rather than written out — the parser defaults them, and 106 empty lines is noise. The
+design file's per-item `notes` were deliberately **not** promoted: they are authoring
+commentary ("Explicitly NOT Strength-based — too light"), and the design file remains
+the place to read them.
+
+*`_meta` was restructured*, not just appended to:
+- `currency` is now the design file's record (`name`/`abbreviation`/`source`/
+  `pointsPerAdvantageRank`/`note`/`reconfigure`/`notAPower`) instead of a prose string.
+  The `equipmentPointsByAdvantageRank` lookup table was **dropped** — it is
+  `rank × pointsPerAdvantageRank`, and two sources of one truth is a bug waiting.
+- `equipmentCategories` is the new ordered `{id, title}` axis (11 rows, weapons first,
+  platforms last). `categoryKey` stays as the id → description map and the parser folds
+  its text into each `EquipmentCategory.description` — exactly the shape
+  `conditions.json` uses for `categoryKey` + `sheetSections`.
+- `stackingRule` (rule / `appliesTo` / engineNote) replaces the old one-line
+  `stackingNote`, which was also **mojibake** — its em dash had been double-encoded
+  through cp1251. The file is now clean: U+2014 is the only non-ASCII codepoint in it.
+- `strengthBasedDamage` was left in the design file on purpose. Phase 8 promotes it.
+
+*Records* (all frozen, in `data_loader.py` between `Movement` and `Readout`):
+`EquipmentEffectRef`, `EquipmentModifierRef`, `CriticalProfile`, `EquipmentEntry`,
+`EquipmentCategory`, `EquipmentRules`; `GameData.equipment` / `.equipment_categories` /
+`.equipment_rules` / `.equipment_catalog()`. Two decisions worth keeping:
+- **References are unqualified at parse time.** The JSON writes `"effects:damage"` and
+  `"advantages:improved_critical"` (the design vocabulary, and it reads well); the
+  record carries `"damage"`, which indexes straight into `GameData.effects` /
+  `modifier_catalog()`. `_unqualify` splits on the last colon and knows nothing about
+  which namespaces exist, so a mod inventing one gets the same treatment. Every ref in
+  the shipped catalog resolves — there is a test, and it passed first time.
+- **`implementation` stays an open dict.** 78 distinct keys across the catalog (ranges,
+  charges, ammo modes, `attachesTo`, escape DCs). Typing it now would be inventing a
+  schema for fields no phase reads yet; retaining it whole is what lets Phases 6–10 read
+  their own keys without another data migration.
+
+*Traps left for later phases, deliberately:*
+- **`omni_equipment` carries `modifiers:removable`** and is the one catalog item that
+  legitimately does — the design file marks it "Equipment tier, -8 points … bought with
+  Power Points, not Equipment Points". Phase 3's rule that seeing `removable` on an
+  equipment item means something double-counted needs to except this item (or exclude
+  it from the EP path entirely; its `costKind` is `built` and its `cost` is `null`).
+- **`cost` is `None` only for `costKind: "built"`, but not every `built` item lacks a
+  price** — `utility_kit` is `built` with a printed 25. The test asserts the one-way
+  implication, not an equivalence.
+- Six items are not `fixed` price (`evidence_kit` ranked; `armor_cloth` and
+  `armored_costume` per-rank; `utility_kit`, `trick_arrows`, `omni_equipment` built).
+  All six carry a `costNote`, and a test holds that.
+
+*Not done, by design:* `stockVehicles`, `vehicleFeatures`, `vehicleModifiers`,
+`installationFeatures`, `stockInstallations` and the two size tables are still in the
+shipped file **unparsed** — Phases 9–10 own them. `CLAUDE.md` was not touched; Phase 11
+owns the docs.
+
+*Verified:* `tests/test_equipment_data.py` (new, 12 tests — records, referential
+integrity, the category axis, cost invariants, the currency, and two mod-merge tests
+proving `_deep_merge` gives catalog extension and per-field override for free) plus
+`test_data_loader`, `test_mods`, `test_mod_loading`, `test_packaging`, `test_powers`,
+`test_derived_stats`, `test_conditions`, `test_character`, `test_library`,
+`test_system_rules` — 355 passed. `ruff check .` and `black --check .` clean.
+
+Next: **Phase 2 — Data-driven stat appliers**, the powers-layer refactor. Its guard is
+that `tests/test_derived_stats.py` must pass *unedited*.

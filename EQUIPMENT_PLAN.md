@@ -233,7 +233,7 @@ contract `PowersSection._on_power_edited` already honours.
 *Verify:* `tests/test_power_constructor.py`, `tests/test_equipment_section.py`.
 
 ### Phase 8 — Strength-based weapons and accessories
-**Status: todo**
+**Status: done**
 
 The §4 divisor, which is **not** the existing effective-rank cost rule and must not be
 conflated with it: when modifiers push a Strength-Based Damage effect above 1 point per
@@ -883,3 +883,96 @@ regroup/locked paths) plus the **unedited** `test_power_constructor`, `test_powe
 the block's two-button row.
 
 Next: **Phase 8 — Strength-based weapons and accessories**.
+
+### 2026-08-08 — Phase 8: Strength-based weapons and accessories
+
+**Shipped.** The §4 divisor, the weapon-Toughness warning, and the accessory layer.
+Suite: **2156 passed** (was 2126). `ruff` and `black` clean.
+
+**The §4 divisor is now the engine's only answer to "how much ability arrives".** Two
+new functions in `core/rules/powers_cost.py` — `effect_per_rank_cost` (base + per-rank
+extras − per-rank flaws; flat modifiers excluded, which *is* carve-out 2) and
+`ability_rank_contribution(ability, per_rank)` (pass-through at ≤ 1 PP/rank, which *is*
+carve-out 1; floor division above it). Both `effect_rank_trait_bonus` (play) and
+`effect_rank_trait_bonus_cost` (cost) route through the same one, and that pairing is
+the decision worth keeping: the design doc's engineNote says the divisor is applied
+*first* and the reduced number feeds both the DC and the per-rank Extra pricing, so
+charging extras against ranks a divisor threw away would be paying for nothing.
+
+*This moved numbers, and it had to.* **Two tests in `tests/test_powers.py` were edited**
+— the only existing tests touched anywhere in the phase. Both asserted a Ranged
+Strength-Based Damage folding in the whole of a Strength 4 (`14` PP); at 2 points per
+rank the divisor lands `floor(4/2) = 2`, so it is `12`. They kept their intent (folding
+happens; cost is stable across the wielder's current Strength) and only their numbers
+moved. Nothing else in the suite noticed, because every other Strength-Based build in
+the tests and the whole shipped catalog is at 1 PP/rank — the shipped catalog's 43
+Strength-Based items are all plain close weapons, so **no stock item's price changed.**
+
+**Breakage is data, not a table in Python.** `equipment.json` gained
+`_meta.strengthBasedDamage.breakage.materialToughness` (`wood`/`leather` 4, `metal` 7,
+from the printed "roughly 4 for wood, 7–8 for metal") parsed into
+`EquipmentRules.material_toughness`/`breakage_rule`, and 28 weapons gained
+`implementation.material`. `item_material_toughness` reads one against the other;
+`item_breakage_warnings` compares it with the ability *exerted* — the wielder's own,
+**before** the divisor, since halving what arrives does not halve what is going through
+the haft. It warns and never clamps, so `effect_effective_rank` is untouched. The same
+material tags and table were mirrored back into `docs/design-data/equipment-design.json`
+so the reference stays the superset the promotion model assumes.
+
+**An accessory is modifiers looking for a host.** `EquipmentItem` gained three fields —
+`accessories` (what is fitted to *this*), and on an accessory `attaches_to` and
+`attachment`. All three serialize only when non-empty, so an ordinary item's JSON is
+byte-for-byte what it was. Five decisions worth keeping:
+
+- **The merge is derived, never stored.** `item_effective_build(item, data)` returns the
+  host's build with each fitted accessory's modifiers added to every effect, and returns
+  the host's own build object unchanged when nothing is fitted. Because the stored build
+  is never rewritten, the host stays `item_is_stock` (so it keeps its printed price) and
+  detaching is lossless. Every reader takes that build: the card's terms table, its PL
+  markers, its dice footer, and `pins.py` (both the resolver and `available_pins`) — so a
+  pinned rifle attack reads the +2 its laser sight lends it.
+- **Pricing takes `item.build`, never the effective one.** `item_own_ep_cost` is the old
+  `item_ep_cost` renamed; the new `item_ep_cost` is *that plus every fitted accessory's*.
+  Both halves are load-bearing: an attached accessory is off `Character.equipment`, so
+  folding it in is the only way `equipment_points_spent` counts it at all — and pricing
+  the merged build instead would charge for the same Accurate twice.
+- **Being an accessory is having somewhere to attach**, not sitting in the `accessory`
+  category — that group is only where the cards are filed. `item_attaches_to` /
+  `item_attachment` read the item first and fall back to its catalog entry, which is what
+  lets gear saved before this phase attach at all.
+- **Advantages an item grants are drawn on its card and never join the Advantages
+  block** (`item_granted_advantages`, `GrantedAdvantage(name, source)`). That is the
+  printed rule (`_meta.weaponTraits.advantageScope`) and it lit up `grants`, which was
+  parsed but read by nothing until now — the axe finally says "Grants Improved Smash". An
+  accessory's grant is drawn on the *host* but named after the accessory.
+- **Fitting is a menu (`🔗` on a loose accessory's header), not a drag.** A drag would
+  have to cross two groups, and a cross-group drop is the one gesture this block refuses
+  everywhere else. `_remove_item` now also reaches into hosts, since a fitted accessory
+  is not in the flat list for the plain filter to find.
+
+*Deliberately not done:*
+- **No accessory editing in the constructor.** `attachment` is populated at pick time and
+  there is no UI for it, so a *custom* accessory can be priced but lends nothing. The
+  gear constructor is the place for it and it belongs with whatever phase next opens that
+  window.
+- **`stun_ammo`'s `damageType: nonlethal` and `suppressor`'s `detectDC` are still inert** —
+  they carry no modifier, so fitting them costs the point and changes no number. Both need
+  a descriptor/quality channel the terms layer does not have yet.
+- **The still-open `implementation` → allocation-options job from Phases 6/7 is still
+  open.** Phase 8 read `implementation` for `attachesTo` and `material` but not for the
+  Enhanced Movement modes; it is a catalog-building job and now has no obvious owner
+  before Phase 11.
+- Contributions (`equipment_contributions`) still gather off `item.build`, not the
+  effective one: accessories carry attack modifiers, never trait boosts, so there is
+  nothing there to gather.
+
+*Verified:* `tests/test_equipment.py` (+15: the accessory model, the fit/host rules, the
+lend, the identity return, paid-exactly-once, lossless detach, the save round-trip, the
+byte-for-byte serialization of an ordinary item, scoped grants both ways, and five on
+breakage including warns-never-clamps), `tests/test_powers.py` (+5 on the divisor: the
+cheap effect, the compound bow, both carve-outs, and the arithmetic stated once),
+`tests/test_equipment_section.py` (+8 on the card and the block's fit/detach/remove
+seams). `test_equipment_constructor`, `test_powers_section` and `test_power_constructor`
+pass **unedited**.
+
+Next: **Phase 9 — Stock vehicles**.

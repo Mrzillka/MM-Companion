@@ -517,3 +517,108 @@ def test_wearing_a_glider_reaches_the_speed_readout(qapp, data) -> None:
     sheet.equipment._toggle_worn(char.equipment[0])
 
     assert "Glider" not in sheet.system_info._speed._lines_label.text()
+
+
+# --- Phase 8: accessories and the breakage warning on a card ---------------------------
+
+
+def _fit(section, char, host_id: str, accessory_id: str):
+    """Fit the named accessory to the named host through the block's own seam."""
+    host = next(i for i in char.equipment if i.catalog_id == host_id)
+    accessory = next(i for i in char.equipment if i.catalog_id == accessory_id)
+    section._attach(host, accessory)
+    return host, accessory
+
+
+def test_fitting_an_accessory_takes_its_card_off_the_board(qapp, data) -> None:
+    """It has stopped being a thing you own and become part of one."""
+    char = _hero(data, "rifle", "laser_sight")
+    section = _section(data, char)
+
+    _fit(section, char, "rifle", "laser_sight")
+
+    assert _ids(char) == ["rifle"]
+    assert [a.catalog_id for a in char.equipment[0].accessories] == ["laser_sight"]
+
+
+def test_a_host_card_lists_what_is_fitted_to_it(qapp, data) -> None:
+    char = _hero(data, "rifle", "laser_sight")
+    section = _section(data, char)
+    host, _ = _fit(section, char, "rifle", "laser_sight")
+
+    labels = _labels(section._make_card(host))
+
+    assert any("Laser Sight" in text for text in labels)
+
+
+def test_a_fitted_accessory_moves_the_hosts_attack_and_its_price(qapp, data) -> None:
+    """Both readings on the card change, because both come off the effective build."""
+    char = _hero(data, "rifle", "laser_sight")
+    section = _section(data, char)
+    rifle = char.equipment[0]
+    before = _labels(section._make_card(rifle))
+
+    _fit(section, char, "rifle", "laser_sight")
+
+    card = section._make_card(rifle)
+    assert _labels(card) != before
+    assert any("2 vs. Defense" in text for text in _labels(card))
+    assert "9 EP" in _labels(card)  # the rifle's printed 8 plus the sight's 1
+
+
+def test_taking_an_accessory_off_puts_its_card_back(qapp, data) -> None:
+    char = _hero(data, "rifle", "laser_sight")
+    section = _section(data, char)
+    host, accessory = _fit(section, char, "rifle", "laser_sight")
+
+    section._detach(host, accessory)
+
+    assert sorted(_ids(char)) == ["laser_sight", "rifle"]
+    assert host.accessories == []
+
+
+def test_removing_a_fitted_accessory_reaches_into_its_host(qapp, data) -> None:
+    """It is not in the flat list any more, so the plain filter would walk past it."""
+    char = _hero(data, "rifle", "laser_sight")
+    section = _section(data, char)
+    host, accessory = _fit(section, char, "rifle", "laser_sight")
+
+    section._remove_item(accessory)
+
+    assert _ids(char) == ["rifle"]
+    assert host.accessories == []
+
+
+def test_an_item_grants_its_advantages_on_its_own_card(qapp, data) -> None:
+    """Never in the Advantages block: the axe's Improved Smash is the axe's."""
+    char = _hero(data, "axe")
+    section = _section(data, char)
+
+    labels = _labels(section._make_card(char.equipment[0]))
+
+    assert "Grants Improved Smash" in labels
+    assert [selection.name for selection in char.advantages] == ["Equipment"]
+
+
+def test_an_accessory_grant_is_drawn_on_the_host_and_named_after_the_accessory(qapp, data) -> None:
+    char = _hero(data, "rifle", "targeting_scope")
+    section = _section(data, char)
+    host, _ = _fit(section, char, "rifle", "targeting_scope")
+
+    assert "Grants Improved Aim (Targeting Scope)" in _labels(section._make_card(host))
+
+
+def test_a_card_warns_when_the_wielder_will_break_the_weapon(qapp, data) -> None:
+    char = _hero(data, "sword")
+    section = _section(data, char)
+    char.abilities["STR"] = 3
+
+    assert not any(
+        "break on use" in text for text in _labels(section._make_card(char.equipment[0]))
+    )
+
+    char.abilities["STR"] = 12
+
+    warnings = [t for t in _labels(section._make_card(char.equipment[0])) if "break on use" in t]
+    assert len(warnings) == 1
+    assert "Toughness 7" in warnings[0]

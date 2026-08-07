@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import uuid4
 
-from .powers import Power
+from .powers import ModifierSelection, Power
 
 # The ``costKind`` vocabulary an :class:`~mm_companion.core.data_loader.EquipmentEntry`
 # declares (``equipment.json``'s ``_meta.costKindKey``). A closed vocabulary named in
@@ -63,6 +63,26 @@ class EquipmentItem:
     :attr:`~mm_companion.core.powers.Power.cost_override`: when set it *replaces* the
     item's derived price. ``None`` leaves the cost fully derived
     (:func:`~mm_companion.core.rules.equipment.item_ep_cost`).
+
+    The last three fields are the **accessory** layer (``docs/mm-equipment-design.md``
+    §2 pattern I). ``accessories`` holds the items fitted to *this* one — a laser sight
+    on a rifle — and an attached accessory lives here rather than in
+    :attr:`~mm_companion.core.character.Character.equipment`, which is what makes its
+    scope honest: the targeting scope's Improved Aim is a trait of that weapon, not of
+    the character, and a loose card could only say otherwise. Its price folds into the
+    host's (:func:`~mm_companion.core.rules.equipment.item_ep_cost`), so the budget
+    still counts it exactly once.
+
+    On the accessory itself, ``attaches_to`` is the host categories it fits (copied off
+    the catalog entry at pick time, for the reason ``category`` is) and ``attachment``
+    the modifiers it lends its host — an accessory has no effects of its own, so its
+    Accurate or Subtle would otherwise have nothing to hang on. Being an accessory at
+    all is having somewhere to attach, so a mod's accessory needs no category of its
+    own; ask :func:`~mm_companion.core.rules.equipment.item_attaches_to`, which falls
+    back to the catalog for gear saved before any of this existed. Merging them into the
+    host is :func:`~mm_companion.core.rules.equipment.item_effective_build`, which is
+    derived on demand: the stored build is never rewritten, so detaching is lossless
+    and the host stays recognisably the catalog's.
     """
 
     catalog_id: str = ""
@@ -71,6 +91,9 @@ class EquipmentItem:
     worn: bool = True
     stacks: bool = False
     ep_override: int | None = None
+    accessories: list[EquipmentItem] = field(default_factory=list)
+    attaches_to: tuple[str, ...] = ()
+    attachment: list[ModifierSelection] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid4().hex)
 
     @property
@@ -92,6 +115,14 @@ class EquipmentItem:
             data["stacks"] = True
         if self.ep_override is not None:
             data["ep_override"] = self.ep_override
+        # Written only when they say something, so an ordinary item's entry is
+        # unchanged and an existing save round-trips byte for byte.
+        if self.accessories:
+            data["accessories"] = [a.to_dict() for a in self.accessories]
+        if self.attaches_to:
+            data["attaches_to"] = list(self.attaches_to)
+        if self.attachment:
+            data["attachment"] = [m.to_dict() for m in self.attachment]
         return data
 
     @classmethod
@@ -103,5 +134,8 @@ class EquipmentItem:
             category=raw.get("category", ""),
             stacks=bool(raw.get("stacks", False)),
             ep_override=None if override is None else int(override),
+            accessories=[cls.from_dict(a) for a in raw.get("accessories", ())],
+            attaches_to=tuple(str(c) for c in raw.get("attaches_to", ())),
+            attachment=[ModifierSelection.from_dict(m) for m in raw.get("attachment", ())],
             id=raw.get("id") or uuid4().hex,
         )

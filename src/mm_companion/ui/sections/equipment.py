@@ -32,6 +32,13 @@ the no-stacking rule (``docs/mm-equipment-design.md`` §3): two pieces of armour
 add up, and neither does armour plus a power. The loser is still on the sheet, so its
 card says what beat it rather than showing a number nothing is reading.
 
+**Some gear goes on other gear.** An accessory (a laser sight, a suppressor) is fitted
+to a weapon from its own card and then lives *on* that weapon: it leaves the loose list,
+its price folds into the host's, and its modifiers are lent to the host's rolls by
+:func:`~mm_companion.core.rules.item_effective_build`. That is what keeps a scope's
+Improved Aim honest — it is a trait of the rifle, not of the character, and a loose card
+sitting in its own group could only imply otherwise.
+
 **There are two currencies**, and the budget bar at the top is the second one: ranks of
 the Equipment advantage buy Equipment Points, and those buy the items. Overspending
 warns (a red bar and a ``⚠``) and never blocks — see
@@ -46,6 +53,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -58,14 +66,22 @@ from mm_companion.core.equipment import PER_RANK_COST_KINDS, EquipmentItem
 from mm_companion.core.powers import power_is_homerule
 from mm_companion.core.rules import (
     PIN_EQUIPMENT,
+    GrantedAdvantage,
     PinRef,
     SupersededItemBonus,
+    accessory_hosts,
+    attach_accessory,
     build_item_from_entry,
     debilitated_traits,
+    detach_accessory,
     equipment_budget,
     equipment_points_spent,
     equipment_violations,
+    item_attaches_to,
+    item_breakage_warnings,
+    item_effective_build,
     item_ep_cost,
+    item_granted_advantages,
     item_superseded,
     power_has_custom_modifier,
     power_pl_violations,
@@ -92,6 +108,13 @@ EQUIPMENT_GROUP_MIME = "application/x-mm-equipment-group"
 WEAR_HINT = (
     "Click this card to wear or stow this item — a stowed item keeps its "
     "Equipment Point price but grants nothing."
+)
+
+#: Why an item-granted advantage is not in the Advantages block, on the line's tooltip.
+GRANT_HINT = (
+    "Equipment grants its wielder this advantage only while the item is in use — it "
+    "is a trait of the item, not of the character, which is why it is written here "
+    "rather than in the Advantages block."
 )
 
 #: Why an item's bonus is not on the sheet, on the annotation's tooltip.
@@ -278,8 +301,42 @@ class EquipmentSection(TitledSection):
         self._after_change()
 
     def _remove_item(self, item: EquipmentItem) -> None:
+        """Take one item off the character — loose, or fitted to something else.
+
+        An attached accessory is not in the flat list at all (that is what stops the
+        budget counting it twice), so removing one has to reach into its host.
+        """
         self._character.equipment[:] = [i for i in self._character.equipment if i is not item]
+        for host in self._character.equipment:
+            host.accessories[:] = [a for a in host.accessories if a is not item]
         self._after_change()
+
+    # -- accessories ------------------------------------------------------
+    def _attach_menu(self, accessory: EquipmentItem, anchor: QPushButton) -> None:
+        """Offer the items this accessory fits, and fit it to the one chosen.
+
+        A menu rather than a drag: the two boards a drag would have to cross are the
+        accessory's own group and the weapon's, and a cross-group drop is exactly what
+        this block refuses everywhere else (a rifle may not be dragged into Armor). So
+        fitting says what it is instead of overloading the gesture that reorders.
+        """
+        hosts = accessory_hosts(self._character, accessory, self._data)
+        menu = QMenu(anchor)
+        for host in hosts:
+            action = menu.addAction(host.name or "Equipment")
+            action.triggered.connect(lambda _checked=False, h=host: self._attach(h, accessory))
+        if not hosts:
+            action = menu.addAction("Nothing this fits")
+            action.setEnabled(False)
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
+    def _attach(self, host: EquipmentItem, accessory: EquipmentItem) -> None:
+        if attach_accessory(self._character, host, accessory, self._data):
+            self._after_change()
+
+    def _detach(self, host: EquipmentItem, accessory: EquipmentItem) -> None:
+        if detach_accessory(self._character, host, accessory):
+            self._after_change()
 
     # -- the builder ------------------------------------------------------
     def _create_custom_item(self) -> None:
@@ -548,8 +605,13 @@ class EquipmentSection(TitledSection):
         card.setToolTip(WEAR_HINT)
         card.clicked.connect(lambda i=item: self._toggle_worn(i))
 
+        # The *effective* build throughout: what the item does is its own build plus
+        # whatever is fitted to it, and every reader below (the header's PL markers, the
+        # terms table, the dice footer) wants one and the same build.
+        build = item_effective_build(item, self._data)
+
         layout = QVBoxLayout(card)
-        layout.addWidget(self._header_row(item, card))
+        layout.addWidget(self._header_row(item, card, build))
 
         if item.build.description:
             desc = QLabel(item.build.description)
@@ -557,18 +619,30 @@ class EquipmentSection(TitledSection):
             desc.setStyleSheet(muted_style(italic=True))
             layout.addWidget(desc)
 
-        effects = effects_block(item.build, self._character, self._data)
+        effects = effects_block(build, self._character, self._data)
         if effects is not None:
             layout.addWidget(effects)
+
+        fitted = self._accessories_block(item)
+        if fitted is not None:
+            layout.addWidget(fitted)
+
+        grants = self._grants_block(item)
+        if grants is not None:
+            layout.addWidget(grants)
 
         superseded = self._superseded_block(item)
         if superseded is not None:
             layout.addWidget(superseded)
 
+        breakage = self._breakage_block(item)
+        if breakage is not None:
+            layout.addWidget(breakage)
+
         # The numbers that come up mid-play, one line per roll. An item that rolls
         # nothing — a first-aid kit, a suit of armour — gets neither the footer nor its
         # rule, the same bargain a passive power's card strikes.
-        rolls = self._rolls_block(item)
+        rolls = self._rolls_block(item, build)
         if rolls is not None:
             layout.addWidget(hline_separator())
             layout.addWidget(rolls)
@@ -576,7 +650,7 @@ class EquipmentSection(TitledSection):
         self._show_worn(card, item)
         return card
 
-    def _rolls_block(self, item: EquipmentItem) -> QWidget | None:
+    def _rolls_block(self, item: EquipmentItem, build) -> QWidget | None:
         """An item's dice footer — a weapon's attack, and the save it forces.
 
         Drawn by the powers block's own :class:`~mm_companion.ui.cards.RollsFooter` from
@@ -591,7 +665,7 @@ class EquipmentSection(TitledSection):
         build fact — refusing the die here would only teach people to click the card
         twice first.
         """
-        specs = power_rolls(item.build, self._character, self._data)
+        specs = power_rolls(build, self._character, self._data)
         if not specs:
             return None
         footer = RollsFooter(
@@ -612,7 +686,7 @@ class EquipmentSection(TitledSection):
         """Which parameters are already on the card, so a line can offer Unpin."""
         self._pins.set_pinned(refs)
 
-    def _header_row(self, item: EquipmentItem, card: DraggableCard) -> QWidget:
+    def _header_row(self, item: EquipmentItem, card: DraggableCard, build=None) -> QWidget:
         """Name and markers on the left; the item's price and its ``✕`` on the right.
 
         A host widget rather than a bare layout, for the reason the powers header gives:
@@ -643,7 +717,9 @@ class EquipmentSection(TitledSection):
         name.setFont(font)
         layout.addWidget(name)
 
-        violations = power_pl_violations(item.build, self._character, self._data)
+        violations = power_pl_violations(
+            build if build is not None else item.build, self._character, self._data
+        )
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))
@@ -668,6 +744,16 @@ class EquipmentSection(TitledSection):
         # Parented by addWidget *before* the visibility is set, for the reason the
         # powers header gives: setVisible on a parentless widget flashes a top-level
         # window.
+        # An accessory offers somewhere to go. Only on a *loose* one: a fitted accessory
+        # is drawn as a row of its host's card and is taken off from there.
+        if item_attaches_to(item, self._data):
+            fit = QPushButton("🔗")
+            fit.setFixedWidth(24)
+            fit.setToolTip("Fit this accessory to a weapon")
+            fit.clicked.connect(lambda _checked=False, i=item, b=fit: self._attach_menu(i, b))
+            layout.addWidget(fit)
+            fit.setVisible(not self._locked)
+
         edit = QPushButton("✎")
         edit.setFixedWidth(24)
         edit.setToolTip("Edit this item")
@@ -697,6 +783,96 @@ class EquipmentSection(TitledSection):
             or power_is_homerule(item.build)
             or power_has_custom_modifier(item.build, self._data)
         )
+
+    def _accessories_block(self, item: EquipmentItem) -> QWidget | None:
+        """The items fitted to this one, each with the ``✕`` that takes it off again.
+
+        A row rather than a card of its own: an accessory that is fitted has stopped
+        being a thing you own and become part of the thing you own, which is exactly
+        what its price folding into the host's says too. Detaching is lossless — the
+        stored builds were never rewritten — so the row is a switch, not a decision.
+        """
+        if not item.accessories:
+            return None
+        unit = self._data.equipment_rules.currency_abbreviation
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setSpacing(0)
+        for accessory in item.accessories:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            name = QLabel(f"⚭ {accessory.name or 'Accessory'}")
+            name.setStyleSheet(muted_style())
+            name.setToolTip("Fitted to this item — its price is counted in the total above.")
+            row_layout.addWidget(name)
+            row_layout.addStretch()
+            price = QLabel(f"{item_ep_cost(accessory, self._data, self._character)} {unit}")
+            price.setStyleSheet(muted_style())
+            row_layout.addWidget(price)
+            take_off = QPushButton("✕")
+            take_off.setFixedWidth(24)
+            take_off.setToolTip("Take this accessory off")
+            take_off.clicked.connect(lambda _checked=False, h=item, a=accessory: self._detach(h, a))
+            row_layout.addWidget(take_off)
+            take_off.setVisible(not self._locked)
+            layout.addWidget(row)
+        return host
+
+    def _grants_block(self, item: EquipmentItem) -> QWidget | None:
+        """ "Grants Improved Aim (Targeting Scope)" — advantages that come with the item.
+
+        Written on the card and **never** added to the Advantages block, because that is
+        what the rule says they are: an advantage a weapon grants applies while using
+        that weapon and nowhere else. An accessory's is named after the accessory, so a
+        scope's Improved Aim reads as the scope's even though it is drawn on the rifle.
+        """
+        granted = item_granted_advantages(item, self._data)
+        if not granted:
+            return None
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setSpacing(0)
+        for grant in granted:
+            label = QLabel(self._grant_text(item, grant))
+            label.setWordWrap(True)
+            label.setStyleSheet(muted_style())
+            label.setToolTip(GRANT_HINT)
+            layout.addWidget(label)
+        return host
+
+    @staticmethod
+    def _grant_text(item: EquipmentItem, grant: GrantedAdvantage) -> str:
+        """The advantage, plus which accessory brought it when it was not the item."""
+        if grant.source and grant.source != item.name:
+            return f"Grants {grant.name} ({grant.source})"
+        return f"Grants {grant.name}"
+
+    def _breakage_block(self, item: EquipmentItem) -> QWidget | None:
+        """ "Strength 10 exceeds this Sword's Toughness 7" — the thing is going to break.
+
+        A warning and never a clamp: the Damage bonus stays exactly what the sheet says
+        it is, because the weapon breaking is a real event at the table rather than an
+        arithmetic cap (``docs/mm-equipment-design.md`` §4). Silence otherwise — an item
+        the wielder is not over-straining says nothing rather than printing a
+        reassurance.
+        """
+        warnings = item_breakage_warnings(item, self._character, self._data)
+        if not warnings:
+            return None
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setSpacing(0)
+        for warning in warnings:
+            label = QLabel(f"⚠ {warning}")
+            label.setWordWrap(True)
+            label.setStyleSheet(tinted_style("tint.warning", bold=False))
+            label.setToolTip(self._data.equipment_rules.breakage_rule)
+            layout.addWidget(label)
+        return host
 
     def _superseded_block(self, item: EquipmentItem) -> QWidget | None:
         """ "Superseded by *X*" for each bonus this item is not currently granting.

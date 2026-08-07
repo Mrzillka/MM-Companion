@@ -49,6 +49,7 @@ from .derived import (
     resistance_total,
     skill_total,
 )
+from .equipment import item_effective_build
 from .rolls import (
     KIND_POWER_CHECK,
     KIND_POWER_SAVE,
@@ -390,8 +391,16 @@ def _from_equipment(char: Character, game_data: GameData, ref: PinRef) -> Pinned
     item = next((i for i in char.equipment if i.id == ref.key), None)
     if item is None:
         return _missing(ref, pin_label(ref, game_data))
+    # The *effective* build, so a rifle's pinned attack reads the +2 its laser sight
+    # lends it — the same number the card's dice footer shows.
     return _from_build_roll(
-        char, game_data, ref, item.build, ref.index, key=item.id, fallback="Equipment"
+        char,
+        game_data,
+        ref,
+        item_effective_build(item, game_data),
+        ref.index,
+        key=item.id,
+        fallback="Equipment",
     )
 
 
@@ -565,7 +574,8 @@ def available_pins(
     # bury the two entries a GM came for.
     equipment: list[PinnedValue] = []
     for item in char.equipment:
-        for index in range(len(power_rolls(item.build, char, game_data))):
+        build = item_effective_build(item, game_data)
+        for index in range(len(power_rolls(build, char, game_data))):
             equipment.append(read(PinRef(PIN_EQUIPMENT, item.id, index)))
     if equipment:
         groups.append(PinGroup("Equipment", tuple(equipment)))

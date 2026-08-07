@@ -25,8 +25,12 @@ from mm_companion.core.rules import (
     MISSING_VALUE,
     PIN_EQUIPMENT,
     PinRef,
+    accessory_hosts,
+    attach_accessory,
     available_pins,
     build_item_from_entry,
+    detach_accessory,
+    effect_effective_rank,
     equipment_advantage_rank,
     equipment_budget,
     equipment_contributions,
@@ -35,8 +39,15 @@ from mm_companion.core.rules import (
     equipment_speed_lines,
     equipment_violations,
     estimated_power_level,
+    item_accepts_accessory,
+    item_attaches_to,
+    item_breakage_warnings,
+    item_effective_build,
     item_ep_cost,
+    item_granted_advantages,
     item_is_stock,
+    item_material_toughness,
+    item_own_ep_cost,
     item_rank,
     movement_mode_lines,
     pin_label,
@@ -592,3 +603,181 @@ def test_an_over_ranked_weapon_marks_its_own_card(data, hero) -> None:
     item = _item(data, "axe")
 
     assert power_pl_violations(item.build, hero, data)
+
+
+# --- Phase 8: accessories --------------------------------------------------------------
+
+
+def test_an_accessory_keeps_its_modifiers_off_its_own_build(data) -> None:
+    """A laser sight's Accurate belongs to the rifle, so it is held, not built in.
+
+    An accessory has no effects of its own for a modifier to hang on, and the old
+    behaviour dropped them on the floor: the item cost its printed point and did
+    nothing at all.
+    """
+    sight = _item(data, "laser_sight")
+
+    assert sight.build.effects == []
+    assert [m.modifier_id for m in sight.attachment] == ["accurate"]
+    assert item_attaches_to(sight, data) == ("ranged_weapon",)
+
+
+def test_an_accessory_only_fits_what_it_says_it_fits(data) -> None:
+    sight = _item(data, "laser_sight")
+
+    assert item_accepts_accessory(_item(data, "rifle"), sight, data)
+    assert not item_accepts_accessory(_item(data, "sword"), sight, data)
+    # Not onto another accessory (a chain with no weapon on the end), and not itself.
+    assert not item_accepts_accessory(_item(data, "suppressor"), sight, data)
+    assert not item_accepts_accessory(sight, sight, data)
+    # A weapon is not an accessory, however much it would like to be one.
+    assert not item_accepts_accessory(_item(data, "rifle"), _item(data, "sword"), data)
+
+
+def test_fitting_an_accessory_moves_it_onto_its_host(data, hero) -> None:
+    rifle, sight = _item(data, "rifle"), _item(data, "laser_sight")
+    hero.equipment = [rifle, sight]
+
+    assert [h.name for h in accessory_hosts(hero, sight, data)] == ["Rifle"]
+    assert attach_accessory(hero, rifle, sight, data)
+
+    assert hero.equipment == [rifle]
+    assert rifle.accessories == [sight]
+
+
+def test_a_fitted_accessory_lends_its_modifiers_to_the_host(data, hero) -> None:
+    """The rifle rolls +2 — and its own stored build is untouched, so it is still stock."""
+    rifle, sight = _item(data, "rifle"), _item(data, "laser_sight")
+    hero.equipment = [rifle, sight]
+    bare = power_rolls(rifle.build, hero, data)[0].modifier
+
+    attach_accessory(hero, rifle, sight, data)
+    fitted = power_rolls(item_effective_build(rifle, data), hero, data)[0].modifier
+
+    assert fitted == bare + 2
+    assert rifle.build.effects[0].extras == _item(data, "rifle").build.effects[0].extras
+    assert item_is_stock(rifle, data)
+
+
+def test_a_host_with_nothing_fitted_hands_back_its_own_build(data) -> None:
+    """The usual case keeps the object identity every caller already had."""
+    rifle = _item(data, "rifle")
+
+    assert item_effective_build(rifle, data) is rifle.build
+
+
+def test_a_fitted_accessory_is_paid_for_exactly_once(data, hero) -> None:
+    """The budget walks the loose list, so a folded-in price is the only way it counts."""
+    rifle, sight = _item(data, "rifle"), _item(data, "laser_sight")
+    hero.equipment = [rifle, sight]
+    loose = equipment_points_spent(hero, data)
+
+    attach_accessory(hero, rifle, sight, data)
+
+    assert equipment_points_spent(hero, data) == loose
+    assert item_own_ep_cost(rifle, data) == data.equipment_catalog()["rifle"].cost
+    assert item_ep_cost(rifle, data) == item_own_ep_cost(rifle, data) + 1
+
+
+def test_taking_an_accessory_off_is_lossless(data, hero) -> None:
+    rifle, sight = _item(data, "rifle"), _item(data, "laser_sight")
+    hero.equipment = [rifle, sight]
+    attack = power_rolls(rifle.build, hero, data)[0].modifier
+    attach_accessory(hero, rifle, sight, data)
+
+    assert detach_accessory(hero, rifle, sight)
+
+    assert hero.equipment == [rifle, sight]
+    assert rifle.accessories == []
+    assert power_rolls(item_effective_build(rifle, data), hero, data)[0].modifier == attack
+
+
+def test_a_fitted_accessory_round_trips_through_a_save(data, hero) -> None:
+    rifle, sight = _item(data, "rifle"), _item(data, "laser_sight")
+    hero.equipment = [rifle, sight]
+    attach_accessory(hero, rifle, sight, data)
+
+    reloaded = Character.from_dict(hero.to_dict())
+
+    assert len(reloaded.equipment) == 1
+    fitted = reloaded.equipment[0].accessories
+    assert [a.catalog_id for a in fitted] == ["laser_sight"]
+    assert [m.modifier_id for m in fitted[0].attachment] == ["accurate"]
+    assert item_ep_cost(reloaded.equipment[0], data) == item_ep_cost(rifle, data)
+
+
+def test_an_ordinary_item_serializes_exactly_as_it_did(data) -> None:
+    """The three new fields are written only when they say something."""
+    stored = _item(data, "sword").to_dict()
+
+    assert "accessories" not in stored
+    assert "attaches_to" not in stored
+    assert "attachment" not in stored
+
+
+def test_granted_advantages_are_scoped_to_the_item(data, hero) -> None:
+    """A weapon's advantages are a trait of the weapon, never of the character."""
+    axe = _item(data, "axe")
+
+    granted = item_granted_advantages(axe, data)
+
+    assert [g.name for g in granted] == ["Improved Critical", "Improved Smash"]
+    assert {g.source for g in granted} == {"Axe"}
+    # And nothing has quietly joined the character's own advantage list.
+    assert [s.name for s in hero.advantages] == ["Equipment"]
+
+
+def test_an_accessory_grant_is_named_after_the_accessory(data, hero) -> None:
+    """The scope's Improved Aim is drawn on the rifle but is still the scope's."""
+    rifle, scope = _item(data, "rifle"), _item(data, "targeting_scope")
+    hero.equipment = [rifle, scope]
+    attach_accessory(hero, rifle, scope, data)
+
+    granted = item_granted_advantages(rifle, data)
+
+    assert [(g.name, g.source) for g in granted] == [("Improved Aim", "Targeting Scope")]
+
+
+# --- Phase 8: the weapon-Toughness warning ---------------------------------------------
+
+
+def test_a_weapon_carries_strength_up_to_its_material_toughness(data, hero) -> None:
+    sword = _item(data, "sword")
+    hero.abilities["STR"] = 7
+
+    assert item_material_toughness(sword, data) == 7
+    assert item_breakage_warnings(sword, hero, data) == []
+
+    hero.abilities["STR"] = 8
+
+    (warning,) = item_breakage_warnings(sword, hero, data)
+    assert "Strength 8" in warning and "Toughness 7" in warning and "break" in warning
+
+
+def test_a_wooden_weapon_breaks_sooner_than_a_metal_one(data, hero) -> None:
+    """The number is the material's, from the data — nothing here knows what a staff is."""
+    hero.abilities["STR"] = 6
+
+    assert item_breakage_warnings(_item(data, "staff"), hero, data)
+    assert item_breakage_warnings(_item(data, "sword"), hero, data) == []
+
+
+def test_breakage_warns_and_never_clamps(data, hero) -> None:
+    """The break is an event at the table, so the bonus is still the whole bonus."""
+    sword = _item(data, "sword")
+    hero.abilities["STR"] = 12
+
+    assert item_breakage_warnings(sword, hero, data)
+    assert (
+        effect_effective_rank(sword.build.effects[0], data, hero)
+        == sword.build.effects[0].rank + 12
+    )
+
+
+def test_an_item_with_no_material_is_never_warned_about(data, hero) -> None:
+    """A firearm carries no Strength, and a custom item has no entry to read."""
+    hero.abilities["STR"] = 20
+
+    assert item_breakage_warnings(_item(data, "rifle"), hero, data) == []
+    assert item_material_toughness(EquipmentItem(), data) is None
+    assert item_breakage_warnings(EquipmentItem(), hero, data) == []

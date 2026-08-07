@@ -85,6 +85,19 @@
         "sense qualities"
       ],
       "engineNote": "Compute equipment contributions as max(), not sum(), per target stat, and then take max() again against non-equipment sources. This is why a character with high native Protection gains nothing from armour."
+    },
+    "strengthBasedDamage": {
+      "baseRule": "A Strength-Based Damage effect adds the wielder's Strength rank to the weapon's Damage rank.",
+      "costPerRankDivisor": "When modifiers push the effect above 1 point per rank, divide the wielder's Strength rank by the effect's cost per rank and round down; that reduced number is the Strength bonus actually added. An effect costing 1 point per rank or less adds Strength unmultiplied, and flat modifiers never trigger the divisor because they do not change the cost per rank.",
+      "breakage": {
+        "rule": "An ordinary weapon can only carry Strength up to its own Toughness. Exerting more Strength than that breaks the weapon when it is used — a real event at the table, so the character generator warns rather than silently capping the bonus.",
+        "materialToughnessNote": "Toughness by the material an item's 'implementation.material' names, from the printed guidance (roughly 4 for wooden weapons, 7-8 for metal). An item naming no material, or one this table does not list, is never warned about.",
+        "materialToughness": {
+          "wood": 4,
+          "leather": 4,
+          "metal": 7
+        }
+      }
     }
   },
   "equipment": [
@@ -740,7 +753,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -773,7 +787,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -818,7 +833,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -862,7 +878,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -895,7 +912,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -933,7 +951,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -978,7 +997,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1003,7 +1023,8 @@
         "sleeperHoldOverride": {
           "thirdDegree": "conditions:incapacitated",
           "thirdDegreeNote": "Unconscious rather than Asleep; continued holding past that imposes Dying."
-        }
+        },
+        "material": "metal"
       }
     },
     {
@@ -1041,7 +1062,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1086,7 +1108,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1129,7 +1152,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -1168,7 +1192,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1206,7 +1231,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1293,7 +1319,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1367,7 +1394,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -1405,7 +1433,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -1483,7 +1512,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1514,7 +1544,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -1559,7 +1590,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1598,7 +1630,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1643,7 +1676,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "leather"
       }
     },
     {
@@ -2267,7 +2301,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -2310,7 +2345,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -2362,7 +2398,8 @@
       "implementation": {
         "range": "ranged",
         "action": "standard",
-        "resolution": "Toughness resistance check first; on failure, Fortitude against the Toxin."
+        "resolution": "Toughness resistance check first; on failure, Fortitude against the Toxin.",
+        "material": "wood"
       }
     },
     {
@@ -2456,7 +2493,8 @@
         "range": "ranged",
         "action": "standard",
         "returnsToWielder": true,
-        "tacticalNote": "Commonly used to set up a Feint, striking a Vulnerable target on the return arc next turn."
+        "tacticalNote": "Commonly used to set up a Feint, striking a Vulnerable target on the return arc next turn.",
+        "material": "wood"
       }
     },
     {
@@ -2499,7 +2537,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -2537,7 +2576,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -2578,7 +2618,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {

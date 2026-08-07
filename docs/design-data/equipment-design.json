@@ -85,7 +85,13 @@
         "Flat modifiers that do not change cost per rank — the full Strength rank still applies."
       ],
       "breakageCap": "An ordinary weapon can only carry Strength up to its own Toughness (roughly 4 for wood, 7-8 for metal). Exerting more Strength than that breaks the weapon when it is used.",
-      "engineNote": "This divisor is separate from the cost engine's effective-rank rule. Cost still prices per-rank Extras against the full effective rank (purchased + Strength); this divisor only limits how much Strength reaches the Damage rank in the first place. Apply the divisor first, then feed the resulting effective rank into both the DC calculation and the Extra pricing."
+      "engineNote": "This divisor is separate from the cost engine's effective-rank rule. Cost still prices per-rank Extras against the full effective rank (purchased + Strength); this divisor only limits how much Strength reaches the Damage rank in the first place. Apply the divisor first, then feed the resulting effective rank into both the DC calculation and the Extra pricing.",
+      "materialToughness": {
+        "wood": 4,
+        "leather": 4,
+        "metal": 7
+      },
+      "materialToughnessNote": "Toughness by the material an item's 'implementation.material' names, derived from the printed breakageCap guidance. An item naming no material, or one this table does not list, is never warned about."
     },
     "equipmentLimits": {
       "availability": "The GM may restrict ownership of some items (permits, licences, bulk) or charge extra Feature ranks for restricted gear.",
@@ -1227,7 +1233,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Small hand axes (Damage 1-2) can also be thrown."
     },
@@ -1262,7 +1269,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Not Strength-based: adds a flat +1 to the wielder's own unarmed Damage. Armored gauntlets use the same line."
     },
@@ -1307,7 +1315,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Prose gives Reach 1 or 2; the table prices Reach 2. A bladed head (rope-dart, kusari-gama) is +1 point as a Variable Descriptor."
     },
@@ -1351,7 +1360,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Explicitly NOT Strength-based, unlike most close weapons."
     },
@@ -1386,7 +1396,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       },
       "notes": "Short paired batons add the Split extra for +1 point."
     },
@@ -1425,7 +1436,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Folding or switchblade versions can add Subtle 1 (concealable) for +1 point."
     },
@@ -1470,7 +1482,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Covers nunchaku and three-section staffs."
     },
@@ -1498,7 +1511,8 @@
         "sleeperHoldOverride": {
           "thirdDegree": "conditions:incapacitated",
           "thirdDegreeNote": "Unconscious rather than Asleep; continued holding past that imposes Dying."
-        }
+        },
+        "material": "metal"
       },
       "notes": "No Damage effect of its own. Grants Sleeper Hold with a harsher third degree."
     },
@@ -1537,7 +1551,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1581,7 +1596,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Wielder chooses Reach or Split per use: hooking the pair together extends reach but forfeits the Split Attack."
     },
@@ -1624,7 +1640,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       },
       "notes": "The Ranged Weapons table lists a separate thrown javelin line (see javelin_thrown) with different numbers."
     },
@@ -1664,7 +1681,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1702,7 +1720,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1790,7 +1809,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -1865,7 +1885,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -1903,7 +1924,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       },
       "notes": "Collapsible staffs can add Subtle 1 (concealable) for +1 point."
     },
@@ -1985,7 +2007,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Specific sword designs may swap in Improved Critical, Weapon Bind, or Weapon Break for extra points."
     },
@@ -2018,7 +2041,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       },
       "notes": "The table lists 'Defensive'; in 4e that is the Defensive Attack maneuver, not an advantage — see _meta.unresolvedReferences."
     },
@@ -2063,7 +2087,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Can be thrown like a spear."
     },
@@ -2103,7 +2128,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "The table's 'Concealed' is Subtle 1; 'Defensive' is the Defensive Attack maneuver."
     },
@@ -2148,7 +2174,8 @@
       ],
       "implementation": {
         "range": "close",
-        "action": "standard"
+        "action": "standard",
+        "material": "leather"
       },
       "notes": "Prose says Reach 3, the table prices Reach 2 — see _meta.printedDiscrepancies. Not Strength-based per the table."
     },
@@ -2779,7 +2806,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       },
       "notes": "Heavy-pull bows may add Strength-Based, adding half Strength rank rounded down, rarely more than +2 or +3."
     },
@@ -2822,7 +2850,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       }
     },
     {
@@ -2875,7 +2904,8 @@
       "implementation": {
         "range": "ranged",
         "action": "standard",
-        "resolution": "Toughness resistance check first; on failure, Fortitude against the Toxin."
+        "resolution": "Toughness resistance check first; on failure, Fortitude against the Toxin.",
+        "material": "wood"
       }
     },
     {
@@ -2969,7 +2999,8 @@
         "range": "ranged",
         "action": "standard",
         "returnsToWielder": true,
-        "tacticalNote": "Commonly used to set up a Feint, striking a Vulnerable target on the return arc next turn."
+        "tacticalNote": "Commonly used to set up a Feint, striking a Vulnerable target on the return arc next turn.",
+        "material": "wood"
       }
     },
     {
@@ -3011,7 +3042,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       }
     },
     {
@@ -3049,7 +3081,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "wood"
       },
       "notes": "Duplicate of the close-weapon javelin entry with different numbers (Ranged Damage 2 at 4 points vs. Str-based Damage 1 at 3 points). Both lines are as printed."
     },
@@ -3091,7 +3124,8 @@
       ],
       "implementation": {
         "range": "ranged",
-        "action": "standard"
+        "action": "standard",
+        "material": "metal"
       },
       "notes": "Explicitly NOT Strength-based — too light."
     },

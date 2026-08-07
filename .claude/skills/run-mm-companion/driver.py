@@ -127,7 +127,7 @@ def build(target: str):
         # a piece of armour outclassed by a better one so its "superseded by" line
         # renders. Only this block is left visible — the shot is about the cards.
         from mm_companion.core.character import AdvantageSelection
-        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.core.rules import attach_accessory, build_item_from_entry
         from mm_companion.ui.main_window import MainWindow
 
         win = MainWindow(locked=False)
@@ -135,9 +135,13 @@ def build(target: str):
         char = sheet.character
         char.advantages.append(AdvantageSelection(name="Equipment", rank=3))
         catalog = sheet._data.equipment_catalog()
-        for item_id in ("sword", "crossbow", "leather_armor", "chain_mail"):
+        for item_id in ("sword", "crossbow", "leather_armor", "chain_mail", "rifle", "laser_sight"):
             char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
         char.equipment[1].worn = False  # the crossbow is stowed
+        # Phase 8: a fitted accessory (which leaves the loose list and lends its
+        # Accurate to the rifle) and a wielder strong enough to snap the sword.
+        attach_accessory(char, char.equipment[4], char.equipment[5], sheet._data)
+        char.abilities["STR"] = 12
         sheet.equipment.refresh()
         for key in sheet.block_keys():
             if key != "equipment":

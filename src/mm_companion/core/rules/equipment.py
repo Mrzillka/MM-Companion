@@ -31,21 +31,34 @@ from ..data_loader import EquipmentEntry, GameData
 from ..equipment import PER_RANK_COST_KINDS, EquipmentItem
 from ..powers import ModifierSelection, Power, PowerEffectInstance
 from .appliers import GROUP_EQUIPMENT, STACK_MAX, STACK_SUM
-from .derived import trait_bonuses
+from .derived import effective_ability, trait_bonuses
 from .powers_cost import power_total_cost
 from .runtime import build_contributions, equipment_contributions, worn_items
 
 __all__ = [
+    "GrantedAdvantage",
     "SupersededItemBonus",
+    "accessory_hosts",
+    "attach_accessory",
     "build_item_from_entry",
+    "detach_accessory",
+    "entry_attaches_to",
     "equipment_advantage_rank",
     "equipment_budget",
     "equipment_contributions",
     "equipment_points_remaining",
     "equipment_points_spent",
     "equipment_violations",
+    "item_accepts_accessory",
+    "item_attaches_to",
+    "item_attachment",
+    "item_breakage_warnings",
+    "item_effective_build",
     "item_ep_cost",
+    "item_granted_advantages",
     "item_is_stock",
+    "item_material_toughness",
+    "item_own_ep_cost",
     "item_rank",
     "item_superseded",
     "worn_items",
@@ -136,9 +149,18 @@ def _entry_modifier_selections(
 
 
 def _build_effect(
-    ref, entry: EquipmentEntry, game_data: GameData, rank: int
+    ref,
+    game_data: GameData,
+    rank: int,
+    modifiers: tuple[list[ModifierSelection], list[ModifierSelection]],
 ) -> PowerEffectInstance:
-    """One catalog effect reference as a real :class:`PowerEffectInstance`."""
+    """One catalog effect reference as a real :class:`PowerEffectInstance`.
+
+    ``modifiers`` is the entry's own ``(extras, flaws)``, computed once by the caller
+    and copied here — an accessory's are withheld entirely (they belong to its host,
+    see :func:`item_effective_build`), and a Strength-Based ref prepends to its own
+    copy rather than to the list every other effect is sharing.
+    """
 
     base = next((e for e in game_data.effects if e.id == ref.effect), None)
     config = dict(ref.config)
@@ -147,7 +169,7 @@ def _build_effect(
         # the item's own description of what it does, so it is kept rather than dropped.
         config.setdefault("configuration", ref.configuration)
 
-    extras, flaws = _entry_modifier_selections(entry, game_data)
+    extras, flaws = list(modifiers[0]), list(modifiers[1])
     if base is not None:
         if ref.resistance:
             key = _resistance_config_key(base)
@@ -187,14 +209,297 @@ def build_item_from_entry(
     by the refs whose rank the catalog leaves open (``rankIsPurchased``); a ref with a
     printed rank keeps it.
 
-    An entry with no effects at all — the five accessories that only modify a host
-    weapon — builds an empty power, which is correct: the item exists, has its printed
-    price, and grants nothing on its own. Attaching it to a host is Phase 8's job.
+    An **accessory** — an entry declaring ``implementation.attachesTo`` — is built
+    differently in one respect: its printed modifiers become the item's
+    :attr:`~mm_companion.core.equipment.EquipmentItem.attachment` rather than being
+    folded into effects of its own. That is the only place they can live and mean
+    anything: a laser sight has no effect for its Accurate to modify until it is
+    fitted to a rifle, and until then the item is a real, priced, effect-less thing.
     """
 
-    effects = [_build_effect(ref, entry, game_data, rank) for ref in entry.effects]
+    attaches_to = entry_attaches_to(entry)
+    modifiers = _entry_modifier_selections(entry, game_data)
+    effects = [
+        _build_effect(ref, game_data, rank, ((), ()) if attaches_to else modifiers)
+        for ref in entry.effects
+    ]
     build = Power(name=entry.name, description=entry.description, effects=effects)
-    return EquipmentItem(catalog_id=entry.id, build=build, category=entry.category)
+    return EquipmentItem(
+        catalog_id=entry.id,
+        build=build,
+        category=entry.category,
+        attaches_to=attaches_to,
+        attachment=[*modifiers[0], *modifiers[1]] if attaches_to else [],
+    )
+
+
+# --- accessories: items fitted to other items -------------------------------------------
+
+
+def entry_attaches_to(entry: EquipmentEntry) -> tuple[str, ...]:
+    """The host categories a catalog entry may be fitted to, from ``implementation.attachesTo``.
+
+    Written either as one id or as a list of them, so both are accepted; ``()`` for
+    everything that is not an accessory. Being *an accessory at all* is this field
+    being non-empty rather than the entry's ``category`` — the shipped ``accessory``
+    group is where the cards are filed, which is presentation, and a mod is free to
+    attach something filed elsewhere.
+    """
+
+    hosts = entry.implementation.get("attachesTo")
+    if not hosts:
+        return ()
+    if isinstance(hosts, str):
+        return (hosts,)
+    return tuple(str(h) for h in hosts)
+
+
+def item_attaches_to(item: EquipmentItem, game_data: GameData) -> tuple[str, ...]:
+    """The host categories this *item* fits — its own, else its catalog entry's.
+
+    The item's own copy is authoritative (it is what survives a mod being disabled,
+    the same bargain ``category`` strikes), and the entry is the fallback for gear
+    saved before accessories existed, which carries neither field.
+    """
+
+    if item.attaches_to:
+        return item.attaches_to
+    entry = game_data.equipment_catalog().get(item.catalog_id)
+    return entry_attaches_to(entry) if entry is not None else ()
+
+
+def item_attachment(item: EquipmentItem, game_data: GameData) -> list[ModifierSelection]:
+    """The modifiers this accessory lends its host — its own, else its entry's printed
+    ones (see :func:`item_attaches_to` for why there is a fallback at all)."""
+
+    if item.attachment:
+        return list(item.attachment)
+    entry = game_data.equipment_catalog().get(item.catalog_id)
+    if entry is None or not entry_attaches_to(entry):
+        return []
+    extras, flaws = _entry_modifier_selections(entry, game_data)
+    return [*extras, *flaws]
+
+
+def item_accepts_accessory(
+    host: EquipmentItem, accessory: EquipmentItem, game_data: GameData
+) -> bool:
+    """Whether ``accessory`` may be fitted to ``host``.
+
+    Being an accessory *at all* is naming somewhere to attach (:func:`item_attaches_to`)
+    rather than sitting in the ``accessory`` group, which is only where the cards are
+    filed — so a mod may attach something filed anywhere. Those names are host
+    *categories* (a laser sight goes on a ranged weapon), checked against the host's own
+    ``category``, which is stored on the item rather than looked up so gear from a mod
+    that has since been disabled still answers. An accessory is never fitted to another
+    accessory: that is a chain with no weapon on the end of it.
+    """
+
+    hosts = item_attaches_to(accessory, game_data)
+    if not hosts or host is accessory or item_attaches_to(host, game_data):
+        return False
+    return host.category in hosts
+
+
+def accessory_hosts(
+    char: Character, accessory: EquipmentItem, game_data: GameData
+) -> list[EquipmentItem]:
+    """The character's items this accessory could be fitted to, in sheet order."""
+
+    return [item for item in char.equipment if item_accepts_accessory(item, accessory, game_data)]
+
+
+def attach_accessory(
+    char: Character, host: EquipmentItem, accessory: EquipmentItem, game_data: GameData
+) -> bool:
+    """Fit ``accessory`` to ``host``, taking it out of the character's loose gear.
+
+    An attached accessory lives on its host and *only* there — that is what keeps its
+    scope honest (the targeting scope's Improved Aim belongs to that weapon) and what
+    stops :func:`equipment_points_spent` counting it twice, since the host's price now
+    folds it in. Returns False, changing nothing, when the two do not fit.
+    """
+
+    if not item_accepts_accessory(host, accessory, game_data):
+        return False
+    if accessory in char.equipment:
+        char.equipment.remove(accessory)
+    if accessory not in host.accessories:
+        host.accessories.append(accessory)
+    return True
+
+
+def detach_accessory(char: Character, host: EquipmentItem, accessory: EquipmentItem) -> bool:
+    """Take ``accessory`` off ``host`` and put it back among the loose gear.
+
+    Lossless, because attaching never rewrote either build: the host goes back to being
+    exactly the catalog's item and the accessory back to its own card at its own price.
+    It returns to the end of the list, where a newly added item lands. False when it
+    was not fitted there.
+    """
+
+    if accessory not in host.accessories:
+        return False
+    host.accessories.remove(accessory)
+    if accessory not in char.equipment:
+        char.equipment.append(accessory)
+    return True
+
+
+def item_effective_build(item: EquipmentItem, game_data: GameData) -> Power:
+    """The item's build **as it is actually used**: its own, plus what is fitted to it.
+
+    Every fitted accessory's
+    :attr:`~mm_companion.core.equipment.EquipmentItem.attachment` modifiers are added
+    to each of the host's effects, so a rifle with a laser sight rolls its attack at +2
+    exactly the way a Damage power with Accurate does — the terms table, the dice
+    footer and the pinned readouts all take this build and need no idea that
+    accessories exist.
+
+    Two things it deliberately is **not**. It is not stored: the item keeps the build
+    the catalog gave it, so it stays :func:`item_is_stock` and detaching is lossless.
+    And it is never priced — an accessory's cost is its own printed price, added to the
+    host's by :func:`item_ep_cost`; deriving a price from this build instead would
+    charge for the same modifier twice.
+
+    The host's own build is returned unchanged when nothing is fitted, which is the
+    usual case and keeps the object identity every caller already had.
+    """
+
+    lent = [
+        selection
+        for accessory in item.accessories
+        for selection in item_attachment(accessory, game_data)
+    ]
+    if not lent or not item.build.effects:
+        return item.build
+
+    catalog = game_data.modifier_catalog()
+    extras, flaws = [], []
+    for selection in lent:
+        modifier = catalog.get(selection.modifier_id)
+        (flaws if modifier is not None and modifier.category == "flaw" else extras).append(
+            selection
+        )
+
+    def copies(selections):
+        return [ModifierSelection.from_dict(s.to_dict()) for s in selections]
+
+    effects = []
+    for effect in item.build.effects:
+        clone = PowerEffectInstance.from_dict(effect.to_dict())
+        clone.extras = [*clone.extras, *copies(extras)]
+        clone.flaws = [*clone.flaws, *copies(flaws)]
+        effects.append(clone)
+    return Power(
+        name=item.build.name,
+        description=item.build.description,
+        structure=item.build.structure,
+        cost_override=item.build.cost_override,
+        effects=effects,
+        activated=item.build.activated,
+        item_present=item.build.item_present,
+    )
+
+
+@dataclass(frozen=True)
+class GrantedAdvantage:
+    """An advantage an item hands its wielder, and which item hands it over.
+
+    Equipment-granted advantages are a trait of the *thing*, not of the character
+    (``docs/design-data/equipment-design.json``, ``_meta.weaponTraits.advantageScope``):
+    an axe's Improved Smash applies while swinging the axe and nowhere else, which is
+    exactly why they are reported per item and never merged into the character's own
+    advantage list. ``source`` names the accessory when one is what granted it, so a
+    scope's Improved Aim reads as the scope's.
+    """
+
+    name: str
+    source: str
+
+
+def item_granted_advantages(
+    item: EquipmentItem, game_data: GameData
+) -> tuple[GrantedAdvantage, ...]:
+    """Every advantage this item and its fitted accessories grant, scoped to the item.
+
+    Read off the catalog entry's ``grants`` and resolved to the advantage's display
+    name — falling back to the id, so a mod's entry naming something this ruleset
+    dropped still says *something* rather than vanishing. A wholly custom item grants
+    nothing; there is no entry to read.
+    """
+
+    catalog = game_data.equipment_catalog()
+    names = {a.id: a.name for a in game_data.advantages}
+    granted: list[GrantedAdvantage] = []
+    for owner in (item, *item.accessories):
+        entry = catalog.get(owner.catalog_id)
+        if entry is None:
+            continue
+        for advantage_id in entry.grants.get("advantages", ()):
+            granted.append(GrantedAdvantage(names.get(advantage_id, advantage_id), owner.name))
+    return tuple(granted)
+
+
+# --- breakage: more Strength than the thing can carry -----------------------------------
+
+
+def item_material_toughness(item: EquipmentItem, game_data: GameData) -> int | None:
+    """How much Toughness this item has, from the material its catalog entry names.
+
+    ``None`` when the entry names no material, when the ruleset's table does not list
+    it, or when there is no entry at all — all of which mean the same thing to the
+    caller: nothing to warn about. Nothing here knows what a sword is made of; the
+    material is on the entry and the table is in ``_meta.strengthBasedDamage``.
+    """
+
+    entry = game_data.equipment_catalog().get(item.catalog_id)
+    if entry is None:
+        return None
+    material = entry.implementation.get("material")
+    if not isinstance(material, str):
+        return None
+    return game_data.equipment_rules.material_toughness.get(material)
+
+
+def item_breakage_warnings(item: EquipmentItem, char: Character, game_data: GameData) -> list[str]:
+    """One line per ability this item cannot carry: "Strength 10 exceeds ... Toughness 7".
+
+    A Strength-Based weapon adds the wielder's Strength to its Damage, but an ordinary
+    weapon can only carry Strength up to its own Toughness; past that it **breaks when
+    used** (``docs/mm-equipment-design.md`` §4). That is a real event at the table
+    rather than a build error, so this warns and never clamps — the bonus stays exactly
+    what :func:`~.powers_cost.effect_effective_rank` says it is, and the sheet says what
+    is going to happen.
+
+    The ability is whichever one a modifier on the effect folds in (``adds_ability``),
+    and it is the ability *exerted* — the wielder's own, before the §4 divisor cuts how
+    much of it reaches the Damage rank. Halving what arrives does not halve what is
+    being put through the haft.
+    """
+
+    toughness = item_material_toughness(item, game_data)
+    if toughness is None:
+        return []
+
+    catalog = game_data.modifier_catalog()
+    abilities = {a.key: a.name for a in game_data.abilities}
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for effect in item.build.effects:
+        for selection in (*effect.extras, *effect.flaws):
+            modifier = catalog.get(selection.modifier_id)
+            if not (modifier and modifier.adds_ability) or modifier.adds_ability in seen:
+                continue
+            seen.add(modifier.adds_ability)
+            exerted = effective_ability(char, game_data, modifier.adds_ability)
+            if exerted > toughness:
+                label = abilities.get(modifier.adds_ability, modifier.adds_ability)
+                warnings.append(
+                    f"{label} {exerted} exceeds this {item.name or 'item'}'s "
+                    f"Toughness {toughness} — it will break on use."
+                )
+    return warnings
 
 
 # --- an item's price --------------------------------------------------------------------
@@ -277,8 +582,10 @@ def _undiscounted(power: Power, game_data: GameData) -> Power:
     )
 
 
-def item_ep_cost(item: EquipmentItem, game_data: GameData, char: Character | None = None) -> int:
-    """What one item costs in Equipment Points.
+def item_own_ep_cost(
+    item: EquipmentItem, game_data: GameData, char: Character | None = None
+) -> int:
+    """What the item itself costs in Equipment Points, ignoring anything fitted to it.
 
     Three answers, in order:
 
@@ -291,6 +598,11 @@ def item_ep_cost(item: EquipmentItem, game_data: GameData, char: Character | Non
     3. Otherwise the build's derived cost — the same
        :func:`~.powers_cost.power_total_cost` a power pays, minus any Removable
        discount, since an item's price is what its effects would cost *undiscounted*.
+
+    Note this prices ``item.build`` and never
+    :func:`item_effective_build`: an accessory's modifiers are already paid for by the
+    accessory's own printed price, and pricing the merged build would charge for them a
+    second time.
     """
 
     if item.ep_override is not None:
@@ -303,6 +615,21 @@ def item_ep_cost(item: EquipmentItem, game_data: GameData, char: Character | Non
         return entry.cost
 
     return power_total_cost(_undiscounted(item.build, game_data), game_data, char)
+
+
+def item_ep_cost(item: EquipmentItem, game_data: GameData, char: Character | None = None) -> int:
+    """What one item costs in Equipment Points **with everything fitted to it**.
+
+    An accessory's price folds into its host's (``docs/mm-equipment-design.md`` §2
+    pattern I), which is also the only way the budget can count it: an attached
+    accessory is off the character's loose gear list, so
+    :func:`equipment_points_spent` would otherwise walk straight past it. Use
+    :func:`item_own_ep_cost` for the item's own line.
+    """
+
+    return item_own_ep_cost(item, game_data, char) + sum(
+        item_ep_cost(accessory, game_data, char) for accessory in item.accessories
+    )
 
 
 def equipment_points_spent(char: Character, game_data: GameData) -> int:

@@ -15,6 +15,7 @@ from mm_companion.core.powers import (
     node_from_dict,
 )
 from mm_companion.core.rules import (
+    ability_rank_contribution,
     array_alternate_cost,
     array_base_index,
     effect_allocation_used,
@@ -24,6 +25,7 @@ from mm_companion.core.rules import (
     effect_game_terms,
     effect_is_active,
     effect_makes_attack,
+    effect_per_rank_cost,
     effect_readout_rows,
     effect_stat_rows,
     effect_total_cost,
@@ -383,16 +385,17 @@ def test_strength_based_folds_ability_into_per_rank_modifier_cost() -> None:
     data = load_game_data()
     char = Character()
     char.abilities["STR"] = 4
-    # Damage 5 + Strength-Based (folds in STR 4) + Ranged (+1/rank). The bought ranks
-    # pay base + mods; the folded-in Strength ranks pay the mods but not the base:
-    # 5 × (1 + 1) + 4 × 1 = 14.
+    # Damage 5 + Strength-Based + Ranged (+1/rank). Ranged puts the effect at 2 points
+    # per rank, so the §4 divisor lets only floor(4 / 2) = 2 of the wielder's Strength
+    # arrive. The bought ranks pay base + mods; the folded-in ranks pay the mods but
+    # not the base: 5 × (1 + 1) + 2 × 1 = 12.
     effect = PowerEffectInstance(
         "damage",
         rank=5,
         extras=[ModifierSelection("strength_based"), ModifierSelection("ranged")],
     )
-    assert effect_total_cost(effect, data, char) == 14
-    assert effect_cost_formula(effect, data, char) == "5 × (1 + 0 + 1) + 4 × (0 + 1)"
+    assert effect_total_cost(effect, data, char) == 12
+    assert effect_cost_formula(effect, data, char) == "5 × (1 + 0 + 1) + 2 × (0 + 1)"
     # Without a character (or Strength) the folded ranks are unknown, so only the
     # bought ranks are priced.
     assert effect_total_cost(effect, data) == 10
@@ -1120,9 +1123,10 @@ def test_strength_based_amount_caps_the_folded_in_strength() -> None:
 
 def test_strength_based_cost_uses_the_bought_amount_not_current_strength() -> None:
     data = load_game_data()
-    # Strength-Based (folds STR) + Ranged (+1/rank), amount bought = 4. The cost pays
-    # for those 4 folded ranks regardless of the wielder's current Strength:
-    # 5 × (1 + 1) + 4 × 1 = 14, whether Strength is 4, 8, or 1.
+    # Strength-Based (folds STR) + Ranged (+1/rank), amount bought = 4. Ranged puts the
+    # effect at 2 points per rank, so the §4 divisor lands floor(4 / 2) = 2 of those
+    # bought ranks — and the cost pays for them regardless of the wielder's current
+    # Strength: 5 × (1 + 1) + 2 × 1 = 12, whether Strength is 4, 8, or 1.
     effect = PowerEffectInstance(
         "damage",
         rank=5,
@@ -1134,12 +1138,17 @@ def test_strength_based_cost_uses_the_bought_amount_not_current_strength() -> No
     for strength in (1, 4, 8):
         char = Character()
         char.abilities["STR"] = strength
-        assert effect_total_cost(effect, data, char) == 14
-        assert effect_cost_formula(effect, data, char) == "5 × (1 + 0 + 1) + 4 × (0 + 1)"
-    # The effect *value*, by contrast, still tracks the current (capped) Strength.
+        assert effect_total_cost(effect, data, char) == 12
+        assert effect_cost_formula(effect, data, char) == "5 × (1 + 0 + 1) + 2 × (0 + 1)"
+    # The effect *value*, by contrast, still tracks the current (capped) Strength —
+    # through the same divisor, so Strength 1 into a 2-point-per-rank effect arrives
+    # as floor(min(4, 1) / 2) = 0 and the rank is the bought one.
     weak = Character()
     weak.abilities["STR"] = 1
-    assert effect_effective_rank(effect, data, weak) == 6  # 5 + min(4, 1)
+    assert effect_effective_rank(effect, data, weak) == 5
+    strong = Character()
+    strong.abilities["STR"] = 8
+    assert effect_effective_rank(effect, data, strong) == 7  # 5 + floor(min(4, 8) / 2)
 
 
 def test_strength_amount_over_strength_is_a_warning() -> None:
@@ -1908,3 +1917,74 @@ def test_deflect_no_longer_carries_its_own_limited_to_row() -> None:
     data = load_game_data()
     # The general Limited flaw already asks for this, so the duplicate config went away.
     assert "limitedCategory" not in _rows_by_key(PowerEffectInstance("deflect", rank=5), data)
+
+
+# --- the Strength-Based divisor (docs/mm-equipment-design.md §4) ------------------------
+
+
+def test_a_cheap_effect_takes_the_whole_ability() -> None:
+    """Damage is 1 point per rank, so Strength arrives undivided — no divisor at all."""
+    data = load_game_data()
+    char = Character()
+    char.abilities["STR"] = 5
+    effect = PowerEffectInstance("damage", rank=3, extras=[ModifierSelection("strength_based")])
+
+    assert effect_per_rank_cost(effect, data) == 1
+    assert effect_effective_rank(effect, data, char) == 8
+
+
+def test_a_two_point_effect_halves_the_ability_it_folds_in() -> None:
+    """The compound bow from the design doc: Ranged Strength-Based Damage, Strength 5 → +2."""
+    data = load_game_data()
+    char = Character()
+    char.abilities["STR"] = 5
+    effect = PowerEffectInstance(
+        "damage",
+        rank=3,
+        extras=[ModifierSelection("strength_based"), ModifierSelection("ranged")],
+    )
+
+    assert effect_per_rank_cost(effect, data) == 2
+    assert effect_effective_rank(effect, data, char) == 5  # 3 + floor(5 / 2)
+
+
+def test_a_flat_modifier_never_triggers_the_divisor() -> None:
+    """Accurate is charged once, so it does not change what a rank costs (carve-out 2)."""
+    data = load_game_data()
+    char = Character()
+    char.abilities["STR"] = 5
+    effect = PowerEffectInstance(
+        "damage",
+        rank=3,
+        extras=[ModifierSelection("strength_based"), ModifierSelection("accurate", rank=2)],
+    )
+
+    assert effect_per_rank_cost(effect, data) == 1
+    assert effect_effective_rank(effect, data, char) == 8
+
+
+def test_a_sub_one_point_effect_takes_the_whole_ability() -> None:
+    """Carve-out 1: below 1 point per rank the ability is not multiplied either way."""
+    data = load_game_data()
+    char = Character()
+    char.abilities["STR"] = 5
+    effect = PowerEffectInstance(
+        "damage",
+        rank=4,
+        extras=[ModifierSelection("strength_based")],
+        flaws=[ModifierSelection("limited"), ModifierSelection("unreliable")],
+    )
+
+    assert effect_per_rank_cost(effect, data) < 1
+    assert effect_effective_rank(effect, data, char) == 9
+
+
+def test_the_divisor_is_arithmetic_and_needs_no_data() -> None:
+    """The rule itself, stated once: floor division above 1 PP/rank, pass-through below."""
+    assert ability_rank_contribution(5, 1) == 5
+    assert ability_rank_contribution(5, 0) == 5
+    assert ability_rank_contribution(5, 2) == 2
+    assert ability_rank_contribution(5, 3) == 1
+    assert ability_rank_contribution(5, 6) == 0
+    assert ability_rank_contribution(0, 2) == 0
+    assert ability_rank_contribution(-3, 1) == 0

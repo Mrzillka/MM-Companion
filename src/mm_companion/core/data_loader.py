@@ -1160,6 +1160,15 @@ class EquipmentRules:
     contributions to one of them resolve as ``max()`` among themselves and
     ``max()`` again against non-equipment sources — never a sum of the two
     maxima. ``cost_kinds`` maps each ``cost_kind`` to its explanation.
+
+    ``material_toughness`` is the breakage table from
+    ``_meta.strengthBasedDamage.breakage``: how much Toughness an item made of a
+    given material has, which is the most Strength it can carry before it breaks
+    in use (``docs/mm-equipment-design.md`` §4). Which material an item is made of
+    is its own ``implementation.material``. Empty for a ruleset that declares
+    none, which simply means nothing is ever warned about — the warning is a
+    courtesy, not a rule the engine enforces. ``breakage_rule`` is that section's
+    own prose, shown as the warning's tooltip.
     """
 
     currency_name: str = "Equipment Point"
@@ -1169,6 +1178,8 @@ class EquipmentRules:
     stacking_rule: str = ""
     stacking_targets: tuple[str, ...] = ()
     cost_kinds: dict = field(default_factory=dict)
+    material_toughness: dict = field(default_factory=dict)
+    breakage_rule: str = ""
     #: Unrecognised ``_meta`` keys, retained rather than dropped.
     extra: dict = field(default_factory=dict, compare=False)
 
@@ -2027,6 +2038,7 @@ def _parse_equipment_rules(raw: dict) -> EquipmentRules:
     meta = raw.get("_meta", {})
     currency = meta.get("currency", {})
     stacking = meta.get("stackingRule", {})
+    breakage = meta.get("strengthBasedDamage", {}).get("breakage", {})
     defaults = EquipmentRules()
     return EquipmentRules(
         currency_name=str(currency.get("name", defaults.currency_name)),
@@ -2038,6 +2050,11 @@ def _parse_equipment_rules(raw: dict) -> EquipmentRules:
         stacking_rule=str(stacking.get("rule", "")),
         stacking_targets=tuple(str(t) for t in stacking.get("appliesTo", ())),
         cost_kinds=dict(meta.get("costKindKey", {})),
+        material_toughness={
+            str(material): int(toughness)
+            for material, toughness in breakage.get("materialToughness", {}).items()
+        },
+        breakage_rule=str(breakage.get("rule", "")),
         extra=_extras(
             meta,
             "currency",
@@ -2046,6 +2063,7 @@ def _parse_equipment_rules(raw: dict) -> EquipmentRules:
             "equipmentCategoriesNote",
             "costKindKey",
             "stackingRule",
+            "strengthBasedDamage",
             "description",
         ),
     )

@@ -274,7 +274,7 @@ capped at PL — a different cap pair from characters.
 *Verify:* `tests/test_equipment.py`, `tests/test_equipment_section.py`.
 
 ### Phase 11 — Docs, mod hooks, polish
-**Status: todo**
+**Status: done**
 
 `docs/mm-equipment-architecture.md` (the counterpart to `mm-powers-architecture.md`);
 the stat-applier registry added to the registry table in `docs/modding.md`; a sample mod
@@ -1248,3 +1248,72 @@ hand-built Skyhawk whose Flight 9 is on the System block's Speed readout beside 
 tank's.
 
 Next: **Phase 11 — Docs, mod hooks, polish**.
+
+### 2026-08-08 — Phase 11: Docs, mod hooks, polish
+
+**Shipped.** The last phase, and the only one that adds no rules: the equipment layer is
+now written down where the next person will look for it, and the one seam it added is a
+documented, exercised mod hook. Suite: **2226 passed** (was 2224). `ruff` and `black`
+clean.
+
+**`docs/mm-equipment-architecture.md`** — the counterpart to `mm-powers-architecture.md`,
+twelve sections: the wrapping model and the two shapes rejected for it, the two currencies
+and the Removable discount that is never reapplied, the catalog as data, how an entry
+becomes a build, the applier/resolver split, what `worn` gates and the three things that
+deliberately ignore it, accessories, platforms, a table of every place equipment reaches
+the rest of the sheet, the UI, the mod seams, and what is out of scope. It records the
+*whys* that are cheapest to lose: why `item_own_ep_cost` prices `item.build` and not the
+effective build, why editing a stock item can make it cheaper, why Speed is spelled twice
+on a platform, why a cap ignores `worn` while a bonus does not.
+
+**`CLAUDE.md`** gained "The equipment layer" between the powers and session sections,
+plus three corrections the earlier phases left behind: the sheet is **twelve** blocks
+(`EquipmentSection` was missing from the list and from the default arrangement), the
+opening paragraph now says equipment exists, and the data-flow bullet names
+`equipment.json`.
+
+**The mod hook.** `STAT_APPLIERS` is now in `docs/modding.md`'s registry table with its
+own paragraph, and the two rules a handler has to honour are stated there because both
+are silent when broken: **pass `stacking`/`group` through untouched** (they are the
+granter's terms — they are what makes one record stack on a power and not stack on a
+piece of gear), and **decline with `()`** rather than raising, so a character built on a
+disabled mod's effect still loads.
+
+**`docs/sample-mods/field-kit`** is the third sample and the first equipment one:
+`effects.json` adds an Ablative Weave whose `statIntegration.apply` names a kind the base
+engine does not know, `equipment.json` adds an Ablative Vest to the **stock** `armor`
+category built out of it, and `field_kit_mod.py` registers `partial_bonus` (half the
+amount, rounded up). The split is the point of the sample — *what the vest is* is data
+merged by id; *what "partial" means* is the only thing that needed code — and the README
+says which line to edit for each of the three ways to change it, including how to drop
+the Python entirely and fall back to the shipped `bonus` kind.
+
+Two tests in `tests/test_mod_loading.py` (10 → 12), and the second is the one worth
+having: enabled-but-**untrusted**, the vest still merges, still prices at 3 EP and is
+still worn — it simply grants nothing, because an unregistered apply kind yields no
+contributions. That is the promise that a mod losing trust does not make a saved
+character unloadable.
+
+**Theme tokens: nothing to add.** Audited `ui/sections/equipment.py`,
+`equipment_picker.py`, `platform_editor.py` and `ui/cards/` for a hardcoded colour,
+radius, padding or point size — there are none; every one goes through
+`theme.color`/`metric`/`font_size`, and the single token the block introduced
+(`platform.features.height`) landed with Phase 10.
+
+*No source under `src/` changed in this phase* — deliberately. Everything here is docs,
+a sample mod and tests, so there was nothing for the existing suites to disagree with.
+
+*Deliberately not done:*
+- **`docs/modding-tutorial.md` is untouched.** It builds `guardian-kit` step by step
+  around a readout kind; bolting a second mechanic onto the same walk-through would make
+  a beginner's tutorial into a survey. `field-kit` is a *reference* sample with its own
+  README, the shape `flat-bonus-readouts` already had.
+- **No `mm-equipment-ui-design.md`.** The powers layer has one because its constructor is
+  a screen-by-screen design; the Equipment block's UI is a catalog picker and the powers
+  cards, and §10 of the architecture doc covers what is genuinely its own.
+- **`EQUIPMENT_PLAN.md` is still here.** It is deleted as part of the merge into
+  `develop`, which happens when the user says the feature is done — not at the end of a
+  phase.
+
+Next: **nothing — every phase is `done`.** The feature is ready for the user's call on
+merging `feature/equipment` into `develop` (`--no-ff`, deleting this file as part of it).

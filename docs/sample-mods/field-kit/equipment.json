@@ -1,0 +1,22 @@
+{
+  "equipment": [
+    {
+      "id": "ablative_vest",
+      "name": "Ablative Vest",
+      "category": "armor",
+      "subcategory": "modern",
+      "cost": 3,
+      "costKind": "fixed",
+      "description": "A layered vest of sacrificial plating. Rank 4 of Ablative Weave, so it is worth +2 Toughness.",
+      "effects": [
+        {
+          "effect": "effects:ablative_weave",
+          "rank": 4
+        }
+      ],
+      "patterns": [
+        "passive_trait_item"
+      ]
+    }
+  ]
+}

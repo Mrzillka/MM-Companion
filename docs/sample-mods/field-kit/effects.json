@@ -1,0 +1,21 @@
+{
+  "effects": [
+    {
+      "id": "ablative_weave",
+      "name": "Ablative Weave",
+      "effectType": "Defense",
+      "action": "None",
+      "range": "Personal",
+      "duration": "Permanent",
+      "baseCost": "1 per rank",
+      "baseCostValue": 1,
+      "statIntegration": {
+        "pattern": "passive_permanent",
+        "affects": "defense",
+        "target": "TOUGHNESS",
+        "apply": "partial_bonus"
+      },
+      "description": "Armour that only ever half-covers you: it grants half its rank in Toughness, rounded up. The halving is not in this record — 'partial_bonus' names an apply kind this mod's Python module registers, and the engine routes to it."
+    }
+  ]
+}

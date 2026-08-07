@@ -14,7 +14,11 @@ menu and the launcher. Powers *are* modelled now: a player assembles a `Power`
 out of base effects, extras, and flaws in a drag-and-drop **Power Constructor**;
 `core` derives the point cost, game-term summary, effective ranks, runtime
 on/off state, and per-power PL validation, and an active power's trait boosts
-flow through the whole sheet (see "The powers layer" below).
+flow through the whole sheet (see "The powers layer" below). **Equipment** rides on
+that same pipeline: gear is *chosen* from a catalog rather than assembled, bought in
+a second currency (Equipment Points), worn on and off by clicking a card, and rolled
+like an attack power — including vehicles and installations, which are bought as
+traits off their own tables (see "The equipment layer" below).
 
 ## Commands
 
@@ -90,7 +94,9 @@ clean (see Licensing below).
   (effect-specific extras/flaws, keyed by effect id), and `effect_readouts.json`
   (per-effect derived Tier-5 readouts). The powers rules and UI are documented in
   `docs/mm-powers-architecture.md`, `docs/mm-powers-ui-design.md`, and
-  `docs/mm-modifiers-ui-design.md`.
+  `docs/mm-modifiers-ui-design.md`. The gear catalog — items, stock vehicles and
+  installations, their Features, and the two size tables — is `equipment.json`,
+  documented in `docs/mm-equipment-architecture.md` and `docs/mm-equipment-design.md`.
 - Conditions are a small state-tracker, not a build cost. `conditions.json` is the
   single consolidated catalog (short `tooltip` copy + `includes`/`supersedes` graph
   + `mechanisms`/`parameter`/`debilitates` and typed penalty/mod fields), documented
@@ -209,15 +215,15 @@ clean (see Licensing below).
   rows are the last to claim a frame. The GM window gets the same strip, since it
   hosts the same canvas.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
-  `QScrollArea` → `BlockCanvas`) → eleven blocks, each a section `QGroupBox` wrapped
+  `QScrollArea` → `BlockCanvas`) → twelve blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
-  `ComplicationsSection`, `SkillsSection`, `PowersSection`, `DiceSection`. The block
-  set is **not** hardcoded in the sheet:
+  `ComplicationsSection`, `SkillsSection`, `PowersSection`, `EquipmentSection`,
+  `DiceSection`. The block set is **not** hardcoded in the sheet:
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
   block (key, dock title, widget factory, `BlockSize`, default row/col, and
   `default_pinned` for a block that starts in the strip instead of a row), held in an
-  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The eleven
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The twelve
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
   cross-block wiring still reaches it) and passes `default_rows()` plus
@@ -691,7 +697,8 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   the sheet from the block registry's `default_rows()` (grouping descriptors by
   their default row/col): the Name & Details block beside the Character Image, then
   the System / Power Level block full width, the Abilities | Resistances pair, then
-  Conditions, Advantages, Complications, Skills, Powers — plus the registry's
+  Conditions, Advantages, Complications, Skills, Powers, Equipment — plus the
+  registry's
   `default_pin_lines()`, which parks the **Dice Roller** block in the strip on the
   right. A block is in *either* the rows or the strip, never both: the arrangement
   model requires every block exactly once, so `default_arrangement()` excludes the
@@ -833,6 +840,107 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   a stylesheet `font-size` outranks the card's font and would sit the transition
   out. Runtime toggling stays available in the locked read-only view — it is a
   mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`.
+
+## The equipment layer (matters when touching equipment, gear or vehicles)
+
+Equipment is the powers layer used a second way, not a parallel one. The full map is
+`docs/mm-equipment-architecture.md`, the rules themselves are
+`docs/mm-equipment-design.md`; the shape:
+
+- **An item wraps a power.** `core.equipment.EquipmentItem` holds a real
+  `core.powers.Power` in its `build`, plus `catalog_id`, `category`, `platform`,
+  `accessories`, `worn`, `stacks` and `ep_override`. So `power_total_cost`,
+  `effect_stat_rows`, `power_rolls`, `effect_is_active` and `power_pl_violations` all
+  take `item.build` **unchanged** — a rifle is priced, drawn, rolled and validated by
+  the code a Blast power is, which is why the equipment work moved no existing sheet's
+  numbers. `Character.equipment` is its own list beside `Character.powers`, because
+  equipment is *not* a power: a character built entirely from gear legitimately answers
+  "no powers".
+- **Two currencies, and they never mix.** Power Points buy ranks of the Equipment
+  advantage; each rank grants `points_per_advantage_rank` (5) Equipment Points, and
+  those buy the items (`equipment_budget` / `equipment_points_spent` /
+  `equipment_points_remaining` in `core/rules/equipment.py`). An item's price is never a
+  term in `power_points_spent` and never the reverse. Nothing raises when this breaks —
+  the build total is just wrong — so both totals are asserted in
+  `tests/test_equipment.py`.
+- **The Removable discount is never reapplied.** The book prices gear at what its
+  effects would cost *undiscounted*, precisely because the advantage already granted the
+  points. `build_item_from_entry` never attaches a removable-gated flaw, and
+  `item_own_ep_cost` strips one (`_undiscounted`) before pricing a build carrying one
+  anyway. If the cost engine sees `removable` on an item, something has double-counted —
+  and it is silent, every item simply being cheap.
+- **A price has three answers, in order** (`item_own_ep_cost`): an `ep_override`; the
+  catalog's **printed** price while the item is still stock (`item_is_stock` compares a
+  signature of the build against what the entry would produce); otherwise the derived
+  cost plus, for a platform, its bought traits. So **editing a stock item re-prices it,
+  and it can go down** — the printed number sometimes bundles what the generic table
+  does not price. `item_ep_cost` adds everything fitted to it and is what the budget
+  counts.
+- **Stat effects are data** (`core/rules/appliers.py`, the layer below `runtime`). A
+  stat effect is a record (the `TraitBoost` parsed from `statIntegration`) plus an
+  `apply` **kind** naming what it means; each kind is a registered `StatApplier` handed
+  an `ApplyContext` and yielding `TraitContribution`s. Five ship — `bonus`, `speed`,
+  `sense`, `penalty_removed`, `penalty_replaced` — with `register_stat_applier` the mod
+  hook (the third instance of the `PATTERN_BEHAVIOURS` / `GATE_KINDS` pattern). The
+  amount is `flat + rank × per_rank`, all data, defaulting to M&M's rule that the bonus
+  *is* the rank, so an effect declaring none of it behaves exactly as it always did. An
+  **unregistered** kind yields nothing rather than raising.
+- **Gear does not stack, and that is a resolver, not an applier.**
+  `build_contributions(power, char, data, stacking=, group=)` gathers a power *and* an
+  item — one function, so the two can't drift — and the two keywords are the
+  **granter's** terms travelling onto every contribution (a power `STACK_SUM` in
+  `GROUP_POWERS`, a worn item `STACK_MAX` in `GROUP_EQUIPMENT`).
+  `resolve_contributions` then nets one trait under two different rules: **within** a
+  group the `sum` contributions add and the largest `max` one joins them; **between**
+  groups the larger total wins outright, never the sum of the two maxima. Powers keep
+  summing among themselves, which is why no existing number moved;
+  `tests/test_derived_stats.py` is the guard and passes unedited. Whatever lost is
+  reported in `TraitBonus.superseded` and `item_superseded`, so an outclassed item's
+  card says *what* beat it — a silently inert bonus reads as a bug. The per-item
+  `stacks` checkbox opts one item out and badges it homerule.
+- **`worn` is runtime**, exactly like a power's `activated`: left out of `to_dict()`, a
+  loaded character comes up wearing everything, and a card toggle emits `runtimeChanged`
+  (not `changed`), so it works in the locked sheet and never marks it dirty. Three
+  things deliberately ignore it: the **price** (sheathing a sword refunds nothing), **PL
+  validation** (`offensive_builds` yields every item — a sheet that passed by sheathing
+  its sword would validate nothing), and a **GM's pinned chips** (a strip must not
+  rearrange itself mid-fight).
+- **Accessories live on their host.** A scope is a trait of the rifle, not of the
+  character, so an attached accessory sits in `EquipmentItem.accessories` and leaves the
+  loose list. `item_attaches_to` says where it fits, `attachment` is what it lends, and
+  `item_effective_build` merges the two **on demand** — the stored build is never
+  rewritten, so detaching is lossless. Its price folds into the host's, which is the
+  only way the budget counts it at all; note `item_own_ep_cost` prices `item.build` and
+  not the effective build, or the accessory's modifiers would be charged twice.
+- **Platforms are bought as traits, not effects** (`core/rules/platforms.py`): a vehicle
+  is five (Size first — it sets three baselines), an installation is two plus Features.
+  `PlatformSpec` is the shape, and **stock and custom are one shape** — `item_platform`
+  resolves the item's own spec or normalises the printed record into the same one, so
+  there is no custom-platform branch. Carrying a spec is what makes a platform custom
+  (`platform_is_stock`); a spec equal to the printed one is still stock. **Speed is
+  spelled twice on purpose**: the trait on the spec, the movement as a *real effect on
+  the build*, kept in step by the single writer `apply_platform` — which is what puts a
+  hand-built jet's Flight on the System block's Speed readout at a Flight's price.
+  `current_speed` is runtime and the one number that changes *within* a round (a moving
+  vehicle's Defense Class). `vehicle_modifier_advantage_cost` is deliberately a **Power
+  Point** number and is shown, never totalled.
+- **UI.** `ui/cards/` is the card machinery extracted out of the Powers block and shared
+  by both — the draggable card and its eased off-progress, the terms grid, the node
+  list, the dice footer — knowing nothing about *what* is drawn; each drag payload's
+  MIME format is a keyword argument, so two boards can't accept each other's drags.
+  `ui/sections/equipment.py` is the block (budget bar; Add Equipment / Create Custom
+  Item / Create Platform; auto-grouped cards whose group is the item's `category`, a
+  rules fact — so a cross-group drop is refused *visibly* with
+  `DropFeedback.show_reject()`, since a bare `ignore()` reads like a target that didn't
+  notice). The catalog is `ui/sections/equipment_picker.py`, modeless for the reason
+  `pin_picker` is. Custom gear reuses the **Power Constructor in gear mode** (an item's
+  build *is* a power, so there was never a second builder), and a platform's ✎ opens a
+  menu — Traits… (`ui/platform_editor.py`) or Effects… (the constructor) — because a
+  platform is two editable things. The editor computes no price: it applies the spec to
+  a working item and asks `item_ep_cost`, so it and the card can never disagree.
+- Budget breaches **warn, never block** (`equipment_violations`, a red bar and a ⚠).
+  `core.storage.equipment_enforcement()` is the one seam that could change that, beside
+  `pl_enforcement()` — read it through the accessor, never off `load_settings()`.
 
 ## The session layer (matters when touching GM mode / online play)
 
@@ -1221,8 +1329,8 @@ authoring guide is `docs/modding.md`; the shape:
   reusing their names, or add a declarative sheet block via `blocks.json`). A
   **data+Python** mod also ships one `python_module` whose import-time
   `register_*` calls extend an engine registry (readout kinds, condition
-  mechanisms, config-field types/widgets, sheet blocks — see the registry table in
-  `docs/modding.md`).
+  mechanisms, stat appliers, config-field types/widgets, sheet blocks — see the
+  registry table in `docs/modding.md`).
 - **Two settings gates** (`core/storage.DEFAULT_SETTINGS`): `enabled_mods` (ids
   whose *data* layers on) and `trusted_mods` (ids whose *Python* may be imported —
   a separate opt-in because importing runs code). `mods.set_mod_enabled` /

@@ -114,10 +114,13 @@ class PowerCanvas(QFrame):
         game_data: GameData,
         focus_options: list[tuple[str, str]] | None = None,
         character: Character | None = None,
+        unit: str = "PP",
     ) -> None:
         super().__init__()
         self._power = power
         self._data = game_data
+        # The currency every card on this canvas prices itself in; see EffectCard.
+        self._unit = unit
         # The wielder, passed to each card so an ability-folding chip can bound its
         # "amount used" spin box.
         self._character = character
@@ -178,7 +181,9 @@ class PowerCanvas(QFrame):
 
     def _build_card(self, instance: PowerEffectInstance) -> EffectCard:
         """Render a card for an effect instance already on the power."""
-        card = EffectCard(instance, self._data, self._focus_options, self._character)
+        card = EffectCard(
+            instance, self._data, self._focus_options, self._character, unit=self._unit
+        )
         card.changed.connect(self._on_card_changed)
         card.removeRequested.connect(self._remove_card)
         self._cards.append(card)

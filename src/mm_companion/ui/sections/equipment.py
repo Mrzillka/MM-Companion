@@ -8,8 +8,14 @@ game-term tables. What differs is everything *around* the card:
 
 **Gear is chosen, not assembled.** "Add Equipment" opens the
 :class:`~mm_companion.ui.sections.equipment_picker.EquipmentPickerDialog` — the
-catalog, filtered and priced — rather than a brick-builder. Building an item of one's
-own is Phase 7's job.
+catalog, filtered and priced — rather than a brick-builder. But the builder is still
+there for the two cases the catalog cannot answer: **"Create Custom Item"** and a
+card's **✎** open the
+:class:`~mm_companion.ui.power_constructor.PowerConstructorWindow` in gear mode, since
+an item's build *is* a power and there was never a second builder to write. Editing
+works on a deep copy the constructor hands back, which then replaces the original in
+place — the same contract :class:`~mm_companion.ui.sections.powers.PowersSection`
+honours, so closing the editor without saving is a no-op.
 
 **The groups are automatic.** A card's group is its item's ``category``, a rules fact
 about the thing (a rifle is not armour), so a drag reorders items *within* a group and
@@ -67,6 +73,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import DraggableCard, DragHandle, NodeList, RollsFooter, effects_block
+from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -192,6 +199,9 @@ class EquipmentSection(TitledSection):
         # card eases on from where its predecessor was — see _show_worn.
         self._card_off: dict[str, float] = {}
         self._card_off_prev: dict[str, float] = {}
+        # Open constructor windows, kept referenced so Qt does not collect one the
+        # moment the click handler that opened it returns.
+        self._windows: list[PowerConstructorWindow] = []
 
         layout = QVBoxLayout(self)
 
@@ -209,9 +219,20 @@ class EquipmentSection(TitledSection):
         self._groups_host.moveRequested.connect(self._on_group_moved)
         layout.addWidget(self._groups_host)
 
+        # Two ways to acquire gear, side by side because they answer different
+        # questions: "what is there?" and "what do I have in mind?".
+        self._buttons = QWidget()
+        button_row = QHBoxLayout(self._buttons)
+        button_row.setContentsMargins(0, 0, 0, 0)
         self._add_button = QPushButton("Add Equipment")
+        self._add_button.setToolTip("Browse the catalog and pick something off it")
         self._add_button.clicked.connect(self._open_picker)
-        layout.addWidget(self._add_button)
+        button_row.addWidget(self._add_button)
+        self._custom_button = QPushButton("Create Custom Item")
+        self._custom_button.setToolTip("Build a piece of gear the catalog does not have")
+        self._custom_button.clicked.connect(self._create_custom_item)
+        button_row.addWidget(self._custom_button)
+        layout.addWidget(self._buttons)
 
         self.set_block_title("Equipment")
         self._rebuild_list()
@@ -258,6 +279,66 @@ class EquipmentSection(TitledSection):
 
     def _remove_item(self, item: EquipmentItem) -> None:
         self._character.equipment[:] = [i for i in self._character.equipment if i is not item]
+        self._after_change()
+
+    # -- the builder ------------------------------------------------------
+    def _create_custom_item(self) -> None:
+        """Open the constructor on a blank item, for gear the catalog does not carry."""
+        window = PowerConstructorWindow(self._data, character=self._character, gear=True)
+        window.itemSaved.connect(self._on_item_saved)
+        self._track(window)
+
+    def _edit_item(self, item: EquipmentItem) -> None:
+        """Reopen the constructor on an existing item.
+
+        The constructor edits a **deep copy** and hands it back on save, and that copy
+        replaces the original in place — so an editor closed without saving leaves the
+        character's item exactly as it was. A stock item edited here stops matching its
+        catalog entry and is priced from its effects instead
+        (:func:`~mm_companion.core.rules.item_is_stock`), which is the card's price
+        moving off the book's printed number the moment the build stops being the
+        book's.
+        """
+        window = PowerConstructorWindow(self._data, character=self._character, item=item)
+        window.itemSaved.connect(
+            lambda edited, original=item: self._on_item_edited(original, edited)
+        )
+        self._track(window)
+
+    def _track(self, window: PowerConstructorWindow) -> None:
+        """Hold a constructor window open and show it."""
+        window.closed.connect(lambda w=window: self._on_window_closed(w))
+        self._windows.append(window)
+        window.show()
+
+    def _on_window_closed(self, window: PowerConstructorWindow) -> None:
+        if window in self._windows:
+            self._windows.remove(window)
+
+    def _on_item_saved(self, item: EquipmentItem) -> None:
+        self._character.equipment.append(item)
+        self._after_change()
+
+    def _on_item_edited(self, original: EquipmentItem, edited: EquipmentItem) -> None:
+        """Swap the edited copy in for the item it was opened on.
+
+        Matched by id rather than by identity, since the copy carries the original's
+        id and nothing else about it can be relied on to have stayed the same. An
+        original removed while the editor was open is treated as an add, the way
+        :meth:`PowersSection._on_power_edited` treats the same race.
+        """
+        index = next(
+            (
+                i
+                for i, existing in enumerate(self._character.equipment)
+                if existing.id == original.id
+            ),
+            None,
+        )
+        if index is None:
+            self._character.equipment.append(edited)
+        else:
+            self._character.equipment[index] = edited
         self._after_change()
 
     # -- grouping ---------------------------------------------------------
@@ -355,6 +436,14 @@ class EquipmentSection(TitledSection):
         self._after_change()
 
     def _after_change(self) -> None:
+        # Normalise the flat list back into group order first. The drag handlers do
+        # their own reflow before calling here (this repeats it harmlessly), but an
+        # *added* item lands on the end of the list and an *edited* one can have
+        # changed category outright — both would otherwise leave a group's items
+        # scattered through the model, which is the one thing the splice in
+        # :meth:`_on_item_moved` assumes is never true.
+        grouped = self._grouped_items()
+        self._reflow(grouped, self._ordered_categories(grouped))
         self._rebuild_list()
         self.changed.emit()
 
@@ -576,6 +665,16 @@ class EquipmentSection(TitledSection):
         cost.setEnabled(False)
         layout.addWidget(cost)
 
+        # Parented by addWidget *before* the visibility is set, for the reason the
+        # powers header gives: setVisible on a parentless widget flashes a top-level
+        # window.
+        edit = QPushButton("✎")
+        edit.setFixedWidth(24)
+        edit.setToolTip("Edit this item")
+        edit.clicked.connect(lambda _checked=False, i=item: self._edit_item(i))
+        layout.addWidget(edit)
+        edit.setVisible(not self._locked)
+
         remove = QPushButton("✕")
         remove.setFixedWidth(24)
         remove.setToolTip("Remove this item")
@@ -682,7 +781,10 @@ class EquipmentSection(TitledSection):
         switch, not a build edit, which is why it emits :attr:`runtimeChanged`.
         """
         self._locked = locked
-        self._add_button.setVisible(not locked)
+        self._buttons.setVisible(not locked)
         if locked and self._picker is not None:
             self._picker.close()
+        if locked:
+            for window in list(self._windows):
+                window.close()
         self._rebuild_list()

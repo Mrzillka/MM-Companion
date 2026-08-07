@@ -69,10 +69,16 @@ class EffectCard(QFrame):
         game_data: GameData,
         focus_options: list[tuple[str, str]] | None = None,
         character: Character | None = None,
+        unit: str = "PP",
     ) -> None:
         super().__init__()
         self.instance = instance
         self._data = game_data
+        # What this card's running cost is denominated in. The arithmetic is the
+        # same either way — an equipment item's effects cost what they would cost as
+        # a power — but the *currency* is not, and a formula reading "= 3 PP" beside a
+        # total reading "3 EP" is two answers to one question.
+        self._unit = unit
         # The wielder, so an ability-folding chip (Strength-Based) can bound its
         # "amount used" spin box by the character's effective ability.
         self._character = character
@@ -863,7 +869,8 @@ class EffectCard(QFrame):
     def _refresh_cost(self) -> None:
         formula = effect_cost_formula(self.instance, self._data, self._character)
         total = effect_total_cost(self.instance, self._data, self._character)
-        self._cost.setText(f"{formula} = {total} PP" if formula else f"{total} PP")
+        unit = self._unit
+        self._cost.setText(f"{formula} = {total} {unit}" if formula else f"{total} {unit}")
 
     # -- structure role (driven by the canvas) ----------------------------
     def set_role(self, role: str, note: str = "") -> None:

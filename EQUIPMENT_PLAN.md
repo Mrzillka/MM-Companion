@@ -222,7 +222,7 @@ so armour Toughness counts against the paired cap.
 `tests/test_derived_stats.py`.
 
 ### Phase 7 — Custom items via the constructor
-**Status: todo**
+**Status: done**
 
 `PowerConstructorWindow` gains a gear mode: the cost readout reads EP, the title says
 Equipment, and the "stacks with other bonuses" checkbox lives here. Game-term overrides
@@ -810,3 +810,76 @@ on the real app via `driver.py equipment-demo` — the sword's footer, the stowe
 crossbow's dimmed one, and armour with none.
 
 Next: **Phase 7 — Custom items via the constructor**.
+
+### 2026-08-07 — Phase 7: Custom items via the constructor
+
+**Shipped.** Gear is built and edited in the Power Constructor. A **gear mode** on
+`PowerConstructorWindow` (`gear=True` for a blank item, `item=` to edit one), a
+`CostOverrideTarget` seam on `PowerTermsView`, "Create Custom Item" and a card's `✎` on
+the block. Suite: **2126 passed** (was 2098); `test_powers_section`,
+`test_power_constructor` and `test_powers` pass **unedited**, and no existing test was
+touched at all.
+
+*One builder, not two.* An item wraps a real `Power`, so the palette, the canvas, the
+game-term table and every Dev-mode override work on gear untouched — `self.power` simply
+*is* `self.item.build`. Four things differ, and each follows from equipment being a
+different kind of thing bought in a different currency: the currency, a group combo, the
+no-stacking opt-out, and the name rule.
+
+*Five decisions worth keeping:*
+- **A hand-set price is stored on the item, in Equipment Points.** The Dev-mode cost row
+  now writes through a `CostOverrideTarget` (`unit`/`read`/`write`/`derived`) instead of
+  straight at `Power.cost_override`, and gear points it at `EquipmentItem.ep_override`.
+  This is the "Two currencies" risk in the flesh: a price typed as EP and stored on the
+  power would read back as PP to every function that asks a power what it costs, and
+  *nothing would raise*. A test asserts both fields after an override — the EP one set,
+  the PP one still `None`.
+- **Every cost in the window agrees on the currency.** `_currency` is one property the
+  total, the override spin **and each effect card's formula** read; the card's formula
+  was the one that got away in the first pass, reading "= 3 PP" directly under "Total
+  cost: 3 EP". `EffectCard`/`PowerCanvas` took a `unit="PP"` keyword for it, defaulting
+  to today's behaviour.
+- **An item is asked for a name where a power is asked for an effect.** Gear with no
+  effects is ordinary — the five accessories that only modify a host weapon have none,
+  and they still cost points — but an unnamed item is a card reading "Equipment" that
+  nothing tells from the next. That is also why the Dev-mode table now renders its cost
+  row with **no effects present** (the read-only table still shows only its placeholder):
+  an accessory priced by hand is exactly a build with nothing in it.
+- **The group combo seeds itself in `_build_gear_row`, not in `_seed_from_power`.** The
+  build panel is constructed first, so seeding it later let the combo's opening row write
+  `close_weapon` over an edited item's real category on the way past. Found by the test
+  that opens a suit of armour and asks what the combo says.
+- **`_after_change` normalises the flat list into group order.** `Character.equipment` is
+  flat with groups derived from `category`, and an edit can now change an item's category
+  outright — which would leave a group's items scattered through the model, the one thing
+  `_on_item_moved`'s splice assumes is never true. The drag handlers already reflowed;
+  this makes it true after every change.
+
+*Also:* an edit is a deep copy replaced **by id** (an editor closed unsaved is a no-op, and
+an item removed while its editor was open is re-added, matching `PowersSection`); locking
+the sheet closes any open builder as well as the picker, following the picker's Phase 5
+precedent; `driver.py` gained an `equipment-constructor` target.
+
+*Deliberately not done:*
+- **The budget is not checked in the constructor.** The block owns the budget bar, and an
+  item is not on the character while it is being built — "would this overspend" needs a
+  simulation the phase does not need. Overspending warns on the block, as designed.
+- **`implementation` → allocation options is still open** (flagged in Phase 6: gear-granted
+  Enhanced Movement modes are inert against the shipped catalog because
+  `build_item_from_entry` populates no `allocation` config). It is a *catalog-building*
+  job rather than a constructor one, so it belongs with Phase 8's reading of
+  `implementation` for `attachesTo`.
+- No accessory attachment (Phase 8 owns `attachesTo`), no re-rank UI beyond editing the
+  build in the constructor, and docs remain Phase 11's.
+
+*Verified:* `tests/test_equipment_constructor.py` (new, 30 tests — the two titles and
+save-button texts, the EP total against a stock item's printed price, both currencies
+staying put, the group combo in all three seeding cases, the stacks box, five cases on the
+hand-set price including the PP-field-stays-empty trap, the name rule in both directions,
+`itemSaved`/`powerSaved` never crossing, and the block's create/edit/abandon/reprice/
+regroup/locked paths) plus the **unedited** `test_power_constructor`, `test_powers_section`,
+`test_equipment_section`, `test_powers`, `test_equipment`. Full suite **2126 passed**;
+`ruff` and `black` clean. Eyes on the real app: the gear constructor on a catalog sword and
+the block's two-button row.
+
+Next: **Phase 8 — Strength-based weapons and accessories**.

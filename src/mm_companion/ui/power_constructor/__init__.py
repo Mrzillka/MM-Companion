@@ -29,6 +29,13 @@ that merely warns or actually blocks the save is a single app-wide switch —
 :func:`~mm_companion.core.storage.pl_enforcement` — so it can move to a settings
 toggle later without touching this window.
 
+The same window builds a piece of **equipment** when opened in gear mode
+(``PowerConstructorWindow(..., gear=True)``, or with an ``item=`` to edit): an
+:class:`~mm_companion.core.equipment.EquipmentItem` wraps a real power, so every brick,
+card and override works unchanged and only the currency, the group combo, the
+no-stacking opt-out and the name rule differ. It hands the finished item back on
+:attr:`PowerConstructorWindow.itemSaved`. See that class's docstring.
+
 This module was split into a package for navigability (the old single file topped
 2600 lines); the public surface — :class:`PowerConstructorWindow` and the modding
 seams below — is re-exported here so ``mm_companion.ui.power_constructor`` keeps
@@ -49,13 +56,14 @@ from mm_companion.ui.power_constructor.common import (
 )
 from mm_companion.ui.power_constructor.effect_card import EffectCard
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
-from mm_companion.ui.power_constructor.terms_view import PowerTermsView
+from mm_companion.ui.power_constructor.terms_view import CostOverrideTarget, PowerTermsView
 from mm_companion.ui.power_constructor.window import PowerConstructorWindow
 
 __all__ = [
     "BrickWidget",
     "CONFIG_WIDGET_BUILDERS",
     "ConfigWidgetBuilder",
+    "CostOverrideTarget",
     "EffectCard",
     "ModifierChip",
     "ModifierGroup",

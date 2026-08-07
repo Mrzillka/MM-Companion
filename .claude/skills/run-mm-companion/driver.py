@@ -176,6 +176,21 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target == "equipment-constructor":
+        # The same builder in gear mode, opened on a catalog sword: the shot is about
+        # what differs — the Equipment title, the EP total, and the group combo beside
+        # the no-stacking opt-out.
+        from mm_companion.core.character import AdvantageSelection, Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=3))
+        item = build_item_from_entry(data.equipment_catalog()["sword"], data)
+        char.equipment.append(item)
+        win = PowerConstructorWindow(data, character=char, item=item)
     elif target in ("dice", "dice-demo"):
         # The roller is a sheet block now, pinned in the strip by default, so the
         # shot is of the sheet — there is no standalone roller window.
@@ -438,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",
+            "equipment-constructor",
             "focus",
             "dice",
             "dice-demo",

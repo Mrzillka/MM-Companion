@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -53,6 +54,31 @@ _OVERRIDE_STD_FIELDS = (
 _OVERRIDE_STD_KEYS = frozenset(key for key, _, _ in _OVERRIDE_STD_FIELDS)
 
 
+@dataclass(frozen=True)
+class CostOverrideTarget:
+    """Where the Dev-mode "Override total cost" row reads and writes, and in what unit.
+
+    A power overrides its own :attr:`~mm_companion.core.powers.Power.cost_override`, in
+    Power Points, and that is what this table does with no target set. An **equipment
+    item** is bought in the other currency, so the constructor's gear mode hands one of
+    these in pointing at
+    :attr:`~mm_companion.core.equipment.EquipmentItem.ep_override` instead.
+
+    The indirection exists precisely so the two currencies never share a field: a price
+    typed as Equipment Points and stored on ``Power.cost_override`` would read back as
+    Power Points to every function that asks a power what it costs, and nothing would
+    raise — it would simply be wrong (``EQUIPMENT_PLAN.md``, "Two currencies").
+
+    :attr:`derived` supplies what the spin box starts at when nothing is overridden yet,
+    so the player edits *from* the engine's own answer rather than from zero.
+    """
+
+    unit: str
+    read: Callable[[], int | None]
+    write: Callable[[int | None], None]
+    derived: Callable[[], int]
+
+
 class PowerTermsView(QWidget):
     """A read-only, tinted game-term breakdown of the power as a per-effect table.
 
@@ -89,11 +115,23 @@ class PowerTermsView(QWidget):
         self._game_data: GameData | None = None
         self._char: Character | None = None
         self._editable = False
+        # Where the cost-override row reads and writes; None means the power's own
+        # ``cost_override``, in Power Points.
+        self._cost_target: CostOverrideTarget | None = None
 
     def set_power(self, power: Power, game_data: GameData, char: Character | None = None) -> None:
         self._power = power
         self._game_data = game_data
         self._char = char
+        self._render()
+
+    def set_cost_override_target(self, target: CostOverrideTarget | None) -> None:
+        """Point the Dev-mode cost override at something other than the power itself.
+
+        Set once by the host window (the constructor's gear mode); see
+        :class:`CostOverrideTarget` for why the field is not simply shared.
+        """
+        self._cost_target = target
         self._render()
 
     def set_editable(self, editable: bool) -> None:
@@ -106,7 +144,7 @@ class PowerTermsView(QWidget):
         power, game_data = self._power, self._game_data
         if power is None or game_data is None:
             return
-        if not power.effects:
+        if not power.effects and not self._editable:
             placeholder = QLabel("Game-term summary appears here as you add effects.")
             placeholder.setStyleSheet(muted_style(italic=True))
             placeholder.setWordWrap(True)
@@ -170,6 +208,11 @@ class PowerTermsView(QWidget):
         it, so ticking Dev mode doesn't restate an effect's Check line without the
         combat focus it is linked to — which would make the by-the-book value look like
         an override and badge the power homerule for correcting it back.
+
+        The cost row is rendered even with **no effects**, where the read-only table
+        shows only its placeholder: a hand-set price is a fact about the whole build and
+        an equipment accessory — gear that has a price and modifies its host rather than
+        doing anything itself — is exactly a build with none.
         """
         self.effect_rows = []
         self._layout.addWidget(self._cost_override_row(power, game_data, char))
@@ -189,13 +232,20 @@ class PowerTermsView(QWidget):
         row = QHBoxLayout(host)
         row.setContentsMargins(0, 0, 0, 0)
         self._cost_override_check = QCheckBox("Override total cost")
-        overridden = power.cost_override is not None
+        target = self._cost_target
+        stored = target.read() if target is not None else power.cost_override
+        overridden = stored is not None
         self._cost_override_check.setChecked(overridden)
-        current = power.cost_override if overridden else power_total_cost(power, game_data, char)
+        if overridden:
+            current = stored
+        elif target is not None:
+            current = target.derived()
+        else:
+            current = power_total_cost(power, game_data, char)
         self._cost_override_spin = make_spin_box(
             0, 9999, value=int(current), buttons=False, max_width=72
         )
-        self._cost_override_spin.setSuffix(" PP")
+        self._cost_override_spin.setSuffix(f" {target.unit if target else 'PP'}")
         self._cost_override_spin.setEnabled(overridden)
         self._cost_override_check.toggled.connect(self._on_cost_override_toggled)
         self._cost_override_spin.valueChanged.connect(self._on_cost_override_value)
@@ -204,15 +254,21 @@ class PowerTermsView(QWidget):
         row.addStretch()
         return host
 
+    def _write_cost_override(self, value: int | None) -> None:
+        """Store (or clear) the hand-set price, wherever this table's target keeps it."""
+        if self._cost_target is not None:
+            self._cost_target.write(value)
+        elif self._power is not None:
+            self._power.cost_override = value
+
     def _on_cost_override_toggled(self, on: bool) -> None:
         self._cost_override_spin.setEnabled(on)
-        if self._power is not None:
-            self._power.cost_override = self._cost_override_spin.value() if on else None
+        self._write_cost_override(self._cost_override_spin.value() if on else None)
         self.edited.emit()
 
     def _on_cost_override_value(self, value: int) -> None:
-        if self._power is not None and self._cost_override_check.isChecked():
-            self._power.cost_override = value
+        if self._cost_override_check.isChecked():
+            self._write_cost_override(value)
             self.edited.emit()
 
     def _effect_edit_group(

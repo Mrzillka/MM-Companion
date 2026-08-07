@@ -30,16 +30,20 @@ def test_catalog_loads_with_unique_ids() -> None:
 
 
 def test_equipment_catalog_is_an_id_lookup() -> None:
-    """Items and vehicles, in one lookup.
+    """Items and both kinds of platform, in one lookup.
 
-    A stock vehicle enters the rules layer as one more catalog entry (Phase 9), which
-    is what lets it be picked, priced, worn and drawn by the code that already exists.
+    A stock vehicle or installation enters the rules layer as one more catalog entry,
+    which is what lets it be picked, priced, worn and drawn by the code that already
+    exists.
     """
     data = load_game_data()
     catalog = data.equipment_catalog()
-    assert len(catalog) == len(data.equipment) + len(data.vehicle_entries)
+    assert len(catalog) == (
+        len(data.equipment) + len(data.vehicle_entries) + len(data.installation_entries)
+    )
     assert catalog["crossbow"].name == "Crossbow"
     assert catalog["tank"].name == "Tank"
+    assert catalog["moon_base"].name == "Moon-Base"
 
 
 def test_item_effects_and_modifiers_name_real_records() -> None:
@@ -253,6 +257,69 @@ def test_vehicle_features_and_modifiers_parse() -> None:
     assert "durable" not in data.modifier_catalog()
 
 
+# --- Installations ----------------------------------------------------------
+
+
+def test_stock_installations_parse_with_their_traits_and_features() -> None:
+    data = load_game_data()
+    assert data.installations
+    ids = [installation.id for installation in data.installations]
+    assert len(ids) == len(set(ids))
+
+    base = data.installation_catalog()["moon_base"]
+    assert (base.size, base.toughness, base.cost) == (9, 2, 39)
+    assert "holding_cells" in base.features
+    assert base.patterns == ("platform",)
+
+
+def test_every_installation_feature_reference_resolves() -> None:
+    """An installation is its Features, so a dangling one is a hole in the record."""
+    data = load_game_data()
+    features = set(data.installation_feature_catalog())
+    assert len(features) == 36
+
+    for installation in data.installations:
+        for feature in installation.features:
+            assert feature in features, f"{installation.id} names unknown feature {feature}"
+
+
+def test_installation_features_parse_with_their_escalation() -> None:
+    data = load_game_data()
+    features = data.installation_feature_catalog()
+    assert features["concealed"].repeatable is True
+    assert features["communications"].repeatable is False
+    assert features["holding_cells"].cost == 1
+    # Two catalogs, not one: a base has no Caltrops and a car has no Holding Cells.
+    assert "caltrops" not in features
+    assert "holding_cells" not in data.vehicle_feature_catalog()
+
+
+def test_the_installation_size_table_and_its_free_starting_points_parse() -> None:
+    rules = load_game_data().installation_rules
+    assert rules.category == "installation"
+    assert [row.size_rank for row in rules.size_table] == list(range(1, 12))
+    assert rules.size_row(5).cost == 0 and rules.size_row(5).examples == ("House",)
+    assert (rules.free_size_rank, rules.free_toughness, rules.toughness_per_point) == (5, 6, 2)
+
+
+def test_the_installation_power_level_pair_is_data() -> None:
+    """Twice PL of Toughness, Impervious capped at PL — and *which* modifier that is."""
+    rules = load_game_data().installation_rules
+    assert (rules.toughness_pl_multiple, rules.impervious_pl_multiple) == (2, 1)
+    assert rules.impervious_modifier == "impervious"
+
+
+def test_installation_entries_are_ordinary_catalog_entries() -> None:
+    """The Phase 9 bargain again: no installation branch anywhere downstream."""
+    data = load_game_data()
+    entry = data.equipment_catalog()["abandoned_warehouse"]
+    assert entry.category == "installation"
+    assert entry.cost == 14
+    # It has no movement and no weapons, so it carries no effects at all — what it
+    # *does* is its Features, which are traits rather than a bundle of effects.
+    assert entry.effects == ()
+
+
 # --- Mod extensibility ------------------------------------------------------
 
 
@@ -368,3 +435,47 @@ def test_a_mod_overrides_one_field_of_a_stock_vehicle(_home: Path) -> None:
     tank = load_game_data().vehicle_catalog()["tank"]
     assert tank.toughness == 14
     assert len(tank.weapons) == 2  # what the mod didn't restate survives
+
+
+def test_a_mod_adds_an_installation_and_a_feature(_home: Path) -> None:
+    """Platforms are merged by id like everything else, so a mod extends both catalogs."""
+    _write_mod(
+        {
+            "installationFeatures": [
+                {
+                    "id": "orbital_launch",
+                    "name": "Orbital Launch",
+                    "cost": 1,
+                    "repeatable": False,
+                    "description": "A silo that can put something in orbit.",
+                }
+            ],
+            "stockInstallations": [
+                {
+                    "id": "launch_complex",
+                    "name": "Launch Complex",
+                    "size": 8,
+                    "toughness": 10,
+                    "cost": 12,
+                    "costKind": "fixed",
+                    "features": ["installationFeatures:orbital_launch"],
+                    "patterns": ["platform"],
+                }
+            ],
+        },
+    )
+
+    data = load_game_data()
+    assert data.installation_feature_catalog()["orbital_launch"].name == "Orbital Launch"
+    entry = data.equipment_catalog()["launch_complex"]
+    assert entry.category == "installation" and entry.cost == 12
+    assert "moon_base" in data.installation_catalog()  # the shipped nine survive
+
+
+def test_a_mod_overrides_an_installations_traits(_home: Path) -> None:
+    """A record merges field by field, so a house rule restates only what it changes."""
+    _write_mod({"stockInstallations": [{"id": "moon_base", "toughness": 20}]})
+
+    base = load_game_data().installation_catalog()["moon_base"]
+    assert base.toughness == 20  # the printed 2 is the recorded discrepancy
+    assert base.size == 9 and base.cost == 39  # everything else is the shipped record

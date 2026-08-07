@@ -137,6 +137,19 @@
       "defenseRank": "A moving vehicle's Defense rank equals its current speed rank plus the Defense modifier for its Size.",
       "defenseClass": "10 + Defense rank",
       "stationary": "A stationary vehicle can be attacked as a routine check at DC 10 plus the vehicle's Defense modifier."
+    },
+    "installationCategory": "installation",
+    "installationTraits": {
+      "freeSizeRank": 5,
+      "freeToughness": 6,
+      "toughnessPerPoint": 2,
+      "note": "An installation starts at size rank 5 (a house) and Toughness 6 for nothing; size costs 1 Equipment Point per rank up (and refunds 1 per rank down), Toughness 1 per +2, and each Feature 1. The printed trait table gives Size a starting rank of 0, which contradicts both the surrounding text and the size table itself (rank 11 = 6 points, rank 1 = -4, i.e. exactly sizeRank - 5); rank 5 is used."
+    },
+    "installationPowerLevel": {
+      "toughnessMultiplier": 2,
+      "imperviousMultiplier": 1,
+      "imperviousModifier": "modifiers:impervious",
+      "note": "An installation has no defences other than its Toughness, so its Toughness may reach twice the series Power Level while Impervious stays capped at the Power Level itself. That is a different cap pair from a character's."
     }
   },
   "equipment": [
@@ -5155,6 +5168,9 @@
         "installationFeatures:living_space",
         "installationFeatures:power_system",
         "installationFeatures:security_system"
+      ],
+      "patterns": [
+        "platform"
       ]
     },
     {
@@ -5179,7 +5195,11 @@
         "installationFeatures:power_system",
         "installationFeatures:security_system",
         "installationFeatures:workshop"
-      ]
+      ],
+      "patterns": [
+        "platform"
+      ],
+      "notes": "Printed Toughness is 2, which is below the free starting Toughness of 6 and inconsistent with the 39-point total; 20 fits the arithmetic. Security System is listed at DC 25 (2 ranks) and the base also carries a Teleport (Affects Others) effect."
     },
     {
       "id": "orbiting_satellite",
@@ -5202,7 +5222,11 @@
         "installationFeatures:living_space",
         "installationFeatures:power_system",
         "installationFeatures:security_system"
-      ]
+      ],
+      "patterns": [
+        "platform"
+      ],
+      "notes": "Also carries a Teleport (Affects Others) effect."
     },
     {
       "id": "sanctum_sanctorum",
@@ -5218,7 +5242,11 @@
         "installationFeatures:living_space",
         "installationFeatures:security_system",
         "installationFeatures:workshop"
-      ]
+      ],
+      "patterns": [
+        "platform"
+      ],
+      "notes": "Dual Size is set to a Huge interior."
     },
     {
       "id": "sea_base",
@@ -5236,6 +5264,9 @@
         "installationFeatures:living_space",
         "installationFeatures:power_system",
         "installationFeatures:security_system"
+      ],
+      "patterns": [
+        "platform"
       ]
     },
     {
@@ -5258,6 +5289,9 @@
         "installationFeatures:power_system",
         "installationFeatures:security_system",
         "installationFeatures:workshop"
+      ],
+      "patterns": [
+        "platform"
       ]
     },
     {
@@ -5281,6 +5315,9 @@
         "installationFeatures:power_system",
         "installationFeatures:security_system",
         "installationFeatures:workshop"
+      ],
+      "patterns": [
+        "platform"
       ]
     },
     {
@@ -5302,6 +5339,9 @@
         "installationFeatures:living_space",
         "installationFeatures:power_system",
         "installationFeatures:security_system"
+      ],
+      "patterns": [
+        "platform"
       ]
     },
     {
@@ -5325,6 +5365,9 @@
         "installationFeatures:power_system",
         "installationFeatures:security_system",
         "installationFeatures:workshop"
+      ],
+      "patterns": [
+        "platform"
       ]
     }
   ],

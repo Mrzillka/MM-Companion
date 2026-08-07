@@ -9,20 +9,30 @@ resulting ``Character.equipment``.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.equipment import (
+    PLATFORM_INSTALLATION,
+    PLATFORM_VEHICLE,
+    EquipmentItem,
+)
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
     PIN_EQUIPMENT,
     PinRef,
+    apply_platform,
     build_item_from_entry,
+    item_ep_cost,
     item_superseded,
+    new_platform,
+    platform_rules_category,
     resolve_pin,
 )
 from mm_companion.ui.cards import DraggableCard, NodeList, RollLine, RollsFooter
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.platform_editor import PlatformEditorDialog, platform_kind_title
 from mm_companion.ui.sections.equipment import (
     EQUIPMENT_GROUP_MIME,
     EQUIPMENT_MIME,
@@ -671,3 +681,173 @@ def test_parking_a_vehicle_reads_as_parking_not_as_stowing(qapp, data) -> None:
     tank, sword = char.equipment[0], char.equipment[1]
     assert "park" in _card(section, tank).toolTip()
     assert "stow" in _card(section, sword).toolTip()
+
+
+# -- installations and custom platforms -------------------------------------------------
+
+
+def _platform(data, kind: str) -> EquipmentItem:
+    """A blank platform, the way the block's Create Platform button makes one."""
+    spec = new_platform(kind, data)
+    item = EquipmentItem(category=platform_rules_category(kind, data), platform=spec)
+    item.build.name = f"New {platform_kind_title(kind, data)}"
+    apply_platform(item, spec, data)
+    return item
+
+
+def test_an_installation_card_shows_its_two_traits_and_its_features(qapp, data) -> None:
+    """A far shorter grid than a vehicle's, because an installation is a shorter thing."""
+    char = _hero(data, "moon_base")
+    section = _section(data, char)
+
+    labels = _labels(section._make_card(char.equipment[0]))
+
+    assert "Size:" in labels and "Toughness:" in labels and "Features:" in labels
+    assert "Defense Class:" not in labels  # a base does not dodge
+    assert "Range:" not in labels  # nor is it a bundle of effects
+
+
+def test_opening_a_base_reads_as_opening_not_as_wearing(qapp, data) -> None:
+    """The same switch, in the third set of words it needs: worn / boarded / opened."""
+    char = _hero(data, "moon_base", "tank", "sword")
+    section = _section(data, char)
+
+    base, tank, sword = char.equipment[0], char.equipment[1], char.equipment[2]
+    assert "close" in _card(section, base).toolTip()
+    assert "park" in _card(section, tank).toolTip()
+    assert "stow" in _card(section, sword).toolTip()
+
+
+def test_a_vehicle_card_carries_a_throttle_and_an_installation_does_not(qapp, data) -> None:
+    """The one number that changes within a round, and the card it belongs on."""
+    char = _hero(data, "tank", "moon_base", "sword")
+    section = _section(data, char)
+    tank, base, sword = char.equipment[0], char.equipment[1], char.equipment[2]
+
+    assert section._throttle_row(tank) is not None
+    assert section._throttle_row(base) is None
+    assert section._throttle_row(sword) is None
+
+
+def test_the_throttle_restates_the_defense_class_without_rebuilding_the_card(qapp, data) -> None:
+    """It must not: the spin box being dragged is a child of the card it would destroy."""
+    char = _hero(data, "tank")
+    section = _section(data, char)
+    tank = char.equipment[0]
+    card = _card(section, tank)
+    assert "14 moving / 8 stationary" in _labels(card)
+
+    dirtied = []
+    section.changed.connect(lambda: dirtied.append(True))
+    section._on_throttle(tank, 2)
+
+    assert card is _card(section, tank)  # the same card, restated in place
+    assert "10 moving / 8 stationary" in _labels(card)
+    assert not dirtied  # driving slowly is not a build edit
+
+
+def test_the_platform_editor_prices_the_whole_item(qapp, data) -> None:
+    """Traits, Features and the movement effect — the number the card will show.
+
+    The dialog computes nothing itself: it applies the spec to a working item and asks
+    the rules layer, which is what stops the two numbers ever disagreeing.
+    """
+    char = _hero(data)
+    item = _platform(data, PLATFORM_VEHICLE)
+    dialog = PlatformEditorDialog(data, char, item)
+
+    dialog._size.setValue(2)
+    dialog._strength.setValue(10)
+    dialog._toughness.setValue(12)
+    dialog._defense.setValue(-2)  # the penalty its size confers, left unbought
+    dialog._speed.setValue(6)
+    dialog.accept()
+
+    assert dialog.item.platform.size == 2
+    assert item_ep_cost(dialog.item, data, char) == 17  # 11 of traits + Speed 6
+    assert dialog._cost.text() == "17 EP"
+
+
+def test_choosing_a_size_carries_the_traits_it_sets(qapp, data) -> None:
+    """Size is chosen first, and you keep what you bought above each baseline."""
+    char = _hero(data)
+    dialog = PlatformEditorDialog(data, char, _platform(data, PLATFORM_VEHICLE))
+    assert dialog._strength.value() == 2  # what size 0 gives
+    dialog._strength.setValue(4)  # two points of bought Strength
+
+    dialog._size.setValue(3)
+
+    assert dialog._strength.value() == 10  # the new baseline of 8, plus the two bought
+    assert dialog._strength.minimum() == 8  # and cannot be typed back under it
+    assert dialog._toughness.value() == 8
+    # The Defense penalty follows too, rather than leaving three points quietly bought.
+    assert dialog._defense.value() == -3
+    assert item_ep_cost(dialog.item, data, char) == 3 + 2 + 1  # size, Strength, Speed 1
+
+
+def test_an_editor_opened_on_a_printed_platform_leaves_it_alone(qapp, data) -> None:
+    """A sailboat's printed Toughness is one under its size's, and that is not ours to fix.
+
+    Correcting it on open would re-price a boat someone opened to add a Feature to.
+    """
+    char = _hero(data, "sailboat")
+    dialog = PlatformEditorDialog(data, char, char.equipment[0])
+
+    assert dialog._toughness.value() == 6
+    dialog.accept()
+    assert dialog.item.platform.toughness == 6
+
+
+def test_the_editor_shows_the_vehicle_modifiers_in_the_other_currency(qapp, data) -> None:
+    """Durable prices the Equipment *advantage* in Power Points, and says so on its own line."""
+    char = _hero(data)
+    dialog = PlatformEditorDialog(data, char, _platform(data, PLATFORM_VEHICLE))
+    assert not dialog._advantage_cost.text()
+
+    dialog._modifier_boxes["durable"].setChecked(True)
+
+    assert "PP" in dialog._advantage_cost.text()
+    assert "EP" in dialog._cost.text()
+    assert "PP" not in dialog._cost.text()  # the two never mix
+
+
+def test_an_installation_editor_warns_about_its_own_cap_pair(qapp, data) -> None:
+    """Toughness to twice PL is fine; Impervious past PL is not (§6)."""
+    char = _hero(data)
+    dialog = PlatformEditorDialog(data, char, _platform(data, PLATFORM_INSTALLATION))
+
+    dialog._toughness.setValue(char.power_level * 2)
+    assert not dialog._warnings.text()
+
+    dialog._toughness.setValue(char.power_level * 2 + 1)
+    assert "installation cap" in dialog._warnings.text()
+
+    dialog._toughness.setValue(char.power_level * 2)
+    dialog._impervious.setValue(char.power_level + 1)
+    assert "Impervious" in dialog._warnings.text()
+
+
+def test_an_installations_features_are_bought_in_the_editor(qapp, data) -> None:
+    """One point each, and a repeatable one bought twice reads as two ranks."""
+    char = _hero(data)
+    dialog = PlatformEditorDialog(data, char, _platform(data, PLATFORM_INSTALLATION))
+
+    dialog._feature_boxes["laboratory"].setValue(1)
+    dialog._feature_boxes["concealed"].setValue(2)
+    dialog.accept()
+
+    assert dialog.item.platform.features.count("concealed") == 2
+    assert item_ep_cost(dialog.item, data, char) == 3
+    assert dialog._feature_boxes["laboratory"].maximum() == 1  # not repeatable
+
+
+def test_a_platform_card_offers_both_of_its_editors(qapp, data) -> None:
+    """Traits and effects are two different things and live in two different editors."""
+    char = _hero(data, "tank", "sword")
+    section = _section(data, char)
+
+    tank_edit = [b for b in _card(section, char.equipment[0]).findChildren(QPushButton)]
+    sword_edit = [b for b in _card(section, char.equipment[1]).findChildren(QPushButton)]
+
+    assert any("traits" in b.toolTip() for b in tank_edit)
+    assert not any("traits" in b.toolTip() for b in sword_edit)

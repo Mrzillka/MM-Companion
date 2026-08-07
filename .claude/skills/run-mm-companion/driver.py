@@ -169,6 +169,49 @@ def build(target: str):
             if key not in ("equipment", "system_info"):
                 sheet.hide_block(key)
         win.resize(820, 860)
+    elif target == "equipment-platforms":
+        # Phase 10: the two kinds of platform side by side, one printed and one built.
+        # A moon-base (its own short trait grid, its fifteen Features on one row), a
+        # tank (the throttle under its grid, which restates the Defense Class), and a
+        # hand-built jet whose Flight the editor bought and whose Speed reaches the
+        # System block exactly as a printed vehicle's does.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.equipment import PLATFORM_VEHICLE, EquipmentItem
+        from mm_companion.core.rules import (
+            apply_platform,
+            build_item_from_entry,
+            new_platform,
+            platform_rules_category,
+        )
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=25))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("tank", "moon_base"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+
+        spec = new_platform(PLATFORM_VEHICLE, sheet._data)
+        spec.vehicle_class, spec.size, spec.speed = "air", 3, 9
+        spec.strength, spec.toughness, spec.defense_modifier = 10, 9, -3
+        spec.features = ["autopilot", "alarm"]
+        built = EquipmentItem(
+            category=platform_rules_category(PLATFORM_VEHICLE, sheet._data),
+            platform=spec,
+        )
+        built.build.name = "Skyhawk"
+        built.build.description = "Built off the trait table rather than picked."
+        apply_platform(built, spec, sheet._data)
+        char.equipment.append(built)
+
+        sheet.equipment.refresh()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("equipment", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 900)
     elif target in ("sheet-pinned", "sheet-pinned-bottom"):
         # The pinned strip with something in it: two blocks parked outside the
         # scrolling page. The bottom variant also moves the strip to another edge,
@@ -477,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-locked",
             "equipment-demo",
             "equipment-vehicles",
+            "equipment-platforms",
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",

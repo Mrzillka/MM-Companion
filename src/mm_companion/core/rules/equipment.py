@@ -32,9 +32,9 @@ from ..equipment import PER_RANK_COST_KINDS, EquipmentItem
 from ..powers import ModifierSelection, Power, PowerEffectInstance
 from .appliers import GROUP_EQUIPMENT, STACK_MAX, STACK_SUM
 from .derived import effective_ability, trait_bonuses
+from .platforms import item_platform_cost, platform_is_stock
 from .powers_cost import power_total_cost
 from .runtime import build_contributions, equipment_contributions, worn_items
-from .vehicles import item_platform_cost
 
 __all__ = [
     "GrantedAdvantage",
@@ -556,10 +556,15 @@ def item_is_stock(item: EquipmentItem, game_data: GameData) -> bool:
     comparison is against a *freshly built* entry at this item's own rank, so a
     ranked item is stock at every rank. A custom item (no ``catalog_id``, or an id no
     loaded ruleset defines) is never stock.
+
+    A **platform** has a second half to the same question, since its traits live
+    outside its build: a jet whose Toughness the player raised is no longer the
+    catalog's jet even though its effects are untouched, and pricing it at the printed
+    number would hand those points away (:func:`~.platforms.platform_is_stock`).
     """
 
     entry = game_data.equipment_catalog().get(item.catalog_id)
-    if entry is None:
+    if entry is None or not platform_is_stock(item, game_data):
         return False
     stock = build_item_from_entry(entry, game_data, rank=item_rank(item)).build
     return _build_signature(stock) == _build_signature(item.build)
@@ -613,7 +618,7 @@ def item_own_ep_cost(
        :func:`~.powers_cost.power_total_cost` a power pays, minus any Removable
        discount, since an item's price is what its effects would cost *undiscounted*
        — plus, for a vehicle, its platform traits
-       (:func:`~.vehicles.item_platform_cost`), which are bought off their own table
+       (:func:`~.platforms.item_platform_cost`), which are bought off their own table
        rather than through effects.
 
     Note this prices ``item.build`` and never

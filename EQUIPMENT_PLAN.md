@@ -262,7 +262,7 @@ a separate field, not a folded-in modifier.
 *Verify:* `tests/test_equipment_data.py`, `tests/test_equipment_section.py`.
 
 ### Phase 10 — Custom vehicles and installations
-**Status: todo**
+**Status: done**
 
 The vehicle trait-cost builder (Size chosen first, since it sets the STR/TOU/DEF
 baselines; ranks past 5 extend arithmetically), moving Defense rank
@@ -1102,3 +1102,149 @@ on the real app confirm the trait grid, the named dice footer, and "Tank 6" and
 "Jumbo Jet 9" both on the System block's Speed readout.
 
 Next: **Phase 10 — Custom vehicles and installations**.
+
+### 2026-08-08 — Phase 10: Custom vehicles and installations
+
+**Shipped.** Both kinds of platform can now be *built* as well as picked: a vehicle off
+the §5 trait table, an installation off the §6 one, plus the nine printed installations,
+the 36 installation Features, the installations' own PL cap pair, and a throttle that
+makes a vehicle's moving Defense Class a live number. Suite: **2224 passed** (was 2184).
+`ruff` and `black` clean.
+
+**The decision the phase turns on: stock and custom are one shape.** A new
+`core.equipment.PlatformSpec` holds a platform's bought traits, and
+`rules.platforms.item_platform(item, data)` resolves it — the item's own spec if it has
+one, otherwise the printed record *normalised into the same spec*
+(`PlatformSpec.from_vehicle` / `.from_installation`). So there is no custom-platform
+branch anywhere: one cost function, one trait grid, one card, one picker. The rejected
+alternative was a `CustomVehicle` record beside `StockVehicle`, which would have needed
+a twin of every reader and would have drifted the first time one of them changed.
+
+*Carrying a spec is what makes a platform custom*, and `platform_is_stock` is the second
+half of `item_is_stock` — without it a jet whose Toughness the player raised would keep
+the book's printed price and the points would simply be free. A spec that happens to
+**equal** the printed one is still stock, so a no-op pass through the editor moves no
+price (the same contract a no-op pass through the constructor has).
+
+**`core/rules/vehicles.py` became `core/rules/platforms.py`** (a `git mv`, every public
+name kept, one line changed in `rules/__init__`). Installations are the second platform
+and far too small for a module of their own; what they share — resolution, Features,
+pricing, the movement effect — is most of the file.
+
+**Where a platform's Speed lives, and why it is spelled twice.** The trait is on the
+spec; the **movement is a real effect on the build**, exactly as it is for a printed
+vehicle. `apply_platform(item, spec, data)` is the one writer that keeps the two in
+step, and that is what makes a hand-built jet's Flight reach the sheet's Speed readout,
+cost what Flight costs, and show up in the effect list the constructor edits — with no
+platform branch in any of the three. Two subtleties are load-bearing:
+- **The movement effect is identified by what it *is*, not by remembering where it was
+  put** (`platform_movement_index`: the first effect in the build that one of the
+  ruleset's vehicle classes measures Speed in, or the one the spec names). The first
+  version diffed the old spec against the new, which is wrong the moment the caller
+  passes the item's *own* spec — the ordinary case, since the editor edits the live one.
+  A test (`…speed_is_a_real_effect_on_its_build`) holds it.
+- **Re-ranking edits the effect rather than replacing it**, so the dimension hopper's
+  Enhanced Movement mode survives a trip through the editor.
+
+**The editor** (`ui/platform_editor.py`, a modal dialog on a deep copy, swapped in on
+accept like the constructor's). Three things about it are the rules showing through:
+- **Size is chosen first**, so it is the top box and the three traits it sets *carry*
+  with it — each moves by the amount its baseline moved, so a jet upgraded from size 3
+  to 4 keeps its bought Strength and does **not** quietly acquire three points of
+  bought-off Defense. Minimums move too, so the floor holds against a typed number. A
+  platform *opened* below its baseline (the printed sailboat's Toughness is one under)
+  is left exactly as found — correcting it on open would re-price a boat someone opened
+  to add a Feature to.
+- **It computes no price.** It applies the spec to a working item on every keystroke and
+  asks `item_ep_cost`, which is the only way Speed's cost appears at all and the reason
+  the dialog and the card can never disagree.
+- **The two currencies stay apart, visibly.** Durable / Minion / Summonable get their own
+  line, in Power Points, *beside* the EP price — `vehicle_modifier_advantage_cost` was
+  written in Phase 9 and wired to nothing; this is what it was waiting for.
+
+**The block.** A third button, **Create Platform**, opens a menu of the kinds the ruleset
+declares (titled off their category headings, so a renamed ruleset renames the menu). A
+platform card's ✎ opens a menu rather than an editor, because a platform is two editable
+things — Traits… (this dialog) and Effects… (the constructor, where its weapons live).
+The card's ⚠ now covers `item_platform_violations` as well as `power_pl_violations`: the
+effect-shaped check has nothing to say about a fortress made of Toughness.
+
+**The throttle** is the phase's one piece of live state: `EquipmentItem.current_speed`,
+runtime like `worn` and deliberately unserialized. A tank at Speed 6 is DC 14 and the
+same tank crawling is DC 10 (§5 Combat), and this is the only number in the app that
+changes *within* a round. It restates the trait grid **in place** (`_trait_hosts` /
+`_refresh_traits`) rather than through `_rebuild_list`, because the rebuild every other
+change uses would destroy the spin box under the pointer that asked for it.
+
+**Installations.** `InstallationSizeRow` / `StockInstallation` / `InstallationRules`
+parse; `installation_entry()` derives catalog entries the same way `vehicle_entry()`
+does, so all nine are pickable, priced, worn and drawn with no new plumbing. Their card
+is a much shorter grid (Size, Toughness, one Features row — a moon-base has fifteen and
+one row each would bury the two traits the card exists to show), and their click hint is
+a third honest wording: you *wear* a jacket, *board* a car and *open* a base.
+- Cost: `installation_size_cost` is the §6 line through the free rank (a room refunds 4,
+  a small town costs 6, and a rank past the table extrapolates along the same line),
+  plus one point per +2 Toughness **rounded up**, plus a point per Feature. Toughness
+  *below* the free 6 refunds nothing — it is a starting point, not a purchase, which is
+  why the moon-base's printed Toughness 2 stays a recorded discrepancy.
+- **Their own PL cap pair** (`installation_pl_violations`): Toughness to **twice** the
+  series PL, Impervious still capped at PL. Both multiples *and which modifier
+  Impervious is* are data (`_meta.installationPowerLevel`), so a ruleset can move them.
+
+**Data promoted** into `src/mm_companion/data/equipment.json`: `_meta.installationCategory`,
+`_meta.installationTraits` (the free rank/Toughness and the per-point step, with the
+printed trait-table discrepancy recorded), `_meta.installationPowerLevel` (the two
+multiples plus `imperviousModifier`), and each stock installation's `patterns` and
+`notes`. The engine-facing keys were mirrored back into
+`docs/design-data/equipment-design.json`, which the promotion model assumes stays the
+superset. One new theme token, `platform.features.height`, in `classic.json` (+
+`token_meta.json`) — every other preset inherits it through the documented
+default-preset fallback.
+
+*Two existing tests were edited*, both asserting a premise this phase changes on purpose:
+`test_equipment_catalog_is_an_id_lookup` (the catalog is items + vehicles **+
+installations**) and the two assertions in the editor test that assumed the old lift
+behaviour. Every powers test — `test_powers`, `test_powers_section`,
+`test_power_constructor`, `test_equipment_constructor` — passes **unedited**.
+
+*Deliberately not done:*
+- **A custom vehicle cannot be given Impervious Toughness from the editor.** The spec
+  carries `defenses` (a printed tank's Impervious 4 normalises into it and draws on the
+  grid) but only the installation editor offers the control, because that is where the
+  cap rule needs it. The §5 table prices no defensive modifier either way.
+- **An edited stock platform re-prices to its derived cost, which can go *down*.** A
+  tank edited to Toughness 14 comes out at 70 rather than 76: the printed 76 bundles
+  things the §5 table does not price (its Impervious 4). That is the documented
+  stock-vs-derived contract rather than a bug, but it is the surprising face of it.
+- **`vehicle_modifier_advantage_cost` still changes no total.** The editor *shows* the
+  Power Point number; nothing adds it to the Equipment advantage's cost, because the
+  advantage's own cost lives in the Advantages block and a per-vehicle allocation of
+  ranks is not modelled.
+- **The §5 crash, control-check and vehicle-damage-ladder rules** (`vehicleCrash`,
+  `vehicleControl`, `vehicleDamage` in the design file's `_meta`) are still unparsed, as
+  are the installation Features' `implementation` blocks (Concealed's escalating DC,
+  Holding Cells' prerequisite chain, Combat Simulator's PL-bounded effect). They are
+  parsed as names and prices; what each *does* is prose on its tooltip.
+- **A platform is still not a nested character.** No trait-by-trait sub-sheet, no
+  crew/passenger tracking, no per-vehicle allocation of Equipment advantage ranks.
+
+*Verified:* `tests/test_equipment_data.py` (+7: the installation records, referential
+integrity over every Feature reference, the two separate Feature catalogs, the size
+table and the free starting points, the PL pair as data, installation entries as
+ordinary catalog entries, and two mod tests proving `_deep_merge` extends and overrides
+installations for free), `tests/test_equipment.py` (+19: the one-shape normalisation, a
+new platform at its free baselines, the traits-plus-movement split, the movement effect
+reaching the Speed readout and surviving a re-rank, editing a stock platform off its
+printed price, Feature pricing, the spec round-trip, the throttle, stock installations
+as gear, the free house, the size refunds, the rounded-up Toughness, the full
+installation price, no movement effect on a base, the cap pair both ways, the dispatch,
+and the PP pool staying untouched), `tests/test_equipment_section.py` (+9: the
+installation card, the third wording, the throttle's presence and its in-place restate,
+the editor's price, the size carry, the untouched sailboat, the two currencies on
+screen, the cap warning, Features bought in the editor, and the platform card's two
+editors). `driver.py` gained an `equipment-platforms` target; eyes on the real app
+confirm the moon-base's short grid, the tank's throttle moving its Defense Class, and a
+hand-built Skyhawk whose Flight 9 is on the System block's Speed readout beside the
+tank's.
+
+Next: **Phase 11 — Docs, mod hooks, polish**.

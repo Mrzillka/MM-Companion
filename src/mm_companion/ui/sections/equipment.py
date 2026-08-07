@@ -57,6 +57,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QVariantAnimation, Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -70,7 +71,12 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import EquipmentEntry, GameData
-from mm_companion.core.equipment import PER_RANK_COST_KINDS, EquipmentItem
+from mm_companion.core.equipment import (
+    PER_RANK_COST_KINDS,
+    PLATFORM_INSTALLATION,
+    PLATFORM_KINDS,
+    EquipmentItem,
+)
 from mm_companion.core.powers import power_is_homerule
 from mm_companion.core.rules import (
     PIN_EQUIPMENT,
@@ -90,11 +96,15 @@ from mm_companion.core.rules import (
     item_effective_build,
     item_ep_cost,
     item_granted_advantages,
+    item_platform,
+    item_platform_violations,
     item_superseded,
+    new_platform,
+    platform_rules_category,
+    platform_trait_rows,
     power_has_custom_modifier,
     power_pl_violations,
     power_rolls,
-    vehicle_trait_rows,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -105,12 +115,19 @@ from mm_companion.ui.cards import (
     effects_block,
     terms_style,
 )
+from mm_companion.ui.platform_editor import PlatformEditorDialog, platform_kind_title
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
-from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    BOLD_STYLE,
+    hline_separator,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 #: The two drag payloads this board uses. They are *not* the powers block's
 #: :data:`~mm_companion.ui.cards.NODE_MIME`, and they are not each other's: a format is
@@ -132,6 +149,14 @@ WEAR_HINT = (
 BOARD_HINT = (
     "Click this card to board or park this vehicle — a parked vehicle keeps its "
     "Equipment Point price but moves nobody."
+)
+
+#: The same switch again on an installation, where neither of the other two words fits.
+#: A base you have shut down is still yours and still paid for; it is simply not doing
+#: anything for you this scene.
+PREMISES_HINT = (
+    "Click this card to open or close this installation — a closed installation keeps "
+    "its Equipment Point price but does nothing."
 )
 
 #: Why an item-granted advantage is not in the Advantages block, on the line's tooltip.
@@ -249,6 +274,10 @@ class EquipmentSection(TitledSection):
         # Open constructor windows, kept referenced so Qt does not collect one the
         # moment the click handler that opened it returns.
         self._windows: list[PowerConstructorWindow] = []
+        # Per platform id, the widget its trait grid is drawn into. Kept so the
+        # throttle can restate the grid's Defense Class row without rebuilding the
+        # card underneath the spin box being dragged.
+        self._trait_hosts: dict[str, QWidget] = {}
 
         layout = QVBoxLayout(self)
 
@@ -279,6 +308,15 @@ class EquipmentSection(TitledSection):
         self._custom_button.setToolTip("Build a piece of gear the catalog does not have")
         self._custom_button.clicked.connect(self._create_custom_item)
         button_row.addWidget(self._custom_button)
+        # A third way in, because a platform is not built the way the other two are:
+        # it is bought off a trait table rather than assembled out of effects, so it
+        # opens the platform editor rather than the brick-builder.
+        self._platform_button = QPushButton("Create Platform")
+        self._platform_button.setToolTip(
+            "Build a vehicle or an installation off its own trait table"
+        )
+        self._platform_button.clicked.connect(self._platform_menu)
+        button_row.addWidget(self._platform_button)
         layout.addWidget(self._buttons)
 
         self.set_block_title("Equipment")
@@ -368,6 +406,52 @@ class EquipmentSection(TitledSection):
         window = PowerConstructorWindow(self._data, character=self._character, gear=True)
         window.itemSaved.connect(self._on_item_saved)
         self._track(window)
+
+    def _platform_menu(self) -> None:
+        """Offer the kinds of platform this ruleset knows, and build the chosen one.
+
+        A menu rather than two buttons: the button row is already three wide, and the
+        two kinds are one question ("what am I building?") rather than two unrelated
+        actions. What each is *called* comes from the ruleset's own category headings.
+        """
+        menu = QMenu(self._platform_button)
+        for kind in PLATFORM_KINDS:
+            title = platform_kind_title(kind, self._data)
+            action = menu.addAction(title)
+            action.triggered.connect(lambda _checked=False, k=kind: self._create_platform(k))
+        menu.exec(self._platform_button.mapToGlobal(self._platform_button.rect().bottomLeft()))
+
+    def _create_platform(self, kind: str) -> None:
+        """Open the platform editor on a blank platform of *kind*.
+
+        The item exists before the dialog does — the editor prices a *working item*
+        rather than a spec on its own, since Speed is a movement effect on the build and
+        only the item knows what the whole thing costs. An editor closed with Cancel
+        leaves that item unadded, so nothing on the sheet moved.
+        """
+        item = EquipmentItem(
+            category=platform_rules_category(kind, self._data),
+            platform=new_platform(kind, self._data),
+        )
+        item.build.name = f"New {platform_kind_title(kind, self._data)}"
+        dialog = PlatformEditorDialog(self._data, self._character, item, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._character.equipment.append(dialog.item)
+            self._after_change()
+
+    def _edit_platform(self, item: EquipmentItem) -> None:
+        """Reopen the platform editor on an existing vehicle or installation.
+
+        On a deep copy, swapped in on accept, exactly as :meth:`_edit_item` works — so
+        Cancel is a no-op. A stock platform edited here stops being the catalog's and is
+        priced from its own traits instead (:func:`~mm_companion.core.rules.item_is_stock`),
+        which is the same contract editing a stock item's build has.
+        """
+        working = EquipmentItem.from_dict(item.to_dict())
+        working.id = item.id
+        dialog = PlatformEditorDialog(self._data, self._character, working, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._on_item_edited(item, dialog.item)
 
     def _edit_item(self, item: EquipmentItem) -> None:
         """Reopen the constructor on an existing item.
@@ -626,8 +710,8 @@ class EquipmentSection(TitledSection):
         """A stat-block card for one item, which is also its wear/stow switch."""
         card = DraggableCard(item.id, mime=EQUIPMENT_MIME)
         card.set_clickable(True)
-        traits = vehicle_trait_rows(item, self._data)
-        card.setToolTip(BOARD_HINT if traits else WEAR_HINT)
+        platform = item_platform(item, self._data)
+        card.setToolTip(self._wear_hint(platform))
         card.clicked.connect(lambda i=item: self._toggle_worn(i))
 
         # The *effective* build throughout: what the item does is its own build plus
@@ -649,8 +733,11 @@ class EquipmentSection(TitledSection):
         # (that is how its speed reaches the sheet and its cannon rolls), but a
         # game-term table for Speed 6 restates the trait grid's own Speed row, and one
         # per weapon buries the traits the card exists to show.
-        if traits:
-            layout.addLayout(self._traits_grid(traits))
+        if platform is not None:
+            layout.addWidget(self._traits_host(item))
+            throttle = self._throttle_row(item)
+            if throttle is not None:
+                layout.addWidget(throttle)
         else:
             effects = effects_block(build, self._character, self._data)
             if effects is not None:
@@ -682,6 +769,93 @@ class EquipmentSection(TitledSection):
 
         self._show_worn(card, item)
         return card
+
+    @staticmethod
+    def _wear_hint(platform) -> str:
+        """What clicking this card *means*, in the words its own kind of gear uses.
+
+        One switch, three honest descriptions: you wear a jacket, you board a car and
+        you open a base. Saying "stow" about a moon-base would be the tooltip telling a
+        small lie about a mechanic the card is otherwise clear about.
+        """
+        if platform is None:
+            return WEAR_HINT
+        return PREMISES_HINT if platform.kind == PLATFORM_INSTALLATION else BOARD_HINT
+
+    def _traits_host(self, item: EquipmentItem) -> QWidget:
+        """The platform's trait grid, in a widget that can be restated on its own.
+
+        Kept addressable (``_trait_hosts``) for one reason: the throttle changes the
+        Defense Class row, and rebuilding the whole card — which is what every other
+        change here does — would destroy the spin box under the pointer that asked for
+        it.
+        """
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._traits_widget(item))
+        self._trait_hosts[item.id] = host
+        return host
+
+    def _traits_widget(self, item: EquipmentItem) -> QWidget:
+        inner = QWidget()
+        inner.setLayout(self._traits_grid(platform_trait_rows(item, self._data)))
+        return inner
+
+    def _refresh_traits(self, item: EquipmentItem) -> None:
+        """Redraw one platform's trait grid in place, after a throttle change."""
+        host = self._trait_hosts.get(item.id)
+        if host is None:
+            return
+        layout = host.layout()
+        while layout.count():
+            taken = layout.takeAt(0).widget()
+            if taken is not None:
+                taken.setParent(None)
+                taken.deleteLater()
+        layout.addWidget(self._traits_widget(item))
+
+    def _throttle_row(self, item: EquipmentItem) -> QWidget | None:
+        """A vehicle's current speed rank — the one number that changes within a round.
+
+        A moving vehicle's Defense rank is its **current** speed plus its size modifier
+        (``docs/mm-equipment-design.md`` §5 Combat), so a car crawling through traffic
+        is a much easier target than the same car flat out. The card shows the Defense
+        Class either way; this is what lets a driver say which one they are doing.
+        Runtime state like wearing, so it is offered in the locked read-only view too
+        and marks nothing dirty.
+
+        ``None`` for anything that is not a vehicle with a speed rank to vary.
+        """
+        spec = item_platform(item, self._data)
+        if spec is None or spec.kind == PLATFORM_INSTALLATION or not spec.speed:
+            return None
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(6, 0, 0, 0)
+        label = QLabel("Throttle")
+        label.setStyleSheet(muted_style())
+        row.addWidget(label)
+        spin = make_spin_box(
+            0,
+            spec.speed,
+            value=item.current_speed if item.current_speed is not None else spec.speed,
+        )
+        spin.setToolTip(
+            "The speed rank this vehicle is doing right now. Its Defense rank is that "
+            "rank plus its size modifier, so slowing down makes it easier to hit."
+        )
+        spin.valueChanged.connect(lambda value, i=item: self._on_throttle(i, value))
+        row.addWidget(spin)
+        row.addStretch()
+        return host
+
+    def _on_throttle(self, item: EquipmentItem, value: int) -> None:
+        """Set a vehicle's current speed and restate its Defense Class."""
+        item.current_speed = value
+        self._refresh_traits(item)
+        self.runtimeChanged.emit()
 
     def _traits_grid(self, rows) -> QGridLayout:
         """A vehicle's platform traits, in the grid an effect's game terms use.
@@ -764,9 +938,12 @@ class EquipmentSection(TitledSection):
         name.setFont(font)
         layout.addWidget(name)
 
+        # Both halves of what a platform can breach: its effects (a mounted cannon over
+        # the wielder's cap) and its bought traits (a fortress made of Toughness), which
+        # the effect-shaped check has nothing to say about.
         violations = power_pl_violations(
             build if build is not None else item.build, self._character, self._data
-        )
+        ) + item_platform_violations(item, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))
@@ -803,8 +980,15 @@ class EquipmentSection(TitledSection):
 
         edit = QPushButton("✎")
         edit.setFixedWidth(24)
-        edit.setToolTip("Edit this item")
-        edit.clicked.connect(lambda _checked=False, i=item: self._edit_item(i))
+        # A platform is two editable things at once — the traits it was bought as and
+        # the effects it carries (its weapons) — and they are edited in two different
+        # places, so its pencil asks which. Ordinary gear has only the one.
+        if item_platform(item, self._data) is not None:
+            edit.setToolTip("Edit this platform's traits or its effects")
+            edit.clicked.connect(lambda _checked=False, i=item, b=edit: self._edit_menu(i, b))
+        else:
+            edit.setToolTip("Edit this item")
+            edit.clicked.connect(lambda _checked=False, i=item: self._edit_item(i))
         layout.addWidget(edit)
         edit.setVisible(not self._locked)
 
@@ -815,6 +999,16 @@ class EquipmentSection(TitledSection):
         layout.addWidget(remove)
         remove.setVisible(not self._locked)
         return host
+
+    def _edit_menu(self, item: EquipmentItem, anchor: QPushButton) -> None:
+        """Traits or effects — the two halves of a platform, each with its own editor."""
+        menu = QMenu(anchor)
+        traits = menu.addAction("Traits…")
+        traits.triggered.connect(lambda _checked=False, i=item: self._edit_platform(i))
+        effects = menu.addAction("Effects…")
+        effects.setToolTip("Its weapons and anything else it carries, in the constructor")
+        effects.triggered.connect(lambda _checked=False, i=item: self._edit_item(i))
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
     def _is_homerule(self, item: EquipmentItem) -> bool:
         """Whether the item's numbers have been bent, and so want the ``⌂`` badge.

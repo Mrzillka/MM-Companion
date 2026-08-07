@@ -348,6 +348,13 @@
       "features": "1 Equipment Point per Feature",
       "effects": "The effect's normal Power Point cost, paid in Equipment Points"
     },
+    "installationCategory": "installation",
+    "installationTraits": {
+      "freeSizeRank": 5,
+      "freeToughness": 6,
+      "toughnessPerPoint": 2,
+      "note": "The same table as installationTraitCosts, in the numbers the engine reads."
+    },
     "installationSizeTable": [
       {
         "sizeRank": 1,
@@ -435,6 +442,9 @@
       "npcOwned": "Not strictly limited; the GM may cap at the NPC's Power Level as a guideline.",
       "toughnessCap": "Up to twice the series Power Level, since installations have no other defences.",
       "imperviousCap": "No greater than the Power Level.",
+      "toughnessMultiplier": 2,
+      "imperviousMultiplier": 1,
+      "imperviousModifier": "modifiers:impervious",
       "featureLimitSuggestion": "The GM may cap Features by size — for example no more than 2 per size rank above 3, and 1 per size rank below that."
     },
     "environments": {

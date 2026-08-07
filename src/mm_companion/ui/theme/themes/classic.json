@@ -62,6 +62,7 @@
     "space.lg": 8,
 
     "canvas.hint.height": 120,
+    "platform.features.height": 160,
 
     "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout under it.",
     "die.size": 160,

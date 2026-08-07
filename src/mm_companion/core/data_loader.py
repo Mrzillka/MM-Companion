@@ -1361,6 +1361,83 @@ class VehicleRules:
         return next((c for c in self.classes if c.id == class_id), None)
 
 
+# --- Installations: the second kind of platform, and a simpler one. Size and
+#     Toughness off their own table, Features, and effects (from ``equipment.json``). ---
+@dataclass(frozen=True)
+class InstallationSizeRow:
+    """One row of the installation Size table: what a size rank costs.
+
+    Unlike a vehicle's, an installation's size confers no trait baselines — it is
+    priced and nothing more (``docs/mm-equipment-design.md`` §6). The pivot is the
+    free rank (a house), whose ``cost`` is ``0``; below it the cost is negative and
+    the points come *back*.
+    """
+
+    size_rank: int
+    cost: int = 0
+    examples: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class InstallationRules:
+    """What an installation starts with for free, and what more of it costs.
+
+    ``free_size_rank`` and ``free_toughness`` are the starting points every
+    installation gets without paying (rank 5, Toughness 6); ``toughness_per_point``
+    is how much Toughness one Equipment Point buys above that. ``category`` is the
+    equipment category installations file under, named in the data rather than in
+    Python for the reason :attr:`VehicleRules.category` is.
+
+    ``toughness_pl_multiple`` and ``impervious_pl_multiple`` are the installation's
+    own Power Level cap pair, and it is genuinely a different pair from a character's:
+    an installation has no defences other than its Toughness, so that Toughness may
+    reach **twice** the series Power Level while Impervious stays capped at the Power
+    Level itself.
+    """
+
+    category: str = "installation"
+    size_table: tuple[InstallationSizeRow, ...] = ()
+    free_size_rank: int = 5
+    free_toughness: int = 6
+    toughness_per_point: int = 2
+    toughness_pl_multiple: int = 2
+    impervious_pl_multiple: int = 1
+    #: Which modifier the Impervious cap governs, named in the data rather than in
+    #: Python — the cap is a rule, but *Impervious* is content.
+    impervious_modifier: str = "impervious"
+    note: str = ""
+
+    def size_row(self, size_rank: int) -> InstallationSizeRow | None:
+        """The row for this size rank, or ``None`` when the table does not print one."""
+
+        return next((row for row in self.size_table if row.size_rank == size_rank), None)
+
+
+@dataclass(frozen=True)
+class StockInstallation:
+    """One installation off the printed table (``stockInstallations``).
+
+    A platform like a vehicle, with far less to it: Size, Toughness, and a list of
+    Features. It carries no movement and no weapons, so the
+    :class:`~mm_companion.core.powers.Power` :func:`installation_entry` gives it is
+    usually empty — which is exactly right, since what an installation *does* is its
+    Features rather than its effects.
+    """
+
+    id: str
+    name: str
+    size: int = 0
+    toughness: int = 0
+    cost: int | None = None
+    cost_kind: str = "fixed"
+    cost_formula: str = ""
+    features: tuple[str, ...] = ()
+    patterns: tuple[str, ...] = ()
+    notes: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
 # --- Derived readouts & declarative blocks: per-effect Tier-5 readouts and the
 #     data-described sheet blocks a data-only mod can add. ---------------------
 @dataclass(frozen=True)
@@ -1494,6 +1571,14 @@ class GameData:
     vehicle_modifiers: tuple[VehicleModifier, ...] = ()
     #: The vehicle size table, the class → movement-effect axis, and the §5 constants.
     vehicle_rules: VehicleRules = field(default_factory=VehicleRules)
+    #: The printed stock installations, from ``equipment.json``'s ``stockInstallations``.
+    installations: tuple[StockInstallation, ...] = ()
+    #: The same installations as ordinary catalog entries — see :meth:`equipment_catalog`.
+    installation_entries: tuple[EquipmentEntry, ...] = ()
+    #: The Features an installation can carry, from ``installationFeatures``.
+    installation_features: tuple[PlatformFeature, ...] = ()
+    #: The installation size table, its free starting points, and its own PL cap pair.
+    installation_rules: InstallationRules = field(default_factory=InstallationRules)
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1516,21 +1601,23 @@ class GameData:
     def equipment_catalog(self) -> dict[str, EquipmentEntry]:
         """A single ``id -> EquipmentEntry`` lookup, for the equipment rules layer.
 
-        Vehicles are in it. A stock vehicle is a different *shape* of record — five
-        platform traits rather than a bundle of effects — but it is bought, priced,
-        worn and drawn as one more thing off the catalog, so it enters the rules layer
-        through the same door (:attr:`vehicle_entries`). Everything that already works
+        Both kinds of **platform** are in it. A stock vehicle or installation is a
+        different *shape* of record — bought traits rather than a bundle of effects —
+        but it is bought, priced, worn and drawn as one more thing off the catalog, so
+        it enters the rules layer through the same door (:attr:`vehicle_entries`,
+        :attr:`installation_entries`). Everything that already works
         on an entry then works on a vehicle: the picker lists it under its category,
         :func:`~mm_companion.core.rules.build_item_from_entry` gives it a build, and
         :func:`~mm_companion.core.rules.item_is_stock` keeps it at its printed price.
         Its platform traits are read from :meth:`vehicle_catalog` by the one layer that
         needs them.
 
-        Items win an id collision: a ruleset that ships a vehicle and an item under one
+        Items win an id collision: a ruleset that ships a platform and an item under one
         id has a bug, and the item is the older, larger catalog.
         """
 
         catalog: dict[str, EquipmentEntry] = {e.id: e for e in self.vehicle_entries}
+        catalog.update({e.id: e for e in self.installation_entries})
         catalog.update({e.id: e for e in self.equipment})
         return catalog
 
@@ -1543,6 +1630,16 @@ class GameData:
         """A single ``id -> PlatformFeature`` lookup over the vehicle Features."""
 
         return {f.id: f for f in self.vehicle_features}
+
+    def installation_catalog(self) -> dict[str, StockInstallation]:
+        """A single ``id -> StockInstallation`` lookup, for the traits a card shows."""
+
+        return {i.id: i for i in self.installations}
+
+    def installation_feature_catalog(self) -> dict[str, PlatformFeature]:
+        """A single ``id -> PlatformFeature`` lookup over the installation Features."""
+
+        return {f.id: f for f in self.installation_features}
 
 
 # ===========================================================================
@@ -2290,6 +2387,9 @@ def _parse_equipment_rules(raw: dict) -> EquipmentRules:
             "vehicleClassesNote",
             "vehicleSizeExtension",
             "vehicleCombat",
+            "installationCategory",
+            "installationTraits",
+            "installationPowerLevel",
         ),
     )
 
@@ -2466,6 +2566,97 @@ def vehicle_entry(vehicle: StockVehicle, rules: VehicleRules) -> EquipmentEntry:
         description=description,
         effects=tuple(effects),
         patterns=vehicle.patterns,
+    )
+
+
+def _parse_stock_installation(raw: dict) -> StockInstallation:
+    cost = raw.get("cost")
+    return StockInstallation(
+        id=str(raw["id"]),
+        name=str(raw.get("name", raw["id"])),
+        size=int(raw.get("size", 0) or 0),
+        toughness=int(raw.get("toughness", 0) or 0),
+        cost=None if cost is None else int(cost),
+        cost_kind=str(raw.get("costKind", "fixed")),
+        cost_formula=str(raw.get("costFormula", "")),
+        features=tuple(_unqualify(f) for f in raw.get("features", ())),
+        patterns=tuple(str(p) for p in raw.get("patterns", ())),
+        notes=str(raw.get("notes", "")),
+        extra=_extras(
+            raw,
+            "id",
+            "name",
+            "size",
+            "toughness",
+            "cost",
+            "costKind",
+            "costFormula",
+            "features",
+            "patterns",
+            "notes",
+        ),
+    )
+
+
+def _parse_installation_rules(raw: dict) -> InstallationRules:
+    meta = raw.get("_meta", {})
+    defaults = InstallationRules()
+    traits = meta.get("installationTraits", {})
+    if not isinstance(traits, dict):  # a ruleset may state it as prose
+        traits = {}
+    power_level = meta.get("installationPowerLevel", {})
+    if not isinstance(power_level, dict):
+        power_level = {}
+    return InstallationRules(
+        category=str(meta.get("installationCategory", defaults.category)),
+        size_table=tuple(
+            InstallationSizeRow(
+                size_rank=int(row.get("sizeRank", 0) or 0),
+                cost=int(row.get("cost", 0) or 0),
+                examples=tuple(str(e) for e in row.get("examples", ())),
+            )
+            for row in raw.get("installationSizeTable", ())
+            if isinstance(row, dict)
+        ),
+        free_size_rank=int(traits.get("freeSizeRank", defaults.free_size_rank)),
+        free_toughness=int(traits.get("freeToughness", defaults.free_toughness)),
+        toughness_per_point=max(
+            1, int(traits.get("toughnessPerPoint", defaults.toughness_per_point))
+        ),
+        toughness_pl_multiple=int(
+            power_level.get("toughnessMultiplier", defaults.toughness_pl_multiple)
+        ),
+        impervious_pl_multiple=int(
+            power_level.get("imperviousMultiplier", defaults.impervious_pl_multiple)
+        ),
+        impervious_modifier=_unqualify(
+            power_level.get("imperviousModifier", defaults.impervious_modifier)
+        ),
+        note=str(traits.get("note", "")),
+    )
+
+
+def installation_entry(installation: StockInstallation, rules: InstallationRules) -> EquipmentEntry:
+    """A stock installation as an ordinary :class:`EquipmentEntry`.
+
+    The installation twin of :func:`vehicle_entry`, and simpler for the same reason an
+    installation is simpler than a vehicle: it has no movement and no weapons, so the
+    entry it yields usually carries no effects at all. What it *is* — Size, Toughness
+    and its Features — is read straight off the :class:`StockInstallation` by the one
+    layer that needs it, exactly as a vehicle's five traits are. What this buys is
+    everything around that: the picker lists it, the budget prices it, a card draws it
+    and a save round-trips it, with no installation branch anywhere.
+    """
+
+    return EquipmentEntry(
+        id=installation.id,
+        name=installation.name,
+        category=rules.category,
+        cost=installation.cost,
+        cost_kind=installation.cost_kind,
+        cost_note=installation.cost_formula,
+        description=installation.notes,
+        patterns=installation.patterns,
     )
 
 
@@ -2749,6 +2940,10 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     # (which class means which movement effect, which category they file under).
     vehicle_rules = _parse_vehicle_rules(equipment_raw)
     vehicles = tuple(_parse_stock_vehicle(v) for v in equipment_raw.get("stockVehicles", []))
+    installation_rules = _parse_installation_rules(equipment_raw)
+    installations = tuple(
+        _parse_stock_installation(i) for i in equipment_raw.get("stockInstallations", [])
+    )
 
     return GameData(
         profile_fields=[_parse_field(f) for f in profile_raw.get("profile_fields", [])],
@@ -2783,6 +2978,14 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
             _parse_vehicle_modifier(m) for m in equipment_raw.get("vehicleModifiers", [])
         ),
         vehicle_rules=vehicle_rules,
+        installations=installations,
+        installation_entries=tuple(
+            installation_entry(i, installation_rules) for i in installations
+        ),
+        installation_features=tuple(
+            _parse_platform_feature(f) for f in equipment_raw.get("installationFeatures", [])
+        ),
+        installation_rules=installation_rules,
         system=system,
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
     )

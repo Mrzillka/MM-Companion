@@ -19,13 +19,20 @@ import pytest
 from mm_companion.core import storage
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.equipment import PER_RANK_COST_KINDS, EquipmentItem
+from mm_companion.core.equipment import (
+    PER_RANK_COST_KINDS,
+    PLATFORM_INSTALLATION,
+    PLATFORM_VEHICLE,
+    EquipmentItem,
+    PlatformSpec,
+)
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     MISSING_VALUE,
     PIN_EQUIPMENT,
     PinRef,
     accessory_hosts,
+    apply_platform,
     attach_accessory,
     available_pins,
     build_item_from_entry,
@@ -39,6 +46,10 @@ from mm_companion.core.rules import (
     equipment_speed_lines,
     equipment_violations,
     estimated_power_level,
+    installation_pl_violations,
+    installation_size_cost,
+    installation_trait_cost,
+    installation_trait_rows,
     item_accepts_accessory,
     item_attaches_to,
     item_breakage_warnings,
@@ -48,9 +59,18 @@ from mm_companion.core.rules import (
     item_is_stock,
     item_material_toughness,
     item_own_ep_cost,
+    item_platform,
+    item_platform_violations,
     item_rank,
     movement_mode_lines,
+    new_platform,
     pin_label,
+    platform_feature_cost,
+    platform_is_stock,
+    platform_movement_effect,
+    platform_rules_category,
+    platform_trait_cost,
+    platform_trait_rows,
     power_level_violations,
     power_pl_violations,
     power_points_spent,
@@ -928,3 +948,297 @@ def test_owning_a_vehicle_never_touches_the_power_point_pool(data, hero) -> None
 
     assert power_points_spent(hero, data) == before
     assert equipment_points_spent(hero, data) == 76
+
+
+# --- custom platforms: the same shape, printed or built ---------------------------------
+
+
+def _custom(kind: str, data) -> EquipmentItem:
+    """A blank platform of *kind*, the way the block's Create Platform button makes one."""
+    spec = new_platform(kind, data)
+    item = EquipmentItem(category=platform_rules_category(kind, data), platform=spec)
+    apply_platform(item, spec, data)
+    return item
+
+
+def test_a_printed_platform_and_a_built_one_are_one_shape(data) -> None:
+    """The decision the phase turns on: ``item_platform`` normalises both.
+
+    A stock vehicle's traits come off its printed record and a custom one's off the
+    item, and nothing downstream can tell — which is why there is no custom-platform
+    branch in the cost engine, the card, or the picker.
+    """
+    printed = item_platform(_item(data, "tank"), data)
+    built = item_platform(_custom(PLATFORM_VEHICLE, data), data)
+
+    assert isinstance(printed, PlatformSpec) and isinstance(built, PlatformSpec)
+    assert printed.kind == built.kind == PLATFORM_VEHICLE
+    assert printed.strength == 10 and printed.defenses[0].modifier_id == "impervious"
+    assert item_platform(_item(data, "sword"), data) is None
+
+
+def test_a_new_vehicle_starts_at_the_baselines_its_size_gives(data) -> None:
+    """Size is chosen first, so a blank platform opens at what size 0 already confers."""
+    spec = new_platform(PLATFORM_VEHICLE, data)
+    baseline = vehicle_size_row(0, data)
+
+    assert (spec.strength, spec.toughness, spec.defense_modifier) == (
+        baseline.strength,
+        baseline.toughness,
+        baseline.defense,
+    )
+    assert vehicle_trait_cost(spec, data) == 0
+
+
+def test_a_custom_vehicle_is_priced_off_the_table_plus_its_movement(data, hero) -> None:
+    """The two halves the §5 table splits into, and the one that is *not* a trait.
+
+    Traits are bought off the table; Speed is a movement effect and is priced through
+    the build like any other effect. A price computed from either half alone is the
+    bug this split exists to prevent.
+    """
+    item = _custom(PLATFORM_VEHICLE, data)
+    spec = item.platform
+    spec.size, spec.strength, spec.toughness, spec.defense_modifier = 2, 10, 12, -2
+    spec.speed = 6
+    apply_platform(item, spec, data)
+
+    assert vehicle_trait_cost(spec, data) == 11  # 2 size + 4 Strength + 5 Toughness
+    assert platform_trait_cost(spec, data) == 11  # no Features yet
+    assert item_ep_cost(item, data, hero) == 11 + 6  # Speed 6 at one point a rank
+
+
+def test_a_platforms_speed_is_a_real_effect_on_its_build(data, hero) -> None:
+    """Which is what makes it reach the Speed readout and cost what movement costs.
+
+    ``apply_platform`` is the one writer that keeps the two in step: the trait lives on
+    the spec, the effect lives on the build, and nothing else in the app has to know
+    that a vehicle's Speed is spelled twice.
+    """
+    item = _custom(PLATFORM_VEHICLE, data)
+    item.build.name = "Hover Bike"
+    spec = item.platform
+    spec.vehicle_class, spec.speed = "air", 8
+    apply_platform(item, spec, data)
+
+    assert [(e.effect_id, e.rank) for e in item.build.effects] == [("flight", 8)]
+    hero.equipment.append(item)
+    assert [line.label for line in equipment_speed_lines(hero, data)] == ["Hover Bike 8"]
+
+    spec.speed = 3
+    apply_platform(item, spec, data)
+    assert [(e.effect_id, e.rank) for e in item.build.effects] == [("flight", 3)]
+
+    spec.speed = None
+    apply_platform(item, spec, data)
+    assert item.build.effects == []
+
+
+def test_re_ranking_a_movement_effect_keeps_what_hangs_off_it(data) -> None:
+    """A trip through the editor must not quietly strip an Enhanced Movement's mode."""
+    hopper = _item(data, "dimension_hopper")
+    spec = item_platform(hopper, data)
+    assert hopper.build.effects[0].config["modes"]
+
+    spec.movement_rank = 8
+    apply_platform(hopper, spec, data)
+
+    assert hopper.build.effects[0].effect_id == "enhanced_movement"
+    assert hopper.build.effects[0].rank == 8
+    assert hopper.build.effects[0].config["modes"]
+
+
+def test_editing_a_stock_platforms_traits_moves_it_off_the_printed_price(data, hero) -> None:
+    """The other half of ``item_is_stock``: a platform's traits live outside its build.
+
+    Without it a jet whose Toughness the player raised would keep the book's printed
+    number — the points would simply be free, and nothing would say so.
+    """
+    tank = _item(data, "tank")
+    assert item_is_stock(tank, data) and item_ep_cost(tank, data, hero) == 76
+
+    spec = item_platform(tank, data)
+    apply_platform(tank, spec, data)  # a no-op pass through the editor
+    assert platform_is_stock(tank, data)
+    assert item_is_stock(tank, data) and item_ep_cost(tank, data, hero) == 76
+
+    spec.toughness += 2
+    apply_platform(tank, spec, data)
+    assert not platform_is_stock(tank, data)
+    assert not item_is_stock(tank, data)
+
+
+def test_a_platforms_features_cost_a_point_each(data) -> None:
+    """Off each Feature's own record, and a repeatable one bought twice costs twice."""
+    item = _custom(PLATFORM_VEHICLE, data)
+    item.platform.features = ["alarm", "alarm", "caltrops"]
+
+    assert platform_feature_cost(item.platform, data) == 3
+    assert platform_trait_cost(item.platform, data) == 3
+    assert platform_feature_cost(PlatformSpec(features=["nonesuch"]), data) == 0
+
+
+def test_a_platform_spec_round_trips_through_a_save(data) -> None:
+    """And an item that is not a platform writes no ``platform`` key at all."""
+    item = _custom(PLATFORM_VEHICLE, data)
+    item.platform.features = ["autopilot"]
+    item.platform.modifiers = ["durable"]
+
+    restored = EquipmentItem.from_dict(item.to_dict())
+    assert restored.platform == item.platform
+    assert "platform" not in _item(data, "sword").to_dict()
+
+
+def test_a_throttle_makes_a_vehicle_easier_to_hit(data) -> None:
+    """The one defence in the app that changes within a round (§5 Combat).
+
+    ``current_speed`` is runtime state like ``worn``: a tank crawling is DC 10, the
+    same tank flat out is DC 14, and neither is a build edit.
+    """
+    tank = _item(data, "tank")
+    rows = {row.key: row for row in platform_trait_rows(tank, data)}
+    assert rows["defense_class"].value == "14 moving / 8 stationary"
+
+    tank.current_speed = 2
+    rows = {row.key: row for row in platform_trait_rows(tank, data)}
+    assert rows["defense_class"].value == "10 moving / 8 stationary"
+    assert "current_speed" not in tank.to_dict()
+
+
+# --- installations ----------------------------------------------------------------------
+
+
+def test_stock_installations_are_pickable_priced_gear(data, hero) -> None:
+    """The Phase 9 bargain again: a printed installation is one more catalog entry."""
+    catalog = data.equipment_catalog()
+    assert catalog["moon_base"].category == platform_rules_category(PLATFORM_INSTALLATION, data)
+
+    base = _item(data, "moon_base")
+    assert item_is_stock(base, data)
+    assert item_ep_cost(base, data, hero) == 39  # the printed number wins while stock
+    assert base.build.effects == []  # what it *does* is its Features
+
+
+def test_an_installation_starts_from_a_free_house(data, hero) -> None:
+    """Size rank 5 and Toughness 6 cost nothing; everything above is what is bought."""
+    item = _custom(PLATFORM_INSTALLATION, data)
+    rules = data.installation_rules
+
+    assert (item.platform.size, item.platform.toughness) == (
+        rules.free_size_rank,
+        rules.free_toughness,
+    )
+    assert installation_trait_cost(item.platform, data) == 0
+    assert item_ep_cost(item, data, hero) == 0
+
+
+def test_an_installations_size_refunds_below_the_pivot(data) -> None:
+    """A room hands four points *back*; a small town costs six."""
+    assert installation_size_cost(5, data) == 0
+    assert installation_size_cost(1, data) == -4
+    assert installation_size_cost(11, data) == 6
+    # Past the printed table the same straight line continues, rather than clamping.
+    assert installation_size_cost(13, data) == 8
+
+
+def test_installation_toughness_is_a_point_per_two_rounded_up(data) -> None:
+    """And Toughness under the free baseline refunds nothing — it is a starting point."""
+    spec = new_platform(PLATFORM_INSTALLATION, data)
+    spec.toughness = 12
+    assert installation_trait_cost(spec, data) == 3
+
+    spec.toughness = 11  # +5 over the baseline: three points, not two and a half
+    assert installation_trait_cost(spec, data) == 3
+
+    spec.toughness = 2
+    assert installation_trait_cost(spec, data) == 0
+
+
+def test_an_installation_is_priced_from_its_traits_and_its_features(data, hero) -> None:
+    item = _custom(PLATFORM_INSTALLATION, data)
+    item.platform.size = 7  # a mansion: +2
+    item.platform.toughness = 12  # +3
+    item.platform.features = ["laboratory", "security_system", "concealed", "concealed"]
+    apply_platform(item, item.platform, data)
+
+    assert platform_trait_cost(item.platform, data) == 9
+    assert item_ep_cost(item, data, hero) == 9
+
+
+def test_an_installation_never_grows_a_movement_effect(data) -> None:
+    """They do not move, which is why the honest answer is no effect rather than rank 0."""
+    item = _custom(PLATFORM_INSTALLATION, data)
+    assert platform_movement_effect(item.platform, data) is None
+    assert item.build.effects == []
+
+
+def test_an_installation_has_its_own_power_level_cap_pair(data, hero) -> None:
+    """Toughness may reach twice the series PL; Impervious may not (§6).
+
+    A different pair from a character's, and the reason installations get a validator
+    branch of their own rather than joining ``power_level_violations``.
+    """
+    spec = new_platform(PLATFORM_INSTALLATION, data)
+    spec.toughness = hero.power_level * 2
+    assert installation_pl_violations(spec, hero, data) == []
+
+    spec.toughness += 1
+    assert (
+        "exceeds the PL 10 installation cap of 20"
+        in installation_pl_violations(spec, hero, data)[0]
+    )
+
+    spec.toughness = 20
+    spec.defenses = [ModifierSelection(modifier_id="impervious", rank=hero.power_level)]
+    assert installation_pl_violations(spec, hero, data) == []
+    spec.defenses = [ModifierSelection(modifier_id="impervious", rank=hero.power_level + 1)]
+    assert (
+        "Impervious 11 exceeds the PL 10 cap of 10"
+        in installation_pl_violations(spec, hero, data)[0]
+    )
+
+
+def test_only_an_installation_answers_the_installation_cap(data, hero) -> None:
+    """A vehicle's traits have no cap of their own — its weapons are capped as gear is."""
+    tank = _item(data, "tank")
+    assert item_platform_violations(tank, hero, data) == []
+    assert item_platform_violations(_item(data, "sword"), hero, data) == []
+
+    base = _custom(PLATFORM_INSTALLATION, data)
+    base.platform.toughness = 99
+    assert item_platform_violations(base, hero, data)
+
+
+def test_an_installations_trait_rows_say_what_it_is_and_what_it_has(data) -> None:
+    """Two traits and its Features — a far shorter grid than a vehicle's, on purpose."""
+    rows = {row.key: row for row in installation_trait_rows(_item(data, "moon_base"), data)}
+
+    assert rows["size"].value == "9" and "Skyscraper" in rows["size"].base
+    assert rows["toughness"].base == "6"  # the free starting point it is measured against
+    assert "Holding Cells" in rows["features"].value
+
+    item = _custom(PLATFORM_INSTALLATION, data)
+    item.platform.features = ["concealed", "concealed"]
+    features = {row.key: row for row in installation_trait_rows(item, data)}["features"]
+    assert features.value == "Concealed ×2"
+
+
+def test_the_trait_grid_dispatches_on_the_kind(data) -> None:
+    """One question from the card, one answer, and no platform branch in the block."""
+    assert [row.key for row in platform_trait_rows(_item(data, "tank"), data)][0] == "vehicle_class"
+    assert [row.key for row in platform_trait_rows(_item(data, "moon_base"), data)][0] == "size"
+    assert platform_trait_rows(_item(data, "sword"), data) == []
+    assert vehicle_trait_rows(_item(data, "moon_base"), data) == []
+    assert installation_trait_rows(_item(data, "tank"), data) == []
+
+
+def test_a_custom_platform_never_touches_the_power_point_pool(data, hero) -> None:
+    """The two currencies again, this time with the money on the other side."""
+    before = power_points_spent(hero, data)
+    base = _custom(PLATFORM_INSTALLATION, data)
+    base.platform.size = 11
+    base.platform.features = ["laboratory"]
+    hero.equipment.append(base)
+
+    assert power_points_spent(hero, data) == before
+    assert equipment_points_spent(hero, data) == 7

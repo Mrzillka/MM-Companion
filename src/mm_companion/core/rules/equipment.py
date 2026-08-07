@@ -34,6 +34,7 @@ from .appliers import GROUP_EQUIPMENT, STACK_MAX, STACK_SUM
 from .derived import effective_ability, trait_bonuses
 from .powers_cost import power_total_cost
 from .runtime import build_contributions, equipment_contributions, worn_items
+from .vehicles import item_platform_cost
 
 __all__ = [
     "GrantedAdvantage",
@@ -125,10 +126,10 @@ def _ability_toggle_field(base, game_data: GameData):
     return None
 
 
-def _entry_modifier_selections(
-    entry: EquipmentEntry, game_data: GameData
+def _modifier_selections(
+    refs, game_data: GameData
 ) -> tuple[list[ModifierSelection], list[ModifierSelection]]:
-    """An entry's printed extras and flaws, split by the modifier's own ``category``.
+    """Printed modifier references, split into extras and flaws by their own ``category``.
 
     A flaw carrying the ``removable`` gate is dropped: an item is *already* removable
     (that is what equipment is), and its price already reflects the discount once. See
@@ -139,13 +140,21 @@ def _entry_modifier_selections(
     catalog = game_data.modifier_catalog()
     extras: list[ModifierSelection] = []
     flaws: list[ModifierSelection] = []
-    for ref in entry.modifiers:
+    for ref in refs:
         modifier = catalog.get(ref.modifier)
         if modifier is None or modifier.gate == GATE_REMOVABLE:
             continue
         selection = ModifierSelection(modifier_id=ref.modifier, rank=ref.rank or 1)
         (extras if modifier.category == "extra" else flaws).append(selection)
     return extras, flaws
+
+
+def _entry_modifier_selections(
+    entry: EquipmentEntry, game_data: GameData
+) -> tuple[list[ModifierSelection], list[ModifierSelection]]:
+    """The entry-wide extras and flaws every one of its effects carries."""
+
+    return _modifier_selections(entry.modifiers, game_data)
 
 
 def _build_effect(
@@ -159,7 +168,9 @@ def _build_effect(
     ``modifiers`` is the entry's own ``(extras, flaws)``, computed once by the caller
     and copied here — an accessory's are withheld entirely (they belong to its host,
     see :func:`item_effective_build`), and a Strength-Based ref prepends to its own
-    copy rather than to the list every other effect is sharing.
+    copy rather than to the list every other effect is sharing. The ref's *own*
+    modifiers layer on top of those: a vehicle's cannon is Area and its machine gun
+    Multiattack, and neither belongs to the tank as a whole.
     """
 
     base = next((e for e in game_data.effects if e.id == ref.effect), None)
@@ -169,7 +180,9 @@ def _build_effect(
         # the item's own description of what it does, so it is kept rather than dropped.
         config.setdefault("configuration", ref.configuration)
 
-    extras, flaws = list(modifiers[0]), list(modifiers[1])
+    own_extras, own_flaws = _modifier_selections(ref.modifiers, game_data)
+    extras = [*modifiers[0], *own_extras]
+    flaws = [*modifiers[1], *own_flaws]
     if base is not None:
         if ref.resistance:
             key = _resistance_config_key(base)
@@ -188,6 +201,7 @@ def _build_effect(
 
     return PowerEffectInstance(
         effect_id=ref.effect,
+        label=ref.label,
         # A ref with no printed rank is one the player buys ranks of (Armored Costume's
         # Protection); ``rank`` is what they chose.
         rank=ref.rank if ref.rank is not None else max(1, rank),
@@ -597,7 +611,10 @@ def item_own_ep_cost(
        multiplied by :func:`item_rank`.
     3. Otherwise the build's derived cost — the same
        :func:`~.powers_cost.power_total_cost` a power pays, minus any Removable
-       discount, since an item's price is what its effects would cost *undiscounted*.
+       discount, since an item's price is what its effects would cost *undiscounted*
+       — plus, for a vehicle, its platform traits
+       (:func:`~.vehicles.item_platform_cost`), which are bought off their own table
+       rather than through effects.
 
     Note this prices ``item.build`` and never
     :func:`item_effective_build`: an accessory's modifiers are already paid for by the
@@ -614,7 +631,9 @@ def item_own_ep_cost(
             return entry.cost * max(1, item_rank(item))
         return entry.cost
 
-    return power_total_cost(_undiscounted(item.build, game_data), game_data, char)
+    return power_total_cost(
+        _undiscounted(item.build, game_data), game_data, char
+    ) + item_platform_cost(item, game_data)
 
 
 def item_ep_cost(item: EquipmentItem, game_data: GameData, char: Character | None = None) -> int:

@@ -98,6 +98,45 @@
           "metal": 7
         }
       }
+    },
+    "vehicleCategory": "vehicle",
+    "vehicleClasses": [
+      {
+        "id": "ground",
+        "title": "Ground",
+        "effect": "effects:speed"
+      },
+      {
+        "id": "water",
+        "title": "Water",
+        "effect": "effects:swimming"
+      },
+      {
+        "id": "air",
+        "title": "Air",
+        "effect": "effects:flight"
+      },
+      {
+        "id": "space",
+        "title": "Space",
+        "effect": "effects:flight"
+      },
+      {
+        "id": "exotic",
+        "title": "Exotic"
+      }
+    ],
+    "vehicleClassesNote": "Which movement effect a stock vehicle's printed Speed rank is a rank of, so a plane's Speed reaches the sheet as Flight and a boat's as Swimming. An Exotic vehicle names no default: it carries its own 'movement' block instead.",
+    "vehicleSizeExtension": {
+      "strength": 2,
+      "toughness": 1,
+      "defense": -1,
+      "note": "Beyond size rank 5, each further rank adds +2 Strength, +1 Toughness, and -1 Defense (GM option). The table is extended arithmetically rather than storing extra rows."
+    },
+    "vehicleCombat": {
+      "defenseRank": "A moving vehicle's Defense rank equals its current speed rank plus the Defense modifier for its Size.",
+      "defenseClass": "10 + Defense rank",
+      "stationary": "A stationary vehicle can be attacked as a routine check at DC 10 plus the vehicle's Defense modifier."
     }
   },
   "equipment": [
@@ -4038,7 +4077,10 @@
       "defenseModifier": 0,
       "toughness": 7,
       "cost": 10,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "car",
@@ -4050,7 +4092,11 @@
       "defenseModifier": -1,
       "toughness": 8,
       "cost": 10,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "variants": "+1 or +2 Strength for full-size cars; +1 or +2 Speed for sports and racing models."
     },
     {
       "id": "police_cruiser",
@@ -4062,7 +4108,10 @@
       "defenseModifier": -1,
       "toughness": 9,
       "cost": 13,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "limousine",
@@ -4074,7 +4123,10 @@
       "defenseModifier": -2,
       "toughness": 9,
       "cost": 14,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "truck",
@@ -4086,7 +4138,11 @@
       "defenseModifier": -2,
       "toughness": 9,
       "cost": 15,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "variants": "Covers pick-ups, SUVs, and vans."
     },
     {
       "id": "armored_car",
@@ -4098,7 +4154,16 @@
       "defenseModifier": -2,
       "toughness": 12,
       "cost": 23,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "defenses": [
+        {
+          "modifier": "modifiers:impervious",
+          "rank": 3
+        }
+      ]
     },
     {
       "id": "tank",
@@ -4110,7 +4175,46 @@
       "defenseModifier": -2,
       "toughness": 12,
       "cost": 76,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "defenses": [
+        {
+          "modifier": "modifiers:impervious",
+          "rank": 4
+        }
+      ],
+      "weapons": [
+        {
+          "name": "Cannon",
+          "effect": "effects:damage",
+          "rank": 10,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 6
+            }
+          ]
+        },
+        {
+          "name": "Heavy machine gun",
+          "effect": "effects:damage",
+          "rank": 7,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:multiattack"
+            }
+          ]
+        }
+      ],
+      "notes": "Entering or leaving takes a simple action; starting up takes another."
     },
     {
       "id": "apc",
@@ -4122,7 +4226,33 @@
       "defenseModifier": -2,
       "toughness": 12,
       "cost": 46,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "defenses": [
+        {
+          "modifier": "modifiers:impervious",
+          "rank": 3
+        }
+      ],
+      "weapons": [
+        {
+          "name": "Cannon",
+          "effect": "effects:damage",
+          "rank": 6,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 4
+            }
+          ]
+        }
+      ],
+      "notes": "Troops aboard fire personal weapons from three-quarters cover."
     },
     {
       "id": "bus",
@@ -4134,7 +4264,10 @@
       "defenseModifier": -3,
       "toughness": 11,
       "cost": 17,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "semi",
@@ -4146,7 +4279,10 @@
       "defenseModifier": -3,
       "toughness": 11,
       "cost": 18,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "train_engine",
@@ -4158,7 +4294,11 @@
       "defenseModifier": -2,
       "toughness": 10,
       "cost": 16,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "notes": "Ground Speed is Limited to established tracks."
     },
     {
       "id": "jet_ski",
@@ -4170,7 +4310,10 @@
       "defenseModifier": 0,
       "toughness": 7,
       "cost": 10,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "sailboat",
@@ -4182,7 +4325,11 @@
       "defenseModifier": -1,
       "toughness": 6,
       "cost": 6,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "notes": "Printed Defense is -1 although Size 2 implies -2; see _meta.printedDiscrepancies."
     },
     {
       "id": "speedboat",
@@ -4194,7 +4341,10 @@
       "defenseModifier": -1,
       "toughness": 7,
       "cost": 12,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "yacht",
@@ -4206,7 +4356,10 @@
       "defenseModifier": -2,
       "toughness": 9,
       "cost": 15,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "cutter",
@@ -4218,7 +4371,25 @@
       "defenseModifier": -3,
       "toughness": 12,
       "cost": 37,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Light machine guns",
+          "effect": "effects:damage",
+          "rank": 6,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:multiattack"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "destroyer",
@@ -4230,7 +4401,26 @@
       "defenseModifier": -4,
       "toughness": 14,
       "cost": 50,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Heavy guns",
+          "effect": "effects:damage",
+          "rank": 10,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 8
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "cruise_ship",
@@ -4242,7 +4432,10 @@
       "defenseModifier": -5,
       "toughness": 15,
       "cost": 25,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "battleship",
@@ -4254,7 +4447,32 @@
       "defenseModifier": -5,
       "toughness": 16,
       "cost": 76,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "defenses": [
+        {
+          "modifier": "modifiers:impervious",
+          "rank": 5
+        }
+      ],
+      "weapons": [
+        {
+          "name": "Gun batteries",
+          "effect": "effects:damage",
+          "rank": 13,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 9
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "submarine",
@@ -4266,7 +4484,27 @@
       "defenseModifier": -4,
       "toughness": 13,
       "cost": 39,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Torpedoes",
+          "effect": "effects:damage",
+          "rank": 8,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 5
+            }
+          ]
+        }
+      ],
+      "notes": "Homing torpedoes and ballistic missiles (Sphere Area Damage 15+) are common but not in the listed cost."
     },
     {
       "id": "two_seater_plane",
@@ -4278,7 +4516,10 @@
       "defenseModifier": -1,
       "toughness": 8,
       "cost": 13,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "helicopter",
@@ -4290,7 +4531,10 @@
       "defenseModifier": -2,
       "toughness": 9,
       "cost": 24,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "military_copter",
@@ -4302,7 +4546,39 @@
       "defenseModifier": -2,
       "toughness": 11,
       "cost": 70,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Machine guns",
+          "effect": "effects:damage",
+          "rank": 6,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:multiattack"
+            }
+          ]
+        },
+        {
+          "name": "Rockets",
+          "effect": "effects:damage",
+          "rank": 9,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 6
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "private_jet",
@@ -4314,7 +4590,10 @@
       "defenseModifier": -3,
       "toughness": 11,
       "cost": 30,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "jumbo_jet",
@@ -4326,7 +4605,10 @@
       "defenseModifier": -4,
       "toughness": 13,
       "cost": 32,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "fighter_jet",
@@ -4338,7 +4620,43 @@
       "defenseModifier": -3,
       "toughness": 10,
       "cost": 89,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Machine guns",
+          "effect": "effects:damage",
+          "rank": 6,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:multiattack"
+            }
+          ]
+        },
+        {
+          "name": "Air-to-air missiles",
+          "effect": "effects:damage",
+          "rank": 11,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 8
+            },
+            {
+              "modifier": "modifiers:homing",
+              "rank": 6
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "bomber",
@@ -4350,7 +4668,23 @@
       "defenseModifier": -4,
       "toughness": 13,
       "cost": 87,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Bombs",
+          "effect": "effects:damage",
+          "rank": 12,
+          "modifiers": [
+            {
+              "modifier": "modifiers:area_effect"
+            }
+          ],
+          "note": "Rank 12 or higher; machine guns and missiles as per fighter jets."
+        }
+      ]
     },
     {
       "id": "space_shuttle",
@@ -4362,7 +4696,10 @@
       "defenseModifier": -4,
       "toughness": 13,
       "cost": 42,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ]
     },
     {
       "id": "space_fighter",
@@ -4374,7 +4711,22 @@
       "defenseModifier": -3,
       "toughness": 11,
       "cost": 60,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Blaster cannons",
+          "effect": "effects:damage",
+          "rank": 10,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "space_cruiser",
@@ -4386,7 +4738,40 @@
       "defenseModifier": -4,
       "toughness": 15,
       "cost": 116,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Beam weapons",
+          "effect": "effects:damage",
+          "rank": 12,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            }
+          ]
+        },
+        {
+          "name": "Energy torpedoes",
+          "effect": "effects:damage",
+          "rank": 12,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 10
+            },
+            {
+              "modifier": "modifiers:homing",
+              "rank": 8
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "space_battleship",
@@ -4398,7 +4783,40 @@
       "defenseModifier": -5,
       "toughness": 18,
       "cost": 139,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "weapons": [
+        {
+          "name": "Blaster cannons",
+          "effect": "effects:damage",
+          "rank": 15,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            }
+          ]
+        },
+        {
+          "name": "Energy torpedoes",
+          "effect": "effects:damage",
+          "rank": 15,
+          "modifiers": [
+            {
+              "modifier": "modifiers:ranged"
+            },
+            {
+              "modifier": "modifiers:area_effect",
+              "rank": 12
+            },
+            {
+              "modifier": "modifiers:homing",
+              "rank": 8
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "dimension_hopper",
@@ -4410,7 +4828,24 @@
       "defenseModifier": -2,
       "toughness": 9,
       "cost": null,
-      "costKind": "built"
+      "costKind": "built",
+      "patterns": [
+        "platform"
+      ],
+      "movement": {
+        "effect": "effects:enhanced_movement",
+        "rank": 6,
+        "config": {
+          "modes": [
+            {
+              "id": "dimensional_travel",
+              "tier": 3
+            }
+          ]
+        }
+      },
+      "costFormula": "6 + movement effect cost",
+      "notes": "Speed is the movement effect itself, not a Speed rank."
     },
     {
       "id": "mole_machine",
@@ -4422,7 +4857,15 @@
       "defenseModifier": -2,
       "toughness": 12,
       "cost": 18,
-      "costKind": "fixed"
+      "costKind": "fixed",
+      "patterns": [
+        "platform"
+      ],
+      "movement": {
+        "effect": "effects:burrowing",
+        "rank": 6
+      },
+      "notes": "Listed Speed is Burrowing; some add a ground Speed alternate mode."
     },
     {
       "id": "time_machine",
@@ -4434,7 +4877,12 @@
       "defenseModifier": -2,
       "toughness": 9,
       "cost": null,
-      "costKind": "built"
+      "costKind": "built",
+      "patterns": [
+        "platform"
+      ],
+      "costFormula": "6 + movement effect cost",
+      "notes": "Listed cost is a suggestion only; the GM should treat this as a plot device. Its Enhanced Movement (time travel) has no matching mode in effects.json, so no movement effect is asserted here."
     }
   ],
   "installationFeatures": [

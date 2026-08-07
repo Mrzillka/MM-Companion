@@ -510,7 +510,40 @@
         "printed": "Listed as Toughness 2, below the free baseline of 6, and inconsistent with the 39-point total.",
         "resolution": "Kept as printed with a note; 20 is the arithmetically plausible value."
       }
-    ]
+    ],
+    "vehicleCategory": "vehicle",
+    "vehicleClasses": [
+      {
+        "id": "ground",
+        "title": "Ground",
+        "effect": "effects:speed"
+      },
+      {
+        "id": "water",
+        "title": "Water",
+        "effect": "effects:swimming"
+      },
+      {
+        "id": "air",
+        "title": "Air",
+        "effect": "effects:flight"
+      },
+      {
+        "id": "space",
+        "title": "Space",
+        "effect": "effects:flight"
+      },
+      {
+        "id": "exotic",
+        "title": "Exotic"
+      }
+    ],
+    "vehicleClassesNote": "Which movement effect a stock vehicle's printed Speed rank is a rank of, so a plane's Speed reaches the sheet as Flight and a boat's as Swimming. An Exotic vehicle names no default: it carries its own 'movement' block instead.",
+    "vehicleSizeExtensionValues": {
+      "strength": 2,
+      "toughness": 1,
+      "defense": -1
+    }
   },
   "equipment": [
     {

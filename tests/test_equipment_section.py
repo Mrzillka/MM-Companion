@@ -336,11 +336,13 @@ def test_the_picker_lists_the_whole_catalog_grouped_and_priced(qapp, data) -> No
     ]
     assert "Close Weapons" in headings
     assert "Armor" in headings
+    # Vehicles are catalog entries too, so they are simply another group.
+    assert "Vehicles" in headings
 
     rows = sum(
         picker._tree.topLevelItem(i).childCount() for i in range(picker._tree.topLevelItemCount())
     )
-    assert rows == len(data.equipment)
+    assert rows == len(data.equipment_catalog())
 
 
 def test_the_picker_filters_on_every_word(qapp, data) -> None:
@@ -622,3 +624,50 @@ def test_a_card_warns_when_the_wielder_will_break_the_weapon(qapp, data) -> None
     warnings = [t for t in _labels(section._make_card(char.equipment[0])) if "break on use" in t]
     assert len(warnings) == 1
     assert "Toughness 7" in warnings[0]
+
+
+# -- vehicles -------------------------------------------------------------------------
+
+
+def test_a_vehicle_card_shows_its_platform_traits(qapp, data) -> None:
+    """Five bought traits where an item shows its game terms — that is what a vehicle is."""
+    char = _hero(data, "tank")
+    section = _section(data, char)
+
+    labels = _labels(section._make_card(char.equipment[0]))
+
+    assert "Strength:" in labels and "Toughness:" in labels
+    assert "Defense Class:" in labels
+    assert "14 moving / 8 stationary" in labels
+    assert "12 (Impervious 4)" in labels
+    # And not the effect table an item's card leads with.
+    assert "Range:" not in labels
+
+
+def test_a_vehicle_keeps_its_dice_footer_with_the_weapons_named(qapp, data) -> None:
+    char = _hero(data, "tank")
+    section = _section(data, char)
+
+    footer = _card(section, char.equipment[0]).findChild(RollsFooter)
+    lines = [line.text() for line in footer.findChildren(QLabel)]
+
+    assert any(text.startswith("Cannon:") for text in lines)
+    assert any(text.startswith("Heavy machine gun:") for text in lines)
+
+
+def test_a_vehicle_files_itself_under_the_vehicles_group(qapp, data) -> None:
+    char = _hero(data, "tank", "sword")
+    section = _section(data, char)
+
+    assert section._grouped_items()["vehicle"][0].catalog_id == "tank"
+    assert section._category_title("vehicle") == "Vehicles"
+
+
+def test_parking_a_vehicle_reads_as_parking_not_as_stowing(qapp, data) -> None:
+    """Same switch, honest wording: a parked car is not an unworn jacket."""
+    char = _hero(data, "tank", "sword")
+    section = _section(data, char)
+
+    tank, sword = char.equipment[0], char.equipment[1]
+    assert "park" in _card(section, tank).toolTip()
+    assert "stow" in _card(section, sword).toolTip()

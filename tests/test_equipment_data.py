@@ -30,10 +30,16 @@ def test_catalog_loads_with_unique_ids() -> None:
 
 
 def test_equipment_catalog_is_an_id_lookup() -> None:
+    """Items and vehicles, in one lookup.
+
+    A stock vehicle enters the rules layer as one more catalog entry (Phase 9), which
+    is what lets it be picked, priced, worn and drawn by the code that already exists.
+    """
     data = load_game_data()
     catalog = data.equipment_catalog()
-    assert len(catalog) == len(data.equipment)
+    assert len(catalog) == len(data.equipment) + len(data.vehicle_entries)
     assert catalog["crossbow"].name == "Crossbow"
+    assert catalog["tank"].name == "Tank"
 
 
 def test_item_effects_and_modifiers_name_real_records() -> None:
@@ -138,6 +144,115 @@ def test_an_affliction_item_keeps_its_degree_ladder() -> None:
     assert affliction.degrees == (("dazed",), ("stunned",), ("incapacitated",))
 
 
+# --- Vehicles ---------------------------------------------------------------
+
+
+def test_stock_vehicles_parse_with_their_platform_traits() -> None:
+    data = load_game_data()
+    assert data.vehicles
+    ids = [vehicle.id for vehicle in data.vehicles]
+    assert len(ids) == len(set(ids))
+
+    tank = data.vehicle_catalog()["tank"]
+    assert (tank.size, tank.strength, tank.speed) == (2, 10, 6)
+    assert (tank.defense_modifier, tank.toughness) == (-2, 12)
+    assert tank.vehicle_class == "ground"
+    assert tank.patterns == ("platform",)
+
+
+def test_a_vehicles_weapons_and_defenses_resolve() -> None:
+    """Every reference a platform makes has to name something the game data defines."""
+    data = load_game_data()
+    effects = {effect.id for effect in data.effects}
+    modifiers = set(data.modifier_catalog())
+
+    for vehicle in data.vehicles:
+        for weapon in vehicle.weapons:
+            assert weapon.name, f"{vehicle.id} has an unnamed weapon"
+            assert weapon.effect in effects, f"{vehicle.id} names unknown effect"
+            for ref in weapon.modifiers:
+                assert ref.modifier in modifiers, f"{vehicle.id} names unknown modifier"
+        for ref in vehicle.defenses:
+            assert ref.modifier in modifiers
+        if vehicle.movement is not None:
+            assert vehicle.movement.effect in effects
+
+
+def test_a_weapons_own_modifiers_carry_their_own_ranks() -> None:
+    """The tank's cannon is Area 6; its machine gun is not Area at all.
+
+    The design file wrote these as sibling ``areaRank``/``homingRank`` keys; the
+    shipped schema puts the rank on the modifier it belongs to, which is what lets a
+    per-effect modifier list exist at all.
+    """
+    tank = load_game_data().vehicle_catalog()["tank"]
+    cannon, machine_gun = tank.weapons
+    assert [(m.modifier, m.rank) for m in cannon.modifiers] == [
+        ("ranged", None),
+        ("area_effect", 6),
+    ]
+    assert [m.modifier for m in machine_gun.modifiers] == ["ranged", "multiattack"]
+
+
+def test_a_vehicle_class_names_the_movement_effect_its_speed_is() -> None:
+    """A plane's Speed is Flight and a boat's is Swimming — an axis in the data."""
+    rules = load_game_data().vehicle_rules
+    assert rules.category == "vehicle"
+    assert {c.id: c.effect for c in rules.classes} == {
+        "ground": "speed",
+        "water": "swimming",
+        "air": "flight",
+        "space": "flight",
+        "exotic": "",
+    }
+
+
+def test_vehicle_entries_carry_the_movement_and_the_named_weapons() -> None:
+    data = load_game_data()
+    entry = data.equipment_catalog()["tank"]
+    assert entry.category == "vehicle"
+    assert entry.cost == 76
+    assert [(ref.effect, ref.rank, ref.label) for ref in entry.effects] == [
+        ("speed", 6, ""),
+        ("damage", 10, "Cannon"),
+        ("damage", 7, "Heavy machine gun"),
+    ]
+
+
+def test_an_exotic_vehicle_uses_its_own_movement_block() -> None:
+    """Its class names no default, so what it carries is the only answer."""
+    data = load_game_data()
+    mole = data.equipment_catalog()["mole_machine"]
+    assert [(ref.effect, ref.rank) for ref in mole.effects] == [("burrowing", 6)]
+    # And one with neither gets no movement effect rather than an invented one.
+    assert load_game_data().equipment_catalog()["time_machine"].effects == ()
+
+
+def test_the_vehicle_size_table_and_its_extension_parse() -> None:
+    rules = load_game_data().vehicle_rules
+    assert [row.size_rank for row in rules.size_table] == [0, 1, 2, 3, 4, 5]
+    top = rules.size_table[-1]
+    assert (top.strength, top.toughness, top.defense) == (12, 10, -5)
+    assert (
+        rules.size_extension.strength,
+        rules.size_extension.toughness,
+        rules.size_extension.defense,
+    ) == (2, 1, -1)
+
+
+def test_vehicle_features_and_modifiers_parse() -> None:
+    data = load_game_data()
+    features = data.vehicle_feature_catalog()
+    assert features["alarm"].cost == 1 and features["alarm"].repeatable is True
+    assert features["caltrops"].repeatable is False
+
+    modifiers = {m.id: m for m in data.vehicle_modifiers}
+    assert modifiers["durable"].cost == 1
+    # A vehicle modifier prices the *advantage*, so it must never join the modifier
+    # catalog the powers cost engine walks.
+    assert "durable" not in data.modifier_catalog()
+
+
 # --- Mod extensibility ------------------------------------------------------
 
 
@@ -213,3 +328,43 @@ def test_a_mod_overrides_one_field_of_a_base_item(_home: Path) -> None:
     # Everything the mod didn't restate survives the merge.
     assert crossbow.effects[0].rank == 3
     assert crossbow.critical is not None and crossbow.critical.threat_range == (19, 20)
+
+
+def test_a_mod_adds_a_vehicle_and_its_class(_home: Path) -> None:
+    """The catalog extension the deep merge gives for free reaches platforms too."""
+    _write_mod(
+        {
+            "_meta": {"vehicleClasses": [{"id": "aether", "title": "Aether", "effect": "flight"}]},
+            "stockVehicles": [
+                {
+                    "id": "sky_barge",
+                    "name": "Sky Barge",
+                    "class": "aether",
+                    "size": 3,
+                    "strength": 9,
+                    "speed": 5,
+                    "defenseModifier": -3,
+                    "toughness": 9,
+                    "cost": 20,
+                    "costKind": "fixed",
+                    "patterns": ["platform"],
+                }
+            ],
+        }
+    )
+
+    data = load_game_data()
+    barge = data.vehicle_catalog()["sky_barge"]
+    assert barge.speed == 5
+    assert "tank" in data.vehicle_catalog()  # the shipped platforms survive
+    entry = data.equipment_catalog()["sky_barge"]
+    assert entry.category == "vehicle"
+    assert [(ref.effect, ref.rank) for ref in entry.effects] == [("flight", 5)]
+
+
+def test_a_mod_overrides_one_field_of_a_stock_vehicle(_home: Path) -> None:
+    _write_mod({"stockVehicles": [{"id": "tank", "toughness": 14}]})
+
+    tank = load_game_data().vehicle_catalog()["tank"]
+    assert tank.toughness == 14
+    assert len(tank.weapons) == 2  # what the mod didn't restate survives

@@ -32,6 +32,13 @@ the no-stacking rule (``docs/mm-equipment-design.md`` §3): two pieces of armour
 add up, and neither does armour plus a power. The loser is still on the sheet, so its
 card says what beat it rather than showing a number nothing is reading.
 
+**A vehicle is a platform, not a bundle of effects.** Its card leads with the five
+traits it is actually bought as — Size, Strength, Toughness, Defense, Speed, plus the
+Defense Class those imply moving and parked — instead of the game-term table an item
+gets, because that is what a vehicle *is* (``docs/mm-equipment-design.md`` §5). It
+keeps its dice footer, though: a tank's cannon rolls exactly like a Damage power's,
+and each weapon is named there rather than reading "Damage" twice.
+
 **Some gear goes on other gear.** An accessory (a laser sight, a suppressor) is fitted
 to a weapon from its own card and then lives *on* that weapon: it leaves the loose list,
 its price folds into the host's, and its modifiers are lent to the host's rolls by
@@ -50,6 +57,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QVariantAnimation, Signal
 from PySide6.QtWidgets import (
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -86,10 +94,19 @@ from mm_companion.core.rules import (
     power_has_custom_modifier,
     power_pl_violations,
     power_rolls,
+    vehicle_trait_rows,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.cards import DraggableCard, DragHandle, NodeList, RollsFooter, effects_block
+from mm_companion.ui.cards import (
+    DraggableCard,
+    DragHandle,
+    NodeList,
+    RollsFooter,
+    effects_block,
+    terms_style,
+)
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -108,6 +125,13 @@ EQUIPMENT_GROUP_MIME = "application/x-mm-equipment-group"
 WEAR_HINT = (
     "Click this card to wear or stow this item — a stowed item keeps its "
     "Equipment Point price but grants nothing."
+)
+
+#: The same switch on a platform, where "worn" is the wrong word for the same fact.
+#: A parked vehicle is not moving you, which is exactly what stowing does to a bonus.
+BOARD_HINT = (
+    "Click this card to board or park this vehicle — a parked vehicle keeps its "
+    "Equipment Point price but moves nobody."
 )
 
 #: Why an item-granted advantage is not in the Advantages block, on the line's tooltip.
@@ -602,7 +626,8 @@ class EquipmentSection(TitledSection):
         """A stat-block card for one item, which is also its wear/stow switch."""
         card = DraggableCard(item.id, mime=EQUIPMENT_MIME)
         card.set_clickable(True)
-        card.setToolTip(WEAR_HINT)
+        traits = vehicle_trait_rows(item, self._data)
+        card.setToolTip(BOARD_HINT if traits else WEAR_HINT)
         card.clicked.connect(lambda i=item: self._toggle_worn(i))
 
         # The *effective* build throughout: what the item does is its own build plus
@@ -619,9 +644,17 @@ class EquipmentSection(TitledSection):
             desc.setStyleSheet(muted_style(italic=True))
             layout.addWidget(desc)
 
-        effects = effects_block(build, self._character, self._data)
-        if effects is not None:
-            layout.addWidget(effects)
+        # A platform shows what it *is* — five bought traits — where an item shows what
+        # its effects do. Its movement and weapons are still real effects underneath
+        # (that is how its speed reaches the sheet and its cannon rolls), but a
+        # game-term table for Speed 6 restates the trait grid's own Speed row, and one
+        # per weapon buries the traits the card exists to show.
+        if traits:
+            layout.addLayout(self._traits_grid(traits))
+        else:
+            effects = effects_block(build, self._character, self._data)
+            if effects is not None:
+                layout.addWidget(effects)
 
         fitted = self._accessories_block(item)
         if fitted is not None:
@@ -649,6 +682,20 @@ class EquipmentSection(TitledSection):
 
         self._show_worn(card, item)
         return card
+
+    def _traits_grid(self, rows) -> QGridLayout:
+        """A vehicle's platform traits, in the grid an effect's game terms use.
+
+        The same :func:`~mm_companion.ui.power_constructor.terms_grid.build_terms_grid`
+        and the same card typography, so a vehicle card and an item card read as one
+        kind of thing that happens to say different words. A trait beating its size
+        baseline is tinted and carries the baseline on its tooltip — that difference is
+        precisely what the build paid Equipment Points for.
+        """
+        grid = build_terms_grid(rows, terms_style())
+        grid.setContentsMargins(6, 1, 0, 0)
+        grid.setVerticalSpacing(0)
+        return grid
 
     def _rolls_block(self, item: EquipmentItem, build) -> QWidget | None:
         """An item's dice footer — a weapon's attack, and the save it forces.

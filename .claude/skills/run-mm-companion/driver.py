@@ -147,6 +147,28 @@ def build(target: str):
             if key != "equipment":
                 sheet.hide_block(key)
         win.resize(760, 720)
+    elif target == "equipment-vehicles":
+        # Phase 9: platforms. A tank (weapons, Impervious Toughness, a dice footer
+        # naming each gun) and a jumbo jet (whose Flight reaches the Speed readout),
+        # so the trait grid a vehicle card shows instead of a game-term table is
+        # visible beside an ordinary weapon's card.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=25))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("tank", "jumbo_jet", "sword"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+        sheet.equipment.refresh()
+        sheet.system_info.refresh_derived()  # the jet's Flight joins the Speed readout
+        for key in sheet.block_keys():
+            if key not in ("equipment", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 860)
     elif target in ("sheet-pinned", "sheet-pinned-bottom"):
         # The pinned strip with something in it: two blocks parked outside the
         # scrolling page. The bottom variant also moves the strip to another edge,
@@ -454,6 +476,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-demo",
             "sheet-locked",
             "equipment-demo",
+            "equipment-vehicles",
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",

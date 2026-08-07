@@ -55,10 +55,17 @@ from mm_companion.core.rules import (
     power_pl_violations,
     power_points_spent,
     power_rolls,
+    power_total_cost,
     resistance_total,
     resolve_pin,
     speed_lines,
     trait_bonuses,
+    vehicle_defense_class,
+    vehicle_modifier_advantage_cost,
+    vehicle_size_row,
+    vehicle_stationary_dc,
+    vehicle_trait_cost,
+    vehicle_trait_rows,
     worn_items,
 )
 
@@ -781,3 +788,143 @@ def test_an_item_with_no_material_is_never_warned_about(data, hero) -> None:
     assert item_breakage_warnings(_item(data, "rifle"), hero, data) == []
     assert item_material_toughness(EquipmentItem(), data) is None
     assert item_breakage_warnings(EquipmentItem(), hero, data) == []
+
+
+# --- vehicles: a platform, not a bundle of effects --------------------------------------
+
+
+def test_a_vehicles_traits_cost_what_the_size_table_says(data) -> None:
+    """Size, plus every point of Strength/Toughness above the baseline it set.
+
+    A motorcycle is size 0 with the size-0 Strength, so all it pays for is the two
+    points of Toughness above baseline 5.
+    """
+    motorcycle = data.vehicle_catalog()["motorcycle"]
+    assert vehicle_trait_cost(motorcycle, data) == 2
+
+    # A jumbo jet: 4 for size, +6 Strength, +4 Toughness, nothing bought off Defense.
+    assert vehicle_trait_cost(data.vehicle_catalog()["jumbo_jet"], data) == 14
+
+
+def test_traits_plus_the_movement_effect_are_the_printed_price(data) -> None:
+    """The split is the whole reason Speed is an effect rather than a sixth trait.
+
+    A jumbo jet's 14 points of platform plus Flight 9 at 2 points a rank is its
+    printed 32 — which is what says the model matches the book's own build.
+    """
+    jet = _item(data, "jumbo_jet")
+    assert vehicle_trait_cost(data.vehicle_catalog()["jumbo_jet"], data) == 14
+    assert power_total_cost(jet.build, data) == 18  # Flight 9, at 2 a rank
+    assert item_ep_cost(jet, data) == 32
+
+
+def test_a_stock_vehicle_is_priced_at_its_printed_number(data) -> None:
+    """The derived arithmetic is the fallback, never an override of the table."""
+    tank = _item(data, "tank")
+    assert item_is_stock(tank, data)
+    assert item_ep_cost(tank, data) == 76
+
+
+def test_a_vehicle_with_no_printed_price_derives_traits_plus_movement(data) -> None:
+    """The dimension hopper's own line says "6 + movement effect cost"; so does this."""
+    hopper = _item(data, "dimension_hopper")
+    assert data.vehicle_catalog()["dimension_hopper"].cost is None
+    assert vehicle_trait_cost(data.vehicle_catalog()["dimension_hopper"], data) == 6
+    assert item_ep_cost(hopper, data) == 12
+
+
+def test_the_size_table_extends_arithmetically_past_its_last_row(data) -> None:
+    """The book stops at 5 and says +2 STR / +1 TOU / −1 DEF a rank after that."""
+    five = vehicle_size_row(5, data)
+    seven = vehicle_size_row(7, data)
+    assert (five.strength, five.toughness, five.defense) == (12, 10, -5)
+    assert (seven.strength, seven.toughness, seven.defense) == (16, 12, -7)
+    # And a rank below the table clamps to its first row rather than extrapolating down.
+    assert vehicle_size_row(-3, data).size_rank == 0
+
+
+def test_a_moving_vehicle_is_a_harder_target_than_a_parked_one(data) -> None:
+    """The one defence in the app that is dynamic per round."""
+    tank = data.vehicle_catalog()["tank"]
+    assert vehicle_defense_class(tank, data, tank.speed) == 14  # 10 + 6 − 2
+    assert vehicle_stationary_dc(tank, data) == 8  # 10 − 2
+
+
+def test_a_vehicles_speed_reaches_the_speed_readout(data, hero) -> None:
+    """A boat swims and a jet flies — the class axis, arriving on the sheet.
+
+    Nothing in the movement layer knows what a vehicle is: its Speed became a real
+    movement effect when the catalog entry was built, so the existing gear seam picks
+    it up.
+    """
+    hero.equipment.append(_item(data, "jumbo_jet"))
+
+    labels = [line.label for line in equipment_speed_lines(hero, data)]
+    assert labels == ["Jumbo Jet 9"]
+    assert any(line.label == "Jumbo Jet 9" for line in speed_lines(hero, data))
+
+
+def test_a_parked_vehicle_moves_nobody(data, hero) -> None:
+    """Stowing is the same runtime gate every other piece of gear has."""
+    jet = _item(data, "jumbo_jet")
+    hero.equipment.append(jet)
+    jet.worn = False
+
+    assert equipment_speed_lines(hero, data) == []
+
+
+def test_a_vehicles_weapons_roll_under_their_own_names(data, hero) -> None:
+    """Two Damage effects on one card, and a footer that says which is which."""
+    tank = _item(data, "tank")
+
+    labels = [spec.label for spec in power_rolls(tank.build, hero, data)]
+    assert any(label.startswith("Cannon:") for label in labels)
+    assert any(label.startswith("Heavy machine gun:") for label in labels)
+
+
+def test_a_weapons_own_modifiers_land_on_that_weapon_alone(data, hero) -> None:
+    """The cannon is Area; the machine gun is Multiattack. Neither is the tank's."""
+    tank = _item(data, "tank")
+    cannon, machine_gun = tank.build.effects[1], tank.build.effects[2]
+
+    assert {m.modifier_id for m in cannon.extras} == {"ranged", "area_effect"}
+    assert next(m for m in cannon.extras if m.modifier_id == "area_effect").rank == 6
+    assert {m.modifier_id for m in machine_gun.extras} == {"ranged", "multiattack"}
+
+
+def test_the_trait_rows_name_the_baselines_the_build_paid_to_beat(data) -> None:
+    rows = {row.key: row for row in vehicle_trait_rows(_item(data, "tank"), data)}
+
+    assert rows["strength"].value == "10" and rows["strength"].base == "6"
+    assert rows["strength"].change == "better"
+    assert rows["toughness"].value == "12 (Impervious 4)"
+    assert rows["defense"].value == "-2" and rows["defense"].change == ""
+    assert rows["speed"].value == "Speed 6"
+    assert rows["defense_class"].value == "14 moving / 8 stationary"
+    assert rows["vehicle_class"].value == "Ground"
+
+
+def test_only_a_vehicle_has_trait_rows(data) -> None:
+    """Which is how a card asks the question at all."""
+    assert vehicle_trait_rows(_item(data, "sword"), data) == []
+    assert vehicle_trait_rows(EquipmentItem(), data) == []
+
+
+def test_a_vehicle_modifier_prices_the_advantage_not_the_gear(data) -> None:
+    """Durable and Summonable add Power Points to the ranks funding the vehicle.
+
+    The number is deliberately in the *other* currency — an Equipment Point answer
+    here would be the two-currency leak this layer exists to prevent.
+    """
+    assert vehicle_modifier_advantage_cost(["durable"], 4, data) == 4
+    assert vehicle_modifier_advantage_cost(["durable", "minion"], 4, data) == 0
+    assert vehicle_modifier_advantage_cost(["nonesuch"], 4, data) == 0
+
+
+def test_owning_a_vehicle_never_touches_the_power_point_pool(data, hero) -> None:
+    """The one failure that would not raise: an Equipment Point spent as a Power Point."""
+    before = power_points_spent(hero, data)
+    hero.equipment.append(_item(data, "tank"))
+
+    assert power_points_spent(hero, data) == before
+    assert equipment_points_spent(hero, data) == 76

@@ -250,7 +250,7 @@ weapon only, which the sheet gets wrong if accessories are loose items.
 *Verify:* `tests/test_equipment.py`, `tests/test_powers.py`.
 
 ### Phase 9 — Stock vehicles
-**Status: todo**
+**Status: done**
 
 Parse `stockVehicles`, `vehicleFeatures`, `vehicleModifiers` and `vehicleSizeTable`. A
 `vehicle` category whose card shows Size / STR / TOU / DEF / Speed rather than the
@@ -976,3 +976,129 @@ seams). `test_equipment_constructor`, `test_powers_section` and `test_power_cons
 pass **unedited**.
 
 Next: **Phase 9 — Stock vehicles**.
+
+### 2026-08-08 — Phase 9: Stock vehicles
+
+**Shipped.** All 34 stock vehicles are pickable, priced, worn, rolled and drawn.
+Suite: **2184 passed** (was 2156). `ruff` and `black` clean.
+
+**The decision the whole phase turns on: a vehicle enters the rules layer as an
+ordinary catalog entry.** `GameData.equipment_catalog()` now merges `equipment` with a
+derived `vehicle_entries`, one per stock vehicle, built by the new
+`data_loader.vehicle_entry()`. Nothing downstream needed a vehicle branch: the picker
+lists them under Vehicles because it iterates the catalog, `build_item_from_entry`
+gives them a build, `item_is_stock` keeps them at their printed price, `worn_items`
+gates them, `power_rolls` rolls their guns and `equipment_speed_lines` puts their Speed
+on the sheet. The alternative — a parallel vehicle path beside `EquipmentItem` — would
+have needed a twin of every one of those. Items win an id collision, since the item
+catalog is the older and larger one.
+
+*The translation is of shape, not of rules.* `vehicle_entry` writes a platform's printed
+line in the catalog's spelling: its **movement** becomes an effect (its own `movement`
+block if it has one, else the effect its **class** measures Speed in — `_meta.vehicleClasses`
+is the new axis, `air → flight`, `water → swimming`, so a jet's Speed 9 reaches the sheet
+as Flight rather than as a bare number), and each **weapon** becomes an effect carrying
+its own modifiers. The five platform traits are deliberately *not* folded in: they are
+not effects, they are bought off their own table, and `core/rules/vehicles.py` reads them
+straight off the `StockVehicle`.
+
+**Two small, general additions to the powers layer paid for that**, both defaulting to
+today's behaviour and both written only when non-empty:
+- `PowerEffectInstance.label` — what to call *this* effect. `power_rolls` prefixes with
+  it whether or not the power is multi-effect, so a tank's footer says "Cannon:" and
+  "Heavy machine gun:" rather than "Damage:" twice. No power in the base ruleset sets
+  one, so no power's footer moved.
+- `EquipmentEffectRef.modifiers` — extras and flaws carried by *one* effect, on top of
+  the entry-wide list every effect gets. The cannon is Area 6 and the machine gun is
+  Multiattack; neither belongs to the tank. `_entry_modifier_selections` split into a
+  reusable `_modifier_selections(refs, data)` for it.
+
+**The trait-cost table is real, and it checks out against the book.** `vehicle_trait_cost`
+is §5's table — 1 per size rank, 1 per +1 of Strength/Toughness *above the size baseline*,
+1 per −1 of Defense bought off. Speed is excluded on purpose: it is a movement effect and
+is priced as one through the build. That split is what makes the halves add up — a jumbo
+jet's 14 points of platform plus Flight 9 at 2 a rank is its printed 32, exactly. It is
+consulted only when there is no printed price to honour (`item_own_ep_cost` adds
+`item_platform_cost` to the *derived* branch), which is what finally prices the two
+`built` vehicles: the dimension hopper's own line reads "6 + movement effect cost" and it
+now comes out at 6 + 6 = 12.
+
+*Also in `core/rules/vehicles.py`:* `vehicle_size_row` (the table, extended arithmetically
+past rank 5 by `_meta.vehicleSizeExtension` — +2 STR / +1 TOU / −1 DEF a rank — and clamped
+to the first row below it), `vehicle_defense_class` / `vehicle_stationary_dc` (the one
+dynamic defence in the app: a tank at Speed 6 is DC 14, parked it is DC 8), and
+`vehicle_trait_rows`, which returns `EffectStat` rows so the card renders them through the
+*same* `build_terms_grid` an effect's game terms use — a vehicle card differs from an
+item's in what it says, not in how it is laid out. A trait beating its size baseline is
+tinted and carries the baseline on its tooltip, which is precisely what the build paid for.
+
+**The card.** A platform shows the trait grid **instead of** the effects block (a
+game-term table for Speed 6 restates the grid's own Speed row, and one per weapon buries
+the traits the card exists to show) but **keeps** its dice footer, its description, its
+price and its ✕. Its click hint reads "board or park" rather than "wear or stow" — the same
+switch, honest wording.
+
+**The data promotion** put the design file's vehicle mechanics into
+`src/mm_companion/data/equipment.json`: `patterns`, `defenses[]`, `weapons[]`, `movement`,
+`costFormula`, `variants`, `notes`. Weapons were **normalised on the way in** — the design
+file's sibling `areaRank`/`homingRank` keys became a `rank` on the modifier they belong to,
+which is the shape `EquipmentModifierRef` already understood. New `_meta` keys:
+`vehicleCategory` (which equipment category platforms file under — named in data, not in
+Python), `vehicleClasses` (+ its note), `vehicleSizeExtension`, `vehicleCombat`. The two
+engine-facing axes were mirrored back into `docs/design-data/equipment-design.json`, which
+the promotion model assumes stays the superset.
+
+*Three data judgements worth keeping:*
+- **The time machine gets no movement effect.** The design file names Enhanced Movement
+  mode `time_travel`, and `effects.json` has no such mode. Asserting one would be inventing
+  content, so the vehicle carries the fact in its `notes` instead. Its Speed row reads a
+  dash, which is the honest answer for a plot device.
+- **The dimension hopper's mode was resolved**, since `dimensional_travel` does exist:
+  `config.modes = [{"id": "dimensional_travel", "tier": 3}]` at rank 6, reading the design
+  file's `"rank": 3` as the tier index (tier 3 costs 6 ranks, so it allocates exactly).
+  That is the first bite taken out of the still-open `implementation` → allocation job.
+- **Stock vehicles carry no Features.** `vehicleFeatures` and `vehicleModifiers` parse and
+  are exposed (`PlatformFeature`, `VehicleModifier`, `GameData.vehicle_feature_catalog()`)
+  but nothing in the shipped catalog selects any — they are the custom builder's, in
+  Phase 10.
+
+**`vehicle_modifier_advantage_cost` is written but wired to nothing, on purpose.** Durable /
+Minion / Summonable change what the Equipment advantage ranks *funding* a vehicle cost in
+**Power Points**, not what the vehicle costs in Equipment Points — the "two currencies" trap
+in its most confusing form. The rule lives beside the records that describe it; choosing
+modifiers for a vehicle needs the custom-platform builder, which is Phase 10's. They are
+deliberately kept out of `modifier_catalog()` for the same reason, and a test holds that.
+
+*Two existing tests were edited*, both asserting a premise this phase changes on purpose:
+`test_equipment_catalog_is_an_id_lookup` (the catalog is items **plus** vehicles) and
+`test_the_picker_lists_the_whole_catalog_grouped_and_priced` (so is the picker). Every
+powers test — `test_powers`, `test_powers_section`, `test_power_constructor`,
+`test_equipment_constructor` — passes **unedited**.
+
+*Deliberately not done:*
+- **No custom vehicles and no installations** — Phase 10 owns both, along with the vehicle
+  trait-cost *builder* (this phase only reads the table, it does not offer to buy off it),
+  moving Defense as a live per-round number, and the installations' own PL branch.
+- **`installationFeatures` / `stockInstallations` / `installationSizeTable` are still
+  unparsed**, as are the §5 crash, control-check and vehicle-damage-ladder rules
+  (`vehicleCrash`, `vehicleControl`, `vehicleDamage` in the design file's `_meta`).
+- **A vehicle's weapons are subject to `power_pl_violations` like any other gear.** No
+  stock vehicle trips it at PL 10, and warning is the right default when a PC does mount
+  something over their cap, but a GM-adjudicated vehicle-PL exception is not modelled.
+- **A vehicle cannot be re-ranked or reconfigured from the block** beyond editing its build
+  in the constructor, where it is drawn as an ordinary power — the trait grid is read-only.
+
+*Verified:* `tests/test_equipment_data.py` (+10: the platform records, referential integrity
+over every weapon/defense/movement ref, per-weapon modifier ranks, the class axis, the
+derived entries, the exotic pair, the size table and its extension, the two side catalogs,
+and two mod tests proving `_deep_merge` extends and overrides platforms for free),
+`tests/test_equipment.py` (+13: the trait table against two vehicles, traits-plus-movement
+equalling the printed price, stock pricing, the `built` vehicle, the size extension both
+ways, the moving/parked DCs, Speed reaching the readout and a parked vehicle not,
+named weapon rolls, per-weapon modifiers, the trait rows, the advantage-currency modifier,
+and the PP pool staying untouched), `tests/test_equipment_section.py` (+4 on the card, the
+footer, the group and the wording). `driver.py` gained an `equipment-vehicles` target; eyes
+on the real app confirm the trait grid, the named dice footer, and "Tank 6" and
+"Jumbo Jet 9" both on the System block's Speed readout.
+
+Next: **Phase 10 — Custom vehicles and installations**.

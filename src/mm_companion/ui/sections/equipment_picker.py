@@ -58,11 +58,12 @@ def cost_text(entry: EquipmentEntry, unit: str) -> str:
 class EquipmentPickerDialog(QDialog):
     """Browse the equipment catalog and add an item to the character.
 
-    Every entry the loaded ruleset defines is listed — including one a mod added,
-    since the catalog is just :meth:`~mm_companion.core.data_loader.GameData.equipment_catalog`.
-    Groups come from ``equipment_categories`` in declared order, and an entry whose
-    category no row names is offered under its own raw id rather than dropped: a mod
-    may ship items before it ships the heading for them.
+    Every entry the loaded ruleset defines is listed — including one a mod added, and
+    including the stock vehicles, since the catalog is just
+    :meth:`~mm_companion.core.data_loader.GameData.equipment_catalog` and a vehicle
+    enters it as one more entry. Groups come from ``equipment_categories`` in declared
+    order, and an entry whose category no row names is offered under its own raw id
+    rather than dropped: a mod may ship items before it ships the heading for them.
     """
 
     #: The :class:`EquipmentEntry` the user picked.
@@ -128,7 +129,7 @@ class EquipmentPickerDialog(QDialog):
     def _groups(self) -> list[tuple[str, str, list[EquipmentEntry]]]:
         """``(category id, heading, entries)`` in the ruleset's declared order."""
         by_category: dict[str, list[EquipmentEntry]] = {}
-        for entry in self._data.equipment:
+        for entry in self._data.equipment_catalog().values():
             by_category.setdefault(entry.category, []).append(entry)
 
         groups: list[tuple[str, str, list[EquipmentEntry]]] = []

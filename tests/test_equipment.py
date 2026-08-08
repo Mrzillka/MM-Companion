@@ -622,6 +622,26 @@ def test_worn_gear_grants_movement_modes_too(data, hero) -> None:
     assert movement_mode_lines(hero, data) == []
 
 
+def test_an_accessory_cannot_lend_a_removable_flaw_to_its_host(data) -> None:
+    """The removable rule held on the build path and leaked on the accessory one.
+
+    A merged build is never priced, so this cost nothing — but it reaches
+    ``effect_is_active``, and a host carrying a removable flaw switches off whenever it
+    is not "present". A hand-edited save or a mod's accessory is all it took.
+    """
+    char = Character()
+    gun = _item(data, "light_pistol")
+    sight = _item(data, "laser_sight")
+    sight.attachment = [*sight.attachment, ModifierSelection("removable", 1)]
+    char.equipment = [gun, sight]
+    assert attach_accessory(char, gun, sight, data)
+
+    merged = item_effective_build(gun, data)
+    lent = [m.modifier_id for effect in merged.effects for m in (*effect.extras, *effect.flaws)]
+    assert "accurate" in lent, "the sight still lends what it is for"
+    assert "removable" not in lent
+
+
 def test_a_fitted_accessory_counts_toward_the_estimated_power_level(data) -> None:
     """The card's ⚠ read the effective build; the character-wide estimate did not.
 

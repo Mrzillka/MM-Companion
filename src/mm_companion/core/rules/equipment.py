@@ -139,14 +139,37 @@ def _modifier_selections(
     prints the flaw, and it is bought with Power Points rather than Equipment Points.
     """
 
+    return _split_by_category(
+        (ModifierSelection(modifier_id=ref.modifier, rank=ref.rank or 1) for ref in refs),
+        game_data,
+    )
+
+
+def _split_by_category(
+    selections, game_data: GameData
+) -> tuple[list[ModifierSelection], list[ModifierSelection]]:
+    """Modifier selections split into extras and flaws, dropping the removable gate.
+
+    The one answer to "which pile does this go in", because there were two and they
+    disagreed: an unknown category was a flaw when an entry was built and an extra when
+    an accessory lent it. Unreachable against the shipped data — the loader tags every
+    modifier from the array it was parsed out of — but a mod's is not, and being
+    charged for a flaw is the harmless direction to be wrong in.
+
+    Dropping the removable gate here is what makes the rule hold on *both* paths. It
+    was enforced on the build path only, so an accessory whose ``attachment`` carried a
+    removable flaw would have pushed one onto every effect of its host — costing
+    nothing (the merged build is never priced) but reaching ``effect_is_active``, which
+    would switch the host off whenever it was not "present".
+    """
+
     catalog = game_data.modifier_catalog()
     extras: list[ModifierSelection] = []
     flaws: list[ModifierSelection] = []
-    for ref in refs:
-        modifier = catalog.get(ref.modifier)
+    for selection in selections:
+        modifier = catalog.get(selection.modifier_id)
         if modifier is None or modifier.gate == GATE_REMOVABLE:
             continue
-        selection = ModifierSelection(modifier_id=ref.modifier, rank=ref.rank or 1)
         (extras if modifier.category == "extra" else flaws).append(selection)
     return extras, flaws
 
@@ -437,13 +460,7 @@ def item_effective_build(item: EquipmentItem, game_data: GameData) -> Power:
     if not lent or not item.build.effects:
         return item.build
 
-    catalog = game_data.modifier_catalog()
-    extras, flaws = [], []
-    for selection in lent:
-        modifier = catalog.get(selection.modifier_id)
-        (flaws if modifier is not None and modifier.category == "flaw" else extras).append(
-            selection
-        )
+    extras, flaws = _split_by_category(lent, game_data)
 
     def copies(selections):
         return [ModifierSelection.from_dict(s.to_dict()) for s in selections]

@@ -49,7 +49,6 @@ from ..powers import PowerEffectInstance
 from .powers_terms import EffectStat
 
 __all__ = [
-    "PLATFORM_PATTERN",
     "apply_platform",
     "installation_pl_violations",
     "installation_size_cost",
@@ -77,12 +76,6 @@ __all__ = [
     "vehicle_trait_cost",
     "vehicle_trait_rows",
 ]
-
-#: The ``patterns`` tag that marks an entry a platform (``docs/mm-equipment-design.md``
-#: §2 pattern J). Named here rather than in the UI because "is this a platform" is a
-#: rules question — it decides how the thing is priced, not only how it is drawn.
-PLATFORM_PATTERN = "platform"
-
 
 # --- resolving a platform: one shape, whether printed or built ---------------------------
 

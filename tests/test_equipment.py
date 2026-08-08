@@ -620,6 +620,40 @@ def test_worn_gear_grants_movement_modes_too(data, hero) -> None:
     assert movement_mode_lines(hero, data) == []
 
 
+def test_the_shipped_movement_gear_works_without_being_hand_configured(data, hero) -> None:
+    """Straight off the catalog, no fixture surgery.
+
+    The test above rewrites the swing line's allocation config before asserting, which
+    is how the shipped data managed to spell the option ``"mode"`` — where every reader
+    looks for ``"id"`` — through eleven phases without a single failure. Three items
+    were bought, worn and drawn while granting nothing.
+    """
+    hero.equipment = [_item(data, "swing_line"), _item(data, "climbing_cable")]
+
+    labels = [line.label for line in movement_mode_lines(hero, data)]
+    assert "Swinging" in labels
+    assert any(label.startswith("Wall-Crawling") for label in labels)
+
+
+def test_a_shield_raises_the_defence_it_is_bought_as(data, hero) -> None:
+    """``combat.defense`` is design vocabulary; ``DEF`` is the trait key.
+
+    All three shields named the former, so :func:`trait_category` matched no list and
+    the applier declined — a shield on the sheet moved no number at all.
+    """
+    hero.equipment = [_item(data, "large_shield")]
+
+    assert resistance_total(hero, data, "DEF") == 3
+    assert equipment_contributions(hero, data)
+
+
+def test_a_shield_still_costs_the_book_price(data) -> None:
+    """And its derived price agrees, so editing one moves no number either."""
+    item = _item(data, "large_shield")
+    assert item_own_ep_cost(item, data) == 6
+    assert item_is_stock(item, data)
+
+
 def test_a_weapons_attack_counts_toward_the_estimated_power_level(data) -> None:
     """A mook whose whole threat is its rifle used to estimate at 0."""
     char = Character()

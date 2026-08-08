@@ -19,6 +19,7 @@ from mm_companion.core.data_loader import (
     clear_game_data_cache,
     load_game_data,
 )
+from mm_companion.core.rules import build_item_from_entry, power_allocation_violations
 
 
 def test_catalog_loads_with_unique_ids() -> None:
@@ -318,6 +319,76 @@ def test_installation_entries_are_ordinary_catalog_entries() -> None:
     # It has no movement and no weapons, so it carries no effects at all — what it
     # *does* is its Features, which are traits rather than a bundle of effects.
     assert entry.effects == ()
+
+
+def _allocation_fields(data):
+    """Every ``(effect id, config key, field)`` the ruleset declares as an allocation."""
+    return {
+        (effect.id, field.key): field
+        for effect in data.effects
+        for field in effect.config_fields
+        if field.type == "allocation"
+    }
+
+
+def test_every_allocation_config_names_a_real_option() -> None:
+    """An allocation entry is ``{"id", "tier"}``, and both halves have to resolve.
+
+    The guard against a whole class of silent breakage: the catalog was promoted from
+    the design file in the *design* vocabulary, and five entries spelled the option
+    ``"mode"`` or ``"quality"`` where the engine reads ``"id"``. Every reader skipped
+    them without complaint, so a swing line, a climbing cable, a parachute and two
+    pairs of goggles were bought, worn, drawn — and granted nothing at all.
+
+    The tier bound needs its own assertion because ``effect_allocation_used`` *clamps*
+    an out-of-range tier rather than reporting it, so an over-numbered tier is equally
+    quiet.
+    """
+    data = load_game_data()
+    fields = _allocation_fields(data)
+    checked = 0
+
+    for entry in data.equipment_catalog().values():
+        for ref in entry.effects:
+            for key, value in ref.config.items():
+                field = fields.get((ref.effect, key))
+                if field is None:
+                    continue
+                assert isinstance(value, list), f"{entry.id}.{key} is not a list"
+                options = {option.id: option for option in field.alloc_options}
+                for stored in value:
+                    checked += 1
+                    assert isinstance(stored, dict), f"{entry.id}.{key} holds {stored!r}"
+                    unknown = sorted(set(stored) - {"id", "tier"})
+                    assert not unknown, (
+                        f"{entry.id}.{key} carries unknown keys {unknown}"
+                        " — the engine reads only 'id' and 'tier'"
+                    )
+                    assert "id" in stored, f"{entry.id}.{key} names no option id"
+                    option = options.get(stored["id"])
+                    assert (
+                        option is not None
+                    ), f"{entry.id}.{key} names unknown option {stored['id']!r}"
+                    tier = int(stored.get("tier", 1))
+                    assert 1 <= tier <= len(option.tiers), (
+                        f"{entry.id}.{key} names tier {tier} of {option.id!r},"
+                        f" which has {len(option.tiers)}"
+                    )
+
+    assert checked, "the catalog declares no allocation configs — this test is inert"
+
+
+def test_no_catalog_item_over_allocates_its_ranks() -> None:
+    """Every entry builds into a legal power, allocation included.
+
+    The other half of the same guard, and the reason the climbing cable is rank 2:
+    ``wall_crawling``'s first tier costs two ranks, so a rank-1 effect could not have
+    afforded the mode it named.
+    """
+    data = load_game_data()
+    for entry in data.equipment_catalog().values():
+        item = build_item_from_entry(entry, data)
+        assert power_allocation_violations(item.build, data) == [], entry.id
 
 
 # --- Mod extensibility ------------------------------------------------------

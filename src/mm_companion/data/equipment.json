@@ -288,8 +288,7 @@
           "config": {
             "senses": [
               {
-                "quality": "extended",
-                "sense": "vision",
+                "id": "extended",
                 "tier": 1
               }
             ]
@@ -494,8 +493,7 @@
           "config": {
             "senses": [
               {
-                "quality": "low_light_vision",
-                "sense": "vision",
+                "id": "low_light_vision",
                 "tier": 1
               }
             ]
@@ -570,11 +568,11 @@
       "effects": [
         {
           "effect": "effects:enhanced_movement",
-          "rank": 1,
+          "rank": 2,
           "config": {
             "modes": [
               {
-                "mode": "wall_crawling",
+                "id": "wall_crawling",
                 "tier": 1
               }
             ]
@@ -650,7 +648,7 @@
           "config": {
             "modes": [
               {
-                "mode": "safe_fall",
+                "id": "safe_fall",
                 "tier": 1
               }
             ]
@@ -733,8 +731,8 @@
           "config": {
             "modes": [
               {
-                "mode": "swinging",
-                "tier": 2
+                "id": "swinging",
+                "tier": 1
               }
             ]
           }
@@ -3663,7 +3661,7 @@
           "effect": "effects:enhanced_trait",
           "rank": 1,
           "config": {
-            "target": "combat.defense"
+            "target": "DEF"
           }
         }
       ],
@@ -3692,7 +3690,7 @@
           "effect": "effects:enhanced_trait",
           "rank": 2,
           "config": {
-            "target": "combat.defense"
+            "target": "DEF"
           }
         }
       ],
@@ -3721,7 +3719,7 @@
           "effect": "effects:enhanced_trait",
           "rank": 3,
           "config": {
-            "target": "combat.defense"
+            "target": "DEF"
           }
         }
       ],

@@ -82,6 +82,12 @@ class TraitContribution:
     the sheet names as granting it (a power's display name, an advantage's name, an
     item's). ``stacking`` and ``group`` decide how :func:`resolve_contributions` nets it
     against its neighbours, and ``kind`` records which applier produced it.
+
+    ``origin`` is the **id** of the thing on the sheet whose card has to explain this —
+    an equipment item's, today. It is deliberately not the same as ``source``: two
+    identical Leather Armours share a display name, and matching a superseded bonus by
+    name and amount had both of their cards claiming to be the one that lost. Powers
+    leave it empty, since a power's card explains itself from its own build.
     """
 
     amount: int
@@ -91,6 +97,7 @@ class TraitContribution:
     stacking: str = STACK_SUM
     group: str = GROUP_POWERS
     kind: str = APPLY_BONUS
+    origin: str = ""
 
 
 @dataclass(frozen=True)
@@ -98,12 +105,16 @@ class SupersededBonus:
     """A contribution that was outclassed — what the card explains away.
 
     An item whose +2 Toughness loses to a power's +4 still sits on the sheet, and a
-    silently inert bonus reads as a bug. ``beaten_by`` names the source that won.
+    silently inert bonus reads as a bug. ``beaten_by`` names the source that won, and
+    ``origin`` carries the losing contribution's id straight through — that is what lets
+    a card ask "was it *me* that lost" rather than comparing a name and an amount, which
+    two copies of the same item answer identically.
     """
 
     source: str
     amount: int
     beaten_by: str
+    origin: str = ""
 
 
 @dataclass(frozen=True)
@@ -133,7 +144,8 @@ class ApplyContext:
     choice for a configurable boost, the baked-in target otherwise). ``stacking`` and
     ``group`` are the *granter's* terms — a power stacks, an equipment item does not
     unless its owner ticked "stacks with other bonuses" — and travel through onto every
-    contribution the applier yields.
+    contribution the applier yields, as does ``origin`` (the granting item's id; see
+    :class:`TraitContribution`).
     """
 
     record: TraitBoost
@@ -143,6 +155,7 @@ class ApplyContext:
     game_data: GameData
     stacking: str = STACK_SUM
     group: str = GROUP_POWERS
+    origin: str = ""
 
     @property
     def amount(self) -> int:
@@ -210,6 +223,7 @@ def _contribution(context: ApplyContext, category: str, kind: str) -> tuple[Trai
             stacking=context.stacking,
             group=context.group,
             kind=kind,
+            origin=context.origin,
         ),
     )
 
@@ -327,7 +341,7 @@ def resolve_contributions(contributions: Iterable[TraitContribution]) -> TraitBo
     superseded: list[SupersededBonus] = []
     for key, members in groups.items():
         beaten = shut_out if key == winner else tuple(members)
-        superseded.extend(SupersededBonus(c.source, c.amount, beaten_by) for c in beaten)
+        superseded.extend(SupersededBonus(c.source, c.amount, beaten_by, c.origin) for c in beaten)
 
     return TraitBonus(amount, sources, tuple(superseded))
 

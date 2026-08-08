@@ -62,6 +62,7 @@ from mm_companion.core.rules import (
     item_platform,
     item_platform_violations,
     item_rank,
+    item_superseded,
     movement_mode_lines,
     new_platform,
     pin_label,
@@ -430,6 +431,35 @@ def test_two_pieces_of_armour_do_not_stack(data, hero) -> None:
     bonus = trait_bonuses(hero, data)["resistance"]["TOUGHNESS"]
     assert [s.source for s in bonus.superseded] == ["Flak Vest"]
     assert bonus.superseded[0].beaten_by == "Armored Costume"
+
+
+def test_of_two_identical_items_only_the_loser_says_so(data, hero) -> None:
+    """Identity, not resemblance — the winner must not disown the bonus it granted.
+
+    Two copies of one item share a name and an amount, which is what an earlier
+    ``(source, amount)`` match could not tell apart: *both* cards claimed to have been
+    superseded, and the +1 actually on the sheet was owned by neither.
+    """
+    first = _item(data, "leather_armor")
+    second = _item(data, "leather_armor")
+    hero.equipment = [first, second]
+
+    reports = [item_superseded(i, hero, data) for i in (first, second)]
+    assert sum(1 for r in reports if r) == 1, "exactly one of the pair lost"
+    assert resistance_total(hero, data, "TOUGHNESS") == 1
+    loser = next(r for r in reports if r)
+    assert loser[0].stat == "TOUGHNESS"
+    assert loser[0].beaten_by == "Leather"
+
+
+def test_a_genuinely_outclassed_item_names_what_beat_it(data, hero) -> None:
+    weak = _item(data, "leather_armor")
+    strong = _item(data, "chain_mail")
+    hero.equipment = [weak, strong]
+
+    assert item_superseded(strong, hero, data) == ()
+    beaten = item_superseded(weak, hero, data)
+    assert [(b.stat, b.beaten_by) for b in beaten] == [("TOUGHNESS", "Chain-Mail")]
 
 
 def test_the_stacks_homerule_opts_one_item_back_in(data, hero) -> None:

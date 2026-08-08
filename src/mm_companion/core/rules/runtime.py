@@ -321,6 +321,7 @@ def build_contributions(
     *,
     stacking: str = STACK_SUM,
     group: str = GROUP_POWERS,
+    origin: str = "",
 ) -> tuple[TraitContribution, ...]:
     """Every stat contribution **one** assembled build currently makes.
 
@@ -340,6 +341,11 @@ def build_contributions(
     powers — an item's :attr:`~mm_companion.core.equipment.EquipmentItem.build` is a
     real :class:`~mm_companion.core.powers.Power`, so it is gathered by this same
     function rather than a parallel one that could drift.
+
+    ``origin`` travels the same way and identifies the *granter itself* rather than
+    what it is called, so a card can recognise its own superseded bonus among several
+    identically named ones (see :class:`~.appliers.TraitContribution`). Powers pass
+    none: a power's card explains itself from its own build.
     """
 
     contributions: list[TraitContribution] = []
@@ -360,6 +366,7 @@ def build_contributions(
             game_data=game_data,
             stacking=stacking,
             group=group,
+            origin=origin,
         )
         contributions.extend(apply_stat_effect(boost.apply, context))
     return tuple(contributions)
@@ -418,6 +425,7 @@ def equipment_contributions(char: Character, game_data: GameData) -> tuple[Trait
                 game_data,
                 stacking=STACK_SUM if item.stacks else STACK_MAX,
                 group=GROUP_EQUIPMENT,
+                origin=item.id,
             )
         )
     return tuple(contributions)

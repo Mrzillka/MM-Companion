@@ -9,7 +9,7 @@ resulting ``Character.equipment``.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
@@ -716,6 +716,80 @@ def test_opening_a_base_reads_as_opening_not_as_wearing(qapp, data) -> None:
     assert "close" in _card(section, base).toolTip()
     assert "park" in _card(section, tank).toolTip()
     assert "stow" in _card(section, sword).toolTip()
+
+
+def test_editing_a_platforms_traits_leaves_it_parked(qapp, data, monkeypatch) -> None:
+    """The working copy is a deepcopy, not a save round trip.
+
+    ``to_dict`` leaves runtime state out on purpose, so ``from_dict`` handed the editor
+    a vehicle at its defaults — boarded, throttle wide open. A car sitting still at
+    Speed 2 came back moving flat out, with a different Defense Class, from having had
+    a Feature added to it.
+    """
+    char = _hero(data, "tank")
+    tank = char.equipment[0]
+    tank.worn = False
+    tank.current_speed = 2
+    section = _section(data, char)
+
+    captured: dict = {}
+
+    def _accept(self):
+        captured["item"] = self.item
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(PlatformEditorDialog, "exec", _accept)
+    section._edit_platform(tank)
+
+    edited = char.equipment[0]
+    assert edited.worn is False
+    assert edited.current_speed == 2
+    assert edited.id == tank.id
+
+
+def test_a_rebuild_forgets_the_trait_hosts_it_deleted(qapp, data) -> None:
+    """They are widgets, and the rebuild deletes them — a stale entry is a dead pointer."""
+    char = _hero(data, "tank")
+    section = _section(data, char)
+    assert section._trait_hosts
+
+    char.equipment.clear()
+    section._rebuild_list()
+
+    assert section._trait_hosts == {}
+
+
+def test_gear_with_a_printed_modifier_and_no_effect_still_says_what_it_is(qapp, data) -> None:
+    """Armour Cloth is Hardened 1 and nothing else — its card used to be blank."""
+    char = _hero(data, "armor_cloth")
+    section = _section(data, char)
+
+    block = section._printed_modifiers_block(char.equipment[0])
+    assert block is not None
+    assert any("Hardened" in text for text in _labels(block))
+
+
+def test_gear_with_effects_prints_no_modifier_line(qapp, data) -> None:
+    """The block is the *substitute* for a terms table, not an addition to one."""
+    char = _hero(data, "sword")
+    section = _section(data, char)
+
+    assert section._printed_modifiers_block(char.equipment[0]) is None
+
+
+def test_a_cross_group_drop_is_refused_over_the_groups_indent(qapp, data) -> None:
+    """The 14px margin is part of the list, so the reject wash reaches it.
+
+    It used to be a wrapper *around* the list and no drop target at all: a drag over
+    the item cards showed the refusal and a drag two pixels to their left showed
+    nothing, which reads as a target that simply did not notice.
+    """
+    char = _hero(data, "sword", "leather_armor")
+    section = _section(data, char)
+    armor = _group_list(section, "armor")
+
+    assert armor.layout().contentsMargins().left() == 14
+    assert armor._drops is not None
 
 
 def test_a_vehicle_card_carries_a_throttle_and_an_installation_does_not(qapp, data) -> None:

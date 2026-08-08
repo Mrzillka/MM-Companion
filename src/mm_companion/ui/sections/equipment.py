@@ -55,6 +55,8 @@ that.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QVariantAnimation, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -77,7 +79,7 @@ from mm_companion.core.equipment import (
     PLATFORM_KINDS,
     EquipmentItem,
 )
-from mm_companion.core.powers import power_is_homerule
+from mm_companion.core.powers import ModifierSelection, power_is_homerule
 from mm_companion.core.rules import (
     PIN_EQUIPMENT,
     GrantedAdvantage,
@@ -101,6 +103,7 @@ from mm_companion.core.rules import (
     item_platform_violations,
     item_price_warnings,
     item_superseded,
+    modifier_label,
     new_platform,
     platform_rules_category,
     platform_trait_rows,
@@ -451,9 +454,14 @@ class EquipmentSection(TitledSection):
         Cancel is a no-op. A stock platform edited here stops being the catalog's and is
         priced from its own traits instead (:func:`~mm_companion.core.rules.item_is_stock`),
         which is the same contract editing a stock item's build has.
+
+        A real :func:`~copy.deepcopy`, **not** a ``to_dict``/``from_dict`` round trip —
+        the same rule the constructor states at length. The save format leaves runtime
+        state out on purpose, so a round trip re-boards a parked vehicle and opens its
+        throttle: a car sitting still at Speed 2 came back moving flat out with a
+        different Defense Class, from having had a Feature added to it.
         """
-        working = EquipmentItem.from_dict(item.to_dict())
-        working.id = item.id
+        working = deepcopy(item)
         dialog = PlatformEditorDialog(self._data, self._character, working, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._on_item_edited(item, dialog.item)
@@ -634,6 +642,10 @@ class EquipmentSection(TitledSection):
         # Hand the on-screen progress over to the cards about to be built, and start a
         # fresh map, so a removed item leaves nothing behind for a later one to inherit.
         self._card_off_prev, self._card_off = self._card_off, {}
+        # The trait hosts go the same way, and for a harder reason: they are widgets,
+        # not numbers, and the ones this clear() is about to delete would otherwise be
+        # reachable from the map as wrapped-dead C++ objects.
+        self._trait_hosts.clear()
         self._groups_host.clear()
         for category in self._ordered_categories(grouped):
             card = self._make_group_card(category, grouped[category])
@@ -674,11 +686,12 @@ class EquipmentSection(TitledSection):
         for item in items:
             inner.add_entry(item.id, self._make_card(item))
 
-        indent = QWidget()
-        indent_layout = QHBoxLayout(indent)
-        indent_layout.setContentsMargins(14, 0, 0, 0)
-        indent_layout.addWidget(inner)
-        layout.addWidget(indent)
+        # The indent belongs to the *list*, not to a wrapper around it. A wrapper put
+        # a 14px strip down the left of every group that was not a drop target at all,
+        # so a rejected cross-group drag showed its reject wash over the item cards and
+        # nothing whatever over the margin beside them.
+        inner.layout().setContentsMargins(14, 0, 0, 0)
+        layout.addWidget(inner)
         # Not an on/off state — just the resting look, which is where the card's
         # margins and spacing come from.
         card.set_off_progress(0.0)
@@ -747,6 +760,10 @@ class EquipmentSection(TitledSection):
             effects = effects_block(build, self._character, self._data)
             if effects is not None:
                 layout.addWidget(effects)
+            else:
+                printed = self._printed_modifiers_block(item)
+                if printed is not None:
+                    layout.addWidget(printed)
 
         fitted = self._accessories_block(item)
         if fitted is not None:
@@ -1101,6 +1118,50 @@ class EquipmentSection(TitledSection):
         if grant.source and grant.source != item.name:
             return f"Grants {grant.name} ({grant.source})"
         return f"Grants {grant.name}"
+
+    def _printed_modifiers_block(self, item: EquipmentItem) -> QWidget | None:
+        """The entry's printed modifiers, for gear that has no effect to hang them on.
+
+        Three catalog items carry a modifier and nothing for it to modify — an Armour
+        Cloth's Hardened, a Flashlight's Area, a Sash's Reach. All three are real
+        printed lines the player paid for, and all three built a card with a name, a
+        price and a blank body, so what the thing actually *does* was nowhere on the
+        sheet.
+
+        This is deliberately **descriptive**: the modifiers are drawn, not modelled.
+        Inventing an effect apiece so the engine could carry them would be writing game
+        content the book does not, and it would change what the Power Level checker and
+        the terms table see. Read off the catalog at draw time, the way
+        :func:`~mm_companion.core.rules.item_granted_advantages` reads ``grants`` — the
+        item stores nothing new.
+        """
+        if item.build.effects:
+            return None
+        entry = self._data.equipment_catalog().get(item.catalog_id)
+        if entry is None or not entry.modifiers:
+            return None
+        catalog = self._data.modifier_catalog()
+        names = [
+            modifier_label(modifier, ModifierSelection(ref.modifier, ref.rank or 1))
+            for ref in entry.modifiers
+            if (modifier := catalog.get(ref.modifier)) is not None
+        ]
+        if not names:
+            return None
+
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setSpacing(0)
+        label = QLabel(", ".join(names))
+        label.setWordWrap(True)
+        label.setStyleSheet(muted_style())
+        label.setToolTip(
+            "The item's printed modifiers. This piece of gear has no effect of its own "
+            "for them to apply to, so they describe it rather than changing a number."
+        )
+        layout.addWidget(label)
+        return host
 
     def _breakage_block(self, item: EquipmentItem) -> QWidget | None:
         """ "Strength 10 exceeds this Sword's Toughness 7" — the thing is going to break.

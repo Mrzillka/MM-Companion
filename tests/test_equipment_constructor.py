@@ -18,7 +18,14 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.equipment import EquipmentItem
-from mm_companion.core.rules import build_item_from_entry, item_ep_cost, item_is_stock
+from mm_companion.core.powers import ModifierSelection
+from mm_companion.core.rules import (
+    accessory_hosts,
+    build_item_from_entry,
+    item_attaches_to,
+    item_ep_cost,
+    item_is_stock,
+)
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.equipment import EquipmentSection
 
@@ -384,3 +391,79 @@ def test_a_custom_item_survives_a_save_and_load(qapp, data) -> None:
 
     assert restored.name == "Grapnel"
     assert (restored.category, restored.stacks, restored.ep_override) == ("utility", True, 4)
+
+
+# -- the accessory row --------------------------------------------------------
+
+
+def test_the_gear_row_offers_somewhere_to_attach(qapp, data) -> None:
+    """Without it a custom accessory could be built, priced and fitted to nothing."""
+    window = _gear_window(data)
+
+    assert window._attaches.itemData(0) == "", "the default is 'not an accessory'"
+    assert window.item is not None and window.item.attaches_to == ()
+
+    index = window._attaches.findData("ranged_weapon")
+    assert index > 0
+    window._attaches.setCurrentIndex(index)
+
+    assert window.item.attaches_to == ("ranged_weapon",)
+
+
+def test_the_gear_row_seeds_from_the_item_it_opens_on(qapp, data) -> None:
+    sight = build_item_from_entry(data.equipment_catalog()["laser_sight"], data)
+    window = _gear_window(data, item=sight)
+
+    assert window._attaches.currentData() == "ranged_weapon"
+    assert "Accurate" in window._lends.text()
+
+
+def test_lending_is_offered_only_once_it_fits_somewhere(qapp, data) -> None:
+    """An item that fits nowhere lends nothing, so the picker would be a no-op."""
+    window = _gear_window(data)
+
+    assert window._lends.isEnabled() is False
+
+    window._attaches.setCurrentIndex(window._attaches.findData("ranged_weapon"))
+
+    assert window._lends.isEnabled() is True
+
+
+def test_choosing_what_it_lends_writes_it_onto_the_item(qapp, data, monkeypatch) -> None:
+    from PySide6.QtWidgets import QDialog
+
+    from mm_companion.ui.attachment_dialog import AttachmentDialog
+
+    window = _gear_window(data)
+    window._attaches.setCurrentIndex(window._attaches.findData("ranged_weapon"))
+
+    monkeypatch.setattr(AttachmentDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(
+        AttachmentDialog, "selections", lambda self: [ModifierSelection("accurate", 2)]
+    )
+    window._edit_attachment()
+
+    assert window.item is not None
+    assert [(m.modifier_id, m.rank) for m in window.item.attachment] == [("accurate", 2)]
+    assert "Accurate 2" in window._lends.text()
+
+
+def test_a_custom_accessory_built_here_can_be_fitted_on_the_block(qapp, data) -> None:
+    """The whole point of the row: end to end, from the builder onto a weapon."""
+    char = Character.new_default(data)
+    char.advantages.append(AdvantageSelection(name="Equipment", rank=5))
+    rifle = build_item_from_entry(data.equipment_catalog()["assault_rifle"], data)
+    char.equipment.append(rifle)
+    section = EquipmentSection(data, char)
+
+    window = _gear_window(data, char=char)
+    window._name.setText("Homemade Scope")
+    window._attaches.setCurrentIndex(window._attaches.findData("ranged_weapon"))
+    window.itemSaved.connect(section._on_item_saved)
+    window._save_power()
+
+    scope = next(i for i in char.equipment if i.name == "Homemade Scope")
+    assert item_attaches_to(scope, data) == ("ranged_weapon",)
+    # By identity: saving reflows the flat list into group order, so the rifle has
+    # moved by now.
+    assert accessory_hosts(char, scope, data) == [rifle]

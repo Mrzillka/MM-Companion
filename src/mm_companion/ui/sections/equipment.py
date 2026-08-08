@@ -268,6 +268,11 @@ class EquipmentSection(TitledSection):
         self._character = character
         self._locked = False
         self._picker: EquipmentPickerDialog | None = None
+        #: The trait editor while one is open, so locking the sheet can close it. It is
+        #: modal, so a *user* can never reach the lock past it — but set_locked is also
+        #: driven programmatically, and a fully editable dialog over a read-only sheet
+        #: is exactly what the other two children are closed to prevent.
+        self._platform_editor: PlatformEditorDialog | None = None
         # Whether there is a GM card beside this sheet, and what is already on it.
         # Live state read at menu time, so set_pin_target/set_pinned need no rebuild.
         self._pins = PinMenuState()
@@ -443,7 +448,12 @@ class EquipmentSection(TitledSection):
         )
         item.build.name = f"New {platform_kind_title(kind, self._data)}"
         dialog = PlatformEditorDialog(self._data, self._character, item, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        self._platform_editor = dialog
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._platform_editor = None
+        if accepted:
             self._character.equipment.append(dialog.item)
             self._after_change()
 
@@ -463,7 +473,12 @@ class EquipmentSection(TitledSection):
         """
         working = deepcopy(item)
         dialog = PlatformEditorDialog(self._data, self._character, working, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        self._platform_editor = dialog
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._platform_editor = None
+        if accepted:
             self._on_item_edited(item, dialog.item)
 
     def _edit_item(self, item: EquipmentItem) -> None:
@@ -504,7 +519,18 @@ class EquipmentSection(TitledSection):
         id and nothing else about it can be relied on to have stayed the same. An
         original removed while the editor was open is treated as an add, the way
         :meth:`PowersSection._on_power_edited` treats the same race.
+
+        A **fitted accessory** is edited in place on its host, and has to be: it is not
+        in the flat list at all — that is what stops the budget counting it twice — so
+        the loose search alone would have taken it off the weapon and dropped a second
+        copy at the end of the sheet.
         """
+        for host in self._character.equipment:
+            for i, fitted in enumerate(host.accessories):
+                if fitted.id == original.id:
+                    host.accessories[i] = edited
+                    self._after_change()
+                    return
         index = next(
             (
                 i
@@ -1060,6 +1086,11 @@ class EquipmentSection(TitledSection):
         being a thing you own and become part of the thing you own, which is exactly
         what its price folding into the host's says too. Detaching is lossless — the
         stored builds were never rewritten — so the row is a switch, not a decision.
+
+        The ``✎`` opens the same constructor a loose item's does, so an accessory can be
+        repriced or have what it lends changed without being taken off first — which
+        used to be the only way, and it dropped the thing to the end of the list on the
+        way past. :meth:`_on_item_edited` finds it by id whether it is loose or fitted.
         """
         if not item.accessories:
             return None
@@ -1080,6 +1111,12 @@ class EquipmentSection(TitledSection):
             price = QLabel(f"{item_ep_cost(accessory, self._data, self._character)} {unit}")
             price.setStyleSheet(muted_style())
             row_layout.addWidget(price)
+            edit = QPushButton("✎")
+            edit.setFixedWidth(24)
+            edit.setToolTip("Edit this accessory")
+            edit.clicked.connect(lambda _checked=False, a=accessory: self._edit_item(a))
+            row_layout.addWidget(edit)
+            edit.setVisible(not self._locked)
             take_off = QPushButton("✕")
             take_off.setFixedWidth(24)
             take_off.setToolTip("Take this accessory off")
@@ -1273,6 +1310,10 @@ class EquipmentSection(TitledSection):
         self._buttons.setVisible(not locked)
         if locked and self._picker is not None:
             self._picker.close()
+        if locked and self._platform_editor is not None:
+            # reject(), not close(): an editor abandoned by a lock must not be read as
+            # an accept and write its half-finished traits back.
+            self._platform_editor.reject()
         if locked:
             for window in list(self._windows):
                 window.close()

@@ -23,6 +23,7 @@ from mm_companion.core.rules import (
     PIN_EQUIPMENT,
     PinRef,
     apply_platform,
+    attach_accessory,
     build_item_from_entry,
     item_ep_cost,
     item_superseded,
@@ -925,3 +926,54 @@ def test_a_platform_card_offers_both_of_its_editors(qapp, data) -> None:
 
     assert any("traits" in b.toolTip() for b in tank_edit)
     assert not any("traits" in b.toolTip() for b in sword_edit)
+
+
+# -- editing a fitted accessory -----------------------------------------------
+
+
+def _fitted(data) -> tuple[Character, EquipmentSection, EquipmentItem, EquipmentItem]:
+    """A character with a laser sight already fitted to a rifle."""
+    char = _hero(data, "assault_rifle", "laser_sight")
+    gun, sight = char.equipment
+    assert attach_accessory(char, gun, sight, data)
+    return char, _section(data, char), gun, sight
+
+
+def test_a_fitted_accessory_can_be_edited_without_taking_it_off(qapp, data) -> None:
+    """Its row had a price and a detach button, and no way in at all.
+
+    Detaching first was the only route, and it drops the accessory to the end of the
+    loose list on the way past.
+    """
+    _char, section, gun, _sight = _fitted(data)
+    block = section._accessories_block(gun)
+
+    assert block is not None
+    assert [b.text() for b in block.findChildren(QPushButton)] == ["✎", "✕"]
+
+
+def test_editing_a_fitted_accessory_leaves_it_on_its_host(qapp, data) -> None:
+    """The loose search alone would have taken it off and left a second copy loose."""
+    char, section, gun, sight = _fitted(data)
+    edited = EquipmentItem.from_dict(sight.to_dict())
+    edited.ep_override = 4
+
+    section._on_item_edited(sight, edited)
+
+    assert len(gun.accessories) == 1
+    assert gun.accessories[0].ep_override == 4
+    assert all(i.id != sight.id for i in char.equipment), "it did not become loose"
+
+
+def test_locking_the_sheet_closes_the_platform_editor(qapp, data, monkeypatch) -> None:
+    """The picker and the builders were closed; the trait dialog was not."""
+    char = _hero(data, "tank")
+    section = _section(data, char)
+    dialog = PlatformEditorDialog(data, char, char.equipment[0])
+    section._platform_editor = dialog
+    dialog.show()
+
+    section.set_locked(True)
+
+    assert dialog.isVisible() is False
+    assert dialog.result() == QDialog.DialogCode.Rejected

@@ -53,6 +53,7 @@ from mm_companion.core.rules import (
     installation_trait_rows,
     item_accepts_accessory,
     item_attaches_to,
+    item_attachment,
     item_breakage_warnings,
     item_effective_build,
     item_ep_cost,
@@ -620,6 +621,90 @@ def test_worn_gear_grants_movement_modes_too(data, hero) -> None:
     item.worn = False
 
     assert movement_mode_lines(hero, data) == []
+
+
+def test_a_custom_accessory_can_be_fitted_at_all(data) -> None:
+    """It could be built and priced and then fitted to nothing.
+
+    ``item_attaches_to`` fell back to the catalog entry, and a custom item's
+    ``catalog_id`` is empty — so the lookup missed, the tuple came back empty, and the
+    block's fit button is gated on exactly that.
+    """
+    char = Character()
+    gun = _item(data, "assault_rifle")
+    scope = EquipmentItem(
+        build=Power(name="Homemade Scope"),
+        category="accessory",
+        attaches_to=("ranged_weapon",),
+        attachment=[ModifierSelection("accurate", 1)],
+    )
+    char.equipment = [gun, scope]
+
+    assert item_attaches_to(scope, data) == ("ranged_weapon",)
+    assert item_accepts_accessory(gun, scope, data)
+    assert attach_accessory(char, gun, scope, data)
+
+
+def test_an_accessory_that_lends_nothing_on_purpose_lends_nothing(data) -> None:
+    """Empty and unset used to be the same answer, and now they are not.
+
+    The catalog fallback is for gear saved before either field existed, which carries
+    *neither*. An item naming somewhere to attach has been through the accessory row, so
+    its empty attachment is a decision.
+    """
+    stripped = _item(data, "laser_sight")
+    stripped.attachment = []
+
+    assert item_attaches_to(stripped, data)  # still an accessory
+    assert item_attachment(stripped, data) == []
+
+    untouched = _item(data, "laser_sight")
+    untouched.attachment = []
+    untouched.attaches_to = ()
+
+    assert [m.modifier_id for m in item_attachment(untouched, data)] == ["accurate"]
+
+
+def test_a_fitted_accessorys_own_effects_reach_the_weapon(data, hero) -> None:
+    """Priced into the host and invisible on it, before this.
+
+    ``item_effective_build`` merged an accessory's *modifiers* and dropped its effects,
+    so a custom accessory carrying one was paid for through the host's price while
+    appearing on no table, in no footer and against no cap.
+    """
+    gun = _item(data, "assault_rifle")
+    launcher = EquipmentItem(
+        build=Power(name="Grenade Launcher", effects=[PowerEffectInstance("damage", rank=6)]),
+        category="accessory",
+        attaches_to=("ranged_weapon",),
+    )
+    hero.equipment = [gun, launcher]
+    bare = len(item_effective_build(gun, data).effects)
+    assert attach_accessory(hero, gun, launcher, data)
+
+    merged = item_effective_build(gun, data)
+    assert len(merged.effects) == bare + 1
+    # Labelled, so the card and the dice footer say which part of the weapon it is.
+    assert merged.effects[-1].label == "Grenade Launcher"
+    # The stored build is untouched — detaching stays lossless.
+    assert len(gun.build.effects) == bare
+
+
+def test_a_fitted_accessorys_trait_boost_reaches_the_sheet(data, hero) -> None:
+    """A fitted accessory is off ``Character.equipment``, so the gatherer walked past it."""
+    jacket = _item(data, "leather_armor")
+    lining = EquipmentItem(
+        build=Power(
+            name="Ceramic Lining",
+            effects=[PowerEffectInstance("protection", rank=5)],
+        ),
+        category="accessory",
+        attaches_to=("armor",),
+    )
+    hero.equipment = [jacket, lining]
+    assert attach_accessory(hero, jacket, lining, data)
+
+    assert resistance_total(hero, data, "TOUGHNESS") == 5
 
 
 def test_an_accessory_cannot_lend_a_removable_flaw_to_its_host(data) -> None:

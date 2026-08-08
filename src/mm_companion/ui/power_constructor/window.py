@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -30,6 +31,7 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     item_ep_cost,
+    modifier_label,
     power_allocation_violations,
     power_linked_range_violations,
     power_modifier_requirement_violations,
@@ -38,6 +40,7 @@ from mm_companion.core.rules import (
     power_total_cost,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.attachment_dialog import AttachmentDialog
 from mm_companion.ui.power_constructor.bricks import BrickList, BrickWidget, PaletteDropZone
 from mm_companion.ui.power_constructor.canvas import PowerCanvas
 from mm_companion.ui.power_constructor.common import (
@@ -414,16 +417,23 @@ class PowerConstructorWindow(QMainWindow):
         layout.addLayout(actions)
         return panel
 
-    # -- gear mode's two extra build fields --------------------------------
+    # -- gear mode's extra build fields ------------------------------------
     def _build_gear_row(self) -> QWidget:
-        """The group an item files under, and its opt-out of the no-stacking rule.
+        """The facts about the *item* rather than about the build inside it.
 
-        Both are facts about the *item* rather than about the build inside it, which is
-        why they sit up here beside the name rather than anywhere on the canvas.
+        Which group it files under, whether it opts out of the no-stacking rule, and —
+        the accessory pair — what it fits onto and what it lends whatever it is fitted
+        to. All four sit up here beside the name rather than anywhere on the canvas,
+        because none of them is a property of any effect.
         """
         host = QWidget()
-        row = QHBoxLayout(host)
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        top = QWidget()
+        row = QHBoxLayout(top)
         row.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(top)
+        outer.addWidget(self._build_accessory_row())
 
         row.addWidget(QLabel("Group"))
         self._category = QComboBox()
@@ -458,6 +468,80 @@ class PowerConstructorWindow(QMainWindow):
         if self.item is not None:
             self._stacks.setChecked(self.item.stacks)
         return host
+
+    def _build_accessory_row(self) -> QWidget:
+        """Where this fits, and what it lends when it is fitted there.
+
+        A custom accessory could be priced and never attached to anything: both fields
+        were written from the catalog at pick time and there was no control for either,
+        so ``item_attaches_to`` fell back to a ``catalog_id`` a custom item does not
+        have, and the block's fit button is gated on exactly that.
+
+        A single combo rather than a multi-select: every accessory the ruleset ships
+        fits one host category, and the model's tuple still admits more for a mod.
+        """
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+
+        row.addWidget(QLabel("Fits onto"))
+        self._attaches = QComboBox()
+        self._attaches.addItem("— not an accessory —", "")
+        for category in self._data.equipment_categories:
+            self._attaches.addItem(category.title or category.id, category.id)
+        self._attaches.setToolTip(
+            "Gear this can be fitted to. An accessory lives on its host rather than "
+            "loose on the sheet, and its price folds into the host's."
+        )
+        self._attaches.currentIndexChanged.connect(self._on_attaches_changed)
+        guard_wheel(self._attaches)
+        row.addWidget(self._attaches)
+
+        self._lends = QPushButton()
+        self._lends.setToolTip("Choose the modifiers this lends whatever it is fitted to")
+        self._lends.clicked.connect(self._edit_attachment)
+        row.addWidget(self._lends)
+        row.addStretch()
+
+        if self.item is not None and self.item.attaches_to:
+            index = self._attaches.findData(self.item.attaches_to[0])
+            if index >= 0:
+                self._attaches.setCurrentIndex(index)
+        self._sync_attachment_button()
+        return host
+
+    def _on_attaches_changed(self) -> None:
+        if self.item is None:
+            return
+        chosen = self._attaches.currentData() or ""
+        self.item.attaches_to = (chosen,) if chosen else ()
+        self._sync_attachment_button()
+
+    def _sync_attachment_button(self) -> None:
+        """The button says what is currently lent, and goes dead when nothing can be.
+
+        An item that fits nowhere lends nothing to anything, so offering the picker
+        there would be offering a choice with no consequence.
+        """
+        selections = list(self.item.attachment) if self.item is not None else []
+        catalog = self._data.modifier_catalog()
+        names = [
+            modifier_label(modifier, selection)
+            for selection in selections
+            if (modifier := catalog.get(selection.modifier_id)) is not None
+        ]
+        self._lends.setText(f"Lends: {', '.join(names)}" if names else "Lends: nothing")
+        self._lends.setEnabled(bool(self.item is not None and self.item.attaches_to))
+
+    def _edit_attachment(self) -> None:
+        if self.item is None:
+            return
+        dialog = AttachmentDialog(self._data, list(self.item.attachment), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.item.attachment = dialog.selections()
+            self._sync_attachment_button()
+            # The lent modifiers are priced on *this* item, so its total moves.
+            self._refresh_cost()
 
     def _select_category(self, category: str) -> None:
         """Show *category* on the combo, adding a row for one no heading names."""

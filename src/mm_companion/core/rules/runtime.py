@@ -26,6 +26,7 @@ from ..data_loader import GameData
 from ..equipment import EquipmentItem
 from ..powers import STRUCTURE_ARRAY, Power, PowerEffectInstance, PowerGroup, PowerNode
 from ..registry import Registry
+from .accessories import item_effective_build
 from .appliers import (
     BOOST_TRAIT_CATEGORIES,
     GROUP_EQUIPMENT,
@@ -414,13 +415,20 @@ def equipment_contributions(char: Character, game_data: GameData) -> tuple[Trait
     :data:`~.appliers.STACK_MAX` — only the best piece of armour counts — unless its
     owner ticked :attr:`~mm_companion.core.equipment.EquipmentItem.stacks`, the
     per-item homerule that opts one item back into adding on top.
+
+    Gathered off the item's **effective** build, so an accessory carrying a trait boost
+    of its own grants it: a fitted accessory is off
+    :attr:`~mm_companion.core.character.Character.equipment`, and the loop above would
+    walk straight past it. The contribution's ``origin`` stays the *host's* id, which is
+    the honest answer — the host's card is what has to explain the bonus, and a fitted
+    accessory has no card of its own to put it on.
     """
 
     contributions: list[TraitContribution] = []
     for item in worn_items(char):
         contributions.extend(
             build_contributions(
-                item.build,
+                item_effective_build(item, game_data),
                 char,
                 game_data,
                 stacking=STACK_SUM if item.stacks else STACK_MAX,

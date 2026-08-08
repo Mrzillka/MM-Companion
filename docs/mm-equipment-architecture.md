@@ -248,16 +248,44 @@ A laser sight is not a thing the character has; it is a thing the *rifle* has
 honest — a loose card in its own group could only imply the Improved Aim was the
 character's.
 
+All of it lives in **`core/rules/accessories.py`**, which sits *below* both
+`rules/equipment.py` (which prices things) and `rules/runtime.py` (which decides what is
+live). It has to: pricing reaches `powers_cost` and so `derived`, and `derived` reads
+what runtime gathers, so the two cannot import each other — and both need the merged
+build. Nothing in the module prices anything or decides what is on.
+
 - **Being an accessory is having somewhere to attach.** `attaches_to` is the host
-  categories it fits, copied off the entry at pick time; `item_attaches_to` falls back to
-  the catalog for gear saved before the field existed. A mod's accessory therefore needs
-  no category of its own.
-- **What it lends** is `attachment`, a list of modifier selections — an accessory has no
-  effects of its own, so its Accurate or Subtle would otherwise have nothing to hang on.
+  categories it fits, chosen in the constructor's gear row or copied off the entry at
+  pick time. A mod's accessory therefore needs no category of its own.
+- **What it lends** is `attachment`, a list of modifier selections — a catalog accessory
+  has no effects of its own, so its Accurate or Subtle would otherwise have nothing to
+  hang on.
+- **The catalog fallback needs *neither* field.** `item_attaches_to` and
+  `item_attachment` read the entry only for an item carrying no `attaches_to` and no
+  `attachment`, which is exactly what "saved before the fields existed" means. An item
+  that names somewhere to attach has been through the accessory row, so an empty
+  `attachment` there is the player saying *lends nothing* — reading the printed
+  modifiers back over it would ignore a decision.
 - **Merging is derived, never stored.** `item_effective_build(item, data)` returns the
   host's build with the accessories' modifiers folded in, computed on demand. The stored
   build is never rewritten, so detaching is lossless and the host stays recognisably the
   catalog's.
+- **An accessory's own effects come along too**, each labelled with the accessory's name
+  so the host's terms table and dice footer say which part of the weapon is doing it. No
+  catalog accessory has any — a laser sight is modifiers and nothing else — but a custom
+  one may, and its effects are already inside the host's price, so leaving them out
+  charged for something that appeared nowhere and did nothing. The lent modifiers are
+  deliberately *not* applied to them: what an accessory lends is lent to the host.
+- **Contributions read the effective build.** `equipment_contributions` walks
+  `worn_items`, and a fitted accessory is not among them, so an accessory carrying a
+  trait boost would otherwise grant nothing. The contribution's `origin` stays the
+  *host's* id — the host's card is what has to explain the bonus, and a fitted accessory
+  has no card of its own to put it on.
+- **`removable` is dropped on the way in**, by the same `_split_by_category` that builds
+  an entry's modifiers. Enforced on the build path only, an accessory lending a
+  removable flaw would have pushed one onto every effect of its host: no cost (the
+  merged build is never priced) but a host that switches off whenever it is not
+  "present".
 - **The price folds into the host's.** `item_ep_cost` recurses; `item_own_ep_cost` is the
   item's own line. That is also the only way the budget can count an accessory at all,
   since it is off the loose list. And `item_own_ep_cost` prices `item.build` rather than
@@ -317,6 +345,8 @@ to a total, because a per-vehicle allocation of advantage ranks is not modelled.
 | Power Level validation | `offensive_builds`, `estimated_power_level` | every item's *effective* build, worn or not |
 | The dice | `power_rolls(item_effective_build(...))` | a rifle rolls exactly like an attack power, follow-up save chip and all |
 | A GM's pinned chips | `PIN_EQUIPMENT` in `core/rules/pins.py` | its own pin kind, because an item's `key` is its `id` on `Character.equipment` |
+| A GM's default chips | `SELECT_FIRST_WEAPON` | late-bound, for the mook whose whole threat is its rifle and who therefore owns no powers for `SELECT_FIRST_DAMAGE` to find |
+| A GM card's hover summary | `ui/card_summary.py` | every item, worn or not, as its effective build — the same rule the pinned strip beside it follows |
 | Granted advantages | `item_granted_advantages` | an entry's `grants` block |
 | Breakage warnings | `item_breakage_warnings` | more Strength than the material's Toughness can carry (§4); a courtesy, not enforcement |
 
@@ -348,8 +378,15 @@ beside the Power Level one.
 - **The Power Constructor in gear mode** covers what the catalog cannot: "Create Custom
   Item" and a card's ✎. An item's build *is* a power, so there was never a second builder
   to write — gear mode adds the EP readout, the "stacks" checkbox, and `itemSaved`
-  beside `powerSaved`. Editing works on a deep copy swapped in on accept, so closing
-  without saving is a no-op.
+  beside `powerSaved`, plus the **accessory pair** — "Fits onto" (a combo, since every
+  shipped accessory fits one host category and the model's tuple still admits more for a
+  mod) and "Lends to its host", which opens `ui/attachment_dialog.py`. That is a filtered
+  checklist rather than the drag palette, because the palette drops a brick onto an
+  *effect card* and an accessory has none; it is offered only once the item fits
+  somewhere, since an item that fits nowhere lends nothing to anything. Editing works on
+  a deep copy swapped in on accept, so closing without saving is a no-op — and
+  `_on_item_edited` looks inside hosts as well as the loose list, or editing a fitted
+  accessory would take it off its weapon and leave a second copy loose.
 - **`ui/platform_editor.py`** is the modal trait editor a platform's ✎ offers beside
   Effects… — a platform is two editable things. It computes no price of its own: it
   applies the spec to a working item on every keystroke and asks `item_ep_cost`, which is
@@ -385,3 +422,13 @@ simply grants nothing.
   nothing tracks how many doses of antitoxin are left.
 - **Wealth, availability and Ranks of Benefit** — a campaign-economy layer the app does
   not model.
+- **Two catalog fields are carried and inert**: `stun_ammo`'s `damageType: nonlethal`
+  and `suppressor`'s `detectDC`. Both need a descriptor/quality channel the terms layer
+  does not have, so fitting either costs its point and changes no number.
+- **Gear the engine cannot price says so rather than guessing.** Trick Arrows keeps its
+  array in `implementation.alternates`, whose ranks and DCs the catalog never states, so
+  it is free with a `⚠` (`item_price_warnings`) and `ep_override` is how a GM settles
+  it. Promoting that block into a real array build is content authoring, not plumbing.
+- **The `sense`, `penalty` and `movement` applier categories have no reader.** They are
+  registered so a mod or a catalog record can route to them, but `movement.py` still
+  derives its own lines and nothing consumes a penalty contribution.

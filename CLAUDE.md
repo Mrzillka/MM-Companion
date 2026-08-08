@@ -885,6 +885,12 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
   amount is `flat + rank × per_rank`, all data, defaulting to M&M's rule that the bonus
   *is* the rank, so an effect declaring none of it behaves exactly as it always did. An
   **unregistered** kind yields nothing rather than raising.
+- **A contribution carries an `origin`** — the granting item's id — beside its `source`
+  name, and `item_superseded` matches on it. Two copies of one armour share a name and an
+  amount, so matching by those had *both* cards claiming to have lost while the bonus
+  actually on the sheet was disowned by both. **Powers pass none**, deliberately: a
+  power's card explains itself from its own build, and `tests/test_stat_appliers.py`
+  asserts whole-dataclass equality on a power's contribution.
 - **Gear does not stack, and that is a resolver, not an applier.**
   `build_contributions(power, char, data, stacking=, group=)` gathers a power *and* an
   item — one function, so the two can't drift — and the two keywords are the
@@ -905,13 +911,23 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
   validation** (`offensive_builds` yields every item — a sheet that passed by sheathing
   its sword would validate nothing), and a **GM's pinned chips** (a strip must not
   rearrange itself mid-fight).
-- **Accessories live on their host.** A scope is a trait of the rifle, not of the
-  character, so an attached accessory sits in `EquipmentItem.accessories` and leaves the
-  loose list. `item_attaches_to` says where it fits, `attachment` is what it lends, and
-  `item_effective_build` merges the two **on demand** — the stored build is never
-  rewritten, so detaching is lossless. Its price folds into the host's, which is the
-  only way the budget counts it at all; note `item_own_ep_cost` prices `item.build` and
-  not the effective build, or the accessory's modifiers would be charged twice.
+- **Accessories live on their host**, and their whole layer is `core/rules/accessories.py`
+  — **below** both `rules/equipment.py` and `rules/runtime.py`, because pricing reaches
+  `derived` and `derived` reads what runtime gathers, so the two cannot import each other
+  and both need the merged build. A scope is a trait of the rifle, not of the character,
+  so an attached accessory sits in `EquipmentItem.accessories` and leaves the loose list.
+  `item_attaches_to` says where it fits, `attachment` is what it lends (both editable in
+  the constructor's gear row; `ui/attachment_dialog.py` is the modifier checklist), and
+  `item_effective_build` merges them **on demand** — the stored build is never rewritten,
+  so detaching is lossless. It also carries the accessory's **own effects** across,
+  labelled with the accessory's name, and `equipment_contributions` reads that effective
+  build so a fitted trait boost is granted at all — the `origin` stays the *host's* id,
+  since the host's card is what has to explain it. The catalog fallback on both fields
+  needs the item to carry **neither**, which is what "saved before they existed" means:
+  an empty `attachment` on an item that names somewhere to attach is a decision, not a
+  gap. Its price folds into the host's, which is the only way the budget counts it at
+  all; note `item_own_ep_cost` prices `item.build` and not the effective build, or the
+  accessory's modifiers would be charged twice.
 - **Platforms are bought as traits, not effects** (`core/rules/platforms.py`): a vehicle
   is five (Size first — it sets three baselines), an installation is two plus Features.
   `PlatformSpec` is the shape, and **stock and custom are one shape** — `item_platform`

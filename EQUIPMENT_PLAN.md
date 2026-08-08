@@ -291,7 +291,7 @@ one cause: the shipped catalog was promoted in the *design* vocabulary and the e
 never learned to read it in five places, so those items looked right and did nothing.
 
 ### Phase 13 — Gear reaches the GM
-**Status: not started**
+**Status: done**
 
 `ui/card_summary.py` lists powers only, so a mook whose whole threat is its rifle hovers
 blank on a GM card; and `SELECT_FIRST_DAMAGE` walks powers only, so the same mook seeded
@@ -300,7 +300,7 @@ the shape — `_from_build_roll` already takes `key` as a parameter, which is wh
 makes a resolved ref writable-back.
 
 ### Phase 14 — Custom accessories
-**Status: not started**
+**Status: done**
 
 A custom accessory cannot be fitted at all: `attaches_to`/`attachment` are set only from
 the catalog, `item_attaches_to` falls back to `catalog_id` (empty for a custom item), and
@@ -1429,3 +1429,100 @@ break-the-guard test also reverted four uncommitted fixes in the same file. Back
 file up instead, or stage first.
 
 Next: **Phase 13 — Gear reaches the GM**.
+
+### 2026-08-08 — Phase 13: Gear reaches the GM
+
+**Shipped.** Two places the GM side still knew only about powers, and both matter most
+for the creature that has none. Suite: **2252 passed**.
+
+- **`ui/card_summary.py`** walked `leaf_powers` and stopped, so a thug whose whole threat
+  is its rifle hovered showing abilities, resistances and nothing else. It now lists
+  equipment the same way, each item as its **effective** build — a fitted laser sight's
+  +2 is in the number the GM is about to be attacked with. Every item, worn or not,
+  matching the pinned strip beside it. One change covers both card kinds, since
+  `player_card` and `npc_card` call the one function.
+- **`SELECT_FIRST_WEAPON`** is the equipment twin of `SELECT_FIRST_DAMAGE`: the attack
+  check where there is one, the forced save otherwise, gear that rolls nothing skipped
+  rather than pinned blank. `_locate_item` is the new seam beside `_locate_power`, and it
+  returns the **item** alongside the build because a resolved ref has to name something
+  the resolver can find again — gear lives on `Character.equipment` and a build id is
+  indexed by nothing. `pin_label` asks the select **before** returning the flat
+  `"Equipment"`, or the caption never fires.
+
+*One existing assertion changed*, and it asserts the premise this phase alters on
+purpose: `default_pin_choices` now offers an Equipment group. **`available_pins` is
+untouched** — it is character-driven, so a goon with no gear rightly gets no group, and
+that distinction is worth keeping in mind: the defaults picker is character-free and the
+live picker is not.
+
+Next: **Phase 14 — Custom accessories**.
+
+### 2026-08-08 — Phase 14: Custom accessories
+
+**Shipped.** A custom accessory can now be built, fitted, edited and have its effects
+count. Suite: **2265 passed** (was 2226 before Phase 12). `ruff` and `black` clean.
+
+**The hole was worse than the plan recorded.** A custom accessory could not be fitted
+*at all*: `attaches_to`/`attachment` were written from the catalog at pick time, no
+control existed for either, `item_attaches_to` fell back to a `catalog_id` a custom item
+does not have, and the block's 🔗 is gated on exactly that.
+
+**The layering had to move first.** `item_effective_build` lived in
+`core/rules/equipment.py`, which imports `runtime` — so `runtime` could not import it,
+and `equipment_contributions` had no way to read a merged build. **`core/rules/accessories.py`**
+is the extraction: `entry_attaches_to`, `item_attaches_to`, `item_attachment`,
+`item_accepts_accessory`, `accessory_hosts`, `attach_accessory`, `detach_accessory`,
+`item_effective_build`, plus `_modifier_selections`/`_split_by_category`. It sits below
+both — nothing in it prices anything or decides what is live — and `rules/equipment.py`
+re-exports every public name, so no caller moved.
+
+**The two halves, which had to land together.** An ✎ on a fitted accessory without
+merging its effects would have opened a *supported* path to an effect priced into the
+host and invisible on it.
+- **Authoring.** The gear row gains "Fits onto" (a combo — every shipped accessory fits
+  one host category, and the tuple still admits more for a mod) and "Lends to its host",
+  which opens the new `ui/attachment_dialog.py`: a filtered checklist of the general
+  pool, with a rank spin enabled only while its row is ticked. A checklist rather than
+  the drag palette, because the palette drops a brick onto an *effect card* and an
+  accessory has none. Offered only once the item fits somewhere.
+- **Merging.** `item_effective_build` now carries an accessory's **own effects** across,
+  each labelled with the accessory's name so the host's terms table and dice footer say
+  which part of the weapon it is. The lent modifiers are deliberately *not* applied to
+  them: what an accessory lends is lent to the host. `equipment_contributions` reads the
+  effective build, so a fitted trait boost is granted at all — with the **host's** id as
+  `origin`, since the host's card is what has to explain it.
+
+*Three smaller things that fell out, each a real defect the new controls exposed:*
+- **`item_attachment`'s catalog fallback now needs the item to carry neither field**,
+  which is what "saved before they existed" means. Once a player can *clear* the list,
+  empty and unset stop being the same answer, and an accessory told to lend nothing was
+  having the printed modifiers read back over it.
+- **`_on_item_edited` reaches into hosts.** It walked the flat list only, and a fitted
+  accessory is not in it — so the new ✎ would have taken it off its weapon and appended a
+  second copy loose.
+- **`set_locked` rejects an open `PlatformEditorDialog`**, the one modal child it was not
+  closing (`reject()`, not `close()`, so an editor abandoned by a lock is not read as an
+  accept). The close-on-lock *policy* is unchanged — `test_equipment_constructor.py:371`
+  asserts it deliberately.
+
+*Verified on real cards*, not only in tests: a rifle showing `Accurate ×2` lent by a
+hand-built scope, `Defence +3` on a large shield, `Hardened` on the once-blank Armour
+Cloth, `Movement modes: Swinging` on the swing line, Trick Arrows at `⚠ 0 EP`, and an
+Evidence Kit at 2 EP for rank 2. (A screenshot is no use in this environment — the venv
+ships no fonts, so every glyph renders as a box; reading the widget tree is the honest
+check here.)
+
+*Docs:* `docs/mm-equipment-architecture.md` §7 rewritten for the new module and both
+capabilities, §9 gains the two GM rows, §10 the accessory row, §12 the four things that
+stay out of scope. `CLAUDE.md`'s equipment section gains the `origin` rule and the
+rewritten accessory bullet.
+
+*Still deliberately out of scope, and now with no owner:* `stun_ammo`'s `damageType` and
+`suppressor`'s `detectDC` are inert (both need a descriptor channel the terms layer does
+not have); the §5 crash/control/damage-ladder rules and the installation Features'
+`implementation` blocks are unparsed; the `sense`/`penalty`/`movement` applier categories
+are registered with no reader; a platform is still not a nested character.
+
+Next: **nothing.** Every phase is `done` and the audit that prompted 12–14 is closed. The
+feature is ready for the user's call on merging `feature/equipment` into `develop`
+(`--no-ff`, deleting this file as part of it).

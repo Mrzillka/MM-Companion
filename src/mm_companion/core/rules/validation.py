@@ -9,6 +9,7 @@ from ..character import Character
 from ..data_loader import GameData
 from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
 from .derived import effective_ability, resistance_total, skill_total
+from .equipment import item_effective_build
 from .powers_cost import effect_effective_rank
 from .powers_terms import _effect_name, _effective_stats
 
@@ -124,7 +125,7 @@ def leaf_powers(nodes: list[PowerNode]) -> Iterator[Power]:
             yield node
 
 
-def offensive_builds(char: Character) -> Iterator[Power]:
+def offensive_builds(char: Character, game_data: GameData) -> Iterator[Power]:
     """Every assembled build on *char* whose effects face a Power Level cap.
 
     The leaf powers **and** the gear. An item's
@@ -133,6 +134,13 @@ def offensive_builds(char: Character) -> Iterator[Power]:
     printed rules are explicit that buying an effect with Equipment Points does not buy
     it out of Power Level (``docs/mm-equipment-design.md`` §2).
 
+    Each item is yielded as its **effective** build
+    (:func:`~.equipment.item_effective_build`) — the weapon as it is actually used,
+    with whatever is fitted to it folded in. A laser sight's Accurate raises the rifle's
+    attack, and a cap that read the bare build would have missed it: the card's own ⚠
+    already reads the effective build, so the two disagreed, and the one that was wrong
+    is the character-wide estimate the NPC cards are drawn from.
+
     *Every* item, not only the worn ones: wearing is runtime state a player flips
     mid-scene, and a Power Level cap is a statement about the **build**. A sheet that
     passed validation by sheathing its sword would be validating nothing.
@@ -140,7 +148,7 @@ def offensive_builds(char: Character) -> Iterator[Power]:
 
     yield from leaf_powers(char.powers)
     for item in char.equipment:
-        yield item.build
+        yield item_effective_build(item, game_data)
 
 
 def _pl_for_cap(value: int, cap) -> int:
@@ -177,7 +185,7 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
     attack_cap = game_data.costs.power_level.caps.get("attack_effect")
     if attack_cap is not None:
         attack_key = game_data.system.trait_keys.attack
-        for power in offensive_builds(char):
+        for power in offensive_builds(char, game_data):
             for effect in power.effects:
                 base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
                 if base is None or base.resistance_dc_base is None:

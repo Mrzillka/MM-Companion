@@ -622,6 +622,24 @@ def test_worn_gear_grants_movement_modes_too(data, hero) -> None:
     assert movement_mode_lines(hero, data) == []
 
 
+def test_a_fitted_accessory_counts_toward_the_estimated_power_level(data) -> None:
+    """The card's ⚠ read the effective build; the character-wide estimate did not.
+
+    So a mook's rifle counted and the laser sight on it did not — and the NPC cards
+    that estimate is drawn for are exactly where a fitted accessory lives.
+    """
+    char = Character()
+    char.abilities["ATK"] = 6
+    gun = _item(data, "light_pistol")
+    sight = _item(data, "laser_sight")
+    char.equipment = [gun, sight]
+    bare = estimated_power_level(char, data)
+
+    assert attach_accessory(char, gun, sight, data)
+
+    assert estimated_power_level(char, data) > bare
+
+
 def test_a_ranked_item_with_no_effects_keeps_the_rank_it_was_bought_at(data, hero) -> None:
     """The picker asks; nothing used to listen.
 

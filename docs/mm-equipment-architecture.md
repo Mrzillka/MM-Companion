@@ -230,7 +230,9 @@ Three things deliberately ignore `worn`, and each for its own reason:
 
 - **The price.** `equipment_points_spent` counts every item. Sheathing a sword does not
   refund it.
-- **Power Level.** `offensive_builds` yields every item's build. A cap is a statement
+- **Power Level.** `offensive_builds(char, data)` yields every item's *effective*
+  build — with whatever is fitted to it folded in, so a laser sight's Accurate counts
+  toward the rifle's cap the way the card's own ⚠ already read it. A cap is a statement
   about the build; a sheet that passed validation by sheathing its sword would be
   validating nothing.
 - **A GM's pinned chips.** `resolve_pin` reads an item's rolls whether it is worn or
@@ -312,7 +314,7 @@ to a total, because a per-vehicle allocation of advantage ranks is not modelled.
 | --- | --- | --- |
 | Ability / resistance / skill totals | `trait_bonuses` → the resolver (§5) | worn gear only |
 | The Speed readout | `equipment_speed_lines` | a glider flies, a bicycle is faster than walking; worn only |
-| Power Level validation | `offensive_builds`, `estimated_power_level` | every item, worn or not |
+| Power Level validation | `offensive_builds`, `estimated_power_level` | every item's *effective* build, worn or not |
 | The dice | `power_rolls(item_effective_build(...))` | a rifle rolls exactly like an attack power, follow-up save chip and all |
 | A GM's pinned chips | `PIN_EQUIPMENT` in `core/rules/pins.py` | its own pin kind, because an item's `key` is its `id` on `Character.equipment` |
 | Granted advantages | `item_granted_advantages` | an entry's `grants` block |

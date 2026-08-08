@@ -61,6 +61,7 @@ from mm_companion.core.rules import (
     item_own_ep_cost,
     item_platform,
     item_platform_violations,
+    item_price_warnings,
     item_rank,
     item_superseded,
     movement_mode_lines,
@@ -618,6 +619,47 @@ def test_worn_gear_grants_movement_modes_too(data, hero) -> None:
     item.worn = False
 
     assert movement_mode_lines(hero, data) == []
+
+
+def test_an_item_bought_with_power_points_costs_no_equipment_points(data, hero) -> None:
+    """Omni-Equipment is a Variable power priced at 2 PP; it used to cost 7 EP.
+
+    The two-currencies trap in its quietest direction — nothing raises, the budget bar
+    is simply wrong. The entry states the Power Point price itself, so the rule is data.
+    """
+    item = _item(data, "omni_equipment")
+    hero.equipment = [item]
+
+    assert item_own_ep_cost(item, data) == 0
+    assert equipment_points_spent(hero, data) == 0
+
+
+def test_an_unpriceable_built_item_warns_rather_than_being_silently_free(data) -> None:
+    """Trick Arrows has no printed price and nothing in its build to derive one from.
+
+    Its array lives in ``implementation.alternates``, whose ranks and DCs the catalog
+    never states, so there is nothing to price. It stays free — and says so, which is
+    the whole difference: a free item otherwise looks exactly like a correct one.
+    """
+    item = _item(data, "trick_arrows")
+
+    assert item_own_ep_cost(item, data) == 0
+    assert item_price_warnings(item, data)
+
+
+def test_a_priced_item_carries_no_price_warning(data) -> None:
+    assert item_price_warnings(_item(data, "utility_kit"), data) == []
+    assert item_own_ep_cost(_item(data, "utility_kit"), data) == 25
+    assert item_price_warnings(_item(data, "leather_armor"), data) == []
+
+
+def test_a_hand_set_price_settles_an_unpriceable_item(data) -> None:
+    """``ep_override`` is the seam the warning points at."""
+    item = _item(data, "trick_arrows")
+    item.ep_override = 12
+
+    assert item_own_ep_cost(item, data) == 12
+    assert item_price_warnings(item, data) == []
 
 
 def test_the_shipped_movement_gear_works_without_being_hand_configured(data, hero) -> None:

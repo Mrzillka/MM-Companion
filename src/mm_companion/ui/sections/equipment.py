@@ -98,6 +98,7 @@ from mm_companion.core.rules import (
     item_granted_advantages,
     item_platform,
     item_platform_violations,
+    item_price_warnings,
     item_superseded,
     new_platform,
     platform_rules_category,
@@ -940,10 +941,16 @@ class EquipmentSection(TitledSection):
 
         # Both halves of what a platform can breach: its effects (a mounted cannon over
         # the wielder's cap) and its bought traits (a fortress made of Toughness), which
-        # the effect-shaped check has nothing to say about.
-        violations = power_pl_violations(
-            build if build is not None else item.build, self._character, self._data
-        ) + item_platform_violations(item, self._character, self._data)
+        # the effect-shaped check has nothing to say about. Plus the one thing that is
+        # not a breach at all — gear the budget cannot price, which is worth the same
+        # glyph precisely because it is otherwise invisible: a free item looks correct.
+        violations = (
+            power_pl_violations(
+                build if build is not None else item.build, self._character, self._data
+            )
+            + item_platform_violations(item, self._character, self._data)
+            + item_price_warnings(item, self._data)
+        )
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))

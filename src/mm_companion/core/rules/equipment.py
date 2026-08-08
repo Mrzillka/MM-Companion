@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from ..character import Character
 from ..components import GATE_REMOVABLE
 from ..data_loader import EquipmentEntry, GameData
-from ..equipment import PER_RANK_COST_KINDS, EquipmentItem
+from ..equipment import COST_BUILT, PER_RANK_COST_KINDS, EquipmentItem
 from ..powers import ModifierSelection, Power, PowerEffectInstance
 from .derived import effective_ability, trait_bonuses
 from .platforms import item_platform_cost, platform_is_stock
@@ -43,6 +43,7 @@ __all__ = [
     "build_item_from_entry",
     "detach_accessory",
     "entry_attaches_to",
+    "entry_power_point_cost",
     "equipment_advantage_rank",
     "equipment_budget",
     "equipment_contributions",
@@ -59,6 +60,7 @@ __all__ = [
     "item_is_stock",
     "item_material_toughness",
     "item_own_ep_cost",
+    "item_price_warnings",
     "item_rank",
     "item_superseded",
     "worn_items",
@@ -244,6 +246,52 @@ def build_item_from_entry(
         attaches_to=attaches_to,
         attachment=[*modifiers[0], *modifiers[1]] if attaches_to else [],
     )
+
+
+# --- gear the Equipment Point budget cannot price ---------------------------------------
+
+
+def entry_power_point_cost(entry: EquipmentEntry | None) -> int:
+    """What the entry says it costs in **Power Points**, or 0 when it says nothing.
+
+    A handful of entries are not bought out of the Equipment Point pool at all —
+    Omni-Equipment is a Variable power with Removable, priced in the *first* currency.
+    Its own ``costNote`` says so, and ``implementation.powerPointCost`` states the
+    number. Read from the open ``implementation`` bag rather than a new schema field,
+    the way :func:`item_material_toughness` reads ``material``.
+    """
+
+    if entry is None:
+        return 0
+    value = entry.implementation.get("powerPointCost")
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def item_price_warnings(item: EquipmentItem, game_data: GameData) -> list[str]:
+    """Why this item's Equipment Point price cannot be trusted; empty when it can.
+
+    One case today, and it is the one that had to be *visible* rather than merely
+    correct: a ``built`` entry with no printed price and nothing in its build comes out
+    at 0 EP, which is a free item. Trick Arrows is that — its whole array lives in
+    ``implementation.alternates``, whose ranks and DCs the catalog never states, so
+    there is nothing to price and inventing a number would be inventing content.
+
+    The item is still addable and still free; what changes is that the card says so, so
+    it can never again be *silently* free. ``ep_override`` is the seam for a GM who
+    wants to set one.
+    """
+
+    if item.ep_override is not None:
+        return []
+    entry = game_data.equipment_catalog().get(item.catalog_id)
+    if entry is None or entry.cost is not None or entry.cost_kind != COST_BUILT:
+        return []
+    if entry_power_point_cost(entry) or item.build.effects or item.platform is not None:
+        return []
+    return [
+        f"{entry.name} has no printed Equipment Point price and nothing to derive one "
+        "from — it is counted as free. Set a price on the item to charge for it."
+    ]
 
 
 # --- accessories: items fitted to other items -------------------------------------------
@@ -605,15 +653,20 @@ def item_own_ep_cost(
 ) -> int:
     """What the item itself costs in Equipment Points, ignoring anything fitted to it.
 
-    Three answers, in order:
+    Four answers, in order:
 
     1. :attr:`~mm_companion.core.equipment.EquipmentItem.ep_override` when set — the
        homerule seam, the twin of a power's ``cost_override``.
-    2. The catalog's **printed** price, when the item is still stock
+    2. **Nothing**, when the entry declares a Power Point price
+       (:func:`entry_power_point_cost`). Gear bought out of the *first* currency spends
+       none of the second, and deriving a price from its effects instead charged
+       Omni-Equipment 7 EP for something the book prices at 2 PP — the two-currencies
+       trap in the direction that is hardest to notice, since nothing raises.
+    3. The catalog's **printed** price, when the item is still stock
        (:func:`item_is_stock`) and the entry prints one. That is the book's own number,
        and for the ``per_rank``/``ranked`` kinds it is a price per rank, so it is
        multiplied by :func:`item_rank`.
-    3. Otherwise the build's derived cost — the same
+    4. Otherwise the build's derived cost — the same
        :func:`~.powers_cost.power_total_cost` a power pays, minus any Removable
        discount, since an item's price is what its effects would cost *undiscounted*
        — plus, for a vehicle, its platform traits
@@ -630,6 +683,8 @@ def item_own_ep_cost(
         return item.ep_override
 
     entry = game_data.equipment_catalog().get(item.catalog_id)
+    if entry_power_point_cost(entry):
+        return 0
     if entry is not None and entry.cost is not None and item_is_stock(item, game_data):
         if entry.cost_kind in PER_RANK_COST_KINDS:
             return entry.cost * max(1, item_rank(item))

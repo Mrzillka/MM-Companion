@@ -283,6 +283,33 @@ under `docs/sample-mods/` that registers one, exercised end-to-end by
 theme tokens for anything the block introduced. Then delete this file as part of the
 merge into `develop`.
 
+### Phase 12 — Correctness pass
+**Status: done**
+
+An audit before the merge found nine bugs producing visibly wrong numbers, most sharing
+one cause: the shipped catalog was promoted in the *design* vocabulary and the engine
+never learned to read it in five places, so those items looked right and did nothing.
+
+### Phase 13 — Gear reaches the GM
+**Status: not started**
+
+`ui/card_summary.py` lists powers only, so a mook whose whole threat is its rifle hovers
+blank on a GM card; and `SELECT_FIRST_DAMAGE` walks powers only, so the same mook seeded
+from the GM defaults gets a dashed chip. A `first_weapon` select on `PIN_EQUIPMENT` is
+the shape — `_from_build_roll` already takes `key` as a parameter, which is what
+makes a resolved ref writable-back.
+
+### Phase 14 — Custom accessories
+**Status: not started**
+
+A custom accessory cannot be fitted at all: `attaches_to`/`attachment` are set only from
+the catalog, `item_attaches_to` falls back to `catalog_id` (empty for a custom item), and
+the fit button is gated on it. And a fitted accessory's card is unreachable — name,
+price and a detach button, nothing else — while `item_effective_build` merges only
+*modifiers*, so a custom accessory's own effects would be priced into the host and
+invisible on it. The two halves must land together, or the pencil opens a supported path
+to an inert effect.
+
 ## Conventions for this work
 
 - **`ui → core → data`.** The rules live in `core/`, Qt only in `ui/`. No game content
@@ -1315,5 +1342,90 @@ a sample mod and tests, so there was nothing for the existing suites to disagree
   `develop`, which happens when the user says the feature is done — not at the end of a
   phase.
 
-Next: **nothing — every phase is `done`.** The feature is ready for the user's call on
-merging `feature/equipment` into `develop` (`--no-ff`, deleting this file as part of it).
+### 2026-08-08 — Phase 12: Correctness pass
+
+**Shipped.** Eight commits closing the audit that ran before the merge. Suite:
+**2248 passed** (was 2226). `ruff` and `black` clean. `test_stat_appliers`,
+`test_powers`, `test_derived_stats`, `test_power_constructor`, `test_powers_section`,
+`test_conditions` and `test_data_loader` all pass **unedited**.
+
+**The theme, and why it went unnoticed for eleven phases.** The catalog was promoted out
+of `docs/design-data/equipment-design.json` in the *design* vocabulary, and in five
+places the engine reads a different spelling. Every reader skipped them in silence, so
+the items were bought, worn, priced and drawn — and granted nothing. Nothing raises when
+this breaks; the sheet is simply wrong.
+
+*The eight commits:*
+
+- **Let a bonus remember whose it was.** `TraitContribution`/`SupersededBonus`/
+  `ApplyContext` gained `origin`, the granting item's id, and `item_superseded` reads it
+  instead of matching `(source, amount)` — which two copies of one armour answer
+  identically, so *both* cards read "Superseded by Leather" and the +1 actually on the
+  sheet was disowned by both. **Powers deliberately pass no origin**:
+  `test_stat_appliers:158` asserts whole-dataclass equality on a power's contribution,
+  and `origin` means "the id of the thing whose *card* has to explain this", which only
+  equipment has.
+- **Let the catalog say what the engine reads.** `equipment.json` only. Allocation
+  entries are `{"id","tier"}`; the swing line, climbing cable, parachute, binoculars and
+  night-vision goggles wrote `"mode"`/`"quality"`. Two needed more than the key: the
+  swing line's tier 2→1 (Swinging has one tier, costing two ranks) and the climbing
+  cable's rank 1→2 (Wall-Crawling's first tier costs two). The three shields had the
+  same disease one field over — `config.target: "combat.defense"`, design vocabulary
+  matching no trait list, now `DEF`. All are stock-priced and stay stock, so **no price
+  moved**; a worn shield now reaches Dodge and so the Dodge+Toughness cap, which is
+  correct — gear does not buy out of Power Level.
+- **The guard against that whole class**, in `test_equipment_data`: an allocation entry's
+  keys must be exactly ⊆ `{id, tier}` with both resolving, and every catalog entry must
+  build into a power that allocates legally. Verified by re-breaking one entry and
+  watching it fail. The tier bound is asserted separately because
+  `effect_allocation_used` **clamps** rather than reporting.
+- **Charge an item in the currency it is bought with.** Omni-Equipment is priced by the
+  book at 2 *Power* Points and was being charged 7 EP — `item_own_ep_cost` gained a
+  fourth answer, ahead of the printed price, reading the entry's own
+  `implementation.powerPointCost`. Trick Arrows is the other unpriced `built` entry and
+  its array lives in `implementation.alternates`, whose ranks the catalog never states;
+  it stays free, but `item_price_warnings` puts a ⚠ on its card, because a free item
+  otherwise looks exactly like a correct one. The warning rides the card's existing ⚠
+  rather than `equipment_violations` (which is about the budget), so no budget assertion
+  moved.
+- **Keep the rank the picker asked for.** `EquipmentItem.rank`, written only above 1 so
+  an ordinary item's saved entry is byte-for-byte what it was. `item_rank` falls back to
+  it only when the build has no effects — which is Evidence Kit and Armour Cloth, both
+  priced per rank while granting nothing mechanical, so both cost one point whatever was
+  typed. `entry_max_rank` now clamps the prompt, reading `implementation.maxRank` **only
+  when it is a number**: `armored_costume` keeps a sentence about GM discretion there.
+- **Estimate a mook by the weapon it actually carries.** `offensive_builds(char, data)`
+  yields `item_effective_build`, so a fitted laser sight's Accurate reaches
+  `estimated_power_level`. The card's own ⚠ had it right all along, so the two
+  disagreed — and the wrong one is what NPC cards are drawn from. No cycle:
+  `rules/equipment` reaches `derived`/`platforms`/`powers_cost`/`runtime`, and none of
+  those reaches `validation`.
+- **Let a card keep its state and say what it carries.** `_edit_platform` copied through
+  `to_dict`/`from_dict`, which leaves runtime state out on purpose — a parked car at
+  Speed 2 came back boarded and flat out from having had a Feature added to it; it is a
+  `deepcopy` now, as `_edit_item` already was. `_rebuild_list` now clears `_trait_hosts`
+  (widgets, so a stale entry is a dead pointer). The group's 14px indent moved *into* the
+  drop list, so a refused cross-group drag shows its reject wash there too. And Armour
+  Cloth, Flashlight and Sash draw their printed modifiers, muted and tooltipped as
+  description — all three had a name, a price and a blank body.
+- **Split a modifier the same way on both paths.** One `_split_by_category`; the two
+  sites disagreed on an unknown category (flaw when built, extra when lent). Unreachable
+  today, but the share closes a real leak: dropping the removable gate was enforced on
+  the build path only, so an accessory lending a removable flaw would have switched its
+  whole host off through `effect_is_active`. Also drops the dead `PLATFORM_PATTERN`.
+
+*Decisions taken with the user:* Omni-Equipment 0 EP (the currencies never mix); Trick
+Arrows free-with-a-warning; the three modifier-only items descriptive rather than given
+invented effects; the shield target `DEF`.
+
+*Deliberately not done here:* Phases 13 and 14 own the GM reach and the accessory
+authoring hole. Still open with no owner before the merge: `stun_ammo`'s `damageType`
+and `suppressor`'s `detectDC` are inert; the §5 crash/control/damage-ladder rules and
+the installation Features' `implementation` blocks are unparsed; the
+`sense`/`penalty`/`movement` applier categories still have no reader.
+
+*One process note worth carrying:* a `git checkout --` used to undo a deliberate
+break-the-guard test also reverted four uncommitted fixes in the same file. Back the
+file up instead, or stage first.
+
+Next: **Phase 13 — Gear reaches the GM**.

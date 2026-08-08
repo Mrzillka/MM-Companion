@@ -38,6 +38,7 @@ from mm_companion.core.rules import (
     build_item_from_entry,
     detach_accessory,
     effect_effective_rank,
+    entry_max_rank,
     equipment_advantage_rank,
     equipment_budget,
     equipment_contributions,
@@ -619,6 +620,42 @@ def test_worn_gear_grants_movement_modes_too(data, hero) -> None:
     item.worn = False
 
     assert movement_mode_lines(hero, data) == []
+
+
+def test_a_ranked_item_with_no_effects_keeps_the_rank_it_was_bought_at(data, hero) -> None:
+    """The picker asks; nothing used to listen.
+
+    An Evidence Kit is printed at a price *per rank* while granting nothing mechanical,
+    so its build has no effect to read a rank off and ``item_rank`` returned a hardcoded
+    1 — every one of them cost a single point whatever the player typed.
+    """
+    item = _item(data, "evidence_kit", rank=2)
+    hero.equipment = [item]
+
+    assert item_rank(item) == 2
+    assert item_own_ep_cost(item, data) == 2
+    assert equipment_points_spent(hero, data) == 2
+    assert item_is_stock(item, data), "a ranked item is stock at every rank"
+
+
+def test_a_bought_rank_survives_a_save(data) -> None:
+    item = _item(data, "armor_cloth", rank=3)
+
+    assert item_rank(EquipmentItem.from_dict(item.to_dict())) == 3
+
+
+def test_a_rank_one_item_writes_no_rank_at_all(data) -> None:
+    """The byte-for-byte promise: an ordinary item's entry is what it always was."""
+    assert "rank" not in _item(data, "leather_armor").to_dict()
+
+
+def test_an_entrys_declared_maximum_rank_is_read_only_when_it_is_a_number(data) -> None:
+    """``implementation.maxRank`` is an open bag, and one entry keeps prose in it."""
+    catalog = data.equipment_catalog()
+
+    assert entry_max_rank(catalog["evidence_kit"]) == 2
+    assert entry_max_rank(catalog["armored_costume"]) is None  # a sentence, not a number
+    assert entry_max_rank(catalog["leather_armor"]) is None
 
 
 def test_an_item_bought_with_power_points_costs_no_equipment_points(data, hero) -> None:

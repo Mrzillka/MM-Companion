@@ -43,6 +43,7 @@ __all__ = [
     "build_item_from_entry",
     "detach_accessory",
     "entry_attaches_to",
+    "entry_max_rank",
     "entry_power_point_cost",
     "equipment_advantage_rank",
     "equipment_budget",
@@ -243,6 +244,7 @@ def build_item_from_entry(
         catalog_id=entry.id,
         build=build,
         category=entry.category,
+        rank=max(1, rank),
         attaches_to=attaches_to,
         attachment=[*modifiers[0], *modifiers[1]] if attaches_to else [],
     )
@@ -567,9 +569,33 @@ def item_breakage_warnings(item: EquipmentItem, char: Character, game_data: Game
 
 
 def item_rank(item: EquipmentItem) -> int:
-    """The rank an item was bought at — its build's first effect's, else 1."""
+    """The rank an item was bought at.
 
-    return item.build.effects[0].rank if item.build.effects else 1
+    Read off the build's first effect, which is where a rank actually lives for
+    everything that has one. Gear with **no** effects falls back to the item's own
+    :attr:`~mm_companion.core.equipment.EquipmentItem.rank` — an Evidence Kit is priced
+    per rank while granting nothing mechanical, so there is no effect to read and the
+    hardcoded 1 this used to return threw the player's choice away.
+    """
+
+    return item.build.effects[0].rank if item.build.effects else max(1, item.rank)
+
+
+def entry_max_rank(entry: EquipmentEntry | None) -> int | None:
+    """The highest rank the entry may be bought at, or ``None`` when it does not say.
+
+    ``implementation.maxRank`` is an open-bag field and not every entry that has one
+    puts a *number* there — ``armored_costume`` stores a sentence about the GM's
+    discretion — so anything that is not an int is read as "unstated" rather than
+    coerced.
+    """
+
+    if entry is None:
+        return None
+    value = entry.implementation.get("maxRank")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
 
 
 def _build_signature(power: Power) -> tuple:

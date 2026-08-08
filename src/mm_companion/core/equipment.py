@@ -207,6 +207,13 @@ class EquipmentItem:
     ``None`` means "as fast as it goes", which is what a card shows before anyone has
     touched the throttle.
 
+    ``rank`` is what a ranked or per-rank item was **bought at**, and it is only
+    consulted for gear whose build has no effects to read it off — an Evidence Kit and
+    an Armour Cloth are printed at a price per rank while granting nothing mechanical,
+    so without a field of their own the rank the picker asked for had nowhere to go and
+    was silently discarded. Everything with effects still answers from its first
+    effect's rank (:func:`~mm_companion.core.rules.equipment.item_rank`).
+
     ``stacks`` is build state and the one per-item homerule: equipment bonuses do not
     stack with each other or with powers (``docs/mm-equipment-design.md`` §3), and
     ticking this opts *this* item out of that rule, adding its bonus on top of the
@@ -243,6 +250,7 @@ class EquipmentItem:
     build: Power = field(default_factory=Power)
     category: str = ""
     platform: PlatformSpec | None = None
+    rank: int = 1
     worn: bool = True
     current_speed: int | None = None
     stacks: bool = False
@@ -269,6 +277,8 @@ class EquipmentItem:
         }
         if self.platform is not None:
             data["platform"] = self.platform.to_dict()
+        if self.rank > 1:
+            data["rank"] = self.rank
         if self.stacks:
             data["stacks"] = True
         if self.ep_override is not None:
@@ -292,6 +302,7 @@ class EquipmentItem:
             build=Power.from_dict(raw.get("build", {})),
             category=raw.get("category", ""),
             platform=PlatformSpec.from_dict(platform) if isinstance(platform, dict) else None,
+            rank=max(1, int(raw.get("rank", 1) or 1)),
             stacks=bool(raw.get("stacks", False)),
             ep_override=None if override is None else int(override),
             accessories=[cls.from_dict(a) for a in raw.get("accessories", ())],

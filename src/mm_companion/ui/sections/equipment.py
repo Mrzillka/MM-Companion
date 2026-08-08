@@ -88,6 +88,7 @@ from mm_companion.core.rules import (
     build_item_from_entry,
     debilitated_traits,
     detach_accessory,
+    entry_max_rank,
     equipment_budget,
     equipment_points_spent,
     equipment_violations,
@@ -341,21 +342,24 @@ class EquipmentSection(TitledSection):
         """Put a catalog entry on the character, asking for a rank when it needs one.
 
         Most gear has one printed price; the handful whose ``cost_kind`` prices it *per
-        rank* (an Armored Costume's Protection) needs to know how many. No upper bound
-        is imposed here — how high a rank may go is a Power Level question, and
+        rank* (an Armored Costume's Protection) needs to know how many. The ceiling is
+        the entry's own :func:`~mm_companion.core.rules.entry_max_rank` when it states
+        one and otherwise nothing worth calling a limit — how high a rank may go is a
+        Power Level question, and
         :func:`~mm_companion.core.rules.power_pl_violations` already marks the card
         when it is breached.
         """
         rank = 1
         if entry.cost_kind in PER_RANK_COST_KINDS:
             unit = self._data.equipment_rules.currency_abbreviation
+            ceiling = entry_max_rank(entry) or 99
             chosen, ok = QInputDialog.getInt(
                 self,
                 f"Add {entry.name}",
                 f"Rank ({entry.cost} {unit} per rank):",
                 1,
                 1,
-                99,
+                ceiling,
             )
             if not ok:
                 return

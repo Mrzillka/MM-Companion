@@ -8,7 +8,10 @@ from a single command:
     python .claude/skills/run-mm-companion/driver.py start        # launcher (StartWindow)
     python .claude/skills/run-mm-companion/driver.py sheet        # editable character sheet
     python .claude/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
+    python .claude/skills/run-mm-companion/driver.py sheet-locked # the read-only view
     python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+    python .claude/skills/run-mm-companion/driver.py compact      # the window shrunk to the roller
+    python .claude/skills/run-mm-companion/driver.py compact-gm   # the same, from the GM window
     python .claude/skills/run-mm-companion/driver.py gm           # GM Mode, with a cast of NPCs
     python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
     python .claude/skills/run-mm-companion/driver.py all           # start + sheet + constructor
@@ -96,6 +99,15 @@ def build(target: str):
 
         initialize_mods()
         win = StartWindow()
+    elif target == "sheet-locked":
+        # The read-only view a saved character opens in, which is a different
+        # question from "sheet": locking sheds every field's input chrome, so it is
+        # the other half of any change to how a spin box or a combo box is dressed.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=True)
+        for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
+            win._sheet.abilities._abilities[key].setValue(value)
     elif target in ("sheet", "sheet-demo"):
         from mm_companion.ui.main_window import MainWindow
 
@@ -109,6 +121,97 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target == "equipment-demo":
+        # The Equipment block with gear on it: two categories (so the automatic
+        # grouping and the group order show), a stowed item beside a worn one, and
+        # a piece of armour outclassed by a better one so its "superseded by" line
+        # renders. Only this block is left visible — the shot is about the cards.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.rules import attach_accessory, build_item_from_entry
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=3))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("sword", "crossbow", "leather_armor", "chain_mail", "rifle", "laser_sight"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+        char.equipment[1].worn = False  # the crossbow is stowed
+        # Phase 8: a fitted accessory (which leaves the loose list and lends its
+        # Accurate to the rifle) and a wielder strong enough to snap the sword.
+        attach_accessory(char, char.equipment[4], char.equipment[5], sheet._data)
+        char.abilities["STR"] = 12
+        sheet.equipment.refresh()
+        for key in sheet.block_keys():
+            if key != "equipment":
+                sheet.hide_block(key)
+        win.resize(760, 720)
+    elif target == "equipment-vehicles":
+        # Phase 9: platforms. A tank (weapons, Impervious Toughness, a dice footer
+        # naming each gun) and a jumbo jet (whose Flight reaches the Speed readout),
+        # so the trait grid a vehicle card shows instead of a game-term table is
+        # visible beside an ordinary weapon's card.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=25))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("tank", "jumbo_jet", "sword"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+        sheet.equipment.refresh()
+        sheet.system_info.refresh_derived()  # the jet's Flight joins the Speed readout
+        for key in sheet.block_keys():
+            if key not in ("equipment", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 860)
+    elif target == "equipment-platforms":
+        # Phase 10: the two kinds of platform side by side, one printed and one built.
+        # A moon-base (its own short trait grid, its fifteen Features on one row), a
+        # tank (the throttle under its grid, which restates the Defense Class), and a
+        # hand-built jet whose Flight the editor bought and whose Speed reaches the
+        # System block exactly as a printed vehicle's does.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.equipment import PLATFORM_VEHICLE, EquipmentItem
+        from mm_companion.core.rules import (
+            apply_platform,
+            build_item_from_entry,
+            new_platform,
+            platform_rules_category,
+        )
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=25))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("tank", "moon_base"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+
+        spec = new_platform(PLATFORM_VEHICLE, sheet._data)
+        spec.vehicle_class, spec.size, spec.speed = "air", 3, 9
+        spec.strength, spec.toughness, spec.defense_modifier = 10, 9, -3
+        spec.features = ["autopilot", "alarm"]
+        built = EquipmentItem(
+            category=platform_rules_category(PLATFORM_VEHICLE, sheet._data),
+            platform=spec,
+        )
+        built.build.name = "Skyhawk"
+        built.build.description = "Built off the trait table rather than picked."
+        apply_platform(built, spec, sheet._data)
+        char.equipment.append(built)
+
+        sheet.equipment.refresh()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("equipment", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 900)
     elif target in ("sheet-pinned", "sheet-pinned-bottom"):
         # The pinned strip with something in it: two blocks parked outside the
         # scrolling page. The bottom variant also moves the strip to another edge,
@@ -142,6 +245,21 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target == "equipment-constructor":
+        # The same builder in gear mode, opened on a catalog sword: the shot is about
+        # what differs — the Equipment title, the EP total, and the group combo beside
+        # the no-stacking opt-out.
+        from mm_companion.core.character import AdvantageSelection, Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=3))
+        item = build_item_from_entry(data.equipment_catalog()["sword"], data)
+        char.equipment.append(item)
+        win = PowerConstructorWindow(data, character=char, item=item)
     elif target in ("dice", "dice-demo"):
         # The roller is a sheet block now, pinned in the strip by default, so the
         # shot is of the sheet — there is no standalone roller window.
@@ -227,6 +345,9 @@ def build(target: str):
             win._driver_bridge = bridge  # keep it alive for the screenshot
             return win
 
+        # Load the attack first: the *spec* is what carries the save it forces, so
+        # without this the card comes out with no follow-up chip to click.
+        panel.load_spec(attack)
         panel._dc_check.setChecked(True)
         panel._dc_spin.setValue(12)  # the target's Defense
         dice_module.roll_d20 = lambda *a, **k: 14  # a hit, deterministically
@@ -241,6 +362,42 @@ def build(target: str):
         panel._bonus_spin.setValue(4)  # the target's Toughness
         dice_module.roll_d20 = lambda *a, **k: 6  # and it fails
         panel._finish_roll()
+        return win
+    elif target in ("compact", "compact-gm"):
+        # Compact mode: the whole window collapsed to just the roller, frameless and
+        # on top. Two variants because the two windows lend *different* roll
+        # surfaces to the same mini page — the sheet a DiceRollerView's panel and
+        # history, the GM a bare panel beside the shared GM history — and a shot of
+        # only one would say nothing about whether the seam holds for both.
+        if target == "compact-gm":
+            from mm_companion.ui.gm_window import GMWindow
+
+            win = GMWindow(bind="127.0.0.1")
+            win.show()
+            panel = win._roller
+        else:
+            from mm_companion.ui.main_window import MainWindow
+
+            win = MainWindow(locked=False)
+            win.show()
+            panel = win._sheet.dice.panel
+
+        # Fill the roller in first, so the mini window is not an empty state: a
+        # loaded trait in the chip, a couple of quick-roll chips beside the die and
+        # two resolved rolls in the history under it.
+        from mm_companion.core.rules import RollSpec
+
+        panel.load_spec(RollSpec(label="Athletics", modifier=9))
+        panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
+        panel._add_quick_roll({"bonus": 8, "penalty": 0, "dc": None}, name="Toughness")
+        panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
+        panel._dc_check.setChecked(True)
+        panel._dc_spin.setValue(15)
+        panel._finish_roll()
+        panel._dc_check.setChecked(False)
+        panel._finish_roll()
+
+        win._compact.enter()
         return win
     elif target in ("dice-bottom", "dice-bottom-demo"):
         # The Dice block in a *bottom* strip — short and wide, so its four parts
@@ -308,21 +465,32 @@ def build(target: str):
     elif target == "gm":
         # GM Mode with a cast already in it, so the NPC panel is not an empty
         # state: two NPCs are written into the workspace gm_characters/ dir and
-        # registered with the session exactly as "Create NPC" would.
+        # registered with the session exactly as "Create NPC" would. Built through
+        # quick_npc so they have the Damage power a card's default pinned strip
+        # reads its third chip from — a cast of statless placeholders would show
+        # that chip as a dash and say nothing about how the card really looks.
         from mm_companion.core import library
-        from mm_companion.core.character import Character
         from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
         from mm_companion.ui.gm_window import GMWindow
 
         data = load_game_data()
         win = GMWindow(bind="127.0.0.1")
-        for name, ranks in (("Bank Robber", 2), ("Ogre", 9)):
-            npc = Character.new_default(data)
-            npc.profile["hero_name"] = name
-            for key in ("STR", "STA", "AGL", "FGT"):
-                if key in npc.abilities:
-                    npc.abilities[key] = ranks
+        for name, rank in (("Bank Robber", 4), ("Ogre", 9)):
+            npc = quick_npc(data, name=name, attack=rank, effect=rank, defence=rank, toughness=rank)
             win._register_npc(library.save_character(npc, directory=win._npc_dir()))
+    elif target == "gm-settings":
+        # The GM Mode settings page, reached the way a GM reaches it: build the GM
+        # window and fire its own Settings ▸ Preferences… handler, so the shot is of
+        # the window that opens rather than one constructed to look like it — which
+        # is what proves the menu lands on this page and not on Themes.
+        from mm_companion.ui.gm_window import GMWindow
+
+        gm = GMWindow(bind="127.0.0.1")
+        gm.show()
+        gm._open_settings()
+        win = gm._settings_window
+        win._gm_owner = gm  # keep the GM window alive for the shot
     elif target == "npc":
         from mm_companion.ui.npc_window import NPCWindow
 
@@ -349,9 +517,14 @@ def main(argv: list[str] | None = None) -> int:
             "start",
             "sheet",
             "sheet-demo",
+            "sheet-locked",
+            "equipment-demo",
+            "equipment-vehicles",
+            "equipment-platforms",
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",
+            "equipment-constructor",
             "focus",
             "dice",
             "dice-demo",
@@ -359,9 +532,12 @@ def main(argv: list[str] | None = None) -> int:
             "roll-demo-table",
             "dice-bottom",
             "dice-bottom-demo",
+            "compact",
+            "compact-gm",
             "settings",
             "settings-demo",
             "gm",
+            "gm-settings",
             "npc",
             "all",
         ],

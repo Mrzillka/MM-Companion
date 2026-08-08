@@ -6,13 +6,31 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Signal
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QDialog, QFileDialog, QMainWindow, QMenu, QMessageBox, QWidget
+from PySide6.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.compact import CompactController
+from mm_companion.ui.connection_indicator import install_connection_indicator
 
 CHARACTER_FILTER = "Character files (*.json)"
+
+#: The lock toggle's two faces. It sits on the menu bar rather than inside a menu
+#: because it is a play-time view switch, not a preference — and because a glyph
+#: that *shows* the current state is worth more there than a tick two clicks deep.
+#: Emoji text on the action, matching the block title bars' 🖈 ↗ ✕, so it needs no
+#: artwork and stays legible on every preset's bar.
+LOCK_GLYPH_LOCKED = "🔒"
+LOCK_GLYPH_UNLOCKED = "🔓"
 
 
 class MainWindow(QMainWindow):
@@ -33,6 +51,13 @@ class MainWindow(QMainWindow):
 
     closed = Signal()
     saved = Signal()
+    #: A row of this sheet was right-clicked and pinned. Carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`, relayed straight from the
+    #: sheet. Only ever raised on a window opened with ``pin_target=True``, which
+    #: today means one a GM opened from a card.
+    pinRequested = Signal(object)
+    #: The same, for a row that was already pinned.
+    unpinRequested = Signal(object)
 
     def __init__(
         self,
@@ -43,6 +68,7 @@ class MainWindow(QMainWindow):
         locked: bool = True,
         gm_view: bool = False,
         npc: bool = False,
+        pin_target: bool = False,
     ) -> None:
         super().__init__(parent)
         # A GM's read-only view of a player's snapshot: force-locked, with only the
@@ -71,10 +97,28 @@ class MainWindow(QMainWindow):
         self._settings_window: QWidget | None = None
 
         self._sheet = CharacterSheet(character=character)
+        # Opened from a GM card: its rows offer "Pin to GM card", and what they pin
+        # is relayed back out to whoever opened this window.
+        self._sheet.set_pin_target(pin_target)
+        self._sheet.pinRequested.connect(self.pinRequested)
+        self._sheet.unpinRequested.connect(self.unpinRequested)
+        # Compact mode: the whole window collapsed to just the dice roller. The
+        # controller owns the mini page, borrows the roller out of the sheet when
+        # it is asked for, and floats its own round shrink button over the roller
+        # — so there is nothing to add to the menu bar; see
+        # :mod:`mm_companion.ui.compact`.
+        self._compact = CompactController(self, self._sheet, self._sheet)
         self._build_menu_bar(locked)
-        # The sheet is itself a scrolling page (it owns its scroll area), so it is
-        # the central widget directly — no outer wrapper.
-        self.setCentralWidget(self._sheet)
+        # The sheet is a scrolling page in its own right (it owns its scroll area),
+        # so the only thing this wrapper is for is having the compact page beside
+        # it: one of the two is always hidden, and a hidden widget is left out of
+        # the layout's minimum, which is what lets the window shrink to the roller.
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.addWidget(self._sheet)
+        central_layout.addWidget(self._compact.page)
+        self.setCentralWidget(central)
         self._update_title()
 
         # New characters open unlocked for editing; otherwise the sheet is a
@@ -96,6 +140,15 @@ class MainWindow(QMainWindow):
         """The file this sheet is saved to, or ``None`` until the first save."""
         return self._path
 
+    def sync_dice_layout(self) -> None:
+        """Re-read the dice roller's layout preference.
+
+        Found by name rather than by type: the Settings window walks the open
+        windows looking for anything that answers this, so it needs no import of
+        the sheet or the GM window to reach either of them.
+        """
+        self._sheet.sync_dice_layout()
+
     def storage_dir(self) -> Path:
         """The workspace directory this window's Open/Save dialogs start in."""
         return storage.get_workspace().characters_dir
@@ -107,9 +160,13 @@ class MainWindow(QMainWindow):
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar.
 
-        A GM's read-only view (:attr:`_gm_view`) gets only the **View** menu — no
-        File/Settings/Session, and no Lock toggle — so a player's snapshot
-        can be looked at and rearranged but never edited, saved, or unlocked.
+        Menus first, then the lock toggle as the bar's last item — it is a widget
+        on the bar, not an entry inside a menu (see :data:`LOCK_GLYPH_LOCKED`).
+
+        A GM's read-only view (:attr:`_gm_view`) returns before either, so it gets
+        only the **View** menu — no File/Settings/Session and no lock — and a
+        player's snapshot can be looked at and rearranged but never edited, saved,
+        or unlocked.
         """
         menu_bar = self.menuBar()
 
@@ -126,6 +183,9 @@ class MainWindow(QMainWindow):
         self._build_view_menu(menu_bar)
 
         if self._gm_view:
+            # Not even the compact toggle: this bar is deliberately bare, and the
+            # GM has their own roller in the GM window. Compact mode still *works*
+            # here — the roller's own ⤡ is on every panel — it just gets no chrome.
             return
 
         settings_menu = menu_bar.addMenu("&Settings")
@@ -139,18 +199,43 @@ class MainWindow(QMainWindow):
             self._cost_config_action = settings_menu.addAction("Cost config...")
             self._cost_config_action.triggered.connect(self._open_cost_config)
 
-        self._lock_action = settings_menu.addAction("Lock")
-        self._lock_action.setCheckable(True)
-        self._lock_action.setChecked(locked)
-        self._lock_action.toggled.connect(self._sheet.set_locked)
-
         # Joining a session is something a *player* does at the table; an NPC sheet
         # is the GM's prep material, driven from the GM window instead. (Rolling
         # dice used to have a Tools menu here; it is the Dice block now — see
         # mm_companion.ui.sections.dice.)
+        # The one thing on this bar that does not fade: a sheet in a session says
+        # so for as long as it is, and a sheet that is not says "Offline".
+        #
+        # Only on a sheet that could *be* in one, which is the same rule as the
+        # Session menu above and for the same reason. A GM opens an NPC sheet (or
+        # a player's read-only snapshot, which returned above) while hosting, and
+        # those windows never join anything — so an indicator there would sit at
+        # "Offline" throughout a perfectly healthy session, which is exactly the
+        # false reading this widget exists to prevent.
         if not self._npc:
             session_menu = menu_bar.addMenu("&Session")
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
+            install_connection_indicator(self)
+
+        # Last on the bar, and on the bar rather than in a menu: locking is how a
+        # sheet is read *and* how it is written, so it is reached constantly. An
+        # action added straight to a QMenuBar with no submenu behaves as a button —
+        # one click, and the glyph is the state read-out.
+        self._lock_action = menu_bar.addAction(LOCK_GLYPH_LOCKED)
+        self._lock_action.setCheckable(True)
+        self._lock_action.setChecked(locked)
+        self._lock_action.toggled.connect(self._sheet.set_locked)
+        self._lock_action.toggled.connect(self._show_lock_state)
+        self._show_lock_state(locked)
+
+    def _show_lock_state(self, locked: bool) -> None:
+        """Put the current lock state on the bar's glyph and its tooltip."""
+        self._lock_action.setText(LOCK_GLYPH_LOCKED if locked else LOCK_GLYPH_UNLOCKED)
+        self._lock_action.setToolTip(
+            "Locked — click to edit this sheet"
+            if locked
+            else "Unlocked — click to make this sheet read-only"
+        )
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""
@@ -209,14 +294,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not join", str(exc))
             return
         set_active_session(bridge)
-        record_session_history(
-            code=dialog.code_text(),
-            session_id=client.session_id,
-            session_name=client.session_name,
-            display_name=dialog.display_name(),
-            player_id=client.player_id,
-            player_token=client.player_token,
-        )
+
+        def remember(*_args: object) -> None:
+            """Write the seat down on every connect, not only the first.
+
+            A reconnect can come back with a different token, and the copy on disk
+            is what a *later launch* reclaims with — so recording it once at join
+            time leaves the next session starting as a stranger.
+            """
+            record_session_history(
+                code=dialog.code_text(),
+                session_id=client.session_id,
+                session_name=client.session_name,
+                display_name=dialog.display_name(),
+                player_id=client.player_id,
+                player_token=client.player_token,
+            )
+
+        remember()
+        bridge.connected.connect(remember)
         attach_player_session(self, bridge)
 
     def _open_cost_config(self) -> None:
@@ -303,8 +399,16 @@ class MainWindow(QMainWindow):
         self._sheet.restore_layout(layout.get("dock_state"))
 
     def _persist_layout(self) -> None:
-        """Save the window geometry and block arrangement as a global preference."""
-        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        """Save the window geometry and block arrangement as a global preference.
+
+        A window closed while compact remembers what it was **before** it shrank:
+        this key is shared by every sheet, so persisting 380x560 here would open
+        every character that size from then on. The mini window's own size is
+        remembered separately, by the controller.
+        """
+        self._compact.remember_size()
+        state = self._compact.saved_geometry() or self.saveGeometry()
+        geometry = bytes(state.toBase64()).decode("ascii")
         storage.update_settings(
             layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
         )
@@ -347,6 +451,9 @@ class MainWindow(QMainWindow):
         name = library.display_name(self._sheet.character)
         marker = "*" if self._dirty else ""
         self.setWindowTitle(f"{self.TITLE} — {marker}{name}")
+        # The mini window is frameless, so its strip is the only place the title
+        # shows at all — including the unsaved-changes marker.
+        self._compact.page.strip.set_title(f"{marker}{name}")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Guard unsaved changes, announce the close, then close normally."""

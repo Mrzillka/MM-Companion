@@ -5,6 +5,8 @@ from copy import deepcopy
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -22,11 +24,14 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
+from mm_companion.core.equipment import EquipmentItem
 from mm_companion.core.powers import (
     Power,
     power_is_homerule,
 )
 from mm_companion.core.rules import (
+    item_ep_cost,
+    modifier_label,
     power_allocation_violations,
     power_linked_range_violations,
     power_modifier_requirement_violations,
@@ -35,6 +40,7 @@ from mm_companion.core.rules import (
     power_total_cost,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.attachment_dialog import AttachmentDialog
 from mm_companion.ui.power_constructor.bricks import BrickList, BrickWidget, PaletteDropZone
 from mm_companion.ui.power_constructor.canvas import PowerCanvas
 from mm_companion.ui.power_constructor.common import (
@@ -42,16 +48,39 @@ from mm_companion.ui.power_constructor.common import (
     MODIFIER_MIME,
     combat_focus_options,
 )
-from mm_companion.ui.power_constructor.terms_view import PowerTermsView
+from mm_companion.ui.power_constructor.terms_view import CostOverrideTarget, PowerTermsView
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import BOLD_STYLE, tinted_style
 
 
 class PowerConstructorWindow(QMainWindow):
-    """Standalone brick-builder window for assembling a single power."""
+    """Standalone brick-builder window for assembling a single power — or one item.
+
+    **Gear mode** (``gear=True``, or an ``item`` to edit) builds a piece of equipment
+    instead. It is the same builder throughout — an
+    :class:`~mm_companion.core.equipment.EquipmentItem` *wraps* a real
+    :class:`~mm_companion.core.powers.Power`, so the palette, the canvas, the game-term
+    table and every Dev-mode override work on gear untouched. Four things differ, and
+    all four follow from equipment being a different kind of thing bought in a different
+    currency:
+
+    - the running total, and any hand-set price, read in **Equipment Points** (see
+      :class:`~mm_companion.ui.power_constructor.terms_view.CostOverrideTarget` for why
+      that override is not stored on the power);
+    - a **group** combo, because a card's category is a rules fact the Equipment block
+      sorts by and a custom item has no catalog entry to take one from;
+    - the **"stacks with other bonuses"** check box — the per-item opt-out of the
+      no-stacking rule (``docs/mm-equipment-design.md`` §3), which lives here because it
+      is build state and a homerule;
+    - an item is required to have a **name** rather than an effect. A power with no
+      effects is nothing at all, but gear with none is ordinary: an accessory that only
+      modifies its host weapon has no effects of its own, and a name is the only thing
+      that makes an item identifiable on a card.
+    """
 
     closed = Signal()
     powerSaved = Signal(object)  # carries the finished Power to the host section
+    itemSaved = Signal(object)  # gear mode's counterpart: the finished EquipmentItem
 
     def __init__(
         self,
@@ -60,6 +89,8 @@ class PowerConstructorWindow(QMainWindow):
         *,
         character: Character | None = None,
         power: Power | None = None,
+        item: EquipmentItem | None = None,
+        gear: bool = False,
     ) -> None:
         super().__init__(parent)
         self._data = data or load_game_data()
@@ -78,9 +109,29 @@ class PowerConstructorWindow(QMainWindow):
         # ``item_present``, ``array_active``, ``toggled_on``, ``suppressed``) so a loaded
         # character comes up all-active, which means a round-trip would quietly switch a
         # power the player had turned off back on the moment they edited its description.
-        self._editing = power is not None
-        self.power = deepcopy(power) if self._editing else Power()
-        self.setWindowTitle("Edit Power" if self._editing else "Power Constructor")
+        # The same is true of an item: ``worn`` is left out of its save format too.
+        #
+        # Gear mode is implied by being handed an item to edit — there is nothing else
+        # an EquipmentItem could be doing here — and asked for outright by ``gear`` when
+        # building a custom one from scratch. In it, ``self.power`` *is* the item's
+        # build, so every method below goes on working on the power it always did.
+        self._gear = gear or item is not None
+        self._editing = (item if self._gear else power) is not None
+        if self._gear:
+            self.item: EquipmentItem | None = (
+                deepcopy(item) if item is not None else EquipmentItem()
+            )
+            self.power = self.item.build
+        else:
+            self.item = None
+            self.power = deepcopy(power) if self._editing else Power()
+        titles = {
+            (False, False): "Power Constructor",
+            (False, True): "Edit Power",
+            (True, False): "Equipment Constructor",
+            (True, True): "Edit Equipment",
+        }
+        self.setWindowTitle(titles[(self._gear, self._editing)])
         self.resize(1240, 660)
 
         # Three columns: the brick palette, the build panel (the effect canvas the
@@ -101,6 +152,9 @@ class PowerConstructorWindow(QMainWindow):
         splitter.setCollapsible(0, False)
         self.setCentralWidget(splitter)
 
+        if self._gear:
+            self._terms.set_cost_override_target(self._cost_override_target())
+
         if self._editing:
             self._seed_from_power()
 
@@ -109,17 +163,67 @@ class PowerConstructorWindow(QMainWindow):
         self._refresh_pl_warning()
 
         # An edited power that already carries overrides opens with Dev mode on, so its
-        # homerule edits are visible straight away (this also builds the table).
-        if power_is_homerule(self.power):
+        # homerule edits are visible straight away (this also builds the table). An
+        # item's hand-set price is the same kind of edit and opens it the same way.
+        if power_is_homerule(self.power) or (self.item is not None and self._item_priced_by_hand()):
             self._dev_mode.setChecked(True)
 
+    @property
+    def _noun(self) -> str:
+        """What this window calls the thing it is building, in a sentence."""
+        return "item" if self._gear else "power"
+
+    @property
+    def _currency(self) -> str:
+        """What every cost in this window is denominated in.
+
+        One property rather than a decision made at each readout: the effect cards, the
+        running total and the Dev-mode override all have to agree, and a card reading
+        "= 3 PP" under a total reading "3 EP" is two answers to the same question.
+        """
+        return self._data.equipment_rules.currency_abbreviation if self._gear else "PP"
+
+    def _item_priced_by_hand(self) -> bool:
+        return self.item is not None and self.item.ep_override is not None
+
+    def _cost_override_target(self) -> CostOverrideTarget:
+        """Point the Dev-mode price at the *item*, in Equipment Points.
+
+        Not at ``Power.cost_override``: a number typed here is a price in the second
+        currency, and storing it on the power would hand every function that asks a
+        power what it costs an Equipment-Point answer labelled Power Points.
+        """
+
+        def write(value: int | None) -> None:
+            if self.item is not None:
+                self.item.ep_override = value
+
+        return CostOverrideTarget(
+            unit=self._currency,
+            read=lambda: None if self.item is None else self.item.ep_override,
+            write=write,
+            derived=self._derived_ep_cost,
+        )
+
+    def _derived_ep_cost(self) -> int:
+        """What the item costs with no hand-set price — 0 without an item."""
+        if self.item is None:
+            return 0
+        stored, self.item.ep_override = self.item.ep_override, None
+        try:
+            return item_ep_cost(self.item, self._data, self._character)
+        finally:
+            self.item.ep_override = stored
+
     def _seed_from_power(self) -> None:
-        """Populate the editor from the (copied) power being edited."""
+        """Populate the editor from the (copied) power — or item — being edited."""
         self._name.setText(self.power.name)
         self._description.setPlainText(self.power.description)
         self.canvas.load_power()
+        # The item's own two fields seeded themselves as the panel was built; see
+        # :meth:`_build_gear_row`.
         self._save_button.setText("Save Changes")
-        self._save_button.setToolTip("Update this power on the character sheet")
+        self._save_button.setToolTip(f"Update this {self._noun} on the character sheet")
 
     # The effect palette is grouped by the effect's game-term type; the sections
     # read in a from-offense-to-utility order rather than the raw data order.
@@ -242,7 +346,9 @@ class PowerConstructorWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         self._name = QLineEdit()
-        self._name.setPlaceholderText("Power name (e.g. Fire Blast)")
+        self._name.setPlaceholderText(
+            "Item name (e.g. Combat Knife)" if self._gear else "Power name (e.g. Fire Blast)"
+        )
         self._name.textChanged.connect(self._on_name_changed)
         layout.addWidget(self._name)
 
@@ -254,6 +360,9 @@ class PowerConstructorWindow(QMainWindow):
         self._description.textChanged.connect(self._on_description_changed)
         guard_wheel(self._description)  # don't let the box steal the page wheel
         layout.addWidget(self._description)
+
+        if self._gear:
+            layout.addWidget(self._build_gear_row())
 
         # Cross-power relationships (Independent / Array / Linked *between* whole powers)
         # are no longer set here — they're built on the character sheet by dragging one
@@ -279,7 +388,13 @@ class PowerConstructorWindow(QMainWindow):
         cost_row.addWidget(self._warning)
         layout.addLayout(cost_row)
 
-        self.canvas = PowerCanvas(self.power, self._data, self._focus_options, self._character)
+        self.canvas = PowerCanvas(
+            self.power,
+            self._data,
+            self._focus_options,
+            self._character,
+            unit=self._currency,
+        )
         self.canvas.changed.connect(self._refresh_cost)
         self.canvas.changed.connect(self._refresh_game_terms)
         self.canvas.changed.connect(self._refresh_pl_warning)
@@ -291,12 +406,160 @@ class PowerConstructorWindow(QMainWindow):
         # A save bar pinned below the canvas hands the finished power to the sheet.
         actions = QHBoxLayout()
         actions.addStretch()
-        self._save_button = QPushButton("Save Power")
-        self._save_button.setToolTip("Add this power to the character sheet")
+        self._save_button = QPushButton("Save Item" if self._gear else "Save Power")
+        self._save_button.setToolTip(
+            "Add this item to the character sheet"
+            if self._gear
+            else "Add this power to the character sheet"
+        )
         self._save_button.clicked.connect(self._save_power)
         actions.addWidget(self._save_button)
         layout.addLayout(actions)
         return panel
+
+    # -- gear mode's extra build fields ------------------------------------
+    def _build_gear_row(self) -> QWidget:
+        """The facts about the *item* rather than about the build inside it.
+
+        Which group it files under, whether it opts out of the no-stacking rule, and —
+        the accessory pair — what it fits onto and what it lends whatever it is fitted
+        to. All four sit up here beside the name rather than anywhere on the canvas,
+        because none of them is a property of any effect.
+        """
+        host = QWidget()
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        top = QWidget()
+        row = QHBoxLayout(top)
+        row.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(top)
+        outer.addWidget(self._build_accessory_row())
+
+        row.addWidget(QLabel("Group"))
+        self._category = QComboBox()
+        for category in self._data.equipment_categories:
+            self._category.addItem(category.title or category.id, category.id)
+        if self._category.count() == 0:  # a ruleset declaring no headings at all
+            self._category.addItem("Other", "")
+        self._category.setToolTip("Which group the Equipment block files this item under.")
+        self._category.currentIndexChanged.connect(self._on_category_changed)
+        guard_wheel(self._category)
+        row.addWidget(self._category)
+        row.addStretch()
+
+        self._stacks = QCheckBox("Stacks with other bonuses")
+        self._stacks.setToolTip(
+            "Equipment bonuses normally do not stack — with each other or with powers, "
+            "the best one applies. Tick this to add this item's bonus on top of the "
+            "winner instead. It is a homerule, and the item's card is badged ⌂ for it."
+        )
+        self._stacks.toggled.connect(self._on_stacks_toggled)
+        row.addWidget(self._stacks)
+
+        # Seed *here* rather than in _seed_from_power: the build panel is constructed
+        # first, so leaving it until then would have the combo's opening row write its
+        # own category over the edited item's on the way past. A custom item, which has
+        # none, takes whichever group the combo opened on — so an item saved without the
+        # combo ever being touched still lands somewhere real.
+        if self.item is not None and self.item.category:
+            self._select_category(self.item.category)
+        else:
+            self._on_category_changed()
+        if self.item is not None:
+            self._stacks.setChecked(self.item.stacks)
+        return host
+
+    def _build_accessory_row(self) -> QWidget:
+        """Where this fits, and what it lends when it is fitted there.
+
+        A custom accessory could be priced and never attached to anything: both fields
+        were written from the catalog at pick time and there was no control for either,
+        so ``item_attaches_to`` fell back to a ``catalog_id`` a custom item does not
+        have, and the block's fit button is gated on exactly that.
+
+        A single combo rather than a multi-select: every accessory the ruleset ships
+        fits one host category, and the model's tuple still admits more for a mod.
+        """
+        host = QWidget()
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+
+        row.addWidget(QLabel("Fits onto"))
+        self._attaches = QComboBox()
+        self._attaches.addItem("— not an accessory —", "")
+        for category in self._data.equipment_categories:
+            self._attaches.addItem(category.title or category.id, category.id)
+        self._attaches.setToolTip(
+            "Gear this can be fitted to. An accessory lives on its host rather than "
+            "loose on the sheet, and its price folds into the host's."
+        )
+        self._attaches.currentIndexChanged.connect(self._on_attaches_changed)
+        guard_wheel(self._attaches)
+        row.addWidget(self._attaches)
+
+        self._lends = QPushButton()
+        self._lends.setToolTip("Choose the modifiers this lends whatever it is fitted to")
+        self._lends.clicked.connect(self._edit_attachment)
+        row.addWidget(self._lends)
+        row.addStretch()
+
+        if self.item is not None and self.item.attaches_to:
+            index = self._attaches.findData(self.item.attaches_to[0])
+            if index >= 0:
+                self._attaches.setCurrentIndex(index)
+        self._sync_attachment_button()
+        return host
+
+    def _on_attaches_changed(self) -> None:
+        if self.item is None:
+            return
+        chosen = self._attaches.currentData() or ""
+        self.item.attaches_to = (chosen,) if chosen else ()
+        self._sync_attachment_button()
+
+    def _sync_attachment_button(self) -> None:
+        """The button says what is currently lent, and goes dead when nothing can be.
+
+        An item that fits nowhere lends nothing to anything, so offering the picker
+        there would be offering a choice with no consequence.
+        """
+        selections = list(self.item.attachment) if self.item is not None else []
+        catalog = self._data.modifier_catalog()
+        names = [
+            modifier_label(modifier, selection)
+            for selection in selections
+            if (modifier := catalog.get(selection.modifier_id)) is not None
+        ]
+        self._lends.setText(f"Lends: {', '.join(names)}" if names else "Lends: nothing")
+        self._lends.setEnabled(bool(self.item is not None and self.item.attaches_to))
+
+    def _edit_attachment(self) -> None:
+        if self.item is None:
+            return
+        dialog = AttachmentDialog(self._data, list(self.item.attachment), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.item.attachment = dialog.selections()
+            self._sync_attachment_button()
+            # The lent modifiers are priced on *this* item, so its total moves.
+            self._refresh_cost()
+
+    def _select_category(self, category: str) -> None:
+        """Show *category* on the combo, adding a row for one no heading names."""
+        index = self._category.findData(category)
+        if index < 0:
+            self._category.addItem(category or "Other", category)
+            index = self._category.count() - 1
+        self._category.setCurrentIndex(index)
+
+    def _on_category_changed(self) -> None:
+        if self.item is not None:
+            self.item.category = self._category.currentData() or ""
+
+    def _on_stacks_toggled(self, on: bool) -> None:
+        # A homerule, but not a re-pricing one: what an item costs is unchanged by
+        # whether its bonus stacks, so the cost readout has nothing to restate.
+        if self.item is not None:
+            self.item.stacks = on
 
     # -- right: the game-term summary (editable in Dev mode) --------------
     def _build_summary_panel(self) -> QWidget:
@@ -360,9 +623,19 @@ class PowerConstructorWindow(QMainWindow):
     def _refresh_cost(self) -> None:
         # The power's own full assembled cost. Whether it contributes only a flat point
         # as an array alternate is decided by its group on the character sheet, not here.
-        total = power_total_cost(self.power, self._data, self._character)
-        suffix = " (homerule)" if self.power.cost_override is not None else ""
-        self._cost.setText(f"Total cost: {total} PP{suffix}")
+        #
+        # Gear is priced in the other currency, and by `item_ep_cost` rather than
+        # inline — which means an item still matching its catalog entry shows the book's
+        # *printed* price, and drops to its derived one the moment the build is edited.
+        # That is the same number the card shows, and the jump is the honest signal that
+        # this is no longer the thing the book priced.
+        if self.item is not None:
+            total = item_ep_cost(self.item, self._data, self._character)
+            suffix = " (homerule)" if self.item.ep_override is not None else ""
+        else:
+            total = power_total_cost(self.power, self._data, self._character)
+            suffix = " (homerule)" if self.power.cost_override is not None else ""
+        self._cost.setText(f"Total cost: {total} {self._currency}{suffix}")
 
     def _refresh_game_terms(self) -> None:
         self._terms.set_power(self.power, self._data, self._character)
@@ -420,7 +693,7 @@ class PowerConstructorWindow(QMainWindow):
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:
-        """Hand the assembled power to the host section, then close.
+        """Hand the assembled power — or item — to the host section, then close.
 
         A power with no effects has nothing to cost or resolve, so it is rejected
         with a prompt rather than saved empty. An over-allocated Tier-4 effect (one
@@ -428,8 +701,21 @@ class PowerConstructorWindow(QMainWindow):
         not a house-rule choice. A power that breaks a PL cap is rejected only when
         enforcement is set to *block* — otherwise the live warning has already flagged
         it and the save is allowed to proceed.
+
+        **An item is asked for a name instead of an effect.** Gear with no effects is
+        ordinary — an accessory that only modifies its host weapon has none, and it is
+        still a thing the character owns and pays for — but an unnamed item is a card
+        reading "Equipment" that nothing can tell from the next one.
         """
-        if not self.power.effects:
+        if self._gear:
+            if not self.power.name.strip():
+                QMessageBox.information(
+                    self,
+                    "Name this item",
+                    "Give this item a name before saving it.",
+                )
+                return
+        elif not self.power.effects:
             QMessageBox.information(
                 self,
                 "Nothing to save",
@@ -441,7 +727,7 @@ class PowerConstructorWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Over-allocated",
-                "This power can't be saved because an effect allocates more ranks "
+                f"This {self._noun} can't be saved because an effect allocates more ranks "
                 "than it has:\n\n• " + "\n• ".join(alloc),
             )
             return
@@ -450,7 +736,7 @@ class PowerConstructorWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Mismatched linked Range",
-                "This power can't be saved because its linked effects don't share "
+                f"This {self._noun} can't be saved because its linked effects don't share "
                 "the same Range:\n\n• " + "\n• ".join(linked),
             )
             return
@@ -459,11 +745,14 @@ class PowerConstructorWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Exceeds Power Level",
-                "This power can't be saved because it breaks Power Level caps:\n\n• "
-                + "\n• ".join(violations),
+                f"This {self._noun} can't be saved because it breaks Power Level caps:"
+                "\n\n• " + "\n• ".join(violations),
             )
             return
-        self.powerSaved.emit(self.power)
+        if self.item is not None:
+            self.itemSaved.emit(self.item)
+        else:
+            self.powerSaved.emit(self.power)
         self.close()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)

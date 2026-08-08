@@ -311,6 +311,35 @@ class SessionState:
                 return slot
         return None
 
+    def player_by_id_if_free(self, player_id: str) -> PlayerSlot | None:
+        """The *empty* seat a returning client's ``player_id`` names, if any.
+
+        The fallback for a client that knows which seat it had but no longer has
+        the token for it — settings cleared, a different machine, a join code
+        pasted by hand. Without it that client is given a brand new slot and the
+        GM's board grows a second card while the first sits there greyed out.
+
+        Deliberately weaker than :meth:`player_by_token`, and fenced accordingly.
+        A ``player_id`` is *public* — it rides in :meth:`PlayerSlot.roster_dict`
+        to every seat at the table — so this returns a slot only when it is
+        **not currently connected** and **not the GM's**. What that leaves open
+        is a table-mate claiming someone's seat while they are offline, which
+        costs them a name on the board and nothing else: no character reaches a
+        player (snapshots go to the GM's connection alone), a live seat can never
+        be taken, and hidden rolls still need the GM token. Everyone who could
+        try this already holds the join code and is sitting at the table.
+
+        Matching on ``display_name`` was considered and rejected: two real
+        players called "Sam" would silently become one seat, which is a worse bug
+        than the duplicate card it would fix.
+        """
+        if not player_id:
+            return None
+        slot = self.players.get(player_id)
+        if slot is None or slot.connected or slot.is_gm:
+            return None
+        return slot
+
     def roster(self) -> list[dict]:
         """The roster as it goes on the wire, in join order — see :meth:`PlayerSlot.roster_dict`."""
         return [slot.roster_dict() for slot in self.players.values()]

@@ -13,6 +13,7 @@ directly (handy for tests and portable installs).
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -37,6 +38,17 @@ THEMES_DIRNAME = "themes"
 PL_ENFORCE_WARN = "warn"
 PL_ENFORCE_BLOCK = "block"
 
+# The same switch for a build that spends more Equipment Points than its Equipment
+# advantage grants. Kept a *separate* setting rather than folded into the one above:
+# the two are different currencies and a table may well police one and not the other.
+EQUIPMENT_ENFORCE_WARN = "warn"
+EQUIPMENT_ENFORCE_BLOCK = "block"
+
+# How the dice roller lays itself out as a sheet block: reflowing to whatever room
+# it is given, or always in the shape compact mode uses. See ``dice_layout`` below.
+DICE_LAYOUT_AUTO = "auto"
+DICE_LAYOUT_COMPACT = "compact"
+
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
     # Id of the visual theme preset (see :mod:`mm_companion.ui.theme`). "classic"
@@ -45,6 +57,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "theme": "classic",
     "ruleset": "4e",
     "pl_enforcement": PL_ENFORCE_WARN,
+    "equipment_enforcement": EQUIPMENT_ENFORCE_WARN,
     # Ids of workspace mods to layer on top of the base ruleset, in the order they
     # should apply (later entries win). Empty by default, so a fresh install runs
     # the base ruleset only. See :mod:`mm_companion.core.mods`.
@@ -113,6 +126,67 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # key because the GM window has a different block set. See
     # :mod:`mm_companion.ui.gm_window`.
     "gm_layout": {},
+    # What a GM card's pinned-parameter strip starts with, per card kind. Each
+    # entry is a ``PinRef.to_dict()`` (see :mod:`mm_companion.core.rules.pins`).
+    # Read through :func:`gm_default_pins`, never straight off ``load_settings``:
+    # an existing workspace's file predates this key entirely.
+    #
+    # These live in settings rather than as a constant in code because the whole
+    # point is that a GM changes them: the Settings window's GM Mode page reads
+    # this through :func:`gm_default_pins` and writes it through
+    # :func:`set_gm_default_pins`, and this dict is what its "Restore shipped"
+    # button puts back.
+    # The NPC damage entry is deliberately *late-bound* — the defaults are written
+    # down long before the NPC they will describe exists, so "the first Damage
+    # power" is the only way to say it, and it stays true when the GM edits which
+    # power that is. It resolves to the **attack roll** that power makes: the chip
+    # a GM clicks when the mook swings. The save it forces is the target's to roll
+    # and arrives on their side as the attack's follow-up.
+    #
+    # Defence and Toughness lead both lists because they are the pair a GM reads
+    # together — how hard to hit, how hard to hurt.
+    "gm_default_pins": {
+        "player": [
+            {"kind": "resistance", "key": "DEF"},
+            {"kind": "resistance", "key": "TOUGHNESS"},
+            {"kind": "initiative"},
+            {"kind": "skill", "key": "Perception"},
+        ],
+        "npc": [
+            {"kind": "resistance", "key": "DEF"},
+            {"kind": "resistance", "key": "TOUGHNESS"},
+            {"kind": "ability", "key": "ATK"},
+            {"kind": "power", "select": "first_damage"},
+        ],
+    },
+    # Per-card pin strips the GM has since edited, keyed ``"npc:<file name>"`` or
+    # ``"player:<player_id>"``; a card with no entry here starts from
+    # ``gm_default_pins``. Same plain-dict idiom as ``quick_rolls``.
+    #
+    # A player id is session-scoped, so someone who rejoins in a fresh seat starts
+    # from the defaults again. That is the cheap version on purpose: the honest
+    # alternative is per-session state on the server, and pins are a GM's private
+    # scratch note, not table state.
+    "gm_pins": {},
+    # Compact mode — the mini dice roller a window collapses to (see
+    # :mod:`mm_companion.ui.compact`). Read through :func:`compact_settings`.
+    #
+    # Note what is *not* here: whether a window is currently compact. That is a
+    # play-time view switch like the sheet's lock, not a preference, and reopening
+    # into a dice-only window would leave someone hunting for the rest of the app.
+    # ``width``/``height`` of 0 mean "take the theme's compact.width/height", so a
+    # preset with tighter padding still opens at its own size until the user drags
+    # the mini window to one they prefer.
+    "compact": {"on_top": True, "width": 0, "height": 0},
+    # How the dice roller arranges itself as an ordinary sheet block.
+    #
+    # ``"auto"`` lets it reflow to whatever space it is given — a column in the
+    # narrow side strip, one row in a wide bottom one. ``"compact"`` pins the shape
+    # compact mode uses (the roll settings across the top, the quick rolls beside a
+    # smaller die), everywhere and always. It is a preference rather than a mode
+    # because that arrangement turned out to be a good roller in its own right, not
+    # just a way to fit a mini window.
+    "dice_layout": DICE_LAYOUT_AUTO,
 }
 
 
@@ -233,6 +307,22 @@ def pl_enforcement() -> str:
     return value if value in (PL_ENFORCE_WARN, PL_ENFORCE_BLOCK) else PL_ENFORCE_WARN
 
 
+def equipment_enforcement() -> str:
+    """How the builder should treat an Equipment Point overspend — ``warn`` or ``block``.
+
+    The equipment twin of :func:`pl_enforcement`, and the same seam: a red budget bar
+    and a ``⚠`` today, one setting away from refusing the save. Read through here and
+    never off :func:`load_settings`, which returns the file verbatim and so answers
+    ``None`` for any key added after a workspace was created.
+    """
+    value = load_settings().get("equipment_enforcement", EQUIPMENT_ENFORCE_WARN)
+    return (
+        value
+        if value in (EQUIPMENT_ENFORCE_WARN, EQUIPMENT_ENFORCE_BLOCK)
+        else EQUIPMENT_ENFORCE_WARN
+    )
+
+
 def theme_name() -> str:
     """The id of the visual theme preset to use, or ``""`` to take the default.
 
@@ -244,6 +334,102 @@ def theme_name() -> str:
     """
     value = load_settings().get("theme", "")
     return value if isinstance(value, str) else ""
+
+
+def gm_default_pins() -> dict:
+    """What a GM card's pinned-parameter strip starts with, per card kind.
+
+    The one seam for that question, and it exists because of a bug worth stating:
+    :func:`load_settings` returns the settings file **verbatim**, it does not
+    merge :data:`DEFAULT_SETTINGS` in. So a workspace created before this key
+    existed — which is every workspace that predates the feature — answers
+    ``None``, and reading it directly gave every card an empty strip. Every other
+    setting is read through a fallback for the same reason; this is that fallback.
+    """
+    stored = load_settings().get("gm_default_pins")
+    default = DEFAULT_SETTINGS["gm_default_pins"]
+    if not isinstance(stored, dict):
+        return copy.deepcopy(default)  # type: ignore[arg-type]
+    # Per *kind*, not wholesale: a settings file that names only "npc" should
+    # still get the shipped player strip rather than nothing.
+    merged = copy.deepcopy(default)  # type: ignore[arg-type]
+    merged.update({key: value for key, value in stored.items() if isinstance(value, list)})
+    return merged
+
+
+def set_gm_default_pins(pins: dict) -> None:
+    """Write the starting strips, merging *pins* over what is stored per kind.
+
+    The write half of :func:`gm_default_pins`, and it merges for the same reason
+    that one does: a caller naming only ``"npc"`` means "leave the player strip
+    alone", not "reset it to shipped". Note the asymmetry that follows — an
+    **empty list** is a real answer (a GM who wants a card to start bare) and is
+    stored as one, while a *missing* kind is no answer at all.
+    """
+    merged = gm_default_pins()
+    merged.update({key: value for key, value in pins.items() if isinstance(value, list)})
+    update_settings(gm_default_pins=merged)
+
+
+def clear_gm_card_pins() -> None:
+    """Forget every card's own strip, so each seeds from the defaults again.
+
+    The deliberate opposite of the rule :meth:`GMWindow._pins_for` normally keeps
+    — a card's strip is the GM's once the card exists — so it happens only when a
+    GM asks for it outright, from the GM Mode settings page.
+    """
+    update_settings(gm_pins={})
+
+
+def dice_layout() -> str:
+    """How the dice roller arranges itself as a block — ``auto`` or ``compact``.
+
+    The one seam the UI consults, defaulting to :data:`DICE_LAYOUT_AUTO` when unset
+    or unrecognized — the same shape :func:`pl_enforcement` has, and needed for the
+    same reason: :func:`load_settings` returns the file verbatim, so a workspace
+    older than this key answers ``None``.
+    """
+    value = load_settings().get("dice_layout", DICE_LAYOUT_AUTO)
+    return value if value in (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT) else DICE_LAYOUT_AUTO
+
+
+def set_dice_layout(layout: str) -> None:
+    """Choose how the dice roller arranges itself; an unknown value means ``auto``."""
+    known = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT)
+    update_settings(dice_layout=layout if layout in known else DICE_LAYOUT_AUTO)
+
+
+def compact_settings() -> dict:
+    """The mini dice roller's remembered size and its always-on-top preference.
+
+    The same fallback :func:`gm_default_pins` exists for, and for the same reason:
+    :func:`load_settings` hands the file back verbatim, so a workspace older than
+    this key answers ``None``. Merged per key rather than wholesale, so a file
+    naming only ``on_top`` still gets the shipped size.
+    """
+    stored = load_settings().get("compact")
+    merged = copy.deepcopy(DEFAULT_SETTINGS["compact"])  # type: ignore[arg-type]
+    if not isinstance(stored, dict):
+        return merged
+    if isinstance(stored.get("on_top"), bool):
+        merged["on_top"] = stored["on_top"]
+    for key in ("width", "height"):
+        value = stored.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            merged[key] = value
+    return merged
+
+
+def set_compact_settings(**changes: object) -> None:
+    """Write some of the compact-mode preferences, leaving the rest alone.
+
+    The write half of :func:`compact_settings`. Merges for the write half's usual
+    reason: dragging the mini window to a new size must not also reset whether it
+    stays on top.
+    """
+    merged = compact_settings()
+    merged.update({key: value for key, value in changes.items() if key in merged})
+    update_settings(compact=merged)
 
 
 def relay_url() -> str:

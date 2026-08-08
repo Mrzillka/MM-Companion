@@ -29,6 +29,14 @@
       "recovery": "Recovery check bonus, not an ongoing stat",
       "none": "No standing character-sheet stat; used as an action",
       "special": "Custom/narrative effect not mapped to a standard stat"
+    },
+    "applyNote": "statIntegration.apply names WHICH RULE reads a stat effect once its effect is active; core.rules.appliers holds one registered applier per kind and a mod's python_module can register another. Alongside it, amountPerRank (default 1) and amountFlat (default 0) say what the record is worth at a given rank: flat + rank * perRank. All three default to M&M's own rule -- a bonus worth exactly the effect's rank -- so an effect that states none of them behaves as it always has. A record only carries a stat effect at all when it is configurableTarget or names a statIntegration.target.",
+    "applyKey": {
+      "bonus": "Add the amount to the numeric trait the record targets (Enhanced Trait, Protection). A target the sheet does not total contributes nothing.",
+      "penalty_removed": "Cancel that much of a penalty standing on the target, rather than granting a bonus",
+      "penalty_replaced": "Leave a smaller penalty in place of the one standing on the target; the amount is what remains",
+      "speed": "Grant ranks of the named movement mode",
+      "sense": "Grant ranks of the named sense quality"
     }
   },
   "effects": [
@@ -458,7 +466,8 @@
       "configurableTarget": true,
       "statIntegration": {
         "pattern": "passive_permanent",
-        "affects": "ability|skill|defense|resistance"
+        "affects": "ability|skill|defense|resistance",
+        "apply": "bonus"
       },
       "description": "A bonus to a chosen ability, skill, defense, or resistance, held as a power rather than a bought-in trait."
     },
@@ -879,7 +888,8 @@
       "statIntegration": {
         "pattern": "passive_permanent",
         "affects": "defense",
-        "target": "TOUGHNESS"
+        "target": "TOUGHNESS",
+        "apply": "bonus"
       },
       "description": "A standing bonus to Toughness from tough skin, natural armor, or similar."
     },

@@ -1,0 +1,9 @@
+{
+  "id": "field-kit",
+  "name": "Field Kit (sample equipment + stat-applier mod)",
+  "version": "1.0",
+  "description": "A data+Python mod for the equipment layer: adds an Ablative Vest to the armor catalog, a new Ablative Weave base effect behind it, and registers the 'partial_bonus' stat-applier kind that makes the weave grant half its rank. Because it runs code, it must be trusted as well as enabled.",
+  "priority": 30,
+  "files": ["effects.json", "equipment.json"],
+  "python_module": "field_kit_mod"
+}

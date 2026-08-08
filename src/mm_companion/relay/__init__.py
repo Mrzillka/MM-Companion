@@ -39,6 +39,7 @@ import ssl
 import time
 from dataclasses import dataclass, field
 
+from mm_companion.core.session.net import tune_socket
 from mm_companion.core.session.relay import (
     ENVELOPE_ACCEPT,
     ENVELOPE_ERROR,
@@ -93,8 +94,20 @@ class RelayLimits:
     rate_bytes: int = 256 * 1024
     #: Burst allowed above the sustained rate.
     burst_bytes: int = 1024 * 1024
-    #: A connection with no traffic for this long is dropped. The app's control
-    #: link pings well inside it.
+    #: A connection with no traffic for this long is dropped, and its paired half
+    #: with it. "Traffic" is bytes moved in *either* direction — ``last_active`` is
+    #: stamped by both :meth:`RelayServer._read` and :meth:`RelayServer._flush` —
+    #: so being written to keeps a peer alive as surely as writing does. That is
+    #: what makes one keepalive exchange enough for a whole pair: the client's
+    #: ping is a read on its own peer and a write on the session's, and the Pong
+    #: is the reverse.
+    #:
+    #: Everything at a table now keeps its link warm: the GM's control link pings
+    #: every :data:`~mm_companion.core.session.relay.CONTROL_PING_INTERVAL`, and
+    #: every session client every :data:`~mm_companion.core.session.net.KEEPALIVE_INTERVAL`
+    #: (both 30 s). Before protocol v7 nothing did, so a table that was merely
+    #: being roleplayed sent no bytes at all and was reaped mid-session — which is
+    #: why a deployment used to have to raise this.
     idle_timeout: float = 120.0
     #: A session is closed at this age however busy it is.
     session_ttl: float = 12 * 3600.0
@@ -257,6 +270,9 @@ class RelayServer:
         except OSError:
             return
         now = time.monotonic()
+        # Nagle hurts most here: every byte of a table's traffic is forwarded
+        # through this loop, and a delayed ACK on one hop would tax both.
+        tune_socket(sock)
         sock.setblocking(False)
         peer = _Peer(sock, address, now)
         if self._ssl_context is not None:

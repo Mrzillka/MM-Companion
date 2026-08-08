@@ -14,6 +14,13 @@ WorkingDirectory=/home/mm/MM_Companion
 # evening's game; a session parked here by the hub is meant to outlive that, so it
 # is raised to 30 days. The hub re-registers on its own if a link is ever dropped,
 # so this is a safety valve against a leaked session, not the normal path.
+#
+# --idle-timeout is deliberately left at its stock 120 s. It used to be raised to
+# 4 h here, because nothing kept a session's data streams warm and a table that
+# was merely being roleplayed got reaped after two minutes. Protocol v7 fixed
+# that at the source: every client pings every 30 s, and one exchange keeps both
+# halves of a pair alive. See the ordering note in deploy/README.md before
+# applying this to a box a pre-v7 table is still using.
 ExecStart=/home/mm/MM_Companion/.venv/bin/python -m mm_companion.relay \
     --port 47332 \
     --session-ttl 720 \

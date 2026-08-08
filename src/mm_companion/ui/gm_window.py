@@ -61,19 +61,28 @@ from mm_companion.core import library, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.npc import quick_npc
-from mm_companion.core.rules import apply_condition, decrement_condition
+from mm_companion.core.rules import (
+    PinRef,
+    apply_condition,
+    decrement_condition,
+    default_pins,
+    parse_pins,
+)
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import PlayerSlot, SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.compact import CompactController
+from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerPanel
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
+from mm_companion.ui.pin_picker import PinPickerDialog
 from mm_companion.ui.pinned_panel import PinnedBoard
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
@@ -123,6 +132,31 @@ def _next_copy_name(source_name: str, existing: set[str]) -> str:
     return f"{base}-{n}"
 
 
+def _npc_key(file_name: str) -> str:
+    """A pin-store key for an NPC. Its file name is its identity everywhere else."""
+    return f"npc:{file_name}"
+
+
+def _player_key(player_id: str) -> str:
+    """A pin-store key for a seat.
+
+    Keyed by the *public* player id, which is what survives a reconnect
+    (:meth:`~mm_companion.core.session.model.SessionState.player_by_id_if_free`).
+    A player who ends up in a fresh seat starts from the defaults again — pins are
+    a GM's private scratch note, and the honest alternative is session state on
+    the server for something no player should see.
+    """
+    return f"player:{player_id}"
+
+
+def _load_pins() -> dict[str, list[PinRef]]:
+    """Every card's saved pin strip, from settings."""
+    raw = storage.load_settings().get("gm_pins", {})
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): parse_pins(value) for key, value in raw.items()}
+
+
 class GMWindow(QMainWindow):
     """The GM's board: player cards, NPCs, the shared roll log, and a status strip.
 
@@ -170,6 +204,19 @@ class GMWindow(QMainWindow):
         # the loaded model and its transient initiative. Rebuilt on every refresh
         # from disk, carrying the runtime state across.
         self._npc_state: dict[str, _NpcEntry] = {}
+        # What each card has pinned, keyed ``"npc:<file>"`` / ``"player:<id>"``.
+        # Loaded once here rather than read per card: a card is rebuilt on every
+        # refresh, and re-reading settings each time would make a strip's contents
+        # depend on how recently the file was written.
+        self._pins: dict[str, list[PinRef]] = _load_pins()
+        # Pin pickers open on a card, keyed the same way, kept referenced while up.
+        self._pin_pickers: dict[str, PinPickerDialog] = {}
+        # Sheets opened from a card, so a change to that card's strip can be pushed
+        # into their row menus. A list per card: an NPC's sheet and a player's are
+        # both singular in practice, but nothing here needs to insist on it.
+        self._pin_sheets: dict[str, list] = {}
+        # The Settings window, kept referenced while open like the sheets above.
+        self._settings_window: QWidget | None = None
         # The manual (un-rolled) order of the cast, by file name. Rolled NPCs sort
         # above this by initiative; dragging a card sets its place here.
         self._manual_order: list[str] = []
@@ -225,14 +272,30 @@ class GMWindow(QMainWindow):
         self._board = PinnedBoard(self._scroll, self._canvas)
         self._canvas.set_pinned_board(self._board)
 
+        # Everything that is the GM window proper, so compact mode can hide it in
+        # one move and the window is free to shrink to the roller alone.
+        self._full = QWidget()
+        full_layout = QVBoxLayout(self._full)
+        full_layout.setContentsMargins(0, 0, 0, 0)
+        full_layout.addWidget(self._board, stretch=1)
+        # A persistent strip along the bottom, not a draggable block: the hosting
+        # status and the reachability advice, then a transient notice line.
+        full_layout.addWidget(self._build_status_strip())
+        full_layout.addWidget(self._build_notice())
+
+        # The same compact mode a player's sheet has, over the same roller — the
+        # GM's is a bare panel beside a GM history rather than a DiceRollerView, so
+        # this window supplies its own release_roller/restore_roller, and its own
+        # compact_anchor for the round shrink button to float over.
+        # The mini window's caption follows `windowTitleChanged`, so it picks up
+        # the session name this window retitles itself with on its own.
+        self._compact = CompactController(self, self, self._full)
+
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.addWidget(self._board, stretch=1)
-        # A persistent strip along the bottom, not a draggable block: the hosting
-        # status and the reachability advice, then a transient notice line.
-        central_layout.addWidget(self._build_status_strip())
-        central_layout.addWidget(self._build_notice())
+        central_layout.addWidget(self._full, stretch=1)
+        central_layout.addWidget(self._compact.page)
         self.setCentralWidget(central)
 
         self._canvas.arrangement_changed.connect(self._update_min_width)
@@ -257,11 +320,14 @@ class GMWindow(QMainWindow):
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extra + 2)
 
     def _build_menu(self) -> None:
-        """A Session menu (copy the join code) and a View menu (show/hide blocks)."""
+        """Session (copy the join code), Settings, and View (show/hide blocks)."""
         session_menu = self.menuBar().addMenu("&Session")
         self._copy_code_action = session_menu.addAction("Copy join code")
         self._copy_code_action.setEnabled(False)
         self._copy_code_action.triggered.connect(self._copy_code)
+
+        settings_menu = self.menuBar().addMenu("&Settings")
+        settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
 
         view_menu = self.menuBar().addMenu("&View")
         self._block_actions: dict[str, object] = {}
@@ -274,6 +340,12 @@ class GMWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
+
+        # The notice strip below fades after ten seconds by design; this does not.
+        # It is the only place a GM can look to see whether their table is still
+        # reachable — including the case where hosting is fine but the relay
+        # registration died and no new player can get in.
+        install_connection_indicator(self).set_bridge(self._bridge)
 
     def _on_block_toggled(self, key: str, visible: bool) -> None:
         if visible:
@@ -312,8 +384,15 @@ class GMWindow(QMainWindow):
                 pass
 
     def _persist_layout(self) -> None:
-        """Save the GM window's geometry and block arrangement as a global preference."""
-        geometry = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        """Save the GM window's geometry and block arrangement as a global preference.
+
+        A window closed while compact is remembered at the size it was *before* it
+        shrank; the mini window's own size is kept separately (see
+        :mod:`mm_companion.ui.compact`).
+        """
+        self._compact.remember_size()
+        state = self._compact.saved_geometry() or self.saveGeometry()
+        geometry = bytes(state.toBase64()).decode("ascii")
         try:
             storage.update_settings(
                 gm_layout={
@@ -413,8 +492,11 @@ class GMWindow(QMainWindow):
         — so it is not hidden by the players' apps agreeing to ignore it, it
         simply never reaches them.
         """
-        box = QGroupBox("Rolls")
-        layout = QHBoxLayout(box)
+        # Held so compact mode can take the roller out and put it back, and so the
+        # shrink button has something to float over; see :meth:`release_roller`
+        # and :meth:`compact_anchor`.
+        self._rolls_box = box = QGroupBox("Rolls")
+        self._rolls_layout = layout = QHBoxLayout(box)
 
         self._roller = DiceRollerPanel(hidden_option=True)
         # While hosting, a roll made here goes through the server like everyone
@@ -438,6 +520,40 @@ class GMWindow(QMainWindow):
         self._roller.sessionRollRevealed.connect(self._history.release_roll)
         layout.addWidget(self._history, stretch=1)
         return box
+
+    # -- compact mode --------------------------------------------------------
+
+    def release_roller(self) -> tuple[QWidget, QWidget]:
+        """Lend the roller and the shared history to compact mode.
+
+        The GM window's roll surface is a bare panel beside a GM history rather
+        than a :class:`~mm_companion.ui.dice_roller.DiceRollerView`, so it answers
+        the borrow itself. Same contract, same reason for it: these are the live
+        widgets, still attached to the table, so the GM's hidden-roll switch and
+        the ✕ on every card carry into the mini window unchanged.
+        """
+        for widget in (self._roller, self._history):
+            self._rolls_layout.removeWidget(widget)
+        return (self._roller, self._history)
+
+    def compact_anchor(self) -> QWidget:
+        """What the shrink button floats over: the Rolls block, history and all."""
+        return self._rolls_box
+
+    def suspend_windows(self, suspended: bool) -> None:
+        """Stand this window's floated blocks down while it is compact (pinned ones stay)."""
+        self._canvas.set_windows_suspended(suspended)
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the roller's layout preference (see ``MainWindow.sync_dice_layout``)."""
+        self._roller.set_layout_preference(storage.dice_layout() == storage.DICE_LAYOUT_COMPACT)
+
+    def restore_roller(self) -> None:
+        """Take the roller and the history back into the Rolls block."""
+        self._rolls_layout.addWidget(self._roller)
+        self._rolls_layout.addWidget(self._history, stretch=1)
+        self._roller.show()
+        self._history.show()
 
     def _sync_quick_roll_state(self) -> None:
         """Push the roller's quick-roll strip into the history's stars."""
@@ -790,6 +906,11 @@ class GMWindow(QMainWindow):
     def _on_player_joined(self, payload: dict) -> None:
         player = payload.get("player", {})
         name = str(player.get("display_name", "")) or "A player"
+        # A returning player is not news the same way a new one is, and saying
+        # "joined" for both is what made a reconnect look like a second arrival.
+        if payload.get("adopted") or not payload.get("new", True):
+            self._show_notice(f"{name} rejoined.", theme.color("tint.better"))
+            return
         self._show_notice(f"{name} joined.", theme.color("tint.better"))
 
     def _on_refused(self, payload: dict) -> None:
@@ -828,6 +949,11 @@ class GMWindow(QMainWindow):
                 card.removeConditionRequested.connect(self._remove_condition)
                 card.setHeroPointsRequested.connect(self._set_hero_points)
                 card.removePlayerRequested.connect(self._remove_player)
+                card.pinsChanged.connect(lambda pid, refs: self._store_pins(_player_key(pid), refs))
+                card.loadRequested.connect(self._roller.load_spec)
+                card.rollRequested.connect(self._roller.roll_spec)
+                card.pinPickerRequested.connect(self._open_player_pin_picker)
+                card.pins.set_pins(self._pins_for(_player_key(player_id), "player"))
                 self._cards[player_id] = card
                 self._cards_flow.addWidget(card)
             card.set_roster(entry)
@@ -863,7 +989,14 @@ class GMWindow(QMainWindow):
         previous = self._player_windows.pop(player_id, None)
         if previous is not None:
             previous.close()
-        window = MainWindow(character=self._character_from_snapshot(snapshot), gm_view=True)
+        window = MainWindow(
+            character=self._character_from_snapshot(snapshot),
+            gm_view=True,
+            pin_target=True,
+        )
+        card = self._cards.get(player_id)
+        if card is not None:
+            self._attach_pin_sheet(window, card)
         self._player_windows[player_id] = window
         window.show()
         window.raise_()
@@ -895,10 +1028,19 @@ class GMWindow(QMainWindow):
         """
         card = self._cards.get(player_id)
         name = card.display_name() if card is not None else "this player"
+        # Do not promise to disconnect someone who already is: a GM clearing a
+        # seat after the session wants to be told what actually happens, and
+        # "they will be disconnected" reads as a warning not to.
+        online = card is not None and card.connected
+        detail = (
+            "They will be disconnected."
+            if online
+            else "They are already offline; this clears their seat."
+        )
         confirm = QMessageBox.question(
             self,
-            "Remove player",
-            f"Remove {name} from the session? They will be disconnected.",
+            "Remove player" if online else "Remove seat",
+            f"Remove {name} from the session? {detail}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -980,12 +1122,153 @@ class GMWindow(QMainWindow):
                 break
         card.setParent(None)
         card.deleteLater()
+        self._forget_pins(_player_key(player_id))
 
     def _clear_cards(self) -> None:
         for player_id in list(self._cards):
             self._drop_card(player_id)
         self._snapshots.clear()
         self._no_players.setVisible(True)
+
+    # -- pinned parameters ---------------------------------------------------
+
+    def _pins_for(self, key: str, kind: str) -> list[PinRef]:
+        """This card's strip, seeding it from the defaults the first time.
+
+        Seeded and *stored* on first sight rather than left to fall through to the
+        defaults on every read: once a card exists, its strip is the GM's, and a
+        later change to ``gm_default_pins`` must not silently rearrange the cards
+        already on the board.
+        """
+        if key not in self._pins:
+            self._pins[key] = default_pins(kind, storage.gm_default_pins())
+            self._persist_pins()
+        return self._pins[key]
+
+    def reseed_pins_from_defaults(self) -> None:
+        """Throw every card's own strip away and seed them all from the defaults.
+
+        The deliberate exception to the rule :meth:`_pins_for` keeps — a card's
+        strip is the GM's once the card exists — so nothing calls this but the GM
+        Mode settings page, on an explicit, confirmed ask.
+
+        Cleared first, then re-seeded card by card: what that drops is the entries
+        for cards *not* on the board (a player who left, an NPC file not loaded),
+        which is the point. Those are gone from the settings file, so they seed
+        from the new defaults the next time they are seen.
+        """
+        defaults = storage.gm_default_pins()
+        self._pins.clear()
+        cards = [(_player_key(pid), "player", card) for pid, card in self._cards.items()]
+        cards += [
+            (_npc_key(name), "npc", entry.card)
+            for name, entry in self._npc_state.items()
+            if entry.card is not None
+        ]
+        for card_key, kind, card in cards:
+            refs = default_pins(kind, defaults)
+            # set_pins is silent by design (a load, not an edit), so the strip is
+            # stored explicitly — which is also what restates an open picker or sheet.
+            card.pins.set_pins(refs)
+            self._store_pins(card_key, refs)
+        self._persist_pins()
+
+    def _store_pins(self, card_key: str, refs: object) -> None:
+        """A card's strip was edited — remember it, and restate it everywhere.
+
+        Both a picker and an opened sheet offer to pin *and* to unpin, and each
+        picks which from what it was last told is on the card. So a change made in
+        any of the three has to reach the other two, or a menu ends up offering to
+        pin something that is already there.
+        """
+        self._pins[card_key] = list(refs) if isinstance(refs, list) else []
+        self._persist_pins()
+        picker = self._pin_pickers.get(card_key)
+        if picker is not None:
+            picker.set_pinned(self._pins[card_key])
+        for window in self._pin_sheets.get(card_key, ()):
+            window.sheet.set_pinned(self._pins[card_key])
+
+    def _persist_pins(self) -> None:
+        """Write every card's strip, **including the empty ones**.
+
+        An empty list is not the absence of an answer: it is a GM who took every
+        chip off that card on purpose, and :meth:`_pins_for` seeds the defaults
+        for a key it has never seen. Dropping the empty ones to keep the settings
+        file tidy meant a cleared strip was back at four chips after a restart.
+        """
+        storage.update_settings(
+            gm_pins={key: [ref.to_dict() for ref in refs] for key, refs in self._pins.items()}
+        )
+
+    def _open_player_pin_picker(self, player_id: str) -> None:
+        card = self._cards.get(player_id)
+        if card is None or card.character is None:
+            return
+        self._open_pin_picker(_player_key(player_id), card, card.character, card.display_name())
+
+    def _open_npc_pin_picker(self, name: str) -> None:
+        entry = self._npc_state.get(name)
+        if entry is None or entry.card is None:
+            return
+        self._open_pin_picker(_npc_key(name), entry.card, entry.character, entry.summary.name)
+
+    def _open_pin_picker(self, card_key: str, card, character: Character, title: str) -> None:
+        """Open (or raise) the picker for one card, wired to that card's strip.
+
+        Modeless, so the GM can pin several things in a row and watch the card
+        fill in — which means the dialog outlives this call and has to be kept
+        referenced, and dropped again when it closes.
+        """
+        existing = self._pin_pickers.get(card_key)
+        if existing is not None:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+        picker = PinPickerDialog(character, self._data, card.pins.pins, self, title=title)
+        picker.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        picker.pinRequested.connect(card.pins.add_pin)
+        picker.unpinRequested.connect(card.pins.remove_ref)
+        picker.destroyed.connect(lambda *_: self._pin_pickers.pop(card_key, None))
+        self._pin_pickers[card_key] = picker
+        picker.show()
+
+    def _attach_pin_sheet(self, window, card) -> None:
+        """Wire a sheet opened from *card* to that card's strip, both directions.
+
+        The sheet's rows pin and unpin onto the card; the card tells the sheet what
+        is on it, now and on every later change, so a sheet left open beside the
+        card never goes stale.
+        """
+        card_key = self._card_key(card)
+        window.pinRequested.connect(card.pins.add_pin)
+        window.unpinRequested.connect(card.pins.remove_ref)
+        window.sheet.set_pinned(card.pins.pins)
+        sheets = self._pin_sheets.setdefault(card_key, [])
+        sheets.append(window)
+        window.destroyed.connect(lambda *_: self._drop_pin_sheet(card_key, window))
+
+    def _drop_pin_sheet(self, card_key: str, window) -> None:
+        sheets = self._pin_sheets.get(card_key)
+        if sheets is None:
+            return
+        self._pin_sheets[card_key] = [w for w in sheets if w is not window]
+
+    @staticmethod
+    def _card_key(card) -> str:
+        """A card's pin-store key, from whichever identity that card carries."""
+        name_key = getattr(card, "name_key", "")
+        return _npc_key(name_key) if name_key else _player_key(card.player_id)
+
+    def _forget_pins(self, card_key: str) -> None:
+        """Drop a card's strip for good — the seat or the NPC is gone."""
+        picker = self._pin_pickers.pop(card_key, None)
+        if picker is not None:
+            picker.close()
+        self._pin_sheets.pop(card_key, None)
+        if self._pins.pop(card_key, None) is not None:
+            self._persist_pins()
 
     # -- NPCs ---------------------------------------------------------------
 
@@ -1080,6 +1363,11 @@ class GMWindow(QMainWindow):
             card.reorderRequested.connect(self._reorder_npc)
             card.reorderPreview.connect(self._show_npc_drop_indicator)
             card.reorderPreviewEnded.connect(self._npc_drop_indicator.hide_indicator)
+            card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
+            card.loadRequested.connect(self._roller.load_spec)
+            card.rollRequested.connect(self._roller.roll_spec)
+            card.pinPickerRequested.connect(self._open_npc_pin_picker)
+            card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
             entry.card = card
             self._npc_flow.addWidget(card)
         self._no_npcs.setVisible(not self._npc_state)
@@ -1223,6 +1511,12 @@ class GMWindow(QMainWindow):
         existing = {other.summary.name for other in self._npc_state.values()}
         copy.profile["hero_name"] = _next_copy_name(entry.summary.name, existing)
         path = library.save_character(copy, directory=self._npc_dir())
+        # The duplicate is the same creature under a new name, so it starts with
+        # the same strip rather than back at the defaults.
+        pins = self._pins.get(_npc_key(name))
+        if pins:
+            self._pins[_npc_key(path.name)] = list(pins)
+            self._persist_pins()
         self._register_npc(path)
 
     def _open_npc(self, name: str) -> None:
@@ -1241,7 +1535,10 @@ class GMWindow(QMainWindow):
             existing.raise_()
             existing.activateWindow()
             return
-        self._track_npc_window(NPCWindow(character=library.load_character(path), path=path))
+        window = NPCWindow(character=library.load_character(path), path=path, pin_target=True)
+        if entry.card is not None:
+            self._attach_pin_sheet(window, entry.card)
+        self._track_npc_window(window)
 
     def _track_npc_window(self, window: NPCWindow) -> None:
         """Show an NPC sheet and keep it alive, watching for saves and its close."""
@@ -1286,6 +1583,10 @@ class GMWindow(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         library.delete_character(entry.path)
+        # Only a *deletion* forgets the strip. Taking an NPC out of the session
+        # leaves its file, and a GM who adds it back next week should find their
+        # pins where they left them.
+        self._forget_pins(_npc_key(name))
         self._remove_npc(name)
 
     # -- NPC conditions -----------------------------------------------------
@@ -1335,6 +1636,12 @@ class GMWindow(QMainWindow):
                 pass  # an unwritable workspace is not worth a dialog mid-session
         if entry.card is not None:
             entry.card.refresh_conditions()
+            # And the pinned numbers, which a condition moves: a Vulnerable NPC's
+            # Defence chip must read what the GM should actually use. The chips
+            # resolve from the model, so this is only a matter of asking them to.
+            # (A player's card gets this for free — a condition there comes back as
+            # a fresh snapshot, which restates the whole card.)
+            entry.card.pins.refresh()
 
     # -- small view helpers ------------------------------------------------
 
@@ -1391,6 +1698,20 @@ class GMWindow(QMainWindow):
         if clipboard is not None:
             clipboard.setText(self._join_code)
         self._show_notice("Join code copied — send it to your players.", theme.color("accent"))
+
+    def _open_settings(self) -> None:
+        """Open the Settings window on the GM page (Settings ▸ Preferences).
+
+        The same window the character sheet opens, landing on the page this window
+        is the one that cares about. Imported here rather than at module scope, the
+        way the sheet's opener does it, and kept referenced so it is not collected
+        the moment this method returns.
+        """
+        from mm_companion.ui.settings import GMPage, SettingsWindow
+
+        window = SettingsWindow(page=GMPage.title)
+        self._settings_window = window
+        window.show()
 
     # -- lifecycle ---------------------------------------------------------
 

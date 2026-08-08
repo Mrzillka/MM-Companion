@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -67,12 +67,51 @@ EMPTY_TEXT = "No rolls yet — every roll at this table shows up here."
 #: block, a reflow would read that sliver as "a row fits here").
 MIN_HISTORY_WIDTH = 260
 
-#: Shortest a roll history may get, for the same reason and pinned in the same two
-#: places. A card is roughly 70px tall, so this is two of them and the start of a
-#: third — enough that the list reads as a list. Without it the scroll area gives
-#: its height away just as readily as its width, and at the Dice block's minimum
-#: the history collapses to about one card.
+#: How tall a roll history *asks* to be. A card is roughly 70px, so this is two of
+#: them and the start of a third — enough that the list reads as a list. It is the
+#: history's size **hint**, deliberately not its minimum: see
+#: :data:`HISTORY_FLOOR_HEIGHT`.
 MIN_HISTORY_HEIGHT = 200
+
+#: Shortest a roll history may actually be squeezed to — one card.
+#:
+#: The distinction between this and :data:`MIN_HISTORY_HEIGHT` is the whole fix for
+#: a bug worth remembering. A block's minimum is its *content's* height
+#: (``BlockFrame.minimumSizeHint``), and the strip propagates that up to hold the
+#: window open. With 200px pinned as a hard minimum, the history could never give
+#: a pixel back — so the moment the roll panel grew (a stat clicked on the sheet
+#: shows the spec chip) the whole Dice block grew with it, past the window, and the
+#: strip answered with a scrollbar. The history is the elastic part of that block:
+#: it is a list, it has its own scroll area, and shortening it is the honest way to
+#: find room. So the *hint* asks for two cards and this floor is what it will
+#: settle for. The width has no such split — the reflow's row/column decision reads
+#: :data:`MIN_HISTORY_WIDTH` as a real minimum.
+HISTORY_FLOOR_HEIGHT = 90
+
+
+def size_history_scroll(scroll: QScrollArea) -> None:
+    """Give a history's scroll area its floors, and hand back the size to ask for.
+
+    Both histories — the private :class:`~mm_companion.ui.dice_roller.LocalRollHistory`
+    and the shared :class:`RollHistoryPanel` — are the same widget in every way
+    that matters to a layout: a scrolling list of the same cards. So the three
+    numbers that make one behave live here once, rather than being restated in a
+    module that only differs in where its cards come from.
+
+    Pair it with ``sizeHint`` returning :data:`HISTORY_SIZE_HINT`, which is the
+    half a scroll area cannot be told: left alone it reports its *inner widget's*
+    hint, so a history grew with every roll — and since a block's minimum is its
+    content's preferred height, the Dice block's minimum climbed all session until
+    the pinned strip could no longer fit it. A history is a scrolling list; what it
+    wants is a readable window onto the log, not the whole log.
+    """
+    scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
+    scroll.setMinimumHeight(HISTORY_FLOOR_HEIGHT)
+
+
+#: What a history asks for: two cards' worth, however long the log actually is.
+#: See :func:`size_history_scroll` for the half of the bargain it belongs to.
+HISTORY_SIZE_HINT = QSize(MIN_HISTORY_WIDTH, MIN_HISTORY_HEIGHT)
 
 #: How many quick rolls the strip holds. A cap rather than a scroll: the strip
 #: shares the Dice block with the roll controls and the die, so an unbounded list
@@ -505,9 +544,12 @@ class RollHistoryPanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(self._container)
-        self._scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
-        self._scroll.setMinimumHeight(MIN_HISTORY_HEIGHT)
+        size_history_scroll(self._scroll)
         layout.addWidget(self._scroll)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Two cards' worth, however long the log is — see :func:`size_history_scroll`."""
+        return HISTORY_SIZE_HINT
 
     # -- the quick-roll strip's state --------------------------------------
 

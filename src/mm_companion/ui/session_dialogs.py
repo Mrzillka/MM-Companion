@@ -339,12 +339,16 @@ class JoinSessionDialog(QDialog):
         self.setMinimumWidth(560)
         self._code: discovery.JoinCode | None = None
         self._character_box: QComboBox | None = None
-        # The slot to reclaim if a history row is chosen and its code is unchanged.
-        self._reclaim: tuple[str, str] = ("", "")
-        self._reclaim_code = ""
 
         settings = storage.load_settings()
         history = load_session_history()
+        # Every session this player has joined before, by its code. Reclaiming a
+        # seat is resolved from *what is in the box* rather than from a selected
+        # row: pasting a code by hand, or leaving the prefilled newest one alone,
+        # is the same return visit as clicking its row — and used to be treated
+        # as a first join, which is how a reconnecting player grew a second card
+        # on the GM's board while their first sat there greyed out.
+        self._history_by_code = {str(entry["code"]): entry for entry in history}
 
         layout = QVBoxLayout(self)
 
@@ -385,9 +389,6 @@ class JoinSessionDialog(QDialog):
         newest_code = history[0]["code"] if history else ""
         self._code_edit = QLineEdit(newest_code)
         self._code_edit.setPlaceholderText("the code your GM sent you")
-        # Typing a fresh code means this is not a return to the selected session,
-        # so the reclaimed seat no longer applies.
-        self._code_edit.textEdited.connect(lambda _text: self._clear_reclaim())
         form.addRow("Join code", self._code_edit)
 
         self._name_edit = QLineEdit(str(settings.get("session_player_name", "")))
@@ -445,12 +446,14 @@ class JoinSessionDialog(QDialog):
     def reclaim_ids(self) -> tuple[str, str]:
         """``(player_id, player_token)`` to reclaim a seat, or ``("", "")``.
 
-        Only meaningful when a history row was chosen and its code is unchanged —
-        those ids belong to that one session and would be refused by any other.
+        Resolved from the join code currently in the box. Those ids belong to one
+        session and would be refused by any other, so a code we have never seen
+        correctly yields nothing.
         """
-        if self.code_text() == self._reclaim_code:
-            return self._reclaim
-        return ("", "")
+        entry = self._history_by_code.get(self.code_text())
+        if entry is None:
+            return ("", "")
+        return (str(entry.get("player_id", "")), str(entry.get("player_token", "")))
 
     # -- previous sessions -------------------------------------------------
 
@@ -474,20 +477,17 @@ class JoinSessionDialog(QDialog):
         return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
 
     def _on_history_selected(self) -> None:
-        """Fill the code and name from a chosen previous session, and arm reclaim."""
+        """Fill the code and name from a chosen previous session.
+
+        Only fills the fields — the seat follows from the code itself, see
+        :meth:`reclaim_ids`.
+        """
         entry = self._selected_history_entry()
         if entry is None:
             return
-        code = str(entry.get("code", ""))
-        self._code_edit.setText(code)
+        self._code_edit.setText(str(entry.get("code", "")))
         if entry.get("display_name"):
             self._name_edit.setText(str(entry["display_name"]))
-        self._reclaim = (str(entry.get("player_id", "")), str(entry.get("player_token", "")))
-        self._reclaim_code = code
-
-    def _clear_reclaim(self) -> None:
-        self._reclaim = ("", "")
-        self._reclaim_code = ""
 
     def _forget_selected(self) -> None:
         """Remove the selected previous session from the table and from settings."""
@@ -498,7 +498,11 @@ class JoinSessionDialog(QDialog):
             return
         row = rows[0].row()
         entry = self._selected_history_entry() or {}
-        remove_session_history(str(entry.get("code", "")))
+        code = str(entry.get("code", ""))
+        remove_session_history(code)
+        # Forgotten means forgotten: leaving it in the lookup would let the same
+        # code silently reclaim a seat the player just asked us to drop.
+        self._history_by_code.pop(code, None)
         self._history_table.removeRow(row)
 
     # -- validation --------------------------------------------------------

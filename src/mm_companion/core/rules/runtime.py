@@ -1,9 +1,10 @@
 """Runtime power state and standing trait bonuses (lowest rules layer).
 
 Which passive effect is currently on (gating), array/live-power selection, and the
-per-trait bonuses a character's active powers add. Everything that reads an
-"effective" trait builds on this module, so it takes no dependency on the rest of
-the rules package.
+stat contributions a character's active powers make. Everything that reads an
+"effective" trait builds on this module, so it depends on nothing in the rules
+package except :mod:`.appliers` — which decides what a stat effect *means* once
+this module has decided it is on.
 """
 
 from __future__ import annotations
@@ -22,25 +23,28 @@ from ..components import (
     RESOURCE_POOL,
 )
 from ..data_loader import GameData
+from ..equipment import EquipmentItem
 from ..powers import STRUCTURE_ARRAY, Power, PowerEffectInstance, PowerGroup, PowerNode
 from ..registry import Registry
+from .accessories import item_effective_build
+from .appliers import (
+    BOOST_TRAIT_CATEGORIES,
+    GROUP_EQUIPMENT,
+    GROUP_POWERS,
+    NUMERIC_CATEGORIES,
+    STACK_MAX,
+    STACK_SUM,
+    ApplyContext,
+    TraitBonus,
+    TraitContribution,
+    apply_stat_effect,
+    resolve_bonuses,
+)
 
 # The trait categories a ``TraitBoost`` can name that map to a numeric trait bonus on
-# the sheet (``defense`` resistances live in the resistances list).
-TRAIT_CATEGORIES = frozenset({"ability", "resistance", "defense", "skill"})
-
-
-@dataclass(frozen=True)
-class TraitBonus:
-    """A standing bonus a character's powers add to one trait.
-
-    ``amount`` is the summed bonus; ``sources`` names each contributing power (its
-    name, or the effect's name when the power is unnamed) so the UI can explain the
-    boost on a tooltip.
-    """
-
-    amount: int
-    sources: tuple[str, ...]
+# the sheet. Defined by (and shared with) the ``bonus`` applier that enforces it; kept
+# under this name because the constructor's target picker reads it from here.
+TRAIT_CATEGORIES = BOOST_TRAIT_CATEGORIES
 
 
 # --- statIntegration pattern registry -------------------------------------------------
@@ -92,31 +96,29 @@ def _gate_toggle(power: Power, effect: PowerEffectInstance) -> bool:
     return not effect.toggled_on
 
 
-def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
-    """The trait key one effect boosts, or ``""`` when it isn't a trait booster.
+def _boost_target(effect: PowerEffectInstance, boost) -> str:
+    """The trait a :class:`TraitBoost` names, whatever kind of trait it is.
 
-    Reads the effect's :class:`~mm_companion.core.components.TraitBoost` component:
-    the target is the player's choice (``config['target']``) for a ``configurable``
-    boost or the baked-in ``target`` (e.g. Protection) otherwise, and only when the
-    boost's ``affects`` names a numeric trait category.
+    The player's choice (``config['target']``) for a ``configurable`` boost, the
+    baked-in ``target`` (e.g. Protection's ``"TOUGHNESS"``) otherwise. Unfiltered:
+    deciding whether the named trait is one the sheet totals is the *applier's* job
+    (:mod:`.appliers`), since a movement or sense grant names a target too.
+    """
+
+    return (effect.config.get("target", "") if boost.configurable else boost.target) or ""
+
+
+def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
+    """The **numeric** trait key one effect boosts, or ``""`` when it isn't one.
+
+    :func:`_boost_target` narrowed to the boosts whose ``affects`` names a numeric
+    trait category — what the game-terms summary renders a "Trait +N" line for.
     """
 
     boost = base.integration.trait_boost if base.integration else None
     if boost is None or not (boost.affects & TRAIT_CATEGORIES):
         return ""
-    target = effect.config.get("target", "") if boost.configurable else boost.target
-    return target or ""
-
-
-def _trait_category(game_data: GameData, target: str) -> str:
-    """Which trait list ``target`` belongs to — ``ability``/``resistance``/``skill``, or ``""``."""
-    if any(a.key == target for a in game_data.abilities):
-        return "ability"
-    if any(r.key == target for r in game_data.resistances):
-        return "resistance"
-    if any(s.name == target for s in game_data.skills):
-        return "skill"
-    return ""
+    return _boost_target(effect, boost)
 
 
 def _trait_name(game_data: GameData, target: str) -> str:
@@ -313,50 +315,146 @@ def power_has_custom_modifier(power: Power, game_data: GameData) -> bool:
     return False
 
 
+def build_contributions(
+    power: Power,
+    char: Character,
+    game_data: GameData,
+    *,
+    stacking: str = STACK_SUM,
+    group: str = GROUP_POWERS,
+    origin: str = "",
+) -> tuple[TraitContribution, ...]:
+    """Every stat contribution **one** assembled build currently makes.
+
+    An effect contributes when it carries a
+    :class:`~mm_companion.core.components.TraitBoost` — an Enhanced-Trait-style boost
+    (``configurable``, the target read from the instance ``config['target']``) or a
+    fixed-target one like Protection — *and* is currently active
+    (:func:`effect_is_active`, so a switched-off or suppressed one drops out).
+
+    What the record then *means* is not decided here: the boost's ``apply`` kind picks
+    an applier out of :data:`~.appliers.STAT_APPLIERS`, which yields the contributions
+    (a numeric trait bonus for ``bonus``, a movement grant for ``speed``, and so on).
+
+    ``stacking`` and ``group`` are the *granter's* terms and travel onto every
+    contribution: a power stacks within the Power-Point group, a worn item is
+    exclusive within the equipment one. This is the seam equipment shares with
+    powers — an item's :attr:`~mm_companion.core.equipment.EquipmentItem.build` is a
+    real :class:`~mm_companion.core.powers.Power`, so it is gathered by this same
+    function rather than a parallel one that could drift.
+
+    ``origin`` travels the same way and identifies the *granter itself* rather than
+    what it is called, so a card can recognise its own superseded bonus among several
+    identically named ones (see :class:`~.appliers.TraitContribution`). Powers pass
+    none: a power's card explains itself from its own build.
+    """
+
+    contributions: list[TraitContribution] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None or base.integration is None:
+            continue
+        boost = base.integration.trait_boost
+        if boost is None:
+            continue  # not a stat effect at all
+        if not effect_is_active(power, effect, base, game_data, char):
+            continue  # switched off, suppressed, or not a standing bonus
+        context = ApplyContext(
+            record=boost,
+            rank=effect.rank,
+            target=_boost_target(effect, boost),
+            source=power.name or base.name,
+            game_data=game_data,
+            stacking=stacking,
+            group=group,
+            origin=origin,
+        )
+        contributions.extend(apply_stat_effect(boost.apply, context))
+    return tuple(contributions)
+
+
+def power_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
+    """Every stat contribution the character's live powers currently make.
+
+    :func:`build_contributions` over every :func:`live_powers` build. Everything a
+    power grants is bought with Power Points, so it is gathered into the
+    :data:`~.appliers.GROUP_POWERS` group as a stacking contribution — several powers
+    boosting one trait add up, exactly as they always have.
+    """
+
+    contributions: list[TraitContribution] = []
+    for power in live_powers(char.powers):
+        contributions.extend(
+            build_contributions(power, char, game_data, stacking=STACK_SUM, group=GROUP_POWERS)
+        )
+    return tuple(contributions)
+
+
+def worn_items(char: Character) -> list[EquipmentItem]:
+    """The character's gear that is currently being worn or carried.
+
+    Wearing is the equipment answer to a power's on/off switch, and it is *runtime*
+    state: an item the player has taken off keeps its Equipment Point price (it is
+    still owned — see :func:`~.equipment.equipment_points_spent`) but grants nothing.
+    """
+
+    return [item for item in char.equipment if item.worn]
+
+
+def equipment_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
+    """Every stat contribution the character's **worn** gear currently makes.
+
+    The equipment twin of :func:`power_contributions`, and deliberately the same code
+    underneath (:func:`build_contributions`) — an item is a real build, so anything
+    true of a power's Protection is true of a suit of armour's.
+
+    Two things differ, and both are the no-stacking rule
+    (``docs/mm-equipment-design.md`` §3). The contributions land in the
+    :data:`~.appliers.GROUP_EQUIPMENT` group, which is compared against the powers
+    group with ``max`` rather than added to it; and within that group each item is
+    :data:`~.appliers.STACK_MAX` — only the best piece of armour counts — unless its
+    owner ticked :attr:`~mm_companion.core.equipment.EquipmentItem.stacks`, the
+    per-item homerule that opts one item back into adding on top.
+
+    Gathered off the item's **effective** build, so an accessory carrying a trait boost
+    of its own grants it: a fitted accessory is off
+    :attr:`~mm_companion.core.character.Character.equipment`, and the loop above would
+    walk straight past it. The contribution's ``origin`` stays the *host's* id, which is
+    the honest answer — the host's card is what has to explain the bonus, and a fitted
+    accessory has no card of its own to put it on.
+    """
+
+    contributions: list[TraitContribution] = []
+    for item in worn_items(char):
+        contributions.extend(
+            build_contributions(
+                item_effective_build(item, game_data),
+                char,
+                game_data,
+                stacking=STACK_SUM if item.stacks else STACK_MAX,
+                group=GROUP_EQUIPMENT,
+                origin=item.id,
+            )
+        )
+    return tuple(contributions)
+
+
 def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:
     """Trait bonuses every saved power grants, grouped ``category -> {key: TraitBonus}``.
 
-    A power enhances a trait when one of its effects is a trait booster — an
-    Enhanced-Trait-style effect (a configurable :class:`TraitBoost`, the target read
-    from the instance ``config['target']``) or a fixed-target one like Protection
-    (the target baked into the boost) — its ``affects`` names a trait category, *and*
-    the effect is currently active (:func:`effect_is_active`, so a switched-off or
-    suppressed power drops out). The bonus is the effect's rank, added to the resolved
-    target; the category is inferred from which trait list the target key belongs to
-    (abilities, resistances, or skills). Effects that boost non-numeric traits (senses,
-    movement) or carry no resolvable target are skipped. Multiple powers stack.
+    The numeric view of :func:`power_contributions`, netted by
+    :func:`~.appliers.resolve_contributions`: the three trait lists the sheet totals
+    (abilities, resistances, skills), each always present so a caller can index
+    straight in. Contributions in the other categories — a movement or sense grant, a
+    penalty removal — are deliberately dropped here; they have their own readers.
+
+    This is the *powers-only* view, which is what the Abilities and Resistances blocks
+    show in their enhancement column. The sheet-wide number every derived total reads
+    is :func:`~.derived.trait_bonuses`, which folds in the advantages too.
     """
 
-    result: dict[str, dict[str, TraitBonus]] = {"ability": {}, "resistance": {}, "skill": {}}
-
-    for power in live_powers(char.powers):
-        for effect in power.effects:
-            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-            if base is None:
-                continue
-            target = _resolved_trait_target(effect, base)
-            if not target:
-                continue  # not a booster, or no trait chosen / no fixed target
-            category = _trait_category(game_data, target)
-            if not category:
-                continue  # target isn't a trait we track
-            if not effect_is_active(power, effect, base, game_data, char):
-                continue  # switched off, suppressed, or not a standing bonus
-            source = power.name or base.name
-            bucket = result[category]
-            prior = bucket.get(target)
-            if prior is None:
-                bucket[target] = TraitBonus(effect.rank, (source,))
-            else:
-                bucket[target] = TraitBonus(prior.amount + effect.rank, prior.sources + (source,))
-    return result
-
-
-def _trait_bonus(
-    char: Character, game_data: GameData, category: str, key: str
-) -> TraitBonus | None:
-    """The :class:`TraitBonus` powers add to one trait, or ``None`` when there is none."""
-    return power_trait_bonuses(char, game_data)[category].get(key)
+    resolved = resolve_bonuses(power_contributions(char, game_data))
+    return {category: dict(resolved.get(category, {})) for category in NUMERIC_CATEGORIES}
 
 
 def active_array_child(group: PowerGroup) -> PowerNode | None:

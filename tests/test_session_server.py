@@ -45,11 +45,13 @@ from mm_companion.core.session.protocol import (
     ERROR_PROTOCOL_VERSION,
     ERROR_SESSION_FULL,
     MAX_MESSAGE_BYTES,
+    REASON_SESSION_CLOSED,
     CharacterSnapshot,
     ErrorMessage,
     Hello,
     Ping,
     ProtocolError,
+    Welcome,
     decode,
     encode,
 )
@@ -148,8 +150,9 @@ def connect(request: pytest.FixtureRequest):
     yield make
 
     for client in clients:
-        if client.connected:
-            client.close()
+        # Unconditionally: a client midway through a reconnect has no socket, so
+        # ``connected`` is False while its thread is very much still running.
+        client.close()
 
 
 def raw_connect(srv: SessionServer) -> Connection:
@@ -694,7 +697,10 @@ def test_a_note_is_persisted_and_reloads_as_a_note(running_server, connect) -> N
     client, _events = connect(srv, "Volt")
 
     client.post_note("spent a hero point — 0 left")
-    wait_for(lambda: len(srv.state.rolls) == 1, message="the note was recorded")
+    # Wait on the *file*, not on ``state.rolls``: the append to the log happens a
+    # moment after the in-memory list grows, and waiting on the list left a race
+    # this test lost about one run in three.
+    wait_for(lambda: len(store.load_rolls(srv.state.id)) == 1, message="the note was persisted")
 
     reloaded = store.load_rolls(srv.state.id)
     assert [entry.kind for entry in reloaded] == ["note"]
@@ -951,9 +957,47 @@ def test_stopping_marks_everyone_offline(running_server, connect) -> None:
     wait_for(lambda: client.player_id in srv.connected_player_ids(), message="seated")
 
     srv.stop()
-    events.next_of(EVENT_DISCONNECTED)
+    # A deliberate stop says so, so the client ends the session instead of
+    # spending its retry window redialling a table that has closed.
+    assert events.next_of(EVENT_DISCONNECTED)["reason"] == REASON_SESSION_CLOSED
     assert all(not slot.connected for slot in srv.state.players.values())
     assert srv.running is False
+
+
+def test_the_farewell_goes_out_before_anything_is_torn_down(running_server, connect) -> None:
+    """The ordering inside ``stop``, asserted directly rather than raced for.
+
+    ``stop`` used to clear ``_running`` before sending the farewell, which let
+    each reader loop exit and close its own socket first; the message then went
+    to a closed connection and was dropped without a sound. The client read a
+    bare EOF, called it a network fault, and redialled a deliberately closed
+    table for five minutes.
+
+    Reproducing that by repetition does not work — on loopback the reader threads
+    never get scheduled in time, so the buggy order passes locally and only fails
+    under the load of a full suite. So this pins the invariant that actually
+    matters: **when the farewell is written, the session is still running and the
+    socket is still open.** Both were false in the broken order.
+    """
+    srv = running_server()
+    client, _events = connect(srv, "Volt")
+    wait_for(lambda: client.player_id in srv.connected_player_ids(), message="seated")
+
+    observed: list[tuple[str, bool, bool]] = []
+    original = srv._send_quietly
+
+    def spy(connection, message):
+        observed.append((getattr(message, "TYPE", ""), srv._running, connection.closed))
+        return original(connection, message)
+
+    srv._send_quietly = spy
+    srv.stop()
+
+    farewells = [entry for entry in observed if entry[0] == "kicked"]
+    assert farewells, "stopping sent no farewell at all"
+    for _type, running, closed in farewells:
+        assert running is True, "the farewell was sent after teardown had begun"
+        assert closed is False, "the farewell was written to an already-closed socket"
 
 
 def test_the_client_reports_an_unreachable_session() -> None:
@@ -1030,6 +1074,225 @@ def test_closing_a_never_connected_client_emits_nothing() -> None:
     client = SessionClient("127.0.0.1", 1, token="x", display_name="Nobody", on_event=events)
     client.close()
     assert events.kinds() == []
+
+
+# --------------------------------------------------------------------------
+# Keepalive, dead peers, and coming back
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def brisk(monkeypatch: pytest.MonkeyPatch):
+    """Shrink the keepalive clocks so a test can watch them work.
+
+    Everything here is real elapsed time — the behaviour under test is a peer
+    saying *nothing* — so the numbers are as small as loopback tolerates.
+    """
+
+    def apply(*, keepalive: float = 0.1, peer: float = 0.5, io: float = 0.05) -> None:
+        monkeypatch.setattr(client_mod, "IO_TIMEOUT", io)
+        monkeypatch.setattr(server_mod, "IO_TIMEOUT", io)
+        monkeypatch.setattr(client_mod, "KEEPALIVE_INTERVAL", keepalive)
+        monkeypatch.setattr(client_mod, "PEER_TIMEOUT", peer)
+        monkeypatch.setattr(server_mod, "PEER_TIMEOUT", peer)
+
+    return apply
+
+
+def test_a_quiet_client_pings_on_its_own(running_server, connect, brisk) -> None:
+    """The whole point: nobody at the table does anything, and the link stays warm.
+
+    Before this, a session that was merely being roleplayed sent no bytes at all
+    and was reaped by the relay after two minutes.
+    """
+    brisk()
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+
+    # Nothing calls ping(); the reader thread does it because the server has
+    # been quiet for longer than the keepalive interval.
+    assert events.next_of(EVENT_PONG, timeout=2.0)["nonce"] >= 1
+    assert client.connected
+    assert client.connection_state == client_mod.STATE_ONLINE
+
+
+def test_a_silent_peer_is_reaped_by_the_server(running_server, brisk) -> None:
+    """A hand-rolled client that never pings loses its seat, rather than haunting it."""
+    brisk()
+    events = Events()
+    srv = running_server(on_event=events)
+    connection = raw_connect(srv)
+    try:
+        connection.send(Hello(token=srv.state.host_token, display_name="Ghost"))
+        assert connection.receive() is not None  # the welcome
+        left = events.next_of(server_mod.EVENT_PLAYER_LEFT, timeout=3.0)
+        assert left["player"]["display_name"] == "Ghost"
+        assert not any(entry["connected"] for entry in srv.roster() if not entry["is_gm"])
+    finally:
+        connection.close()
+
+
+def test_a_stalled_link_is_not_invisible(brisk, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A half-open connection ends, instead of looking healthy forever.
+
+    The stub below welcomes the client and then never speaks again, holding the
+    socket open — which is what a black-holed connection, a suspended laptop or a
+    NAT that dropped its mapping all look like from this end. There is nothing to
+    read and nothing to fail, so before the peer deadline the client would sit in
+    ``recv`` until the app was quit.
+    """
+    brisk()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    held: list[socket.socket] = []
+
+    def serve_once_then_go_quiet() -> None:
+        sock, _address = listener.accept()
+        held.append(sock)
+        sock.recv(4096)  # the Hello
+        sock.sendall(encode(Welcome(session_id="s", session_name="Stub", player_id="p1")))
+        # and now, deliberately, nothing at all — forever.
+
+    thread = threading.Thread(target=serve_once_then_go_quiet, daemon=True)
+    thread.start()
+
+    events = Events()
+    # reconnect=False so the disconnect is the observable outcome; the redial
+    # behaviour has its own test below.
+    client = SessionClient(
+        "127.0.0.1", port, token="t", display_name="Volt", on_event=events, reconnect=False
+    )
+    try:
+        client.connect(timeout=TIMEOUT)
+        assert events.next_of(EVENT_DISCONNECTED, timeout=4.0)["reason"] == "timeout"
+    finally:
+        client.close()
+        for sock in held:
+            sock.close()
+        listener.close()
+
+
+def test_a_dropped_client_comes_back_to_the_same_seat(running_server, connect, brisk) -> None:
+    """The reported bug, from the client's side: one seat, not two.
+
+    A blip must also *not* look like leaving — the shared roll history and the
+    "you left the session" notice both hang off EVENT_DISCONNECTED.
+    """
+    brisk()
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+    events.next_of(EVENT_CONNECTED)
+    first_id = client.player_id
+    before = len(srv.state.players)
+
+    # Kill the connection from the server's side, as a network drop would.
+    srv._connections[first_id].close()
+
+    assert events.next_of(client_mod.EVENT_STATE, timeout=3.0)["state"] in {
+        client_mod.STATE_RECONNECTING,
+        client_mod.STATE_ONLINE,
+    }
+    wait_for(
+        lambda: client.connection_state == client_mod.STATE_ONLINE,
+        timeout=6.0,
+        message="the client reconnecting",
+    )
+
+    assert client.player_id == first_id
+    assert len(srv.state.players) == before  # no second slot appeared
+    assert EVENT_DISCONNECTED not in events.kinds()  # a blip is not leaving
+
+
+def test_a_kick_is_terminal_and_never_redialled(running_server, connect, brisk) -> None:
+    brisk()
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+    wait_for(lambda: client.player_id in srv.connected_player_ids(), message="seated")
+
+    srv.kick(client.player_id, reason="told to go")
+
+    assert events.next_of(EVENT_KICKED)["reason"] == "told to go"
+    assert events.next_of(EVENT_DISCONNECTED)["reason"] == "kicked"
+    time.sleep(0.5)  # long enough for several backoff steps to have fired
+    assert events.kinds().count(EVENT_DISCONNECTED) == 1
+    assert client.connection_state == client_mod.STATE_OFFLINE
+
+
+def test_a_refused_redial_ends_the_session(running_server, connect, brisk) -> None:
+    """Retrying is for network faults; a refusal is an answer, and it is final."""
+    brisk()
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+    player_id = client.player_id
+    wait_for(lambda: player_id in srv.connected_player_ids(), message="seated")
+
+    # The join code changes under us, so the redial is refused rather than failing.
+    srv.state.host_token = "a-completely-different-token"
+    srv._connections[player_id].close()
+
+    assert events.next_of(EVENT_DISCONNECTED, timeout=6.0)["reason"] == ERROR_BAD_TOKEN
+    assert client.connection_state == client_mod.STATE_OFFLINE
+
+
+def test_an_offline_seat_is_adopted_by_player_id(running_server, connect) -> None:
+    """A returning player with no token still lands on their own card.
+
+    This is the GM-facing half of the bug: a player who cleared their settings,
+    moved machines, or pasted the code by hand used to arrive as a second card
+    while their first sat there greyed out forever.
+    """
+    srv = running_server()
+    first, _events = connect(srv, "Volt")
+    player_id = first.player_id
+    first.close()
+    wait_for(lambda: not srv.state.players[player_id].connected, message="the seat freeing up")
+
+    # No player_token at all — only the public id, which is all a fresh install
+    # could possibly know.
+    second, events = connect(srv, "Volt", player_id=player_id, reconnect=False)
+
+    assert second.player_id == player_id
+    assert len(srv.state.players) == 2  # the GM and one player, not two players
+    assert events.next_of(EVENT_CONNECTED)["player_id"] == player_id
+
+
+def test_a_live_seat_is_never_adopted(running_server, connect) -> None:
+    """Adoption is bounded: it hands back an *empty* chair, never occupies one."""
+    srv = running_server()
+    first, _events = connect(srv, "Volt")
+    wait_for(lambda: first.player_id in srv.connected_player_ids(), message="seated")
+
+    second, _events2 = connect(srv, "Impostor", player_id=first.player_id, reconnect=False)
+
+    assert second.player_id != first.player_id
+    assert len(srv.state.players) == 3  # the GM, Volt, and a genuinely new seat
+    assert first.connected
+
+
+def test_the_gm_seat_is_never_adopted(running_server, connect) -> None:
+    """The one seat that carries a privilege still costs the GM token to claim."""
+    srv = running_server()
+    gm_id = srv.gm_slot().player_id
+
+    player, _events = connect(srv, "Chancer", player_id=gm_id, reconnect=False)
+
+    assert player.player_id != gm_id
+    assert player.is_gm is False
+
+
+def test_a_lost_listener_is_reported(running_server) -> None:
+    """Hosting that nobody can reach says so, instead of looking perfect."""
+    events = Events()
+    srv = running_server(on_event=events)
+
+    # A relay whose control link dies does exactly this: accept() gives up while
+    # the server still believes it is hosting.
+    srv._listener.close()
+
+    assert events.next_of(server_mod.EVENT_LISTENER_LOST)["session_id"] == srv.state.id
 
 
 # --------------------------------------------------------------------------

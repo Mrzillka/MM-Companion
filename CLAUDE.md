@@ -14,7 +14,11 @@ menu and the launcher. Powers *are* modelled now: a player assembles a `Power`
 out of base effects, extras, and flaws in a drag-and-drop **Power Constructor**;
 `core` derives the point cost, game-term summary, effective ranks, runtime
 on/off state, and per-power PL validation, and an active power's trait boosts
-flow through the whole sheet (see "The powers layer" below).
+flow through the whole sheet (see "The powers layer" below). **Equipment** rides on
+that same pipeline: gear is *chosen* from a catalog rather than assembled, bought in
+a second currency (Equipment Points), worn on and off by clicking a card, and rolled
+like an attack power — including vehicles and installations, which are bought as
+traits off their own tables (see "The equipment layer" below).
 
 ## Commands
 
@@ -90,7 +94,9 @@ clean (see Licensing below).
   (effect-specific extras/flaws, keyed by effect id), and `effect_readouts.json`
   (per-effect derived Tier-5 readouts). The powers rules and UI are documented in
   `docs/mm-powers-architecture.md`, `docs/mm-powers-ui-design.md`, and
-  `docs/mm-modifiers-ui-design.md`.
+  `docs/mm-modifiers-ui-design.md`. The gear catalog — items, stock vehicles and
+  installations, their Features, and the two size tables — is `equipment.json`,
+  documented in `docs/mm-equipment-architecture.md` and `docs/mm-equipment-design.md`.
 - Conditions are a small state-tracker, not a build cost. `conditions.json` is the
   single consolidated catalog (short `tooltip` copy + `includes`/`supersedes` graph
   + `mechanisms`/`parameter`/`debilitates` and typed penalty/mod fields), documented
@@ -111,7 +117,18 @@ clean (see Licensing below).
   `ConditionsSection` (its own block) drives it: the "+" menu applies a condition (a
   `ConditionParameterDialog` first when it needs a subject) and renders one chip per
   `AppliedCondition`; its `conditionsChanged` fans out over the signal bus so every
-  overlay refreshes. Dice/recovery/turn-economy are out of scope for now.
+  overlay refreshes. That menu is built by the shared
+  `conditions.build_condition_menu`, which all three "+" buttons use (this block's,
+  and the GM's fast-apply on a player and an NPC card) so a condition is in the
+  same place in all of them. It splits the catalog into submenus by each record's
+  `group`, titled and ordered by `_meta.conditionGroups` — an *ergonomic* axis,
+  orthogonal to `category`: a flat list of 36 is slow to search mid-round, while a
+  category is a rules fact and stays the axis the applied chips are grouped by. An
+  untagged condition is offered flat below the submenus and a ruleset declaring no
+  groups gets the flat menu back, so both are purely additive. Note
+  `QMenu.addMenu(title)` hands ownership *back* to the caller, so each submenu is
+  constructed with the menu as its parent or it is collected out from under the
+  open menu. Dice/recovery/turn-economy are out of scope for now.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
@@ -198,15 +215,15 @@ clean (see Licensing below).
   rows are the last to claim a frame. The GM window gets the same strip, since it
   hosts the same canvas.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
-  `QScrollArea` → `BlockCanvas`) → eleven blocks, each a section `QGroupBox` wrapped
+  `QScrollArea` → `BlockCanvas`) → twelve blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
-  `ComplicationsSection`, `SkillsSection`, `PowersSection`, `DiceSection`. The block
-  set is **not** hardcoded in the sheet:
+  `ComplicationsSection`, `SkillsSection`, `PowersSection`, `EquipmentSection`,
+  `DiceSection`. The block set is **not** hardcoded in the sheet:
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
   block (key, dock title, widget factory, `BlockSize`, default row/col, and
   `default_pinned` for a block that starts in the strip instead of a row), held in an
-  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The eleven
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The twelve
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
   cross-block wiring still reaches it) and passes `default_rows()` plus
@@ -279,11 +296,12 @@ clean (see Licensing below).
   and `core.storage` directly), so it publishes nothing on the bus — a roll must never
   mark the sheet dirty, though it does **serve** `roll-requested`, see "Rolling from
   the sheet" below — and its `set_locked` is a **no-op**, since rolling is a
-  mid-play action like a power's on/off switch. Its history keeps an inner scroll area,
-  the same deliberate exception the GM window's `gm_rolls` block makes, with a
-  `MIN_HISTORY_WIDTH` **and** `MIN_HISTORY_HEIGHT` floor (a scroll area asks for nothing
-  on its own, so without them a history is squeezed to an unreadable sliver, or to the
-  one card that fits in whatever height is left over). A session can be joined long
+  mid-play action like a power's on/off switch. **Its history is the only thing in the
+  block allowed to scroll** — the block itself never does, and neither does the strip
+  around it (see "The Dice block's height" below). That history keeps an inner scroll
+  area, the same deliberate exception the GM window's `gm_rolls` block makes, with a
+  `MIN_HISTORY_WIDTH` floor (a scroll area asks for nothing on its own, so without it a
+  history is squeezed to an unreadable sliver). A session can be joined long
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
@@ -337,14 +355,186 @@ clean (see Licensing below).
   `_column_sizes`). A splitter child with no stretch keeps the pixels it was given: when
   the panel's minimum *shrinks* the splitter simply leaves it where it was, and Qt sends
   no resize — a minimum going down provokes nothing. Removing a quick roll used to leave
-  a permanent gap above the strip for exactly this reason. So `_rebuild_quick_strip`
-  emits `quickRollsChanged` and calls `updateGeometry` (what makes the `BlockFrame` ask
-  again), and the view re-divides **twice** — now, and on the next turn, since the
-  dropped chips are `deleteLater`'d and the size hint only tells the truth once they are
-  gone. A split the user dragged is still left alone (`_user_sized`).
+  a permanent gap above the strip for exactly this reason. So anything that changes what
+  the panel holds emits **`contentChanged`** and calls `updateGeometry` (what makes the
+  `BlockFrame` ask again), and the view re-divides **twice** — now, and on the next turn,
+  since dropped chips are `deleteLater`'d and the size hint only tells the truth once
+  they are gone. A split the user dragged is still left alone (`_user_sized`).
+  `quickRollsChanged` is the *sibling* topic and stays about what is *in* the strip (the
+  histories' stars); conflating the two is how `load_spec` came to change the panel's
+  height while telling nobody.
 - A block's `min_width` in `ui/block_sizes.json` is what sets the **strip's** thickness
   for a pinned block (a page row is wide enough for anything), so `dice` is 360 — under
   that its column arrangement clips in a side strip.
+
+### The Dice block's height (the rule: it never scrolls, and neither does the strip)
+
+The block's minimum is *exactly* its content — no more, and no less — and the roll
+history is the one thing inside it that scrolls. Four separate things make that true,
+and the bug that motivated them was a single click: loading a stat into the roller
+shows the spec chip, the panel grows ~50px, and the strip answered with a scrollbar.
+- **The panel says when it changed size** (`contentChanged`, above). Without it the
+  splitter kept handing the panel its old share *plus* the chip.
+- **The history is the elastic part**, and its two heights are deliberately different
+  numbers: `MIN_HISTORY_HEIGHT` (200) is what it *asks* for, `HISTORY_FLOOR_HEIGHT` (90)
+  is the hard `setMinimumHeight`. It is a list with its own scroll area, so shortening it
+  is the honest way to find room; pinning 200 as a minimum meant it could never give a
+  pixel back.
+- **A history's `sizeHint` is capped** at those two cards. A `QScrollArea` otherwise
+  reports its inner widget's hint, and a block's minimum is its content's *preferred*
+  height — so the block's minimum used to climb with every roll, all session. Both halves
+  are one thing and live in one place: `roll_history.size_history_scroll(scroll)` plus a
+  `sizeHint` returning `HISTORY_SIZE_HINT`, taken by both `RollHistoryPanel` and
+  `LocalRollHistory` — as far as a layout is concerned those two *are* the same widget,
+  and differ only in where their cards come from.
+- **The strip re-reports its minimum** when the content below it changes
+  (`PinnedPanel.eventFilter` on a `LayoutRequest` from its splitter). This is the one Qt
+  cannot do itself: a `QScrollArea`'s own minimum does not depend on its child, so the
+  invalidation chain frame → strip → board → window is broken exactly there, and the
+  window kept a minimum computed before the block grew.
+
+Both of the strip's scrollbars stay on `AsNeeded`. They are the documented valve for a
+strip asked to hold more than the display can show — `PinnedPanel.minimumSizeHint` is
+capped at the usable screen, and past that a bar beats clipping a block. What the four
+fixes above buy is that the valve stops firing when the window had room all along.
+
+## Compact mode (matters when touching the roller or either window)
+
+The pinned strip's argument taken one step further: mid-fight the only part of the app
+anyone touches is the roller, so `ui/compact.py` collapses the **whole window** to a
+small, frameless, always-on-top mini roller — the Roll box across the top, the quick
+rolls beside a smaller die, the history filling the rest. A **round `⤡` button floating
+over the roller's bottom-right corner** enters, as does **`Ctrl+Shift+D`**; `⤢` on the
+mini strip, `Esc`, or that same button leaves.
+- **The button rides the roller, not the menu bar.** It sat in the bar's right-hand
+  corner once and was close to invisible there — a thin grey glyph at the far end of a
+  bar nobody looks at, saying nothing about dice. So `CompactOverlayButton` floats over
+  the thing it acts on, the way a meeting app parks its controls over the video. It
+  covers a corner of one history card, which is the price and a cheap one. Four
+  consequences. It is **in no layout** — a plain child of its host, placed by hand from
+  an event filter on the host's `Resize`/`Show` and `raise_()`d, so the roller is laid
+  out as though it were not there (and `attach(None)` parks it back on the *window*,
+  never on nothing: re-parenting to `None` promotes a widget to a top-level one, which
+  both the General settings page and the tests' teardown then sweep up). It is styled by
+  a **stylesheet on the widget itself**
+  from tokens every preset defines (`accent`, `text.on-badge`, `border.card`) — Classic
+  emits no `QToolButton` rules at all, so a theme-QSS rule would exist under some presets
+  and not others, the same bargain `ui/lock.py` strikes. It sits **flush in the corner**,
+  which is a choice between two overlaps rather than a way of avoiding one — the
+  bottom-right of a scrolling list of cards is never empty. There it clips the tail of
+  the history's own scroll bar (the down-arrow and the last of the trough), which costs
+  nothing anyone reaches for since the wheel and the thumb are untouched; insetting by a
+  scroll bar's width to spare it was tried and is **worse**, landing the button squarely
+  on a card's `✕`, a discrete control with no other way to hit it. And
+  **closing the Dice block closes the way in** — `enter()` checks
+  `compact_anchor().isVisibleTo(window)`, which it has to now that a shortcut exists: the
+  button being a child of the block used to enforce that on its own.
+- The two ways in are **not the same affordance**. The button is the discoverable one,
+  which is the whole reason it left the menu bar; `Ctrl+Shift+D` (the only shortcut in
+  `src/`) is what makes compact mode reachable without a mouse at all, and it is the only
+  way at all into the GM's read-only view of a player sheet, whose menu bar is
+  deliberately bare.
+- There is **one** button, re-parented between the roller and the mini page's scroll area
+  — the same rule the roller itself follows below. Two would be two states to keep in
+  step, and the one showing the wrong glyph would be whichever was off screen. The mini
+  page hands over its *scroll area* rather than itself, so the button never lands on the
+  `QSizeGrip` that is the only way to resize a frameless window.
+- The **roll panel** carries no shrink button, and the button's host is the
+  `DiceRollerView` rather than the panel for that reason: among the roll controls it cost
+  a row of the panel's height in every window it appeared in — including the pinned
+  strip, where height is the scarce thing. Over the view it lands on the history, which
+  has room. A window's menu bar is back to holding nothing but the connection indicator.
+- **The mini roller is the roller, moved.** Nothing builds a second one: the controller
+  asks its *surface* to hand the live panel and history over and gives them back on the
+  way out, so a loaded spec, the quick-roll strip, a tumble in flight and — the one that
+  would really show — the session history and its attachment to the table all carry
+  across. A second roller would have been a second seat at the table and every roll
+  twice. Same borrow-and-return the canvas performs moving a block between the page, the
+  strip and a floating window, including the rule that a widget still parented to a
+  container Qt is about to free goes with it.
+- A **surface** is anything with `release_roller()` (the panel and the history widget,
+  or `None`), `restore_roller()`, and `compact_anchor()` (the widget the round button
+  floats over). `CharacterSheet` duck-types over its blocks for all three like
+  `sync_session`, so a mod's roller joins on the same terms; `GMWindow` answers for
+  itself, since its roller is a bare `DiceRollerPanel` beside a `gm=True` history rather
+  than a `DiceRollerView`, and its anchor is the Rolls group box. A surface that lends
+  nothing simply has no compact mode — including no button, since there is nowhere to put
+  one. Note this is now the *only* gate: a GM's read-only view of a player sheet has a
+  roller, so it has compact mode too, where the old menu-bar toggle denied it one.
+- The compact arrangement is a **third shape** beside the reflow's row and column, and
+  while it is in force `sync_reflow` stands down — it is chosen, not derived from the
+  room available. It is also **not only a mode**: it turned out to be a good roller in
+  its own right, so `dice_layout` in settings (`auto` / `compact`, read through
+  `storage.dice_layout()`, edited on the Settings window's General page) pins it
+  everywhere. Hence two flags on the panel, `_window_compact` and `_prefer_compact`,
+  resolved by one `_apply_shape()`: leaving compact mode must not undo the preference,
+  which a single flag did the first time anyone expanded the window. The page applies it
+  live by walking the open top-level windows for anything answering `sync_dice_layout` —
+  duck-typed, so it imports neither the sheet nor the GM window. `DiceRollerView` stands
+  its reflow down the same way while its parts are out on loan (`_lent`), and
+  `restore_roller` ends with the usual two-pass
+  `updateGeometry` → `_redivide` → `_settle.start(0)`.
+- Three things the window has to get right. **Hiding the outgoing content is what frees
+  it to shrink** — a hidden widget is left out of its layout's minimum, and both
+  `CharacterSheet._update_min_width` and `PinnedPanel.minimumSizeHint` otherwise hold it
+  open. **Window flags change before the animation, never during it**: Qt hides a window
+  whose flags change and the platform recreates it, so the geometry is re-applied right
+  after the `show()`. And a **maximized** window cannot be resized, so it is dropped to
+  normal on the way in and re-maximized on the way out.
+- A **transition is atomic**: `enter`/`leave` both open with `_settle_animation`, which
+  lands whatever is still easing — geometry *and* its pending `on_finished` — before the
+  next one starts. Both toggles read and write the window's geometry (`saveGeometry`
+  going in, `remember_size` coming out) and a frame of an ease is neither of the two
+  sizes anyone chose: toggling inside the 180 ms wrote a half-grown rectangle into the
+  **shared** `layout` key, so every character sheet opened at it. Note Qt does *not* emit
+  `finished` for an animation merely stopped, which is why the finisher is held on the
+  controller and run by hand.
+- The mini window is frameless, so it supplies what the OS frame would have: the strip
+  is the drag handle and carries the title — the **only** place a caption shows, so it
+  follows `windowTitleChanged` rather than being seeded once (the GM window retitles
+  itself with the session it is hosting); a host wanting something shorter calls
+  `set_title` *after* `setWindowTitle`, which is what `MainWindow._update_title` does to
+  show `*Name` rather than the whole window title. A `QSizeGrip` is the only way to
+  resize.
+  Both halves live in `ui/frameless.py` (`apply_window_flags`, `size_grip_row`) because a
+  **floated block makes exactly the same trade** — see below. It goes **as small as it is
+  dragged** — the roller lives in a `QScrollArea`, which does not pass its child's
+  minimum on, so the only floor is `compact.min-width/height` and under that the die and
+  history scroll.
+- **Floated blocks mostly stay.** A `BlockWindow` is a child of the *window*, not the
+  sheet, so hiding the content never touched one; the controller asks its surface to
+  `suspend_windows(True)`, which hides every floated block **except the ones pinned on
+  top**. Read that with the other rule in hand, because together they are not what the
+  sentence sounds like: on top is a floated block's **default**, so for anyone who has
+  not gone out of their way, entering compact mode hides *nothing*. That is intended, and
+  it is the right reading of both rules — a block popped out is a block wanted beside
+  things, so it goes on sitting beside the mini roller too, and `✕` is how you say
+  otherwise. What `suspend_windows` actually clears is the narrower case: the blocks a
+  user explicitly sent behind, which are the ones not being read. Do not "fix" the
+  test at `tests/test_compact_mode.py` that calls `set_block_on_top(…, False)` first —
+  that call is the point of it.
+- The **flag** matters more than what it hides, and that is the other reason
+  `suspend_windows` is called on every entry regardless: `_windows_suspended` is what
+  `accepts_drops` reads (next bullet), and that guard has to be on whenever the page is
+  behind the mini roller.
+- The blocks that stay are still **draggable**, and that is where `BlockCanvas.accepts_drops`
+  earns its keep: while suspended, a drag is a plain move and nothing may land. A hidden
+  widget keeps its last geometry, so `_hit_test` over where the page *used to be* still
+  reports a perfectly good `DropSlot` — and the block docked into a page nobody could see
+  and vanished, recoverable only from the View menu. `update_drag` shows no insert line
+  and does not auto-scroll for the same reason (both would promise a landing the drop
+  refuses), and entering compact mid-drag ends the gesture rather than letting it finish
+  against a page that has gone.
+- Persistence splits in two, and must: `compact` in settings holds the *mini* window's
+  size and the always-on-top pin (read through `storage.compact_settings()`, never off
+  `load_settings()`), while `saved_geometry()` hands `_persist_layout` the blob captured
+  **before** the shrink — the `layout` key is shared by every sheet, so writing 380×560
+  there would open every character that size. Being compact is deliberately *not*
+  persisted: it is a play-time view switch like the lock, and relaunching into a
+  dice-only window would leave someone hunting for the rest of the app.
+- `ANIMATION_MS` is a class attribute so `tests/conftest.py` can zero it, exactly as it
+  does `PowersSection.TRANSITION_MS`; a window that is not on screen jumps rather than
+  eases, so a test asserts on the resting state without an event loop.
 
 ## Rolling from the sheet (matters when touching the roller or a stat block)
 
@@ -466,6 +656,18 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   inner scroll area, sized to its content. A floated block moves into a
   `BlockWindow` (a top-level window owned by the sheet); its title bar reuses the
   same drag gesture, so you drag it back onto the page to re-dock.
+  A floated `BlockWindow` is **frameless and can be pinned above other
+  applications**, the same trade the mini roller makes and through the same
+  `ui/frameless.py` helpers: a popped-out block spends its life beside somebody
+  else's window, where the OS title bar is most of what makes it read as a document.
+  The block's own title bar was already the drag handle and its `✕` already hides
+  the block, so all the frame owed was a `QSizeGrip`. The `🖈` **means what the
+  block's current home makes it mean** — pin *to the strip* on the page, pin *on
+  top* in a window — and `TitleBar.set_floating` swaps the two (checkable there,
+  a plain action elsewhere; `↗` hides, since a window is already popped out).
+  That is one glyph honestly read, not a pun: pinning is what it says, and what it
+  pins to is whatever the block is beside. In a window it opens **already lit** —
+  staying on top is the default, see the canvas bullet below.
 - `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
   arrangement — `_rows` (an ordered list of rows, each an ordered list of block
   keys), `_windows` (floated blocks), `_hidden` (closed blocks), and `_pinned`
@@ -475,13 +677,28 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   gesture (float-out at drag start, `_hit_test` → a `DropIndicator`, dock-on-drop,
   pin-on-drop over the strip, or leave-floating), plus edge auto-scroll. Structural
   ops `float_block`, `dock_block`, `show_block`/`hide_block`,
-  `pin_block`/`unpin_block`/`set_pin_edge`/`set_pin_align`, `arrangement`,
+  `pin_block`/`unpin_block`/`set_pin_edge`/`set_pin_align`, `set_block_on_top`,
+  `set_windows_suspended`, `arrangement`,
   `apply_arrangement`, `default_arrangement` are the headless-testable seams (drag
-  outcomes without synthetic mouse events). The default arrangement is supplied by
+  outcomes without synthetic mouse events). **Which floated blocks stay on top lives
+  in `_on_top`, keyed by block** and not on the `BlockWindow`: dragging a block out
+  and docking it back destroys and rebuilds that window, so anything held on the
+  window is lost the first time it moves. **A popped-out block stays on top by
+  default** (`DEFAULT_ON_TOP`) — it was popped out to be read *beside* something, and
+  one that sinks behind that window the moment it is clicked is no use — which is why
+  `_on_top` is a `dict[str, bool]` and not a set: absence has to mean "never asked"
+  rather than "no", and only an explicit `set_block_on_top` (or a restored layout
+  carrying one) records the exception. Ask `_wants_on_top`, never `key in _on_top`. It
+  persists in the `floating` entry as `on_top`, read tolerantly and so needing no
+  `SCHEMA_VERSION` bump — the `hidden_anchors` precedent — but written **both ways**,
+  since absence now means the default. Note the asymmetry: *moving* a block keeps the
+  choice across a dock (popping it out again puts it back the way it was left), while
+  *restoring a layout* is authoritative and clears it. The default arrangement is supplied by
   the sheet from the block registry's `default_rows()` (grouping descriptors by
   their default row/col): the Name & Details block beside the Character Image, then
   the System / Power Level block full width, the Abilities | Resistances pair, then
-  Conditions, Advantages, Complications, Skills, Powers — plus the registry's
+  Conditions, Advantages, Complications, Skills, Powers, Equipment — plus the
+  registry's
   `default_pin_lines()`, which parks the **Dice Roller** block in the strip on the
   right. A block is in *either* the rows or the strip, never both: the arrangement
   model requires every block exactly once, so `default_arrangement()` excludes the
@@ -624,6 +841,123 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   out. Runtime toggling stays available in the locked read-only view — it is a
   mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`.
 
+## The equipment layer (matters when touching equipment, gear or vehicles)
+
+Equipment is the powers layer used a second way, not a parallel one. The full map is
+`docs/mm-equipment-architecture.md`, the rules themselves are
+`docs/mm-equipment-design.md`; the shape:
+
+- **An item wraps a power.** `core.equipment.EquipmentItem` holds a real
+  `core.powers.Power` in its `build`, plus `catalog_id`, `category`, `platform`,
+  `accessories`, `worn`, `stacks` and `ep_override`. So `power_total_cost`,
+  `effect_stat_rows`, `power_rolls`, `effect_is_active` and `power_pl_violations` all
+  take `item.build` **unchanged** — a rifle is priced, drawn, rolled and validated by
+  the code a Blast power is, which is why the equipment work moved no existing sheet's
+  numbers. `Character.equipment` is its own list beside `Character.powers`, because
+  equipment is *not* a power: a character built entirely from gear legitimately answers
+  "no powers".
+- **Two currencies, and they never mix.** Power Points buy ranks of the Equipment
+  advantage; each rank grants `points_per_advantage_rank` (5) Equipment Points, and
+  those buy the items (`equipment_budget` / `equipment_points_spent` /
+  `equipment_points_remaining` in `core/rules/equipment.py`). An item's price is never a
+  term in `power_points_spent` and never the reverse. Nothing raises when this breaks —
+  the build total is just wrong — so both totals are asserted in
+  `tests/test_equipment.py`.
+- **The Removable discount is never reapplied.** The book prices gear at what its
+  effects would cost *undiscounted*, precisely because the advantage already granted the
+  points. `build_item_from_entry` never attaches a removable-gated flaw, and
+  `item_own_ep_cost` strips one (`_undiscounted`) before pricing a build carrying one
+  anyway. If the cost engine sees `removable` on an item, something has double-counted —
+  and it is silent, every item simply being cheap.
+- **A price has three answers, in order** (`item_own_ep_cost`): an `ep_override`; the
+  catalog's **printed** price while the item is still stock (`item_is_stock` compares a
+  signature of the build against what the entry would produce); otherwise the derived
+  cost plus, for a platform, its bought traits. So **editing a stock item re-prices it,
+  and it can go down** — the printed number sometimes bundles what the generic table
+  does not price. `item_ep_cost` adds everything fitted to it and is what the budget
+  counts.
+- **Stat effects are data** (`core/rules/appliers.py`, the layer below `runtime`). A
+  stat effect is a record (the `TraitBoost` parsed from `statIntegration`) plus an
+  `apply` **kind** naming what it means; each kind is a registered `StatApplier` handed
+  an `ApplyContext` and yielding `TraitContribution`s. Five ship — `bonus`, `speed`,
+  `sense`, `penalty_removed`, `penalty_replaced` — with `register_stat_applier` the mod
+  hook (the third instance of the `PATTERN_BEHAVIOURS` / `GATE_KINDS` pattern). The
+  amount is `flat + rank × per_rank`, all data, defaulting to M&M's rule that the bonus
+  *is* the rank, so an effect declaring none of it behaves exactly as it always did. An
+  **unregistered** kind yields nothing rather than raising.
+- **A contribution carries an `origin`** — the granting item's id — beside its `source`
+  name, and `item_superseded` matches on it. Two copies of one armour share a name and an
+  amount, so matching by those had *both* cards claiming to have lost while the bonus
+  actually on the sheet was disowned by both. **Powers pass none**, deliberately: a
+  power's card explains itself from its own build, and `tests/test_stat_appliers.py`
+  asserts whole-dataclass equality on a power's contribution.
+- **Gear does not stack, and that is a resolver, not an applier.**
+  `build_contributions(power, char, data, stacking=, group=)` gathers a power *and* an
+  item — one function, so the two can't drift — and the two keywords are the
+  **granter's** terms travelling onto every contribution (a power `STACK_SUM` in
+  `GROUP_POWERS`, a worn item `STACK_MAX` in `GROUP_EQUIPMENT`).
+  `resolve_contributions` then nets one trait under two different rules: **within** a
+  group the `sum` contributions add and the largest `max` one joins them; **between**
+  groups the larger total wins outright, never the sum of the two maxima. Powers keep
+  summing among themselves, which is why no existing number moved;
+  `tests/test_derived_stats.py` is the guard and passes unedited. Whatever lost is
+  reported in `TraitBonus.superseded` and `item_superseded`, so an outclassed item's
+  card says *what* beat it — a silently inert bonus reads as a bug. The per-item
+  `stacks` checkbox opts one item out and badges it homerule.
+- **`worn` is runtime**, exactly like a power's `activated`: left out of `to_dict()`, a
+  loaded character comes up wearing everything, and a card toggle emits `runtimeChanged`
+  (not `changed`), so it works in the locked sheet and never marks it dirty. Three
+  things deliberately ignore it: the **price** (sheathing a sword refunds nothing), **PL
+  validation** (`offensive_builds` yields every item — a sheet that passed by sheathing
+  its sword would validate nothing), and a **GM's pinned chips** (a strip must not
+  rearrange itself mid-fight).
+- **Accessories live on their host**, and their whole layer is `core/rules/accessories.py`
+  — **below** both `rules/equipment.py` and `rules/runtime.py`, because pricing reaches
+  `derived` and `derived` reads what runtime gathers, so the two cannot import each other
+  and both need the merged build. A scope is a trait of the rifle, not of the character,
+  so an attached accessory sits in `EquipmentItem.accessories` and leaves the loose list.
+  `item_attaches_to` says where it fits, `attachment` is what it lends (both editable in
+  the constructor's gear row; `ui/attachment_dialog.py` is the modifier checklist), and
+  `item_effective_build` merges them **on demand** — the stored build is never rewritten,
+  so detaching is lossless. It also carries the accessory's **own effects** across,
+  labelled with the accessory's name, and `equipment_contributions` reads that effective
+  build so a fitted trait boost is granted at all — the `origin` stays the *host's* id,
+  since the host's card is what has to explain it. The catalog fallback on both fields
+  needs the item to carry **neither**, which is what "saved before they existed" means:
+  an empty `attachment` on an item that names somewhere to attach is a decision, not a
+  gap. Its price folds into the host's, which is the only way the budget counts it at
+  all; note `item_own_ep_cost` prices `item.build` and not the effective build, or the
+  accessory's modifiers would be charged twice.
+- **Platforms are bought as traits, not effects** (`core/rules/platforms.py`): a vehicle
+  is five (Size first — it sets three baselines), an installation is two plus Features.
+  `PlatformSpec` is the shape, and **stock and custom are one shape** — `item_platform`
+  resolves the item's own spec or normalises the printed record into the same one, so
+  there is no custom-platform branch. Carrying a spec is what makes a platform custom
+  (`platform_is_stock`); a spec equal to the printed one is still stock. **Speed is
+  spelled twice on purpose**: the trait on the spec, the movement as a *real effect on
+  the build*, kept in step by the single writer `apply_platform` — which is what puts a
+  hand-built jet's Flight on the System block's Speed readout at a Flight's price.
+  `current_speed` is runtime and the one number that changes *within* a round (a moving
+  vehicle's Defense Class). `vehicle_modifier_advantage_cost` is deliberately a **Power
+  Point** number and is shown, never totalled.
+- **UI.** `ui/cards/` is the card machinery extracted out of the Powers block and shared
+  by both — the draggable card and its eased off-progress, the terms grid, the node
+  list, the dice footer — knowing nothing about *what* is drawn; each drag payload's
+  MIME format is a keyword argument, so two boards can't accept each other's drags.
+  `ui/sections/equipment.py` is the block (budget bar; Add Equipment / Create Custom
+  Item / Create Platform; auto-grouped cards whose group is the item's `category`, a
+  rules fact — so a cross-group drop is refused *visibly* with
+  `DropFeedback.show_reject()`, since a bare `ignore()` reads like a target that didn't
+  notice). The catalog is `ui/sections/equipment_picker.py`, modeless for the reason
+  `pin_picker` is. Custom gear reuses the **Power Constructor in gear mode** (an item's
+  build *is* a power, so there was never a second builder), and a platform's ✎ opens a
+  menu — Traits… (`ui/platform_editor.py`) or Effects… (the constructor) — because a
+  platform is two editable things. The editor computes no price: it applies the spec to
+  a working item and asks `item_ep_cost`, so it and the card can never disagree.
+- Budget breaches **warn, never block** (`equipment_violations`, a red bar and a ⚠).
+  `core.storage.equipment_enforcement()` is the one seam that could change that, beside
+  `pl_enforcement()` — read it through the accessor, never off `load_settings()`.
+
 ## The session layer (matters when touching GM mode / online play)
 
 GM Mode and online play are a self-contained subsystem, split the usual
@@ -641,10 +975,115 @@ The shape:
   UPnP, `publish_session` → a `Reachability` with verbatim `advice`, and the
   `transports` registry a relay plugs into), `relay.py` (`RelayTransport`
   registered under `mmrelay://` so a relay join code just works).
+- **A link is kept warm, and a dropped one comes back.** `Ping`/`Pong` existed
+  from the start and nothing sent one, so a table that was merely *roleplayed*
+  moved no bytes and the relay reaped it after two minutes (the deployment
+  worked around that with a 4 h idle timeout). Now a client's reader thread pings
+  after `net.KEEPALIVE_INTERVAL` of silence and **either** end drops a peer after
+  `net.PEER_TIMEOUT` — which is also what makes a half-open link visible at all,
+  since `recv` otherwise just times out forever and the GM's roster shows a ghost
+  as connected. One exchange warms a whole relayed pair (the relay stamps
+  `last_active` on writes too), so there is no server heartbeat. `SessionClient`
+  then runs a state machine (`STATE_*`, published as `EVENT_STATE`) and redials
+  along `RECONNECT_DELAYS` for `RECONNECT_WINDOW`, re-presenting the
+  `player_id`/`player_token` it holds so a blip lands back in the same seat.
+  **`EVENT_DISCONNECTED` means the session is over**, not that a packet went
+  missing — a blip raises `EVENT_STATE` and nothing else, which is what stops a
+  two-second Wi-Fi drop tearing the shared roll history out of the Dice block.
+  A server that stops says so (`REASON_SESSION_CLOSED`), or a deliberate end and
+  a sleeping laptop are indistinguishable. Protocol **v7** exists for this: a v6
+  client never pings and would be reaped, so it is refused at the door.
+- **A returning player gets their own seat back**, three ways. The client's
+  redial carries the token; `JoinSessionDialog.reclaim_ids` resolves a saved seat
+  from the *code text* (it used to need a click on a history row nobody knew to
+  make); and on a token miss `SessionState.player_by_id_if_free` hands back the
+  seat the public `player_id` names — but only an **empty**, non-GM one. The
+  trade-off is written out on that method.
 - `src/mm_companion/ui/` — Qt: `session_bridge.py` (`SessionBridge`, the **only**
   place core `on_event` callbacks become signals; module-level
-  `active_session()`/`live_session()`), `gm_window.py`, `npc_window.py`,
-  `player_card.py`, `roll_history.py`, and `session_player.py`/`session_dialogs.py`.
+  `active_session()`/`live_session()`), `connection_indicator.py`, `gm_window.py`,
+  `npc_window.py`, `player_card.py`, `roll_history.py`, and
+  `session_player.py`/`session_dialogs.py`. `SessionBridge.joined` follows the
+  *socket* (False mid-blip, so a send fails honestly); `in_session` follows the
+  *session*, and `live_session()` asks that one — asking `joined` meant a roll
+  made during a blip rolled locally into the private history, a roll the table
+  never saw and the player thought it had. `ConnectionIndicator` is the menu
+  bar's corner widget (`setCornerWidget`, installed by `MainWindow` and
+  `GMWindow`), and it exists because every other disconnect cue **fades** after
+  ten seconds; it recomputes its whole state from the bridge on every signal
+  rather than mapping signals to states one by one.
+- **The two cards are one card.** A player card and an NPC card differ in what
+  they may *do* (a player's is a remote snapshot the GM can only ask to change;
+  an NPC's is the GM's own model, edited in place) but not in what a GM *reads*:
+  both open their sheet from the **portrait** alone and both hover the same
+  abilities/resistances/powers summary out of `ui/card_summary.py`. Opening used
+  to be a click anywhere on an NPC card, which fought that card's own
+  drag-to-reorder gesture — the two were told apart only by how far the pointer
+  had moved.
+- **Pinned parameters** are the strip down a card's right side: the four or five
+  numbers *this* GM wants off *this* creature. `core/rules/pins.py` is the model
+  — a `PinRef` names an ability, resistance, skill, initiative, defence DC or one
+  of a power's rolls, and `resolve_pin` turns it into a caption, a reading and a
+  `RollSpec`. **A reference, never a number**: the character underneath is live,
+  so a frozen value would be right once.
+- Three things a pin's *reading* has to get right. Values come off the **roll**
+  builders (`resistance_roll`, not `resistance_total`), which folds condition
+  overlays in for free while the build math stays condition-free — and
+  `with_conditions=False` takes them back out again for the picker, which is a
+  catalogue of the creature rather than a combat readout (the `RollSpec` is the
+  same either way, so nothing about what a chip *rolls* moves). A **defence DC**
+  is its own kind rather than a dressed-up resistance: the sheet's table shows
+  the rank, and a chip quietly showing ten more would be a trap. And a pin that
+  no longer resolves reads as a dash rather than vanishing — a chip that
+  disappears leaves no way to remove it — which is why `PinnedValue.missing` is a
+  field of its own and not `spec is None`: a **forced save** carries no spec
+  either (the wielder never rolls their own target's save; it reaches the person
+  who does as the attack's follow-up chip) but is perfectly well resolved.
+- `ui/pin_panel.py` is the strip: **click loads** into the GM's roller and
+  **double-click rolls** — the sheet's own bargain — plus drag to reorder and
+  right-click to remove. A click is a release with *no* drag started and *no*
+  double-click just handled, which is what keeps the four apart.
+  `ui/pin_picker.py` is the modeless browser the "+" opens; it unpins as well as
+  pins, and its `set_pinned` is a no-op when it already agrees — without that
+  guard the card's echo rebuilds the tree *during* a toggle, deleting the row
+  being restated.
+- A GM also pins from the sheet opened off that card, by right-clicking a row.
+  Two bus topics, `pin-requested` and `unpin-requested`, both served by the
+  **sheet** rather than any block, since a pin's destination is outside the sheet
+  entirely. Which of the two a row offers comes from `stat_table.PinMenuState`,
+  fed by `CharacterSheet.set_pinned` — pushed from the card on open *and* on
+  every change, so a sheet left open never offers to pin what is already there.
+  The menu appears at all only once `MainWindow(pin_target=True)` says there is a
+  card.
+- Strips persist per card in `gm_pins`, seeded from `gm_default_pins` — the
+  settings key the Settings window's **GM Mode page** edits, and the reason the NPC
+  damage default is *late-bound* ("the first Damage power", resolving to the
+  **attack roll** it makes — the save it forces belongs to the target), since the
+  defaults are written long before the NPC is. Read it through
+  **`storage.gm_default_pins()`**,
+  never off `load_settings()`: that returns the settings file *verbatim* and does
+  not merge `DEFAULT_SETTINGS`, so any key added after a workspace was created
+  reads back as `None`. Every setting in that module has an accessor or an inline
+  fallback for this reason; a new one needs the same or it is silently dead for
+  every existing user. An **empty strip is persisted** rather than dropped to keep
+  the file tidy: a missing key is what seeds the defaults, so skipping the empty
+  ones handed a GM back the four chips they had just taken off.
+- That page (`ui/settings/gm_page.py`, reached from the GM window's own
+  `Settings ▸ Preferences…`) is two reorderable lists, one per card kind, and its
+  shape follows from *when* a default is written. A default cannot name a power —
+  a `Power.id` belongs to one character — so the picker it opens is the
+  character-free `default_pin_choices(game_data)` rather than `available_pins`,
+  offering the traits plus the one late-bound `select="first_damage"` row; the same
+  `PinPickerDialog` serves both, with a `None` character putting it in that mode and
+  hiding its "Now" column. Writing goes through `storage.set_gm_default_pins`, which
+  merges per kind for the same reason the reader does, and the page always writes
+  **both** kinds — an omitted kind reads back as the shipped strip, while an
+  explicit `[]` is honoured. Editing the defaults deliberately leaves the board
+  alone (`_pins_for` made each card's strip its own on first sight), so
+  **Apply to cards on the board** is a separate, confirmed button:
+  `storage.clear_gm_card_pins()` plus `GMWindow.reseed_pins_from_defaults()` on
+  every open GM window — in that order, or a window still holding its old strips
+  writes them back out and undoes the clear.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.
@@ -739,7 +1178,7 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   3. **Stylesheet** — geometry, the object-named block chrome, and the menu/tab
      classes the native Windows style paints from the *system* theme and which
      therefore ignore the palette.
-- **Three rules, each guarded by a test in `tests/test_theme_qss.py`:**
+- **Four rules, each guarded by a test in `tests/test_theme_qss.py`:**
   1. Never select a bare `QFrame`/`QLabel`/`QGroupBox`/`QScrollArea` — every
      nested separator and label inherits it. Use an object name or a class that
      names a whole component.
@@ -749,6 +1188,25 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   3. A semantic tint must clear **3.0:1** against its background — for a
      `system` preset that means against *both* a light and a dark window, since
      it cannot know which it is on. `tests/test_theme.py` enforces it per preset.
+  4. **State a complex widget's box, give its arrow column back.** One
+     `border`/`padding`/`background` on a `QSpinBox` or a `QComboBox` makes
+     `QStyleSheetStyle` compute `SC_SpinBoxEditField` from the box's own padding
+     rect, which knows nothing about the arrows — so the edit field spanned the
+     whole widget and the `QLineEdit` was laid over both arrow buttons. The arrows
+     still painted, still looked right, and the child under the cursor was the
+     line edit, which took every click and ignored it. `qss._arrow_column_rules`
+     restores a `padding-right` and is emitted for **every** preset, because the
+     focus ring alone is box enough to trigger it (Classic was fine until a field
+     was clicked into). Two things not to redo: placing the buttons yourself stops
+     the platform drawing its indicator inside them (working arrows nobody can
+     see), and Qt renders each border edge as a rectangle rather than mitring
+     them, so the CSS-triangle substitute comes out square. **How wide that column
+     is belongs to the style, not the theme** — 50px under `windows11`, 15px under
+     `Fusion` — so `theme.arrow_columns(app)` measures it once and `qss.build`
+     takes it; there is deliberately no token. A `make_spin_box(buttons=False)` box
+     carries `theme.ARROWLESS_PROPERTY` so the sheet hands the room straight back.
+     `tests/test_input_arrow_columns.py` clicks a real arrow, per preset, across
+     every base style Qt ships.
 - A plain `QWidget` ignores a stylesheet `background` unless it sets
   `WA_StyledBackground` (a `QFrame` honours it natively). If a wash you applied
   doesn't paint, that is why.
@@ -762,11 +1220,15 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   map overrides any bound. The GM window's blocks live there too, under `gm_`
   keys.
 - The look is changed in the **Settings window** (`ui/settings/`, opened from a
-  sheet's `Settings ▸ Preferences…` or the launcher's Settings button): a
-  `QListWidget` nav over a `QStackedWidget`, whose pages come from
-  `window.PAGES` — one entry today, `ThemePage`. Adding a second area of settings
-  is an entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
-  `is_dirty`, `save`, `discard`, `needs_restart`).
+  sheet's `Settings ▸ Preferences…`, the GM window's, or the launcher's Settings
+  button): a `QListWidget` nav over a `QStackedWidget`, whose pages come from
+  `window.PAGES` — `GeneralPage`, `ThemePage` and `GMPage`. Adding another area of
+  settings is an
+  entry in that tuple plus a `SettingsPage` subclass (`page.py`: `title`,
+  `is_dirty`, `save`, `discard`, `needs_restart`). Which page it *opens on* is the
+  caller's to say (`SettingsWindow(page=GMPage.title)`), which is how the GM window
+  lands on its own rather than on the sheet's; a caller that names none gets the
+  **first**, so the tuple's order is a decision and not an accident.
 - The Themes page separates two things on purpose. **Picking** a preset writes
   through at once (`set_active_theme`), as the old menu did. **Editing** one is a
   draft: `TokenEditor` (`ui/settings/token_editor.py`) generates a form by walking
@@ -839,12 +1301,23 @@ through rather than reinvent. When building new sheet widgets, use it:
   session stays alive and each new application stylesheet re-polishes all of them,
   which is quietly quadratic.
 
-The Lock pattern is threaded top-down: `MainWindow` owns the checkable Lock menu
+The Lock pattern is threaded top-down: `MainWindow` owns the checkable lock
 action, `CharacterSheet.set_locked(bool)` fans out to each section's
 `set_locked`, and sections call `set_widget_locked` on their editable widgets.
 The sheet **starts locked** (a read-only viewer, not an editor). Any new section
 with editable widgets should expose `set_locked` and be wired into
-`CharacterSheet.set_locked`.
+`CharacterSheet.set_locked`. That action lives **on the menu bar**, not in a
+menu — `menu_bar.addAction(…)` with no submenu, so one click toggles it — and its
+🔒/🔓 glyph *is* the state read-out (`_show_lock_state`). It is a play-time view
+switch reached constantly, not a preference; a GM's read-only `gm_view` window
+returns before it is built and so has none.
+
+`set_widget_locked` sheds a field's chrome with a small **widget-level**
+stylesheet (`_LOCKED_SPIN_STYLE` / `_LOCKED_COMBO_STYLE`) as well as
+`setFrame`/`setButtonSymbols`, because a styled preset's application sheet states
+a border, a radius and a padding that outrank both. It is deliberately not a
+`[locked="true"]` rule in the theme QSS: Classic emits almost no sheet, so an
+app-level rule would exist under some presets and not others.
 
 ## The mod pipeline (matters when touching data loading or startup)
 
@@ -872,8 +1345,8 @@ authoring guide is `docs/modding.md`; the shape:
   reusing their names, or add a declarative sheet block via `blocks.json`). A
   **data+Python** mod also ships one `python_module` whose import-time
   `register_*` calls extend an engine registry (readout kinds, condition
-  mechanisms, config-field types/widgets, sheet blocks — see the registry table in
-  `docs/modding.md`).
+  mechanisms, stat appliers, config-field types/widgets, sheet blocks — see the
+  registry table in `docs/modding.md`).
 - **Two settings gates** (`core/storage.DEFAULT_SETTINGS`): `enabled_mods` (ids
   whose *data* layers on) and `trusted_mods` (ids whose *Python* may be imported —
   a separate opt-in because importing runs code). `mods.set_mod_enabled` /

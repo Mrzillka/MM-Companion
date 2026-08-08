@@ -9,7 +9,7 @@
     },
     "metrics": {
       "label": "Sizes",
-      "order": ["radius", "border", "focus", "space", "card", "group", "column", "canvas", "opacity"]
+      "order": ["radius", "border", "focus", "space", "card", "group", "column", "canvas", "die", "compact", "opacity"]
     },
     "typography": {
       "label": "Typography",
@@ -35,6 +35,8 @@
     "group": "Group boxes",
     "column": "Column minimums",
     "canvas": "Canvas",
+    "die": "The die",
+    "compact": "Compact mode",
     "opacity": "Opacity",
     "family": "Font family",
     "size": "Point sizes",
@@ -148,6 +150,27 @@
       "hint": "0 is invisible, 1 is fully lit. A card eases to this when switched off."
     },
     "canvas.hint.height": {"label": "Empty-canvas hint height", "hint": "In pixels."},
+    "platform.features.height": {
+      "label": "Platform Features list",
+      "hint": "How tall the scrolling Feature list in the vehicle/installation editor is, in pixels."
+    },
+    "die.size": {"label": "Die", "hint": "How big the d20 is drawn, in pixels. Square."},
+    "die.size.compact": {
+      "label": "Die (compact mode)",
+      "hint": "The smaller die the mini roller uses, so the whole window fits in a screen corner."
+    },
+    "die.padding": {
+      "label": "Die padding",
+      "hint": "Room around the drawing inside its button, in pixels."
+    },
+    "compact.width": {"label": "Window width", "hint": "What the mini roller opens at, in pixels."},
+    "compact.height": {"label": "Window height", "hint": "In pixels."},
+    "compact.min-width": {
+      "label": "Minimum width",
+      "hint": "How small the mini roller may be dragged before it starts scrolling instead."
+    },
+    "compact.min-height": {"label": "Minimum height", "hint": "In pixels."},
+    "compact.button": {"label": "Shrink button", "hint": "The diameter of the round button floating over the roller's bottom-right corner, in pixels."},
     "column.stat.spin": {"label": "Ability / resistance spin box"},
     "column.skill.name": {"label": "Skill name"},
     "column.skill.spin": {"label": "Skill rank spin box"},
@@ -167,6 +190,10 @@
       "label": "Hero point pip",
       "hint": "The medallion is square, so this is its height too."
     },
+    "column.status-dot": {
+      "label": "Connection dot",
+      "hint": "The dot beside the connection state in the menu bar corner. Round, so this is its height too."
+    },
     "family": {
       "label": "Font family",
       "hint": "Leave on the platform default unless you have a reason; the app never sets a size in a stylesheet, so an unusual family can reflow a lot."
@@ -175,7 +202,9 @@
     "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
     "size.cost-total": {"label": "Cost total"},
     "size.dice-face": {"label": "Die face"},
+    "size.dice-face.compact": {"label": "Die face (compact mode)", "hint": "On the smaller die."},
     "size.roll-readout": {"label": "Roll readout"},
+    "size.compact-button": {"label": "Shrink button glyph", "hint": "The arrow inside the round button over the roller. Sized against compact.button, the circle it has to fill."},
     "scale.inactive": {
       "label": "Switched-off card",
       "hint": "How much a switched-off power card shrinks. 1.0 is no change."

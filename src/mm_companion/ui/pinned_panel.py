@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -307,9 +307,25 @@ class PinnedPanel(QFrame):
         self._splitter = QSplitter(Qt.Orientation.Vertical, self)
         self._splitter.setObjectName("pinnedSplitter")
         self._splitter.setChildrenCollapsible(False)
+        # And the strip has to hear when its content's minimum moves, because the
+        # scroll area below sits between the two and a QScrollArea's own minimum
+        # does not depend on its child — so Qt's invalidation stops there and
+        # nothing ever asks :meth:`minimumSizeHint` again. That is not cosmetic:
+        # this widget's answer is what holds the *window* open, so a block that
+        # grew (the roller showing its spec chip) would find the window still at
+        # the minimum computed before it grew, and the strip would answer the
+        # shortfall with the scrollbar it exists to avoid. A LayoutRequest reaches
+        # the splitter whenever a block below it invalidates.
+        self._splitter.installEventFilter(self)
 
         # The last-resort scroll (see the module docstring): with the strip's
         # minimum holding the window open, the content fits and no bar ever shows.
+        # Both axes stay on `AsNeeded` — the minimum is capped at the usable screen,
+        # and where the room genuinely is not there a bar beats clipping a block.
+        # What makes a bar rare is that the minimum is re-reported when the content
+        # changes (see :meth:`eventFilter`); it was not, and the Dice block showing
+        # its spec chip was enough to bring one up on a window that had plenty of
+        # room to grow into.
         self._scroll = QScrollArea(self)
         self._scroll.setObjectName("pinnedScroll")
         self._scroll.setWidgetResizable(True)
@@ -449,6 +465,18 @@ class PinnedPanel(QFrame):
             else:
                 self.setFixedHeight(self.empty_extent())
         self.updateGeometry()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
+        """Re-report the strip's minimum whenever its content's own changes.
+
+        See the ``installEventFilter`` in ``__init__`` for why this is needed at
+        all: the scroll area between this widget and the blocks breaks Qt's own
+        invalidation chain, so without this the window keeps a minimum computed
+        before the block grew.
+        """
+        if watched is self._splitter and event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()
+        return super().eventFilter(watched, event)
 
     def empty_extent(self) -> int:
         """How thick the strip is with nothing pinned: its handle, and no more."""

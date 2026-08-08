@@ -25,6 +25,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QTimer
 
 from mm_companion.core.character import Character
+from mm_companion.core.session import client as session_client
 from mm_companion.core.session.protocol import CharacterSnapshot, encode, sanitize_snapshot
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
@@ -224,14 +225,36 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     pusher = SnapshotPusher(window.sheet, bridge, parent=window)
     receiver = ConditionReceiver(window.sheet, bridge, parent=window)
 
+    indicator = getattr(window, "connection_indicator", None)
+    if indicator is not None:
+        indicator.set_bridge(bridge)
+
     def leave() -> None:
         pusher.detach()
         receiver.detach()
         bridge.stop()
         set_active_session(None)
+        if indicator is not None:
+            indicator.set_bridge(None)
         window.sheet.sync_session()
 
+    def on_state(state: str, detail: object) -> None:
+        """Say it on the status bar too, for the change worth narrating.
+
+        The indicator carries the standing truth; this is the moment it changed,
+        which is what someone looking at the sheet rather than the menu bar sees.
+        """
+        if state == session_client.STATE_RECONNECTING:
+            window.statusBar().showMessage("Lost the session — trying to get back in…", 10000)
+        elif state == session_client.STATE_ONLINE and isinstance(detail, dict):
+            window.statusBar().showMessage("Back in the session.", 5000)
+
     window.closed.connect(leave)
+    # A reconnect raises this again with a fresh welcome, and ``push_now`` drops
+    # any send it makes while offline — so without this the GM's copy of the
+    # sheet would stay frozen at whatever it was when the link went down.
+    bridge.connected.connect(lambda _welcome: pusher.push_now())
+    bridge.connectionStateChanged.connect(on_state)
     bridge.disconnected.connect(
         lambda reason: window.statusBar().showMessage(f"Left the session: {reason}", 10000)
     )

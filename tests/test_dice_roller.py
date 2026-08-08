@@ -28,7 +28,12 @@ from mm_companion.core.dice import resolve_check
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.dice_roller import DiceRollerView, degree_text
-from mm_companion.ui.roll_history import MAX_QUICK_ROLLS, MIN_HISTORY_HEIGHT, NoteCard
+from mm_companion.ui.roll_history import (
+    HISTORY_FLOOR_HEIGHT,
+    MAX_QUICK_ROLLS,
+    MIN_HISTORY_HEIGHT,
+    NoteCard,
+)
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 
@@ -409,11 +414,39 @@ def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> N
     assert empty_history > full_history
 
 
-def test_the_history_is_never_squeezed_below_two_cards(qapp: QApplication) -> None:
+def test_a_history_asks_for_two_cards_and_settles_for_one(qapp: QApplication) -> None:
+    """The two heights are deliberately different numbers, and the gap is the point.
+
+    A history *asks* for two cards' worth so it reads as a list. It is not a
+    *minimum*, because the history is the elastic part of the Dice block: when the
+    roll panel above it grows, this is what gives the room back rather than the
+    block growing past the window.
+    """
     view = DiceRollerView()
 
-    assert view._local_history._scroll.minimumHeight() == MIN_HISTORY_HEIGHT
-    assert view._session_history._scroll.minimumHeight() == MIN_HISTORY_HEIGHT
+    for history in (view._local_history, view._session_history):
+        assert history._scroll.minimumHeight() == HISTORY_FLOOR_HEIGHT
+        assert history.sizeHint().height() == MIN_HISTORY_HEIGHT
+        assert HISTORY_FLOOR_HEIGHT < MIN_HISTORY_HEIGHT
+
+
+def test_a_history_does_not_grow_taller_as_the_log_gets_longer(qapp: QApplication) -> None:
+    """What it asks for is a readable window onto the log, not the whole log.
+
+    Left to itself a ``QScrollArea`` reports its inner widget's hint, and a block's
+    minimum is its content's *preferred* height — so the Dice block's minimum used
+    to climb with every roll until the pinned strip could no longer fit it.
+    """
+    view = DiceRollerView()
+    before = view._local_history.sizeHint()
+
+    for _ in range(20):
+        view._local_history.add_roll(
+            {"die": 11, "bonus": 0, "penalty": 0, "dc": None, "result": None}
+        )
+
+    assert len(view._local_history.cards()) == 20
+    assert view._local_history.sizeHint() == before
 
 
 def test_a_dragged_split_is_left_alone_until_the_axis_flips(qapp: QApplication) -> None:

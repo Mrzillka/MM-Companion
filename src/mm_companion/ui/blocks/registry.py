@@ -10,7 +10,7 @@ the page and the pinned strip respectively.
 
 The registry reuses the generic :class:`~mm_companion.core.registry.Registry`, so
 it keeps insertion order and rejects a duplicate key unless ``replace=True`` — a
-mod overriding a base block is explicit. The eleven base blocks register at import;
+mod overriding a base block is explicit. The twelve base blocks register at import;
 a mod's Python module can :func:`register_block` a new one (its size table entry
 travels on the descriptor, so no separate JSON edit is needed).
 """
@@ -35,7 +35,9 @@ from mm_companion.ui.blocks.bus import (
     FACTS_CHANGED,
     LOAD_REQUESTED,
     NOTE_REQUESTED,
+    PIN_REQUESTED,
     ROLL_REQUESTED,
+    UNPIN_REQUESTED,
 )
 from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.sections import (
@@ -46,6 +48,7 @@ from mm_companion.ui.sections import (
     ComplicationsSection,
     ConditionsSection,
     DiceSection,
+    EquipmentSection,
     PowersSection,
     ResistancesSection,
     SkillsSection,
@@ -103,7 +106,16 @@ def default_pin_lines() -> list[list[str]]:
 # Every block whose lines can be rolled says so the same way: one `rollRequested`
 # signal carrying the RollSpec. Named once so the five tables below stay readable
 # and a sixth requester is a one-word addition.
-_ROLLS = {"rollRequested": (ROLL_REQUESTED,)}
+#
+# `pinRequested` rides along with it, because a line a GM can roll is exactly a
+# line a GM can pin to that character's card — same rows, same stashed key. The
+# sheet serves the topic (the card is outside the sheet entirely) and the menu
+# only appears once it says there is a card, so a player's own sheet is unchanged.
+_ROLLS = {
+    "rollRequested": (ROLL_REQUESTED,),
+    "pinRequested": (PIN_REQUESTED,),
+    "unpinRequested": (UNPIN_REQUESTED,),
+}
 
 # A *stat readout* also loads on a single click, so the sliders and the DC can be
 # set before anything is thrown. A power card's roll line does not: it is an
@@ -256,6 +268,26 @@ _BASE_BLOCKS = [
         {},
     ),
     (
+        "equipment",
+        "Equipment",
+        EquipmentSection,
+        6,
+        0,
+        {
+            "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
+            # Wearing a jacket is a play action, not a build edit, so it drives the
+            # same live refreshes minus EDITED — the same split the Powers block's
+            # runtime toggle makes.
+            "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED),
+        },
+        # An item's card restates itself from character facts (a Strength-Based weapon
+        # folds in Strength) and its *budget* is a rank of the Equipment advantage, so
+        # an advantage edit has to reach it.
+        {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
+        _ROLLS,  # the 🎲 beside each line of a weapon card's dice footer
+        {},
+    ),
+    (
         "dice",
         "Dice Roller",
         DiceSection,
@@ -284,7 +316,7 @@ _PINNED_BY_DEFAULT = frozenset({"dice"})
 
 
 def register_base_blocks(*, replace: bool = False) -> None:
-    """Register the eleven base M&M blocks (called once at import)."""
+    """Register the twelve base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
     for key, title, factory, row, col, publishes, subscribes, requests, serves in _BASE_BLOCKS:
         register_block(

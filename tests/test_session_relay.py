@@ -17,6 +17,7 @@ import time
 
 import pytest
 
+from mm_companion.core.session import client as client_mod
 from mm_companion.core.session import discovery
 from mm_companion.core.session import relay as relay_transport
 from mm_companion.core.session.client import SessionClient
@@ -471,6 +472,93 @@ def test_a_whole_session_runs_over_the_relay(box):
         client.close()
     finally:
         server.stop()
+
+
+def test_a_quiet_table_survives_the_relays_idle_reaper(monkeypatch: pytest.MonkeyPatch):
+    """The reported bug, end to end: a table that says nothing stays connected.
+
+    The relay reaps a pair that has moved no bytes for ``idle_timeout``, and a
+    session being *roleplayed* sends nothing at all — no rolls, no sheet edits.
+    Production had to raise the timeout to four hours to work around this. The
+    client keepalive is what makes the stock value correct again.
+    """
+    monkeypatch.setattr(client_mod, "IO_TIMEOUT", 0.05)
+    monkeypatch.setattr(client_mod, "KEEPALIVE_INTERVAL", 0.1)
+    # The GM's control link has its own keepalive, and it has to stay under the
+    # reaper too — scaled down here in the same proportion as production's
+    # 30 s ping against a 120 s timeout.
+    monkeypatch.setattr(relay_transport, "CONTROL_PING_INTERVAL", 0.1)
+    server = RelayServer("127.0.0.1", 0, limits=_capped(idle_timeout=0.4))
+    running = _run(server)
+    box = _Box(server, running.thread)
+    state = new_session("Quiet table")
+    session = SessionServer(state, transport=box.transport(state.id), persist=False)
+    session.start()
+    try:
+        client = SessionClient(
+            box.url(state.id),
+            0,
+            token=state.host_token,
+            display_name="Ada",
+            transport=box.transport(state.id),
+        )
+        client.connect()
+        try:
+            # Several idle windows' worth of doing absolutely nothing.
+            time.sleep(1.5)
+
+            assert client.connected
+            assert client.connection_state == client_mod.STATE_ONLINE
+            # And the link is not merely open, it still carries traffic.
+            client.request_roll(label="After the lull", bonus=2)
+            assert _wait_for(lambda: len(state.rolls) == 1)
+            assert state.rolls[0].label == "After the lull"
+        finally:
+            client.close()
+    finally:
+        session.stop()
+        server.stop()
+        running.thread.join(timeout=TIMEOUT)
+
+
+def test_without_the_keepalive_the_relay_really_does_reap(monkeypatch: pytest.MonkeyPatch):
+    """The negative twin, so the test above is provably testing something.
+
+    Same setup with the keepalive pushed out of reach: the pair is reaped, and the
+    client notices — which is the other half of the fix, since before this a
+    black-holed connection looked healthy indefinitely.
+    """
+    monkeypatch.setattr(client_mod, "IO_TIMEOUT", 0.05)
+    monkeypatch.setattr(client_mod, "PEER_TIMEOUT", 0.8)
+    monkeypatch.setattr(relay_transport, "CONTROL_PING_INTERVAL", 0.1)
+    # The single difference from the test above: the client never pings. Every
+    # other clock is identical, so what this proves is the keepalive and nothing
+    # else — the GM's control link is still warm, and the pair still dies.
+    monkeypatch.setattr(client_mod, "KEEPALIVE_INTERVAL", 3600.0)
+    server = RelayServer("127.0.0.1", 0, limits=_capped(idle_timeout=0.4))
+    running = _run(server)
+    box = _Box(server, running.thread)
+    state = new_session("Doomed table")
+    session = SessionServer(state, transport=box.transport(state.id), persist=False)
+    session.start()
+    try:
+        client = SessionClient(
+            box.url(state.id),
+            0,
+            token=state.host_token,
+            display_name="Ada",
+            transport=box.transport(state.id),
+            reconnect=False,
+        )
+        client.connect()
+        try:
+            assert _wait_for(lambda: not client.connected, timeout=4.0)
+        finally:
+            client.close()
+    finally:
+        session.stop()
+        server.stop()
+        running.thread.join(timeout=TIMEOUT)
 
 
 def test_two_players_reach_the_same_hosted_session(box):

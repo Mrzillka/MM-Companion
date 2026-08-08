@@ -500,13 +500,18 @@ def power_rolls(power: Power, char: Character | None, game_data: GameData) -> li
     Effect-prefixed for a multi-effect power, so a Linked Damage + Affliction says
     which save is which. An attack check and the save it forces are separate rolls
     made by different people, so they get an entry each rather than sharing one.
+
+    An effect carrying a :attr:`~mm_companion.core.powers.PowerEffectInstance.label`
+    is prefixed by *that*, whether or not it has company: a tank's two Damage effects
+    are "Cannon" and "Heavy machine gun", and prefixing both with "Damage" would name
+    neither. Nothing in the base ruleset's powers sets one, so no power's footer moves.
     """
 
     multi = len(power.effects) > 1
     specs: list[RollSpec] = []
     for effect in power.effects:
-        prefix = ""
-        if multi:
+        prefix = effect.label
+        if not prefix and multi:
             base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
             prefix = base.name if base else effect.effect_id
         specs.extend(_effect_rolls(effect, game_data, char, prefix))

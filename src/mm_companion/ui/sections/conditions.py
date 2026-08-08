@@ -16,6 +16,8 @@ unlike the rest of the build — so :meth:`set_locked` is a deliberate no-op.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -61,11 +63,63 @@ def addable_categories(data: GameData) -> tuple[str, ...]:
 def addable_conditions(data: GameData) -> list[Condition]:
     """The conditions a "+" menu may apply, in catalog order.
 
-    Module-level because two menus offer the same list: this block's own "+", and
-    the GM's fast-apply on a player card.
+    Module-level because three menus offer the same list: this block's own "+",
+    and the GM's fast-apply on a player card and on an NPC card. All three reach
+    it through :func:`build_condition_menu`.
     """
     addable = addable_categories(data)
     return [c for c in data.conditions if c.category in addable]
+
+
+def build_condition_menu(
+    parent: QWidget,
+    data: GameData,
+    on_pick: Callable[[Condition], None],
+) -> QMenu:
+    """The "+" menu, split into one submenu per ``_meta.conditionGroups`` entry.
+
+    Module-level because three menus offer the same catalog — this block's own
+    "+", and the GM's fast-apply on a player card and on an NPC card — and a
+    condition should be in the same place in all three.
+
+    The split is a finding aid: 36 conditions in one alphabetical list is slow to
+    search mid-round. A condition whose ``group`` no submenu claims is appended
+    flat at the end rather than dropped, so a mod that adds one without tagging it
+    is still playable; a ruleset that declares no groups at all gets the old flat
+    menu back untouched.
+    """
+    menu = QMenu(parent)
+    conditions = addable_conditions(data)
+    by_name = sorted(conditions, key=lambda c: c.name)
+
+    def add_to(target: QMenu, items: list[Condition]) -> None:
+        for condition in items:
+            target.addAction(
+                condition.name,
+                lambda checked=False, c=condition: on_pick(c),
+            )
+
+    claimed: set[str] = set()
+    for group in data.condition_groups:
+        members = [c for c in by_name if c.group == group.group]
+        if not members:
+            continue
+        claimed.add(group.group)
+        # Constructed with *menu* as its parent, not through ``menu.addMenu(title)``:
+        # that convenience overload hands ownership of the new menu back to the
+        # caller, so a submenu with no Python reference is collected out from under
+        # the open menu. Parenting it makes the menu keep it alive instead.
+        submenu = QMenu(group.title, menu)
+        menu.addMenu(submenu)
+        add_to(submenu, members)
+    leftovers = [c for c in by_name if c.group not in claimed]
+    if leftovers:
+        # Only ever a separator between real submenus and the stragglers; an
+        # ungrouped ruleset produces the flat list with nothing above it.
+        if claimed:
+            menu.addSeparator()
+        add_to(menu, leftovers)
+    return menu
 
 
 def matching_condition(
@@ -156,7 +210,6 @@ class ConditionsSection(QGroupBox):
         self._data = data
         self._character = character
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
-        self._addable_conditions: list[Condition] = addable_conditions(data)
         self._condition_chips: list[QFrame] = []
         # Ephemeral last-rolled Confused action, keyed by (condition_id, parameter);
         # runtime combat state, not saved with the character.
@@ -209,9 +262,7 @@ class ConditionsSection(QGroupBox):
             self.edited.emit()
 
     def _show_condition_menu(self) -> None:
-        menu = QMenu(self)
-        for cond in sorted(self._addable_conditions, key=lambda c: c.name):
-            menu.addAction(cond.name, lambda checked=False, c=cond: self._choose_condition(c))
+        menu = build_condition_menu(self, self._data, self._choose_condition)
         button = self._add_condition_button
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 

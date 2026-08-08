@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 from mm_companion.core import storage
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
@@ -142,6 +143,85 @@ def test_the_block_is_never_clipped_in_either_strip(qapp: QApplication) -> None:
         needed = frame.minimumSizeHint()
         assert frame.width() >= needed.width(), edge
         assert frame.height() >= needed.height(), edge
+
+
+# -- the strip never scrolls -------------------------------------------------
+
+
+def _strip_bars(sheet: CharacterSheet) -> tuple[bool, bool]:
+    """Whether the pinned strip is showing a vertical / horizontal scrollbar."""
+    scroll = sheet.board.panel._scroll
+    return (scroll.verticalScrollBar().isVisible(), scroll.horizontalScrollBar().isVisible())
+
+
+def test_loading_a_trait_takes_the_room_from_the_history_not_the_window(
+    qapp: QApplication,
+) -> None:
+    """The regression: clicking a stat row grew the block past the window.
+
+    Showing the spec chip makes the roll panel taller. The history is the elastic
+    part of that block — it is a list with its own scroll area — so it is what has
+    to give the room back. It did not: the splitter handed the panel its old share
+    *plus* the chip, nothing re-divided, and the strip answered the shortfall with
+    a scrollbar.
+    """
+    sheet = _laid_out(qapp, _sheet(qapp))
+    view = sheet.dice.view
+    assert _strip_bars(sheet) == (False, False)
+    before = view._history_part.height()
+    window_height = sheet.height()
+
+    sheet.dice.load_roll(RollSpec(label="Athletics", modifier=9))
+    _settle(qapp)
+
+    assert view.panel._spec_chip.isVisible()
+    assert view._history_part.height() < before  # the history gave the chip its room
+    assert sheet.height() == window_height  # and the block did not push the window
+    assert _strip_bars(sheet) == (False, False)
+
+
+def test_a_long_history_does_not_ratchet_the_block_taller(qapp: QApplication) -> None:
+    """A history asks for two cards' worth however long the log gets.
+
+    A block's minimum is its content's *preferred* height, and a scroll area's
+    preferred height tracks its inner widget — so before this the Dice block's
+    minimum climbed with every roll, all session, until the strip could no longer
+    fit it.
+    """
+    sheet = _laid_out(qapp, _sheet(qapp))
+    frame = sheet.block_frame("dice")
+    before = frame.minimumSizeHint().height()
+
+    for _ in range(20):
+        sheet.dice.view._local_history.add_roll(
+            {"die": 11, "bonus": 0, "penalty": 0, "dc": None, "result": None}
+        )
+    _settle(qapp)
+
+    assert len(sheet.dice.view._local_history.cards()) == 20
+    assert frame.minimumSizeHint().height() == before
+    assert _strip_bars(sheet) == (False, False)
+
+
+def test_the_strip_holds_the_window_open_rather_than_scrolling(qapp: QApplication) -> None:
+    """Squeezed shorter than its content, the window refuses — it never scrolls.
+
+    The chain that makes that work runs frame → strip splitter → PinnedPanel →
+    board → sheet → window, and it has one broken link Qt cannot repair itself: a
+    ``QScrollArea``'s own minimum does not depend on its child, so the strip has to
+    re-report its own when the content below changes (see
+    ``PinnedPanel.eventFilter``).
+    """
+    sheet = _laid_out(qapp, _sheet(qapp))
+    sheet.dice.load_roll(RollSpec(label="Athletics", modifier=9))
+    _settle(qapp)
+    needed = sheet.block_frame("dice").minimumSizeHint().height()
+
+    sheet.resize(sheet.width(), 300)
+    _settle(qapp)
+
+    assert sheet.height() >= needed
+    assert _strip_bars(sheet) == (False, False)
 
 
 # -- a roll is not an edit ---------------------------------------------------

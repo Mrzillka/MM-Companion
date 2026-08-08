@@ -100,6 +100,13 @@ Then GMs set their **Relay address** to `relay.example.net` (TLS is assumed) or
 `--idle-timeout`, and `--session-ttl`; run `python -m mm_companion.relay --help`
 for the full list and defaults.
 
+**Leave `--idle-timeout` alone.** The stock 120 s is correct: every app at a table
+keeps its own link warm with a 30 s keepalive, so a session that is merely being
+roleplayed — no rolls, no sheet edits — stays connected indefinitely. This was not
+always true, and raising the timeout used to be the standard workaround; if you
+are running a relay for players on an app older than the keepalive release, see
+the ordering note in `deploy/README.md` before lowering it back.
+
 **What the relay is and is not.** It parses *only* its own envelope to learn which
 two connections to pair, then forwards bytes verbatim; it never dials outward, so
 an open relay cannot be turned into a general proxy against third parties. It
@@ -223,6 +230,9 @@ is the same guidance gathered in one place.
 | "this session speaks protocol vN, you speak vM" | The two apps are different enough versions to be incompatible. | Update both to the same release. |
 | "that join code is not for this session" / "has a typo" | Wrong or mistyped code. | Re-copy the code from the GM; the checksum catches most typos before a doomed connection attempt. |
 | The relay is unreachable / at capacity | The relay box is down or full. | The app returns to direct hosting; use a tunnel, run your own relay, or ask the GM to forward a port. |
+| **Everyone drops after about two minutes**, reliably, whenever the table stops rolling | An app from before the keepalive release, going through a relay on the stock idle timeout: nothing kept the link warm, so a quiet table was reaped. | Update the app — every current version pings for itself. If you run the relay, `deploy/README.md` has the upgrade ordering. |
+| **Reconnecting…** in the menu bar corner | The link dropped and the app is redialling. Your seat is held; the shared roll history is not thrown away. | Wait — it retries for five minutes, backing off. It goes back to **Connected** on its own, in the same seat. If it reaches **Disconnected**, rejoin with the same code. |
+| **Hosting — no one can join** | The session is fine and everyone in it is fine, but the listener died — usually a relay registration that dropped. | Stop and restart hosting. Existing players are unaffected either way. |
 
 ## What is protected, and what is not
 

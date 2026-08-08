@@ -4,9 +4,11 @@ Ability ranks live on the :class:`~mm_companion.core.character.Character`, so th
 spin boxes are views over it. A trait a power raises (Enhanced Trait) shows its
 enhanced total in green in the Total column — ``→ 5`` — without replacing the
 bought value; the boost is computed in
-:func:`~mm_companion.core.rules.power_trait_bonuses`.
+:func:`~mm_companion.core.rules.trait_bonuses`, the *sheet-wide* number, so worn
+equipment shows in this column on the same terms as a power (and by the same
+no-stacking rule, gear that loses to a power does not).
 :meth:`AbilitiesSection.refresh_enhancements` recomputes that column, and the
-sheet calls it whenever a power changes.
+sheet calls it whenever a power, an advantage or a piece of gear changes.
 
 Double-clicking a row rolls that ability: the section emits
 :attr:`AbilitiesSection.rollRequested` with the spec
@@ -23,14 +25,20 @@ from PySide6.QtWidgets import QSpinBox, QTableWidgetItem, QVBoxLayout, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    PIN_ABILITY,
+    PinRef,
     RollSpec,
     ability_points_spent,
     ability_roll,
     condition_scope_penalty,
-    power_trait_bonuses,
+    trait_bonuses,
 )
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.sections.stat_table import apply_stat_effects, build_stat_table
+from mm_companion.ui.sections.stat_table import (
+    PinMenuState,
+    apply_stat_effects,
+    build_stat_table,
+)
 from mm_companion.ui.sections.titled_section import TitledSection
 
 
@@ -55,12 +63,23 @@ class AbilitiesSection(TitledSection):
     #: The same spec and the same non-build promise; only the die stays still.
     loadRequested = Signal(object)
 
+    #: A row was right-clicked and pinned — carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
+    #: GM opened from a card (see ``set_pin_target``); the same non-build promise as
+    #: the two roll signals.
+    pinRequested = Signal(object)
+    #: The same, for a row that was already on the card.
+    unpinRequested = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         self._data = data
         self._character = character
         self._locked = False
+        # Whether this sheet was opened from a GM card, and what is already on
+        # that card. Both are set by the sheet after construction.
+        self._pins = PinMenuState()
         self._abilities: dict[str, QSpinBox] = {}
         # The Total cells that show a power-boosted trait's enhanced value.
         self._ability_enh: dict[str, QTableWidgetItem] = {}
@@ -76,6 +95,10 @@ class AbilitiesSection(TitledSection):
             roll_spec=self._roll_spec,
             roll_sink=self.rollRequested.emit,
             load_sink=self.loadRequested.emit,
+            pin_ref=self._pin_ref,
+            pin_sink=self.pinRequested.emit,
+            unpin_sink=self.unpinRequested.emit,
+            pins=self._pins,
         )
         layout.addWidget(self.table)
         layout.addStretch()  # top-aligned, so it lines up with Resistances beside it
@@ -99,17 +122,29 @@ class AbilitiesSection(TitledSection):
         self.set_priced_title("Abilities", ability_points_spent(self._character, self._data))
 
     def refresh_enhancements(self) -> None:
-        """Recompute each ability's Total cell from power boosts and condition penalties."""
-        bonuses = power_trait_bonuses(self._character, self._data)
+        """Recompute each ability's Total cell from standing boosts and condition penalties."""
+        bonuses = trait_bonuses(self._character, self._data).get("ability", {})
         cond_effects = {
             a.key: condition_scope_penalty(self._character, self._data, {a.key, a.name})
             for a in self._data.abilities
         }
-        apply_stat_effects(self._abilities, self._ability_enh, bonuses["ability"], cond_effects)
+        apply_stat_effects(self._abilities, self._ability_enh, bonuses, cond_effects)
 
     def _roll_spec(self, key: str) -> RollSpec:
         """This ability's roll, built fresh at click time so it is never stale."""
         return ability_roll(self._character, self._data, key)
+
+    def _pin_ref(self, key: object) -> PinRef:
+        """The pin that names this row — the same key the roll is built from."""
+        return PinRef(PIN_ABILITY, str(key))
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether this block's rows offer to pin at all."""
+        self._pins.enabled = enabled
+
+    def set_pinned(self, refs) -> None:
+        """Which parameters are already on the card, so a row can offer Unpin."""
+        self._pins.set_pinned(refs)
 
     def set_locked(self, locked: bool) -> None:
         """Make the ability spin boxes read-only labels (locked) or editable."""

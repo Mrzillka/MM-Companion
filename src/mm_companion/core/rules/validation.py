@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 
 from ..character import Character
 from ..data_loader import GameData
 from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
 from .derived import effective_ability, resistance_total, skill_total
+from .equipment import item_effective_build
 from .powers_cost import effect_effective_rank
 from .powers_terms import _effect_name, _effective_stats
 
@@ -103,19 +105,50 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
     return violations
 
 
-def _iter_leaf_powers(nodes: list[PowerNode]):
+def leaf_powers(nodes: list[PowerNode]) -> Iterator[Power]:
     """Yield every leaf :class:`Power` in a powers tree, ignoring array selection.
 
     Unlike :func:`~mm_companion.core.rules.live_powers`, this descends into *all*
     children of every group — including an array's unselected alternates — because
     Power Level caps apply to the whole build, not just the currently-active branch.
+
+    Public because three places wanted it and each grew its own copy: PL
+    validation here, the GM card's hover summary, and the powers block. A tree
+    walk is not a rule, but where the walk *stops* is one, and three answers to
+    that is two too many.
     """
 
     for node in nodes:
         if isinstance(node, PowerGroup):
-            yield from _iter_leaf_powers(node.children)
+            yield from leaf_powers(node.children)
         else:
             yield node
+
+
+def offensive_builds(char: Character, game_data: GameData) -> Iterator[Power]:
+    """Every assembled build on *char* whose effects face a Power Level cap.
+
+    The leaf powers **and** the gear. An item's
+    :attr:`~mm_companion.core.equipment.EquipmentItem.build` is a real :class:`Power`,
+    so a rifle obeys the attack-plus-rank cap exactly as a blast power does — the
+    printed rules are explicit that buying an effect with Equipment Points does not buy
+    it out of Power Level (``docs/mm-equipment-design.md`` §2).
+
+    Each item is yielded as its **effective** build
+    (:func:`~.equipment.item_effective_build`) — the weapon as it is actually used,
+    with whatever is fitted to it folded in. A laser sight's Accurate raises the rifle's
+    attack, and a cap that read the bare build would have missed it: the card's own ⚠
+    already reads the effective build, so the two disagreed, and the one that was wrong
+    is the character-wide estimate the NPC cards are drawn from.
+
+    *Every* item, not only the worn ones: wearing is runtime state a player flips
+    mid-scene, and a Power Level cap is a statement about the **build**. A sheet that
+    passed validation by sheathing its sword would be validating nothing.
+    """
+
+    yield from leaf_powers(char.powers)
+    for item in char.equipment:
+        yield item_effective_build(item, game_data)
 
 
 def _pl_for_cap(value: int, cap) -> int:
@@ -132,14 +165,18 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
     The smallest Power Level that would keep the build legal under the three caps in
     ``docs/mm-core-mechanics.md`` §7 — the ``max`` of:
 
-    - the attack + effect-rank cap over every offensive power effect (mirroring
-      :func:`power_pl_violations`: an attack-roll effect needs
-      ``ceil((attack + rank) / 2)``, an auto-hit effect needs ``rank`` outright);
+    - the attack + effect-rank cap over every offensive effect of every build the
+      character carries — its powers **and** its gear (:func:`offensive_builds`),
+      mirroring :func:`power_pl_violations`: an attack-roll effect needs
+      ``ceil((attack + rank) / 2)``, an auto-hit effect needs ``rank`` outright;
     - each paired-resistance cap from ``system.json`` (Dodge + Toughness,
-      Fortitude + Will), summed via :func:`resistance_total`.
+      Fortitude + Will), summed via :func:`resistance_total` — which already folds in
+      what worn armour grants, since equipment contributions reach the derived totals
+      like any other standing bonus.
 
     Used for NPCs, which carry no power-point budget, so their Power Level is derived
-    from what they can do rather than what they cost. A trait-less NPC estimates 0.
+    from what they can do rather than what they cost. A mook whose whole threat is the
+    rifle it carries would otherwise estimate at 0. A trait-less NPC still does.
     All numbers are data-driven (the caps come from ``costs.json``/``system.json``).
     """
 
@@ -148,7 +185,7 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
     attack_cap = game_data.costs.power_level.caps.get("attack_effect")
     if attack_cap is not None:
         attack_key = game_data.system.trait_keys.attack
-        for power in _iter_leaf_powers(char.powers):
+        for power in offensive_builds(char, game_data):
             for effect in power.effects:
                 base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
                 if base is None or base.resistance_dc_base is None:
@@ -332,7 +369,14 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     Evaluates the character-wide caps: per-skill modifier plus each paired-resistance
     cap (Dodge + Toughness, Fortitude + Will). The trait pairings and their labels come
     from ``system.json`` (``paired_caps``), not this resolver. The attack + effect-rank
-    cap is per-power and checked in :func:`power_pl_violations` instead.
+    cap is per-build and checked in :func:`power_pl_violations` instead — which the
+    Powers and Equipment blocks both call, so a weapon's breach is marked on its own
+    card.
+
+    Toughness from worn armour counts here exactly like bought Toughness, and needs no
+    special case to: :func:`resistance_total` reads the sheet-wide bonus, into which
+    equipment contributions already flow (``docs/mm-equipment-design.md`` §2 — gear does
+    not buy its way out of Power Level).
     """
 
     caps = game_data.costs.power_level.caps

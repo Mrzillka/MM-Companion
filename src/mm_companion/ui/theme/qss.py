@@ -14,7 +14,7 @@ preset's ``chrome.mode``:
     The theme dresses the window itself: surfaces, block frames and title bars,
     cards, canvases, chips and input chrome, all from tokens.
 
-Three rules constrain everything below, each learned from a real breakage:
+Four rules constrain everything below, each learned from a real breakage:
 
 1. **Never select a bare widget class that appears inside content.** A rule on
    plain ``QFrame`` or ``QLabel`` is inherited by every separator and every label
@@ -28,11 +28,16 @@ Three rules constrain everything below, each learned from a real breakage:
    carry a ``QGraphicsOpacityEffect`` (the powers cards, the canvas drop fade, the
    GM notice). A stylesheet background on an ancestor paints behind the whole
    subtree and fights the effect, so surfaces stop at the block frame.
+4. **State a complex widget's box, give its arrow column back.** One
+   ``border``/``padding``/``background`` on a ``QSpinBox`` or a ``QComboBox`` makes
+   ``QStyleSheetStyle`` lay the edit field out from the box alone, over the top of
+   the arrows — which then look right and take no clicks. See
+   :func:`_arrow_column_rules` for what that cost and why the fix is a padding.
 """
 
 from __future__ import annotations
 
-from mm_companion.ui.theme.tokens import Theme, UnknownToken
+from mm_companion.ui.theme.tokens import Theme, UnknownToken, rgba
 
 #: Widget classes that take a focus ring. Every one of them is either wheel-guarded
 #: (see :mod:`mm_companion.ui.wheel_guard`, where a control ignores the wheel until
@@ -48,6 +53,20 @@ _FOCUSABLE = (
     "QPushButton",
     "QToolButton",
 )
+
+#: How wide the arrow column is, as ``(spin box, combo box)`` pixels. A property of
+#: the platform *style* rather than of the theme — see :func:`_arrow_column_rules`.
+ArrowColumns = tuple[int, int]
+
+#: What a caller with no ``QApplication`` to measure gets. Wide enough for the
+#: common styles, and only ever a fallback: :func:`mm_companion.ui.theme.apply`
+#: measures the real one.
+FALLBACK_ARROW_COLUMNS: ArrowColumns = (20, 20)
+
+#: The dynamic property a spin box built without arrows carries, so the sheet can
+#: hand it back the room it does not need. Set by
+#: :func:`mm_companion.ui.widgets.make_spin_box`.
+ARROWLESS_PROPERTY = "mmArrowless"
 
 
 def _color(theme: Theme, name: str, fallback: str | None = None) -> str:
@@ -68,11 +87,22 @@ def _metric(theme: Theme, name: str, fallback: float | None = None) -> float:
     raise UnknownToken("metrics", name, theme.metrics)
 
 
-def build(theme: Theme) -> str:
-    """The global stylesheet for *theme*."""
+def build(theme: Theme, arrow_columns: ArrowColumns | None = None) -> str:
+    """The global stylesheet for *theme*.
+
+    *arrow_columns* is the platform style's own arrow column, measured by the
+    caller; see :func:`_arrow_column_rules` for why it cannot be a token.
+    """
     blocks = [_focus_rules(theme)] if theme.chrome.focus_ring else []
     if theme.styled:
         blocks.append(_chrome_rules(theme))
+    # Last, and that is load-bearing: it restates `padding-right`, which the input
+    # chrome above also sets. Equal specificity, so the later rule is the one that
+    # takes. Paired with whichever block states a box — see _arrow_column_rules; a
+    # preset with neither the ring nor the chrome states none, so it needs no
+    # correction and keeps the platform's own layout untouched.
+    if theme.chrome.focus_ring or theme.styled:
+        blocks.append(_arrow_column_rules(theme, arrow_columns or FALLBACK_ARROW_COLUMNS))
     return "\n\n".join(block for block in blocks if block)
 
 
@@ -93,6 +123,52 @@ def _focus_rules(theme: Theme) -> str:
         f"    border: {width}px solid {ring};\n"
         f"    border-radius: {radius}px;\n"
         f"}}"
+    )
+
+
+def _arrow_column_rules(theme: Theme, columns: ArrowColumns) -> str:
+    """Keep a spin box's value out from under its own arrows.
+
+    Qt's box model is all-or-nothing on a complex widget. The moment a stylesheet
+    states a ``border``, a ``padding`` or a ``background`` on a ``QSpinBox`` or a
+    ``QComboBox``, ``QStyleSheetStyle`` — not the platform style — computes
+    ``SC_SpinBoxEditField`` from the box's own padding rect, which knows nothing
+    about the arrows. It came back spanning the whole widget, so the line edit was
+    laid over both arrow buttons: every click aimed at an arrow landed in the text
+    field instead, and a long value was drawn underneath them. Arrows that are
+    painted, correct-looking, and dead.
+
+    Both statements exist, which is why this is not confined to the styled presets.
+    :func:`_chrome_rules` gives a styled preset a box at all times, and
+    :func:`_focus_rules` gives *every* preset one while a box holds keyboard focus
+    — and the wheel guard means a spin box is focused whenever anyone is about to
+    use it. Classic was correct until clicked into, and broken from then on.
+
+    The fix is a right-hand padding the width of the arrow column, and *only* that:
+    the buttons themselves are deliberately left unstated so the platform style
+    goes on drawing its own arrows. Placing them here instead is the obvious
+    alternative and the wrong one — once a sub-control is positioned by the sheet
+    the platform stops drawing its indicator inside it, which buys working arrows
+    nobody can see, and Qt renders each border edge as a rectangle rather than
+    mitring them, so the usual CSS-triangle substitute comes out as a square.
+
+    How wide that column is belongs to the *style*, not to the theme: 50px under
+    ``windows11``, 15px under ``Fusion``. So it is measured (see
+    :func:`mm_companion.ui.theme.arrow_columns`) and passed in, and the constants
+    below are only the fallback for a caller with no ``QApplication`` — the tests
+    that build a sheet as text.
+    """
+    spin, combo = columns
+    return (
+        "/* room for the platform's own arrows */\n"
+        f"QSpinBox, QDoubleSpinBox {{ padding-right: {spin}px; }}\n"
+        f"QComboBox {{ padding-right: {combo}px; }}\n"
+        # A box built with buttons=False reserves nothing, so it must not pay for a
+        # column it does not have — on the sheet's narrow rank grids that padding
+        # would be most of the cell. make_spin_box marks those; see
+        # mm_companion.ui.widgets.
+        f'QSpinBox[{ARROWLESS_PROPERTY}="true"],'
+        f' QDoubleSpinBox[{ARROWLESS_PROPERTY}="true"] {{ padding-right: 0px; }}'
     )
 
 
@@ -163,6 +239,17 @@ def _chrome_rules(theme: Theme) -> str:
             f"    border-radius: {radius_field}px;\n"
             f"    padding: 0 {pad}px;\n"
             f"}}\n"
+            # The popup is a separate top-level window and the palette does not
+            # reach it, so a dark preset otherwise drops a system-light list out of
+            # a dark combo. Scoped under QComboBox, so it is not the bare container
+            # selector rule 1 forbids.
+            f"QComboBox QAbstractItemView {{\n"
+            f"    background: {block};\n"
+            f"    color: {text};\n"
+            f"    border: {width}px solid {border};\n"
+            f"    selection-background-color: {c('accent')};\n"
+            f"    selection-color: {c('text.on-badge')};\n"
+            f"}}\n"
             f"QHeaderView::section {{\n"
             f"    background: {titlebar};\n"
             f"    color: {muted};\n"
@@ -191,6 +278,20 @@ def _chrome_rules(theme: Theme) -> str:
             f"QTabBar::tab:hover {{ color: {text}; }}",
             # Buttons. autoRaise tool buttons (the block title bar's ↗ and ✕) stay
             # flat until hovered, so the title bar keeps reading as one strip.
+            #
+            # The resting border is drawn *transparent* rather than dropped, and a
+            # checked one is stated outright, because of a bug worth remembering:
+            # once a stylesheet states a tool button's box, QStyleSheetStyle takes
+            # the whole box over and stops painting the platform's sunken/checked
+            # panel. Without a :checked rule a checkable tool button — the mini
+            # roller's always-on-top pin, a floated block's — painted exactly like
+            # an unchecked one, which on the dark presets meant invisible. And
+            # `border: none` here would make the glyph jump sideways the moment it
+            # lit up; that is the same lesson QuickRollStar carries.
+            #
+            # The lit state is the accent, not surface.card: on both dark presets
+            # surface.card is *darker* than the title bar it sits on (~1.05:1),
+            # which is also why hover barely reads there.
             "/* buttons */\n"
             f"QPushButton {{\n"
             f"    border: {width}px solid {border};\n"
@@ -198,8 +299,12 @@ def _chrome_rules(theme: Theme) -> str:
             f"    padding: {m('space.xs')}px {m('space.lg')}px;\n"
             f"}}\n"
             f"QPushButton:hover {{ border-color: {c('accent')}; }}\n"
-            f"QToolButton {{ background: transparent; border: none; }}\n"
-            f"QToolButton:hover {{ background: {c('surface.card', block)}; "
-            f"border-radius: {radius_field}px; }}",
+            f"QToolButton {{ background: transparent;"
+            f" border: {width}px solid transparent;"
+            f" border-radius: {radius_field}px; }}\n"
+            f"QToolButton:hover {{ background: {c('surface.card', block)}; }}\n"
+            f"QToolButton:checked {{ background: {rgba(c('accent'), 0.25)};"
+            f" border-color: {c('accent')}; }}\n"
+            f"QToolButton:checked:hover {{ background: {rgba(c('accent'), 0.35)}; }}",
         )
     )

@@ -23,7 +23,9 @@ from mm_companion.ui.blocks.bus import (
     FACTS_CHANGED,
     LOAD_REQUESTED,
     NOTE_REQUESTED,
+    PIN_REQUESTED,
     ROLL_REQUESTED,
+    UNPIN_REQUESTED,
     SignalBus,
 )
 
@@ -39,7 +41,13 @@ BASE_TOPICS = {
     EDITED,
 }
 
-REQUEST_TOPICS = {ROLL_REQUESTED, LOAD_REQUESTED, NOTE_REQUESTED}
+REQUEST_TOPICS = {
+    ROLL_REQUESTED,
+    LOAD_REQUESTED,
+    NOTE_REQUESTED,
+    PIN_REQUESTED,
+    UNPIN_REQUESTED,
+}
 
 
 # -- bus mechanics -----------------------------------------------------------
@@ -147,7 +155,11 @@ def test_every_requested_topic_is_served_and_vice_versa() -> None:
     # The same dead-wiring check the notification channel gets: a request nobody
     # answers, or a server nobody asks, is a mistake either way.
     requested: set[str] = set()
-    served: set[str] = set()
+    # The sheet serves the two pin topics itself — a pin's destination is a GM
+    # card, which is outside the sheet entirely, so no block can answer them.
+    # Seeded here for the same reason BUILD_CHANGED/EDITED are seeded below;
+    # test_roll_routing.py checks the sheet really does serve them.
+    served: set[str] = {PIN_REQUESTED, UNPIN_REQUESTED}
     for descriptor in block_descriptors():
         for topics in descriptor.requests.values():
             requested.update(topics)

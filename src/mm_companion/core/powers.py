@@ -93,6 +93,12 @@ class PowerEffectInstance:
     this effect's attack roll and its Attack PL cap (see
     :func:`mm_companion.core.rules.effect_attack_skill_bonus`).
 
+    ``label`` names *this* effect where the base effect's own name is not enough —
+    a vehicle's "Cannon" and "Heavy machine gun" are both Damage, and a dice footer
+    listing "Damage" twice says nothing. Empty for the ordinary case, and it is
+    cosmetic: nothing about cost, terms or rolls changes, only what they are called
+    (:func:`mm_companion.core.rules.power_rolls` prefixes with it).
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -104,6 +110,7 @@ class PowerEffectInstance:
     """
 
     effect_id: str
+    label: str = ""
     rank: int = 1
     extras: list[ModifierSelection] = field(default_factory=list)
     flaws: list[ModifierSelection] = field(default_factory=list)
@@ -124,6 +131,10 @@ class PowerEffectInstance:
             "descriptors": list(self.descriptors),
             "attack_skill": self.attack_skill,
         }
+        # Written only when it says something, so an existing power's entry is
+        # byte-for-byte what it was.
+        if self.label:
+            data["label"] = self.label
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
@@ -132,6 +143,7 @@ class PowerEffectInstance:
     def from_dict(cls, raw: dict) -> PowerEffectInstance:
         return cls(
             effect_id=raw["effect_id"],
+            label=str(raw.get("label", "")),
             rank=int(raw.get("rank", 1)),
             extras=[ModifierSelection.from_dict(m) for m in raw.get("extras", [])],
             flaws=[ModifierSelection.from_dict(m) for m in raw.get("flaws", [])],

@@ -104,6 +104,20 @@ new seat** subject to the client limit. On success it replies with `Welcome`
 history). A **mod-fingerprint mismatch is a warning**, not a refusal — the session
 works, but ids from the other end may not resolve against the mods loaded here.
 
+**Finding the right seat** has two steps, and the second is a deliberate
+weakening of the first. `player_by_token` matches the secret slot token, which is
+the real claim. If that misses, `player_by_id_if_free` will hand back the seat the
+client's *public* `player_id` names — but only when that seat is **empty** and
+**not the GM's**. Without it, a player who cleared their settings, moved machines,
+or pasted the join code by hand arrived as a second card on the GM's board while
+their first sat there greyed out forever. What it costs is that a table-mate could
+claim someone's offline seat and appear under their name; that is bounded (a live
+seat can never be taken, no character is disclosed — snapshots go to the GM's
+connection alone — and hidden rolls still need the GM token), and everyone who
+could try it already holds the join code and is sitting at the table. Matching on
+`display_name` was considered and rejected: two real players called "Sam" would
+silently become one seat.
+
 ### Two rules the server never breaks
 
 - **The server rolls.** Every roll — a player's request or the GM's own — goes
@@ -112,6 +126,53 @@ works, but ids from the other end may not resolve against the mods loaded here.
   one; a player's `hidden` flag is ignored. A hidden roll is recorded, persisted,
   and shown to the GM's own window with a 👁 marker, but it is left out of the
   wire entirely — there is nothing for a player client to peek at.
+
+### Keeping a link alive, and what happens when it dies
+
+`Ping`/`Pong` existed from the first version of the protocol and **nothing ever
+sent one** until v7. The cost of that was concrete: a relay drops a pair that has
+moved no bytes for `RelayLimits.idle_timeout` (120 s), and a table that is being
+*roleplayed* rolls nothing and edits no sheet, so it was reaped mid-session. The
+deployment worked around it by raising the timeout to four hours.
+
+Now every client keeps its own link warm. Hearing nothing for
+`net.KEEPALIVE_INTERVAL` (30 s) its reader thread sends a `Ping`; hearing nothing
+for `net.PEER_TIMEOUT` (90 s — three missed keepalives, and deliberately *under*
+the relay's 120 s) **either end** gives up on the peer. One exchange is enough for
+a whole relayed pair, because the relay stamps `last_active` on writes as well as
+reads: the ping is a read on the client's peer and a write on the session's, and
+the Pong is the reverse. So there is no separate server heartbeat.
+
+The peer deadline is the other half of the fix, and it matters on its own: before
+it, a half-open link — a black-holed connection, a suspended laptop, a NAT that
+dropped its mapping — was **invisible**. `recv` simply timed out forever on both
+sides, so a player sat in a session that was not there and the GM's roster showed
+a ghost as connected indefinitely.
+
+A connection that ends for a reason worth retrying is **redialled** in the
+background (`RECONNECT_DELAYS`, giving up after `RECONNECT_WINDOW` = 5 min),
+re-presenting the `player_id`/`player_token` already in hand — which is what makes
+a blip land back in the *same* seat with no user action. Retryable: a closed
+socket, an unreachable host, a torn frame, our own peer timeout. Terminal: a kick,
+an explicit `close()`, and a refusal in `TERMINAL_CODES` (bad token, protocol
+version, session full, rate limit) — answers that five more minutes would not
+change.
+
+One rule holds this together and is worth stating on its own:
+
+> **`EVENT_DISCONNECTED` means the session is over**, not that a packet went
+> missing. A blip raises `EVENT_STATE` and nothing else.
+
+Several things hang off that signal — the dice block swaps the table's shared roll
+history back for the private one, the sheet says "Left the session" — and firing
+it for a two-second Wi-Fi drop tells the player something false and throws away
+the table's history. A successful reconnect re-raises `EVENT_CONNECTED` with a
+fresh `Welcome`, so the roster and history repaint from it with no separate "you
+are back" path.
+
+Stopping a server **says so** (`Kicked` with `REASON_SESSION_CLOSED`), because a
+deliberate end and a sleeping laptop are otherwise indistinguishable and players
+would spend the whole retry window redialling a table that had closed.
 
 ## The connection ladder
 
@@ -144,6 +205,14 @@ call onto the GUI thread. Module-level `active_session()`/`live_session()` are t
 process-wide handle the sheet and the roller attach to without threading it
 through every constructor.
 
+Two properties that look like synonyms and are not. **`joined`** follows the
+*socket* and goes False the moment it dies, which is what makes a send fail
+honestly mid-blip. **`in_session`** follows the *session* and stays true across a
+reconnect. `live_session()` asks the second one, and the reason is a bug it once
+had: asking `joined` meant a roll made during a blip took the solo path, rolled
+locally, and landed in the private history — a roll the table never saw and the
+player thought it had. Asking `in_session` sends it, fails, and says so.
+
 The windows and widgets:
 
 - **`gm_window.py`** — the GM's console: host controls, the join code with a Copy
@@ -152,8 +221,16 @@ The windows and widgets:
   history).
 - **`player_card.py`** — one card per connected player (never the GM's own seat):
   portrait (the transmitted thumbnail, else a placeholder), name, PL, hero points,
-  condition chips (each with a hover hint), "Open sheet", and a "+" that
-  fast-applies a condition onto that player's live sheet.
+  condition chips (each with a hover hint), and a "+" that fast-applies a
+  condition onto that player's live sheet.
+- **`card_summary.py`** — the half of a card that is the same on both kinds. A
+  player's card and an NPC's differ in what they may *do* (a player's is a remote
+  snapshot the GM can only ask to change; an NPC's is the GM's own model, edited in
+  place) but not in what a GM *reads*, so both hover the same abilities /
+  resistances / powers summary and both open their sheet from the **portrait
+  alone**. Opening used to be a click anywhere on an NPC card, which fought that
+  card's own drag-to-reorder gesture — the two were told apart only by how far the
+  pointer had moved.
 - **`npc_window.py`** — an NPC is an ordinary `Character` in a simplified sheet
   (the point-pool row replaced by an *estimated* PL). NPCs are GM-only and never
   go on the wire; they live in the workspace `gm_characters/` dir.
@@ -162,6 +239,89 @@ The windows and widgets:
   command to the player's live sheet). Both listen on the sheet's signal bus.
 - **`roll_history.py`** — `RollHistoryPanel`, the shared log shown in both the GM
   window and each player's Dice Roller.
+- **`connection_indicator.py`** — a dot and a short label in the menu bar's
+  top-right corner (`setCornerWidget`), installed by both `MainWindow` and
+  `GMWindow`. It exists because every other report of a lost session **fades**:
+  the GM's notice strip after ten seconds by design, a status-bar message the
+  same. It follows a bridge and recomputes its *whole* state from that bridge on
+  every signal rather than mapping each signal to a state — several signals arrive
+  for one transition, and one state function is what stops them disagreeing.
+
+### Pinned parameters: the strip down a card's right side
+
+The four or five numbers *this* GM wants off *this* creature, without opening its
+sheet. `core/rules/pins.py` is the model and is pure Python like the rest of
+`core`: a **`PinRef`** names an ability, a resistance, a skill, initiative, a
+defence DC or one of a power's rolls, and `resolve_pin` turns it into a caption, a
+reading and a `RollSpec`. A reference, **never a number** — the character
+underneath is live, so a frozen value would be right once and then quietly wrong.
+
+Three things the *reading* has to get right, each of which was a bug first:
+
+- **Values come off the roll builders** (`resistance_roll`, not
+  `resistance_total`), which folds the condition overlays in for free while the
+  build math itself stays condition-free — and `with_conditions=False` takes them
+  back out again for the picker, which is a catalogue of the creature rather than a
+  combat readout. The `RollSpec` is identical either way, so nothing about what a
+  chip *rolls* moves with it.
+- **A defence DC is its own kind**, not a dressed-up resistance. The sheet's table
+  shows the rank, and a chip quietly showing ten more would be a trap.
+- **A pin that no longer resolves reads as a dash** rather than vanishing; a chip
+  that disappears leaves no way to remove it. That is why `PinnedValue.missing` is
+  a field of its own rather than `spec is None` — a **forced save** carries no spec
+  either (the wielder never rolls their own target's save; it reaches the person
+  who does as the attack's follow-up chip) but is perfectly well resolved.
+
+`ui/pin_panel.py` is the strip: **click loads** into the GM's roller and
+**double-click rolls**, the same bargain the sheet strikes everywhere else, plus
+drag to reorder and right-click to remove. A click is a release with *no* drag
+started and *no* double-click just handled, which is what keeps the four gestures
+apart. `ui/pin_picker.py` is the modeless browser the "+" opens; it unpins as well
+as pins, and its `set_pinned` is a no-op when it already agrees — without that
+guard the card's echo rebuilds the tree *during* a toggle, deleting the row being
+restated.
+
+A GM also pins from the sheet opened off that card, by right-clicking a row. Two
+bus topics — `pin-requested` and `unpin-requested` — served by the **sheet**
+rather than by any block, since a pin's destination is outside the sheet entirely.
+Which of the two a row offers comes from `stat_table.PinMenuState`, fed by
+`CharacterSheet.set_pinned`, pushed from the card on open *and* on every change so
+a sheet left open never offers to pin what is already there.
+
+Strips persist per card in the `gm_pins` setting, seeded from `gm_default_pins`.
+Three details:
+
+- The NPC damage default is **late-bound** — "the first Damage power", resolving to
+  the **attack roll** it makes, since the save it forces belongs to the target —
+  because the defaults are written long before the NPC is.
+- An **empty strip is written**, not dropped for tidiness. A GM who took every chip
+  off a card meant it, and a missing key is what seeds the defaults.
+- Read the setting through **`storage.gm_default_pins()`**, never off
+  `load_settings()`: that returns the settings file verbatim and does not merge
+  `DEFAULT_SETTINGS`, so a key added after a workspace was created reads back as
+  `None` — which is exactly how this shipped once with every strip empty.
+
+### Editing the defaults
+
+The GM window has a **Settings** menu of its own, opening the app's Settings window
+on its **GM Mode** page (`ui/settings/gm_page.py`) — two reorderable lists, one per
+card kind, over `gm_default_pins`.
+
+*When* a default is written down is the whole shape of that page. It predates the
+card it will seed, so it cannot name that character's things: a `Power.id` belongs
+to one character, and the only power a default may name is the late-bound
+`select="first_damage"`. So the page opens the **same** `PinPickerDialog` the cards
+do, with a `None` character putting it in defaults mode — listing
+`default_pin_choices(game_data)` instead of `available_pins(char, …)` and hiding the
+"Now" column, since there is nobody to read a value off.
+
+Editing the defaults deliberately does **not** reach the board: `_pins_for` wrote
+each card's strip into `gm_pins` the first time it saw the card, precisely so a
+later change here cannot rearrange what is in play. **Apply to cards on the board**
+is the confirmed override — `storage.clear_gm_card_pins()`, then
+`GMWindow.reseed_pins_from_defaults()` on every open GM window. That order matters:
+a window still holding its old strips in memory writes them straight back out on its
+next edit and undoes the clear.
 
 ### Snapshot sync
 

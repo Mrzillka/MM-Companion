@@ -62,6 +62,20 @@
     "space.lg": 8,
 
     "canvas.hint.height": 120,
+    "platform.features.height": 160,
+
+    "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout under it.",
+    "die.size": 160,
+    "die.size.compact": 96,
+    "die.padding": 20,
+
+    "_compact.width": "The size the window opens at in compact mode, before the user resizes it. The minimums are deliberately far below the roller's own content: past them the die and the history simply scroll, which is what lets the mini window be shoved into a corner of a shared screen.",
+    "compact.width": 380,
+    "compact.height": 560,
+    "compact.min-width": 200,
+    "compact.min-height": 150,
+    "_compact.button": "The diameter of the round button that floats over the roller's bottom-right corner and is the only way in and out of compact mode. Big enough to be found without hunting, small enough that the slice of roll history it covers is one card's corner.",
+    "compact.button": 34,
 
     "card.margins": [8, 6, 8, 6],
     "card.margins.off": [5, 3, 5, 3],
@@ -82,7 +96,8 @@
     "column.settings.value": 220,
     "column.chip-button": 24,
     "column.roll-button": 28,
-    "column.hero-point": 26
+    "column.hero-point": 26,
+    "column.status-dot": 10
   },
 
   "_typography": "Point sizes, applied with QFont.setPointSizeF — never as a stylesheet font-size, which would outrank the widget font and break the power card's switched-off transition. A null family keeps the platform default.",
@@ -92,7 +107,9 @@
     "size.terms": 8.0,
     "size.cost-total": 12.0,
     "size.dice-face": 40.0,
+    "size.dice-face.compact": 24.0,
     "size.roll-readout": 16.0,
+    "size.compact-button": 15.0,
     "scale.inactive": 0.9
   },
 

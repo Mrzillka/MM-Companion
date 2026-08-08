@@ -8,7 +8,7 @@ from ..character import Character
 from ..data_loader import GameData
 from .conditions import condition_speed_rank_mod
 from .powers_cost import effect_effective_rank
-from .runtime import effect_is_active, live_powers
+from .runtime import effect_is_active, live_powers, worn_items
 
 # -- movement / speed ------------------------------------------------------------
 
@@ -55,28 +55,74 @@ def base_ground_speed_rank(char: Character, game_data: GameData) -> int:
     return game_data.movement.base_ground_speed_rank + _size_speed_mod(char, game_data)
 
 
+def _build_speed_lines(
+    build, char: Character, game_data: GameData, *, name: str = ""
+) -> list[SpeedLine]:
+    """The speed lines **one** assembled build currently grants.
+
+    Every active effect carrying a per-round distance measure (Flight, Speed, Swimming,
+    Burrowing, …) at its *effective* rank. Shared by :func:`speed_lines` and
+    :func:`equipment_speed_lines`, since an item's
+    :attr:`~mm_companion.core.equipment.EquipmentItem.build` is a real
+    :class:`~mm_companion.core.powers.Power` — the same seam
+    :func:`~.runtime.build_contributions` uses, so gear and powers cannot drift.
+
+    *name* is what to call the line. Empty (the powers case) labels it by the base
+    effect, because a power's own title is arbitrary while *Flight* is the mechanic; a
+    piece of gear passes its own name instead, since that is what the item **is** and
+    two worn items granting the same effect would otherwise read identically.
+    """
+
+    lines: list[SpeedLine] = []
+    for effect in build.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None or base.measure is None:
+            continue
+        if base.measure.column != "distance" or not base.measure.per_round:
+            continue
+        if not effect_is_active(build, effect, base, game_data, char):
+            continue
+        rank = effect_effective_rank(effect, game_data, char)
+        lines.append(SpeedLine(f"{name or base.name} {rank}", rank))
+    return lines
+
+
+def equipment_speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
+    """The movement speeds the character's **worn** gear currently grants.
+
+    A glider flies and a bicycle is faster than walking, so gear reaches the Speed
+    readout exactly as a movement power does. Only *worn* items count
+    (:func:`~.runtime.worn_items`) — a bicycle in the garage moves nobody — which is the
+    same runtime gate a power's on/off switch provides.
+
+    No base ground line here: that belongs to the character, not to any one source, and
+    :func:`speed_lines` supplies it once.
+    """
+
+    lines: list[SpeedLine] = []
+    for item in worn_items(char):
+        lines.extend(_build_speed_lines(item.build, char, game_data, name=item.name))
+    return lines
+
+
 def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
     """The character's movement speeds — a base ground line plus one per active mode.
 
     The first line is always ground movement (:func:`base_ground_speed_rank`). Then
     every currently-active power effect that carries a per-round distance measure
     (Flight, Speed, Swimming, Burrowing, …) adds its own line at its *effective* rank,
-    labelled by the effect name and rank. A switched-off or suppressed movement power
-    contributes nothing (:func:`effect_is_active`).
+    labelled by the effect name and rank, and finally the worn gear that does the same
+    (:func:`equipment_speed_lines`). A switched-off or suppressed movement power — and a
+    stowed item — contributes nothing (:func:`effect_is_active`).
+
+    The base line stays first, which is what lets :func:`condition_speed_lines` overlay
+    the ground penalty on ``lines[0]`` however many modes are appended after it.
     """
 
     lines = [SpeedLine("Base", base_ground_speed_rank(char, game_data))]
     for power in live_powers(char.powers):
-        for effect in power.effects:
-            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-            if base is None or base.measure is None:
-                continue
-            if base.measure.column != "distance" or not base.measure.per_round:
-                continue
-            if not effect_is_active(power, effect, base, game_data, char):
-                continue
-            rank = effect_effective_rank(effect, game_data, char)
-            lines.append(SpeedLine(f"{base.name} {rank}", rank))
+        lines.extend(_build_speed_lines(power, char, game_data))
+    lines.extend(equipment_speed_lines(char, game_data))
     return lines
 
 
@@ -132,14 +178,60 @@ def _affects_movement(base) -> bool:
     return boost is not None and MOVEMENT_AFFECTS in boost.affects
 
 
+def _build_mode_lines(
+    build, char: Character, game_data: GameData, ground: int
+) -> list[MovementModeLine]:
+    """The specialised movement modes **one** assembled build currently grants."""
+
+    lines: list[MovementModeLine] = []
+    for effect in build.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None or not _affects_movement(base):
+            continue
+        if not effect_is_active(build, effect, base, game_data, char):
+            continue
+        for field in base.config_fields:
+            if field.type != "allocation":
+                continue
+            chosen = {
+                entry["id"]: int(entry.get("tier", 1))
+                for entry in effect.config.get(field.key, [])
+                if isinstance(entry, dict) and "id" in entry
+            }
+            for option in field.alloc_options:
+                tier = chosen.get(option.id)
+                if tier is None:
+                    continue
+                speed = option.speed(tier)
+                if speed is None:
+                    continue  # a capability, not a speed — nothing to show here
+                label = option.label + (f" {tier}" if len(option.tiers) > 1 else "")
+                lines.append(
+                    MovementModeLine(
+                        label,
+                        speed.rank(ground),
+                        option.description,
+                        option.tier_note(tier),
+                    )
+                )
+    return lines
+
+
 def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementModeLine]:
-    """The specialised movement *speeds* the character's active powers currently grant.
+    """The specialised movement *speeds* the character's active builds currently grant.
 
     Walks the ``allocation`` config fields of every live effect that declares itself a
     *movement* effect (:func:`_affects_movement`) and yields one line per chosen option
     at the rate its tier grants — a flat rank for a mode with a speed of its own
     (Swinging), or one derived from the character's ground speed for a mode expressed
     against it (Wall-Crawling).
+
+    Worn gear is walked alongside the live powers, for the reason
+    :func:`equipment_speed_lines` gives: a swing line grants Swinging exactly as a power
+    would, and showing gear-granted Flight while hiding gear-granted Swinging would be a
+    distinction the sheet cannot justify. A mode is named by the *option* either way —
+    the capability is what the row is about, and the item's own card is where it says
+    which thing grants it.
 
     Only options that actually confer a **rate** appear. Safe Fall, Stable, Trackless
     and the like are real capabilities, but they are not speeds, so listing them under a
@@ -150,36 +242,9 @@ def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementMo
     ground = base_ground_speed_rank(char, game_data)
     lines: list[MovementModeLine] = []
     for power in live_powers(char.powers):
-        for effect in power.effects:
-            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-            if base is None or not _affects_movement(base):
-                continue
-            if not effect_is_active(power, effect, base, game_data, char):
-                continue
-            for field in base.config_fields:
-                if field.type != "allocation":
-                    continue
-                chosen = {
-                    entry["id"]: int(entry.get("tier", 1))
-                    for entry in effect.config.get(field.key, [])
-                    if isinstance(entry, dict) and "id" in entry
-                }
-                for option in field.alloc_options:
-                    tier = chosen.get(option.id)
-                    if tier is None:
-                        continue
-                    speed = option.speed(tier)
-                    if speed is None:
-                        continue  # a capability, not a speed — nothing to show here
-                    label = option.label + (f" {tier}" if len(option.tiers) > 1 else "")
-                    lines.append(
-                        MovementModeLine(
-                            label,
-                            speed.rank(ground),
-                            option.description,
-                            option.tier_note(tier),
-                        )
-                    )
+        lines.extend(_build_mode_lines(power, char, game_data, ground))
+    for item in worn_items(char):
+        lines.extend(_build_mode_lines(item.build, char, game_data, ground))
     return lines
 
 

@@ -39,7 +39,13 @@ from mm_companion.ui.blocks import (
     default_rows,
     sync_declarative_blocks,
 )
-from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED, QUIET_REQUESTS
+from mm_companion.ui.blocks.bus import (
+    BUILD_CHANGED,
+    EDITED,
+    PIN_REQUESTED,
+    QUIET_REQUESTS,
+    UNPIN_REQUESTED,
+)
 from mm_companion.ui.pinned_panel import PinnedBoard
 
 
@@ -47,6 +53,14 @@ class CharacterSheet(QWidget):
     """Scrollable, free-form canvas of the sheet's blocks over a shared model."""
 
     edited = Signal()
+    #: A block's row was right-clicked and pinned. Carries a
+    #: :class:`~mm_companion.core.rules.pins.PinRef`, and goes *out* of the sheet —
+    #: what it names belongs on a GM card, which is not part of this window. The
+    #: sheet is the only thing serving ``pin-requested``, so the topic reaches here
+    #: whichever block raised it and a mod block joins on the same terms.
+    pinRequested = Signal(object)
+    #: The same, for a row that was already pinned.
+    unpinRequested = Signal(object)
 
     def __init__(
         self,
@@ -244,6 +258,11 @@ class CharacterSheet(QWidget):
         # a mod that ships its own roller is revealed on the same terms. A quiet
         # topic is exempt: it is raised as a side effect of something else the user
         # was doing, and would open a window they never asked for (see bus.py).
+        # The requests no *block* answers: a pin's destination is a GM card, so
+        # the sheet takes them and passes them on to whoever opened the sheet.
+        self._bus.serve(PIN_REQUESTED, self.pinRequested.emit)
+        self._bus.serve(UNPIN_REQUESTED, self.unpinRequested.emit)
+
         for topic in {t for d in self._descriptors for t in d.serves} - QUIET_REQUESTS:
             self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
 
@@ -295,6 +314,94 @@ class CharacterSheet(QWidget):
         self._locked = locked
         for section in self._sections():
             section.set_locked(locked)
+
+    def release_roller(self) -> tuple[QWidget, QWidget] | None:
+        """Lend the dice roller out to a compact window, or ``None`` if there is none.
+
+        The sheet is what a window can see, so it is the sheet that answers "give me
+        your roller" — but it does not name the Dice block to do it. Duck-typed over
+        the blocks like :meth:`sync_session`, first one wins; a sheet whose roller
+        block a mod replaced (or a user closed the feature out of) answers ``None``
+        and the window simply has no compact mode.
+        """
+        for section in self._sections():
+            handler = getattr(section, "release_roller", None)
+            if callable(handler):
+                return handler()
+        return None
+
+    def restore_roller(self) -> None:
+        """Take the dice roller back into its block."""
+        for section in self._sections():
+            handler = getattr(section, "restore_roller", None)
+            if callable(handler):
+                handler()
+                return
+
+    def compact_anchor(self) -> QWidget | None:
+        """The widget compact mode's shrink button floats over, or ``None``.
+
+        The third of the duck-typed set above, and swept for the same way: the
+        sheet does not name the Dice block, it asks each block in turn, and a
+        sheet whose roller a mod replaced with something that offers none answers
+        ``None`` — no button, and no compact mode, exactly as lending no roller
+        already meant.
+
+        Closing the Dice block from the View menu is not that case and needs no
+        code: the button is a child of the roller, so it goes wherever the roller
+        goes, including out of sight. Which is the honest answer too — compact
+        mode would have nothing to show.
+        """
+        for section in self._sections():
+            handler = getattr(section, "compact_anchor", None)
+            if callable(handler):
+                return handler()
+        return None
+
+    def suspend_windows(self, suspended: bool) -> None:
+        """Take this sheet's floated block windows off the screen, or bring them back.
+
+        What compact mode asks for on the way in and out: the blocks pinned above
+        other applications stay, the rest go with the sheet — and since on top is
+        the default, in practice that usually means they all stay. See
+        :meth:`~mm_companion.ui.block_canvas.BlockCanvas.set_windows_suspended`.
+        """
+        self._canvas.set_windows_suspended(suspended)
+
+    def sync_dice_layout(self) -> None:
+        """Re-read the roller's layout preference, fanned out like :meth:`sync_session`."""
+        for section in self._sections():
+            handler = getattr(section, "sync_dice_layout", None)
+            if callable(handler):
+                handler()
+
+    def set_pinned(self, refs) -> None:
+        """Tell every block which parameters are already on the GM card.
+
+        What turns a row's menu from "Pin to GM card" into "Unpin from GM card".
+        Pushed rather than pulled — a block cannot see the card — and pushed again
+        on every change, so a sheet left open beside the card never offers to pin
+        something that is already there.
+        """
+        for section in self._sections():
+            handler = getattr(section, "set_pinned", None)
+            if callable(handler):
+                handler(refs)
+
+    def set_pin_target(self, enabled: bool) -> None:
+        """Whether this sheet's rows offer "Pin to GM card".
+
+        Off by default, so a player's own sheet is exactly as it was — the action
+        would have nowhere to go. A GM window turns it on when it opens a sheet
+        from a card, and connects :attr:`pinRequested` to that card's strip.
+
+        Duck-typed and fanned out like :meth:`sync_session`: a mod block that
+        offers pinnable rows exposes the same method and is switched with the rest.
+        """
+        for section in self._sections():
+            handler = getattr(section, "set_pin_target", None)
+            if callable(handler):
+                handler(enabled)
 
     def sync_session(self) -> None:
         """Tell any block that cares that the session changed (joined, or ended).

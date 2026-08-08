@@ -9,8 +9,8 @@ content.
 Content is aggregated from several files: the core traits live in their own
 files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 ``resistances.json``), the richer 4e catalogs come from theirs (``skills.json``,
-``advantages.json``, ``conditions.json``) and the point-cost constants from
-``costs.json``.
+``advantages.json``, ``conditions.json``), the gear catalog from
+``equipment.json``, and the point-cost constants from ``costs.json``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 
 from . import mods as mods_module
-from .components import Integration, TraitBoost
+from .components import APPLY_BONUS, Integration, TraitBoost
 
 DATA_PACKAGE = "mm_companion"
 
@@ -321,7 +321,10 @@ class Condition:
     """A status condition that can affect a character (dazed, stunned, ...).
 
     ``category`` distinguishes general conditions from the damage/object-damage
-    ladders. ``includes`` lists ids of sub-conditions this one bundles in, and
+    ladders, and is what the sheet sorts *applied* chips by. ``group`` is the
+    finer, orthogonal split a "+" menu offers the catalog under (Senses,
+    Movement, …) — a finding aid, not a rule, since a flat list of 36 is slow to
+    search mid-round. ``includes`` lists ids of sub-conditions this one bundles in, and
     ``supersedes`` lists ids a more severe condition replaces — together these
     form the condition graph the combat state machine walks (see
     ``docs/mm-conditions-design.md`` §3). ``mechanisms`` names which engine subsystems
@@ -335,6 +338,7 @@ class Condition:
     description: str = ""
     id: str = ""
     category: str = ""
+    group: str = ""
     tooltip: str = ""
     includes: tuple[str, ...] = ()
     supersedes: tuple[str, ...] = ()
@@ -376,6 +380,25 @@ class ConditionCategory:
     category: str
     title: str
     addable: bool = True
+
+
+@dataclass(frozen=True)
+class ConditionGroup:
+    """One submenu a "+" menu splits the addable catalog into, from ``conditions.json``.
+
+    ``group`` matches a :class:`Condition`'s ``group``; ``title`` is the submenu's
+    caption. Read from ``_meta.conditionGroups`` in declared order.
+
+    Deliberately separate from :class:`ConditionCategory`, which the two axes are
+    easy to confuse: a *category* is a rules fact (this is part of the damage
+    ladder) and groups the chips already on a character; a *group* is an
+    ergonomic one (Blind and Deaf are both things you do to someone's senses) and
+    only ever shapes a menu. A ruleset that declares no groups gets the flat
+    alphabetical menu back, so this is purely additive.
+    """
+
+    group: str
+    title: str
 
 
 # --- Powers layer: base effects, modifiers (extras/flaws), and the config
@@ -1004,6 +1027,417 @@ class Movement:
     round_seconds: int = 6
 
 
+# --- Equipment: the gear catalog, its grouping axis, and the rules constants
+#     that govern the second currency (from ``equipment.json``). ---------------
+@dataclass(frozen=True)
+class EquipmentModifierRef:
+    """One extra or flaw a catalog entry applies to its effect.
+
+    ``modifier`` is a bare :class:`Modifier` id — the JSON writes it namespaced
+    (``"modifiers:accurate"``) and the loader unqualifies it; ``rank`` is its rank
+    where it takes one; ``note`` is the printed qualification the table gives
+    ("Ballistic damage only") and is display copy, not a rule.
+    """
+
+    modifier: str
+    rank: int | None = None
+    note: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class EquipmentEffectRef:
+    """One base effect an item is built from, as named by a catalog entry.
+
+    ``effect`` is a bare :class:`Effect` id — the JSON writes it namespaced
+    (``"effects:damage"``) and the loader unqualifies it, so the catalog reads as
+    the design reference does while the record carries something that indexes
+    straight into :attr:`GameData.effects`.
+
+    The remaining fields are the qualities an item's printed line fixes: the
+    ``rank`` it comes at, whether its Damage is ``strength_based``, its
+    ``descriptors``, and the effect's own configuration — ``config`` for the
+    keyed form an effect's config fields take, ``configuration`` for a named
+    preset ("stun", "toxin"), plus the ``resistance`` it is checked against and
+    the condition ``degrees`` an Affliction inflicts. Nothing is *built* here;
+    turning these into a real :class:`~mm_companion.core.powers.Power` is the
+    equipment rules layer's job.
+    """
+
+    effect: str
+    rank: int | None = None
+    strength_based: bool = False
+    descriptors: tuple[str, ...] = ()
+    config: dict = field(default_factory=dict)
+    configuration: str = ""
+    resistance: str = ""
+    degrees: tuple[tuple[str, ...], ...] = ()
+    #: What to call *this* effect on a multi-effect item — a tank's "Cannon". Empty
+    #: for the ordinary case, where the base effect's own name says everything there
+    #: is to say; see :attr:`~mm_companion.core.powers.PowerEffectInstance.label`.
+    label: str = ""
+    #: Extras and flaws carried by this effect alone, on top of the entry-wide
+    #: :attr:`EquipmentEntry.modifiers` every effect gets. An item whose effects each
+    #: want their own (a vehicle's two weapons: one Area, one Multiattack) has no other
+    #: way to say so.
+    modifiers: tuple[EquipmentModifierRef, ...] = ()
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class CriticalProfile:
+    """An item's critical-hit profile: the natural rolls that threaten, and the
+    ranks of Improved Critical that ``threat_range`` already reflects."""
+
+    threat_range: tuple[int, int] = (20, 20)
+    improved_critical_ranks: int = 0
+
+
+@dataclass(frozen=True)
+class EquipmentEntry:
+    """One item of the equipment catalog (from ``equipment.json``).
+
+    ``cost`` is the item's printed Equipment Point price — ``None`` for a
+    ``cost_kind`` of ``"built"``, which has no single printed number because the
+    item is assembled from a trait table. Equipment Points are a *second
+    currency*: they are bought by ranks of the Equipment advantage and never mix
+    with Power Points (see :class:`EquipmentRules`).
+
+    ``effects``/``modifiers`` are the build the item's printed line describes,
+    ``grants`` the advantages it hands its wielder (``{"advantages": (...)}``,
+    ids unqualified), ``critical`` its threat range, and ``patterns`` the
+    behavioural tags (``"attack_item"``, ``"passive_trait_item"``, …) named in
+    ``docs/mm-equipment-design.md`` §2.
+
+    ``implementation`` is deliberately an open bag rather than typed fields: it
+    is the per-item mechanical detail the engine grows into over time (ranges,
+    charges, attachment hosts, ammo modes), and its keys are as varied as the
+    catalog. Reading one is a matter for the phase that needs it; retaining it
+    whole is what lets that happen without another data migration.
+    """
+
+    id: str
+    name: str
+    category: str = ""
+    subcategory: str = ""
+    cost: int | None = None
+    cost_kind: str = "fixed"
+    cost_note: str = ""
+    description: str = ""
+    effects: tuple[EquipmentEffectRef, ...] = ()
+    modifiers: tuple[EquipmentModifierRef, ...] = ()
+    grants: dict = field(default_factory=dict)
+    critical: CriticalProfile | None = None
+    patterns: tuple[str, ...] = ()
+    implementation: dict = field(default_factory=dict)
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class EquipmentCategory:
+    """One group the Equipment block sorts its cards into, from
+    ``_meta.equipmentCategories`` — in display order.
+
+    ``id`` matches an :class:`EquipmentEntry`'s ``category``; ``title`` is the
+    heading shown above that group; ``description`` is the category's own
+    one-liner from ``_meta.categoryKey``.
+
+    The same split the conditions layer makes between a rules fact and a display
+    axis: the category *is* a rules fact here (a weapon is not armour, and a
+    weapon may not be dragged into the armour group), but which order the groups
+    come in and what they are called is presentation, so it lives in ``_meta``
+    where a mod can add a row rather than having its items folded into someone
+    else's group.
+    """
+
+    id: str
+    title: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class EquipmentRules:
+    """The constants governing equipment as a whole, from ``equipment.json``'s ``_meta``.
+
+    ``points_per_advantage_rank`` × the character's rank of the ``advantage``
+    is the Equipment Point budget. ``currency_name``/``currency_abbreviation``
+    name that second currency for the UI.
+
+    ``stacking_targets`` are the stats the no-stacking rule governs: equipment
+    contributions to one of them resolve as ``max()`` among themselves and
+    ``max()`` again against non-equipment sources — never a sum of the two
+    maxima. ``cost_kinds`` maps each ``cost_kind`` to its explanation.
+
+    ``material_toughness`` is the breakage table from
+    ``_meta.strengthBasedDamage.breakage``: how much Toughness an item made of a
+    given material has, which is the most Strength it can carry before it breaks
+    in use (``docs/mm-equipment-design.md`` §4). Which material an item is made of
+    is its own ``implementation.material``. Empty for a ruleset that declares
+    none, which simply means nothing is ever warned about — the warning is a
+    courtesy, not a rule the engine enforces. ``breakage_rule`` is that section's
+    own prose, shown as the warning's tooltip.
+    """
+
+    currency_name: str = "Equipment Point"
+    currency_abbreviation: str = "EP"
+    advantage: str = "equipment"
+    points_per_advantage_rank: int = 5
+    stacking_rule: str = ""
+    stacking_targets: tuple[str, ...] = ()
+    cost_kinds: dict = field(default_factory=dict)
+    material_toughness: dict = field(default_factory=dict)
+    breakage_rule: str = ""
+    #: Unrecognised ``_meta`` keys, retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+# --- Vehicles: the stock platforms, the trait table their sizes come from, and
+#     the two catalogs a custom one is assembled out of (from ``equipment.json``). ---
+@dataclass(frozen=True)
+class VehicleClass:
+    """One medium a vehicle travels through, from ``_meta.vehicleClasses``.
+
+    ``effect`` is the :class:`Effect` id a vehicle of this class measures its printed
+    Speed rank in — ``flight`` for an aircraft, ``swimming`` for a boat — so a
+    vehicle's speed reaches the sheet as the movement effect it actually is rather
+    than as a bare number. Empty for a class that names no default (``exotic``): such
+    a vehicle carries its own :attr:`StockVehicle.movement` instead.
+    """
+
+    id: str
+    title: str
+    effect: str = ""
+
+
+@dataclass(frozen=True)
+class VehicleSizeRow:
+    """One row of the vehicle Size table: the baselines a size rank confers.
+
+    Size is chosen first when a vehicle is built, because it sets ``strength``,
+    ``toughness`` and ``defense``; everything above those baselines is what the
+    build pays for (``docs/mm-equipment-design.md`` §5).
+    """
+
+    size_rank: int
+    strength: int
+    toughness: int
+    defense: int
+    examples: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class VehicleSizeExtension:
+    """What each size rank *past* the printed table adds (``_meta.vehicleSizeExtension``).
+
+    The table stops at rank 5 and the book extends it arithmetically rather than
+    printing more rows, so the deltas are data and :func:`~mm_companion.core.rules.vehicle_size_row`
+    applies them.
+    """
+
+    strength: int = 2
+    toughness: int = 1
+    defense: int = -1
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class VehicleWeapon:
+    """One weapon a stock vehicle mounts.
+
+    ``name`` is what the table calls it ("Cannon"), which becomes the built effect's
+    :attr:`~mm_companion.core.powers.PowerEffectInstance.label` so a tank's two rolls
+    are told apart. ``modifiers`` are that weapon's own — the Area rank of a cannon is
+    a fact about the cannon, not about the tank.
+    """
+
+    name: str
+    effect: str
+    rank: int = 0
+    modifiers: tuple[EquipmentModifierRef, ...] = ()
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class StockVehicle:
+    """One vehicle off the printed table (``stockVehicles``).
+
+    A vehicle is a *platform*: five traits (Size, Strength, Speed, Defense, Toughness)
+    rather than a bundle of effects, which is why its card shows a trait grid where an
+    item's shows a game-term table. What it *does* still becomes a real
+    :class:`~mm_companion.core.powers.Power` — its movement and its weapons — so its
+    speed reaches the Speed readout and its cannon rolls, exactly as a power's would.
+    That translation is :func:`vehicle_entry`.
+
+    ``cost`` is the printed Equipment Point price, ``None`` for the two whose
+    ``cost_kind`` is ``"built"``; ``cost_formula`` is the printed recipe those give
+    instead. ``defenses`` are the modifiers on its Toughness (a tank's Impervious 4),
+    which are trait annotations rather than effects and so are drawn on the grid.
+    """
+
+    id: str
+    name: str
+    vehicle_class: str = ""
+    size: int = 0
+    strength: int = 0
+    speed: int | None = None
+    defense_modifier: int = 0
+    toughness: int = 0
+    cost: int | None = None
+    cost_kind: str = "fixed"
+    cost_formula: str = ""
+    defenses: tuple[EquipmentModifierRef, ...] = ()
+    weapons: tuple[VehicleWeapon, ...] = ()
+    movement: EquipmentEffectRef | None = None
+    patterns: tuple[str, ...] = ()
+    variants: str = ""
+    notes: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class PlatformFeature:
+    """A named 1-point Feature a platform can carry (``vehicleFeatures``).
+
+    ``repeatable`` marks the ones bought more than once, and a repeatable Feature with
+    a defined escalation carries it: ``dc_increase_per_extra_rank`` and
+    ``max_dc_increase`` (``docs/mm-equipment-design.md`` §2 pattern K), stored rather
+    than branched on per feature name.
+    """
+
+    id: str
+    name: str
+    cost: int = 1
+    repeatable: bool = False
+    description: str = ""
+    dc_increase_per_extra_rank: int = 0
+    max_dc_increase: int = 0
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class VehicleModifier:
+    """Durable / Minion / Summonable — the rare modifiers that price the *advantage*.
+
+    Structurally unlike every other modifier in the app: they change what a rank of
+    the Equipment advantage costs in **Power Points** for the ranks allocated to this
+    vehicle, not what the vehicle costs in Equipment Points
+    (``docs/mm-equipment-design.md`` §5). That is why they are their own catalog and
+    never join :meth:`GameData.modifier_catalog` — folding them in would let a cost
+    engine spend one currency as the other.
+    """
+
+    id: str
+    name: str
+    cost: int = 0
+    cost_kind: str = "per_rank_flat"
+    description: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
+@dataclass(frozen=True)
+class VehicleRules:
+    """The constants a vehicle is read and built against (``equipment.json``'s ``_meta``).
+
+    ``category`` is the equipment category vehicles are filed under, named in the data
+    rather than in Python so a ruleset can move them. ``combat`` keeps the §5 Combat
+    prose (the moving/stationary Defense Class rules) for the card's tooltips.
+    """
+
+    category: str = "vehicle"
+    classes: tuple[VehicleClass, ...] = ()
+    size_table: tuple[VehicleSizeRow, ...] = ()
+    size_extension: VehicleSizeExtension = field(default_factory=VehicleSizeExtension)
+    combat: dict = field(default_factory=dict)
+
+    def vehicle_class(self, class_id: str) -> VehicleClass | None:
+        """The :class:`VehicleClass` with this id, or ``None``."""
+
+        return next((c for c in self.classes if c.id == class_id), None)
+
+
+# --- Installations: the second kind of platform, and a simpler one. Size and
+#     Toughness off their own table, Features, and effects (from ``equipment.json``). ---
+@dataclass(frozen=True)
+class InstallationSizeRow:
+    """One row of the installation Size table: what a size rank costs.
+
+    Unlike a vehicle's, an installation's size confers no trait baselines — it is
+    priced and nothing more (``docs/mm-equipment-design.md`` §6). The pivot is the
+    free rank (a house), whose ``cost`` is ``0``; below it the cost is negative and
+    the points come *back*.
+    """
+
+    size_rank: int
+    cost: int = 0
+    examples: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class InstallationRules:
+    """What an installation starts with for free, and what more of it costs.
+
+    ``free_size_rank`` and ``free_toughness`` are the starting points every
+    installation gets without paying (rank 5, Toughness 6); ``toughness_per_point``
+    is how much Toughness one Equipment Point buys above that. ``category`` is the
+    equipment category installations file under, named in the data rather than in
+    Python for the reason :attr:`VehicleRules.category` is.
+
+    ``toughness_pl_multiple`` and ``impervious_pl_multiple`` are the installation's
+    own Power Level cap pair, and it is genuinely a different pair from a character's:
+    an installation has no defences other than its Toughness, so that Toughness may
+    reach **twice** the series Power Level while Impervious stays capped at the Power
+    Level itself.
+    """
+
+    category: str = "installation"
+    size_table: tuple[InstallationSizeRow, ...] = ()
+    free_size_rank: int = 5
+    free_toughness: int = 6
+    toughness_per_point: int = 2
+    toughness_pl_multiple: int = 2
+    impervious_pl_multiple: int = 1
+    #: Which modifier the Impervious cap governs, named in the data rather than in
+    #: Python — the cap is a rule, but *Impervious* is content.
+    impervious_modifier: str = "impervious"
+    note: str = ""
+
+    def size_row(self, size_rank: int) -> InstallationSizeRow | None:
+        """The row for this size rank, or ``None`` when the table does not print one."""
+
+        return next((row for row in self.size_table if row.size_rank == size_rank), None)
+
+
+@dataclass(frozen=True)
+class StockInstallation:
+    """One installation off the printed table (``stockInstallations``).
+
+    A platform like a vehicle, with far less to it: Size, Toughness, and a list of
+    Features. It carries no movement and no weapons, so the
+    :class:`~mm_companion.core.powers.Power` :func:`installation_entry` gives it is
+    usually empty — which is exactly right, since what an installation *does* is its
+    Features rather than its effects.
+    """
+
+    id: str
+    name: str
+    size: int = 0
+    toughness: int = 0
+    cost: int | None = None
+    cost_kind: str = "fixed"
+    cost_formula: str = ""
+    features: tuple[str, ...] = ()
+    patterns: tuple[str, ...] = ()
+    notes: str = ""
+    #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
+    extra: dict = field(default_factory=dict, compare=False)
+
+
 # --- Derived readouts & declarative blocks: per-effect Tier-5 readouts and the
 #     data-described sheet blocks a data-only mod can add. ---------------------
 @dataclass(frozen=True)
@@ -1114,6 +1548,37 @@ class GameData:
     #: How the Conditions block groups its chips, from ``conditions.json``'s
     #: ``_meta.sheetSections`` — in display order.
     condition_categories: tuple[ConditionCategory, ...] = ()
+    #: How a "+" menu splits the addable catalog into submenus, from
+    #: ``conditions.json``'s ``_meta.conditionGroups`` — in display order. Empty
+    #: when a ruleset declares none, which means "offer the flat list".
+    condition_groups: tuple[ConditionGroup, ...] = ()
+    #: The gear catalog, from ``equipment.json``.
+    equipment: tuple[EquipmentEntry, ...] = ()
+    #: How the Equipment block groups its cards, from ``equipment.json``'s
+    #: ``_meta.equipmentCategories`` — in display order.
+    equipment_categories: tuple[EquipmentCategory, ...] = ()
+    #: The Equipment Point currency and the no-stacking rule's targets.
+    equipment_rules: EquipmentRules = field(default_factory=EquipmentRules)
+    #: The printed stock vehicles, from ``equipment.json``'s ``stockVehicles``.
+    vehicles: tuple[StockVehicle, ...] = ()
+    #: The same vehicles as ordinary catalog entries, so every seam that already
+    #: knows how to price, build and draw a piece of gear handles one unchanged.
+    #: Derived at parse time by :func:`vehicle_entry` — see :meth:`equipment_catalog`.
+    vehicle_entries: tuple[EquipmentEntry, ...] = ()
+    #: The Features a platform can carry, from ``vehicleFeatures``.
+    vehicle_features: tuple[PlatformFeature, ...] = ()
+    #: Durable / Minion / Summonable — the modifiers that price the *advantage*.
+    vehicle_modifiers: tuple[VehicleModifier, ...] = ()
+    #: The vehicle size table, the class → movement-effect axis, and the §5 constants.
+    vehicle_rules: VehicleRules = field(default_factory=VehicleRules)
+    #: The printed stock installations, from ``equipment.json``'s ``stockInstallations``.
+    installations: tuple[StockInstallation, ...] = ()
+    #: The same installations as ordinary catalog entries — see :meth:`equipment_catalog`.
+    installation_entries: tuple[EquipmentEntry, ...] = ()
+    #: The Features an installation can carry, from ``installationFeatures``.
+    installation_features: tuple[PlatformFeature, ...] = ()
+    #: The installation size table, its free starting points, and its own PL cap pair.
+    installation_rules: InstallationRules = field(default_factory=InstallationRules)
 
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
@@ -1132,6 +1597,49 @@ class GameData:
         """A single ``id -> Condition`` lookup, for the condition resolver in ``rules``."""
 
         return {c.id: c for c in self.conditions}
+
+    def equipment_catalog(self) -> dict[str, EquipmentEntry]:
+        """A single ``id -> EquipmentEntry`` lookup, for the equipment rules layer.
+
+        Both kinds of **platform** are in it. A stock vehicle or installation is a
+        different *shape* of record — bought traits rather than a bundle of effects —
+        but it is bought, priced, worn and drawn as one more thing off the catalog, so
+        it enters the rules layer through the same door (:attr:`vehicle_entries`,
+        :attr:`installation_entries`). Everything that already works
+        on an entry then works on a vehicle: the picker lists it under its category,
+        :func:`~mm_companion.core.rules.build_item_from_entry` gives it a build, and
+        :func:`~mm_companion.core.rules.item_is_stock` keeps it at its printed price.
+        Its platform traits are read from :meth:`vehicle_catalog` by the one layer that
+        needs them.
+
+        Items win an id collision: a ruleset that ships a platform and an item under one
+        id has a bug, and the item is the older, larger catalog.
+        """
+
+        catalog: dict[str, EquipmentEntry] = {e.id: e for e in self.vehicle_entries}
+        catalog.update({e.id: e for e in self.installation_entries})
+        catalog.update({e.id: e for e in self.equipment})
+        return catalog
+
+    def vehicle_catalog(self) -> dict[str, StockVehicle]:
+        """A single ``id -> StockVehicle`` lookup, for the platform traits a card shows."""
+
+        return {v.id: v for v in self.vehicles}
+
+    def vehicle_feature_catalog(self) -> dict[str, PlatformFeature]:
+        """A single ``id -> PlatformFeature`` lookup over the vehicle Features."""
+
+        return {f.id: f for f in self.vehicle_features}
+
+    def installation_catalog(self) -> dict[str, StockInstallation]:
+        """A single ``id -> StockInstallation`` lookup, for the traits a card shows."""
+
+        return {i.id: i for i in self.installations}
+
+    def installation_feature_catalog(self) -> dict[str, PlatformFeature]:
+        """A single ``id -> PlatformFeature`` lookup over the installation Features."""
+
+        return {f.id: f for f in self.installation_features}
 
 
 # ===========================================================================
@@ -1381,6 +1889,7 @@ def _parse_condition(c: dict) -> Condition:
         description=c.get("description", ""),
         id=c.get("id", ""),
         category=c.get("category", ""),
+        group=c.get("group", ""),
         tooltip=c.get("tooltip", ""),
         includes=tuple(c.get("includes", ())),
         supersedes=tuple(c.get("supersedes", ())),
@@ -1486,13 +1995,25 @@ def _parse_integration(raw: dict, configurable: bool) -> Integration:
     the player targets (``configurable``, e.g. Enhanced Trait) or that carry a fixed
     ``target`` (e.g. Protection). ``affects`` is the ``"a|b"`` category string split
     into a set.
+
+    ``apply``/``amountPerRank``/``amountFlat`` say which applier reads the record and
+    what it is worth (see :mod:`mm_companion.core.rules.appliers`). All three default
+    to the historical rule — a ``bonus`` worth the effect's rank — so an effect that
+    states none of them, in this ruleset or a mod's, behaves exactly as before.
     """
 
     affects = frozenset(a for a in raw.get("affects", "").split("|") if a)
     target = raw.get("target", "")
     boost = None
     if configurable or target:
-        boost = TraitBoost(affects=affects, target=target, configurable=configurable)
+        boost = TraitBoost(
+            affects=affects,
+            target=target,
+            configurable=configurable,
+            apply=raw.get("apply", APPLY_BONUS),
+            per_rank=int(raw.get("amountPerRank", 1)),
+            flat=int(raw.get("amountFlat", 0)),
+        )
     return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
 
 
@@ -1702,6 +2223,443 @@ def _parse_readouts(raw: dict) -> dict[str, tuple[Readout, ...]]:
     return result
 
 
+def _unqualify(ref: object) -> str:
+    """``"effects:damage"`` -> ``"damage"``; a bare id passes through.
+
+    The equipment catalog names its effects, modifiers and advantages with the
+    file they live in, which reads well in the data and is how the design
+    reference writes them, but is not how those records are keyed. Splitting on
+    the last colon is mechanical, so a mod inventing a namespace of its own gets
+    the same treatment without the loader knowing anything about it.
+    """
+
+    return str(ref or "").rsplit(":", 1)[-1]
+
+
+def _parse_equipment_effect_ref(raw: dict) -> EquipmentEffectRef:
+    rank = raw.get("rank")
+    return EquipmentEffectRef(
+        effect=_unqualify(raw.get("effect")),
+        rank=None if rank is None else int(rank),
+        strength_based=bool(raw.get("strengthBased", False)),
+        descriptors=tuple(str(d) for d in raw.get("descriptors", ())),
+        config=dict(raw.get("config", {})),
+        configuration=str(raw.get("configuration", "")),
+        resistance=str(raw.get("resistance", "")),
+        degrees=tuple(tuple(str(c) for c in degree) for degree in raw.get("degrees", ())),
+        label=str(raw.get("label", raw.get("name", ""))),
+        modifiers=tuple(_parse_equipment_modifier_ref(m) for m in raw.get("modifiers", ())),
+        extra=_extras(
+            raw,
+            "effect",
+            "rank",
+            "strengthBased",
+            "descriptors",
+            "config",
+            "configuration",
+            "resistance",
+            "degrees",
+            "label",
+            "name",
+            "modifiers",
+        ),
+    )
+
+
+def _parse_equipment_modifier_ref(raw: dict) -> EquipmentModifierRef:
+    rank = raw.get("rank")
+    return EquipmentModifierRef(
+        modifier=_unqualify(raw.get("modifier")),
+        rank=None if rank is None else int(rank),
+        note=str(raw.get("note", "")),
+        extra=_extras(raw, "modifier", "rank", "note"),
+    )
+
+
+def _parse_critical(raw: dict | None) -> CriticalProfile | None:
+    if not isinstance(raw, dict):
+        return None
+    threat = tuple(int(v) for v in raw.get("threatRange", ()))[:2]
+    return CriticalProfile(
+        threat_range=threat if len(threat) == 2 else (20, 20),
+        improved_critical_ranks=int(raw.get("improvedCriticalRanks", 0)),
+    )
+
+
+def _parse_equipment_entry(raw: dict) -> EquipmentEntry:
+    cost = raw.get("cost")
+    return EquipmentEntry(
+        id=str(raw["id"]),
+        name=str(raw.get("name", raw["id"])),
+        category=str(raw.get("category", "")),
+        subcategory=str(raw.get("subcategory") or ""),
+        cost=None if cost is None else int(cost),
+        cost_kind=str(raw.get("costKind", "fixed")),
+        cost_note=str(raw.get("costNote", "")),
+        description=str(raw.get("description", "")),
+        effects=tuple(_parse_equipment_effect_ref(e) for e in raw.get("effects", ())),
+        modifiers=tuple(_parse_equipment_modifier_ref(m) for m in raw.get("modifiers", ())),
+        # Values are lists of ids in the same namespaced form as the refs above.
+        grants={
+            str(key): tuple(_unqualify(v) for v in values)
+            for key, values in raw.get("grants", {}).items()
+        },
+        critical=_parse_critical(raw.get("critical")),
+        patterns=tuple(str(p) for p in raw.get("patterns", ())),
+        implementation=dict(raw.get("implementation", {})),
+        extra=_extras(
+            raw,
+            "id",
+            "name",
+            "category",
+            "subcategory",
+            "cost",
+            "costKind",
+            "costNote",
+            "description",
+            "effects",
+            "modifiers",
+            "grants",
+            "critical",
+            "patterns",
+            "implementation",
+        ),
+    )
+
+
+def _parse_equipment_categories(raw: dict) -> tuple[EquipmentCategory, ...]:
+    """The Equipment block's groups, from ``_meta.equipmentCategories``.
+
+    Empty when a ruleset declares none — like the condition groups, and unlike
+    the condition *categories*, there is nothing sensible to invent, and a block
+    handed nothing falls back to grouping by the raw category id.
+    """
+
+    meta = raw.get("_meta", {})
+    descriptions = meta.get("categoryKey", {})
+    entries = meta.get("equipmentCategories")
+    if not isinstance(entries, list):
+        return ()
+    return tuple(
+        EquipmentCategory(
+            id=str(entry["id"]),
+            title=str(entry.get("title", entry["id"])),
+            description=str(descriptions.get(entry["id"], "")),
+        )
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("id")
+    )
+
+
+def _parse_equipment_rules(raw: dict) -> EquipmentRules:
+    meta = raw.get("_meta", {})
+    currency = meta.get("currency", {})
+    stacking = meta.get("stackingRule", {})
+    breakage = meta.get("strengthBasedDamage", {}).get("breakage", {})
+    defaults = EquipmentRules()
+    return EquipmentRules(
+        currency_name=str(currency.get("name", defaults.currency_name)),
+        currency_abbreviation=str(currency.get("abbreviation", defaults.currency_abbreviation)),
+        advantage=_unqualify(currency.get("source")) or defaults.advantage,
+        points_per_advantage_rank=int(
+            currency.get("pointsPerAdvantageRank", defaults.points_per_advantage_rank)
+        ),
+        stacking_rule=str(stacking.get("rule", "")),
+        stacking_targets=tuple(str(t) for t in stacking.get("appliesTo", ())),
+        cost_kinds=dict(meta.get("costKindKey", {})),
+        material_toughness={
+            str(material): int(toughness)
+            for material, toughness in breakage.get("materialToughness", {}).items()
+        },
+        breakage_rule=str(breakage.get("rule", "")),
+        extra=_extras(
+            meta,
+            "currency",
+            "categoryKey",
+            "equipmentCategories",
+            "equipmentCategoriesNote",
+            "costKindKey",
+            "stackingRule",
+            "strengthBasedDamage",
+            "description",
+            "vehicleCategory",
+            "vehicleClasses",
+            "vehicleClassesNote",
+            "vehicleSizeExtension",
+            "vehicleCombat",
+            "installationCategory",
+            "installationTraits",
+            "installationPowerLevel",
+        ),
+    )
+
+
+def _parse_vehicle_weapon(raw: dict) -> VehicleWeapon:
+    return VehicleWeapon(
+        name=str(raw.get("name", "")),
+        effect=_unqualify(raw.get("effect")),
+        rank=int(raw.get("rank", 0) or 0),
+        modifiers=tuple(_parse_equipment_modifier_ref(m) for m in raw.get("modifiers", ())),
+        note=str(raw.get("note", "")),
+    )
+
+
+def _parse_stock_vehicle(raw: dict) -> StockVehicle:
+    cost = raw.get("cost")
+    speed = raw.get("speed")
+    movement = raw.get("movement")
+    return StockVehicle(
+        id=str(raw["id"]),
+        name=str(raw.get("name", raw["id"])),
+        vehicle_class=str(raw.get("class", "")),
+        size=int(raw.get("size", 0) or 0),
+        strength=int(raw.get("strength", 0) or 0),
+        speed=None if speed is None else int(speed),
+        defense_modifier=int(raw.get("defenseModifier", 0) or 0),
+        toughness=int(raw.get("toughness", 0) or 0),
+        cost=None if cost is None else int(cost),
+        cost_kind=str(raw.get("costKind", "fixed")),
+        cost_formula=str(raw.get("costFormula", "")),
+        defenses=tuple(_parse_equipment_modifier_ref(d) for d in raw.get("defenses", ())),
+        weapons=tuple(_parse_vehicle_weapon(w) for w in raw.get("weapons", ())),
+        movement=_parse_equipment_effect_ref(movement) if isinstance(movement, dict) else None,
+        patterns=tuple(str(p) for p in raw.get("patterns", ())),
+        variants=str(raw.get("variants", "")),
+        notes=str(raw.get("notes", "")),
+        extra=_extras(
+            raw,
+            "id",
+            "name",
+            "class",
+            "size",
+            "strength",
+            "speed",
+            "defenseModifier",
+            "toughness",
+            "cost",
+            "costKind",
+            "costFormula",
+            "defenses",
+            "weapons",
+            "movement",
+            "patterns",
+            "variants",
+            "notes",
+        ),
+    )
+
+
+def _parse_platform_feature(raw: dict) -> PlatformFeature:
+    return PlatformFeature(
+        id=str(raw["id"]),
+        name=str(raw.get("name", raw["id"])),
+        cost=int(raw.get("cost", 1) or 0),
+        repeatable=bool(raw.get("repeatable", False)),
+        description=str(raw.get("description", "")),
+        dc_increase_per_extra_rank=int(raw.get("dcIncreasePerExtraRank", 0) or 0),
+        max_dc_increase=int(raw.get("maxDcIncrease", 0) or 0),
+        extra=_extras(
+            raw,
+            "id",
+            "name",
+            "cost",
+            "repeatable",
+            "description",
+            "dcIncreasePerExtraRank",
+            "maxDcIncrease",
+        ),
+    )
+
+
+def _parse_vehicle_modifier(raw: dict) -> VehicleModifier:
+    return VehicleModifier(
+        id=str(raw["id"]),
+        name=str(raw.get("name", raw["id"])),
+        cost=int(raw.get("cost", 0) or 0),
+        cost_kind=str(raw.get("costKind", "per_rank_flat")),
+        description=str(raw.get("description", "")),
+        extra=_extras(raw, "id", "name", "cost", "costKind", "description"),
+    )
+
+
+def _parse_vehicle_rules(raw: dict) -> VehicleRules:
+    meta = raw.get("_meta", {})
+    defaults = VehicleRules()
+    extension = meta.get("vehicleSizeExtension", {})
+    if not isinstance(extension, dict):  # a ruleset may state it as prose
+        extension = {}
+    return VehicleRules(
+        category=str(meta.get("vehicleCategory", defaults.category)),
+        classes=tuple(
+            VehicleClass(
+                id=str(entry["id"]),
+                title=str(entry.get("title", entry["id"])),
+                effect=_unqualify(entry.get("effect")),
+            )
+            for entry in meta.get("vehicleClasses", ())
+            if isinstance(entry, dict) and entry.get("id")
+        ),
+        size_table=tuple(
+            VehicleSizeRow(
+                size_rank=int(row.get("sizeRank", 0) or 0),
+                strength=int(row.get("strength", 0) or 0),
+                toughness=int(row.get("toughness", 0) or 0),
+                defense=int(row.get("defense", 0) or 0),
+                examples=tuple(str(e) for e in row.get("examples", ())),
+            )
+            for row in raw.get("vehicleSizeTable", ())
+            if isinstance(row, dict)
+        ),
+        size_extension=VehicleSizeExtension(
+            strength=int(extension.get("strength", 2)),
+            toughness=int(extension.get("toughness", 1)),
+            defense=int(extension.get("defense", -1)),
+            note=str(extension.get("note", "")),
+        ),
+        combat=dict(meta.get("vehicleCombat", {})),
+    )
+
+
+def vehicle_entry(vehicle: StockVehicle, rules: VehicleRules) -> EquipmentEntry:
+    """A stock vehicle as an ordinary :class:`EquipmentEntry`.
+
+    The one translation the vehicle layer needs, and it is a translation of *shape*
+    rather than of rules: a platform's printed line names its movement and its weapons
+    in a vehicle-shaped spelling, and this writes the same information in the catalog's.
+    What comes out is priced, built, worn, rolled and grouped by the code that already
+    exists — see :meth:`GameData.equipment_catalog`.
+
+    Its movement effect is its own ``movement`` block when it has one, and otherwise
+    the effect its :class:`VehicleClass` measures Speed in, at the printed speed rank.
+    A vehicle whose class names no effect and that carries no block of its own (the
+    time machine) simply has no movement effect, which is the honest answer rather than
+    an invented one. The five platform traits are deliberately **not** folded in: they
+    are not effects, they cost points off their own table, and they are read straight
+    off the :class:`StockVehicle` by the card that shows them.
+    """
+
+    effects: list[EquipmentEffectRef] = []
+    movement = vehicle.movement
+    if movement is None and vehicle.speed is not None:
+        vehicle_class = rules.vehicle_class(vehicle.vehicle_class)
+        if vehicle_class is not None and vehicle_class.effect:
+            movement = EquipmentEffectRef(effect=vehicle_class.effect, rank=vehicle.speed)
+    if movement is not None:
+        effects.append(movement)
+    effects.extend(
+        EquipmentEffectRef(
+            effect=weapon.effect,
+            rank=weapon.rank,
+            label=weapon.name,
+            modifiers=weapon.modifiers,
+        )
+        for weapon in vehicle.weapons
+    )
+    description = " ".join(part for part in (vehicle.notes, vehicle.variants) if part)
+    return EquipmentEntry(
+        id=vehicle.id,
+        name=vehicle.name,
+        category=rules.category,
+        cost=vehicle.cost,
+        cost_kind=vehicle.cost_kind,
+        cost_note=vehicle.cost_formula,
+        description=description,
+        effects=tuple(effects),
+        patterns=vehicle.patterns,
+    )
+
+
+def _parse_stock_installation(raw: dict) -> StockInstallation:
+    cost = raw.get("cost")
+    return StockInstallation(
+        id=str(raw["id"]),
+        name=str(raw.get("name", raw["id"])),
+        size=int(raw.get("size", 0) or 0),
+        toughness=int(raw.get("toughness", 0) or 0),
+        cost=None if cost is None else int(cost),
+        cost_kind=str(raw.get("costKind", "fixed")),
+        cost_formula=str(raw.get("costFormula", "")),
+        features=tuple(_unqualify(f) for f in raw.get("features", ())),
+        patterns=tuple(str(p) for p in raw.get("patterns", ())),
+        notes=str(raw.get("notes", "")),
+        extra=_extras(
+            raw,
+            "id",
+            "name",
+            "size",
+            "toughness",
+            "cost",
+            "costKind",
+            "costFormula",
+            "features",
+            "patterns",
+            "notes",
+        ),
+    )
+
+
+def _parse_installation_rules(raw: dict) -> InstallationRules:
+    meta = raw.get("_meta", {})
+    defaults = InstallationRules()
+    traits = meta.get("installationTraits", {})
+    if not isinstance(traits, dict):  # a ruleset may state it as prose
+        traits = {}
+    power_level = meta.get("installationPowerLevel", {})
+    if not isinstance(power_level, dict):
+        power_level = {}
+    return InstallationRules(
+        category=str(meta.get("installationCategory", defaults.category)),
+        size_table=tuple(
+            InstallationSizeRow(
+                size_rank=int(row.get("sizeRank", 0) or 0),
+                cost=int(row.get("cost", 0) or 0),
+                examples=tuple(str(e) for e in row.get("examples", ())),
+            )
+            for row in raw.get("installationSizeTable", ())
+            if isinstance(row, dict)
+        ),
+        free_size_rank=int(traits.get("freeSizeRank", defaults.free_size_rank)),
+        free_toughness=int(traits.get("freeToughness", defaults.free_toughness)),
+        toughness_per_point=max(
+            1, int(traits.get("toughnessPerPoint", defaults.toughness_per_point))
+        ),
+        toughness_pl_multiple=int(
+            power_level.get("toughnessMultiplier", defaults.toughness_pl_multiple)
+        ),
+        impervious_pl_multiple=int(
+            power_level.get("imperviousMultiplier", defaults.impervious_pl_multiple)
+        ),
+        impervious_modifier=_unqualify(
+            power_level.get("imperviousModifier", defaults.impervious_modifier)
+        ),
+        note=str(traits.get("note", "")),
+    )
+
+
+def installation_entry(installation: StockInstallation, rules: InstallationRules) -> EquipmentEntry:
+    """A stock installation as an ordinary :class:`EquipmentEntry`.
+
+    The installation twin of :func:`vehicle_entry`, and simpler for the same reason an
+    installation is simpler than a vehicle: it has no movement and no weapons, so the
+    entry it yields usually carries no effects at all. What it *is* — Size, Toughness
+    and its Features — is read straight off the :class:`StockInstallation` by the one
+    layer that needs it, exactly as a vehicle's five traits are. What this buys is
+    everything around that: the picker lists it, the budget prices it, a card draws it
+    and a save round-trips it, with no installation branch anywhere.
+    """
+
+    return EquipmentEntry(
+        id=installation.id,
+        name=installation.name,
+        category=rules.category,
+        cost=installation.cost,
+        cost_kind=installation.cost_kind,
+        cost_note=installation.cost_formula,
+        description=installation.notes,
+        patterns=installation.patterns,
+    )
+
+
 #: Used when ``conditions.json`` carries no ``_meta.sheetSections`` (an older file, or
 #: a mod's), so the Conditions block still groups the base categories sensibly.
 _DEFAULT_CONDITION_CATEGORIES = (
@@ -1724,6 +2682,26 @@ def _parse_condition_categories(raw: dict) -> tuple[ConditionCategory, ...]:
         if isinstance(entry, dict) and entry.get("category")
     ]
     return tuple(parsed) or _DEFAULT_CONDITION_CATEGORIES
+
+
+def _parse_condition_groups(raw: dict) -> tuple[ConditionGroup, ...]:
+    """The "+" menu's submenus, from ``_meta.conditionGroups``.
+
+    Empty when the file declares none — unlike the categories, there is no
+    sensible default to invent here, and a menu builder handed nothing simply
+    falls back to the flat alphabetical list it used to show.
+    """
+    groups = raw.get("_meta", {}).get("conditionGroups")
+    if not isinstance(groups, list):
+        return ()
+    return tuple(
+        ConditionGroup(
+            group=str(entry["group"]),
+            title=str(entry.get("title", entry["group"])),
+        )
+        for entry in groups
+        if isinstance(entry, dict) and entry.get("group")
+    )
 
 
 def _parse_costs(raw: dict) -> Costs:
@@ -1952,11 +2930,20 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     system_raw = content.get("system.json", {})
     measurements_raw = content.get("measurements.json", {})
     movement_raw = content.get("movement.json", {})
+    equipment_raw = content.get("equipment.json", {})
     blocks_raw = content.get("blocks.json", {})
 
     # Parsed first: an effect's own ``rangeDistance`` block overrides only the keys it
     # names, so it needs the system-wide default to lay itself over.
     system = _parse_system(system_raw)
+    # Likewise: a stock vehicle becomes a catalog entry against its own rules record
+    # (which class means which movement effect, which category they file under).
+    vehicle_rules = _parse_vehicle_rules(equipment_raw)
+    vehicles = tuple(_parse_stock_vehicle(v) for v in equipment_raw.get("stockVehicles", []))
+    installation_rules = _parse_installation_rules(equipment_raw)
+    installations = tuple(
+        _parse_stock_installation(i) for i in equipment_raw.get("stockInstallations", [])
+    )
 
     return GameData(
         profile_fields=[_parse_field(f) for f in profile_raw.get("profile_fields", [])],
@@ -1969,6 +2956,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         advantages=[_parse_advantage(a) for a in advantages_raw.get("advantages", [])],
         conditions=[_parse_condition(c) for c in conditions_raw.get("conditions", [])],
         condition_categories=_parse_condition_categories(conditions_raw),
+        condition_groups=_parse_condition_groups(conditions_raw),
         effects=[_parse_effect(e, system.ranged_distance) for e in effects_raw.get("effects", [])],
         modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
@@ -1978,6 +2966,26 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         duration_action_floor=_parse_duration_action_floor(modifiers_raw),
         effect_readouts=_parse_readouts(effect_readouts_raw),
         movement=_parse_movement(movement_raw),
+        equipment=tuple(_parse_equipment_entry(e) for e in equipment_raw.get("equipment", [])),
+        equipment_categories=_parse_equipment_categories(equipment_raw),
+        equipment_rules=_parse_equipment_rules(equipment_raw),
+        vehicles=vehicles,
+        vehicle_entries=tuple(vehicle_entry(v, vehicle_rules) for v in vehicles),
+        vehicle_features=tuple(
+            _parse_platform_feature(f) for f in equipment_raw.get("vehicleFeatures", [])
+        ),
+        vehicle_modifiers=tuple(
+            _parse_vehicle_modifier(m) for m in equipment_raw.get("vehicleModifiers", [])
+        ),
+        vehicle_rules=vehicle_rules,
+        installations=installations,
+        installation_entries=tuple(
+            installation_entry(i, installation_rules) for i in installations
+        ),
+        installation_features=tuple(
+            _parse_platform_feature(f) for f in equipment_raw.get("installationFeatures", [])
+        ),
+        installation_rules=installation_rules,
         system=system,
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
     )

@@ -382,6 +382,43 @@ def test_typing_a_different_code_drops_the_reclaimed_seat(qapp: QApplication) ->
     assert dialog.reclaim_ids() == ("", "")
 
 
+def test_the_prefilled_code_reclaims_without_a_row_click(qapp: QApplication) -> None:
+    """The reported bug: rejoining used to need a click nobody knew to make.
+
+    The dialog opens with the newest code already in the box, so the obvious way
+    to rejoin is to press Join. That used to arrive as a *first* join, giving the
+    player a second card on the GM's board beside their own greyed-out one.
+    """
+    record_session_history(code="CODE1", player_id="p1", player_token="t1")
+    dialog = JoinSessionDialog()
+
+    assert dialog.code_text() == "CODE1"  # prefilled, nothing selected
+    assert dialog.reclaim_ids() == ("p1", "t1")
+
+
+def test_a_hand_typed_known_code_reclaims(qapp: QApplication) -> None:
+    """Pasting the code the GM sent is the same return visit as picking the row."""
+    record_session_history(code="CODE1", player_id="p1", player_token="t1")
+    record_session_history(code="CODE2", player_id="p2", player_token="t2")
+    dialog = JoinSessionDialog()
+
+    dialog._code_edit.setText("CODE1")
+
+    assert dialog.reclaim_ids() == ("p1", "t1")
+
+
+def test_a_forgotten_code_no_longer_reclaims(qapp: QApplication) -> None:
+    """Forgetting a session means forgetting the seat, not just hiding the row."""
+    record_session_history(code="CODE1", player_id="p1", player_token="t1")
+    dialog = JoinSessionDialog()
+    dialog._history_table.selectRow(0)
+
+    dialog._forget_selected()
+    dialog._code_edit.setText("CODE1")
+
+    assert dialog.reclaim_ids() == ("", "")
+
+
 def test_forgetting_from_the_dialog_removes_the_row(qapp: QApplication) -> None:
     record_session_history(code="CODE1", session_name="Wednesday")
     dialog = JoinSessionDialog()

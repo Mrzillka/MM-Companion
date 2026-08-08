@@ -41,6 +41,7 @@ from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import GameData
+from ..equipment import EquipmentItem
 from ..powers import Power, PowerEffectInstance
 from .derived import (
     defense_class,
@@ -98,6 +99,12 @@ PIN_KINDS = (
 #: roll its wielder makes with it. What an NPC card starts with, since the
 #: defaults are written before the NPC is.
 SELECT_FIRST_DAMAGE = "first_damage"
+
+#: The equipment twin: whichever item rolls something first, and the roll its
+#: wielder makes with it. A mook whose whole threat is the rifle it carries owns no
+#: powers at all, so the power-side default resolved to a dash for exactly the
+#: creature the defaults were written for.
+SELECT_FIRST_WEAPON = "first_weapon"
 
 #: Shown in place of a number a pin can no longer reach.
 MISSING_VALUE = "—"
@@ -265,7 +272,9 @@ def pin_label(ref: PinRef, game_data: GameData) -> str:
             "Initiative",
         )
     if ref.kind == PIN_EQUIPMENT:
-        return "Equipment"
+        # Asked before the flat name for the reason the power side gives below: a
+        # late-bound pin is the one that is *written down* unresolved.
+        return "First Weapon" if ref.select == SELECT_FIRST_WEAPON else "Equipment"
     if ref.select == SELECT_FIRST_DAMAGE:
         # Named rather than left as the flat "Power", because this is the one power
         # pin that is *written down* while unresolved — it is what the defaults
@@ -388,20 +397,67 @@ def _from_equipment(char: Character, game_data: GameData, ref: PinRef) -> Pinned
     rearranging itself mid-fight. The numbers an item's rolls read do not depend on it.
     """
 
-    item = next((i for i in char.equipment if i.id == ref.key), None)
-    if item is None:
+    located = _locate_item(char, game_data, ref)
+    if located is None:
         return _missing(ref, pin_label(ref, game_data))
+    item, build, index = located
     # The *effective* build, so a rifle's pinned attack reads the +2 its laser sight
     # lends it — the same number the card's dice footer shows.
     return _from_build_roll(
         char,
         game_data,
         ref,
-        item_effective_build(item, game_data),
-        ref.index,
+        build,
+        index,
         key=item.id,
         fallback="Equipment",
     )
+
+
+def _locate_item(
+    char: Character, game_data: GameData, ref: PinRef
+) -> tuple[EquipmentItem, Power, int] | None:
+    """The item, its effective build and the roll index *ref* names.
+
+    The equipment twin of :func:`_locate_power`, and it returns the *item* alongside
+    the build because a resolved ref has to name the item — gear lives on
+    :attr:`~mm_companion.core.character.Character.equipment` and its build carries an
+    id nothing indexes by, so writing the build's id back would mint a chip that could
+    never be resolved again.
+    """
+
+    if ref.select == SELECT_FIRST_WEAPON:
+        return _first_weapon_roll(char, game_data)
+    item = next((i for i in char.equipment if i.id == ref.key), None)
+    if item is None:
+        return None
+    return item, item_effective_build(item, game_data), ref.index
+
+
+def _first_weapon_roll(
+    char: Character, game_data: GameData
+) -> tuple[EquipmentItem, Power, int] | None:
+    """The first item that rolls anything, and the roll its wielder makes with it.
+
+    The attack check where there is one, the forced save otherwise — the same order
+    :func:`_first_damage_roll` uses, and for the same reason: the check is the chip a
+    GM clicks when the mook swings, and an auto-hit weapon has none, where a difficulty
+    the GM can read beats a dash.
+
+    Every item, not only the worn ones, matching :func:`_from_equipment`. Gear that
+    rolls nothing is skipped rather than pinned blank — a crowbar is not what this
+    default was written to find.
+    """
+
+    for item in char.equipment:
+        build = item_effective_build(item, game_data)
+        specs = power_rolls(build, char, game_data)
+        index = next((i for i, s in enumerate(specs) if s.kind == KIND_POWER_CHECK), None)
+        if index is None:
+            index = next((i for i, s in enumerate(specs) if s.kind == KIND_POWER_SAVE), None)
+        if index is not None:
+            return item, build, index
+    return None
 
 
 def _from_build_roll(
@@ -637,6 +693,9 @@ def default_pin_choices(game_data: GameData) -> list[PinGroup]:
         groups.append(PinGroup("Skills", skills))
     groups.append(
         PinGroup("Powers", (choice(PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)),)),
+    )
+    groups.append(
+        PinGroup("Equipment", (choice(PinRef(PIN_EQUIPMENT, select=SELECT_FIRST_WEAPON)),)),
     )
     return groups
 

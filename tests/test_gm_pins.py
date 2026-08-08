@@ -17,14 +17,18 @@ from mm_companion.core.rules import (
     MISSING_VALUE,
     PIN_ABILITY,
     PIN_DEFENSE_CLASS,
+    PIN_EQUIPMENT,
     PIN_INITIATIVE,
     PIN_POWER,
     PIN_RESISTANCE,
     PIN_SKILL,
     SELECT_FIRST_DAMAGE,
+    SELECT_FIRST_WEAPON,
     PinRef,
     apply_condition,
+    attach_accessory,
     available_pins,
+    build_item_from_entry,
     default_pin_choices,
     default_pins,
     parse_pins,
@@ -170,6 +174,61 @@ def test_the_first_damage_default_follows_the_powers_the_npc_actually_has(
     assert resolve_pin(strong, data, ref).value == "+11"
 
 
+def test_the_first_weapon_default_finds_the_gear_a_powerless_mook_fights_with(
+    data: GameData,
+) -> None:
+    """The power-side default resolved to a dash for exactly the creature it was for.
+
+    A thug whose whole threat is the rifle it carries owns no powers at all, so
+    ``first_damage`` found nothing. This is its equipment twin.
+    """
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+    catalog = data.equipment_catalog()
+    char.equipment = [
+        build_item_from_entry(catalog["leather_armor"], data),  # rolls nothing: skipped
+        build_item_from_entry(catalog["assault_rifle"], data),
+    ]
+
+    value = resolve_pin(char, data, PinRef(PIN_EQUIPMENT, select=SELECT_FIRST_WEAPON))
+
+    assert value.missing is False
+    assert value.label == "Assault Rifle"
+    assert value.spec is not None and value.spec.kind == "power-check"
+    # Resolving names the *item*, never its build: gear lives on Character.equipment,
+    # and a build id is not something the resolver can look up a second time.
+    assert value.ref.key == char.equipment[1].id
+    assert value.ref.select == ""
+
+
+def test_the_first_weapon_default_is_captioned_before_it_resolves(data: GameData) -> None:
+    """It is written into the defaults long before any NPC exists to bind it to."""
+    assert pin_label(PinRef(PIN_EQUIPMENT, select=SELECT_FIRST_WEAPON), data) == "First Weapon"
+    assert pin_label(PinRef(PIN_EQUIPMENT, "some-id"), data) == "Equipment"
+
+
+def test_the_first_weapon_default_dashes_on_a_character_with_no_gear(data: GameData) -> None:
+    ref = PinRef(PIN_EQUIPMENT, select=SELECT_FIRST_WEAPON)
+    value = resolve_pin(Character.new_default(data), data, ref)
+
+    assert value.missing is True
+
+
+def test_the_first_weapon_default_reads_what_is_fitted_to_the_weapon(data: GameData) -> None:
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+    catalog = data.equipment_catalog()
+    gun = build_item_from_entry(catalog["assault_rifle"], data)
+    sight = build_item_from_entry(catalog["laser_sight"], data)
+    char.equipment = [gun, sight]
+    ref = PinRef(PIN_EQUIPMENT, select=SELECT_FIRST_WEAPON)
+    bare = resolve_pin(char, data, ref).value
+
+    assert attach_accessory(char, gun, sight, data)
+
+    assert resolve_pin(char, data, ref).value != bare
+
+
 def test_the_npc_defaults_are_the_three_a_gm_asked_for(goon: Character, data: GameData) -> None:
     refs = default_pins("npc", DEFAULT_SETTINGS["gm_default_pins"])
     values = resolve_pins(goon, data, refs)
@@ -215,7 +274,14 @@ def test_the_defaults_picker_offers_no_concrete_power(data: GameData) -> None:
 def test_the_defaults_picker_covers_the_character_free_traits(data: GameData) -> None:
     groups = {group.title: [v.ref for v in group.values] for group in default_pin_choices(data)}
 
-    assert set(groups) == {"Abilities", "Resistances", "Derived", "Skills", "Powers"}
+    assert set(groups) == {
+        "Abilities",
+        "Resistances",
+        "Derived",
+        "Skills",
+        "Powers",
+        "Equipment",
+    }
     assert PinRef(PIN_ABILITY, "ATK") in groups["Abilities"]
     assert PinRef(PIN_RESISTANCE, "DEF") in groups["Resistances"]
     assert groups["Derived"] == [PinRef(PIN_INITIATIVE), PinRef(PIN_DEFENSE_CLASS)]

@@ -26,11 +26,11 @@ from mm_companion.core.rules import (
     PIN_RESISTANCE,
     PinRef,
     RollSpec,
-    power_trait_bonuses,
     resistance_base,
     resistance_condition_effect,
     resistance_points_spent,
     resistance_roll,
+    trait_bonuses,
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_table import (
@@ -149,19 +149,17 @@ class ResistancesSection(TitledSection):
             del blocker
 
     def refresh_enhancements(self) -> None:
-        """Recompute each resistance's Total cell from power boosts and conditions.
+        """Recompute each resistance's Total cell from standing boosts and conditions.
 
         Conditions overlay Hit's penalty on Toughness and Vulnerable/Defenseless
         halving/zeroing on the active defenses (Dodge, Defence).
         """
-        bonuses = power_trait_bonuses(self._character, self._data)
+        bonuses = trait_bonuses(self._character, self._data).get("resistance", {})
         cond_effects = {
             res.key: resistance_condition_effect(self._character, self._data, res.key)
             for res in self._data.resistances
         }
-        apply_stat_effects(
-            self._resistances, self._resistance_enh, bonuses["resistance"], cond_effects
-        )
+        apply_stat_effects(self._resistances, self._resistance_enh, bonuses, cond_effects)
 
     def refresh_cost(self) -> None:
         """Re-title the block with its current PP subtotal (also driven by a homebrew

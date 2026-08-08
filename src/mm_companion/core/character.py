@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .data_loader import GameData
+from .equipment import EquipmentItem
 from .powers import STRUCTURE_ARRAY, STRUCTURE_LINKED, Power, PowerGroup, PowerNode, node_from_dict
 
 
@@ -125,6 +126,15 @@ class Character:
     complications: list[Complication] = field(default_factory=list)
     conditions: list[AppliedCondition] = field(default_factory=list)
     powers: list[PowerNode] = field(default_factory=list)
+    #: Gear, in its own collection and its own currency. Deliberately *not* folded into
+    #: ``powers``: equipment is not a power (``docs/mm-equipment-design.md`` §1), it is
+    #: bought with Equipment Points rather than Power Points, and a character built
+    #: entirely from gear still answers "no powers". See :mod:`..equipment`.
+    equipment: list[EquipmentItem] = field(default_factory=list)
+    #: The player's chosen order for the Equipment block's automatic groups, by
+    #: category id. Empty means the ruleset's own order
+    #: (``GameData.equipment_categories``); ids it does not name trail the ones it does.
+    equipment_group_order: list[str] = field(default_factory=list)
     #: Homebrew point-cost overrides for the non-power trait rates, keyed by the
     #: ``TraitCosts`` field names plus ``"pp_per_level"``. Only rates the player has
     #: changed from the ruleset default are stored, so a stock build carries an empty
@@ -191,6 +201,14 @@ class Character:
             "complications": [c.to_dict() for c in self.complications],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
+            # Omitted entirely when the character owns no gear, so a save written
+            # before equipment existed round-trips byte-for-byte.
+            **({"equipment": [e.to_dict() for e in self.equipment]} if self.equipment else {}),
+            **(
+                {"equipment_group_order": list(self.equipment_group_order)}
+                if self.equipment_group_order
+                else {}
+            ),
             **({"cost_overrides": dict(self.cost_overrides)} if self.cost_overrides else {}),
             **(
                 {
@@ -252,6 +270,8 @@ class Character:
                 for c in raw.get("conditions", [])
             ],
             powers=_migrate_flat_relations([node_from_dict(p) for p in raw.get("powers", [])]),
+            equipment=[EquipmentItem.from_dict(e) for e in raw.get("equipment", [])],
+            equipment_group_order=[str(c) for c in raw.get("equipment_group_order", [])],
             cost_overrides={k: int(v) for k, v in raw.get("cost_overrides", {}).items()},
             item_cost_overrides={
                 cat: {k: int(v) for k, v in items.items()}

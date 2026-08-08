@@ -10,9 +10,10 @@ from ..character import Character
 from ..data_loader import GameData, Modifier
 from ..powers import STRUCTURE_ARRAY, STRUCTURE_LINKED, Power, PowerEffectInstance
 from ..registry import Registry
+from .appliers import trait_category
 from .derived import effective_ability
 from .powers_cost import array_alternate_cost, array_base_index, effect_effective_rank
-from .runtime import _resolved_trait_target, _trait_category, _trait_name
+from .runtime import _resolved_trait_target, _trait_name
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -811,7 +812,7 @@ def effect_stat_rows(
     # A trait booster (Enhanced Trait, Protection) shows which trait it raises and by
     # how much — green, since it's an improvement — so the summary isn't blank.
     target = _resolved_trait_target(effect, base_effect)
-    if target and _trait_category(game_data, target):
+    if target and trait_category(game_data, target):
         raised = f"{_trait_name(game_data, target)} +{effect.rank}"
         rows.append(EffectStat("enhances", "Enhances", "", raised, "better"))
     # Tier-5 derived readouts (Growth's size mods, Insubstantial's state, ...) — purely

@@ -109,6 +109,52 @@ def _net_per_rank_modifiers(effect: PowerEffectInstance, game_data: GameData) ->
     )
 
 
+def effect_per_rank_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
+    """The effect's net cost **per rank**: base cost plus per-rank extras minus per-rank
+    flaws.
+
+    Flat modifiers are deliberately excluded — they are charged once, so they do not
+    change what a rank costs. That is exactly the distinction the Strength-Based
+    divisor turns on (:func:`ability_rank_contribution`), and it is the same figure
+    :func:`_ranked_cost` prices ranks at. ``0`` for an unknown effect id.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return 0
+    return base.base_cost_value + _net_per_rank_modifiers(effect, game_data)
+
+
+def ability_rank_contribution(ability: int, per_rank_cost: int) -> int:
+    """How much of an ability actually reaches an effect's rank — M&M's *second*
+    divisor (``docs/mm-equipment-design.md`` §4).
+
+    A Strength-Based Damage adds the wielder's Strength to the Damage rank, but only
+    while a rank is cheap: once extras push the effect **above 1 point per rank**, the
+    wielder adds ``floor(ability / cost per rank)`` instead. A compound bow with Ranged
+    Strength-Based Damage costs 2 points per rank, so a Strength 5 wielder adds
+    ``floor(5 / 2) = +2``, not ``+5``.
+
+    Two carve-outs, and both fall out of the arithmetic rather than being special
+    cases: an effect costing **less** than 1 point per rank adds the ability
+    unmultiplied (there is no divisor and no bonus either way), and a **flat** modifier
+    never triggers the divisor because it is not part of
+    :func:`effect_per_rank_cost` in the first place.
+
+    This is not the existing effective-rank *cost* rule and must not be conflated with
+    it. That rule prices per-rank extras against the folded-in ranks; this one decides
+    how many folded-in ranks there are at all. The divisor is applied first, and the
+    reduced number is what feeds both the resistance DC and that pricing — see
+    :func:`effect_rank_trait_bonus` and :func:`effect_rank_trait_bonus_cost`.
+    """
+
+    if ability <= 0:
+        return 0
+    if per_rank_cost <= 1:
+        return ability
+    return ability // per_rank_cost
+
+
 def _ranked_cost(net_per_rank: int, rank: int) -> int:
     """Points for ``rank`` ranks at ``net_per_rank`` PP/rank.
 
@@ -170,18 +216,24 @@ def effect_rank_trait_bonus(
     the ability the wielder actually has. Absent, the full ability is used and tracks
     it dynamically. Point cost is charged separately against the *bought* cap — see
     :func:`effect_rank_trait_bonus_cost` — so cost stays stable when the ability moves.
+
+    Whatever survives that cap is then put through
+    :func:`ability_rank_contribution`, M&M's second divisor: an effect costing more
+    than a point per rank only picks up ``floor(ability / cost per rank)``.
     """
 
     if char is None:
         return 0
     catalog = game_data.modifier_catalog()
+    per_rank = effect_per_rank_cost(effect, game_data)
     bonus = 0
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier and modifier.adds_ability:
             ability = effective_ability(char, game_data, modifier.adds_ability)
             amount = selection.config.get("amount")
-            bonus += ability if amount is None else max(0, min(int(amount), ability))
+            raw = ability if amount is None else max(0, min(int(amount), ability))
+            bonus += ability_rank_contribution(raw, per_rank)
     return bonus
 
 
@@ -200,9 +252,15 @@ def effect_rank_trait_bonus_cost(
 
     When no amount is stored (a legacy selection that tracked the ability), it falls
     back to the wielder's current ability so old builds keep their previous cost.
+
+    The bought amount goes through :func:`ability_rank_contribution` exactly as the
+    play-time one does, because the two must agree: the per-rank extras are charged
+    against the ranks that actually arrive, not against the ranks a divisor threw
+    away.
     """
 
     catalog = game_data.modifier_catalog()
+    per_rank = effect_per_rank_cost(effect, game_data)
     bonus = 0
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
@@ -210,9 +268,12 @@ def effect_rank_trait_bonus_cost(
             continue
         amount = selection.config.get("amount")
         if amount is not None:
-            bonus += max(0, int(amount))
+            raw = max(0, int(amount))
         elif char is not None:
-            bonus += max(0, effective_ability(char, game_data, modifier.adds_ability))
+            raw = max(0, effective_ability(char, game_data, modifier.adds_ability))
+        else:
+            continue
+        bonus += ability_rank_contribution(raw, per_rank)
     return bonus
 
 

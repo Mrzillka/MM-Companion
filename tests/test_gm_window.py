@@ -29,7 +29,7 @@ from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.npc import quick_npc
-from mm_companion.core.rules import PinRef, apply_condition
+from mm_companion.core.rules import PinRef, apply_condition, attach_accessory, build_item_from_entry
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
@@ -1483,6 +1483,35 @@ def test_the_hover_summary_shows_abilities_resistances_and_powers(window: GMWind
     assert "Abilities" in html and "Strength +6" in html
     assert "Resistances" in html
     assert "Powers" in html and "Smash" in html
+
+
+def test_the_hover_summary_shows_the_gear_a_powerless_mook_fights_with(
+    window: GMWindow,
+) -> None:
+    """A thug whose whole threat is its rifle used to hover blank below Resistances.
+
+    Every item, worn or not — the same rule the pinned strip beside this follows, since
+    wearing is a runtime flag a GM flips constantly.
+    """
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.profile["hero_name"] = "Thug"
+    character.abilities["ATK"] = 6
+    catalog = data.equipment_catalog()
+    gun = build_item_from_entry(catalog["assault_rifle"], data)
+    sight = build_item_from_entry(catalog["laser_sight"], data)
+    character.equipment = [gun, sight]
+    attach_accessory(character, gun, sight, data)
+    path = library.save_character(character, directory=storage.get_workspace().gm_characters_dir)
+    window._register_npc(path)
+
+    (card,) = npc_cards(window)
+    html = card.summary_html()
+
+    assert "Powers" not in html, "it has none, and should not claim a heading"
+    assert "Equipment" in html and "Assault Rifle" in html
+    # The *effective* build: the fitted sight raises the number the GM is reading.
+    assert "8 vs. Defense" in html
 
 
 def write_agile_npc(name: str, agility: int) -> Path:

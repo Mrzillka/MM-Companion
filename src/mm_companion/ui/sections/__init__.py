@@ -15,6 +15,7 @@ from mm_companion.ui.sections.character_image import CharacterImageSection
 from mm_companion.ui.sections.complications import ComplicationsSection
 from mm_companion.ui.sections.conditions import ConditionsSection
 from mm_companion.ui.sections.dice import DiceSection
+from mm_companion.ui.sections.equipment import EquipmentSection
 from mm_companion.ui.sections.powers import PowersSection
 from mm_companion.ui.sections.resistances import ResistancesSection
 from mm_companion.ui.sections.skills import SkillsSection
@@ -28,6 +29,7 @@ __all__ = [
     "ComplicationsSection",
     "ConditionsSection",
     "DiceSection",
+    "EquipmentSection",
     "PowersSection",
     "ResistancesSection",
     "SkillsSection",

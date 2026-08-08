@@ -18,6 +18,7 @@
     "costs.json",
     "system.json",
     "measurements.json",
-    "movement.json"
+    "movement.json",
+    "equipment.json"
   ]
 }

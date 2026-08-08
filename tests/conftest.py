@@ -24,6 +24,7 @@ from mm_companion.core.session.relay import RELAY_SCHEME_PLAIN
 from mm_companion.relay import RelayServer
 from mm_companion.ui import theme
 from mm_companion.ui.compact import CompactController
+from mm_companion.ui.sections.equipment import EquipmentSection
 from mm_companion.ui.sections.powers import PowersSection
 
 
@@ -75,18 +76,22 @@ def _isolated_workspace(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _instant_power_card_transitions():
-    """Switch a power card between its live and off looks instantly, not over a timer.
+    """Switch a card between its live and off looks instantly, not over a timer.
 
     A card eases into its switched-off look, which means the state a test asserts on
     right after a toggle is only the *first frame* of that transition — and no frame
     ever runs, because a test has no event loop turning. Zeroing the duration makes
     every card land on its resting look synchronously. A test that is specifically
     about the animation restores a real duration itself.
+
+    Both card boards, since they animate the same way: a power switching off and an
+    item being stowed run the identical easing.
     """
-    original = PowersSection.TRANSITION_MS
+    originals = (PowersSection.TRANSITION_MS, EquipmentSection.TRANSITION_MS)
     PowersSection.TRANSITION_MS = 0
+    EquipmentSection.TRANSITION_MS = 0
     yield
-    PowersSection.TRANSITION_MS = original
+    PowersSection.TRANSITION_MS, EquipmentSection.TRANSITION_MS = originals
 
 
 @pytest.fixture(autouse=True)

@@ -121,6 +121,97 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target == "equipment-demo":
+        # The Equipment block with gear on it: two categories (so the automatic
+        # grouping and the group order show), a stowed item beside a worn one, and
+        # a piece of armour outclassed by a better one so its "superseded by" line
+        # renders. Only this block is left visible — the shot is about the cards.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.rules import attach_accessory, build_item_from_entry
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=3))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("sword", "crossbow", "leather_armor", "chain_mail", "rifle", "laser_sight"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+        char.equipment[1].worn = False  # the crossbow is stowed
+        # Phase 8: a fitted accessory (which leaves the loose list and lends its
+        # Accurate to the rifle) and a wielder strong enough to snap the sword.
+        attach_accessory(char, char.equipment[4], char.equipment[5], sheet._data)
+        char.abilities["STR"] = 12
+        sheet.equipment.refresh()
+        for key in sheet.block_keys():
+            if key != "equipment":
+                sheet.hide_block(key)
+        win.resize(760, 720)
+    elif target == "equipment-vehicles":
+        # Phase 9: platforms. A tank (weapons, Impervious Toughness, a dice footer
+        # naming each gun) and a jumbo jet (whose Flight reaches the Speed readout),
+        # so the trait grid a vehicle card shows instead of a game-term table is
+        # visible beside an ordinary weapon's card.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=25))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("tank", "jumbo_jet", "sword"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+        sheet.equipment.refresh()
+        sheet.system_info.refresh_derived()  # the jet's Flight joins the Speed readout
+        for key in sheet.block_keys():
+            if key not in ("equipment", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 860)
+    elif target == "equipment-platforms":
+        # Phase 10: the two kinds of platform side by side, one printed and one built.
+        # A moon-base (its own short trait grid, its fifteen Features on one row), a
+        # tank (the throttle under its grid, which restates the Defense Class), and a
+        # hand-built jet whose Flight the editor bought and whose Speed reaches the
+        # System block exactly as a printed vehicle's does.
+        from mm_companion.core.character import AdvantageSelection
+        from mm_companion.core.equipment import PLATFORM_VEHICLE, EquipmentItem
+        from mm_companion.core.rules import (
+            apply_platform,
+            build_item_from_entry,
+            new_platform,
+            platform_rules_category,
+        )
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=25))
+        catalog = sheet._data.equipment_catalog()
+        for item_id in ("tank", "moon_base"):
+            char.equipment.append(build_item_from_entry(catalog[item_id], sheet._data))
+
+        spec = new_platform(PLATFORM_VEHICLE, sheet._data)
+        spec.vehicle_class, spec.size, spec.speed = "air", 3, 9
+        spec.strength, spec.toughness, spec.defense_modifier = 10, 9, -3
+        spec.features = ["autopilot", "alarm"]
+        built = EquipmentItem(
+            category=platform_rules_category(PLATFORM_VEHICLE, sheet._data),
+            platform=spec,
+        )
+        built.build.name = "Skyhawk"
+        built.build.description = "Built off the trait table rather than picked."
+        apply_platform(built, spec, sheet._data)
+        char.equipment.append(built)
+
+        sheet.equipment.refresh()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("equipment", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 900)
     elif target in ("sheet-pinned", "sheet-pinned-bottom"):
         # The pinned strip with something in it: two blocks parked outside the
         # scrolling page. The bottom variant also moves the strip to another edge,
@@ -154,6 +245,21 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target == "equipment-constructor":
+        # The same builder in gear mode, opened on a catalog sword: the shot is about
+        # what differs — the Equipment title, the EP total, and the group combo beside
+        # the no-stacking opt-out.
+        from mm_companion.core.character import AdvantageSelection, Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.rules import build_item_from_entry
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=3))
+        item = build_item_from_entry(data.equipment_catalog()["sword"], data)
+        char.equipment.append(item)
+        win = PowerConstructorWindow(data, character=char, item=item)
     elif target in ("dice", "dice-demo"):
         # The roller is a sheet block now, pinned in the strip by default, so the
         # shot is of the sheet — there is no standalone roller window.
@@ -412,9 +518,13 @@ def main(argv: list[str] | None = None) -> int:
             "sheet",
             "sheet-demo",
             "sheet-locked",
+            "equipment-demo",
+            "equipment-vehicles",
+            "equipment-platforms",
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",
+            "equipment-constructor",
             "focus",
             "dice",
             "dice-demo",

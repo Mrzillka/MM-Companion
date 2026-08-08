@@ -181,3 +181,75 @@ def test_untrusted_python_mod_data_loads_but_code_does_not(_home: Path) -> None:
     assert "damage" in data.effect_readouts
     effect = PowerEffectInstance(effect_id="damage", rank=5)
     assert effect_readout_rows(effect, data) == []
+
+
+# --- the equipment sample: a mod that registers a stat applier --------------
+
+
+def _uninstall_python_mod(root: Path, module: str) -> None:
+    """Undo what importing a mod module did to the process (sys.path + sys.modules)."""
+
+    import sys
+
+    sys.path[:] = [p for p in sys.path if p != str(root)]
+    sys.modules.pop(module, None)
+
+
+def test_sample_equipment_mod_registers_stat_applier(_home: Path) -> None:
+    """The vest is data; ``partial_bonus`` is the one thing that needs code."""
+
+    from mm_companion.core.character import AdvantageSelection, Character
+    from mm_companion.core.rules import build_item_from_entry, resistance_total
+    from mm_companion.core.rules.appliers import STAT_APPLIERS
+
+    root = _install_sample(_home, "field-kit")
+    mods.set_mod_enabled("field-kit", True)
+    mods.set_mod_trusted("field-kit", True)
+    clear_game_data_cache()
+    try:
+        assert "field-kit" in mods.initialize_mods()
+        assert "partial_bonus" in STAT_APPLIERS
+
+        data = load_game_data()
+        entry = data.equipment_catalog()["ablative_vest"]
+        assert entry.category == "armor"  # merged into a stock category, not a new one
+
+        char = Character.new_default(data)
+        char.advantages.append(AdvantageSelection(name="Equipment", rank=1))
+        char.equipment.append(build_item_from_entry(entry, data))
+        # Rank 4 of Ablative Weave, halved and rounded up by the mod's applier.
+        assert resistance_total(char, data, "TOUGHNESS") == 2
+    finally:
+        if "partial_bonus" in STAT_APPLIERS:
+            STAT_APPLIERS.unregister("partial_bonus")
+        _uninstall_python_mod(root, "field_kit_mod")
+
+
+def test_untrusted_equipment_mod_buys_the_item_but_grants_nothing(_home: Path) -> None:
+    """An unregistered apply kind yields no contributions rather than raising.
+
+    So the gear a disabled-Python mod added is still on the sheet, still priced and
+    still worn — it simply does nothing, which is what keeps a saved character
+    loadable after its mod loses trust.
+    """
+
+    from mm_companion.core.character import AdvantageSelection, Character
+    from mm_companion.core.rules import build_item_from_entry, item_ep_cost, resistance_total
+    from mm_companion.core.rules.appliers import STAT_APPLIERS
+
+    _install_sample(_home, "field-kit")
+    mods.set_mod_enabled("field-kit", True)  # enabled, NOT trusted
+    clear_game_data_cache()
+
+    assert mods.initialize_mods() == []
+    assert "partial_bonus" not in STAT_APPLIERS
+
+    data = load_game_data()
+    entry = data.equipment_catalog()["ablative_vest"]
+    char = Character.new_default(data)
+    char.advantages.append(AdvantageSelection(name="Equipment", rank=1))
+    item = build_item_from_entry(entry, data)
+    char.equipment.append(item)
+
+    assert item_ep_cost(item, data) == 3
+    assert resistance_total(char, data, "TOUGHNESS") == 0

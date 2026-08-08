@@ -5,10 +5,98 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..character import Character
+from ..components import APPLY_BONUS
 from ..data_loader import GameData, Resistance, Skill
 from .advantages import advantage_by_name
+from .appliers import (
+    CATEGORY_ABILITY,
+    CATEGORY_RESISTANCE,
+    CATEGORY_SKILL,
+    GROUP_POWERS,
+    STACK_SUM,
+    TraitBonus,
+    TraitContribution,
+    resolve_bonuses,
+    resolve_contributions,
+)
 from .conditions import ConditionEffect, condition_scope_penalty
-from .runtime import TraitBonus, _trait_bonus
+from .runtime import equipment_contributions, power_contributions
+
+
+def advantage_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
+    """Every trait bonus the character's advantages grant.
+
+    Data-driven: an advantage contributes when it carries a ``skill_bonus_per_rank``,
+    times its bought rank, on the skill its ``skill_bonus_target`` names — or, lacking
+    one, the skill the selection's ``parameter`` chose. So a mod adds a granting
+    advantage without touching this resolver.
+
+    Advantages are bought with Power Points like powers, so they join the same
+    stacking group and add on top of a power's boost rather than competing with it.
+    """
+
+    contributions: list[TraitContribution] = []
+    for selection in char.advantages:
+        advantage = advantage_by_name(game_data, selection.name)
+        if advantage is None or not advantage.skill_bonus_per_rank:
+            continue
+        target = advantage.skill_bonus_target or selection.parameter
+        if not target:
+            continue
+        contributions.append(
+            TraitContribution(
+                amount=advantage.skill_bonus_per_rank * selection.rank,
+                stat=target,
+                category=CATEGORY_SKILL,
+                source=advantage.name,
+                stacking=STACK_SUM,
+                group=GROUP_POWERS,
+                kind=APPLY_BONUS,
+            )
+        )
+    return tuple(contributions)
+
+
+def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
+    """Every stat contribution standing on the sheet, in the order the sheet grants them.
+
+    The one place the derived totals gather what is raising a trait: the active powers
+    (:func:`~.runtime.power_contributions`), then the advantages
+    (:func:`advantage_contributions`), then the worn gear
+    (:func:`~.runtime.equipment_contributions`). Conditions are deliberately absent —
+    they are a display-only overlay and never part of the build.
+
+    Order matters twice over. The first two are the Power-Point group and *sum*, so a
+    sheet with no equipment nets exactly what it always did; the gear arrives last in
+    its own group, where the resolver takes the better of the two rather than adding
+    them, and a tie goes to whichever group was seen first — the powers.
+    """
+
+    return (
+        power_contributions(char, game_data)
+        + advantage_contributions(char, game_data)
+        + equipment_contributions(char, game_data)
+    )
+
+
+def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:
+    """The net bonus on every trait, grouped ``category -> {key: TraitBonus}``.
+
+    :func:`trait_contributions` run through the stacking resolver. Unlike
+    :func:`~.runtime.power_trait_bonuses` (the powers-only view the enhancement columns
+    show) this is the sheet-wide number, and it is what every derived total below
+    reads.
+    """
+
+    return resolve_bonuses(trait_contributions(char, game_data))
+
+
+def _trait_bonus(
+    char: Character, game_data: GameData, category: str, key: str
+) -> TraitBonus | None:
+    """The net bonus standing on one trait, or ``None`` when there is none."""
+
+    return trait_bonuses(char, game_data).get(category, {}).get(key)
 
 
 def _skill_for_row(game_data: GameData, row_id: str) -> Skill | None:
@@ -41,7 +129,7 @@ def effective_ability(char: Character, game_data: GameData, key: str) -> int:
     paid for by the power itself.
     """
 
-    bonus = _trait_bonus(char, game_data, "ability", key)
+    bonus = _trait_bonus(char, game_data, CATEGORY_ABILITY, key)
     return char.abilities.get(key, 0) + (bonus.amount if bonus else 0)
 
 
@@ -63,28 +151,23 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
     touching this resolver. Conditions are deliberately *not* folded in here: they are
     display-only, never part of the build. The sheet's "+" column shows both kinds
     netted together — see :func:`skill_modifiers`.
+
+    A skill's contributions are gathered by *either* name a source may have used —
+    the base skill (a power's boost reaches every row of it, focuses and specialized
+    pools included) or this exact row (an advantage aimed at one focus) — and then
+    netted by the stacking resolver.
     """
 
     skill = _skill_for_row(game_data, row_id)
     if skill is None:
         return None
 
-    amount = 0
-    sources: tuple[str, ...] = ()
-    power = _trait_bonus(char, game_data, "skill", skill.name)
-    if power:
-        amount += power.amount
-        sources += power.sources
-    for selection in char.advantages:
-        advantage = advantage_by_name(game_data, selection.name)
-        if advantage is None or not advantage.skill_bonus_per_rank:
-            continue
-        target = advantage.skill_bonus_target or selection.parameter
-        if target not in (skill.name, row_id):
-            continue
-        amount += advantage.skill_bonus_per_rank * selection.rank
-        sources += (advantage.name,)
-    return TraitBonus(amount, sources) if sources else None
+    names = {skill.name, row_id}
+    return resolve_contributions(
+        c
+        for c in trait_contributions(char, game_data)
+        if c.category == CATEGORY_SKILL and c.stat in names
+    )
 
 
 def _skill_scope_keys(row_id: str) -> set[str]:
@@ -200,7 +283,7 @@ def resistance_total(char: Character, game_data: GameData, key: str) -> int:
 
     base = resistance_base(char, game_data, key)
     bought = char.resistances.get(key, 0)
-    bonus = _trait_bonus(char, game_data, "resistance", key)
+    bonus = _trait_bonus(char, game_data, CATEGORY_RESISTANCE, key)
     return base + bought + (bonus.amount if bonus else 0)
 
 

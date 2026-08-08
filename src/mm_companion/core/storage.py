@@ -38,6 +38,12 @@ THEMES_DIRNAME = "themes"
 PL_ENFORCE_WARN = "warn"
 PL_ENFORCE_BLOCK = "block"
 
+# The same switch for a build that spends more Equipment Points than its Equipment
+# advantage grants. Kept a *separate* setting rather than folded into the one above:
+# the two are different currencies and a table may well police one and not the other.
+EQUIPMENT_ENFORCE_WARN = "warn"
+EQUIPMENT_ENFORCE_BLOCK = "block"
+
 # How the dice roller lays itself out as a sheet block: reflowing to whatever room
 # it is given, or always in the shape compact mode uses. See ``dice_layout`` below.
 DICE_LAYOUT_AUTO = "auto"
@@ -51,6 +57,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "theme": "classic",
     "ruleset": "4e",
     "pl_enforcement": PL_ENFORCE_WARN,
+    "equipment_enforcement": EQUIPMENT_ENFORCE_WARN,
     # Ids of workspace mods to layer on top of the base ruleset, in the order they
     # should apply (later entries win). Empty by default, so a fresh install runs
     # the base ruleset only. See :mod:`mm_companion.core.mods`.
@@ -298,6 +305,22 @@ def pl_enforcement() -> str:
     """
     value = load_settings().get("pl_enforcement", PL_ENFORCE_WARN)
     return value if value in (PL_ENFORCE_WARN, PL_ENFORCE_BLOCK) else PL_ENFORCE_WARN
+
+
+def equipment_enforcement() -> str:
+    """How the builder should treat an Equipment Point overspend — ``warn`` or ``block``.
+
+    The equipment twin of :func:`pl_enforcement`, and the same seam: a red budget bar
+    and a ``⚠`` today, one setting away from refusing the save. Read through here and
+    never off :func:`load_settings`, which returns the file verbatim and so answers
+    ``None`` for any key added after a workspace was created.
+    """
+    value = load_settings().get("equipment_enforcement", EQUIPMENT_ENFORCE_WARN)
+    return (
+        value
+        if value in (EQUIPMENT_ENFORCE_WARN, EQUIPMENT_ENFORCE_BLOCK)
+        else EQUIPMENT_ENFORCE_WARN
+    )
 
 
 def theme_name() -> str:

@@ -150,6 +150,10 @@
       "hint": "0 is invisible, 1 is fully lit. A card eases to this when switched off."
     },
     "canvas.hint.height": {"label": "Empty-canvas hint height", "hint": "In pixels."},
+    "platform.features.height": {
+      "label": "Platform Features list",
+      "hint": "How tall the scrolling Feature list in the vehicle/installation editor is, in pixels."
+    },
     "die.size": {"label": "Die", "hint": "How big the d20 is drawn, in pixels. Square."},
     "die.size.compact": {
       "label": "Die (compact mode)",

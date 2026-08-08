@@ -13,9 +13,11 @@ new ones — and, optionally, ships a Python module that teaches the engine a ne
   config-field type, sheet block, …). Importing runs code, so it is gated behind
   an explicit **trust** opt-in (see *Safety*).
 
-Two working examples live in [`docs/sample-mods/`](sample-mods): `campaign-notes`
-(data-only — adds an advantage and a sheet block) and `flat-bonus-readouts`
-(data + Python — registers a new power readout kind).
+Three working examples live in [`docs/sample-mods/`](sample-mods):
+`campaign-notes` (data-only — adds an advantage and a sheet block),
+`flat-bonus-readouts` (data + Python — registers a new power readout kind) and
+`field-kit` (data + Python — adds a piece of gear and registers the stat-applier
+kind that makes it work).
 
 ## Where mods live
 
@@ -56,8 +58,8 @@ mods/
 
 - **`files`** lists the JSON content files in the mod folder. Only listed files
   are read. Use the same filenames as the base ruleset to *override/extend* that
-  content (`advantages.json`, `effects.json`, `conditions.json`, …), or
-  `blocks.json` to add a declarative sheet block.
+  content (`advantages.json`, `effects.json`, `conditions.json`, `equipment.json`,
+  …), or `blocks.json` to add a declarative sheet block.
 - **`priority`** decides load order. The base ruleset is priority `0` and always
   loads first; enabled mods then apply in ascending priority (higher wins). Ties
   are broken by the order in the `enabled_mods` setting.
@@ -170,9 +172,25 @@ handler, replace=False)`), so extending them is the same call everywhere:
 | `rules.powers_terms.CONFIG_DISPLAY_KINDS` | core | config-field **display** rendering |
 | `rules.runtime.PATTERN_BEHAVIOURS` | core | statIntegration **patterns** |
 | `rules.runtime.GATE_KINDS` | core | flaw **gate** kinds |
+| `rules.appliers.STAT_APPLIERS` | core | statIntegration **apply** kinds — what a stat effect is *worth* |
 | `rules.conditions.MECHANISM_SCOPES` | core | condition **mechanisms** |
 | `ui.power_constructor.CONFIG_WIDGET_BUILDERS` | ui | config-field **input widgets** |
 | `ui.blocks.register_block(BlockDescriptor)` | ui | whole **sheet blocks** (Python) |
+
+`STAT_APPLIERS` has its own helper, `register_stat_applier(kind, applier)`, and is
+the seam between "this effect grants something" and "here is what it grants". An
+effect's `statIntegration.apply` names a kind; the handler is given an
+`ApplyContext` (the record, the rank it stands at, the trait it resolved against,
+who is granting it) and returns `TraitContribution`s. The base ruleset registers
+five kinds — `bonus`, `speed`, `sense`, `penalty_removed`, `penalty_replaced` — and
+`docs/sample-mods/field-kit` registers a sixth. Two rules for a handler:
+
+- **Pass `stacking` and `group` through untouched.** They are the *granter's* terms,
+  and they are what makes the same record stack when a power grants it and obey the
+  no-stacking rule when a piece of equipment does.
+- **Decline by returning `()`.** An unregistered kind yields nothing rather than
+  raising, so an effect whose mod is disabled simply grants no bonus and a character
+  built on it still loads.
 
 Core registries are safe to touch from a headless module; the `ui.*` ones import
 PySide6 (only import them from a mod that targets the GUI).

@@ -4,9 +4,11 @@ Ability ranks live on the :class:`~mm_companion.core.character.Character`, so th
 spin boxes are views over it. A trait a power raises (Enhanced Trait) shows its
 enhanced total in green in the Total column — ``→ 5`` — without replacing the
 bought value; the boost is computed in
-:func:`~mm_companion.core.rules.power_trait_bonuses`.
+:func:`~mm_companion.core.rules.trait_bonuses`, the *sheet-wide* number, so worn
+equipment shows in this column on the same terms as a power (and by the same
+no-stacking rule, gear that loses to a power does not).
 :meth:`AbilitiesSection.refresh_enhancements` recomputes that column, and the
-sheet calls it whenever a power changes.
+sheet calls it whenever a power, an advantage or a piece of gear changes.
 
 Double-clicking a row rolls that ability: the section emits
 :attr:`AbilitiesSection.rollRequested` with the spec
@@ -29,7 +31,7 @@ from mm_companion.core.rules import (
     ability_points_spent,
     ability_roll,
     condition_scope_penalty,
-    power_trait_bonuses,
+    trait_bonuses,
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_table import (
@@ -120,13 +122,13 @@ class AbilitiesSection(TitledSection):
         self.set_priced_title("Abilities", ability_points_spent(self._character, self._data))
 
     def refresh_enhancements(self) -> None:
-        """Recompute each ability's Total cell from power boosts and condition penalties."""
-        bonuses = power_trait_bonuses(self._character, self._data)
+        """Recompute each ability's Total cell from standing boosts and condition penalties."""
+        bonuses = trait_bonuses(self._character, self._data).get("ability", {})
         cond_effects = {
             a.key: condition_scope_penalty(self._character, self._data, {a.key, a.name})
             for a in self._data.abilities
         }
-        apply_stat_effects(self._abilities, self._ability_enh, bonuses["ability"], cond_effects)
+        apply_stat_effects(self._abilities, self._ability_enh, bonuses, cond_effects)
 
     def _roll_spec(self, key: str) -> RollSpec:
         """This ability's roll, built fresh at click time so it is never stale."""

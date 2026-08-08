@@ -27,6 +27,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     effective_ability,
+    item_effective_build,
     leaf_powers,
     resistance_total,
 )
@@ -38,7 +39,7 @@ NO_IMAGE = "No image"
 
 
 def character_summary_html(character: Character, data: GameData, title: str) -> str:
-    """A compact abilities / resistances / powers summary, as tooltip HTML.
+    """A compact abilities / resistances / powers / equipment summary, as tooltip HTML.
 
     *title* is the name to head it with, which the two cards know differently — an
     NPC's comes off its file summary, a player's off the snapshot — so it is
@@ -69,6 +70,22 @@ def character_summary_html(character: Character, data: GameData, title: str) -> 
         power_lines.append(f"{name}: {escape(', '.join(rolls))}" if rolls else name)
     if power_lines:
         rows.append("<b>Powers</b><br>" + "<br>".join(power_lines))
+
+    # Gear reads like a power here because it *is* one underneath, and a mook whose
+    # whole threat is the rifle it carries hovered blank without this. Each item as
+    # its effective build, so a fitted laser sight's +2 shows in the number the GM is
+    # about to be attacked with.
+    #
+    # Every item, worn or not — the same argument the pinned strip beside this makes:
+    # wearing is runtime state a GM flips constantly, and a summary that emptied when a
+    # sword was sheathed would be noise.
+    gear_lines = []
+    for item in character.equipment:
+        name = escape(item.name or "Equipment")
+        rolls = _roll_lines(item_effective_build(item, data), character, data)
+        gear_lines.append(f"{name}: {escape(', '.join(rolls))}" if rolls else name)
+    if gear_lines:
+        rows.append("<b>Equipment</b><br>" + "<br>".join(gear_lines))
 
     return "<br><br>".join(rows)
 

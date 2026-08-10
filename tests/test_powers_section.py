@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt, QVariantAnimation
 from PySide6.QtGui import QEnterEvent
-from PySide6.QtWidgets import QApplication, QGridLayout, QLabel
+from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -23,8 +23,14 @@ from mm_companion.core.powers import (
     PowerGroup,
 )
 from mm_companion.core.rules import power_trait_bonuses
+from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.sections.powers import PowersSection, _DraggableCard, _RollLine
+from mm_companion.ui.sections.powers import (
+    PowersSection,
+    _DraggableCard,
+    _ModeToggle,
+    _RollLine,
+)
 
 
 @pytest.fixture(scope="module")
@@ -616,3 +622,65 @@ def test_a_top_level_power_keeps_its_own_switch(qapp: QApplication) -> None:
 
     assert sec._activation_role(flight, None) == "toggle"
     assert sec._linked_activation_set(flight) == [flight]
+
+
+# -- a group's mode is readable ------------------------------------------------
+
+
+def _grouped_sheet(mode: str) -> tuple[CharacterSheet, PowerGroup]:
+    """A sheet holding one group of two powers, in *mode*."""
+    sheet, char = _sheet_with("A", "B")
+    first, second = char.powers
+    sheet.powers._on_combine(second.id, first.id)
+    group = char.powers[0]
+    sheet.powers._set_group_mode(group, mode)
+    return sheet, group
+
+
+def _mode_toggle(sec: PowersSection) -> _ModeToggle:
+    toggle = sec.findChild(_ModeToggle)
+    assert toggle is not None
+    return toggle
+
+
+@pytest.mark.parametrize("preset", ["classic", "slate-dark", "parchment-light", "crimson-gold"])
+def test_a_group_card_states_which_mode_is_lit(qapp: QApplication, preset: str) -> None:
+    """The regression: the lit segment painted exactly like its two neighbours.
+
+    A styled preset states ``QPushButton``'s box in the application sheet, which
+    makes ``QStyleSheetStyle`` take the box over and stop painting the platform's
+    checked panel — and no ``:checked`` rule replaced it. Classic states no widget
+    chrome at all, so an app-level rule could not fix it for every preset either.
+    The switch therefore says what "lit" looks like itself, under all of them.
+    """
+    theme.set_active_theme(preset)
+    sheet, _group = _grouped_sheet(STRUCTURE_ARRAY)
+
+    toggle = _mode_toggle(sheet.powers)
+    assert [b.text() for b in toggle.findChildren(QPushButton) if b.isChecked()] == ["Array"]
+    lit = toggle.styleSheet().split("QPushButton:checked")
+    assert len(lit) == 2, "the widget must state its own checked look"
+    assert "background:" in lit[1]
+
+
+def test_the_locked_group_card_keeps_the_mode_and_drops_the_switch(qapp: QApplication) -> None:
+    """Locking is not ``setEnabled(False)`` — a greyed strip of three reads as nothing.
+
+    The unlit segments go instead, leaving the lit one as a static chip naming the
+    mode, transparent to the mouse so the click falls through to the group card,
+    which is the switch.
+    """
+    sheet, _group = _grouped_sheet(STRUCTURE_LINKED)
+
+    sheet.powers.set_locked(True)
+    toggle = _mode_toggle(sheet.powers)
+    shown = [b for b in toggle.findChildren(QPushButton) if not b.isHidden()]
+    assert [b.text() for b in shown] == ["Linked"]
+    assert shown[0].isEnabled()
+    assert shown[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    sheet.powers.set_locked(False)
+    toggle = _mode_toggle(sheet.powers)
+    shown = [b for b in toggle.findChildren(QPushButton) if not b.isHidden()]
+    assert [b.text() for b in shown] == ["Independent", "Array", "Linked"]
+    assert not shown[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)

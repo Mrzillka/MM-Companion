@@ -1223,6 +1223,16 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
 - A plain `QWidget` ignores a stylesheet `background` unless it sets
   `WA_StyledBackground` (a `QFrame` honours it natively). If a wash you applied
   doesn't paint, that is why.
+- **A checkable `QPushButton` must say what "checked" looks like itself.** The
+  sheet states a push button's box (`_chrome_rules`) but emits no
+  `QPushButton:checked` — and once a box is stated, `QStyleSheetStyle` stops
+  painting the platform's sunken panel, so a lit segment paints exactly like an
+  unlit one. Adding the rule app-side would not fix it either, since Classic emits
+  no widget chrome at all. So a segmented control carries its own widget-level
+  stylesheet from tokens *every* preset defines — `_mode_toggle_style` in
+  `ui/sections/powers.py` is the worked example, the same bargain `ui/lock.py` and
+  `CompactOverlayButton` strike. `QToolButton:checked` *is* in the sheet; push
+  buttons are the gap.
 - `ui/drop_feedback.py` — `DropFeedback` gives one drop target its idle / accept
   / **reject** styling from tokens. Use it in a `dragEnterEvent` instead of
   open-coding a highlight, and call `show_reject()` on the else branch: a bare

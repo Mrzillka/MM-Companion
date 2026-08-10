@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -194,8 +195,22 @@ class StartWindow(QMainWindow):
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setEnabled(False)
 
+        # One host for the scroll area's whole life, with the grid and the empty state
+        # taking turns inside it. ``QScrollArea.setWidget`` *deletes* whatever it was
+        # already holding, so swapping these two in and out of it destroyed the one
+        # being put away: delete your only character and the empty state took the card
+        # grid with it, then creating the next one reached for the freed FlowLayout.
+        # A stacked layout is the swap without the funeral — it shows exactly one of
+        # them and owns both — and it still hands the visible one the whole viewport,
+        # which is what centres the empty state and lets the grid scroll.
+        host = QWidget()
+        self._library_stack = QStackedLayout(host)
+        self._library_stack.addWidget(self._cards_container)
+        self._library_stack.addWidget(self._empty_label)
+
         self._library = QScrollArea()
         self._library.setWidgetResizable(True)
+        self._library.setWidget(host)
         self._populate_cards()
         return self._library
 
@@ -210,7 +225,7 @@ class StartWindow(QMainWindow):
 
         summaries = list_saved_characters()
         if not summaries:
-            self._library.setWidget(self._empty_label)
+            self._library_stack.setCurrentWidget(self._empty_label)
             return
 
         for summary in summaries:
@@ -218,7 +233,7 @@ class StartWindow(QMainWindow):
             card.clicked.connect(self._open_summary)
             card.deleteRequested.connect(self._delete_summary)
             self._cards_flow.addWidget(card)
-        self._library.setWidget(self._cards_container)
+        self._library_stack.setCurrentWidget(self._cards_container)
 
     def _create_new_character(self) -> None:
         """Open a fresh, editable character sheet, hiding the launcher behind it."""

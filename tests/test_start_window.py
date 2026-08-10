@@ -47,7 +47,7 @@ def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
 
 def test_empty_store_shows_the_empty_state(qapp: QApplication) -> None:
     window = StartWindow()
-    assert window._library.widget() is window._empty_label
+    assert window._library_stack.currentWidget() is window._empty_label
     assert window._cards_flow.count() == 0
 
 
@@ -111,7 +111,7 @@ def test_deleting_a_card_removes_the_file_and_refreshes(
 
     assert not path.exists()
     assert window._cards_flow.count() == 0
-    assert window._library.widget() is window._empty_label
+    assert window._library_stack.currentWidget() is window._empty_label
 
 
 def test_declining_the_delete_prompt_keeps_the_file(
@@ -144,7 +144,39 @@ def test_a_library_of_many_characters_wraps_and_scrolls(qapp: QApplication) -> N
 
     container = window._cards_container
     wrapped = window._cards_flow.heightForWidth(container.width())
-    assert wrapped > container.parent().height(), "expected the library to overflow"
+    assert wrapped > window._library.viewport().height(), "expected the library to overflow"
     assert container.height() >= wrapped
     assert window._library.verticalScrollBar().maximum() > 0
+    window.close()
+
+
+def test_the_library_survives_a_round_trip_through_the_empty_state(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete your last character, then make another one.
+
+    ``QScrollArea.setWidget`` deletes the widget it was holding, so swapping the card
+    grid out for the empty state used to destroy the grid — and the next refresh
+    reached for a freed ``FlowLayout``. Both survive being put away now.
+    """
+    import shiboken6
+
+    _save_one("Doomed")
+    window = StartWindow()
+    card = window._cards_flow.itemAt(0).widget()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    card.deleteRequested.emit(card._summary)
+    assert window._library_stack.currentWidget() is window._empty_label
+    # Both halves outlive the swap — the wrappers alone are not proof, since the
+    # flow's own count() is a Python override that answers from a freed object.
+    assert shiboken6.Shiboken.isValid(window._cards_container)
+    assert shiboken6.Shiboken.isValid(window._cards_flow)
+
+    _save_one("Kestrel")
+    window._populate_cards()  # what the sheet's saved/closed signals drive
+    assert window._library_stack.currentWidget() is window._cards_container
+    cards = [window._cards_flow.itemAt(i).widget() for i in range(window._cards_flow.count())]
+    assert [c._summary.name for c in cards] == ["Kestrel"]
+    assert shiboken6.Shiboken.isValid(window._empty_label)
     window.close()

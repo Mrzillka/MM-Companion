@@ -33,7 +33,7 @@ from mm_companion import __version__
 from mm_companion.core import library, storage
 from mm_companion.core.library import CharacterSummary, list_saved_characters
 from mm_companion.core.session.client import SessionClientError
-from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.session_bridge import SessionBridge
 
@@ -184,7 +184,10 @@ class StartWindow(QMainWindow):
 
     def _build_library(self) -> QScrollArea:
         """The right-hand scroll area holding one card per saved character."""
-        self._cards_container = QWidget()
+        # A FlowContainer, so the library reports the height its wrapped rows really
+        # need: a bare host claims one row's worth, and every card past the first row
+        # is clipped with no scroll bar to reach it.
+        self._cards_container = FlowContainer()
         self._cards_flow = FlowLayout(self._cards_container)
 
         self._empty_label = QLabel("No characters yet")

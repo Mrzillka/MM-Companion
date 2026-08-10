@@ -32,7 +32,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
-from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
@@ -426,7 +426,10 @@ class EffectCard(QFrame):
 
     def _multiselect_widget(self, field) -> QWidget:
         """A wrapping row of check boxes — multiple same-category choices at once."""
-        container = QWidget()
+        # A FlowContainer, not a bare QWidget: the flow reports no height-for-width,
+        # so a plain host is sized by its one-row hint and every wrapped row past the
+        # first is clipped by the form row around it.
+        container = FlowContainer()
         flow = FlowLayout(container)
         chosen = self.instance.config.get(field.key, [])
         pairs: list[tuple[QCheckBox, str]] = []
@@ -475,7 +478,10 @@ class EffectCard(QFrame):
         outer = QVBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(3)
-        grid_host = QWidget()
+        # A FlowContainer for the same reason the multiselect uses one: a bare host
+        # reports a single row's height, and a two-dozen-option checklist (Enhanced
+        # Senses, Enhanced Movement) is then cut off just below its first row.
+        grid_host = FlowContainer()
         flow = FlowLayout(grid_host)
         outer.addWidget(grid_host)
         total = QLabel()

@@ -126,3 +126,25 @@ def test_declining_the_delete_prompt_keeps_the_file(
     card.deleteRequested.emit(card._summary)
 
     assert path is not None and path.is_file()
+
+
+def test_a_library_of_many_characters_wraps_and_scrolls(qapp: QApplication) -> None:
+    """Every saved character has to be reachable, not just the first row.
+
+    The flow reports no height-for-width, so a bare host would be sized by its
+    one-row hint: the rows below it are painted past the viewport with no scroll bar
+    to reach them. The ``FlowContainer`` host pins the wrapped height instead.
+    """
+    for index in range(12):
+        _save_one(f"Hero {index}")
+    window = StartWindow()
+    window.resize(900, 500)
+    window.show()
+    qapp.processEvents()
+
+    container = window._cards_container
+    wrapped = window._cards_flow.heightForWidth(container.width())
+    assert wrapped > container.parent().height(), "expected the library to overflow"
+    assert container.height() >= wrapped
+    assert window._library.verticalScrollBar().maximum() > 0
+    window.close()

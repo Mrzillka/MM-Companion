@@ -1542,3 +1542,39 @@ def test_dev_mode_keeps_the_attack_skill_bonus_in_its_auto_values(qapp: QApplica
 
     # And nothing was recorded as an override just by opening the editor.
     assert card.instance.overrides == {}
+
+
+def test_allocation_checklist_is_tall_enough_for_every_wrapped_row(
+    qapp: QApplication,
+) -> None:
+    """A two-dozen-option checklist (Enhanced Senses, Enhanced Movement) wraps onto
+    several rows, and the card has to grow for all of them.
+
+    The flow deliberately reports no height-for-width, so a bare ``QWidget`` host is
+    sized by its one-row hint and the form row around it clips everything below the
+    first line. The host is a ``FlowContainer``, which pins its height to what the
+    flow really wraps to at the width it was given."""
+    from PySide6.QtWidgets import QCheckBox
+
+    from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+
+    window = PowerConstructorWindow(load_game_data())
+    for effect_id in ("enhanced_senses", "enhanced_movement"):
+        card = window.canvas.add_effect(effect_id)
+        window.show()
+        qapp.processEvents()
+
+        hosts = [
+            child
+            for child in card.findChildren(FlowContainer)
+            if isinstance(child.layout(), FlowLayout) and child.findChildren(QCheckBox)
+        ]
+        assert hosts, f"{effect_id} has no allocation checklist"
+        for host in hosts:
+            wrapped = host.layout().heightForWidth(host.width())
+            assert wrapped > host.layout().itemAt(0).sizeHint().height(), "expected >1 row"
+            assert host.height() >= wrapped, f"{effect_id}: checklist clipped"
+            # And the last option really lands inside the host, not painted past it.
+            last = host.findChildren(QCheckBox)[-1]
+            assert last.geometry().bottom() <= host.height()
+    window.close()

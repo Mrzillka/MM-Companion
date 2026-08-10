@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-block size constraints (pixels) for the character-sheet dock panels, plus the GM window's own blocks (gm_*). Keyed by block. Omit a bound (or set it to null/0) to leave it unconstrained: a missing minimum is 0, a missing maximum is unbounded. max_width pins a block so it can't be stretched horizontally; max_height pins it vertically. Setting min == max in a dimension fixes that dimension (non-resizable); abilities and resistances share one fixed 300x340 size that fits all of either block's content — the height is what the taller of the two (abilities, with its Attack row below the derived rule) needs, plus a little slack, so both stay the same size whatever a preset does to the row height. A block's min_width matters most for a block that starts in the pinned strip (dice): a row on the page is wide enough for any of these, but the strip is only as thick as the widest block in it asks for, so a min_width under the block's content width would clip it there. These are the baseline: the active theme's 'blocks' map overrides any bound, since how much room a block needs depends on the look's density.",
+  "_comment": "Per-block size constraints (pixels) for the character-sheet dock panels, plus the GM window's own blocks (gm_*). Keyed by block. Omit a bound (or set it to null/0) to leave it unconstrained: a missing minimum is 0, a missing maximum is unbounded. max_width pins a block so it can't be stretched horizontally; max_height pins it vertically, and setting min == max in a dimension fixes that dimension (non-resizable). A block with no bounds at all is sized entirely by its own content — every block already reports its content as its effective minimum (see BlockFrame.minimumSizeHint), so a bound here is only ever a *floor* worth stating, and abilities/resistances state none: their tables report their real columns and rows, which is more honest than the fixed 300x340 they used to carry and survives a preset that changes the row height. A block's min_width matters most for a block that starts in the pinned strip (dice): a row on the page is wide enough for any of these, but the strip is only as thick as the widest block in it asks for, so a min_width under the block's content width would clip it there. These are the baseline: the active theme's 'blocks' map overrides any bound, since how much room a block needs depends on the look's density.",
   "base_info": {
     "min_width": 320,
     "min_height": 160
@@ -13,18 +13,8 @@
     "min_height": 210,
     "max_width": 240
   },
-  "abilities": {
-    "min_width": 300,
-    "min_height": 340,
-    "max_width": 300,
-    "max_height": 340
-  },
-  "resistances": {
-    "min_width": 300,
-    "min_height": 340,
-    "max_width": 300,
-    "max_height": 340
-  },
+  "abilities": {},
+  "resistances": {},
   "conditions": {
     "min_width": 340,
     "min_height": 150

@@ -276,8 +276,7 @@ def test_moving_a_pinned_block_into_its_own_line_gives_it_a_fair_share(make_shee
 def test_the_strip_shrinks_back_when_the_block_needing_the_room_moves_away(make_sheet) -> None:
     # Regression: pinning a wide block pushes the strip open, and the board recorded
     # that width as if it had been dragged there. Move the block to a line of its
-    # own and the strip stayed wide, leaving dead space beside a block (Abilities is
-    # fixed at 280) that could not fill it — until the strip was resized by hand.
+    # own and the strip stayed wide — until it was resized by hand.
     sheet = make_sheet()
     sheet.pin_block("conditions")
     _settle()
@@ -293,8 +292,11 @@ def test_the_strip_shrinks_back_when_the_block_needing_the_room_moves_away(make_
     assert sheet.board.panel.width() == narrow
     frame = sheet.block_frame("abilities")
     slot = sheet.board.panel._lines[0].slots[0]
-    # Whatever room is left beside it is the strip's own minimum, not a stale width.
-    assert slot.width() - frame.width() == narrow - frame.maximumWidth()
+    # And the block occupies that width rather than sitting in a stale, wider one.
+    # Abilities states no bounds of its own any more (its table reports its real
+    # content), so it fills its slot exactly instead of leaving dead space beside it.
+    assert frame.width() == slot.width()
+    assert frame.minimumSizeHint().width() <= narrow
 
 
 def test_a_thickness_the_user_dragged_to_is_kept(make_sheet) -> None:
@@ -623,9 +625,14 @@ def test_dragging_a_pinned_block_back_onto_the_page_docks_it(make_sheet) -> None
 def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -> None:
     # Regression: on the way into the strip a block is briefly given zero height by
     # a container that hasn't been sized yet; its inner layout cached that (a
-    # *negative* geometry) and, because a fixed-size block reaches its real size
-    # while hidden, no resize event ever made Qt run the layout again. The block
-    # drew as an empty framed box until the strip was resized by hand.
+    # *negative* geometry) and no resize event ever made Qt run the layout again.
+    # The block drew as an empty framed box until the strip was resized by hand.
+    #
+    # Waited for **twice**, and one longer wait is not the same thing: the strip
+    # converges its thickness over several turns, and a block that is free to
+    # stretch (which every block now is — see test_block_sizes) is still riding
+    # that convergence when the first one ends. The question here is where the
+    # block *lands*, not what it looks like one frame in.
     sheet = make_sheet()
     canvas = sheet.canvas
     panel = sheet.board.panel
@@ -635,11 +642,14 @@ def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -
     beside = line.mapToGlobal(QPoint(line.width() - 5, line.height() // 2))
     _drag(canvas, sheet, "abilities", beside)
     _wait()
+    _wait()
 
     frame = sheet.block_frame("abilities")
     assert frame.layout().geometry().height() > 0
     assert frame.title_bar.height() > 0
     assert frame.section.height() > 0
+    # Laid out *by its slot*, not left at the width it had on the page.
+    assert frame.width() == frame.parentWidget().width()
 
 
 def test_dragging_one_pinned_block_beside_another_joins_its_line(make_sheet) -> None:

@@ -72,9 +72,26 @@ def test_to_dict_from_dict_round_trip() -> None:
     )
     char.cost_overrides["ability_per_rank"] = 3
     char.cost_overrides["pp_per_level"] = 20
+    char.skill_order = ["Stealth", "Acrobatics"]
+    char.hidden_skills = ["Vehicles"]
 
     restored = Character.from_dict(char.to_dict())
     assert restored == char
+
+
+def test_the_skills_display_state_is_omitted_when_untouched() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A player who has not reordered or removed a skill row saves neither key, so a
+    # character written before the Skills block could be rearranged round-trips
+    # byte-for-byte.
+    saved = char.to_dict()
+    assert "skill_order" not in saved
+    assert "hidden_skills" not in saved
+
+    restored = Character.from_dict(saved)
+    assert restored.skill_order == []
+    assert restored.hidden_skills == []
 
 
 def test_cost_overrides_are_omitted_when_empty() -> None:

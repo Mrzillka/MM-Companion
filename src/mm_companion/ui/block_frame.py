@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.ui import theme
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
@@ -347,11 +348,16 @@ class BlockWindow(QWidget):
     user can drag it back onto the sheet to re-dock. Closing it via the window
     chrome hides the block rather than losing it.
 
-    The frame lives inside a :class:`QScrollArea` so a tall block (e.g. Powers)
-    that doesn't fit the screen scrolls *within its window* — unlike when it is
-    docked, where the whole sheet scrolls as one page and each block shows all
-    of its content. The scroll area only ever scrolls vertically; the frame's
-    width tracks the window.
+    The frame lives inside a :class:`QScrollArea` so a block that doesn't fit
+    scrolls *within its window* — unlike when it is docked, where the whole sheet
+    scrolls as one page and each block shows all of its content. It scrolls **both
+    ways**, and that is what lets the window go as small as it is dragged: a
+    :class:`QScrollArea` does not pass its child's minimum on, so the only floor is
+    ``float.min-width``/``float.min-height``, exactly as the mini roller's is
+    ``compact.min-*`` (see :mod:`mm_companion.ui.compact`). A block popped out to
+    sit beside somebody else's application is one whose window someone will want to
+    shove into a corner, and clipping it there is not the alternative — scrolling
+    is.
 
     It is **frameless**, and that is a trade rather than a decoration: a popped-out
     block spends its life beside somebody else's application, where the OS title
@@ -377,10 +383,13 @@ class BlockWindow(QWidget):
         self._scroll.setObjectName("blockWindowScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self._scroll)
         layout.addWidget(size_grip_row(self))
+        self.setMinimumSize(
+            int(theme.metric("float.min-width")), int(theme.metric("float.min-height"))
+        )
 
     def set_on_top(self, on_top: bool) -> None:
         """Keep this window above other applications, or let it fall behind."""
@@ -390,10 +399,6 @@ class BlockWindow(QWidget):
         """Host *frame*, giving the window the frame's title as its window title."""
         self.setWindowTitle(frame.title)
         self._scroll.setWidget(frame)
-
-    def verticalScrollBar_extent(self) -> int:  # noqa: N802 - matches Qt naming style
-        """Width the vertical scrollbar occupies, to leave room for it in the min width."""
-        return self._scroll.verticalScrollBar().sizeHint().width()
 
     def closeEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
         """Closing the window hides the block instead of destroying it."""

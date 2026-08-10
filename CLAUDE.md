@@ -248,8 +248,10 @@ clean (see Licensing below).
   hero points. Abilities/Resistances/Advantages were split out of the former
   `StatsSection`; Abilities and Resistances are `QTableWidget`s built through
   `ui/sections/stat_table.py` (Trait | ABL | Rank | Total, a spanned rule before the
-  derived traits), which is also where the pieces they share with the Skills table
-  live: `ROLL_ROLE`, `fit_table_height`, `tint_item`, and the two tint tokens. The
+  derived traits), which is also where the *stat-family* pieces they share with the
+  Skills table live: `ROLL_ROLE`, `pin_menu_contributor`, `tint_item`, and the two
+  tint tokens. Everything that is about a **table** rather than a stat is one layer
+  down in `ui/sections/row_table.py` — see "The table blocks" below. The
   data-driven blocks take the `GameData` and build widgets by iterating over the
   data lists — no hardcoded ability/skill names.
 - `SystemInfoSection` shows several **derived** readouts computed in `core.rules`, never
@@ -667,7 +669,12 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   a plain action elsewhere; `↗` hides, since a window is already popped out).
   That is one glyph honestly read, not a pun: pinning is what it says, and what it
   pins to is whatever the block is beside. In a window it opens **already lit** —
-  staying on top is the default, see the canvas bullet below.
+  staying on top is the default, see the canvas bullet below. It also **goes as
+  small as it is dragged**, the other half of the same trade: the frame sits in a
+  scroll area that scrolls *both* ways, so the only floor is `float.min-width` /
+  `float.min-height` and past that the block scrolls rather than being clipped —
+  exactly as the mini roller's floor is `compact.min-*`. It still *opens* at the
+  block's natural size, so popping one out never changes how it reads.
 - `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
   arrangement — `_rows` (an ordered list of rows, each an ordered list of block
   keys), `_windows` (floated blocks), `_hidden` (closed blocks), and `_pinned`
@@ -719,9 +726,15 @@ explicit "roll this" affordance rather than a number being read off the sheet.
 - Each block's min/max size lives in `ui/block_sizes.json` (loaded by
   `ui/block_sizes.py::load_block_sizes`, keyed by block: `abilities`,
   `resistances`, …) and is applied to the `BlockFrame` in `block_frame.py`. A
-  `max_width == min_width` pins a block's width so it can't stretch (Abilities and
-  Resistances are compact grids); the content blocks (Advantages/Skills/Powers)
-  grow to fill their row. Tweak the JSON to retune — no code change. This is UI
+  `max_width == min_width` pins a block's width so it can't stretch; the content
+  blocks grow to fill their row. **A bound here is only ever a floor worth
+  stating** — every block already reports its own content as its effective minimum
+  (`BlockFrame.minimumSizeHint`), so a block that says nothing is sized entirely by
+  what is in it. Abilities and Resistances say nothing: they used to share a
+  hardcoded `300×340` in both dimensions, a number compensating for the tables
+  measuring themselves once at build time, and one that a denser or roomier preset
+  made wrong in both directions — their tables report their real rows and columns
+  now (see `AutoHeightTable`). Tweak the JSON to retune — no code change. This is UI
   config, **not** game content, so it lives under `ui/` (bundled via the
   `ui/*.json` `package-data` entry), not the OGL `data/` dir.
 - `CharacterSheet` owns the mutable per-character state as a single
@@ -1265,6 +1278,77 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   `extends` chain.
 - Screenshot it with `driver.py settings` / `settings-demo` (see the
   `run-mm-companion` skill).
+
+## The table blocks (matters when touching Abilities, Resistances, Advantages or Skills)
+
+Those four blocks are the same thing seen four ways — an ordered list of rows in a
+`QTableWidget` that shows all of its content and never scrolls on its own — and each
+used to answer the three questions a table block asks in its own way. One answer to
+each now lives in **`ui/sections/row_table.py`**, which is the layer *below*
+`stat_table.py` and knows nothing about stats. Build a new table block out of it
+rather than growing a fifth set of answers; a block constructor will assemble
+exactly these pieces.
+
+- **`AutoHeightTable`** — reports the header plus its summed row heights as both its
+  size hint and its minimum, so the block grows and the table never scrolls.
+  *Reported live*, which is the point: the old `fit_table_height` did it once with
+  `setFixedHeight`, before the stylesheet had touched a row, and the two stat blocks
+  carried a hardcoded height "plus a little slack" to cover for it. Two flags:
+  `word_wrap` re-measures wrapped rows on resize, and `fit_width` reports the summed
+  column widths too — right for a table that *is* the whole block (the stat grids),
+  wrong for one panel of a column flow, whose section caps its own minimum at a
+  single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
+  has not been shown has no visible children, and that is exactly when its minimum
+  is first asked for.
+- **`RowIndex`** — `(table, row, key)` entries in model order. A block that fans its
+  rows across side-by-side panels has no positional row → model mapping, and the
+  entry order *is* the block's order, so a drag reads its source and target
+  positions straight off it. `find` matches by **identity first**: the same
+  advantage can be bought twice.
+- **`install_row_menu(table, *contributors)` / `build_row_menu`** — one right-click
+  menu per table, composed from independent contributors (`pin_menu_contributor` in
+  `stat_table.py`, `remove_contributor` here), ruled apart when more than one has
+  something to say. A row every contributor passes on shows **no menu at all**.
+  `build_row_menu` is the same thing without the modal `exec`, so a test can ask
+  what a row offers.
+- **`RowReorder`** — drag a row to a new place, *across* panels, marked with the
+  shared `DropIndicator` and refused visibly with `DropFeedback.show_reject()`. Each
+  block passes its own MIME format, so two blocks can never accept each other's
+  rows. It holds no model: the block supplies `on_move(source, target, before)` and
+  an `accepts` predicate. `move_within` is the pop/insert with the downward
+  correction a drop position needs.
+- **`SortControl`** — the sort combo, and the standing rule that a preset mode
+  stands the drag down (`SORT_MANUAL` is the shared mode id). Sorting is a
+  **permanent rewrite** of the stored order, in both blocks that have one: the new
+  order is the one that saves, which makes Skills' "by total" a snapshot rather than
+  a live view.
+
+Two things the blocks add on top:
+
+- **Advantages** dropped its ▲/▼ and "Remove" buttons for those gestures. Its picker
+  keeps "Add"; removal is a thing done *to a row*, so it is on the row.
+- **Skills** owns which rows are shown at all. `Character.skill_order` and
+  `Character.hidden_skills` are the player's, resolved against `GameData.skills` by
+  `_visible_skills()` with the same three-part rule `EquipmentSection._ordered_categories`
+  follows (stored order first, unlisted names trailing in the ruleset's order, a
+  stored name the ruleset no longer has *kept* rather than pruned). Both are omitted
+  from `to_dict()` while empty, so a save written before this round-trips unchanged.
+  Removing a skill drops its ranks, focuses and specializations — it **asks first**
+  when there is anything to lose — and the `↺` button restores the rows and the
+  order but never the ranks. A drag works at two levels: a skill moves among the
+  skills and carries its sub-rows with it, a focus moves only within its own skill.
+  The inline `✕` is gone (a focus/spec name cell is a plain item again, so the
+  condition overlay can strike it); the `＋` stays, being an *add* affordance with
+  nowhere else discoverable to live.
+  Two rules keep a long focus name from being clipped, and both are easy to
+  re-break. A focused skill's header spans from **`COL_NAME`**, not from
+  `COL_ABILITY`: a `ResizeToContents` column measures a spanned cell widget as its
+  own content, so parking the "Add focus…" buttons on the Ability column made that
+  column as wide as *they* are, and the stretching name column paid for it. And
+  `_min_col_width` budgets **every** column — the Ability column was missing from
+  that sum, so the flow fitted one panel too many and the name column silently
+  absorbed the shortfall. A column left out of that sum is a column the name column
+  pays for.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

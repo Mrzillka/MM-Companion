@@ -122,6 +122,15 @@ class Character:
     skill_ranks: dict[str, int] = field(default_factory=dict)
     focuses: dict[str, list[str]] = field(default_factory=dict)
     specializations: dict[str, list[str]] = field(default_factory=dict)
+    #: The player's chosen order for the Skills block, by skill name. Empty means the
+    #: ruleset's own order (``GameData.skills``); names it does not list trail the ones
+    #: it does. A name it lists that the ruleset no longer has is **kept**, not pruned,
+    #: so a skill from a mod that is off today returns to where the player put it.
+    skill_order: list[str] = field(default_factory=list)
+    #: Skills the player has taken off the sheet, by name. Display state, not a build
+    #: fact — but removing one *does* drop what was bought on it (the block says so
+    #: first), and the block's reset button restores the rows, not the ranks.
+    hidden_skills: list[str] = field(default_factory=list)
     advantages: list[AdvantageSelection] = field(default_factory=list)
     complications: list[Complication] = field(default_factory=list)
     conditions: list[AppliedCondition] = field(default_factory=list)
@@ -198,6 +207,10 @@ class Character:
                 }
                 for a in self.advantages
             ],
+            # Both omitted while empty, like equipment_group_order below, so a save
+            # written before the Skills block could be reordered round-trips unchanged.
+            **({"skill_order": list(self.skill_order)} if self.skill_order else {}),
+            **({"hidden_skills": list(self.hidden_skills)} if self.hidden_skills else {}),
             "complications": [c.to_dict() for c in self.complications],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
@@ -253,6 +266,8 @@ class Character:
             skill_ranks=dict(raw.get("skill_ranks", {})),
             focuses={k: list(v) for k, v in raw.get("focuses", {}).items()},
             specializations={k: list(v) for k, v in raw.get("specializations", {}).items()},
+            skill_order=[str(name) for name in raw.get("skill_order", [])],
+            hidden_skills=[str(name) for name in raw.get("hidden_skills", [])],
             advantages=[
                 AdvantageSelection(
                     name=a["name"], rank=int(a.get("rank", 1)), parameter=a.get("parameter", "")

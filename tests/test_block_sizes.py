@@ -45,41 +45,48 @@ def test_block_sizes_load_for_every_block() -> None:
     assert "_comment" not in sizes
 
 
-def test_horizontally_pinned_blocks_have_a_max_width() -> None:
+def test_only_the_image_block_pins_a_dimension() -> None:
     sizes = load_block_sizes()
 
-    # Abilities and resistances are compact grids that shouldn't stretch wide.
-    assert sizes["abilities"].max_width < UNBOUNDED
-    assert sizes["resistances"].max_width < UNBOUNDED
     # Base info grows tall on demand — conditions (which can bundle into several
     # chips) must never be clipped, so its height is unbounded.
     assert sizes["base_info"].max_height == UNBOUNDED
     # The content blocks grow freely both ways.
     assert sizes["skills"].max_width == UNBOUNDED
     assert sizes["powers"].max_height == UNBOUNDED
+    # The portrait is the one block that would look wrong stretched wide.
+    assert sizes["character_image"].max_width < UNBOUNDED
 
 
-def test_abilities_and_resistances_share_one_fixed_size() -> None:
+def test_abilities_and_resistances_state_no_bounds_at_all() -> None:
+    """The two stat grids are sized by their own tables, not by this file.
+
+    They used to share a hardcoded 300x340 in both dimensions — a number that
+    compensated for the tables measuring themselves once at build time, and that a
+    denser or roomier preset made wrong in both directions. The tables report their
+    real rows and columns now, so there is nothing left here to state.
+    """
     sizes = load_block_sizes()
-    abilities, resistances = sizes["abilities"], sizes["resistances"]
 
-    # Identical constraints, and fixed (non-resizable) in both dimensions.
-    assert abilities == resistances
-    assert abilities.min_width == abilities.max_width
-    assert abilities.min_height == abilities.max_height
+    for key in ("abilities", "resistances"):
+        assert sizes[key].min_width == 0
+        assert sizes[key].min_height == 0
+        assert sizes[key].max_width == UNBOUNDED
+        assert sizes[key].max_height == UNBOUNDED
 
 
-def test_abilities_and_resistances_frames_are_fixed_and_equal(qapp: QApplication) -> None:
+def test_abilities_and_resistances_frames_ask_for_their_content(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
 
-    ability_frame = sheet.block_frame("abilities")
-    resistance_frame = sheet.block_frame("resistances")
-    for frame in (ability_frame, resistance_frame):
-        assert frame.minimumWidth() == frame.maximumWidth()
-        # Height is pinned via the effective minimum (minimumSizeHint), capped at
-        # the configured max, so a fixed block can neither grow nor shrink.
-        assert frame.minimumSizeHint().height() == frame.maximumHeight()
-    assert ability_frame.minimumSizeHint() == resistance_frame.minimumSizeHint()
+    for key in ("abilities", "resistances"):
+        frame = sheet.block_frame(key)
+        # Unbounded, so the block shares its row's width rather than being pinned...
+        assert frame.maximumWidth() >= 100_000
+        assert frame.maximumHeight() >= 100_000
+        # ...and its effective minimum is its own content, which is a real size and
+        # exactly what the block wants to be (nothing is capping it any more).
+        assert frame.minimumSizeHint().height() > 0
+        assert frame.minimumSizeHint().height() == frame.sizeHint().height()
 
 
 def test_a_long_title_does_not_widen_its_block(qapp: QApplication) -> None:

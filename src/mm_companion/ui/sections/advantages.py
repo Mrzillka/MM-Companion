@@ -5,9 +5,16 @@ and this block is a view over that list. They render across a variable number of
 side-by-side panels whose count adapts to the block's width (see
 :mod:`mm_companion.ui.sections.column_flow`), so a row is no longer positionally
 1:1 with the model — each rendered row keeps a reference back to its backing
-``AdvantageSelection`` (``_row_refs``). A sort dropdown reorders the list (Name /
-Rank / Type permanently rewrite ``Character.advantages``; Manual leaves it alone and
-enables the ▲/▼ move buttons).
+``AdvantageSelection`` (``_row_refs``, a
+:class:`~mm_companion.ui.sections.row_table.RowIndex`). A sort dropdown reorders the
+list (Name / Rank / Type permanently rewrite ``Character.advantages``; Manual leaves
+it alone).
+
+A row is **dragged** to a new place and **right-clicked** to remove — the shared
+table-block gestures, out of :mod:`mm_companion.ui.sections.row_table`, in place of
+the ▲/▼ and "Remove" buttons this block used to carry. Dragging works across the
+panels, since they are one ordered list split for display; while a preset sort mode
+is in force there is nothing to hand-order and the drag stands down.
 
 Rank limits are enforced here from the rules layer: a ranked advantage's spin box is
 capped at its own maximum (:func:`~mm_companion.core.rules.advantage_rank_cap` — the
@@ -18,7 +25,7 @@ also draw from a shared per-character budget
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -32,7 +39,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -52,6 +58,16 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
+from mm_companion.ui.sections.row_table import (
+    SORT_MANUAL,
+    AutoHeightTable,
+    RowIndex,
+    RowReorder,
+    SortControl,
+    install_row_menu,
+    move_within,
+    remove_contributor,
+)
 from mm_companion.ui.sections.stat_table import CONDITION_TINT
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -60,7 +76,12 @@ from mm_companion.ui.widgets import make_spin_box, tinted_style
 RANK_MIN, RANK_MAX = 1, 20
 
 # Sort modes for the chosen-advantages list (UI-only state, not persisted).
-SORT_MANUAL, SORT_NAME, SORT_RANK, SORT_TYPE = "manual", "name", "rank", "type"
+# SORT_MANUAL is the shared one — see row_table, which only lets rows be dragged
+# while it is in force.
+SORT_NAME, SORT_RANK, SORT_TYPE = "name", "rank", "type"
+
+#: This block's drag payload. Its own format, so no other block's rows can land here.
+ROW_MIME = "application/x-mm-rows-advantages"
 
 # Rough widths used to decide how many panels fit without clipping a row. The Name
 # and Type columns size to content; the Description wraps but still wants a readable
@@ -81,46 +102,6 @@ def min_desc_width() -> int:
 NAME_PADDING = 24
 TYPE_PADDING = 24
 FRAME_PADDING = 24
-
-
-class _AutoHeightTable(QTableWidget):
-    """A table that reports its full content height so it never scrolls itself.
-
-    The advantages block grows in height to fit every row instead of the table
-    scrolling internally: the table's own vertical scrollbar is off and its size
-    hint is the header plus the summed row heights, so the enclosing block (which
-    is sized to its content) grows as advantages are added. Word-wrapped rows are
-    re-measured on resize, since their height depends on the stretched column's
-    width.
-    """
-
-    def __init__(self, rows: int, columns: int, parent: QWidget | None = None) -> None:
-        super().__init__(rows, columns, parent)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def _content_height(self) -> int:
-        height = 2 * self.frameWidth()
-        header = self.horizontalHeader()
-        if header.isVisible():
-            height += header.height()
-        for row in range(self.rowCount()):
-            height += self.rowHeight(row)
-        return height
-
-    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        return QSize(super().sizeHint().width(), self._content_height())
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        return QSize(super().minimumSizeHint().width(), self._content_height())
-
-    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
-        super().resizeEvent(event)
-        # A wider/narrower table re-wraps the description column, changing row
-        # heights, so re-measure and let the block resize to the new content.
-        for row in range(self.rowCount()):
-            self.resizeRowToContents(row)
-        self.updateGeometry()
 
 
 class AdvantagesSection(ColumnFlowPanels, TitledSection):
@@ -162,11 +143,11 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._advantage_rank = make_spin_box(RANK_MIN, RANK_MAX, guarded=False)
         self._advantage_add_button = QPushButton("Add")
         self._advantage_add_button.clicked.connect(self._add_advantage)
-        self._advantage_remove_button = QPushButton("Remove")
-        self._advantage_remove_button.clicked.connect(self._remove_advantage)
 
-        # The subject/rank/Add/Remove controls travel together as one widget so they
-        # can move between the picker's two rows in one step (see _apply_picker_mode).
+        # The subject/rank/Add controls travel together as one widget so they can
+        # move between the picker's two rows in one step (see _apply_picker_mode).
+        # There is no "Remove" beside them: removing is a thing done *to a row*, so
+        # it lives on that row's right-click menu.
         self._advantage_controls = QWidget()
         controls_row = QHBoxLayout(self._advantage_controls)
         controls_row.setContentsMargins(0, 0, 0, 0)
@@ -175,7 +156,6 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             self._advantage_param_text,
             self._advantage_rank,
             self._advantage_add_button,
-            self._advantage_remove_button,
         ):
             controls_row.addWidget(widget)
 
@@ -199,25 +179,21 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._heroic_label = QLabel()
         outer.addWidget(self._heroic_label)
 
-        # Sort / manual-reorder controls (hidden while locked).
+        # Sort control (hidden while locked). Hand ordering is the drag on the rows
+        # themselves, so there is nothing beside it.
         controls = QHBoxLayout()
-        self._sort_label = QLabel("Sort:")
-        controls.addWidget(self._sort_label)
-        self._sort_combo = QComboBox()
-        self._sort_combo.addItem("Manual", SORT_MANUAL)
-        self._sort_combo.addItem("Name (A–Z)", SORT_NAME)
-        self._sort_combo.addItem("Rank (high→low)", SORT_RANK)
-        self._sort_combo.addItem("Type", SORT_TYPE)
-        self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
-        controls.addWidget(self._sort_combo)
-        self._move_up_button = QPushButton("▲")
-        self._move_up_button.setToolTip("Move the selected advantage earlier")
-        self._move_up_button.clicked.connect(lambda: self._move_selected(-1))
-        controls.addWidget(self._move_up_button)
-        self._move_down_button = QPushButton("▼")
-        self._move_down_button.setToolTip("Move the selected advantage later")
-        self._move_down_button.clicked.connect(lambda: self._move_selected(1))
-        controls.addWidget(self._move_down_button)
+        self._sort = SortControl(
+            [
+                (SORT_MANUAL, "Manual"),
+                (SORT_NAME, "Name (A–Z)"),
+                (SORT_RANK, "Rank (high→low)"),
+                (SORT_TYPE, "Type"),
+            ]
+        )
+        self._sort.sortChanged.connect(self._on_sort_changed)
+        # The combo itself, for anything that drives the block by picking a mode.
+        self._sort_combo = self._sort.combo
+        controls.addWidget(self._sort)
         controls.addStretch()
         outer.addLayout(controls)
 
@@ -229,7 +205,15 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._locked = False
         self._selected: AdvantageSelection | None = None
         self._syncing_selection = False
-        self._row_refs: list[tuple[_AutoHeightTable, int, AdvantageSelection]] = []
+        self._row_refs = RowIndex()
+        # One controller for every panel: they are one ordered list split for
+        # display, so a row has to be draggable from one into another.
+        self._reorder = RowReorder(
+            ROW_MIME,
+            self._row_refs,
+            lambda source, target, before: self.move_advantage(source.key, target.key, before),
+            enabled=lambda: not self._locked and self._sort.reorder_enabled(),
+        )
         self._init_flow_panels(outer)
         # Keep the content packed at the top: when this block is stretched taller than
         # its content (e.g. sharing a row with the much taller Skills block) the extra
@@ -242,7 +226,6 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             self._advantage_combo,
             self._advantage_param,
             self._advantage_rank,
-            self._sort_combo,
         )
 
         self._rebuild()
@@ -275,8 +258,10 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
 
     # -- panel construction / rebuild ---------------------------------------
 
-    def _make_table(self) -> _AutoHeightTable:
-        table = _AutoHeightTable(0, 3)
+    def _make_table(self) -> AutoHeightTable:
+        # word_wrap: the Description column wraps, so its rows have to be
+        # re-measured whenever the panel's width changes.
+        table = AutoHeightTable(0, 3, word_wrap=True)
         table.setHorizontalHeaderLabels(["Advantage", "Type", "Description"])
         table.verticalHeader().setVisible(False)
         table.setWordWrap(True)
@@ -288,6 +273,10 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table.itemSelectionChanged.connect(lambda t=table: self._on_selection_changed(t))
         table.cellDoubleClicked.connect(lambda row, _col, t=table: self._edit_row(t, row))
+        # A panel built later by _ensure_tables is wired here too, so every panel is
+        # both a source of dragged rows and a target for them.
+        self._reorder.attach(table)
+        install_row_menu(table, remove_contributor(self._remove_label, self._remove_row))
         guard_wheel(table)
         return table
 
@@ -312,7 +301,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self.refresh_conditions()
         self._restore_selection()
 
-    def _render_row(self, table: _AutoHeightTable, selection: AdvantageSelection) -> None:
+    def _render_row(self, table: AutoHeightTable, selection: AdvantageSelection) -> None:
         """Append one row for *selection*, recording its row → model mapping."""
 
         advantage = self._advantages_by_name.get(selection.name)
@@ -329,7 +318,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         table.setItem(row, 1, QTableWidgetItem(types))
         table.setItem(row, 2, QTableWidgetItem(description))
         table.resizeRowToContents(row)
-        self._row_refs.append((table, row, selection))
+        self._row_refs.add(table, row, selection)
 
     # -- ordering / sorting --------------------------------------------------
 
@@ -352,42 +341,39 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         advantage = self._advantages_by_name.get(selection.name)
         return ", ".join(advantage.types) if advantage else ""
 
-    def _on_sort_changed(self) -> None:
-        self._sort_mode = self._sort_combo.currentData()
-        manual = self._sort_mode == SORT_MANUAL
-        # Only Manual mode offers hand reordering.
-        self._move_up_button.setEnabled(manual)
-        self._move_down_button.setEnabled(manual)
-        if manual:
+    def _on_sort_changed(self, mode: str) -> None:
+        self._sort_mode = mode
+        # Only Manual mode offers hand reordering, which RowReorder asks about at
+        # gesture time (see the `enabled` predicate it was built with).
+        if mode == SORT_MANUAL:
             return  # nothing to reorder; the current order stands
         self._apply_sort()
         self._rebuild()
         self.changed.emit()  # a preset rewrites the saved order — mark it an edit
 
-    def _move_selected(self, delta: int) -> None:
-        """Swap the selected advantage with its neighbour in the model list.
+    def move_advantage(
+        self, source: AdvantageSelection, target: AdvantageSelection, before: bool
+    ) -> None:
+        """Move *source* so it sits either side of *target* in the model list.
 
-        Only meaningful in Manual mode; this mutates ``Character.advantages`` so
-        the hand order persists through ``to_dict``.
+        The seam a dragged row lands on, and the headless-testable one: it takes
+        the two model objects rather than a drop position, so a test states what it
+        means without synthesising a drag. Mutates ``Character.advantages``, so the
+        hand order persists through ``to_dict``.
         """
 
-        selected = self._selected
-        if selected is None:
-            return
         advantages = self._character.advantages
-        index = next((i for i, a in enumerate(advantages) if a is selected), None)
-        if index is None:
+        from_index = next((i for i, a in enumerate(advantages) if a is source), None)
+        to_index = next((i for i, a in enumerate(advantages) if a is target), None)
+        if from_index is None or to_index is None or source is target:
             return
-        target = index + delta
-        if not 0 <= target < len(advantages):
-            return
-        advantages[index], advantages[target] = advantages[target], advantages[index]
+        move_within(advantages, from_index, to_index if before else to_index + 1)
         self._rebuild()
         self.changed.emit()
 
     # -- selection tracking across panels ------------------------------------
 
-    def _on_selection_changed(self, table: _AutoHeightTable) -> None:
+    def _on_selection_changed(self, table: AutoHeightTable) -> None:
         if self._syncing_selection:
             return
         rows = {index.row() for index in table.selectedIndexes()}
@@ -401,24 +387,22 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
                 other.clearSelection()
         self._syncing_selection = False
 
-    def _selection_at(self, table: _AutoHeightTable, row: int) -> AdvantageSelection | None:
-        for ref_table, ref_row, selection in self._row_refs:
-            if ref_table is table and ref_row == row:
-                return selection
-        return None
+    def _selection_at(self, table: AutoHeightTable, row: int) -> AdvantageSelection | None:
+        key = self._row_refs.key_at(table, row)
+        return key if isinstance(key, AdvantageSelection) else None
 
     def _restore_selection(self) -> None:
         """Re-highlight the tracked advantage after a rebuild moved its row."""
 
         if self._selected is None:
             return
-        for table, row, selection in self._row_refs:
-            if selection is self._selected:
-                self._syncing_selection = True
-                table.selectRow(row)
-                self._syncing_selection = False
-                return
-        self._selected = None
+        entry = self._row_refs.find(self._selected)
+        if entry is None:
+            self._selected = None
+            return
+        self._syncing_selection = True
+        entry.table.selectRow(entry.row)
+        self._syncing_selection = False
 
     # -- responsive panel count ---------------------------------------------
 
@@ -631,7 +615,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         if index >= 0:
             self._advantage_param.setCurrentIndex(index)
 
-    def _edit_row(self, table: _AutoHeightTable, row: int) -> None:
+    def _edit_row(self, table: AutoHeightTable, row: int) -> None:
         """Open the edit dialog for the double-clicked row's advantage."""
 
         selection = self._selection_at(table, row)
@@ -722,21 +706,32 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._sync_rank_enabled()
         self.changed.emit()
 
-    def _remove_advantage(self) -> None:
-        # Row → model mapping is no longer positional, so resolve the selected
-        # rows back to their AdvantageSelection objects across every panel.
-        selected: list[AdvantageSelection] = []
-        for table in self._tables:
-            for row in {index.row() for index in table.selectedIndexes()}:
-                selection = self._selection_at(table, row)
-                if selection is not None:
-                    selected.append(selection)
-        if not selected:
+    def _remove_label(self, table: AutoHeightTable, row: int) -> str | None:
+        """How the row menu words its Remove entry — ``None`` while locked."""
+
+        if self._locked:
+            return None
+        selection = self._selection_at(table, row)
+        return None if selection is None else f"Remove {selection.name}"
+
+    def _remove_row(self, table: AutoHeightTable, row: int) -> None:
+        selection = self._selection_at(table, row)
+        if selection is not None:
+            self.remove_advantage(selection)
+
+    def remove_advantage(self, selection: AdvantageSelection) -> None:
+        """Take *selection* off the character. The seam the row menu lands on.
+
+        By identity, not by name: the same advantage can be bought twice (two
+        Benefits, two Equipment ranks), and the row that was right-clicked means
+        that one.
+        """
+
+        remaining = [a for a in self._character.advantages if a is not selection]
+        if len(remaining) == len(self._character.advantages):
             return
-        self._character.advantages = [
-            a for a in self._character.advantages if not any(a is s for s in selected)
-        ]
-        if any(self._selected is s for s in selected):
+        self._character.advantages = remaining
+        if self._selected is selection:
             self._selected = None
         self._rebuild()
         self.refresh_cost()
@@ -772,18 +767,19 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         )
 
     def set_locked(self, locked: bool) -> None:
-        """Hide the advantage picker and sort/move controls while locked; the
-        panels are already read-only (and double-click editing is gated)."""
+        """Hide the advantage picker and the sort control while locked.
+
+        The panels are already read-only (double-click editing is gated), and the
+        two row gestures ask ``_locked`` themselves: the drag through the predicate
+        :class:`RowReorder` was built with, the Remove entry through
+        :meth:`_remove_label`, which words nothing while locked.
+        """
         self._locked = locked
         for widget in (
             self._advantage_combo,
             self._advantage_rank,
             self._advantage_add_button,
-            self._advantage_remove_button,
-            self._sort_label,
-            self._sort_combo,
-            self._move_up_button,
-            self._move_down_button,
+            self._sort,
         ):
             widget.setVisible(not locked)
         if locked:

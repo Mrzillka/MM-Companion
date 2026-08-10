@@ -84,7 +84,7 @@ def test_type_sort_groups_by_type(qapp: QApplication) -> None:
     assert _names(section) == ["Agile Grab", "Assessment", "Animal Empathy"]
 
 
-def test_manual_move_mutates_the_model(qapp: QApplication) -> None:
+def test_dragging_a_row_mutates_the_model(qapp: QApplication) -> None:
     section = _section(
         [
             AdvantageSelection("Assessment", 1),
@@ -94,22 +94,61 @@ def test_manual_move_mutates_the_model(qapp: QApplication) -> None:
     )
     assert section._sort_mode == SORT_MANUAL
 
-    section._selected = section._character.advantages[2]  # Animal Empathy
-    section._move_selected(-1)  # move it earlier
+    advantages = section._character.advantages
+    # Animal Empathy, dropped on the near side of Agile Grab.
+    section.move_advantage(advantages[2], advantages[1], before=True)
 
-    assert [s.name for s in section._character.advantages] == [
-        "Assessment",
-        "Animal Empathy",
-        "Agile Grab",
-    ]
+    assert _names(section) == ["Assessment", "Animal Empathy", "Agile Grab"]
 
 
-def test_move_at_the_edge_is_a_no_op(qapp: QApplication) -> None:
+def test_dropping_a_row_on_itself_is_a_no_op(qapp: QApplication) -> None:
     section = _section([AdvantageSelection("Assessment", 1), AdvantageSelection("Benefit", 1)])
-    section._selected = section._character.advantages[0]
-    section._move_selected(-1)  # already first
+    first = section._character.advantages[0]
+    section.move_advantage(first, first, before=True)
 
-    assert [s.name for s in section._character.advantages] == ["Assessment", "Benefit"]
+    assert _names(section) == ["Assessment", "Benefit"]
+
+
+def test_a_row_dropped_past_the_last_one_goes_to_the_end(qapp: QApplication) -> None:
+    section = _section(
+        [
+            AdvantageSelection("Assessment", 1),
+            AdvantageSelection("Agile Grab", 1),
+            AdvantageSelection("Animal Empathy", 1),
+        ]
+    )
+    advantages = section._character.advantages
+    section.move_advantage(advantages[0], advantages[2], before=False)
+
+    assert _names(section) == ["Agile Grab", "Animal Empathy", "Assessment"]
+
+
+def test_the_row_menu_removes_that_advantage_alone(qapp: QApplication) -> None:
+    """Removal is by identity: two Benefits are two rows, and one goes."""
+    section = _section(
+        [
+            AdvantageSelection("Benefit", 1, "Wealth"),
+            AdvantageSelection("Assessment", 1),
+            AdvantageSelection("Benefit", 1, "Status"),
+        ]
+    )
+    table, row, selection = section._row_refs[2]
+    assert section._remove_label(table, row) == "Remove Benefit"
+
+    section._remove_row(table, row)
+
+    assert [s.parameter for s in section._character.advantages if s.name == "Benefit"] == ["Wealth"]
+    assert selection not in section._character.advantages
+
+
+def test_a_locked_block_offers_no_remove(qapp: QApplication) -> None:
+    section = _section([AdvantageSelection("Assessment", 1)])
+    section.set_locked(True)
+
+    table, row, _ = section._row_refs[0]
+    assert section._remove_label(table, row) is None
+    # ...and the drag stands down with it: reordering is a build edit.
+    assert section._reorder._enabled() is False
 
 
 def test_row_refs_map_every_advantage(qapp: QApplication) -> None:

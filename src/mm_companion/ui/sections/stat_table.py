@@ -15,8 +15,10 @@ cosmetic: the columns line up under headers that say what they are, a row is a r
 four widgets), and the whole block reads as one family with Skills instead of two
 blocks that merely happen to be near each other.
 
-The pieces both this and Skills need — the roll payload's item role, fitting a
-table to its rows, tinting an item — live here, since this is the lower module.
+The pieces both this and Skills need that are *about a stat* — the roll payload's
+item role, the pin menu it feeds, tinting an item — live here. The pieces that are
+about a **table** and would be the same for any block at all live one layer down,
+in :mod:`~mm_companion.ui.sections.row_table`.
 """
 
 from __future__ import annotations
@@ -28,7 +30,6 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QHeaderView,
     QMenu,
-    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -37,6 +38,11 @@ from PySide6.QtWidgets import (
 from mm_companion.core.data_loader import TraitRange
 from mm_companion.core.rules import ConditionEffect, PinRef, RollSpec
 from mm_companion.ui import theme
+from mm_companion.ui.sections.row_table import (
+    AutoHeightTable,
+    MenuContributor,
+    install_row_menu,
+)
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, make_spin_box, readonly_item
 
@@ -132,14 +138,14 @@ def build_stat_table(
     stale. The Rank column is the one that never arrives — its spin box eats both
     clicks, which unlocked is what selects the number for retyping.
     """
-    table = QTableWidget(0, len(HEADERS))
+    # The table never scrolls itself; it reports its rows as its size (see
+    # :class:`AutoHeightTable`) and the page scrolls when the blocks don't all fit.
+    # ``fit_width`` because this table *is* the whole block, so its columns are
+    # what the block's minimum width should be.
+    table = AutoHeightTable(0, len(HEADERS), fit_width=True)
     table.setHorizontalHeaderLabels(HEADERS)
     table.verticalHeader().setVisible(False)
-    # The table never scrolls itself; it is sized to show every row (see
-    # :func:`fit_table_height`), and the page scrolls when the blocks don't all fit.
-    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     header = table.horizontalHeader()
     header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
     for col in (COL_ABBR, COL_RANK, COL_TOTAL):
@@ -186,7 +192,9 @@ def build_stat_table(
         row += 1
 
     if pin_ref is not None and pin_sink is not None and unpin_sink is not None:
-        install_pin_menu(table, pin_ref, pin_sink, unpin_sink, pins or PinMenuState())
+        install_row_menu(
+            table, pin_menu_contributor(pin_ref, pin_sink, unpin_sink, pins or PinMenuState())
+        )
     if roll_spec is not None and roll_sink is not None:
         table.cellDoubleClicked.connect(lambda r, _c: _row_spec_to(table, r, roll_spec, roll_sink))
         if load_sink is not None:
@@ -196,36 +204,38 @@ def build_stat_table(
             # load → (load + roll) on one spec. Deferring it by the double-click
             # interval would only make a plain click feel a beat late.
             table.cellClicked.connect(lambda r, _c: _row_spec_to(table, r, roll_spec, load_sink))
-    fit_table_height(table)
     return table
 
 
-def install_pin_menu(
-    table: QTableWidget,
+def pin_menu_contributor(
     pin_ref: PinHookFactory,
     pin_sink: Callable[[PinRef], None],
     unpin_sink: Callable[[PinRef], None],
     pins: PinMenuState,
-) -> None:
-    """Offer Pin / Unpin on a right-clicked row, when there is a card to pin to.
+) -> MenuContributor:
+    """The Pin / Unpin entry of a row menu, offered when there is a card to pin to.
+
+    A *contributor* rather than a whole menu (see
+    :func:`~mm_companion.ui.sections.row_table.install_row_menu`) because a row can
+    have more than one thing to offer: a skill row is both pinnable and removable,
+    and neither action should have to know the other exists.
 
     Public because the Skills table builds itself rather than going through
-    :func:`build_stat_table`, and both should offer the same menu off the same
+    :func:`build_stat_table`, and both should offer the same entry off the same
     stashed payload.
 
     *pins* is consulted at menu time rather than wired once, because both of its
     answers arrive after the block is built — the GM window says there is a card
     when it opens the sheet, and says what is on that card every time the strip
-    changes. A sheet a player opened for themselves is never enabled and shows no
-    menu at all: there is no card, and an action that does nothing is worse than
+    changes. A sheet a player opened for themselves is never enabled and adds
+    nothing at all: there is no card, and an action that does nothing is worse than
     none.
     """
 
-    def show(pos) -> None:
+    def contribute(menu: QMenu, table: QTableWidget, row: int) -> None:
         if not pins.enabled:
             return
-        row = table.rowAt(pos.y())
-        item = table.item(row, COL_TOTAL) if row >= 0 else None
+        item = table.item(row, COL_TOTAL)
         key = None if item is None else item.data(ROLL_ROLE)
         if not key:
             return  # a separator, or a row nothing can be read off
@@ -233,12 +243,9 @@ def install_pin_menu(
         if ref is None:
             return
         sink = unpin_sink if pins.is_pinned(ref) else pin_sink
-        menu = QMenu(table)
         menu.addAction(pins.action_text(ref), lambda: sink(ref))
-        menu.exec(table.viewport().mapToGlobal(pos))
 
-    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-    table.customContextMenuRequested.connect(show)
+    return contribute
 
 
 def _row_spec_to(
@@ -255,14 +262,6 @@ def _row_spec_to(
     spec = roll_spec(key)
     if spec is not None:
         sink(spec)
-
-
-def fit_table_height(table: QTableWidget) -> None:
-    """Fix *table*'s height to exactly show every row, so it never scrolls itself."""
-    height = table.horizontalHeader().height() + 2 * table.frameWidth()
-    for row in range(table.rowCount()):
-        height += table.rowHeight(row)
-    table.setFixedHeight(height)
 
 
 def tint_item(item: QTableWidgetItem | None, token: str | None, struck: bool = False) -> None:
@@ -356,7 +355,7 @@ __all__ = [
     "ROLL_ROLE",
     "apply_stat_effects",
     "build_stat_table",
-    "fit_table_height",
+    "pin_menu_contributor",
     "set_stat_value",
     "tint_item",
 ]

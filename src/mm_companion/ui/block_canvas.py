@@ -713,7 +713,13 @@ class BlockCanvas(QWidget):
         window.deleteLater()
 
     def float_block(self, key: str, pos: QPoint | None = None) -> None:
-        """Tear *key* out into its own :class:`BlockWindow`."""
+        """Tear *key* out into its own :class:`BlockWindow`.
+
+        It *opens* at the block's natural size, so popping a block out never
+        changes how it reads. What it may then be dragged down to is another
+        matter: the window scrolls both ways and its floor is a theme metric, not
+        the block's content (see :class:`~mm_companion.ui.block_frame.BlockWindow`).
+        """
         if key in self._windows:
             return
         frame = self._frames[key]
@@ -727,7 +733,6 @@ class BlockCanvas(QWidget):
         window.set_frame(frame)
         frame.title_bar.set_floating(True, on_top=on_top)
         frame.show()
-        self._apply_window_min_width(window, frame)
         width = max(old_size.width(), frame.sizeHint().width(), frame.minimumWidth())
         height = max(old_size.height(), frame.sizeHint().height(), frame.minimumHeight())
         # A block taller than the screen (e.g. a full Powers list) would open past
@@ -745,18 +750,6 @@ class BlockCanvas(QWidget):
 
         self._relayout()
         self.arrangement_changed.emit()
-
-    @staticmethod
-    def _apply_window_min_width(window: BlockWindow, frame: BlockFrame) -> None:
-        """Stop a floated block's window from shrinking narrow enough to clip it.
-
-        The window's scroll area never scrolls horizontally, so without a minimum a
-        narrow window would cut off the frame's right edge. Pin the window to the
-        frame's own minimum plus room for the vertical scrollbar the tall content
-        may show.
-        """
-        extent = window.verticalScrollBar_extent()
-        window.setMinimumWidth(frame.minimumSizeHint().width() + extent + 4)
 
     @staticmethod
     def _available_height(window: BlockWindow) -> int:
@@ -777,7 +770,6 @@ class BlockCanvas(QWidget):
         window.set_frame(frame)
         frame.title_bar.set_floating(True, on_top=on_top)
         frame.show()
-        self._apply_window_min_width(window, frame)
         window.setGeometry(geom["x"], geom["y"], geom["w"], geom["h"])
         self._windows[key] = window
         window.set_on_top(on_top)

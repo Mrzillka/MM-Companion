@@ -1289,7 +1289,17 @@ through rather than reinvent. When building new sheet widgets, use it:
   (frame, spin buttons, dropdown arrow) so it reads like a label. Combo boxes
   have no native read-only mode, so it installs an event-filter interaction
   blocker.
-- `ui/flow_layout.py` — a reflowing layout for wrapping widget rows.
+- `ui/flow_layout.py` — a reflowing layout for wrapping widget rows. **Host a
+  `FlowLayout` in a `FlowContainer`, never a bare `QWidget`.** The layout answers
+  `hasHeightForWidth` with *no*, on purpose: Qt evaluates that at the parent's
+  **hint** width, which for a flow is one item's, so every item claims a row of its
+  own and the surplus goes to whatever else shares the page. `FlowContainer` pins
+  its `minimumHeight` to what the flow really wraps to at the width it was *given*
+  instead, and re-takes that pin as items come and go. A bare host reports one row
+  and everything below it is clipped — a `QFormLayout` row showing one of Enhanced
+  Senses' twenty check boxes, a `widgetResizable` `QScrollArea` showing the first
+  row of the launcher's character library with no scroll bar to reach the rest.
+  Neither container asks a second time, which is why the host has to answer right.
 - A word-wrapped `QLabel` inside a composite widget will be sized for one line
   and clipped: `heightForWidth` only reaches it if every layout in between agrees
   to ask, and `QFormLayout` does not reliably ask. Pin the column to a width token

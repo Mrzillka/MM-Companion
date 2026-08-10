@@ -117,6 +117,11 @@ NAME_PADDING = 16
 FRAME_PADDING = 16
 # The fixed share of the ABL and Total columns, either side of the rank spin box.
 NUMERIC_PADDING = 40 + 24
+#: Cell padding around the Ability column's short code. The column itself is
+#: *measured* (see ``_ability_col_width``) rather than being another constant here:
+#: it is the one near-fixed column whose content comes from the ruleset, so a mod
+#: with longer ability codes must widen the panel rather than squeeze the names.
+ABILITY_PADDING = 16
 
 
 def spin_width() -> int:
@@ -439,8 +444,23 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
                 longest = max(longest, fm.horizontalAdvance(label))
         name_width = max(name_min_width(), longest + NAME_PADDING)
         mods = mod_width() if self._show_mods else 0
-        numeric = NUMERIC_PADDING + spin_width()
+        numeric = NUMERIC_PADDING + spin_width() + self._ability_col_width()
         return name_width + numeric + mods + FRAME_PADDING
+
+    def _ability_col_width(self) -> int:
+        """The Ability column's share: its own header, or the widest short code.
+
+        Budgeted here because it was not, and a column left out of this sum is a
+        column the *name* column silently pays for: the flow fitted one panel too
+        many and the stretching name column absorbed the whole shortfall, which is
+        what clipped a long focus name.
+        """
+
+        fm = self.fontMetrics()
+        codes = max(
+            (fm.horizontalAdvance(abbr) for abbr in self._ability_abbrs.values()), default=0
+        )
+        return max(fm.horizontalAdvance(HEADERS[COL_ABILITY]), codes) + ABILITY_PADDING
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
@@ -492,32 +512,38 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     def _render_group_header(self, table: QTableWidget, row: int, skill: Skill) -> None:
         """Header cell block with 'Add focus' / 'Add specialization' for a focused skill."""
 
-        table.setItem(row, COL_NAME, readonly_item(skill.name))
         # A focused skill's header row *is* that skill's row: it is what is dragged
         # to move the skill and what is right-clicked to remove it. It buys no ranks
         # of its own, hence the empty row id.
         self._row_refs.add(table, row, SkillRowKey("skill", skill.name))
 
         # In the locked (read-only) view there's nothing to add, so the header
-        # is just the skill name with no buttons.
+        # is just the skill name in its own cell, with no buttons.
         if self._locked:
+            table.setItem(row, COL_NAME, readonly_item(skill.name))
             return
 
-        # The buttons span every column after the name so they read as one wide
-        # control rather than being crammed into a single narrow cell.
         add_focus = QPushButton("Add focus…")
         add_focus.clicked.connect(lambda _=False, s=skill: self._add_focus(s))
         add_spec = QPushButton("Add specialization…")
         add_spec.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
         host = QWidget()
         hbox = QHBoxLayout(host)
-        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setContentsMargins(4, 0, 0, 0)
         hbox.setSpacing(4)
+        hbox.addWidget(QLabel(skill.name))
         hbox.addWidget(add_focus)
         hbox.addWidget(add_spec)
         hbox.addStretch()
-        table.setSpan(row, COL_ABILITY, 1, len(HEADERS) - COL_ABILITY)
-        table.setCellWidget(row, COL_ABILITY, host)
+        # Spanned across **every** column, the skill's name included, and that is the
+        # point rather than a tidiness: a ``ResizeToContents`` column measures a
+        # spanned cell widget as if it were that column's own content, so parking the
+        # buttons on the Ability column made it as wide as they are — half again what
+        # a three-letter code needs — and the *name* column, the one that stretches,
+        # paid for it out of the room a focus name was relying on. Column 0 stretches,
+        # so it is the one column a wide widget cannot distort.
+        table.setSpan(row, COL_NAME, 1, len(HEADERS))
+        table.setCellWidget(row, COL_NAME, host)
 
     def _render_skill_row(
         self,
@@ -598,24 +624,30 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             item = readonly_item(name)
             if indent:
                 # A focus or pool carries its skill's name as well as its own, so it
-                # is the row most likely to be elided by a narrow panel. It used to
-                # be a widget cell and could not say so; as a plain item it can.
+                # is the longest label here and the one _min_col_width is really
+                # sizing the panel for. That sum is a heuristic, so this is the belt
+                # to its braces — and it costs nothing now the cell is a plain item
+                # rather than the widget that used to hold the ✕.
                 item.setToolTip(display)
             table.setItem(row, COL_NAME, item)
             return item
 
-        host = QWidget()
-        hbox = QHBoxLayout(host)
-        hbox.setContentsMargins(4, 0, 0, 0)
-        hbox.setSpacing(4)
-        hbox.addWidget(QLabel(name))
-        hbox.addStretch()
         add = QPushButton("＋")
         add.setFlat(True)
         add.setFixedWidth(20)
         add.setToolTip("Add a specialized (half-cost) rank pool for this skill")
         add.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
+        host = QWidget()
+        hbox = QHBoxLayout(host)
+        hbox.setContentsMargins(4, 0, 0, 0)
+        hbox.setSpacing(4)
+        hbox.addWidget(QLabel(name))
+        # Beside the name rather than pushed to the far side of the column: it means
+        # "add one of these to *this* skill", and the name is what it is pointing at.
+        # It used to be right-aligned, which read as attached only because the column
+        # was too narrow for the gap to show.
         hbox.addWidget(add)
+        hbox.addStretch()
         table.setCellWidget(row, COL_NAME, host)
         return None
 

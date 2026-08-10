@@ -1340,6 +1340,15 @@ Two things the blocks add on top:
   The inline `✕` is gone (a focus/spec name cell is a plain item again, so the
   condition overlay can strike it); the `＋` stays, being an *add* affordance with
   nowhere else discoverable to live.
+  Two rules keep a long focus name from being clipped, and both are easy to
+  re-break. A focused skill's header spans from **`COL_NAME`**, not from
+  `COL_ABILITY`: a `ResizeToContents` column measures a spanned cell widget as its
+  own content, so parking the "Add focus…" buttons on the Ability column made that
+  column as wide as *they* are, and the stretching name column paid for it. And
+  `_min_col_width` budgets **every** column — the Ability column was missing from
+  that sum, so the flow fitted one panel too many and the name column silently
+  absorbed the shortfall. A column left out of that sum is a column the name column
+  pays for.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

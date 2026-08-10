@@ -8,6 +8,9 @@ from PySide6.QtWidgets import QApplication
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.sections.row_table import SORT_MANUAL, build_row_menu
+from mm_companion.ui.sections.skills import COL_ABILITY as S_COL_ABILITY
+from mm_companion.ui.sections.skills import COL_NAME as S_COL_NAME
+from mm_companion.ui.sections.skills import HEADERS as S_HEADERS
 from mm_companion.ui.sections.skills import (
     SORT_ABILITY,
     SORT_ALPHA,
@@ -325,3 +328,56 @@ def test_a_preset_sort_stands_the_drag_down(qapp: QApplication) -> None:
     _sort_to(section, SORT_ALPHA)
 
     assert section._reorder._enabled() is False
+
+
+# -- column widths -------------------------------------------------------------
+
+
+def _shown(section: SkillsSection, width: int, height: int = 900) -> SkillsSection:
+    section.resize(width, height)
+    section.show()
+    for _ in range(10):
+        QApplication.processEvents()
+    return section
+
+
+def test_the_group_header_spans_every_column(qapp: QApplication) -> None:
+    """Including the name's, which is the whole point.
+
+    A ``ResizeToContents`` column measures a spanned cell widget as its own
+    content, so the "Add focus…" buttons parked on the Ability column made that
+    column as wide as they are. Spanning from the name column instead puts them on
+    the one column that stretches, where a wide widget cannot distort anything.
+    """
+    data = load_game_data()
+    section = _shown(SkillsSection(data, Character.new_default(data)), 1000)
+
+    table, row = _row_for(section, SkillRowKey("skill", "Expertise"))
+    assert table.columnSpan(row, S_COL_NAME) == len(S_HEADERS)
+    # The Ability column is back to the width of a three-letter code.
+    assert table.columnWidth(S_COL_ABILITY) < 2 * section._ability_col_width()
+
+
+@pytest.mark.parametrize("width", [700, 1000, 1100, 1300, 1500])
+def test_no_skill_name_is_clipped_at_any_width(qapp: QApplication, width: int) -> None:
+    """The panel count is chosen so every name fits; the flow must budget for it.
+
+    The Ability column was missing from ``_min_col_width``, so at some widths the
+    flow fitted one panel too many and the stretching name column silently paid the
+    difference — which showed up as a long focus name being cut off. Swept across
+    widths because *which* ones broke was an accident of where the panel-count
+    boundaries happened to fall, and those move with the font: a single width would
+    have caught this on one machine and missed it on the next.
+    """
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.focuses["Expertise"] = ["Science", "Streetwise"]
+    char.specializations["Stealth"] = ["Urban"]
+    section = _shown(SkillsSection(data, char), width)
+
+    for entry in section._row_refs:
+        item = entry.table.item(entry.row, S_COL_NAME)
+        if item is None:
+            continue  # a header or a row whose name cell carries the ＋ control
+        needed = entry.table.fontMetrics().horizontalAdvance(item.text())
+        assert entry.table.columnWidth(S_COL_NAME) >= needed, item.text()

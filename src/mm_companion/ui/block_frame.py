@@ -254,7 +254,13 @@ class BlockFrame(QFrame):
     def _apply_size(self, size: BlockSize) -> None:
         """Pin the block's size from its :class:`BlockSize` (see class docstring)."""
         self._size = size
-        self.setMinimumWidth(size.min_width)
+        # Deliberately *not* setMinimumWidth: an explicit minimum does not raise a
+        # widget's layout minimum, it replaces it. ``qSmartMinSize`` ends with
+        # ``if (minSize.width() > 0) s.setWidth(minSize.width())`` - so a JSON floor
+        # of 360 told every enclosing layout the block could never need more than
+        # 360, whatever its content said, and the pinned strip squashed an Extended
+        # roller to it. The floor is carried by :meth:`minimumSizeHint` instead,
+        # where it is a floor: ``max(content, min_width)``.
         if size.max_width < UNBOUNDED:
             self.setMaximumWidth(size.max_width)
         if size.max_height < UNBOUNDED:
@@ -304,19 +310,23 @@ class BlockFrame(QFrame):
             self._relayout_tries = 0
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Never let a block shrink below its full content height.
+        """Never let a block shrink below its full content, in either dimension.
 
-        The JSON ``min_height`` is only a floor; the block's real minimum is its
-        content, so every block always shows *all* of its content and the page
-        scrolls when they don't all fit — rather than the layout squashing a
-        block down to the floor and clipping it (e.g. Base Info's image). Capped
-        at ``max_height`` when a block pins that dimension.
+        The JSON bounds are only floors; the block's real minimum is its content,
+        so every block always shows *all* of it and the page scrolls when they
+        don't all fit — rather than the layout squashing a block down to the floor
+        and clipping it (e.g. Base Info's image). Height is capped at
+        ``max_height`` when a block pins that dimension; width is left to
+        ``setMaximumWidth``, which Qt applies for us.
+
+        This is the *only* place either floor is stated — see :meth:`set_block_size`
+        for why the width one cannot also be an explicit ``setMinimumWidth``.
         """
         hint = super().minimumSizeHint()
         height = max(self._size.min_height, self.sizeHint().height())
         if self._size.max_height < UNBOUNDED:
             height = min(height, self._size.max_height)
-        return QSize(max(hint.width(), self.minimumWidth()), height)
+        return QSize(max(hint.width(), self._size.min_width), height)
 
     def set_vertical_fill(self, fill: bool) -> None:
         """Let this block grow past its content to fill slack (or stop it).

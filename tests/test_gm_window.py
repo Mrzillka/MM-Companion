@@ -193,11 +193,25 @@ def test_an_offline_roll_can_be_removed_before_any_session(
     assert window._history.cards() == []
 
 
+def test_the_rolls_block_starts_in_the_pinned_strip(qapp: QApplication, window: GMWindow) -> None:
+    """Where the sheet's Dice block starts, and for the same reason.
+
+    A roller that scrolls away with the board is no use mid-fight, so the strip is
+    the Rolls block's home rather than somewhere a GM has to drag it — and the page
+    holds only what is read between rolls.
+    """
+    assert window._canvas.pinned_keys() == ["rolls"]
+    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
+    assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
+
+
 def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
     qapp: QApplication, window: GMWindow
 ) -> None:
     # The GM board hosts the same canvas as a character sheet, so it gets the same
-    # pinned strip: the roll history stays put while the rest of the board scrolls.
+    # pinned strip, and a block moves either way across it.
+    window._canvas.unpin_block("rolls")
+    QApplication.processEvents()
     assert window._board.panel.is_empty()
 
     window._canvas.pin_block("rolls")

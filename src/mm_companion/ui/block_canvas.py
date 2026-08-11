@@ -733,7 +733,7 @@ class BlockCanvas(QWidget):
         window.set_frame(frame)
         frame.title_bar.set_floating(True, on_top=on_top)
         frame.show()
-        width = max(old_size.width(), frame.sizeHint().width(), frame.minimumWidth())
+        width = max(old_size.width(), frame.sizeHint().width(), frame.minimumSizeHint().width())
         height = max(old_size.height(), frame.sizeHint().height(), frame.minimumHeight())
         # A block taller than the screen (e.g. a full Powers list) would open past
         # the bottom of the display with no way to see the rest; cap the window to

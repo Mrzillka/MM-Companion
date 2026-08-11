@@ -52,7 +52,7 @@
     "min_height": 150
   },
   "gm_rolls": {
-    "min_width": 660,
-    "min_height": 260
+    "min_width": 360,
+    "min_height": 300
   }
 }

@@ -76,7 +76,7 @@ from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
-from mm_companion.ui.dice_roller import DiceRollerPanel
+from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
@@ -254,11 +254,17 @@ class GMWindow(QMainWindow):
         # them without the prefix, since the GM window has its own block namespace).
         shipped = load_block_sizes()
         sizes = {key: shipped.get(f"gm_{key}", BlockSize()) for key, _title, _box in panels}
-        default_rows = [["players"], ["npcs"], ["rolls"]]
+        # The Rolls block starts in the strip rather than on the page, for the reason
+        # the sheet's Dice block does: a roller that scrolls away with the board is
+        # no use mid-fight. Both boards use the same seam, and the strip's default
+        # edge is the right-hand one.
+        default_rows = [["players"], ["npcs"]]
         # Only a handful of blocks, so a top-aligned stack would leave a wide gap
-        # under the last one; let the bottom block (the rolls board's history)
-        # stretch to fill the page instead.
-        self._canvas = BlockCanvas(panels, sizes, default_rows, fill_last=True)
+        # under the last one; let the bottom block (the NPC cards) stretch to fill
+        # the page instead.
+        self._canvas = BlockCanvas(
+            panels, sizes, default_rows, fill_last=True, default_pinned=[["rolls"]]
+        )
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -283,10 +289,9 @@ class GMWindow(QMainWindow):
         full_layout.addWidget(self._build_status_strip())
         full_layout.addWidget(self._build_notice())
 
-        # The same compact mode a player's sheet has, over the same roller — the
-        # GM's is a bare panel beside a GM history rather than a DiceRollerView, so
-        # this window supplies its own release_roller/restore_roller, and its own
-        # compact_anchor for the round shrink button to float over.
+        # The same compact mode a player's sheet has, over the same roller — and
+        # now over the same DiceRollerView, so this window's release_roller /
+        # restore_roller / compact_anchor are one line each, straight through to it.
         # The mini window's caption follows `windowTitleChanged`, so it picks up
         # the session name this window retitles itself with on its own.
         self._compact = CompactController(self, self, self._full)
@@ -486,39 +491,38 @@ class GMWindow(QMainWindow):
     def _build_rolls_box(self) -> QGroupBox:
         """The GM's own roller beside the table's shared history.
 
-        The same :class:`~mm_companion.ui.dice_roller.DiceRollerPanel` a player
-        uses, with the one thing only a GM gets: a **Hidden roll** switch. A
-        hidden roll is recorded and shown here, marked, and never put on the wire
-        — so it is not hidden by the players' apps agreeing to ignore it, it
-        simply never reaches them.
+        The same :class:`~mm_companion.ui.dice_roller.DiceRollerView` a player's
+        Dice block holds — so it reflows to the room it is given and follows the
+        Normal / Compact / Extended preference exactly as theirs does — with the
+        two things only a GM gets: a **Hidden roll** switch, and this window's own
+        ``gm=True`` history in place of the private/shared pair the view would
+        otherwise swap between. A hidden roll is recorded and shown here, marked,
+        and never put on the wire — so it is not hidden by the players' apps
+        agreeing to ignore it, it simply never reaches them.
+
+        The history is this window's because it follows the bridge while there is
+        one and the *workspace's* saved log when there is not (see
+        :meth:`_refresh_rolls`), which is knowledge the view has no business
+        carrying. Everything else about the arrangement is the view's.
         """
         # Held so compact mode can take the roller out and put it back, and so the
         # shrink button has something to float over; see :meth:`release_roller`
         # and :meth:`compact_anchor`.
         self._rolls_box = box = QGroupBox("Rolls")
-        self._rolls_layout = layout = QHBoxLayout(box)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        self._roller = DiceRollerPanel(hidden_option=True)
+        self._history = RollHistoryPanel(gm=True)
+        self._history.rollRemovedLocally.connect(self._on_local_roll_removed)
+        self._view = DiceRollerView(hidden_option=True, history=self._history)
+        # Still the panel, so every card that loads or throws a spec into it (a
+        # player's, an NPC's) reaches it by the same name it always did.
+        self._roller = self._view.panel
         # While hosting, a roll made here goes through the server like everyone
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
         self._roller.localRoll.connect(self._show_offline_roll)
-        layout.addWidget(self._roller)
-
-        self._history = RollHistoryPanel(gm=True)
-        self._history.saveToggled.connect(self._roller.toggle_quick_roll)
-        self._history.rollFollowUp.connect(self._roller.roll_spec)
-        self._history.rollRemovedLocally.connect(self._on_local_roll_removed)
-        # A card's star shows whether that roll is already in the roller's strip, so
-        # it has to hear about every chip that comes or goes — and once up front, since
-        # the strip is restored from settings with whatever was saved last time.
-        self._roller.quickRollsChanged.connect(self._sync_quick_roll_state)
-        self._sync_quick_roll_state()
-        self._history.setMinimumHeight(240)
-        # Hold the GM's own roll until its die stops tumbling; the roller cues it.
-        self._history.set_defer_own(True)
-        self._roller.sessionRollRevealed.connect(self._history.release_roll)
-        layout.addWidget(self._history, stretch=1)
+        layout.addWidget(self._view)
         return box
 
     # -- compact mode --------------------------------------------------------
@@ -526,19 +530,15 @@ class GMWindow(QMainWindow):
     def release_roller(self) -> tuple[QWidget, QWidget]:
         """Lend the roller and the shared history to compact mode.
 
-        The GM window's roll surface is a bare panel beside a GM history rather
-        than a :class:`~mm_companion.ui.dice_roller.DiceRollerView`, so it answers
-        the borrow itself. Same contract, same reason for it: these are the live
-        widgets, still attached to the table, so the GM's hidden-roll switch and
-        the ✕ on every card carry into the mini window unchanged.
+        The view answers the borrow, exactly as the sheet's Dice block does — these
+        are the live widgets, still attached to the table, so the GM's hidden-roll
+        switch and the ✕ on every card carry into the mini window unchanged.
         """
-        for widget in (self._roller, self._history):
-            self._rolls_layout.removeWidget(widget)
-        return (self._roller, self._history)
+        return self._view.release_roller()
 
     def compact_anchor(self) -> QWidget:
-        """What the shrink button floats over: the Rolls block, history and all."""
-        return self._rolls_box
+        """What the shrink button floats over: the roller, history and all."""
+        return self._view
 
     def suspend_windows(self, suspended: bool) -> None:
         """Stand this window's floated blocks down while it is compact (pinned ones stay)."""
@@ -546,20 +546,11 @@ class GMWindow(QMainWindow):
 
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference (see ``MainWindow.sync_dice_layout``)."""
-        self._roller.set_layout_preference(storage.dice_layout() == storage.DICE_LAYOUT_COMPACT)
+        self._view.sync_dice_layout()
 
     def restore_roller(self) -> None:
         """Take the roller and the history back into the Rolls block."""
-        self._rolls_layout.addWidget(self._roller)
-        self._rolls_layout.addWidget(self._history, stretch=1)
-        self._roller.show()
-        self._history.show()
-
-    def _sync_quick_roll_state(self) -> None:
-        """Push the roller's quick-roll strip into the history's stars."""
-        self._history.set_quick_roll_state(
-            self._roller.quick_roll_keys(), not self._roller.quick_rolls_full()
-        )
+        self._view.restore_roller()
 
     def _build_notice(self) -> _Notice:
         self._notice = _Notice()

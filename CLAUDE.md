@@ -85,7 +85,8 @@ clean (see Licensing below).
   `load_game_data()` is `lru_cache`d — one parse per process.
 - Content is aggregated from several files, loaded via `importlib.resources`
   (not filesystem paths) so it works when installed as a package: core traits
-  from `placeholder.json`; the rich 4e catalogs from `skills.json`,
+  from `profile.json`, `characteristics.json`, `abilities.json`,
+  `resistances.json` and `system.json`; the rich 4e catalogs from `skills.json`,
   `advantages.json`, and `conditions.json`; point costs and PL caps from
   `costs.json`; rank → real-world measurement tables and the Size Table from
   `measurements.json`; and the powers layer from `effects.json` (base effects,
@@ -103,9 +104,9 @@ clean (see Licensing below).
   in `docs/mm-conditions-design.md`. A character's applied conditions live on
   `Character.conditions` as a list of `AppliedCondition` (id + chosen `parameter` +
   stacking `count` + `provenance` — the flattened set with back-refs). The non-roll
-  resolver in `core/rules.py` (`apply_condition`/`remove_condition`, `expand_includes`)
-  bundles umbrellas, applies per-part/trait-scoped supersession, stacks Hit, and
-  cascades debilitation; queryable accessors (`condition_check_penalty`,
+  resolver in `core/rules/conditions.py` (`apply_condition`/`remove_condition`,
+  `expand_includes`) bundles umbrellas, applies per-part/trait-scoped supersession,
+  stacks Hit, and cascades debilitation; queryable accessors (`condition_check_penalty`,
   `condition_defense_mods`, `hit_stack_penalty`, …) compute the mods. These flow into
   the sheet as a **display-only overlay** (the build/derived math itself stays
   condition-free): the ability/resistance tables re-skin their Total column via
@@ -140,9 +141,10 @@ clean (see Licensing below).
   opaque base64 strings so no Qt types leak into `core`); `load_settings` tolerates
   unknown keys.
 - The app launches into `StartWindow` (`ui/start_window.py`), a standalone
-  launcher: four action buttons (Create New Character, Open Existing, Open GM
-  Mode, Exit) beside a scrollable library of `CharacterCard`s (image, name, PL).
-  The cards come from `core.library.list_saved_characters()` — the single seam
+  launcher: seven action buttons (Create New Character, Open Existing, Open GM
+  Mode, Join Session, Manage Mods, Settings, Exit) beside a scrollable library of
+  `CharacterCard`s (image, name, PL). The cards come from
+  `core.library.list_saved_characters()` — the single seam
   for saved characters; it scans the workspace `characters/` dir, so the library
   shows a "No characters yet" state only when nothing is saved. "Create New
   Character" opens a `MainWindow` (`locked=False`, editable) as its own window,
@@ -153,7 +155,10 @@ clean (see Licensing below).
   `StartWindow` refreshes the library on both and re-shows the launcher on close.
   Right-clicking a card offers to delete it (confirmed, then the file is removed
   via `core.library.delete_character` and the library refreshes). The launcher's
-  own Exit closes the app. "Open GM Mode" is still a placeholder.
+  own Exit closes the app. "Open GM Mode" runs a `GMSessionLaunchDialog` and then
+  opens the `GMWindow` it configured — kept in `_gm_window`, since that window
+  owns the hosted session, so a second click raises it rather than building a
+  second one (skipping the dialog).
 - Persistence lives in `core.library` (pure Python, no Qt): `save_character`
   writes a `Character.to_dict()` as JSON into the workspace `characters/` dir —
   overwriting an explicit `path` for a plain "Save", or deriving a non-colliding
@@ -860,7 +865,7 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   the save is the single app-wide seam `core.storage.pl_enforcement()`
   (`"warn"` / `"block"`), so it can become a settings toggle later.
 - **UI**: `PowersSection` ("Add Power") launches the standalone
-  `ui/power_constructor.py::PowerConstructorWindow` — a drag-and-drop
+  `ui/power_constructor/window.py::PowerConstructorWindow` — a drag-and-drop
   brick-builder (a palette of Effect/Extra/Flaw bricks → an effect-card canvas,
   a `PowerModeBar` for the structure once ≥2 effects). It hands the finished
   `Power` back via `powerSaved`; the section appends it to the shared `Character`
@@ -1512,9 +1517,11 @@ authoring guide is `docs/modding.md`; the shape:
   `ensure_workspace()`, before the first `load_game_data()`) imports the
   enabled+trusted mods' Python modules so their `register_*` hooks fire first; the
   base ruleset is implicitly trusted and an import that raises is swallowed.
-- Two living examples ship under `docs/sample-mods/`: `campaign-notes` (data-only)
-  and `flat-bonus-readouts` (data+Python), exercised end-to-end by
-  `tests/test_mod_loading.py`.
+- Four living examples ship under `docs/sample-mods/`: `campaign-notes` (data-only),
+  `flat-bonus-readouts` (data+Python — a new readout kind) and `field-kit`
+  (data+Python — a piece of gear and the stat-applier seam), all three exercised
+  end-to-end by `tests/test_mod_loading.py`; plus `guardian-kit`, the finished mod
+  built step by step in `docs/modding-tutorial.md`.
 
 ## Licensing boundary (matters when adding game data)
 

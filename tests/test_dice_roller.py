@@ -392,6 +392,79 @@ def test_going_wide_never_raises_the_minimum_width(qapp: QApplication) -> None:
     assert view.minimumSizeHint().width() < view.row_minimum_width()
 
 
+# -- a chosen shape, rather than a derived one -------------------------------
+
+
+def _extended(qapp: QApplication) -> DiceRollerView:
+    storage.set_dice_layout(storage.DICE_LAYOUT_EXTENDED)
+    view = DiceRollerView()
+    view.show()
+    return view
+
+
+def test_extended_puts_the_controls_beside_the_history_however_narrow(
+    qapp: QApplication,
+) -> None:
+    """The shape GM Mode was built as, now had by asking for it.
+
+    At this width the auto layout stacks the two (see
+    ``test_a_narrow_tall_roller_stacks_its_parts``) — which is the point: Extended
+    is chosen, not derived from the room, so the room does not get a vote.
+    """
+    view = _extended(qapp)
+
+    _settled(qapp, view, 360, 800)
+
+    assert view.is_row is True
+    assert view._splitter.orientation() is Qt.Orientation.Horizontal
+    # ...and the panel stays a column inside it, or this would be a row of four.
+    assert view.panel.is_row is False
+    assert view.panel._box.direction() is QBoxLayout.Direction.TopToBottom
+
+
+def test_extended_survives_the_widths_that_would_reshape_an_auto_roller(
+    qapp: QApplication,
+) -> None:
+    view = _extended(qapp)
+
+    for width, height in ((1500, 300), (360, 800), (900, 500)):
+        _settled(qapp, view, width, height)
+        assert (view.is_row, view.panel.is_row) == (True, False)
+
+
+def test_extended_reports_the_row_width_it_cannot_narrow_out_of(
+    qapp: QApplication,
+) -> None:
+    """The one rule the reflow's own minimum has to be turned around for.
+
+    An auto roller reports the *column* width whatever axis it is on, because it
+    can always narrow by flipping. A locked row cannot, so it has to hold the block
+    — and through it the strip and the window — open at what it really needs.
+    """
+    view = _extended(qapp)
+    _settled(qapp, view, 900, 500)
+    locked = view.minimumSizeHint().width()
+
+    view.set_layout(storage.DICE_LAYOUT_AUTO)
+    _settled(qapp, view, 900, 500)
+
+    assert locked > view.minimumSizeHint().width()
+    assert locked >= view.panel.column_minimum_width()
+
+
+def test_leaving_extended_hands_the_arrangement_back_to_the_room(
+    qapp: QApplication,
+) -> None:
+    view = _extended(qapp)
+    _settled(qapp, view, 360, 800)
+    assert view.is_row is True
+
+    view.set_layout(storage.DICE_LAYOUT_AUTO)
+    _settled(qapp, view, 360, 800)
+
+    assert (view.is_row, view.panel.is_row) == (False, False)
+
+
 def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> None:
     # The panel carries no splitter stretch, so it keeps whatever height the chips
     # pushed it to unless the space is divided again — which used to leave a growing

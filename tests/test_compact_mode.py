@@ -396,8 +396,8 @@ def test_the_button_stays_flush_in_the_corner(qapp: QApplication, window: MainWi
 
 
 def test_the_gm_windows_button_floats_over_its_rolls_block(gm: GMWindow) -> None:
-    """The GM's roller is a bare panel beside a history, so the window answers itself."""
-    assert gm._compact.button.parentWidget() is gm._rolls_box
+    """Over the view, as on a sheet — the GM's Rolls block holds the same one now."""
+    assert gm._compact.button.parentWidget() is gm._view
 
 
 def test_the_roll_panel_carries_no_shrink_button_of_its_own(window: MainWindow) -> None:
@@ -455,6 +455,44 @@ def test_leaving_compact_mode_does_not_undo_the_preference(window: MainWindow) -
     assert panel._quick_part.parentWidget() is panel._pair
 
 
+def test_compact_mode_wins_over_the_extended_preference(window: MainWindow) -> None:
+    """A window shrunk to the roller alone has no room for the roomiest shape.
+
+    And leaving it hands Extended back, which is the whole reason the window's
+    reason and the user's are two flags rather than one.
+    """
+    storage.set_dice_layout(storage.DICE_LAYOUT_EXTENDED)
+    window.sync_dice_layout()
+    view = window.sheet.dice.view
+    panel = view.panel
+    assert panel._quick_part.parentWidget() is panel
+
+    window._compact.enter()
+
+    assert panel._quick_part.parentWidget() is panel._pair
+    assert view._row_locked() is False  # the parts are the mini window's, not the view's
+
+    window._compact.leave()
+
+    assert panel._quick_part.parentWidget() is panel
+    assert view._row_locked() is True
+
+
+def test_the_gm_window_follows_the_layout_preference_too(gm: GMWindow) -> None:
+    """The point of putting the shared view in the GM's Rolls block."""
+    storage.set_dice_layout(storage.DICE_LAYOUT_EXTENDED)
+    gm.sync_dice_layout()
+
+    assert gm._view._row_locked() is True
+    assert gm._roller._column_locked is True
+
+    storage.set_dice_layout(storage.DICE_LAYOUT_COMPACT)
+    gm.sync_dice_layout()
+
+    assert gm._view._row_locked() is False
+    assert gm._roller._quick_part.parentWidget() is gm._roller._pair
+
+
 def test_the_general_page_applies_to_open_windows_without_a_relaunch(
     window: MainWindow,
 ) -> None:
@@ -466,7 +504,7 @@ def test_the_general_page_applies_to_open_windows_without_a_relaunch(
     assert page.title == "General"
     assert not page.is_dirty()
 
-    page._compact_check.setChecked(True)
+    page._choices[storage.DICE_LAYOUT_COMPACT].setChecked(True)
     assert page.is_dirty()
     page.save()
 
@@ -711,7 +749,7 @@ def gm(qapp: QApplication) -> GMWindow:
 
 
 def test_the_gm_window_lends_its_own_roller_the_same_way(gm: GMWindow) -> None:
-    """Different roll surface, identical feature — which is the point of the seam."""
+    """The GM's window lends through its view, and lends its *own* GM history."""
     roller, history = gm._roller, gm._history
     assert isinstance(roller, DiceRollerPanel)
 
@@ -725,8 +763,8 @@ def test_the_gm_window_lends_its_own_roller_the_same_way(gm: GMWindow) -> None:
 
     gm._compact.leave()
 
-    assert gm._rolls_layout.indexOf(roller) >= 0
-    assert gm._rolls_layout.indexOf(history) >= 0
+    assert gm._view.isAncestorOf(roller)
+    assert gm._view.isAncestorOf(history)
     assert not gm._full.isHidden()
     assert roller._quick_part.parentWidget() is roller
 

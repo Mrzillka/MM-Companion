@@ -458,24 +458,58 @@ mini strip, `Esc`, or that same button leaves.
   or `None`), `restore_roller()`, and `compact_anchor()` (the widget the round button
   floats over). `CharacterSheet` duck-types over its blocks for all three like
   `sync_session`, so a mod's roller joins on the same terms; `GMWindow` answers for
-  itself, since its roller is a bare `DiceRollerPanel` beside a `gm=True` history rather
-  than a `DiceRollerView`, and its anchor is the Rolls group box. A surface that lends
+  itself, but only by handing each straight to the `DiceRollerView` its Rolls block
+  holds — the same view a sheet's Dice block holds, since GM Mode's roller is no longer
+  a bare panel of its own (see "The GM's roller" below). A surface that lends
   nothing simply has no compact mode — including no button, since there is nowhere to put
   one. Note this is now the *only* gate: a GM's read-only view of a player sheet has a
   roller, so it has compact mode too, where the old menu-bar toggle denied it one.
 - The compact arrangement is a **third shape** beside the reflow's row and column, and
   while it is in force `sync_reflow` stands down — it is chosen, not derived from the
   room available. It is also **not only a mode**: it turned out to be a good roller in
-  its own right, so `dice_layout` in settings (`auto` / `compact`, read through
-  `storage.dice_layout()`, edited on the Settings window's General page) pins it
-  everywhere. Hence two flags on the panel, `_window_compact` and `_prefer_compact`,
-  resolved by one `_apply_shape()`: leaving compact mode must not undo the preference,
-  which a single flag did the first time anyone expanded the window. The page applies it
+  its own right, so `dice_layout` in settings pins it everywhere. Hence two flags on the
+  panel, `_window_compact` and `_prefer_compact` (now `_preference`), resolved by one
+  `_apply_shape()`: leaving compact mode must not undo the preference, which a single
+  flag did the first time anyone expanded the window. The page applies it
   live by walking the open top-level windows for anything answering `sync_dice_layout` —
   duck-typed, so it imports neither the sheet nor the GM window. `DiceRollerView` stands
   its reflow down the same way while its parts are out on loan (`_lent`), and
   `restore_roller` ends with the usual two-pass
   `updateGeometry` → `_redivide` → `_settle.start(0)`.
+- **`dice_layout` names three shapes, not two** (`storage.DICE_LAYOUTS` — `auto`,
+  `compact`, `extended`; read through `storage.dice_layout()`, edited on the Settings
+  window's General page, defaulting to `auto`). Both non-auto values are the same
+  bargain — a shape that was only ever a side effect of *where* the roller happened to
+  be, promoted to something you can ask for anywhere. **Compact** is the mini window's,
+  and is the **panel's** business (its three parts). **Extended** is the roll controls
+  as a column beside a history filling the rest, which is what GM Mode always looked
+  like, and is the **view's** (it pins the splitter's axis). So the preference is set in
+  one place — `DiceRollerView.set_layout` — and reaches both halves from there; the
+  panel's own `set_layout_preference` takes the layout *string*, not a compact flag.
+  Three consequences. A chosen shape stands its reflow down at **both** levels
+  (`_compact` or `_column_locked` on the panel, `_row_locked()` on the view) via
+  `ReflowBox.force_reflow`, which is guarded on the current axis so calling it every
+  resize costs nothing. `_row_sizes` needs an Extended branch: the panel is offered its
+  **column** width, never the row-of-three width the auto branch measures. And the
+  view's `minimumSizeHint` reports the **row** width while locked — the one place
+  `ReflowBox`'s "always report the column, you can always narrow by reflowing" rule has
+  to be turned around, because a chosen shape cannot narrow out of itself, so it holds
+  the block (and through it the strip and the window) open at what it really needs.
+  Compact still wins over Extended: the window shrinking beats the preference, and while
+  the parts are lent the view is not locked at all.
+- **The GM's roller is the sheet's roller.** GM Mode's Rolls block holds a
+  `DiceRollerView(hidden_option=True, history=…)` rather than a hand-built panel beside
+  a history in a fixed `QHBoxLayout`, so it reflows, splits and follows the preference
+  exactly as a player's does — and the shape it used to be stuck in is now the Extended
+  one anybody can pick. The `history=` keyword is the whole seam: a host that owns its
+  history hands it in, and everything session-shaped in the view stands down (no
+  private/shared swap, no `localRoll` card, no `detach`), because the GM's panel follows
+  the bridge while there is one and the *workspace's* saved log when there is not
+  (`GMWindow._refresh_rolls`) — knowledge the view has no business carrying. `_roller`
+  still names the panel, so every player and NPC card reaches it unchanged. Note the
+  history carries **no `setMinimumHeight`** any more: that fought the view's history
+  discipline (`HISTORY_FLOOR_HEIGHT` as the hard floor, a capped `sizeHint`), which is
+  what stops a block's minimum climbing with every roll — see "The Dice block's height".
 - Three things the window has to get right. **Hiding the outgoing content is what frees
   it to shrink** — a hidden widget is left out of its layout's minimum, and both
   `CharacterSheet._update_min_width` and `PinnedPanel.minimumSizeHint` otherwise hold it
@@ -707,7 +741,11 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   Conditions, Advantages, Complications, Skills, Powers, Equipment — plus the
   registry's
   `default_pin_lines()`, which parks the **Dice Roller** block in the strip on the
-  right. A block is in *either* the rows or the strip, never both: the arrangement
+  right. The GM window does the same for its **Rolls** block, through the same
+  `default_pinned=` argument and for the same reason — a roller that scrolls away with
+  the board is no use mid-fight — so its page holds only Players and NPCs, and
+  `fill_last` now stretches the NPC cards. A block is in *either* the rows or the strip,
+  never both: the arrangement
   model requires every block exactly once, so `default_arrangement()` excludes the
   pinned keys from the rows (including its trailing sweep over unplaced blocks).
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
@@ -730,7 +768,16 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   blocks grow to fill their row. **A bound here is only ever a floor worth
   stating** — every block already reports its own content as its effective minimum
   (`BlockFrame.minimumSizeHint`), so a block that says nothing is sized entirely by
-  what is in it. Abilities and Resistances say nothing: they used to share a
+  what is in it. That is why the width floor is stated *only* in `minimumSizeHint`
+  and never as a `setMinimumWidth`: an explicit minimum does not **raise** a
+  widget's layout minimum, it **replaces** it (`qSmartMinSize` ends with
+  `if (minSize.width() > 0) s.setWidth(minSize.width())`). A block whose content
+  needed more than its JSON number therefore told every enclosing layout it did
+  not — invisible on the page, where the row has slack and
+  `content_minimum_width` already asks the hint, but not in the pinned strip,
+  whose own minimum *is* its splitter's, so it squashed the block to the number.
+  Equipment was already wider than its floor; the Extended roller is what made it
+  show. Abilities and Resistances say nothing: they used to share a
   hardcoded `300×340` in both dimensions, a number compensating for the tables
   measuring themselves once at build time, and one that a denser or roomier preset
   made wrong in both directions — their tables report their real rows and columns

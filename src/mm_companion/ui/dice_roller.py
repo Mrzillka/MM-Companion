@@ -75,6 +75,7 @@ from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
     HISTORY_SIZE_HINT,
     MAX_QUICK_ROLLS,
+    MIN_HISTORY_WIDTH,
     NoteCard,
     QuickRollStar,
     RollHistoryPanel,
@@ -396,7 +397,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # user prefers this shape everywhere.
         self._compact = False
         self._window_compact = False
-        self._prefer_compact = storage.dice_layout() == storage.DICE_LAYOUT_COMPACT
+        # The user's chosen shape, one of ``storage.DICE_LAYOUTS``. Compact is the
+        # panel's own business; Extended is the *view's* (it pins the splitter's
+        # axis) and reaches the panel only as the column lock below — under it the
+        # controls stay stacked however wide the block, which is what makes Extended
+        # the controls-beside-the-history shape rather than a row of four.
+        self._preference = storage.dice_layout()
+        self._column_locked = False
 
         # The three reflowing parts, in order. The layout's *direction* is what the
         # reflow changes, so the parts are added once and never re-parented.
@@ -466,14 +473,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._box.insertStretch(self._box.indexOf(self._quick_part))
 
     def sync_reflow(self) -> bool:
-        """Re-run the width-driven reflow — unless the compact shape is in force.
+        """Re-run the width-driven reflow — unless a chosen shape is in force.
 
-        The compact shape is *chosen* — by the window shrinking, or by the user's
-        preference — rather than derived from the room available, so the reflow
-        stands down entirely while it lasts. Without this the panel would flip
-        itself back to a plain column the first time it was resized.
+        Both the compact shape and Extended's column lock are *chosen* — by the
+        window shrinking, or by the user's preference — rather than derived from
+        the room available, so the reflow stands down entirely while either lasts.
+        Without this the panel would flip itself back out of the chosen shape the
+        first time it was resized.
         """
-        if self._compact:
+        if self._compact or self._column_locked:
             return False
         return super().sync_reflow()
 
@@ -482,14 +490,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._window_compact = bool(compact)
         self._apply_shape()
 
-    def set_layout_preference(self, compact: bool) -> None:
-        """Whether the user has asked for the compact shape everywhere, always.
+    def set_layout_preference(self, layout: str) -> None:
+        """The shape the user has asked for everywhere, always — a ``DICE_LAYOUT_*``.
 
         The other of the two reasons this panel might be compact, and they are kept
         apart on purpose: leaving compact mode must not undo the preference, which
         one shared flag would have done the first time someone expanded the window.
         """
-        self._prefer_compact = bool(compact)
+        self._preference = layout if layout in storage.DICE_LAYOUTS else storage.DICE_LAYOUT_AUTO
         self._apply_shape()
 
     def _apply_shape(self) -> None:
@@ -507,8 +515,23 @@ class DiceRollerPanel(ReflowBox, QWidget):
         the reflow never does; that is why each direction ends by handing them back
         to a layout before the old one can be emptied.
         """
-        compact = self._window_compact or self._prefer_compact
+        compact = self._window_compact or self._preference == storage.DICE_LAYOUT_COMPACT
+        # Extended keeps the controls stacked; the view puts the history beside
+        # them. Compact wins outright — a window shrunk to the roller alone has no
+        # room for anything else, whatever the preference says.
+        column_locked = not compact and self._preference == storage.DICE_LAYOUT_EXTENDED
+        if compact == self._compact and column_locked == self._column_locked:
+            return
+        self._column_locked = column_locked
         if compact == self._compact:
+            # Only the lock moved, so the parts are already where they belong and
+            # all that is left is to settle the axis it demands.
+            if column_locked:
+                self.force_reflow(False)
+            else:
+                self.sync_reflow()
+            self.updateGeometry()
+            self.contentChanged.emit()
             return
         self._compact = compact
         if compact:
@@ -538,7 +561,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
             # The reflow owns the arrangement again, and the width it last decided
             # from is the mini window's — so re-derive it rather than trusting it.
             self.apply_reflow(self.is_row)
-            self.sync_reflow()
+            if column_locked:
+                self.force_reflow(False)
+            else:
+                self.sync_reflow()
         self.updateGeometry()
         self.contentChanged.emit()
 
@@ -1307,6 +1333,17 @@ class DiceRollerView(ReflowBox, QWidget):
     1. one column of four — the narrow right-hand pinned strip;
     2. ``[settings / die / quick rolls] [history]`` — a medium block;
     3. one row of four — a short, wide bottom strip.
+
+    That is the ``auto`` layout. The user can instead *choose* a shape and have it
+    everywhere: ``compact`` is the panel's business (see
+    :meth:`DiceRollerPanel._apply_shape`), while ``extended`` is this view's — it
+    pins the second arrangement above, the controls as a column beside a history
+    filling the rest, whatever the room. See :func:`mm_companion.core.storage.dice_layout`.
+
+    *history* is for a host that owns its own history panel and only wants the
+    arrangement: GM Mode passes its ``gm=True`` one, which follows the table (or
+    the log on disk between sessions) rather than the private/shared pair this view
+    would otherwise swap between.
     """
 
     def __init__(
@@ -1314,10 +1351,17 @@ class DiceRollerView(ReflowBox, QWidget):
         parent: QWidget | None = None,
         *,
         hidden_option: bool = False,
+        history: RollHistoryPanel | None = None,
     ) -> None:
         super().__init__(parent)
         self.panel = DiceRollerPanel(hidden_option=hidden_option)
-        self.panel.localRoll.connect(self._add_local_card)
+        # A history handed in by the host stands in for both of the ones below, and
+        # takes its attachment to the session with it: what the GM's panel shows off
+        # the air is last night's persisted log, which this view knows nothing about.
+        # So everything session-shaped here stands down when there is one.
+        self._given_history = history
+        if history is None:
+            self.panel.localRoll.connect(self._add_local_card)
         # Held so the same object can be disconnected again; a fresh lambda per
         # sync would leave the old one attached and stack up.
         self._session_bridge: SessionBridge | None = None
@@ -1344,6 +1388,9 @@ class DiceRollerView(ReflowBox, QWidget):
         # make from its own width is meaningless — and would be made against parts
         # that are being laid out by somebody else.
         self._lent = False
+        # The user's chosen shape (see :meth:`sync_dice_layout`). Only ``extended``
+        # means anything to this view; ``compact`` is the panel's own.
+        self._preference = storage.dice_layout()
         self._splitter.splitterMoved.connect(self._on_handle_dragged)
         # A resize arrives before the parts' own minimums have settled — the pinned
         # strip converges its thickness over several deferred turns — and the division
@@ -1359,6 +1406,10 @@ class DiceRollerView(ReflowBox, QWidget):
         layout.addWidget(self._splitter)
 
         self.init_reflow()
+        # And then, if the user prefers it, straight into the locked row — the
+        # reflow has to have laid the parts out once before the axis can be pinned.
+        if self._row_locked():
+            self.force_reflow(True)
         self._sync_session()
         self._sync_quick_roll_state()  # the strip may have been restored with chips in it
 
@@ -1413,6 +1464,16 @@ class DiceRollerView(ReflowBox, QWidget):
         whatever is left, which is the lion's share of a wide strip.
         """
         available = self.reflow_available_width()
+        if self._row_locked():
+            # Extended pins the panel to a column (see
+            # :attr:`DiceRollerPanel._column_locked`), so what it wants here is its
+            # *column* width — never the row-of-three width the auto branch below
+            # measures, which is a different arrangement entirely and would leave
+            # the controls stretched across half the block.
+            floor = self.panel.column_minimum_width()
+            wanted = max(floor, self.panel.sizeHint().width())
+            wanted = min(wanted, max(floor, available - MIN_HISTORY_WIDTH))
+            return [wanted, max(1, available - wanted)]
         floor = self.panel.row_minimum_width() + self.REFLOW_HYSTERESIS
         spare = available - self._history_part.minimumSizeHint().width()
         if spare < floor:
@@ -1440,11 +1501,47 @@ class DiceRollerView(ReflowBox, QWidget):
         self._divide_row()
         self._settle.start(0)  # and again once everything has settled
 
+    def _row_locked(self) -> bool:
+        """Whether the user has pinned the side-by-side (Extended) arrangement.
+
+        Not while the parts are lent to a compact window: that window lays them out
+        itself, and compact mode wins over the preference the same way it does in
+        the panel.
+        """
+        return self._preference == storage.DICE_LAYOUT_EXTENDED and not self._lent
+
     def sync_reflow(self) -> bool:
-        """Re-run the width-driven reflow — unless the parts are out on loan."""
+        """Re-run the width-driven reflow — unless the shape is spoken for.
+
+        Either because the parts are out on loan to a compact window, or because
+        Extended has pinned the axis; a locked row still gets re-divided by the
+        ``resizeEvent`` that follows, since the panel's *share* of it moves with
+        the width even when the axis does not.
+        """
         if self._lent:
             return False
+        if self._row_locked():
+            return self.force_reflow(True)
         return super().sync_reflow()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """The row's width while Extended is locked, the column's otherwise.
+
+        :meth:`ReflowBox.minimumSizeHint` reports the column arrangement's width
+        whatever axis is in use, because a reflowing widget can always narrow by
+        flipping. A locked row cannot — the shape is chosen, not derived — so it
+        has to hold the block open (and through it the pinned strip and the window)
+        at what the two parts really need side by side.
+        """
+        hint = super().minimumSizeHint()
+        if not self._row_locked():
+            return hint
+        row = (
+            self.panel.column_minimum_width()
+            + self.REFLOW_SPACING
+            + self._history_part.minimumSizeHint().width()
+        )
+        return QSize(row, hint.height())
 
     def _divide_row(self) -> None:
         """Re-divide a row between the panel and the history (a no-op otherwise)."""
@@ -1480,12 +1577,18 @@ class DiceRollerView(ReflowBox, QWidget):
         self._redivide()
         self._settle.start(0)
 
+    def _histories(self) -> tuple[QWidget, ...]:
+        """The history panels this view drives — the injected one, or its own pair."""
+        if self._given_history is not None:
+            return (self._given_history,)
+        return (self._local_history, self._session_history)
+
     def _sync_quick_roll_state(self) -> None:
         """Push the strip's contents into whichever history is on screen."""
         keys = self.panel.quick_roll_keys()
         room = not self.panel.quick_rolls_full()
-        self._local_history.set_quick_roll_state(keys, room)
-        self._session_history.set_quick_roll_state(keys, room)
+        for history in self._histories():
+            history.set_quick_roll_state(keys, room)
 
     # -- construction --------------------------------------------------------
 
@@ -1493,6 +1596,20 @@ class DiceRollerView(ReflowBox, QWidget):
         holder = QWidget()
         outer = QVBoxLayout(holder)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        if self._given_history is not None:
+            # One box, always shown: the host's history is already the right one for
+            # whatever state the session is in, so there is nothing to swap between.
+            box = QGroupBox("Rolls")
+            box_layout = QVBoxLayout(box)
+            box_layout.addWidget(self._given_history)
+            self._given_history.saveToggled.connect(self.panel.toggle_quick_roll)
+            self._given_history.rollFollowUp.connect(self.panel.roll_spec)
+            # Hold this app's own roll until its die stops tumbling; the roller cues it.
+            self._given_history.set_defer_own(True)
+            self.panel.sessionRollRevealed.connect(self._given_history.release_roll)
+            outer.addWidget(box)
+            return holder
 
         self._local_box = QGroupBox("History")
         local_layout = QVBoxLayout(self._local_box)
@@ -1531,6 +1648,10 @@ class DiceRollerView(ReflowBox, QWidget):
         self._sync_session()
 
     def _sync_session(self) -> None:
+        if self._given_history is not None:
+            # The host owns the attachment (GM Mode's history follows the bridge
+            # while there is one and the workspace's saved log when there is not).
+            return
         bridge = live_session()
         if bridge is not self._session_bridge:
             self._follow(bridge)
@@ -1573,13 +1694,15 @@ class DiceRollerView(ReflowBox, QWidget):
         In a session the note goes to the server instead and comes back through the
         shared history like any other entry, so this is only ever the fallback.
         """
-        self._local_history.add_note(text)
+        if self._given_history is None:
+            self._local_history.add_note(text)
 
     # -- lifecycle -----------------------------------------------------------
 
     def detach(self) -> None:
         """Let go of the session — the host block or window is going away."""
-        self._session_history.detach()
+        if self._given_history is None:
+            self._session_history.detach()
         self._follow(None)
 
     # -- compact mode --------------------------------------------------------
@@ -1605,7 +1728,25 @@ class DiceRollerView(ReflowBox, QWidget):
 
     def sync_dice_layout(self) -> None:
         """Re-read the layout preference — the Settings page just changed it."""
-        self.panel.set_layout_preference(storage.dice_layout() == storage.DICE_LAYOUT_COMPACT)
+        self.set_layout(storage.dice_layout())
+
+    def set_layout(self, layout: str) -> None:
+        """Take a chosen shape: this view's axis, and the panel's own arrangement.
+
+        The two halves of one preference, which is why they are set together from
+        one place rather than each reading the setting for itself.
+        """
+        self._preference = layout if layout in storage.DICE_LAYOUTS else storage.DICE_LAYOUT_AUTO
+        self.panel.set_layout_preference(self._preference)
+        # The axis first (locked or back under the room's control), then the
+        # division, which has to be re-run whether or not the axis moved: the panel
+        # has just changed shape, so its share of a row it was already in is the
+        # wrong one. The usual second pass, since the parts' hints only tell the
+        # truth on the following turn.
+        self.sync_reflow()
+        self._user_sized = False  # a chosen shape is not the one a handle was dragged to
+        self._redivide()
+        self._settle.start(0)
 
     def restore_roller(self) -> None:
         """Take the panel and the history back into the splitter."""

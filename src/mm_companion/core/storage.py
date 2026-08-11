@@ -45,9 +45,14 @@ EQUIPMENT_ENFORCE_WARN = "warn"
 EQUIPMENT_ENFORCE_BLOCK = "block"
 
 # How the dice roller lays itself out as a sheet block: reflowing to whatever room
-# it is given, or always in the shape compact mode uses. See ``dice_layout`` below.
+# it is given, or pinned to one of the two shapes worth choosing outright. See
+# ``dice_layout`` below.
 DICE_LAYOUT_AUTO = "auto"
 DICE_LAYOUT_COMPACT = "compact"
+DICE_LAYOUT_EXTENDED = "extended"
+#: The whole vocabulary, and the only place it is spelled out — both the reader and
+#: the writer below validate against this, so a fourth shape is one entry here.
+DICE_LAYOUTS = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT, DICE_LAYOUT_EXTENDED)
 
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
@@ -181,11 +186,14 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # How the dice roller arranges itself as an ordinary sheet block.
     #
     # ``"auto"`` lets it reflow to whatever space it is given — a column in the
-    # narrow side strip, one row in a wide bottom one. ``"compact"`` pins the shape
-    # compact mode uses (the roll settings across the top, the quick rolls beside a
-    # smaller die), everywhere and always. It is a preference rather than a mode
-    # because that arrangement turned out to be a good roller in its own right, not
-    # just a way to fit a mini window.
+    # narrow side strip, one row in a wide bottom one. The other two pin a shape
+    # everywhere and always, whatever the room: ``"compact"`` the one compact mode
+    # uses (the roll settings across the top, the quick rolls beside a smaller die,
+    # the history under both) and ``"extended"`` the roll controls as a column
+    # beside a history filling the rest. Both are preferences rather than modes
+    # because each turned out to be a good roller in its own right — the first was
+    # only a way to fit a mini window, the second only what GM Mode happened to be
+    # built as.
     "dice_layout": DICE_LAYOUT_AUTO,
 }
 
@@ -382,7 +390,7 @@ def clear_gm_card_pins() -> None:
 
 
 def dice_layout() -> str:
-    """How the dice roller arranges itself as a block — ``auto`` or ``compact``.
+    """How the dice roller arranges itself as a block — one of :data:`DICE_LAYOUTS`.
 
     The one seam the UI consults, defaulting to :data:`DICE_LAYOUT_AUTO` when unset
     or unrecognized — the same shape :func:`pl_enforcement` has, and needed for the
@@ -390,13 +398,12 @@ def dice_layout() -> str:
     older than this key answers ``None``.
     """
     value = load_settings().get("dice_layout", DICE_LAYOUT_AUTO)
-    return value if value in (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT) else DICE_LAYOUT_AUTO
+    return value if value in DICE_LAYOUTS else DICE_LAYOUT_AUTO
 
 
 def set_dice_layout(layout: str) -> None:
     """Choose how the dice roller arranges itself; an unknown value means ``auto``."""
-    known = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT)
-    update_settings(dice_layout=layout if layout in known else DICE_LAYOUT_AUTO)
+    update_settings(dice_layout=layout if layout in DICE_LAYOUTS else DICE_LAYOUT_AUTO)
 
 
 def compact_settings() -> dict:

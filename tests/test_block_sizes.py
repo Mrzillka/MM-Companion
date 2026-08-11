@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSplitter
 
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize, load_block_sizes
@@ -108,6 +108,31 @@ def test_a_long_title_does_not_widen_its_block(qapp: QApplication) -> None:
     assert frame.title_bar.title_text() == "Abilities — 248 PP, and then some more words besides"
 
 
+def test_a_configured_width_never_caps_what_a_block_asks_a_layout_for(
+    qapp: QApplication,
+) -> None:
+    """The JSON width is a floor to the *layout*, not only to ``minimumSizeHint``.
+
+    It used to be both, and the second one silently: ``setMinimumWidth`` does not
+    raise a widget's layout minimum, it replaces it — ``qSmartMinSize`` ends with
+    ``if (minSize.width() > 0) s.setWidth(minSize.width())``. So a block whose
+    content needed more than its JSON number told every enclosing layout it did
+    not, and the pinned strip (whose own minimum is its splitter's) squashed it to
+    the number. Equipment is the block that already needed more; the roller under
+    the Extended layout is what made it visible.
+    """
+    sheet = CharacterSheet(load_game_data())
+    frame = sheet.block_frame("equipment")
+    content = frame.minimumSizeHint().width()
+
+    assert content > load_block_sizes()["equipment"].min_width
+
+    holder = QSplitter()
+    holder.addWidget(frame)
+
+    assert holder.minimumSizeHint().width() >= content
+
+
 def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     sizes = load_block_sizes()
@@ -119,10 +144,12 @@ def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> No
         # The configured minimum is a floor. The section sits directly in the frame
         # (no inner scroll area), so a block whose content needs more than the
         # configured minimum — e.g. Base Information or the Advantages picker —
-        # reports the larger content-driven minimum instead. Height is enforced
-        # through the effective minimum (minimumSizeHint), so a block is never
-        # squashed below its content; the page scrolls instead.
-        assert frame.minimumWidth() >= spec.min_width
+        # reports the larger content-driven minimum instead.
+        # Both floors are stated through the effective minimum (minimumSizeHint),
+        # so a block is never squashed below its content in either dimension; an
+        # explicit setMinimumWidth would *replace* the content minimum rather than
+        # raise it (see BlockFrame.set_block_size).
+        assert frame.minimumSizeHint().width() >= spec.min_width
         assert frame.minimumSizeHint().height() >= spec.min_height
         # A configured max pins the frame exactly; an unbounded dimension is left
         # effectively unconstrained (Qt reports its own large max).

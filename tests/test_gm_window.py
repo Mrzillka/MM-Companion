@@ -1427,6 +1427,32 @@ def test_an_npc_condition_leaves_the_other_blocks_where_they_were(
     assert players.minimumSizeHint().height() == players_height
 
 
+def test_a_condition_replayed_into_an_open_npc_sheet_is_not_undoable(
+    window: GMWindow,
+) -> None:
+    """The card's entry and the open sheet are two different Character objects.
+
+    They are kept in step by replaying the settled ids; an undo on the sheet would
+    roll one back and not the other, which is exactly the disagreement the replay
+    exists to prevent. So the replay is absorbed rather than recorded.
+    """
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._open_npc(path.name)
+    sheet_window = next(iter(window._npc_windows.values()))
+    sheet_window._sheet.abilities._abilities["STR"].setValue(4)
+
+    window._apply_npc_condition(path.name, "dazed", None)
+
+    assert [c.condition_id for c in sheet_window.sheet.character.conditions] == ["dazed"]
+
+    sheet_window._undo.undo()
+
+    assert sheet_window.sheet.character.abilities["STR"] == 0  # the GM's own edit
+    assert [c.condition_id for c in sheet_window.sheet.character.conditions] == ["dazed"]
+    sheet_window._dirty = False
+
+
 def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) -> None:
     path = write_npc("Ogre")
     window._register_npc(path)

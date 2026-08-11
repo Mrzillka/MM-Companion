@@ -77,6 +77,19 @@ class DeclarativeBlock(QGroupBox):
         if not self._loading:
             self.edited.emit()
 
+    def reseed(self) -> None:
+        """Restate every field from the model — the sheet put an earlier state back.
+
+        A mod's declarative block joins the restore on the same terms a base block
+        does; the sheet finds this by name, not by knowing the block exists.
+        """
+        self._loading = True
+        try:
+            for key, edit in self._edits.items():
+                edit.setText(self._character.profile.get(key, ""))
+        finally:
+            self._loading = False
+
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back."""
         for edit in self._edits.values():

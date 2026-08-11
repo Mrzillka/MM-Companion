@@ -328,6 +328,10 @@ class ConditionsSection(QGroupBox):
                 widget.setParent(None)
                 widget.deleteLater()
 
+    def reseed(self) -> None:
+        """Restate the chips from the model — the sheet put an earlier state back."""
+        self._render_conditions()
+
     def _render_conditions(self) -> None:
         """Rebuild the chip groups from the model so a directly-applied condition, its
         bundled members, supersession, and stacking all stay 1:1 with the state, sorted

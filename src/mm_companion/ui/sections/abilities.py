@@ -19,7 +19,7 @@ which unlocked is what selects the number for retyping.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import QSpinBox, QTableWidgetItem, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
@@ -38,6 +38,7 @@ from mm_companion.ui.sections.stat_table import (
     PinMenuState,
     apply_stat_effects,
     build_stat_table,
+    set_stat_value,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
 
@@ -115,6 +116,20 @@ class AbilitiesSection(TitledSection):
         self.refresh_cost()
         self.abilityChanged.emit(key, value)
         self.changed.emit()
+
+    def reseed(self) -> None:
+        """Restate every rank from the model — the sheet put an earlier state back.
+
+        Signals are blocked so a re-seeded value doesn't count as a fresh edit, and
+        :func:`~mm_companion.ui.sections.stat_table.set_stat_value` stretches the spin
+        box rather than let a rank past its ceiling clamp — a clamp here would silently
+        *lose* ranks a restore was supposed to bring back. The Total column and the
+        priced title arrive on their own topics, so this only touches the spins.
+        """
+        for key, spin in self._abilities.items():
+            blocker = QSignalBlocker(spin)
+            set_stat_value(spin, int(self._character.abilities.get(key, 0)))
+            del blocker
 
     def refresh_cost(self) -> None:
         """Re-title the block with its current PP subtotal (also driven by a homebrew

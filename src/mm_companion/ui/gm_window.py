@@ -93,6 +93,7 @@ from mm_companion.ui.sections.conditions import condition_display_name, matching
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
+from mm_companion.ui.undo import absorbing
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
@@ -1741,11 +1742,17 @@ class GMWindow(QMainWindow):
         window = self._window_for(entry.path)
         section = getattr(window.sheet, "conditions", None) if window is not None else None
         if section is not None:
-            for condition_id, parameter in changes:
-                if applying:
-                    section.apply_condition_by_id(condition_id, parameter)
-                else:
-                    section.remove_condition_by_id(condition_id, parameter)
+            # Absorbed rather than recorded, and for a sharper reason than the
+            # player's: the card's entry and the open sheet are two different
+            # Character objects, kept in step by replaying the settled ids. An undo
+            # on the sheet would roll one back and not the other — exactly the
+            # disagreement the replay exists to prevent.
+            with absorbing(window.sheet):
+                for condition_id, parameter in changes:
+                    if applying:
+                        section.apply_condition_by_id(condition_id, parameter)
+                    else:
+                        section.remove_condition_by_id(condition_id, parameter)
         else:
             try:
                 library.save_character(entry.character, path=entry.path)

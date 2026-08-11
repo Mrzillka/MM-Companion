@@ -383,6 +383,15 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             if name in by_name and name not in hidden
         ]
 
+    def reseed(self) -> None:
+        """Re-render the rows from the model — the sheet put an earlier state back.
+
+        Deliberately *only* the render: the constructor also seeds an empty focus list
+        per focused skill, and a reseed that writes the model would make the undo
+        controller see a change it did not make and record a step for it.
+        """
+        self._rebuild()
+
     # -- data-driven rebuild -------------------------------------------------
 
     def _rebuild(self) -> None:

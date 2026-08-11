@@ -280,6 +280,12 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         guard_wheel(table)
         return table
 
+    def reseed(self) -> None:
+        """Restate the whole block from the model — the sheet put an earlier state back."""
+        self._rebuild()
+        self.refresh_cost()
+        self.refresh_limits()
+
     def _rebuild(self) -> None:
         """Re-render every panel from the ordered advantage list.
 

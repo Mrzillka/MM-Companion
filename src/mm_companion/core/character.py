@@ -12,7 +12,7 @@ The model is JSON-serializable (:meth:`Character.to_dict` /
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from .data_loader import GameData
 from .equipment import EquipmentItem
@@ -293,6 +293,139 @@ class Character:
                 for cat, items in raw.get("item_cost_overrides", {}).items()
             },
         )
+
+    def restore(self, raw: dict, *, keep_runtime: bool = True) -> None:
+        """Put this character back to the state *raw* describes, **in place**.
+
+        The same code path as a load — ``from_dict`` parses *raw*, and every field is
+        then copied across — but the object itself is kept, because a view over it
+        may hold more than the reference. :class:`SkillsSection` aliases three of the
+        model's dicts as its own attributes, so rebinding one here would desync the
+        block silently; dicts are therefore cleared and refilled and lists are sliced
+        in place, never reassigned. Driving that off :func:`~dataclasses.fields`
+        rather than naming the fields means one added later is carried for free.
+
+        ``keep_runtime`` carries the flags that :meth:`to_dict` deliberately omits
+        (see :func:`capture_runtime`) across the restore, so putting a *build* back
+        never switches a power on or re-wears a stowed item.
+        """
+
+        fresh = Character.from_dict(raw)
+        runtime = capture_runtime(self) if keep_runtime else None
+        for spec in fields(self):
+            new = getattr(fresh, spec.name)
+            current = getattr(self, spec.name)
+            if isinstance(current, dict) and isinstance(new, dict):
+                current.clear()
+                current.update(new)
+            elif isinstance(current, list) and isinstance(new, list):
+                current[:] = new
+            else:
+                setattr(self, spec.name, new)
+        if runtime is not None:
+            apply_runtime(self, runtime)
+
+
+def capture_runtime(character: Character) -> dict:
+    """Read every *runtime* flag off a character, keyed by node/item id.
+
+    Runtime state — a power switched on, a jacket worn, which member of an array
+    is live — is deliberately absent from :meth:`Character.to_dict` (see
+    :class:`~.powers.Power` and :class:`~.equipment.EquipmentItem`), so a plain
+    ``from_dict`` round trip switches everything back on. This pair is how
+    :meth:`Character.restore` carries it across one: what is switched on is not
+    part of the build and must not move when the build is put back.
+
+    Per-effect flags are keyed by *position*, since an effect carries no id of its
+    own; :func:`apply_runtime` therefore skips a list whose length has changed.
+    """
+
+    powers: dict[str, dict] = {}
+    equipment: dict[str, dict] = {}
+
+    def walk_node(node: PowerNode) -> None:
+        if isinstance(node, PowerGroup):
+            powers[node.id] = {"active_child_id": node.active_child_id}
+            for child in node.children:
+                walk_node(child)
+            return
+        powers[node.id] = _power_runtime(node)
+
+    def walk_item(item: EquipmentItem) -> None:
+        equipment[item.id] = {
+            "worn": item.worn,
+            "current_speed": item.current_speed,
+            # An item's build *is* a Power, so it carries the same flags a loose
+            # power does — easy to miss, and a stowed rifle would come back armed.
+            "build": _power_runtime(item.build),
+        }
+        for accessory in item.accessories:
+            walk_item(accessory)
+
+    for node in character.powers:
+        walk_node(node)
+    for item in character.equipment:
+        walk_item(item)
+    return {"powers": powers, "equipment": equipment}
+
+
+def apply_runtime(character: Character, captured: dict) -> None:
+    """Put the flags :func:`capture_runtime` read back onto *character*.
+
+    An id the capture never saw is left at its dataclass default — the all-active
+    state — which is what undoing past a power's creation should look like.
+    """
+
+    powers = captured.get("powers", {})
+    equipment = captured.get("equipment", {})
+
+    def walk_node(node: PowerNode) -> None:
+        state = powers.get(node.id)
+        if isinstance(node, PowerGroup):
+            if state is not None:
+                node.active_child_id = state.get("active_child_id", "")
+            for child in node.children:
+                walk_node(child)
+            return
+        if state is not None:
+            _restore_power_runtime(node, state)
+
+    def walk_item(item: EquipmentItem) -> None:
+        state = equipment.get(item.id)
+        if state is not None:
+            item.worn = state.get("worn", item.worn)
+            item.current_speed = state.get("current_speed", item.current_speed)
+            _restore_power_runtime(item.build, state.get("build", {}))
+        for accessory in item.accessories:
+            walk_item(accessory)
+
+    for node in character.powers:
+        walk_node(node)
+    for item in character.equipment:
+        walk_item(item)
+
+
+def _power_runtime(power: Power) -> dict:
+    return {
+        "activated": power.activated,
+        "item_present": power.item_present,
+        "array_active": power.array_active,
+        "effects": [(e.toggled_on, e.suppressed) for e in power.effects],
+    }
+
+
+def _restore_power_runtime(power: Power, state: dict) -> None:
+    power.activated = state.get("activated", power.activated)
+    power.item_present = state.get("item_present", power.item_present)
+    power.array_active = state.get("array_active", power.array_active)
+    effects = state.get("effects", [])
+    # An edit that added or removed an effect makes the positions meaningless, and
+    # writing them anyway is the one way this misapplies. Leave the new list alone.
+    if len(effects) != len(power.effects):
+        return
+    for effect, (toggled_on, suppressed) in zip(power.effects, effects, strict=True):
+        effect.toggled_on = toggled_on
+        effect.suppressed = suppressed
 
 
 def _migrate_flat_relations(nodes: list[PowerNode]) -> list[PowerNode]:

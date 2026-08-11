@@ -49,6 +49,7 @@ from mm_companion.ui.session_dialogs import (
 )
 from mm_companion.ui.session_player import ConditionReceiver, SnapshotPusher, snapshot_size
 from mm_companion.ui.start_window import StartWindow
+from mm_companion.ui.undo import UndoController
 
 
 @pytest.fixture(scope="module")
@@ -555,6 +556,38 @@ def test_a_gm_applied_condition_bundles_like_a_local_one(qapp: QApplication, tab
 
     assert wait_for(qapp, lambda: receiver.applied == 1)
     assert len(sheet.character.conditions) == 4
+
+
+def test_a_gm_applied_condition_is_not_undoable(qapp: QApplication, table) -> None:
+    """Ctrl+Z takes back what *this* player did; the table's Stunned is not that.
+
+    And the player's own earlier edit still is — the absorb lands it first.
+    """
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    undo = UndoController(sheet)
+    sheet.abilities._abilities["STR"].setValue(4)
+
+    host.server.apply_condition(player.client.player_id, "dazed")
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+
+    undo.undo()
+
+    assert sheet.character.abilities["STR"] == 0  # the player's edit went back
+    assert [c.condition_id for c in sheet.character.conditions] == ["dazed"]  # the GM's did not
+    assert not undo.can_undo
+
+
+def test_a_gm_hero_point_command_is_not_undoable(qapp: QApplication, table) -> None:
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    undo = UndoController(sheet)
+
+    host.server.set_hero_points(player.client.player_id, 4)
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+
+    assert sheet.character.characteristics["hero_points"] == 4
+    assert not undo.can_undo
 
 
 def test_a_gm_applied_condition_marks_the_sheet_dirty(qapp: QApplication, table) -> None:

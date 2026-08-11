@@ -51,7 +51,8 @@ construction.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QVariantAnimation, Signal
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, Qt, QVariantAnimation, Signal
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -141,12 +142,81 @@ def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
     return power_roll_lines(power, character, data)
 
 
+def _mode_toggle_style(locked: bool) -> str:
+    """The mode switch's own stylesheet, in tokens every preset defines.
+
+    It is stated **here, on the widget**, and not as a rule in the theme's
+    application sheet — the same bargain :mod:`~mm_companion.ui.lock` and the
+    compact roller's overlay button strike, and here it is forced twice over.
+    Classic emits no widget chrome at all, so an app-level rule would exist under
+    some presets and not others; and a *styled* preset states ``QPushButton``'s box
+    (border, radius, padding), which makes ``QStyleSheetStyle`` take the whole box
+    over and stop painting the platform's sunken/checked panel. That is the bug this
+    fixes: with no ``:checked`` rule anywhere, the lit segment painted exactly like
+    its two neighbours, and a group card gave no sign of being Independent, Array or
+    Linked. Only tokens *every* preset defines are used — Classic has no
+    ``surface.*`` group.
+
+    The resting border is drawn rather than dropped so a segment does not jump
+    sideways as it lights up, which is the lesson the theme's tool-button rules and
+    ``QuickRollStar`` already carry. No ``font-size`` here: weight only.
+    """
+    accent = theme.color("accent")
+    rest = (
+        "QPushButton {"
+        " background: transparent;"
+        f" color: {theme.color('text.muted')};"
+        f" border: {int(theme.metric('border.width'))}px solid {theme.color('border.card')};"
+        f" border-radius: {int(theme.metric('radius.chip'))}px;"
+        f" padding: {int(theme.metric('space.xs'))}px {int(theme.metric('space.sm'))}px; }}"
+    )
+    lit = (
+        "QPushButton:checked {"
+        f" background: {accent};"
+        f" color: {theme.color('text.on-badge')};"
+        f" border-color: {accent};"
+        " font-weight: bold; }"
+    )
+    if locked:
+        # A locked switch is a read-out, so it sheds the hover cue along with the
+        # rest of its input chrome; set_locked hides the unlit segments entirely.
+        return f"{rest}\n{lit}"
+    hover = f"QPushButton:hover {{ border-color: {accent}; color: {accent}; }}"
+    return f"{rest}\n{hover}\n{lit}"
+
+
+def _lit_width(button: QPushButton) -> int:
+    """How wide *button* has to be to hold its label once that label lights up.
+
+    Only the checked segment is bold, and a size hint measured from the resting
+    font is a few pixels short of the bold one — which showed up as a clipped
+    "Independen" the moment that segment was the mode in force. Every segment gets
+    the same allowance, so lighting one up never re-widths the strip either.
+
+    The bold *delta* is added to the hint rather than the bold advance replacing
+    it: the hint already carries the stylesheet's padding, the border and Qt's own
+    margins, and none of those are worth re-deriving here.
+    """
+    font = button.font()
+    bold = QFont(font)
+    bold.setBold(True)
+    grew = QFontMetrics(bold).horizontalAdvance(button.text()) - QFontMetrics(
+        font
+    ).horizontalAdvance(button.text())
+    return button.sizeHint().width() + max(0, grew)
+
+
 class _ModeToggle(QWidget):
     """A segmented Independent / Array / Linked switch for a group's title bar.
 
     Mirrors the Power Constructor's mode bar (the same three choices for how parts
     combine), but scoped to whole cards in a group rather than one power's effects.
     Emits :attr:`modeChanged` with a structure id when the user picks a segment.
+
+    The lit segment *is* how the card reports its group's mode, so it states its own
+    look rather than trusting the platform to paint a checked button — see
+    :func:`_mode_toggle_style`. Locked, it goes on saying which mode is in force and
+    stops being a control: :meth:`set_locked`.
     """
 
     modeChanged = Signal(str)
@@ -166,7 +236,7 @@ class _ModeToggle(QWidget):
         super().__init__(parent)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
+        row.setSpacing(int(theme.metric("space.xs")))
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: dict[str, QPushButton] = {}
@@ -175,10 +245,12 @@ class _ModeToggle(QWidget):
             button.setCheckable(True)
             button.setToolTip(tip)
             button.setFixedHeight(22)
+            button.setMinimumWidth(_lit_width(button))
             self._group.addButton(button)
             self._buttons[mode] = button
             row.addWidget(button)
         self._group.buttonClicked.connect(self._on_clicked)
+        self.set_locked(False)
 
     def _on_clicked(self, button: QPushButton) -> None:
         for mode, candidate in self._buttons.items():
@@ -190,9 +262,25 @@ class _ModeToggle(QWidget):
         """Reflect a mode into the buttons without emitting :attr:`modeChanged`."""
         (self._buttons.get(mode) or self._buttons[STRUCTURE_INDEPENDENT]).setChecked(True)
 
-    def set_toggle_enabled(self, enabled: bool) -> None:
+    def set_locked(self, locked: bool) -> None:
+        """Read-only view: keep the mode legible, drop the switch.
+
+        Locking is *not* ``setEnabled(False)`` anywhere in this app, and a greyed
+        strip of three segments is exactly how a group's mode became unreadable — so
+        the two unlit segments go away instead and the lit one stays on as a static
+        chip naming the mode. It is left transparent to the mouse rather than
+        disabled, so a click on it falls through to the group card the way a click
+        anywhere else on the title bar does; the card is the switch. Call this
+        *after* :meth:`set_mode`, or there is no lit segment yet to keep.
+        """
+        self.setStyleSheet(_mode_toggle_style(locked))
         for button in self._buttons.values():
-            button.setEnabled(enabled)
+            button.setVisible(not locked or button.isChecked())
+            button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, locked)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus if locked else Qt.FocusPolicy.StrongFocus)
+            button.setCursor(
+                Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor
+            )
 
 
 class PowersSection(TitledSection):
@@ -541,10 +629,12 @@ class PowersSection(TitledSection):
         row.addWidget(rename)
         rename.setVisible(not self._locked)
 
+        # Order matters: the lock keeps whichever segment is lit, so the mode has to
+        # be set before it — see _ModeToggle.set_locked.
         toggle = _ModeToggle()
         toggle.set_mode(group.mode)
         toggle.modeChanged.connect(lambda mode, g=group: self._set_group_mode(g, mode))
-        toggle.set_toggle_enabled(not self._locked)
+        toggle.set_locked(self._locked)
         row.addWidget(toggle)
 
         row.addStretch()

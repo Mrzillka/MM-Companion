@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QContextMenuEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox
 
 from mm_companion.core import library, storage
@@ -35,6 +35,7 @@ from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
+from mm_companion.ui import npc_card as npc_card_module
 from mm_companion.ui.gm_window import GMWindow
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
@@ -395,6 +396,20 @@ def test_an_unreadable_tunnel_address_refuses_to_host(
 
 
 # -- roster and clipboard --------------------------------------------------
+
+
+def right_click(widget) -> None:
+    """Right-click *widget*, the way a GM sheds a condition chip.
+
+    A real ``QContextMenuEvent`` rather than calling the handler: what is under
+    test is partly that the event is *consumed*, so it never reaches the context
+    menu of the card the chip sits on.
+    """
+    centre = widget.rect().center()
+    QApplication.sendEvent(
+        widget,
+        QContextMenuEvent(QContextMenuEvent.Reason.Mouse, centre, widget.mapToGlobal(centre)),
+    )
 
 
 def roster(*entries: dict) -> list[dict]:
@@ -984,24 +999,33 @@ def test_a_chip_can_be_taken_off_again(
     card = window._cards["p0"]
     assert card.condition_names() == ["Dazed"]
 
-    card._chip_flow.itemAt(0).widget()._remove.click()
+    right_click(card._chip_flow.itemAt(0).widget())
 
     assert removed == [("p0", "dazed", None)]
 
 
-def test_an_offline_players_chips_lose_their_remove_button(
-    qapp: QApplication, window: GMWindow
+def test_an_offline_players_chips_cannot_be_removed(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     start_hosting(qapp, window, canned())
     window._show_roster(roster({"display_name": "Aria"}))
     window._on_snapshot("p0", a_character(conditions=["dazed"]))
+    removed: list[tuple] = []
+    monkeypatch.setattr(
+        window.bridge.server,
+        "remove_condition",
+        lambda *args: removed.append(args) or True,
+    )
     card = window._cards["p0"]
-    assert card._chip_flow.itemAt(0).widget()._remove is not None
+    assert card._chip_flow.itemAt(0).widget().removable is True
 
     window._show_roster(roster({"display_name": "Aria", "connected": False}))
 
     assert card.condition_names() == ["Dazed"]  # still shown, just not commandable
-    assert card._chip_flow.itemAt(0).widget()._remove is None
+    chip = card._chip_flow.itemAt(0).widget()
+    assert chip.removable is False
+    right_click(chip)
+    assert removed == []
 
 
 # -- the GM's roller and the shared history --------------------------------
@@ -1164,7 +1188,21 @@ def test_a_card_restates_its_hover_summary_from_the_model(window: GMWindow) -> N
 
     window._apply_npc_condition("ogre.json", "dazed", None)
 
-    assert card.toolTip() == card.summary_html()
+    assert card._name_label.toolTip() == card.summary_html()
+
+
+def test_the_hover_summary_is_on_the_name_and_not_the_whole_card(window: GMWindow) -> None:
+    """A tooltip on the card fires wherever the pointer rests, so it landed over
+    the pinned chip or the damage button a GM was lining up."""
+    window._register_npc(write_npc("Ogre"))
+    (card,) = npc_cards(window)
+
+    assert card.toolTip() == ""
+    assert "Abilities" in card._name_label.toolTip()
+    # And on the collapsed card's name, which is a different label — through the
+    # eliding label's own seam, or its next resize would wipe it.
+    card.set_collapsed(True)
+    assert "Abilities" in card._header_name.toolTip()
 
 
 def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWindow) -> None:
@@ -2378,3 +2416,98 @@ def test_the_initiative_badge_rolls(window: GMWindow) -> None:
 
     assert card.initiative is not None
     assert npc_cards(window)[0]._initiative_badge.text().startswith("init ")
+
+
+def test_collapse_all_shrinks_every_card_and_says_what_it_will_do(
+    window: GMWindow,
+) -> None:
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+
+    window._collapse_all_button.click()
+
+    assert all(card.collapsed for card in npc_cards(window))
+    # The caption is a readout of the board as well as the next action.
+    assert window._collapse_all_button.text() == gm_window_module.EXPAND_ALL
+    assert len(storage.gm_collapsed_cards()) == 2
+
+    window._collapse_all_button.click()
+
+    assert not any(card.collapsed for card in npc_cards(window))
+    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+    assert storage.gm_collapsed_cards() == {}
+
+
+def test_one_card_still_open_means_collapse_all(window: GMWindow) -> None:
+    """Anything open means "collapse"; only a wholly shut board offers to expand."""
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    first, _second = npc_cards(window)
+
+    first._collapse_button.click()
+
+    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+    window._collapse_all_button.click()
+    assert all(card.collapsed for card in npc_cards(window))
+
+
+def test_collapse_all_is_dead_with_no_cast(window: GMWindow) -> None:
+    assert window._collapse_all_button.isEnabled() is False
+
+    quick_npc_file(window)
+
+    assert window._collapse_all_button.isEnabled() is True
+
+
+def test_the_card_has_no_initiative_button(window: GMWindow) -> None:
+    """The badge rolls in both states, so the button was a second way to do one
+    thing — and the one that existed on the expanded card only."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    assert not hasattr(card, "_initiative_button")
+
+
+def test_right_clicking_the_badge_clears_the_initiative(window: GMWindow) -> None:
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    goon = npc_cards(window)[0]
+    goon.roll_initiative()
+    assert npc_cards(window)[0].initiative is not None
+
+    right_click(npc_cards(window)[0]._initiative_badge)
+
+    # Cleared on the card, in the window's state, and back in the un-rolled zone.
+    assert all(card.initiative is None for card in npc_cards(window))
+    assert all(entry.initiative is None for entry in window._npc_state.values())
+    assert npc_cards(window)[0]._initiative_badge.text() == npc_card_module.NO_INITIATIVE
+
+
+def test_right_clicking_an_npc_chip_sheds_the_condition(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    window._apply_npc_condition(name, "dazed", None)
+    (card,) = npc_cards(window)
+    assert card.condition_names() == ["Dazed"]
+
+    right_click(card._chip_flow.itemAt(0).widget())
+
+    assert window._npc_state[name].card.condition_names() == []
+    assert library.load_character(window._npc_state[name].path).conditions == []
+
+
+def test_a_chip_right_click_never_reaches_the_cards_own_menu(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The card offers "Remove from this session / Delete" on a right-click, and
+    that must not be what someone aiming at a chip gets."""
+    name = quick_npc_file(window)
+    window._apply_npc_condition(name, "dazed", None)
+    (card,) = npc_cards(window)
+    opened: list[QMenu] = []
+    monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: opened.append(self))
+
+    right_click(card._chip_flow.itemAt(0).widget())
+    right_click(card._initiative_badge)
+
+    assert opened == []

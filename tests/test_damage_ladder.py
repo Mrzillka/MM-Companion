@@ -109,6 +109,33 @@ def test_one_degree_stuns_a_target_that_is_already_dazed(data: GameData) -> None
     assert "stunned" in _ids(char)
 
 
+def test_a_rung_clicked_again_and_again_settles(data: GameData) -> None:
+    """The oscillation bug: Dazed on, Dazed off, Dazed on.
+
+    Escalating *removes* what it escalated from — Stunned supersedes Dazed — so
+    asking "do they have Dazed?" answered no on the very next click, restarted the
+    chain at the bottom, and added a Dazed underneath the Stunned that had replaced
+    it. A rung held down should climb once and then stay.
+    """
+    char = Character()
+    step = _step(data, 1)
+
+    assert apply_damage_step(char, step, data) == ("hit", "dazed")
+    for _ in range(4):
+        assert apply_damage_step(char, step, data) == ("hit", "stunned")
+        assert "dazed" not in _ids(char)
+
+
+def test_a_target_already_stunned_is_not_reduced_to_dazed(data: GameData) -> None:
+    """The same rule from the other side: whatever put the Stunned there, a hit
+    that would daze someone cannot make a Stunned target better off."""
+    char = Character()
+    apply_condition(char, "stunned", data)
+
+    assert apply_damage_step(char, _step(data, 1), data) == ("hit", "stunned")
+    assert "dazed" not in _ids(char)
+
+
 def test_escalation_chains_down_the_deep_end_of_the_ladder(data: GameData) -> None:
     """ "Further failed checks escalate to Dying, then Dead" — one rung per click."""
     char = Character()

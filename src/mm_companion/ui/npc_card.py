@@ -24,11 +24,16 @@ is the GM's, remembered per creature by the window that owns them.
 Two things the collapsed state must not lose, and so neither state has them where
 they used to be: the **"+"** that applies a condition now sits beside the damage
 row, the two of them being the two ways to put something on a creature; and
-**initiative** is rolled by its own badge, since the button that used to do it is
-one of the things a collapsed card sheds. Both **swallow their press** — the badge
-by hand, the "+" by being a button — because a press that reaches the card starts
-its drag-to-reorder, which is the same reason
+**initiative** is rolled by its own badge, the explicit button having gone rather
+than exist on one state only. Both **swallow their press** — the badge by hand, the
+"+" by being a button — because a press that reaches the card starts its
+drag-to-reorder, which is the same reason
 :class:`~mm_companion.ui.card_summary.PortraitButton` swallows its own.
+
+**Right-click means "take that away"** wherever it lands on this card: on a
+condition chip it sheds the condition, on the initiative badge it clears the roll,
+and on the card itself it offers to remove or delete the NPC. Each of the first two
+consumes the event, so the general answer never fires over a specific one.
 """
 
 from __future__ import annotations
@@ -85,7 +90,7 @@ NO_INITIATIVE = "init —"
 
 
 class _InitiativeBadge(QLabel):
-    """The NPC's initiative, and the thing that rolls it.
+    """The NPC's initiative, and the only thing that rolls or clears it.
 
     A ``QLabel`` for the same reason
     :class:`~mm_companion.ui.card_summary.PortraitButton` is one: a ``QToolButton``
@@ -94,9 +99,16 @@ class _InitiativeBadge(QLabel):
     pointing hand, a tooltip, an accent — and, like the portrait, **swallows its
     press**, so clicking it can never be read as the start of the card's
     drag-to-reorder.
+
+    Left-click rolls, right-click clears. The pair belongs on the one widget: the
+    number *is* the thing being set, there is nowhere else on a collapsed card to
+    put a second control, and a GM who has mis-rolled an NPC's place in the order
+    otherwise has to drag the card out of the rolled zone to be rid of it.
     """
 
     clicked = Signal()
+    #: Right-clicked — take this NPC back out of the initiative order.
+    cleared = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("", parent)
@@ -106,7 +118,7 @@ class _InitiativeBadge(QLabel):
         self.setFont(font)
         self.setStyleSheet(f"color: {theme.color('accent')};")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Roll initiative for this NPC")
+        self.setToolTip("Roll initiative for this NPC.\n\nRight-click to clear it.")
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         event.accept()
@@ -116,6 +128,13 @@ class _InitiativeBadge(QLabel):
             event.position().toPoint()
         ):
             self.clicked.emit()
+        event.accept()
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Consumed either way: propagating would reach the card's own
+        # "Remove from this session / Delete" menu, which is not what someone
+        # aiming at the initiative number asked for.
+        self.cleared.emit()
         event.accept()
 
 
@@ -156,6 +175,8 @@ class NPCCard(QFrame):
     removeConditionRequested = Signal(str, str, object)
     #: ``(file_name, total)`` — this NPC just rolled initiative.
     initiativeRolled = Signal(str, int)
+    #: The NPC's file name — its initiative was cleared, so it leaves the order.
+    initiativeCleared = Signal(str)
     #: The NPC's file name — duplicate it into a new NPC (Goon → Goon-2).
     copyRequested = Signal(str)
     #: ``(file_name, target_index)`` — the card was dragged to a new slot. A drag
@@ -233,7 +254,6 @@ class NPCCard(QFrame):
         header_name_font = self._header_name.font()
         header_name_font.setBold(True)
         self._header_name.setFont(header_name_font)
-        self._header_name.setToolTip(summary.name)
         header.addWidget(self._header_name, stretch=1)
 
         self._name_label = QLabel(summary.name)
@@ -246,6 +266,7 @@ class NPCCard(QFrame):
         # The badge *is* the roll affordance once the explicit button is hidden.
         self._initiative_badge = _InitiativeBadge()
         self._initiative_badge.clicked.connect(self.roll_initiative)
+        self._initiative_badge.cleared.connect(self.clear_initiative)
         header.addWidget(self._initiative_badge)
 
         self._collapse_button = _small_button()
@@ -268,14 +289,12 @@ class NPCCard(QFrame):
         pl_row.addStretch()
         layout.addWidget(pl_host)
 
+        # No "Initiative" button here any more: the badge above rolls, in both
+        # states, so this was a second way to do one thing — and the one that cost
+        # a row of the expanded card and did not exist on the collapsed one.
         buttons_host = QWidget()
         buttons_row = QHBoxLayout(buttons_host)
         buttons_row.setContentsMargins(0, 0, 0, 0)
-        self._initiative_button = QToolButton()
-        self._initiative_button.setText("Initiative")
-        self._initiative_button.setToolTip("Roll initiative for this NPC")
-        self._initiative_button.clicked.connect(self.roll_initiative)
-        buttons_row.addWidget(self._initiative_button)
         self._copy_button = QToolButton()
         self._copy_button.setText("Copy")
         self._copy_button.setToolTip("Duplicate this NPC (Goon → Goon-2)")
@@ -390,6 +409,16 @@ class NPCCard(QFrame):
         self.initiativeRolled.emit(self.name_key, total)
         return total
 
+    def clear_initiative(self) -> None:
+        """Take this NPC back out of the initiative order.
+
+        The undo for a roll made on the wrong creature, or for a round that is
+        over. It drops the card into the un-rolled zone, which is also where a drag
+        would have put it — this is just the way to say so without one.
+        """
+        self.set_initiative(None)
+        self.initiativeCleared.emit(self.name_key)
+
     def _set_portrait(self, image_path: str | None) -> None:
         """Show the NPC's picture (a local file, so it resolves normally)."""
         resolved = library.resolve_image_path(image_path)
@@ -398,8 +427,21 @@ class NPCCard(QFrame):
     # -- hover summary -----------------------------------------------------
 
     def _refresh_tooltip(self) -> None:
-        """Set the card's hover summary from the current model."""
-        self.setToolTip(self.summary_html())
+        """Put the hover summary on the **name**, from the current model.
+
+        Not on the card, which is where it used to be: a tooltip on the card fires
+        wherever the pointer rests, so a GM lining up a pinned chip or a degree
+        button got a wall of stats over the thing they were aiming at. The name is
+        the part of the card that *is* the creature, so it is the part that
+        describes it. The rest of the card keeps its own tooltips, which are about
+        what each control does.
+        """
+        summary = self.summary_html()
+        self._name_label.setToolTip(summary)
+        # Through the label's own seam: it owns its tooltip (it shows the full name
+        # there when the name is clipped) and would wipe a plain setToolTip on the
+        # next resize.
+        self._header_name.set_hover_text(summary)
 
     def summary_html(self) -> str:
         """A compact abilities / resistances / powers summary, as tooltip HTML."""

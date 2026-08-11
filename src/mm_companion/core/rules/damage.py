@@ -33,7 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..character import Character
-from ..data_loader import Effect, GameData, ResistanceOutcome
+from ..data_loader import Condition, Effect, GameData, ResistanceOutcome
 from .conditions import apply_condition, expand_includes
 
 __all__ = [
@@ -137,16 +137,43 @@ def _has(character: Character, condition_id: str) -> bool:
     return any(applied.condition_id == condition_id for applied in character.conditions)
 
 
-def _escalate(character: Character, condition_id: str, ladder: dict[str, str]) -> str:
+def _at_least(character: Character, condition_id: str, catalog: dict[str, Condition]) -> bool:
+    """Whether the character is *at least* this badly off.
+
+    True when they carry the condition, and also when they carry something that
+    **supersedes** it — which is the same thing said a rung higher up. The
+    distinction is what the escalation below turns on, and getting it wrong was a
+    real bug: escalating removes what it escalated *from* (Stunned supersedes
+    Dazed), so a plain "do they have Dazed?" answered no on the very next click,
+    started the chain over at the bottom, and added a Dazed underneath the Stunned
+    that had replaced it — the rung flickering on and off as the GM clicked it.
+    """
+
+    if _has(character, condition_id):
+        return True
+    for applied in character.conditions:
+        record = catalog.get(applied.condition_id)
+        if record is not None and condition_id in record.supersedes:
+            return True
+    return False
+
+
+def _escalate(
+    character: Character,
+    condition_id: str,
+    ladder: dict[str, str],
+    catalog: dict[str, Condition],
+) -> str:
     """Walk *condition_id* up the rung's escalation chain against what is already on.
 
-    One step per condition the target already has, so a rung applied twice lands one
-    rung further down each time. The ``seen`` guard is for a ruleset whose map loops
-    back on itself; it stops rather than spinning.
+    One step per rung the target has already reached (see :func:`_at_least`), so a
+    rung applied twice lands one rung further down each time and then *stays* there.
+    The ``seen`` guard is for a ruleset whose map loops back on itself; it stops
+    rather than spinning.
     """
 
     seen = {condition_id}
-    while condition_id in ladder and _has(character, condition_id):
+    while condition_id in ladder and _at_least(character, condition_id, catalog):
         condition_id = ladder[condition_id]
         if condition_id in seen:
             break
@@ -190,7 +217,8 @@ def resolve_damage_step(
     """
 
     ladder = dict(step.escalates)
-    resolved = tuple(_escalate(character, cid, ladder) for cid in step.conditions)
+    catalog = game_data.condition_catalog()
+    resolved = tuple(_escalate(character, cid, ladder, catalog) for cid in step.conditions)
     # A condition that supersedes something a sibling brings must be applied *after*
     # that sibling, or there is nothing there yet for it to replace. Stable, so
     # everything the graph has no opinion about keeps the book's printed order.

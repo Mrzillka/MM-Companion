@@ -142,7 +142,13 @@ clean (see Licensing below).
   Two rules make a rung more than a list of ids, and both read the condition graph:
   **escalation**, a rung's `escalates` map (the data form of "Stunned instead of
   Dazed if already Dazed"), chained so a rung naming `incapacitated -> dying` and
-  `dying -> dead` walks a target one rung further with each failure; and **order**,
+  `dying -> dead` walks a target one rung further with each failure — and gated on
+  `_at_least`, "has it **or** has something that supersedes it", not on a plain
+  `_has`. That distinction is the whole of a bug worth remembering: escalating
+  *removes* what it escalated from (Stunned supersedes Dazed), so a plain "do they
+  have Dazed?" answered no on the very next click, restarted the chain at the
+  bottom, and put a Dazed back under the Stunned — the rung flickering on and off
+  as the GM clicked it. And **order**,
   because a rung's printed ids are not always applicable in that order — rung 2
   reads `hit, stunned, staggered`, and applying Staggered *after* Stunned re-adds
   the Dazed inside its bundle with nothing left to supersede it, so a sibling that
@@ -1155,9 +1161,36 @@ The shape:
   **initiative badge is a `QLabel`**, not a `QToolButton`, for the reason
   `PortraitButton` is one — a tool button wraps a word in forty pixels of chrome —
   and it swallows its press so clicking it can't start the card's drag-to-reorder.
-  And `set_collapsed` is **silent** like `PinPanel.set_pins`; only the caret emits
-  `collapsedChanged`, since the owner telling a card what it already decided must
-  not have the window save what it just read.
+  It is also the *only* control for initiative: left-click rolls, right-click
+  clears (`initiativeCleared` → `_on_npc_initiative_cleared`, the twin of the roll
+  handler), and the explicit "Initiative" button is gone rather than exist on one
+  state only. And `set_collapsed` is **silent** like `PinPanel.set_pins`; only the
+  caret emits `collapsedChanged`, since the owner telling a card what it already
+  decided must not have the window save what it just read.
+- **Right-click means "take that away"**, and the specific answer always wins over
+  the general one. A condition chip sheds its condition, the initiative badge
+  clears its roll, and the card itself offers Remove/Delete — so the first two
+  **consume** the event rather than letting it reach the third. The chips' gesture
+  is `widgets.attach_context_removal`, an event filter on a `QObject` parented to
+  the chip (so it dies with it), used by both GM cards' `_ConditionChip` *and* the
+  character sheet's `ConditionsSection` chips: one gesture wherever a chip appears.
+  It replaced a visible `×`, which is the trade — a third of the width of a caption
+  like "Hit ×3" back, at the cost of an affordance you cannot see, so the helper
+  writes "Right-click to remove" into the tooltip. A chip that *cannot* be removed
+  (an offline player's) still swallows the click: falling through to the card's
+  "Remove player" is not what someone aiming at a chip asked for.
+- The NPC block's header carries **one** Collapse all / Expand all button, whose
+  caption is the action it will take — which makes it a readout of the board too.
+  Anything still open means "collapse"; only a wholly shut board offers to expand.
+  It tells each card **silently** and writes the whole decision once
+  (`_toggle_collapse_all`), and `_refresh_collapse_all` restates it from the board
+  after any change, since a caption that lies is worse than no button.
+- A card's **hover summary sits on the name**, not on the card. A tooltip on the
+  card fires wherever the pointer rests, so it landed over the pinned chip or the
+  degree button a GM was lining up. The wrapped name takes it directly; the
+  collapsed card's `ElidingLabel` takes it through `set_hover_text`, because that
+  label owns its own tooltip (it shows the full caption there when the caption is
+  clipped) and a plain `setToolTip` would be wiped by its next resize.
 - Which cards are shrunk persists in `gm_collapsed`, keyed like `gm_pins`
   (`npc:<file name>`) and read through **`storage.gm_collapsed_cards()`** — never
   off `load_settings()`, for the reason spelled out on `gm_default_pins`. Only the

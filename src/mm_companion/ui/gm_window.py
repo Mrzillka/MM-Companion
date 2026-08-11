@@ -102,6 +102,11 @@ NO_PLAYERS = "Nobody has joined yet — send your players the join code (Session
 
 NO_NPCS = "No NPCs in this session yet — create one, or add one you have already written."
 
+#: The two captions of the one collapse-all button. Which one it wears says what
+#: clicking it will do *and* what the board currently looks like.
+COLLAPSE_ALL = "Collapse all"
+EXPAND_ALL = "Expand all"
+
 
 @dataclass
 class _NpcEntry:
@@ -482,6 +487,12 @@ class GMWindow(QMainWindow):
         add.clicked.connect(self._add_existing_npc)
         buttons.addWidget(add)
         buttons.addStretch()
+        # One button rather than two, and its caption is the action it will take —
+        # which makes it a readout of the board as well as a control. Shrinking a
+        # dozen mooks one caret at a time is the case the collapse exists for.
+        self._collapse_all_button = QPushButton(COLLAPSE_ALL)
+        self._collapse_all_button.clicked.connect(self._toggle_collapse_all)
+        buttons.addWidget(self._collapse_all_button)
         layout.addLayout(buttons)
 
         self._no_npcs = _wrapped(NO_NPCS)
@@ -1366,6 +1377,7 @@ class GMWindow(QMainWindow):
             card.applyConditionRequested.connect(self._apply_npc_condition)
             card.removeConditionRequested.connect(self._remove_npc_condition)
             card.initiativeRolled.connect(self._on_npc_initiative)
+            card.initiativeCleared.connect(self._on_npc_initiative_cleared)
             card.copyRequested.connect(self._copy_npc)
             card.reorderRequested.connect(self._reorder_npc)
             card.reorderPreview.connect(self._show_npc_drop_indicator)
@@ -1380,6 +1392,7 @@ class GMWindow(QMainWindow):
             entry.card = card
             self._npc_flow.addWidget(card)
         self._no_npcs.setVisible(not self._npc_state)
+        self._refresh_collapse_all()
 
     def _ordered_npcs(self) -> list[str]:
         """The cast in render order: rolled NPCs highest-initiative first, then the
@@ -1400,6 +1413,19 @@ class GMWindow(QMainWindow):
         if entry is None:
             return
         entry.initiative = total
+        self._refresh_npcs()
+
+    def _on_npc_initiative_cleared(self, name: str) -> None:
+        """Take an NPC back out of the order, into the un-rolled zone.
+
+        The twin of the above, and it re-sorts the same way: an NPC with no
+        initiative sorts below every NPC that has one, in the manual order the
+        drags have built up.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        entry.initiative = None
         self._refresh_npcs()
 
     def _show_npc_drop_indicator(self, name: str, target_index: int) -> None:
@@ -1607,6 +1633,32 @@ class GMWindow(QMainWindow):
 
     # -- collapsing a card --------------------------------------------------
 
+    def _toggle_collapse_all(self) -> None:
+        """Shrink every NPC card, or open every one.
+
+        Which way round comes from the board: anything still open means "collapse",
+        and only once they are all shut does the button offer to expand. Each card
+        is told **silently** — :meth:`NPCCard.set_collapsed` does not echo — and the
+        whole decision is written once at the end rather than per card.
+        """
+        if not self._npc_state:
+            return
+        collapsed = not all(entry.collapsed for entry in self._npc_state.values())
+        for name, entry in self._npc_state.items():
+            entry.collapsed = collapsed
+            self._collapsed_cards[_npc_key(name)] = collapsed
+            if entry.card is not None:
+                entry.card.set_collapsed(collapsed)
+        storage.set_gm_collapsed_cards(self._collapsed_cards)
+        self._refresh_collapse_all()
+
+    def _refresh_collapse_all(self) -> None:
+        """Restate the button from the board — a caption that lies is worse than none."""
+        entries = list(self._npc_state.values())
+        self._collapse_all_button.setEnabled(bool(entries))
+        all_collapsed = bool(entries) and all(entry.collapsed for entry in entries)
+        self._collapse_all_button.setText(EXPAND_ALL if all_collapsed else COLLAPSE_ALL)
+
     def _set_npc_collapsed(self, name: str, collapsed: bool) -> None:
         """Remember that the GM shrank (or reopened) a card.
 
@@ -1620,6 +1672,7 @@ class GMWindow(QMainWindow):
         entry.collapsed = collapsed
         self._collapsed_cards[_npc_key(name)] = collapsed
         storage.set_gm_collapsed_cards(self._collapsed_cards)
+        self._refresh_collapse_all()
 
     # -- NPC conditions -----------------------------------------------------
 

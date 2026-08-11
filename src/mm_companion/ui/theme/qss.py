@@ -200,8 +200,16 @@ def _chrome_rules(theme: Theme) -> str:
             "/* menus */\n"
             f"QMenuBar {{ background: {window}; color: {text}; }}\n"
             f"QMenuBar::item:selected {{ background: {titlebar}; }}\n"
+            # Stating a flat colour above takes the platform's *disabled* painting
+            # with it — the same bargain as ``QPushButton:checked`` (see the module
+            # docstring): once a property is stated, ``QStyleSheetStyle`` stops
+            # painting that property's states. The bar carries real disabled actions
+            # now (Undo and Redo with an empty history), and a button that looks live
+            # but does nothing reads as broken rather than as empty.
+            f"QMenuBar::item:disabled {{ color: {muted}; }}\n"
             f"QMenu {{ background: {block}; color: {text};"
             f" border: {width}px solid {border}; }}\n"
+            f"QMenu::item:disabled {{ color: {muted}; }}\n"
             f"QMenu::item:selected {{ background: {c('accent')};"
             f" color: {c('text.on-badge')}; }}",
             # One block: a titled frame on the block surface. Surfaces stop here —

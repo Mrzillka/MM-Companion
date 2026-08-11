@@ -126,6 +126,32 @@ def test_no_preset_sets_a_font_size(presets, theme_id: str) -> None:
 
 
 @pytest.mark.parametrize("theme_id", BUNDLED)
+def test_a_stated_menu_colour_restates_the_disabled_one(presets, theme_id: str) -> None:
+    """State a menu's text colour, restate what disabled looks like.
+
+    The same all-or-nothing bargain as ``QPushButton:checked``: once a property is
+    stated, ``QStyleSheetStyle`` stops painting that property's states, so a flat
+    ``color`` on ``QMenuBar`` paints a disabled action exactly like a live one. The
+    bar carries real disabled actions — Undo and Redo with an empty history — and
+    one that looks live but does nothing reads as broken rather than as empty.
+    Classic states no colour and so keeps the platform's own painting.
+    """
+    rules = qss.build(presets[theme_id]).splitlines()
+
+    for selector in ("QMenuBar", "QMenu"):
+        states = [r for r in rules if r.startswith(f"{selector} ") and "color:" in r]
+        if not states:
+            continue  # Classic: no colour stated, so the platform still paints it
+        restates = [
+            r for r in rules if r.startswith(f"{selector}::item:disabled") and "color:" in r
+        ]
+        assert restates, (
+            f"{theme_id} states {selector}'s colour ({states[0]}) without restating "
+            "its disabled one, so a disabled entry paints exactly like a live one"
+        )
+
+
+@pytest.mark.parametrize("theme_id", BUNDLED)
 def test_every_token_a_preset_needs_to_build_is_present(presets, theme_id: str) -> None:
     """Building must not raise — a styled preset missing a surface fails here."""
     assert isinstance(qss.build(presets[theme_id]), str)

@@ -1451,6 +1451,19 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   `ui/sections/powers.py` is the worked example, the same bargain `ui/lock.py` and
   `CompactOverlayButton` strike. `QToolButton:checked` *is* in the sheet; push
   buttons are the gap.
+- **The same trap, one level up: state a colour and you own its states.** The
+  menus block states a flat `color` on `QMenuBar`/`QMenu` (it has to — the native
+  Windows style paints menu chrome from the *system* theme and ignores the
+  palette), and that alone stopped `QStyleSheetStyle` painting a **disabled**
+  entry any differently. It went unnoticed until the bar carried an action that is
+  routinely disabled — Undo and Redo on an empty history — which is a button that
+  looks live and does nothing. So the block also emits
+  `QMenuBar::item:disabled` / `QMenu::item:disabled` in `text.muted`. Classic
+  states no colour and keeps the platform's own painting, which is why the rule
+  test skips a preset that states nothing rather than requiring it everywhere.
+  Guarded twice, on the `test_input_arrow_columns` precedent: the *rule* in
+  `tests/test_theme_qss.py`, the *consequence* in `tests/test_menu_disabled_paint.py`,
+  which paints the bar and measures the glyph's ink.
 - `ui/drop_feedback.py` — `DropFeedback` gives one drop target its idle / accept
   / **reject** styling from tokens. Use it in a `dragEnterEvent` instead of
   open-coding a highlight, and call `show_reject()` on the else branch: a bare

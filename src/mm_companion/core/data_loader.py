@@ -615,6 +615,12 @@ class ResistanceOutcome:
     config_key: str = ""
     text: str = ""
     note: str = ""
+    #: What this rung applies *instead*, as ``(already-has, apply-instead)`` pairs —
+    #: the data form of "Stunned instead of Dazed if already Dazed". Chained by
+    #: :func:`mm_companion.core.rules.resolve_damage_step`, so a rung that names both
+    #: ``incapacitated -> dying`` and ``dying -> dead`` walks a target down the ladder
+    #: one failure at a time. Pairs rather than a mapping so the record stays hashable.
+    escalates: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -943,6 +949,10 @@ class SystemRules:
     linked_modifier: str = "linked"
     ranged_distance: RangeDistance = field(default_factory=RangeDistance)
     derived_traits: tuple[DerivedTrait, ...] = ()
+    #: Which effect's resistance ladder is *the* damage ladder — the rungs the GM's
+    #: quick-damage buttons walk. An id, not a rule, so a ruleset that calls its
+    #: damage effect something else retargets the whole control from data.
+    damage_effect: str = "damage"
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -2024,11 +2034,13 @@ def _parse_outcome_rung(entry: object) -> ResistanceOutcome | None:
         return ResistanceOutcome(text=entry)
     if not isinstance(entry, dict):
         return None
+    escalates = entry.get("escalates", {})
     return ResistanceOutcome(
         conditions=tuple(entry.get("conditions", ())),
         config_key=entry.get("configKey", ""),
         text=entry.get("text", ""),
         note=entry.get("note", ""),
+        escalates=tuple(escalates.items()) if isinstance(escalates, dict) else (),
     )
 
 
@@ -2788,6 +2800,7 @@ def _parse_system(raw: dict) -> SystemRules:
             "alternate_effect_modifier", defaults.alternate_effect_modifier
         ),
         linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+        damage_effect=sys.get("damage_effect", defaults.damage_effect),
         ranged_distance=_parse_range_distance(sys.get("ranged_distance"), defaults.ranged_distance)
         or defaults.ranged_distance,
         derived_traits=tuple(

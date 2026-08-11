@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtWidgets import QApplication, QFrame
 
 from mm_companion.core.character import AdvantageSelection, AppliedCondition, Character
@@ -480,6 +481,44 @@ def test_hit_chip_remove_button_decrements(qapp2: QApplication) -> None:
     section = ConditionsSection(data, char)
     section._shed_condition(char.conditions[0])
     assert char.conditions[0].condition_id == "hit" and char.conditions[0].count == 1
+
+
+def test_right_clicking_a_chip_sheds_the_condition(qapp2: QApplication) -> None:
+    """The same gesture the GM cards' chips use — the "×" is gone from both."""
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "dazed", data)
+    section = ConditionsSection(data, char)
+    (chip,) = section._condition_chips
+
+    centre = chip.rect().center()
+    QApplication.sendEvent(
+        chip,
+        QContextMenuEvent(QContextMenuEvent.Reason.Mouse, centre, chip.mapToGlobal(centre)),
+    )
+
+    assert char.conditions == []
+    assert section._condition_chips == []
+
+
+def test_a_hit_chips_right_click_peels_one_off_the_stack(qapp2: QApplication) -> None:
+    """Removal goes through ``decrement_condition``, so a stack loses one instance
+    rather than the whole pile."""
+    data = load_game_data()
+    char = Character()
+    apply_condition(char, "hit", data)
+    apply_condition(char, "hit", data)
+    section = ConditionsSection(data, char)
+    (chip,) = section._condition_chips
+
+    centre = chip.rect().center()
+    QApplication.sendEvent(
+        chip,
+        QContextMenuEvent(QContextMenuEvent.Reason.Mouse, centre, chip.mapToGlobal(centre)),
+    )
+
+    assert char.conditions[0].condition_id == "hit"
+    assert char.conditions[0].count == 1
 
 
 def test_confused_chip_records_a_roll(qapp2: QApplication) -> None:

@@ -12,7 +12,7 @@ Split from a single module into subsystem submodules; every public name is
 re-exported here so ``from mm_companion.core.rules import X`` keeps working
 unchanged. Submodules form a dependency DAG: ``appliers`` → ``runtime``/``advantages``/
 ``conditions`` (base) → ``derived`` → ``powers_cost`` →
-``costs``/``movement``/``powers_terms`` → ``platforms`` → ``equipment`` →
+``costs``/``movement``/``powers_terms``/``damage`` → ``platforms`` → ``equipment`` →
 ``validation`` → ``rolls`` → ``pins``.
 """
 
@@ -21,6 +21,7 @@ from .advantages import *  # noqa: F401,F403
 from .appliers import *  # noqa: F401,F403
 from .conditions import *  # noqa: F401,F403
 from .costs import *  # noqa: F401,F403
+from .damage import *  # noqa: F401,F403
 from .derived import *  # noqa: F401,F403
 from .equipment import *  # noqa: F401,F403
 from .movement import *  # noqa: F401,F403

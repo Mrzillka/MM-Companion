@@ -9,7 +9,9 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from collections.abc import Callable
+
+from PySide6.QtCore import QEvent, QObject, QSize, Qt
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
@@ -119,10 +121,25 @@ class ElidingLabel(QLabel):
     def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._full_text = ""
+        self._hover_text = ""
         self.setText(text)
 
     def setText(self, text: str) -> None:  # noqa: N802 - Qt override
         self._full_text = text
+        self._elide()
+
+    def set_hover_text(self, text: str) -> None:
+        """A tooltip of the caller's own, kept through elision.
+
+        The label owns its tooltip — it puts the full caption there when the
+        caption doesn't fit — so a caller that just called ``setToolTip`` would
+        find it wiped by the next resize. A hover text set here **wins**: showing
+        the whole caption is a fallback for a clipped one, and a caller who has
+        said what this label's tooltip is has answered a better question. Nothing
+        is lost where the two meet, since a summary written for a name label leads
+        with that name.
+        """
+        self._hover_text = text
         self._elide()
 
     def text(self) -> str:
@@ -148,7 +165,7 @@ class ElidingLabel(QLabel):
             if fits
             else metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, width)
         )
-        self.setToolTip("" if fits else self._full_text)
+        self.setToolTip(self._hover_text or ("" if fits else self._full_text))
 
 
 def hline_separator() -> QFrame:
@@ -157,6 +174,50 @@ def hline_separator() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
+
+
+# -- gestures on a loose widget --------------------------------------------------
+
+
+class _ContextRemoval(QObject):
+    """Turns a right-click on one widget into "take this off".
+
+    Parented to the widget it watches, so it is collected with it — no module-level
+    registry of live chips to keep in step. It **consumes** the event rather than
+    letting it through, which matters where the removable thing sits on something
+    with a context menu of its own: a condition chip on a GM card would otherwise
+    also open that card's "Remove from this session / Delete".
+
+    Filtering the chip alone is enough for its children, since a ``ContextMenu``
+    event a child ignores (a plain label, the Confused chip's die button) propagates
+    up to it.
+    """
+
+    def __init__(self, target: QWidget, on_remove: Callable[[], None]) -> None:
+        super().__init__(target)
+        self._on_remove = on_remove
+        target.installEventFilter(self)
+
+    def eventFilter(self, watched: QObject, event) -> bool:  # noqa: N802 - Qt override
+        if event.type() == QEvent.Type.ContextMenu:
+            self._on_remove()
+            return True
+        return False
+
+
+def attach_context_removal(widget: QWidget, on_remove: Callable[[], None], *, what: str) -> None:
+    """Make a right-click anywhere on *widget* remove the thing it stands for.
+
+    The one way a chip sheds what it names, so the gesture is the same on a GM
+    card and on the character sheet. It replaces a visible ``×`` button, which is
+    the trade: a chip that is only ever a caption is a good deal narrower — the
+    reason this exists — but the affordance is now invisible, so *what* it removes
+    is written into the tooltip rather than left to be discovered.
+    """
+    _ContextRemoval(widget, on_remove)
+    hint = f"Right-click to remove {what}."
+    existing = widget.toolTip()
+    widget.setToolTip(f"{existing}\n\n{hint}" if existing else hint)
 
 
 # -- inline style snippets ------------------------------------------------------

@@ -462,13 +462,18 @@ def build(target: str):
             # And filter down to the tokens the demo actually changed, so the shot
             # shows what the filter box is for rather than the top of a long form.
             page._filter_field.setText("accent")
-    elif target == "gm":
+    elif target in ("gm", "gm-collapsed"):
         # GM Mode with a cast already in it, so the NPC panel is not an empty
-        # state: two NPCs are written into the workspace gm_characters/ dir and
+        # state: NPCs are written into the workspace gm_characters/ dir and
         # registered with the session exactly as "Create NPC" would. Built through
         # quick_npc so they have the Damage power a card's default pinned strip
         # reads its third chip from — a cast of statless placeholders would show
         # that chip as a dash and say nothing about how the card really looks.
+        #
+        # "gm-collapsed" is the other half of the same picture: the same cast with
+        # every card shrunk to its combat readout, which is the whole point of the
+        # collapse (how many creatures fit on one screen) and cannot be judged from
+        # one card in isolation. A bigger cast for that reason.
         from mm_companion.core import library
         from mm_companion.core.data_loader import load_game_data
         from mm_companion.core.npc import quick_npc
@@ -476,9 +481,24 @@ def build(target: str):
 
         data = load_game_data()
         win = GMWindow(bind="127.0.0.1")
-        for name, rank in (("Bank Robber", 4), ("Ogre", 9)):
+        cast = (("Bank Robber", 4), ("Ogre", 9))
+        if target == "gm-collapsed":
+            cast = (("Bank Robber", 4), ("Ogre", 9), ("Goon", 3), ("Sniper", 5), ("Thug", 3))
+        for name, rank in cast:
             npc = quick_npc(data, name=name, attack=rank, effect=rank, defence=rank, toughness=rank)
             win._register_npc(library.save_character(npc, directory=win._npc_dir()))
+        if target == "gm-collapsed":
+            win.show()
+            # Through the caret each card really carries, so the shot is of the
+            # state a GM's click produces — including the conditions a couple of
+            # them have taken, which is what the damage row leaves behind.
+            for entry in win._npc_state.values():
+                if entry.card is not None:
+                    entry.card._collapse_button.click()
+            names = list(win._npc_state)
+            win._apply_npc_damage(names[0], 2)
+            win._apply_npc_damage(names[1], 1)
+            win._apply_npc_damage(names[1], 1)
     elif target == "gm-settings":
         # The GM Mode settings page, reached the way a GM reaches it: build the GM
         # window and fire its own Settings ▸ Preferences… handler, so the shot is of
@@ -537,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
             "settings",
             "settings-demo",
             "gm",
+            "gm-collapsed",
             "gm-settings",
             "npc",
             "all",

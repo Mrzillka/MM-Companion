@@ -315,14 +315,17 @@
           "conditions": ["hit"],
           "note": "unless the target's Toughness is Hardened, Impervious or Impenetrable against this attack"
         },
+        "_escalates": "What a rung applies *instead* when the target already carries the named condition, chained: a second failure at this rung on an Incapacitated target reads incapacitated -> dying, a third dying -> dead. The book's rule, as data rather than prose.",
         "degrees": [
           {
             "conditions": ["hit", "dazed"],
+            "escalates": { "dazed": "stunned" },
             "note": "Stunned instead of Dazed if already Dazed"
           },
           { "conditions": ["hit", "stunned", "staggered"] },
           {
             "conditions": ["hit", "staggered", "incapacitated"],
+            "escalates": { "incapacitated": "dying", "dying": "dead" },
             "note": "further failed checks escalate to Dying, then Dead"
           }
         ]

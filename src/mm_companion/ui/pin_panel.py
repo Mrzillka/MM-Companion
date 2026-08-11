@@ -29,13 +29,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
+    QScrollArea,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -64,6 +65,35 @@ INDICATOR_HEIGHT = 2
 
 #: Shown in place of the chips when a card has none pinned.
 EMPTY_HINT = "Nothing pinned"
+
+
+class _ChipScroll(QScrollArea):
+    """The chips' window: exactly as tall as it is told, and scrolling past that.
+
+    The height is **set**, not asked for, and that is the whole of the class. A
+    scroll area left to negotiate is a bad neighbour here: it reports a default
+    size hint that has nothing to do with its content, and it is elastic in a panel
+    that ends with a stretch — so the two split the room between them, and after a
+    rebuild the strip collapsed to nothing while its chips sat inside it, laid out
+    and invisible. What the strip wants is never in doubt (its chips' heights,
+    clipped to the cap), so :meth:`PinPanel._apply_cap` works it out and says so.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.viewport().setAutoFillBackground(False)
+        self.setStyleSheet("background: transparent;")
+
+    def set_window_height(self, height: int) -> None:
+        """Show exactly *height* pixels of the chips, scrolling for any more."""
+        self.setFixedHeight(max(0, height))
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        return QSize(super().sizeHint().width(), self.height())
 
 
 class PinChip(QFrame):
@@ -264,10 +294,18 @@ class PinPanel(QWidget):
         self._empty.setWordWrap(True)
         outer.addWidget(self._empty)
 
-        self._chip_layout = QVBoxLayout()
+        # The chips live in a scroll area always, capped only when a caller asks
+        # (:meth:`set_max_visible`). One code path rather than two: an uncapped
+        # scroll area reports its content's height and behaves exactly as the bare
+        # column it replaces.
+        self._max_visible: int | None = None
+        self._chip_host = QWidget()
+        self._chip_layout = QVBoxLayout(self._chip_host)
         self._chip_layout.setContentsMargins(0, 0, 0, 0)
         self._chip_layout.setSpacing(int(theme.metric("space.xs")))
-        outer.addLayout(self._chip_layout)
+        self._scroll = _ChipScroll(self)
+        self._scroll.setWidget(self._chip_host)
+        outer.addWidget(self._scroll)
         outer.addStretch()
 
         self._indicator = DropIndicator(self)
@@ -302,6 +340,36 @@ class PinPanel(QWidget):
         """Every chip as one readable string, in order."""
         return [chip.text() for chip in self._chips]
 
+    def set_max_visible(self, count: int | None) -> None:
+        """Show at most *count* chips at once, scrolling for the rest (``None``: all).
+
+        What a collapsed card asks for: the strip is most of what is left of it, and
+        a creature with eight pins must not make its card twice the height of its
+        neighbour's. The cap is a *maximum*, never a minimum — a strip with two chips
+        on a four-chip cap is still two chips tall.
+        """
+        self._max_visible = count
+        self._apply_cap()
+
+    def _apply_cap(self) -> None:
+        """Tell the chip window how tall to be: its chips, capped at
+        :attr:`_max_visible` of them.
+
+        Measured from a real chip rather than a token, since a chip's height is its
+        font and its padding and a preset moves both. Uncapped it is still *set*
+        rather than left to the layout — see :class:`_ChipScroll` for why a strip
+        that merely asks ends up with nothing.
+        """
+        if not self._chips:
+            self._scroll.set_window_height(0)
+            return
+        spacing = self._chip_layout.spacing()
+        chip_height = self._chips[0].sizeHint().height()
+        shown = len(self._chips)
+        if self._max_visible is not None:
+            shown = min(self._max_visible, shown)
+        self._scroll.set_window_height(shown * chip_height + max(0, shown - 1) * spacing)
+
     def refresh(self) -> None:
         """Re-resolve every pin and rebuild the chips.
 
@@ -324,7 +392,11 @@ class PinPanel(QWidget):
             chip.removeRequested.connect(self.remove_pin)
             self._chip_layout.addWidget(chip)
             self._chips.append(chip)
+        # The host is stretched to its viewport, so without a tail spacer the chips
+        # would share that height between them instead of keeping their own.
+        self._chip_layout.addStretch()
         self._empty.setVisible(not self._chips)
+        self._apply_cap()
         self.updateGeometry()
 
     # -- editing the strip ---------------------------------------------------
@@ -406,11 +478,15 @@ class PinPanel(QWidget):
         """Where in the strip a drop at *pos* lands: before the chip it is above.
 
         A chip's own top half means "before me", its bottom half "after me", which
-        is the vertical twin of the modifier chips' left/right rule.
+        is the vertical twin of the modifier chips' left/right rule. *pos* arrives in
+        the panel's coordinates (the drop events land here) while a chip's geometry
+        is its scrolled host's, so it is translated on the way in — otherwise a
+        strip scrolled down drops everything at the wrong index.
         """
+        local = self._chip_host.mapFrom(self, pos)
         for index, chip in enumerate(self._chips):
             geometry = chip.geometry()
-            if pos.y() < geometry.center().y():
+            if local.y() < geometry.center().y():
                 return index
         return len(self._chips)
 
@@ -422,7 +498,13 @@ class PinPanel(QWidget):
             self._indicator.move_to(rect)
 
     def _indicator_rect(self, index: int) -> QRect:
-        """The insertion bar, in the gap before *index* (or below the last chip)."""
+        """The insertion bar, in the gap before *index* (or below the last chip).
+
+        Computed among the chips and handed back in the panel's coordinates, since
+        the :class:`~mm_companion.ui.drop_feedback.DropIndicator` is the panel's
+        child and would otherwise be drawn a scroll offset away from the gap it
+        marks.
+        """
         if not self._chips:
             return QRect()
         gap = self._chip_layout.spacing() // 2
@@ -432,7 +514,8 @@ class PinPanel(QWidget):
         else:
             geometry = self._chips[-1].geometry()
             y = geometry.bottom() + gap
-        return QRect(geometry.left(), y, geometry.width(), INDICATOR_HEIGHT)
+        top_left = self._chip_host.mapTo(self, QPoint(geometry.left(), y))
+        return QRect(top_left.x(), top_left.y(), geometry.width(), INDICATOR_HEIGHT)
 
 
 def install_pin_panel(

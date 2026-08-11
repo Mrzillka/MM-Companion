@@ -173,6 +173,16 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # alternative is per-session state on the server, and pins are a GM's private
     # scratch note, not table state.
     "gm_pins": {},
+    # Which GM cards are shrunk to their short form, keyed the way ``gm_pins`` is
+    # (``"npc:<file name>"``). Read through :func:`gm_collapsed_cards`.
+    #
+    # Persisted, unlike the sheet's lock or compact mode, and the difference is
+    # what the choice is *about*: those are one window's current view, while this
+    # is a standing judgement about one creature — the mooks stay shrunk and the
+    # villain stays open, and a GM should not have to say so again next week. Only
+    # the shrunk ones are stored, so a fresh workspace and a fresh NPC both start
+    # expanded.
+    "gm_collapsed": {},
     # Compact mode — the mini dice roller a window collapses to (see
     # :mod:`mm_companion.ui.compact`). Read through :func:`compact_settings`.
     #
@@ -377,6 +387,31 @@ def set_gm_default_pins(pins: dict) -> None:
     merged = gm_default_pins()
     merged.update({key: value for key, value in pins.items() if isinstance(value, list)})
     update_settings(gm_default_pins=merged)
+
+
+def gm_collapsed_cards() -> dict[str, bool]:
+    """Which GM cards are shrunk, keyed ``"npc:<file name>"``.
+
+    Read through here rather than off :func:`load_settings`, for the reason spelled
+    out on :func:`gm_default_pins`: the settings file comes back verbatim, so a
+    workspace older than this key answers ``None``. Unreadable entries are dropped
+    rather than raising — the worst a wrong answer here can do is open a card.
+    """
+    stored = load_settings().get("gm_collapsed")
+    if not isinstance(stored, dict):
+        return {}
+    return {key: bool(value) for key, value in stored.items() if isinstance(key, str)}
+
+
+def set_gm_collapsed_cards(collapsed: dict[str, bool]) -> None:
+    """Record which cards are shrunk, keeping only the ones that are.
+
+    Wholesale rather than merged, unlike :func:`set_gm_default_pins`: the caller is
+    the GM window, which holds every card there is, so what it passes *is* the
+    answer. Dropping the expanded ones keeps the file to the exceptions, and costs
+    nothing — absent means expanded, which is where a card starts.
+    """
+    update_settings(gm_collapsed={key: True for key, value in collapsed.items() if value})
 
 
 def clear_gm_card_pins() -> None:

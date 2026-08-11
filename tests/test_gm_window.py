@@ -2169,3 +2169,212 @@ def test_every_pinnable_block_learns_what_is_on_the_card(window: GMWindow) -> No
     assert sheet.skills._pins.is_pinned(PinRef("skill", "Perception")) is True
     assert sheet.powers._pins.is_pinned(PinRef("power", "x", 1)) is True
     assert sheet.abilities._pins.is_pinned(PinRef("ability", "STR")) is False
+
+
+# --- collapsing a card, and the damage ladder on it -----------------------
+#
+# A collapsed card is the combat readout: name, initiative, the pinned numbers,
+# the conditions, and the damage row. What it sheds is everything that describes
+# the creature rather than tracks it through a fight.
+
+
+def test_a_card_starts_expanded_and_shrinks_from_the_caret(window: GMWindow) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    assert card.collapsed is False
+
+    card._collapse_button.click()
+
+    assert card.collapsed is True
+    # The full portrait, the PL and the roster buttons are what a collapse sheds.
+    assert card._portrait.isVisibleTo(card) is False
+    assert card._pl_label.isVisibleTo(card) is False
+    assert card._copy_button.isVisibleTo(card) is False
+    # What it keeps: a thumbnail that still opens the sheet, the "+", the damage
+    # row, and the pinned strip.
+    assert card._thumb.isVisibleTo(card) is True
+    assert card._condition_button.isVisibleTo(card) is True
+    assert card._damage.isVisibleTo(card) is True
+    assert card.pins.isVisibleTo(card) is True
+
+
+def test_a_collapsed_card_is_much_shorter(qapp: QApplication, window: GMWindow) -> None:
+    quick_npc_file(window)
+    window.show()
+    qapp.processEvents()
+    (card,) = npc_cards(window)
+    expanded = card.sizeHint().height()
+
+    card.set_collapsed(True)
+    qapp.processEvents()
+
+    assert card.sizeHint().height() < expanded / 1.5
+    window.hide()
+
+
+def test_collapsing_is_remembered_per_card(window: GMWindow) -> None:
+    """It survives the rebuild every initiative roll and condition change causes."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._collapse_button.click()
+    window._refresh_npcs()
+
+    (rebuilt,) = npc_cards(window)
+    assert rebuilt is not card
+    assert rebuilt.collapsed is True
+    assert storage.gm_collapsed_cards() == {f"npc:{name}": True}
+
+
+def test_reopening_a_card_is_remembered_too(window: GMWindow) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._collapse_button.click()
+    card._collapse_button.click()
+
+    assert card.collapsed is False
+    # Only the shrunk ones are stored, so the file stays down to the exceptions.
+    assert storage.gm_collapsed_cards() == {}
+
+
+def test_set_collapsed_is_silent(window: GMWindow) -> None:
+    """The owner telling the card what it already decided must not echo back."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    heard: list[bool] = []
+    card.collapsedChanged.connect(lambda _name, state: heard.append(state))
+
+    card.set_collapsed(True)
+
+    assert heard == []
+
+
+def test_a_copied_npc_inherits_the_shrunk_card(window: GMWindow) -> None:
+    """Copying a mook is how a GM makes the fourth guard, who wants guard three's
+    card rather than a fresh one."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card._collapse_button.click()
+
+    window._copy_npc(name)
+
+    assert storage.gm_collapsed_cards().get("npc:goon-2.json") is True
+    assert all(one.collapsed for one in npc_cards(window))
+
+
+def test_deleting_an_npc_forgets_that_it_was_shrunk(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card._collapse_button.click()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+
+    window._delete_npc(name)
+
+    assert storage.gm_collapsed_cards() == {}
+
+
+def test_the_collapsed_strip_shows_four_pins_and_scrolls_for_the_rest(
+    window: GMWindow,
+) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card.pins.set_pins([PinRef("ability", ability.key) for ability in load_game_data().abilities])
+    uncapped = card.pins.sizeHint().height()
+
+    card.set_collapsed(True)
+
+    assert card.pins.sizeHint().height() < uncapped
+    assert card.pins._scroll.maximumHeight() > 0
+    # Every pin is still *there* — the strip is a window onto them, not a cap.
+    assert len(card.pins.chip_texts()) == len(load_game_data().abilities)
+
+
+def test_the_damage_row_is_on_both_states(window: GMWindow) -> None:
+    """A GM who never collapses a card still wants one-click damage."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    assert card._damage.isVisibleTo(card) is True
+    card.set_collapsed(True)
+    assert card._damage.isVisibleTo(card) is True
+
+
+def test_a_degree_button_puts_the_whole_rung_on_the_npc(window: GMWindow) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._damage.stepChosen.emit(2)
+
+    ids = [applied.condition_id for applied in card.character.conditions]
+    assert {"hit", "staggered", "stunned"} <= set(ids)
+    assert "dazed" not in ids
+    assert "Stunned" in card.condition_names()
+
+
+def test_a_degree_button_escalates_against_what_the_npc_already_has(
+    window: GMWindow,
+) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._damage.stepChosen.emit(1)
+    card._damage.stepChosen.emit(1)
+
+    ids = [applied.condition_id for applied in card.character.conditions]
+    assert "stunned" in ids
+    assert "dazed" not in ids
+    # And the GM is told which of the two rungs actually landed.
+    assert "Stunned" in window._notice_label.text()
+
+
+def test_damage_reaches_the_file(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._damage.stepChosen.emit(1)
+
+    saved = library.load_character(window._npc_state[name].path)
+    assert {"hit", "dazed"} <= {applied.condition_id for applied in saved.conditions}
+
+
+def test_damage_reaches_an_open_sheet_rather_than_the_file(window: GMWindow) -> None:
+    """An open sheet owns its own save, and holds its own copy of the character —
+    so it is handed the ids the escalation settled on, not the rung."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    window._open_npc(name)
+    sheet = next(iter(window._npc_windows.values())).sheet
+
+    card._damage.stepChosen.emit(2)
+
+    ids = {applied.condition_id for applied in sheet.character.conditions}
+    assert {"hit", "staggered", "stunned"} <= ids
+    assert "dazed" not in ids
+
+
+def test_the_damage_buttons_say_what_they_will_do(window: GMWindow) -> None:
+    """Resolved against this creature, so an escalation is visible before the
+    click rather than a surprise after it."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    assert "Dazed" in card._damage.button_tooltips()[1]
+
+    apply_condition(card.character, "dazed", load_game_data())
+    card.refresh_conditions()
+
+    assert "Stunned" in card._damage.button_tooltips()[1]
+
+
+def test_the_initiative_badge_rolls(window: GMWindow) -> None:
+    """It is the roll affordance once the explicit button is collapsed away."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    assert card.initiative is None
+
+    card._initiative_badge.clicked.emit()
+
+    assert card.initiative is not None
+    assert npc_cards(window)[0]._initiative_badge.text().startswith("init ")

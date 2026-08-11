@@ -13,6 +13,22 @@ The card body's press-drag reorders it in the initiative list; the **portrait** 
 what opens its sheet (see :mod:`~mm_companion.ui.card_summary`). Those were once
 the same gesture, distinguished only by how far the pointer had moved, which meant
 a reorder that fell short of the threshold opened a window instead.
+
+A card **collapses**. Expanded it is a good roster entry and a bad combat readout:
+a 96px portrait, a PL, and two buttons, times a dozen mooks, is three cards on
+screen at a time. Collapsed it keeps only what a GM reads mid-round — who it is,
+whose turn it is, the pinned numbers, what conditions it is under — and the damage
+row below. Everything shed is still one click away, and *which* state a card is in
+is the GM's, remembered per creature by the window that owns them.
+
+Two things the collapsed state must not lose, and so neither state has them where
+they used to be: the **"+"** that applies a condition now sits beside the damage
+row, the two of them being the two ways to put something on a creature; and
+**initiative** is rolled by its own badge, since the button that used to do it is
+one of the things a collapsed card sheds. Both **swallow their press** — the badge
+by hand, the "+" by being a button — because a press that reaches the card starts
+its drag-to-reorder, which is the same reason
+:class:`~mm_companion.ui.card_summary.PortraitButton` swallows its own.
 """
 
 from __future__ import annotations
@@ -37,6 +53,7 @@ from mm_companion.core.library import CharacterSummary
 from mm_companion.core.rules import initiative_modifier
 from mm_companion.ui import theme
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
+from mm_companion.ui.damage_row import DamageRow
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
 from mm_companion.ui.player_card import _ConditionChip
@@ -45,13 +62,82 @@ from mm_companion.ui.sections.conditions import (
     condition_display_name,
     condition_tooltip,
 )
+from mm_companion.ui.widgets import ElidingLabel
 
 #: How wide the card's own column is. Fixed, so a row of them lines up in the
-#: flow layout; the pinned-parameter strip adds its own width beside it.
+#: flow layout; the pinned-parameter strip adds its own width beside it. The same
+#: in both states on purpose: collapsing wins its room in *height*, and a card that
+#: also narrowed would break the columns its neighbours line up in.
 CARD_WIDTH = 210
 #: How far the pointer must move with the button down to count as a drag rather
 #: than a click, in pixels.
 DRAG_THRESHOLD = 8
+#: How many pinned chips a collapsed card shows before the strip scrolls. The strip
+#: is most of what is left of a collapsed card, so a creature with eight pins must
+#: not make its card twice the height of its neighbour's.
+COLLAPSED_PIN_ROWS = 4
+#: What the collapse toggle reads: the caret points the way the card will go.
+EXPANDED_GLYPH = "▾"
+COLLAPSED_GLYPH = "▸"
+#: The initiative badge before anything has been rolled. Something to click, and a
+#: dash rather than a zero — an unrolled NPC has no initiative, not one of nought.
+NO_INITIATIVE = "init —"
+
+
+class _InitiativeBadge(QLabel):
+    """The NPC's initiative, and the thing that rolls it.
+
+    A ``QLabel`` for the same reason
+    :class:`~mm_companion.ui.card_summary.PortraitButton` is one: a ``QToolButton``
+    wraps its text in some forty pixels of its own chrome, and four of those across
+    a 210px card leave the name a stub. It carries the affordance instead — a
+    pointing hand, a tooltip, an accent — and, like the portrait, **swallows its
+    press**, so clicking it can never be read as the start of the card's
+    drag-to-reorder.
+    """
+
+    clicked = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("", parent)
+        font = self.font()
+        font.setBold(True)
+        font.setPointSizeF(theme.font_size("size.terms"))
+        self.setFont(font)
+        self.setStyleSheet(f"color: {theme.color('accent')};")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Roll initiative for this NPC")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+            event.position().toPoint()
+        ):
+            self.clicked.emit()
+        event.accept()
+
+
+def _small_button(text: str = "") -> QToolButton:
+    """A square tool button the size of one damage button.
+
+    Left to itself a ``QToolButton`` claims some forty pixels for a single glyph,
+    and four of those across a 210px card leave the name a stub. Sized to
+    ``gm.damage-button`` so every small control on a GM card is the same square,
+    with the glyph's size on the font — never in a stylesheet, which would outrank
+    it.
+    """
+    button = QToolButton()
+    button.setText(text)
+    button.setAutoRaise(True)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    side = int(theme.metric("gm.damage-button"))
+    button.setFixedSize(side, side)
+    font = button.font()
+    font.setPointSizeF(theme.font_size("size.terms"))
+    button.setFont(font)
+    return button
 
 
 class NPCCard(QFrame):
@@ -89,6 +175,13 @@ class NPCCard(QFrame):
     rollRequested = Signal(object)
     #: The NPC's file name — the GM asked to pin something to this card.
     pinPickerRequested = Signal(str)
+    #: ``(file_name, collapsed)`` — the GM shrank or reopened this card. Emitted only
+    #: for a click on the caret; :meth:`set_collapsed` is silent, being a *load*.
+    collapsedChanged = Signal(str, bool)
+    #: ``(file_name, step_index)`` — a rung of the damage ladder was clicked. The
+    #: index, not the conditions: what a degree of failure *means* is the rules
+    #: layer's answer, and it depends on what the creature already carries.
+    damageRequested = Signal(str, int)
 
     def __init__(
         self,
@@ -98,6 +191,7 @@ class NPCCard(QFrame):
         parent: QWidget | None = None,
         *,
         initiative: int | None = None,
+        collapsed: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -115,32 +209,67 @@ class NPCCard(QFrame):
 
         layout = QVBoxLayout()
 
+        # The header is the whole card when it is collapsed, so everything a GM
+        # reaches for mid-round lives here: who it is, whose turn it is, the "+",
+        # and the way back to the full card.
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(int(theme.metric("space.xs")))
+
+        thumb_size = int(theme.metric("gm.thumb"))
+        self._thumb = PortraitButton(size=thumb_size, placeholder="?")
+        self._thumb.clicked.connect(lambda: self.openRequested.emit(self.name_key))
+        header.addWidget(self._thumb)
+
+        # Two labels for one name, in the same slot, exactly one of them showing.
+        # The two states want different things of a name: collapsed it shares its
+        # row with a thumbnail, a badge and a caret, so it *elides* — a wrapped name
+        # would take a second line the row's height (the thumbnail's) does not have,
+        # and clip. Expanded there is no thumbnail and the row can grow, so it wraps
+        # as it always has. Both live here rather than the wrapped one keeping a row
+        # of its own, which left the expanded card with a near-empty strip above its
+        # own name.
+        self._header_name = ElidingLabel(summary.name)
+        header_name_font = self._header_name.font()
+        header_name_font.setBold(True)
+        self._header_name.setFont(header_name_font)
+        self._header_name.setToolTip(summary.name)
+        header.addWidget(self._header_name, stretch=1)
+
         self._name_label = QLabel(summary.name)
         name_font = self._name_label.font()
         name_font.setBold(True)
         self._name_label.setFont(name_font)
         self._name_label.setWordWrap(True)
-        layout.addWidget(self._name_label)
+        header.addWidget(self._name_label, stretch=1)
+
+        # The badge *is* the roll affordance once the explicit button is hidden.
+        self._initiative_badge = _InitiativeBadge()
+        self._initiative_badge.clicked.connect(self.roll_initiative)
+        header.addWidget(self._initiative_badge)
+
+        self._collapse_button = _small_button()
+        self._collapse_button.clicked.connect(self._toggle_collapsed)
+        header.addWidget(self._collapse_button)
+        layout.addLayout(header)
 
         self._portrait = PortraitButton()
         self._portrait.clicked.connect(lambda: self.openRequested.emit(self.name_key))
         layout.addWidget(self._portrait, alignment=Qt.AlignmentFlag.AlignHCenter)
         self._set_portrait(summary.image_path)
 
-        pl_row = QHBoxLayout()
+        # The rows a collapsed card sheds are hosted in widgets rather than added as
+        # bare layouts, for the plain reason that a layout cannot be hidden.
+        pl_host = QWidget()
+        pl_row = QHBoxLayout(pl_host)
         pl_row.setContentsMargins(0, 0, 0, 0)
         self._pl_label = QLabel(f"PL {summary.power_level}")
         pl_row.addWidget(self._pl_label)
         pl_row.addStretch()
-        self._initiative_badge = QLabel("")
-        badge_font = self._initiative_badge.font()
-        badge_font.setBold(True)
-        self._initiative_badge.setFont(badge_font)
-        self._initiative_badge.setStyleSheet(f"color: {theme.color('accent')};")
-        pl_row.addWidget(self._initiative_badge)
-        layout.addLayout(pl_row)
+        layout.addWidget(pl_host)
 
-        buttons_row = QHBoxLayout()
+        buttons_host = QWidget()
+        buttons_row = QHBoxLayout(buttons_host)
         buttons_row.setContentsMargins(0, 0, 0, 0)
         self._initiative_button = QToolButton()
         self._initiative_button.setText("Initiative")
@@ -153,24 +282,37 @@ class NPCCard(QFrame):
         self._copy_button.clicked.connect(lambda: self.copyRequested.emit(self.name_key))
         buttons_row.addWidget(self._copy_button)
         buttons_row.addStretch()
-        layout.addLayout(buttons_row)
+        layout.addWidget(buttons_host)
 
         self.set_initiative(initiative)
 
-        condition_row = QHBoxLayout()
-        condition_row.setContentsMargins(0, 0, 0, 0)
-        self._condition_button = QToolButton()
-        self._condition_button.setText("+")
+        # The two ways to put something on this creature, side by side and on both
+        # states: pick a condition by hand, or take a rung of the damage ladder. A
+        # GM who never collapses a card still wants a failed Toughness save to cost
+        # one click rather than three trips through a menu of thirty-nine.
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(int(theme.metric("space.xs")))
+        self._condition_button = _small_button("+")
         self._condition_button.setToolTip("Apply a condition to this NPC")
         self._condition_button.clicked.connect(self._show_condition_menu)
-        condition_row.addWidget(self._condition_button)
-        condition_row.addStretch()
-        layout.addLayout(condition_row)
+        action_row.addWidget(self._condition_button)
+        self._damage = DamageRow(data)
+        self._damage.set_character(character)
+        self._damage.stepChosen.connect(
+            lambda index: self.damageRequested.emit(self.name_key, index)
+        )
+        action_row.addWidget(self._damage, stretch=1)
+        layout.addLayout(action_row)
 
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
         layout.addStretch()
+
+        #: The widgets the collapsed card sheds — everything that describes the
+        #: creature rather than tracking it through a fight.
+        self._expanded_only = (self._name_label, self._portrait, pl_host, buttons_host)
 
         self.pins = install_pin_panel(self, layout, data)
         self.pins.set_character(character)
@@ -179,7 +321,7 @@ class NPCCard(QFrame):
         self.pins.rollRequested.connect(self.rollRequested)
         self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.name_key))
 
-        self.refresh_conditions()
+        self.set_collapsed(collapsed)
         self._refresh_tooltip()
 
     # -- what the card is showing -----------------------------------------
@@ -198,12 +340,44 @@ class NPCCard(QFrame):
         """The NPC's rolled initiative this session, or ``None`` if unrolled."""
         return self._initiative
 
+    @property
+    def collapsed(self) -> bool:
+        """Whether the card is showing its short form."""
+        return self._collapsed
+
+    # -- collapsing --------------------------------------------------------
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Show the short form (or the full card) — without announcing it.
+
+        Silent, like :meth:`~mm_companion.ui.pin_panel.PinPanel.set_pins`: this is
+        the owner telling the card what it already decided, and echoing that back
+        would have the window save what it just read. The caret emits instead.
+        """
+        self._collapsed = collapsed
+        for widget in self._expanded_only:
+            widget.setVisible(not collapsed)
+        self._thumb.setVisible(collapsed)
+        self._header_name.setVisible(collapsed)
+        self._collapse_button.setText(COLLAPSED_GLYPH if collapsed else EXPANDED_GLYPH)
+        self._collapse_button.setToolTip("Show the whole card" if collapsed else "Shrink this card")
+        self.pins.set_max_visible(COLLAPSED_PIN_ROWS if collapsed else None)
+        # The chips are built at one size or the other, so they are rebuilt rather
+        # than restyled — which the card does on every condition change anyway.
+        self.refresh_conditions()
+        self.updateGeometry()
+
+    def _toggle_collapsed(self) -> None:
+        """The caret: flip the state *and* say so, so the window can remember it."""
+        self.set_collapsed(not self._collapsed)
+        self.collapsedChanged.emit(self.name_key, self._collapsed)
+
     # -- initiative --------------------------------------------------------
 
     def set_initiative(self, total: int | None) -> None:
         """Show (or clear) the NPC's initiative badge."""
         self._initiative = total
-        self._initiative_badge.setText("" if total is None else f"init {total}")
+        self._initiative_badge.setText(NO_INITIATIVE if total is None else f"init {total}")
 
     def roll_initiative(self) -> int:
         """Roll d20 + this NPC's initiative modifier, show it, and announce it.
@@ -246,6 +420,7 @@ class NPCCard(QFrame):
             chip = _ConditionChip(
                 condition_display_name(applied, record),
                 tooltip=condition_tooltip(applied, record, self._conditions_by_id),
+                compact=self._collapsed,
             )
             chip.arm_removal(
                 lambda cid=applied.condition_id, param=applied.parameter: (
@@ -254,6 +429,9 @@ class NPCCard(QFrame):
             )
             self._chip_flow.addWidget(chip)
         self._chips.setVisible(bool(self._character.conditions))
+        # What a damage button will do depends on what is already on the creature,
+        # so the row's tooltips are re-derived whenever the conditions move.
+        self._damage.refresh()
         # Re-derived whenever the card redraws, not kept from construction. The
         # summary reads the *build* numbers, which no condition currently moves —
         # so this changes nothing today. It is here because "computed once in

@@ -64,6 +64,9 @@ from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import (
     PinRef,
     apply_condition,
+    apply_damage_step,
+    damage_step_summary,
+    damage_steps,
     decrement_condition,
     default_pins,
     parse_pins,
@@ -114,6 +117,10 @@ class _NpcEntry:
     character: Character
     initiative: int | None = None
     card: NPCCard | None = None
+    #: Whether this card shows its short form. Held here as well as in settings
+    #: because :meth:`GMWindow._refresh_npcs` destroys and rebuilds every card —
+    #: anything kept on the widget is lost the first time an initiative is rolled.
+    collapsed: bool = False
 
 
 def _next_copy_name(source_name: str, existing: set[str]) -> str:
@@ -209,6 +216,8 @@ class GMWindow(QMainWindow):
         # refresh, and re-reading settings each time would make a strip's contents
         # depend on how recently the file was written.
         self._pins: dict[str, list[PinRef]] = _load_pins()
+        # Which cards the GM has shrunk, by the same key as the pins above.
+        self._collapsed_cards: dict[str, bool] = storage.gm_collapsed_cards()
         # Pin pickers open on a card, keyed the same way, kept referenced while up.
         self._pin_pickers: dict[str, PinPickerDialog] = {}
         # Sheets opened from a card, so a change to that card's strip can be pushed
@@ -1334,6 +1343,7 @@ class GMWindow(QMainWindow):
                 summary=summary,
                 character=character,
                 initiative=initiative,
+                collapsed=self._collapsed_cards.get(_npc_key(name), False),
             )
 
         # Keep the manual order in step with the cast: drop the departed, append
@@ -1343,7 +1353,13 @@ class GMWindow(QMainWindow):
 
         for name in self._ordered_npcs():
             entry = self._npc_state[name]
-            card = NPCCard(entry.character, entry.summary, self._data, initiative=entry.initiative)
+            card = NPCCard(
+                entry.character,
+                entry.summary,
+                self._data,
+                initiative=entry.initiative,
+                collapsed=entry.collapsed,
+            )
             card.openRequested.connect(self._open_npc)
             card.removeRequested.connect(self._remove_npc)
             card.deleteRequested.connect(self._delete_npc)
@@ -1358,6 +1374,8 @@ class GMWindow(QMainWindow):
             card.loadRequested.connect(self._roller.load_spec)
             card.rollRequested.connect(self._roller.roll_spec)
             card.pinPickerRequested.connect(self._open_npc_pin_picker)
+            card.collapsedChanged.connect(self._set_npc_collapsed)
+            card.damageRequested.connect(self._apply_npc_damage)
             card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
             entry.card = card
             self._npc_flow.addWidget(card)
@@ -1503,11 +1521,16 @@ class GMWindow(QMainWindow):
         copy.profile["hero_name"] = _next_copy_name(entry.summary.name, existing)
         path = library.save_character(copy, directory=self._npc_dir())
         # The duplicate is the same creature under a new name, so it starts with
-        # the same strip rather than back at the defaults.
+        # the same strip rather than back at the defaults — and, for the same
+        # reason, shrunk if its original was. Copying a mook is how a GM makes the
+        # fourth guard, and the fourth guard wants the third guard's card.
         pins = self._pins.get(_npc_key(name))
         if pins:
             self._pins[_npc_key(path.name)] = list(pins)
             self._persist_pins()
+        if self._collapsed_cards.get(_npc_key(name)):
+            self._collapsed_cards[_npc_key(path.name)] = True
+            storage.set_gm_collapsed_cards(self._collapsed_cards)
         self._register_npc(path)
 
     def _open_npc(self, name: str) -> None:
@@ -1574,11 +1597,29 @@ class GMWindow(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         library.delete_character(entry.path)
-        # Only a *deletion* forgets the strip. Taking an NPC out of the session
-        # leaves its file, and a GM who adds it back next week should find their
-        # pins where they left them.
+        # Only a *deletion* forgets the card's own state. Taking an NPC out of the
+        # session leaves its file, and a GM who adds it back next week should find
+        # their pins — and their shrunk card — where they left them.
         self._forget_pins(_npc_key(name))
+        if self._collapsed_cards.pop(_npc_key(name), None) is not None:
+            storage.set_gm_collapsed_cards(self._collapsed_cards)
         self._remove_npc(name)
+
+    # -- collapsing a card --------------------------------------------------
+
+    def _set_npc_collapsed(self, name: str, collapsed: bool) -> None:
+        """Remember that the GM shrank (or reopened) a card.
+
+        The card has already changed shape — it emitted this — so there is nothing
+        to redraw. What is recorded is the *judgement*: this creature is one of the
+        ones being tracked rather than read, and it should still be next week.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        entry.collapsed = collapsed
+        self._collapsed_cards[_npc_key(name)] = collapsed
+        storage.set_gm_collapsed_cards(self._collapsed_cards)
 
     # -- NPC conditions -----------------------------------------------------
 
@@ -1589,7 +1630,7 @@ class GMWindow(QMainWindow):
             return
         subject = str(parameter) if parameter else None
         apply_condition(entry.character, condition_id, self._data, parameter=subject)
-        self._after_npc_condition_change(entry, condition_id, subject, applying=True)
+        self._after_npc_condition_change(entry, [(condition_id, subject)], applying=True)
 
     def _remove_npc_condition(self, name: str, condition_id: str, parameter: object) -> None:
         """Take one condition off the NPC's model again."""
@@ -1600,22 +1641,54 @@ class GMWindow(QMainWindow):
         applied = matching_condition(entry.character, condition_id, subject)
         if applied is not None:
             decrement_condition(entry.character, applied)
-        self._after_npc_condition_change(entry, condition_id, subject, applying=False)
+        self._after_npc_condition_change(entry, [(condition_id, subject)], applying=False)
+
+    def _apply_npc_damage(self, name: str, step_index: int) -> None:
+        """Walk a rung of the damage ladder onto an NPC.
+
+        The GM clicked a degree of failure; what that *means* — which conditions,
+        and whether an already-Dazed target is Stunned instead — is
+        :mod:`mm_companion.core.rules.damage`'s answer, resolved once here against
+        this creature's current state. The ids it decided on are then what gets
+        replayed onto an open sheet, so the two copies of the character cannot
+        disagree about an escalation each would otherwise resolve for itself.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        steps = damage_steps(self._data)
+        step = next((s for s in steps if s.index == step_index), None)
+        if step is None:
+            return
+        # Read *before* the apply: the summary resolves escalation against the
+        # creature's current state, so asking afterwards would describe what the
+        # next click would do rather than what this one just did.
+        landed = damage_step_summary(entry.character, step, self._data)
+        applied = apply_damage_step(entry.character, step, self._data)
+        self._after_npc_condition_change(
+            entry, [(condition_id, None) for condition_id in applied], applying=True
+        )
+        self._show_notice(f"“{entry.summary.name}” — {landed}", theme.color("tint.worse"))
 
     def _after_npc_condition_change(
-        self, entry: _NpcEntry, condition_id: str, parameter: str | None, *, applying: bool
+        self,
+        entry: _NpcEntry,
+        changes: list[tuple[str, str | None]],
+        *,
+        applying: bool,
     ) -> None:
-        """Restate the NPC's card and persist the change.
+        """Restate the NPC's card and persist one or more condition changes.
 
         Unlike a player, an NPC is local — so the change is applied to the model
         here rather than sent over the wire. If a sheet for this NPC is open, route
-        the same change through its conditions block so the open sheet stays in
-        sync and owns its own save; otherwise write the model to its file now.
+        the same changes through its conditions block so the open sheet stays in
+        sync and owns its own save; otherwise write the model to its file now —
+        **once**, however many conditions a damage rung brought with it.
         """
         window = self._window_for(entry.path)
-        if window is not None:
-            section = getattr(window.sheet, "conditions", None)
-            if section is not None:
+        section = getattr(window.sheet, "conditions", None) if window is not None else None
+        if section is not None:
+            for condition_id, parameter in changes:
                 if applying:
                     section.apply_condition_by_id(condition_id, parameter)
                 else:

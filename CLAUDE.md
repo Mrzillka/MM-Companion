@@ -129,7 +129,29 @@ clean (see Licensing below).
   groups gets the flat menu back, so both are purely additive. Note
   `QMenu.addMenu(title)` hands ownership *back* to the caller, so each submenu is
   constructed with the menu as its parent or it is collected out from under the
-  open menu. Dice/recovery/turn-economy are out of scope for now.
+  open menu. Recovery and turn economy are out of scope for now.
+- **The damage ladder is walked, not just rendered** (`core/rules/damage.py`). An
+  effect's `resistanceOutcomes` was only ever *text* — the roll history said
+  "Incapacitated!" and left the GM to find three conditions in a menu of 39.
+  `damage_steps(data)` turns the rungs into steps (index 0 the made save, which
+  still costs a Hit; 1..n the degrees of failure), `resolve_damage_step` says what
+  one would put on *this* creature without applying it — which is what lets a
+  button's tooltip promise it — and `apply_damage_step` puts it there through the
+  ordinary `apply_condition`. Which effect is *the* damage ladder is
+  `system.damage_effect`, so nothing here names an effect, a condition or a degree.
+  Two rules make a rung more than a list of ids, and both read the condition graph:
+  **escalation**, a rung's `escalates` map (the data form of "Stunned instead of
+  Dazed if already Dazed"), chained so a rung naming `incapacitated -> dying` and
+  `dying -> dead` walks a target one rung further with each failure; and **order**,
+  because a rung's printed ids are not always applicable in that order — rung 2
+  reads `hit, stunned, staggered`, and applying Staggered *after* Stunned re-adds
+  the Dazed inside its bundle with nothing left to supersede it, so a sibling that
+  supersedes anything in another's expanded set is applied second. `ui/damage_row.py`
+  is the four round buttons; the NPC card carries them in **both** states and the GM
+  window's `_apply_npc_damage` resolves once and replays the settled ids onto an
+  open sheet, so the two copies of the character cannot disagree about an escalation.
+  Note `dead` supersedes `staggered` for this: it is the terminal rung, and without
+  it the third click left a corpse Staggered.
 - On launch, `__main__.main()` shows a splash and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
@@ -1111,7 +1133,41 @@ The shape:
   `ui/pin_picker.py` is the modeless browser the "+" opens; it unpins as well as
   pins, and its `set_pinned` is a no-op when it already agrees — without that
   guard the card's echo rebuilds the tree *during* a toggle, deleting the row
-  being restated.
+  being restated. The chips sit in a `_ChipScroll` whose height is **set, never
+  asked for** (`PinPanel._apply_cap` works it out from a real chip's height and
+  `set_max_visible`, which a collapsed card caps at four): a scroll area reports a
+  size hint unrelated to its content *and* is elastic in a panel that ends with a
+  stretch, so left to negotiate the two split the room and a rebuilt strip
+  collapsed to nothing with its chips laid out inside it, invisible. The drop
+  coordinates are mapped through the scrolled host (`_drop_index`,
+  `_indicator_rect`) — chip geometries are the host's, drop events are the
+  panel's, and the indicator is the panel's child.
+- **An NPC card collapses** (`ui/npc_card.py`). Expanded it is a good roster entry
+  and a bad combat readout — a 96px portrait, a PL and two buttons, times a dozen
+  mooks, is two cards on screen. Collapsed it keeps only what a GM reads mid-round:
+  a thumbnail (still the *only* thing that opens the sheet), the name, an
+  initiative badge, the pinned strip, the conditions and the damage row. Width is
+  unchanged in both states, so cards stay column-aligned in the wrapping flow — the
+  win is height. Three things worth knowing. The two name labels share **one slot**,
+  exactly one showing: collapsed it elides (a wrapped name would need a second line
+  the thumbnail's row height hasn't got), expanded it wraps, and giving the wrapped
+  one a row of its own left a near-empty strip above the card's own name. The
+  **initiative badge is a `QLabel`**, not a `QToolButton`, for the reason
+  `PortraitButton` is one — a tool button wraps a word in forty pixels of chrome —
+  and it swallows its press so clicking it can't start the card's drag-to-reorder.
+  And `set_collapsed` is **silent** like `PinPanel.set_pins`; only the caret emits
+  `collapsedChanged`, since the owner telling a card what it already decided must
+  not have the window save what it just read.
+- Which cards are shrunk persists in `gm_collapsed`, keyed like `gm_pins`
+  (`npc:<file name>`) and read through **`storage.gm_collapsed_cards()`** — never
+  off `load_settings()`, for the reason spelled out on `gm_default_pins`. Only the
+  shrunk ones are stored, so absent means expanded. It is also held on `_NpcEntry`,
+  because `_refresh_npcs` destroys and rebuilds every card and anything kept on the
+  widget is lost the first time an initiative is rolled. Unlike the sheet's lock and
+  compact mode — deliberately *not* persisted — this is a standing judgement about
+  one creature rather than one window's current view: the mooks stay shrunk and the
+  villain stays open. A copy inherits it (the fourth guard wants the third guard's
+  card); only a deletion forgets it.
 - A GM also pins from the sheet opened off that card, by right-clicking a row.
   Two bus topics, `pin-requested` and `unpin-requested`, both served by the
   **sheet** rather than any block, since a pin's destination is outside the sheet

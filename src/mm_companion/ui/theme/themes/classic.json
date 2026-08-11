@@ -76,6 +76,10 @@
     "compact.min-height": 150,
     "_compact.button": "The diameter of the round button that floats over the roller's bottom-right corner and is the only way in and out of compact mode. Big enough to be found without hunting, small enough that the slice of roll history it covers is one card's corner.",
     "compact.button": 34,
+    "_gm.damage-button": "The diameter of one round degree-of-failure button on a GM card's damage row. Small: four of them plus a caption share the width of a 210px card, and the row repeats on every creature on the board.",
+    "gm.damage-button": 22,
+    "_gm.thumb": "The portrait on a collapsed GM card. Big enough to tell two goons apart at a glance and to be an easy click target, since it is still the only thing that opens the sheet.",
+    "gm.thumb": 30,
 
     "_float.min-width": "How small a block popped out into its own window may be dragged. The same bargain the mini roller strikes above: the block lives in a scroll area, so past this it scrolls both ways rather than being clipped, and a popped-out block can be shrunk to a tile beside somebody else's application.",
     "float.min-width": 200,

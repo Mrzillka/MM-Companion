@@ -316,9 +316,22 @@ class PlayerCard(QFrame):
 
 
 class _ConditionChip(QFrame):
-    """One condition, as a compact chip with an optional "×" to take it off."""
+    """One condition, as a compact chip with an optional "×" to take it off.
 
-    def __init__(self, text: str, *, tooltip: str = "", parent: QWidget | None = None) -> None:
+    *compact* is the collapsed GM card's version: the same chip in small print, so a
+    creature carrying five conditions still costs one line of a card that is mostly
+    pinned numbers. Only the type size and the padding change — a chip that reads
+    differently in the two states would be a second thing to recognise.
+    """
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        tooltip: str = "",
+        compact: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setStyleSheet(
             f"border: {int(theme.metric('border.width'))}px solid"
@@ -329,11 +342,18 @@ class _ConditionChip(QFrame):
         if tooltip:
             self.setToolTip(tooltip)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 1, 2, 1)
-        layout.setSpacing(2)
+        layout.setContentsMargins(*((3, 0, 1, 0) if compact else (5, 1, 2, 1)))
+        layout.setSpacing(1 if compact else 2)
         self._label = QLabel(text)
         self._label.setStyleSheet("border: none; background: transparent;")
+        if compact:
+            # On the QFont, never in the sheet above: a stylesheet ``font-size``
+            # outranks a widget's font everywhere in this app.
+            font = self._label.font()
+            font.setPointSizeF(theme.font_size("size.terms"))
+            self._label.setFont(font)
         layout.addWidget(self._label)
+        self._compact = compact
         self._remove: QToolButton | None = None
 
     def text(self) -> str:
@@ -347,6 +367,10 @@ class _ConditionChip(QFrame):
         button.setAutoRaise(True)
         button.setStyleSheet("border: none; background: transparent;")
         button.setToolTip(f"Remove {self.text()}")
+        if self._compact:
+            font = button.font()
+            font.setPointSizeF(theme.font_size("size.terms"))
+            button.setFont(font)
         button.clicked.connect(lambda checked=False: on_remove())
         self.layout().addWidget(button)
         self._remove = button

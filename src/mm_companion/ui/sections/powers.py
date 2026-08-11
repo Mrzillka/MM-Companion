@@ -52,6 +52,7 @@ construction.
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, Qt, QVariantAnimation, Signal
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -184,6 +185,27 @@ def _mode_toggle_style(locked: bool) -> str:
     return f"{rest}\n{hover}\n{lit}"
 
 
+def _lit_width(button: QPushButton) -> int:
+    """How wide *button* has to be to hold its label once that label lights up.
+
+    Only the checked segment is bold, and a size hint measured from the resting
+    font is a few pixels short of the bold one — which showed up as a clipped
+    "Independen" the moment that segment was the mode in force. Every segment gets
+    the same allowance, so lighting one up never re-widths the strip either.
+
+    The bold *delta* is added to the hint rather than the bold advance replacing
+    it: the hint already carries the stylesheet's padding, the border and Qt's own
+    margins, and none of those are worth re-deriving here.
+    """
+    font = button.font()
+    bold = QFont(font)
+    bold.setBold(True)
+    grew = QFontMetrics(bold).horizontalAdvance(button.text()) - QFontMetrics(
+        font
+    ).horizontalAdvance(button.text())
+    return button.sizeHint().width() + max(0, grew)
+
+
 class _ModeToggle(QWidget):
     """A segmented Independent / Array / Linked switch for a group's title bar.
 
@@ -223,6 +245,7 @@ class _ModeToggle(QWidget):
             button.setCheckable(True)
             button.setToolTip(tip)
             button.setFixedHeight(22)
+            button.setMinimumWidth(_lit_width(button))
             self._group.addButton(button)
             self._buttons[mode] = button
             row.addWidget(button)

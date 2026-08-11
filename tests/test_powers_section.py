@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt, QVariantAnimation
-from PySide6.QtGui import QEnterEvent
+from PySide6.QtGui import QEnterEvent, QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
+    STRUCTURE_INDEPENDENT,
     STRUCTURE_LINKED,
     ModifierSelection,
     Power,
@@ -661,6 +662,29 @@ def test_a_group_card_states_which_mode_is_lit(qapp: QApplication, preset: str) 
     lit = toggle.styleSheet().split("QPushButton:checked")
     assert len(lit) == 2, "the widget must state its own checked look"
     assert "background:" in lit[1]
+
+
+def test_a_lit_segment_has_room_for_its_bolder_label(qapp: QApplication) -> None:
+    """ "Independent" came out as "Independen" the moment it was the mode in force.
+
+    The lit segment is bold and the rest are not, so a width taken from the resting
+    font is a few pixels short of the label it has to hold. Every segment carries
+    the same allowance, which also stops the strip re-widthing as the mode changes.
+    """
+    sheet, group = _grouped_sheet(STRUCTURE_INDEPENDENT)
+    toggle = _mode_toggle(sheet.powers)
+
+    for button in toggle.findChildren(QPushButton):
+        bold = QFont(button.font())
+        bold.setBold(True)
+        assert button.minimumWidth() > QFontMetrics(bold).horizontalAdvance(button.text())
+
+    widths = {}
+    for mode in (STRUCTURE_INDEPENDENT, STRUCTURE_ARRAY, STRUCTURE_LINKED):
+        sheet.powers._set_group_mode(group, mode)
+        toggle = _mode_toggle(sheet.powers)
+        widths[mode] = [b.minimumWidth() for b in toggle.findChildren(QPushButton)]
+    assert len(set(map(tuple, widths.values()))) == 1
 
 
 def test_the_locked_group_card_keeps_the_mode_and_drops_the_switch(qapp: QApplication) -> None:

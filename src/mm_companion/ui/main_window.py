@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -21,6 +21,7 @@ from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
+from mm_companion.ui.undo import UndoController
 
 CHARACTER_FILTER = "Character files (*.json)"
 
@@ -31,6 +32,12 @@ CHARACTER_FILTER = "Character files (*.json)"
 #: artwork and stays legible on every preset's bar.
 LOCK_GLYPH_LOCKED = "🔒"
 LOCK_GLYPH_UNLOCKED = "🔓"
+
+#: Undo and redo, on the bar for the same reason the lock is: they are reached
+#: constantly while building, and a button that is *there* is worth more than an
+#: entry two clicks into a menu. Same plain-glyph bargain as the lock.
+UNDO_GLYPH = "↶"
+REDO_GLYPH = "↷"
 
 
 class MainWindow(QMainWindow):
@@ -108,6 +115,13 @@ class MainWindow(QMainWindow):
         # — so there is nothing to add to the menu bar; see
         # :mod:`mm_companion.ui.compact`.
         self._compact = CompactController(self, self._sheet, self._sheet)
+        # The sheet's undo history. Not for a GM's read-only view of a player's
+        # sheet: nothing there can be edited, and the GM opens one per click on a
+        # card, so it would only cost a snapshot.
+        self._undo: UndoController | None = None
+        if not self._gm_view:
+            self._undo = UndoController(self._sheet, parent=self)
+            self._undo.stateChanged.connect(self._on_undo_state)
         self._build_menu_bar(locked)
         # The sheet is a scrolling page in its own right (it owns its scroll area),
         # so the only thing this wrapper is for is having the compact page beside
@@ -217,6 +231,8 @@ class MainWindow(QMainWindow):
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
             install_connection_indicator(self)
 
+        self._build_undo_actions(menu_bar)
+
         # Last on the bar, and on the bar rather than in a menu: locking is how a
         # sheet is read *and* how it is written, so it is reached constantly. An
         # action added straight to a QMenuBar with no submenu behaves as a button —
@@ -227,6 +243,52 @@ class MainWindow(QMainWindow):
         self._lock_action.toggled.connect(self._sheet.set_locked)
         self._lock_action.toggled.connect(self._show_lock_state)
         self._show_lock_state(locked)
+
+    def _build_undo_actions(self, menu_bar) -> None:
+        """Add the ↶ / ↷ buttons and their shortcuts, just before the lock.
+
+        Two things worth knowing. The shortcuts hang off the actions rather than off
+        a bare :class:`QShortcut`, so one object carries the key, the button and the
+        enabled state — and ``Ctrl+Z`` inside a text field still reaches that field's
+        own undo first, which is what every other application does and what the
+        coalescing window makes harmless anyway.
+
+        And each action is *also* added to the window, because compact mode hides the
+        menu bar and a shortcut is inactive while the widget owning it is hidden. An
+        action may belong to several widgets; the window is always visible.
+        """
+        if self._undo is None:
+            return
+        self._undo_action = menu_bar.addAction(UNDO_GLYPH)
+        self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self._undo_action.setToolTip("Undo (Ctrl+Z)")
+        self._undo_action.triggered.connect(self._undo.undo)
+        self._redo_action = menu_bar.addAction(REDO_GLYPH)
+        self._redo_action.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
+        self._redo_action.setToolTip("Redo (Ctrl+Shift+Z)")
+        self._redo_action.triggered.connect(self._undo.redo)
+        for action in (self._undo_action, self._redo_action):
+            self.addAction(action)
+        self._on_undo_state()
+
+    def _on_undo_state(self) -> None:
+        """Follow the history: what the two buttons offer, and whether we are dirty.
+
+        The dirty flag is *re-derived* here rather than only set: an undo back to the
+        state last written to disk really is clean, and the ``*`` should go away.
+        """
+        if self._undo is None:
+            return
+        if hasattr(self, "_undo_action"):
+            self._undo_action.setEnabled(self._undo.can_undo)
+            self._redo_action.setEnabled(self._undo.can_redo)
+        # Only ever *clears* the flag: setting it is _on_edited's job, and
+        # at_saved_state() is False for a character that has never been written, so
+        # a brand-new sheet is not declared clean before it has anywhere to be clean
+        # against.
+        if self._dirty and self._undo.at_saved_state():
+            self._dirty = False
+            self._update_title()
 
     def _show_lock_state(self, locked: bool) -> None:
         """Put the current lock state on the bar's glyph and its tooltip."""
@@ -361,8 +423,16 @@ class MainWindow(QMainWindow):
 
     def _write(self, path: Path) -> bool:
         """Persist the character to *path* and remember it as the current file."""
+        # Land any coalescing edit as its own step *before* the write, because the
+        # write itself edits the model — save_character rewrites an external
+        # image_path to a workspace filename — and that is the app tidying up after
+        # the user, not a step for them to walk back through.
+        if self._undo is not None:
+            self._undo.flush()
         saved_path = library.save_character(self._sheet.character, path=path)
         self._path = saved_path
+        if self._undo is not None:
+            self._undo.mark_saved()
         self._dirty = False
         self._update_title()
         self.statusBar().showMessage(f"Saved to {saved_path}", 5000)

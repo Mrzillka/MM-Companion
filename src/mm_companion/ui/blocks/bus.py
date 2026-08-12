@@ -95,6 +95,31 @@ CONDITION_CHANGED = "condition-changed"
 COST_RATES_CHANGED = "cost-rates-changed"
 EDITED = "edited"
 
+#: Every notification topic, in declaration order. ``EDITED`` is one of them, and is
+#: the odd one out: the other eight say *what to recompute*, while ``EDITED`` says
+#: *the user changed something*.
+NOTIFICATIONS = (
+    ABILITY_CHANGED,
+    BUILD_CHANGED,
+    FACTS_CHANGED,
+    DERIVED_CHANGED,
+    ENHANCEMENTS_CHANGED,
+    CAPS_CHANGED,
+    CONDITION_CHANGED,
+    COST_RATES_CHANGED,
+    EDITED,
+)
+
+#: What a *restore* publishes: every notification topic except ``EDITED``. Putting an
+#: earlier state back has to drive every recompute a normal edit would — the sheet
+#: reads the model, so one blanket republish restates it — but it is not itself an
+#: edit and must never mark the sheet dirty (see ``CharacterSheet.reseed``).
+#:
+#: ``BUILD_CHANGED`` and ``CONDITION_CHANGED`` are in deliberately: the session's
+#: snapshot pusher subscribes to them, so an undone state reaches the GM's card on
+#: the same terms any other change does.
+RESEED_TOPICS = tuple(t for t in NOTIFICATIONS if t != EDITED)
+
 # Request topics (the payload channel — see the module docstring).
 ROLL_REQUESTED = "roll-requested"
 LOAD_REQUESTED = "load-requested"
@@ -142,6 +167,20 @@ class SignalBus:
         """Fire every handler subscribed to *topic*, in subscription order."""
         # Iterate a copy so a handler that (re)subscribes can't disturb the loop.
         for handler in list(self._subscribers.get(topic, ())):
+            handler()
+
+    def publish_all(self, topics) -> None:
+        """Fire every handler subscribed to any of *topics*, each **at most once**.
+
+        Legal exactly because of the contract above — every handler is an idempotent
+        view refresh over the shared model — and worth having because several
+        handlers are subscribed to more than one topic. ``PowersSection.refresh`` and
+        ``EquipmentSection.refresh`` each answer to two, and each rebuilds a whole
+        card tree; publishing the topics one at a time does that twice. Bound methods
+        compare and hash on ``(__self__, __func__)``, so the dedup catches them.
+        """
+        handlers = [h for topic in topics for h in self._subscribers.get(topic, ())]
+        for handler in dict.fromkeys(handlers):
             handler()
 
     def make_publisher(self, topic: str) -> Callable[..., None]:

@@ -172,6 +172,22 @@ def test_a_closed_dice_block_has_no_compact_mode(window: MainWindow) -> None:
     assert not window.sheet.isHidden()
 
 
+def test_the_undo_shortcut_survives_the_hidden_menu_bar(window: MainWindow) -> None:
+    """Compact mode hides the bar, and a shortcut is inactive while its widget is.
+
+    So the two actions belong to the window as well as to the bar — an action may
+    have several owners, and the window is always visible.
+    """
+    window.sheet.abilities._abilities["STR"].setValue(3)
+    window._compact.enter()
+    assert window.menuBar().isHidden()
+
+    assert window._undo_action in window.actions()
+    window._undo_action.trigger()
+
+    assert window.sheet.character.abilities["STR"] == 0
+
+
 # -- the compact arrangement -------------------------------------------------
 
 

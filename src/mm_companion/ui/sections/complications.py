@@ -152,6 +152,13 @@ class ComplicationsSection(QGroupBox):
             if widget is not None:
                 widget.deleteLater()
 
+    def reseed(self) -> None:
+        """Re-render the rows from the model — the sheet put an earlier state back.
+
+        Already silent: :meth:`_render_row` seeds each widget *before* connecting it.
+        """
+        self._rebuild()
+
     def _rebuild(self) -> None:
         """Re-render one row per complication from the model."""
         self._clear_rows()

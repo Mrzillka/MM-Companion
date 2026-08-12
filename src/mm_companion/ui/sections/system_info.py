@@ -600,6 +600,38 @@ class SystemInfoSection(QGroupBox):
         self._character.characteristics[key] = actual
         return actual
 
+    def reseed(self) -> None:
+        """Restate the bought characteristics from the model — an earlier state is back.
+
+        Deliberately does **not** run :meth:`_link_pl_pp`: both Power Level and the
+        point budget in a restored state are authoritative, and reconciling one
+        against the other would rewrite it and turn the restore into a fresh edit.
+
+        The derived readouts and the homebrew notice arrive on ``derived-changed``,
+        so this only touches the four widgets that hold model values directly.
+        """
+        self._loading = True
+        try:
+            for spin, key, fallback in (
+                (self._power_level, "power_level", 10),
+                (self._power_points, "power_points", 150),
+            ):
+                blocker = QSignalBlocker(spin)
+                spin.setValue(int(self._seed(key, fallback)))
+                del blocker
+            blocker = QSignalBlocker(self._size_combo)
+            size = str(self._seed("size", "Medium"))
+            if self._size_combo.findText(size) >= 0:
+                self._size_combo.setCurrentText(size)
+            del blocker
+            # set_value is silent by design, so the "spent/gained" baseline has to be
+            # moved by hand — otherwise the next pip click writes a note about a jump
+            # the player never made.
+            self._hero_points.set_value(int(self._seed("hero_points", 1)))
+            self._last_hero_points = self._hero_points.value()
+        finally:
+            self._loading = False
+
     def _emit_edited(self) -> None:
         if not self._loading:
             self.edited.emit()

@@ -44,6 +44,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     PIN_REQUESTED,
     QUIET_REQUESTS,
+    RESEED_TOPICS,
     UNPIN_REQUESTED,
 )
 from mm_companion.ui.pinned_panel import PinnedBoard
@@ -73,6 +74,11 @@ class CharacterSheet(QWidget):
         self.character = character or Character.new_default(self._data)
         self._npc = False
         self._locked = False
+        # True only while :meth:`reseed` is pushing a restored model back into the
+        # widgets. Putting an earlier state back is not a user edit, so the sheet
+        # must not report one while it happens.
+        self._restoring = False
+        self._undo = None
 
         # Register any data-described (declarative) blocks the active mods contribute
         # via blocks.json, so they join the registry before we iterate it below.
@@ -235,7 +241,7 @@ class CharacterSheet(QWidget):
         # on/off publishes BUILD_CHANGED but not EDITED, so a runtime toggle
         # re-derives without marking the character dirty.)
         self._bus.subscribe(BUILD_CHANGED, self._recompute_derived)
-        self._bus.subscribe(EDITED, self.edited.emit)
+        self._bus.subscribe(EDITED, self._relay_edited)
 
         for descriptor in self._descriptors:
             section = self._sections_by_key[descriptor.key]
@@ -367,6 +373,60 @@ class CharacterSheet(QWidget):
         :meth:`~mm_companion.ui.block_canvas.BlockCanvas.set_windows_suspended`.
         """
         self._canvas.set_windows_suspended(suspended)
+
+    def _relay_edited(self) -> None:
+        """Surface a block's edit — unless the sheet is the one that caused it.
+
+        The one chokepoint that catches every block *and* any mod block: six of the
+        base sections carry no ``_loading`` guard of their own, and a block's widgets
+        write the model and re-emit as they are re-seeded.
+        """
+        if not self._restoring:
+            self.edited.emit()
+
+    @property
+    def undo(self):
+        """This sheet's undo controller, or ``None`` — see :mod:`mm_companion.ui.undo`.
+
+        Held here rather than on the window because the two things that push changes
+        in from outside (a GM's session command, a replayed NPC damage rung) hold the
+        *sheet*, never the window that owns it.
+        """
+        return self._undo
+
+    def set_undo(self, controller) -> None:
+        """Give this sheet the controller that records and restores its states."""
+        self._undo = controller
+
+    def reseed(self) -> None:
+        """Restate every block from the model, which changed underneath them.
+
+        The other half of an undo (see :mod:`mm_companion.ui.undo`): the model has
+        already been put back, and this is what makes the widgets agree with it. Two
+        passes, and the split between them is the rule for adding a block —
+
+        * a block whose widgets hold model values directly exposes ``reseed()``, found
+          by name and duck-typed exactly like :meth:`sync_session`, so a mod block
+          joins on the same terms;
+        * everything a topic already restates is left to the topics. Powers and
+          Equipment have no ``reseed()`` for that reason: their ``refresh()`` *is* the
+          ``facts-changed`` handler, and a method here would rebuild the two costliest
+          card trees a second time.
+
+        Order-free, and deliberately so: the model is restored first and every refresh
+        reads it, so no block depends on another's widgets having been re-seeded yet.
+        ``edited`` is suppressed throughout — a restore is not an edit — and
+        ``RESEED_TOPICS`` is every notification topic but that one.
+        """
+        self._restoring = True
+        try:
+            for section in self._sections():
+                handler = getattr(section, "reseed", None)
+                if callable(handler):
+                    handler()
+            self._bus.publish_all(RESEED_TOPICS)
+        finally:
+            self._restoring = False
 
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference, fanned out like :meth:`sync_session`."""

@@ -1216,8 +1216,19 @@ block the sheet can have **more than one of**. `docs/` has no separate map; this
   duck-typed `accepts_merge(other_key)` that defaults absent. That default is why no
   existing block's drag behaves any differently. The mark is a `DropFeedback` wash over
   the whole target frame rather than an insert line — a line says "the block lands here",
-  a wash says "the block goes *in* here". The canvas only emits `merge_requested`; what
-  merging *means* is the sheet's, since the sections are.
+  a wash says "the block goes *in* here" — and **`border=False`, `wash=MERGE_WASH`**: a
+  stylesheet border would change the frame's box and relayout the page *while the block
+  is being dragged over it*, so the target would shift out from under the cursor the
+  instant it lit up, and without an outline the fill has to be heavier to read. The
+  canvas only emits `merge_requested`; what merging *means* is the sheet's, since the
+  sections are.
+- **`title_bar_released` hit-tests before `_end_drag`, and takes `onto` from
+  `_merge_hint`** — what the drag last *showed* — rather than asking again. Both halves
+  are one bug: `_end_drag` clears `_drag_key`, which `_merge_target` needs to know whose
+  drop it is judging, so re-deriving the merge afterwards made every drop an ordinary
+  dock and the merge never fired at all. The drop now does what the highlight promised.
+  Note also that a block scrolled off the page cannot be dropped on — `_hit_test` bounds
+  the gesture to the viewport — which is honest, and is why a test has to scroll first.
 - **Split is the same drag, adopted.** A tab dragged clear of its bar makes
   `NotesSection` emit `splitRequested`; the sheet builds a new instance holding that one
   note and calls `BlockCanvas.adopt_drag`, and because the **tab bar still holds the mouse

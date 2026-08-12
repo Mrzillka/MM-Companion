@@ -1214,22 +1214,28 @@ class BlockCanvas(QWidget):
             self._end_drag()
             return
         pin_at = self._pin_hit_test(global_pos)
+        # What the drag last *showed*, taken before _end_drag clears it. The drop
+        # does what the highlight promised rather than asking again: re-deriving
+        # it here is how the merge came to never fire at all — _end_drag had
+        # already dropped `_drag_key`, which `_merge_target` needs to know whose
+        # drop it is judging.
+        onto = self._merge_hint
+        slot = self._hit_test(global_pos) if pin_at is None else None
         self._end_drag()
         if not active:
             return
         if pin_at is not None:
             self.pin_block(key, pin_at.line, pin_at.slot, new_line=pin_at.new_line)
             return
-        slot = self._hit_test(global_pos)
         if slot is None:
             return
         self.dock_block(key, slot.row, slot.slot, new_row=slot.new_row)
-        if slot.onto is not None:
+        if onto is not None and onto in self._frames and onto != key:
             # The host owns what a merge *means*; all this knows is that one was
             # asked for. Docked first either way, so a host that ignores the
             # request is left with a placed block rather than a floating one
             # nobody asked to float.
-            self.merge_requested.emit(key, slot.onto)
+            self.merge_requested.emit(key, onto)
 
     def request_float(self, key: str) -> None:
         self.float_block(key)

@@ -35,7 +35,7 @@ def make_sheet(qapp: QApplication):
         sheet.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
         sheet.resize(1000, 860)
         sheet.show()
-        qapp.processEvents()
+        pump()
         sheets.append(sheet)
         return sheet
 
@@ -371,8 +371,8 @@ def test_a_drop_onto_an_ordinary_block_is_a_plain_slot(make_sheet) -> None:
 def test_a_drop_in_the_middle_of_a_notes_block_is_a_merge(make_sheet) -> None:
     sheet = make_sheet()
     key = sheet.add_block_instance("notes")
-    qapp = QApplication.instance()
-    qapp.processEvents()
+    pump()
+    scroll_to(sheet, "notes")
     canvas = sheet.canvas
     canvas._drag_key = key
     row = next(r for r in canvas._row_widgets if any(f.key == "notes" for f in r.frames()))
@@ -385,6 +385,126 @@ def test_a_drop_in_the_middle_of_a_notes_block_is_a_merge(make_sheet) -> None:
     # placed *beside* another rather than into it.
     edge = row.mapToParent(frame.geometry().topLeft()) + QPoint(2, 2)
     assert canvas._merge_target(row, edge) is None
+
+
+def pump(rounds: int = 10) -> None:
+    """Let the page finish laying itself out.
+
+    One ``processEvents`` is not enough: the sheet's scroll area settles its
+    canvas over several turns, and until it has, every block is crammed into the
+    viewport's height and a hit test lands on the wrong row entirely.
+    """
+    qapp = QApplication.instance()
+    for _ in range(rounds):
+        qapp.processEvents()
+
+
+def centre_of(sheet, key: str):
+    """Where block *key* is on screen right now, in global coordinates."""
+    canvas = sheet.canvas
+    frame = sheet.block_frame(key)
+    row = next(r for r in canvas._row_widgets if frame in r.frames())
+    return canvas.mapToGlobal(row.mapToParent(frame.geometry().center()))
+
+
+def scroll_to(sheet, key: str) -> None:
+    """Bring block *key* into view, which a drop onto it requires.
+
+    ``_hit_test`` bounds the whole gesture to the page's viewport, so a block
+    scrolled off the bottom of a long sheet cannot be dropped on — which is the
+    honest behaviour, and means a test has to scroll first exactly as a hand
+    would.
+    """
+    frame = sheet.block_frame(key)
+    row = next(r for r in sheet.canvas._row_widgets if frame in r.frames())
+    centre = row.mapToParent(frame.geometry().center())
+    sheet.page_scroll_area().ensureVisible(centre.x(), centre.y(), 0, 200)
+    pump()
+
+
+def drag_over(sheet, source: str, target: str):
+    """Pick *source* up by its title bar and hold it over the middle of *target*.
+
+    Returns where the cursor ends up, for the caller to release at. Two things a
+    naive version gets wrong. The target's centre is read **after** the drag has
+    started: picking a block up floats it out of its row, the page reflows, and
+    everything below moves up, so an aim taken beforehand points at where the
+    block used to be. And both blocks have to be *visible* first — see
+    :func:`scroll_to`.
+    """
+    canvas = sheet.canvas
+    scroll_to(sheet, target)
+    start = sheet.block_frame(source).title_bar.mapToGlobal(QPoint(4, 4))
+    canvas.title_bar_pressed(source, start)
+    canvas.title_bar_moved(source, start + QPoint(0, 60))  # past startDragDistance
+    pump()
+
+    centre = centre_of(sheet, target)
+    canvas.title_bar_moved(source, centre)
+    pump()
+    return centre
+
+
+def drop_onto(sheet, source: str, target: str) -> None:
+    """Drag block *source* and drop it on the middle of *target*.
+
+    Drives the canvas's real gesture — press, move, release — rather than calling
+    the merge handler, because the bug this guards lived *between* them: the
+    release used to hit-test after ``_end_drag`` had already cleared the drag key,
+    so every drop came out an ordinary dock and the merge never fired.
+    """
+    centre = drag_over(sheet, source, target)
+    sheet.canvas.title_bar_released(source, centre)
+    pump()
+
+
+def test_dropping_a_notes_block_on_another_merges_them(make_sheet, two_notes) -> None:
+    origin, log = two_notes
+    sheet = make_sheet()
+    sheet.notes.open_note(origin)
+    key = sheet.add_block_instance("notes")
+    sheet._sections_by_key[key].open_note(log)
+    pump()
+
+    drop_onto(sheet, key, "notes")
+
+    assert key not in sheet.block_keys()
+    assert sheet.notes.open_refs() == (origin, log)
+
+
+def test_dropping_a_notes_block_on_an_ordinary_one_just_docks(make_sheet, two_notes) -> None:
+    origin, log = two_notes
+    sheet = make_sheet()
+    sheet.notes.open_note(origin)
+    key = sheet.add_block_instance("notes")
+    sheet._sections_by_key[key].open_note(log)
+    pump()
+
+    drop_onto(sheet, key, "skills")
+
+    assert key in sheet.block_keys()  # still its own block
+    assert sheet._sections_by_key[key].open_refs() == (log,)
+
+
+def test_the_merge_highlight_goes_up_during_the_drag_and_comes_down_after(
+    make_sheet, two_notes
+) -> None:
+    origin, log = two_notes
+    sheet = make_sheet()
+    sheet.notes.open_note(origin)
+    key = sheet.add_block_instance("notes")
+    sheet._sections_by_key[key].open_note(log)
+    pump()
+
+    canvas = sheet.canvas
+    centre = drag_over(sheet, key, "notes")
+
+    assert canvas._merge_hint == "notes"
+    assert sheet.block_frame("notes")._merge_feedback.state == "accept"
+
+    canvas.title_bar_released(key, centre)
+    pump()
+    assert canvas._merge_hint is None
 
 
 # -- splitting -----------------------------------------------------------------

@@ -39,6 +39,10 @@
     "min_width": 240,
     "min_height": 180
   },
+  "notes": {
+    "min_width": 320,
+    "min_height": 220
+  },
   "dice": {
     "min_width": 360,
     "min_height": 300

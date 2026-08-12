@@ -19,6 +19,7 @@ indicator, and edge auto-scroll.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -43,6 +44,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui.block_frame import BlockFrame, BlockWindow
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.pinned import (
     DEFAULT_ALIGN,
@@ -58,7 +60,7 @@ if TYPE_CHECKING:  # the board is the canvas's *view* for pinned blocks, not a d
 
 # Bumped whenever the persisted arrangement schema changes, so a layout saved by
 # an older version is rejected and the default applies.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 #: Whether a block popped out of the app stays above other applications unless
 #: told otherwise. It does: a floated block's whole purpose is to be read beside
@@ -69,11 +71,18 @@ DEFAULT_ON_TOP = True
 
 @dataclass(frozen=True)
 class DropSlot:
-    """Where a dragged block would land: a new row, or a slot inside a row."""
+    """Where a dragged block lands: a new row, a slot in one, or *onto* a block.
+
+    ``onto`` names a block the dragged one would merge into rather than sit
+    beside. Only ever set when that block said yes (see
+    :meth:`BlockCanvas._merge_target`), so every block with no opinion keeps
+    exactly the drag behaviour it always had.
+    """
 
     new_row: bool
     row: int
     slot: int
+    onto: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,6 +232,13 @@ class BlockCanvas(QWidget):
 
     arrangement_changed = Signal()
     block_visibility_changed = Signal(str, bool)
+    #: A multi-instance block was built or destroyed at runtime, so a host's
+    #: View menu can grow and lose an entry with it.
+    block_added = Signal(str)
+    block_removed = Signal(str)
+    #: A block was dropped *onto* another (source, target). The canvas only
+    #: reports it: what merging two blocks means is the host's business.
+    merge_requested = Signal(str, str)
 
     def __init__(
         self,
@@ -233,6 +249,7 @@ class BlockCanvas(QWidget):
         *,
         fill_last: bool = False,
         default_pinned: list[list[str]] | None = None,
+        instance_factory: Callable[[str], tuple[str, QWidget, BlockSize] | None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
@@ -255,6 +272,11 @@ class BlockCanvas(QWidget):
             frame.hide()  # shown once _relayout places it in a row
             self._frames[key] = frame
 
+        # How a key in a restored layout that has no frame yet becomes one: the
+        # host answers with (title, section, size), or None if it doesn't know the
+        # key. Only a host with multi-instance blocks supplies it — the GM window
+        # passes none, so nothing there can be conjured out of a layout file.
+        self._instance_factory = instance_factory
         self._windows: dict[str, BlockWindow] = {}
         # Which floated blocks are pinned above other applications. Kept here, by
         # block key, rather than on the window: dragging a block out and docking it
@@ -302,6 +324,8 @@ class BlockCanvas(QWidget):
         self._scroll_area: QAbstractScrollArea | None = None
         self._drag_key: str | None = None
         self._drag_active = False
+        # The frame currently washed as a merge target, so it can be cleared.
+        self._merge_hint: str | None = None
         self._press_global = QPoint()
         self._grab_offset = QPoint()
         self._autoscroll_velocity = 0
@@ -332,6 +356,70 @@ class BlockCanvas(QWidget):
 
     def block_frame(self, key: str) -> BlockFrame:
         return self._frames[key]
+
+    # -- blocks that come and go --------------------------------------------
+
+    def add_block(
+        self,
+        key: str,
+        title: str,
+        section: QWidget,
+        size: BlockSize,
+        *,
+        near: str | None = None,
+    ) -> None:
+        """Build a frame for *key* and place it on the page.
+
+        The frames were built once, in the constructor, for as long as the block
+        set was fixed; a multi-instance block (Notes) is what makes one arrive
+        later. It lands beside *near* when that block is in a row — so a Notes
+        block split off another appears next to it rather than at the bottom of a
+        long sheet — and otherwise in a new row at the end.
+        """
+        if key in self._frames:
+            return
+        self._sizes[key] = size
+        frame = BlockFrame(key, title, section, size, self, parent=self)
+        frame.hide()
+        self._frames[key] = frame
+        row = self._row_of(near) if near else None
+        if row is None:
+            self._rows.append([key])
+        else:
+            self._rows[row].append(key)
+        self._relayout()
+        self.block_added.emit(key)
+        self.arrangement_changed.emit()
+
+    def remove_block(self, key: str) -> None:
+        """Destroy block *key*'s frame and forget it everywhere.
+
+        The caller owns the *section* inside it — the sheet drops it from its own
+        tables and stops listening — so this only takes the frame apart. Every
+        dict keyed by block has to be swept, or a later ``arrangement()`` writes
+        out a key nothing can build.
+        """
+        if key not in self._frames:
+            return
+        if self._drag_key == key:
+            self._end_drag()
+        self._detach(key)
+        frame = self._frames.pop(key)
+        frame.setParent(None)
+        frame.deleteLater()
+        self._sizes.pop(key, None)
+        self._hidden.discard(key)
+        self._anchors.pop(key, None)
+        self._on_top.pop(key, None)
+        self._relayout()
+        self.block_removed.emit(key)
+        self.arrangement_changed.emit()
+
+    def _row_of(self, key: str) -> int | None:
+        for index, row in enumerate(self._rows):
+            if key in row:
+                return index
+        return None
 
     def block_window(self, key: str):
         """The :class:`BlockWindow` block *key* is floated in, or ``None`` if docked."""
@@ -495,6 +583,7 @@ class BlockCanvas(QWidget):
         rows.extend([k] for k in self._frames if k not in used)
         return {
             "version": SCHEMA_VERSION,
+            "instances": [],
             "rows": rows,
             "floating": {},
             "hidden": [],
@@ -511,6 +600,15 @@ class BlockCanvas(QWidget):
         self._sync_from_board()
         return {
             "version": SCHEMA_VERSION,
+            # Which blocks *exist*, before where any of them sits. Only the ones
+            # nothing else could rebuild: a multi-instance block beyond the first
+            # is created at runtime, so a restore has to be told to make it before
+            # the placement below can name it (see _reconcile_instances).
+            "instances": [
+                {"key": key, "title": frame.base_title}
+                for key, frame in self._frames.items()
+                if instance_template(key) != key
+            ],
             "rows": [list(row) for row in self._rows],
             "floating": {key: self._window_geometry(key) for key in self._windows},
             "hidden": sorted(self._hidden),
@@ -558,6 +656,11 @@ class BlockCanvas(QWidget):
         same way — otherwise a restored layout leaves the View menu's checkmarks
         describing the arrangement this one replaced.
         """
+        # Before anything is validated: make the frames the model expects to
+        # exist. _validate demands that the layout's keys and the live frames
+        # match *exactly*, so an instance named in a saved layout has to be built
+        # first or the whole layout is rejected and the user loses their page.
+        self._reconcile_instances(model)
         parsed = self._validate(model)
         if parsed is None:
             return False
@@ -594,6 +697,38 @@ class BlockCanvas(QWidget):
             self.block_visibility_changed.emit(key, key not in self._hidden)
         self.arrangement_changed.emit()
         return True
+
+    def _reconcile_instances(self, model: object) -> None:
+        """Make the multi-instance frames *model* names, and destroy the rest.
+
+        The one place a block is built from a layout file rather than from the
+        registry. It is narrow on purpose: only a key whose
+        :func:`instance_template` differs from itself is touched, so a base block
+        can never be conjured up or swept away by an edited settings file, and a
+        host with no ``instance_factory`` (the GM window) reconciles nothing at
+        all. A key the factory does not recognise is simply not built — the
+        layout then fails validation and the default applies, which is the right
+        answer for a layout naming a block this version no longer has.
+        """
+        if self._instance_factory is None or not isinstance(model, dict):
+            return
+        raw = model.get("instances")
+        wanted: dict[str, str] = {}
+        if isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict) and isinstance(entry.get("key"), str):
+                    key = entry["key"]
+                    if instance_template(key) != key:
+                        wanted[key] = str(entry.get("title") or key)
+
+        for key in [k for k in self._frames if instance_template(k) != k and k not in wanted]:
+            self.remove_block(key)
+        for key, title in wanted.items():
+            if key in self._frames:
+                continue
+            built = self._instance_factory(key)
+            if built is not None:
+                self.add_block(key, built[0] or title, built[1], built[2])
 
     def _validate(self, model: object):
         """Parse/validate a persistence model → (rows, floating, hidden, anchors, pinned) or None.
@@ -1029,6 +1164,27 @@ class BlockCanvas(QWidget):
 
     # -- drag controller (called by the block title bars) --------------------
 
+    def adopt_drag(self, key: str, global_pos: QPoint) -> None:
+        """Take over a drag another widget started, with *key* already under way.
+
+        How a tab dragged off a Notes block becomes a block drag: the tab bar
+        still holds the mouse grab, so it goes on forwarding moves and the
+        release to :meth:`title_bar_moved` / :meth:`title_bar_released`, and from
+        here the gesture is indistinguishable from one begun on a title bar.
+        """
+        self._drag_key = key
+        self._press_global = global_pos
+        self._drag_active = True
+        frame = self._frames[key]
+        # Grabbed in the middle of its title bar, which is where a hand that has
+        # just dragged a tab expects the block to hang from.
+        self._grab_offset = QPoint(frame.width() // 2, frame.title_bar.height() // 2)
+        self.float_block(key, pos=global_pos - self._grab_offset)
+        window = self._windows.get(key)
+        if window is not None:
+            window.move(global_pos - self._grab_offset)
+        self.update_drag(global_pos)
+
     def title_bar_pressed(self, key: str, global_pos: QPoint) -> None:
         self._drag_key = key
         self._drag_active = False
@@ -1065,8 +1221,15 @@ class BlockCanvas(QWidget):
             self.pin_block(key, pin_at.line, pin_at.slot, new_line=pin_at.new_line)
             return
         slot = self._hit_test(global_pos)
-        if slot is not None:
-            self.dock_block(key, slot.row, slot.slot, new_row=slot.new_row)
+        if slot is None:
+            return
+        self.dock_block(key, slot.row, slot.slot, new_row=slot.new_row)
+        if slot.onto is not None:
+            # The host owns what a merge *means*; all this knows is that one was
+            # asked for. Docked first either way, so a host that ignores the
+            # request is left with a placed block rather than a floating one
+            # nobody asked to float.
+            self.merge_requested.emit(key, slot.onto)
 
     def request_float(self, key: str) -> None:
         self.float_block(key)
@@ -1169,7 +1332,18 @@ class BlockCanvas(QWidget):
 
         return QApplication.startDragDistance()
 
+    def _show_merge(self, key: str | None) -> None:
+        """Wash the frame a drop would merge into, and clear the last one."""
+        if key == self._merge_hint:
+            return
+        if self._merge_hint is not None and self._merge_hint in self._frames:
+            self._frames[self._merge_hint].set_merge_target(False)
+        self._merge_hint = key
+        if key is not None:
+            self._frames[key].set_merge_target(True)
+
     def _end_drag(self) -> None:
+        self._show_merge(None)
         self._drag_key = None
         self._drag_active = False
         self._autoscroll_velocity = 0
@@ -1224,6 +1398,9 @@ class BlockCanvas(QWidget):
         geoms = [row.geometry() for row in rows]
         for i, geo in enumerate(geoms):
             if geo.top() + self._GAP <= p.y() <= geo.bottom() - self._GAP:
+                onto = self._merge_target(rows[i], p)
+                if onto is not None:
+                    return DropSlot(False, i, 0, onto)
                 return DropSlot(False, i, self._row_slot(rows[i], p.x()))
 
         # Not inside any row's core → a new row at the nearest boundary.
@@ -1232,6 +1409,35 @@ class BlockCanvas(QWidget):
         boundaries.append(geoms[-1].bottom())
         nearest = min(range(len(boundaries)), key=lambda b: abs(p.y() - boundaries[b]))
         return DropSlot(True, nearest, 0)
+
+    #: How far inside a block's edges the pointer has to be for a drop to mean
+    #: "merge into this" rather than "sit beside it". The outer bands keep the
+    #: ordinary reorder, so a block can still always be placed next to another.
+    _MERGE_INSET = 28
+
+    def _merge_target(self, row: RowWidget, point: QPoint) -> str | None:
+        """The block under *point* that would take the dragged one in, if any.
+
+        Asks the *section* through a duck-typed ``accepts_merge(other_key)``, so
+        this module needs to know nothing about what merging means and a block
+        that does not answer never merges — which is every block but Notes, and
+        is why no existing drag behaves any differently.
+        """
+        if self._drag_key is None:
+            return None
+        for frame in row.frames():
+            if frame.key == self._drag_key:
+                continue
+            geo = frame.geometry()
+            box = QRect(row.mapToParent(geo.topLeft()), geo.size()).adjusted(
+                self._MERGE_INSET, self._MERGE_INSET, -self._MERGE_INSET, -self._MERGE_INSET
+            )
+            if not box.contains(point):
+                continue
+            accepts = getattr(frame.section, "accepts_merge", None)
+            if callable(accepts) and accepts(self._drag_key):
+                return frame.key
+        return None
 
     def _row_slot(self, row: RowWidget, x: int) -> int:
         """The insert column within *row* for canvas x-coordinate *x*."""
@@ -1242,6 +1448,13 @@ class BlockCanvas(QWidget):
         return len(row.frames())
 
     def _show_indicator(self, slot: DropSlot | None) -> None:
+        if slot is not None and slot.onto is not None:
+            # A merge has no *place* to mark, so the target itself is dressed:
+            # an insert line here would promise the block lands beside it.
+            self._indicator.hide_indicator()
+            self._show_merge(slot.onto)
+            return
+        self._show_merge(None)
         if slot is None:
             self._indicator.hide_indicator()
             return

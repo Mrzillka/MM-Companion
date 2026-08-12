@@ -87,6 +87,7 @@ __all__ = [
     "contrast_ratio",
     "delete_workspace_theme",
     "font_family",
+    "font_family_mono",
     "font_size",
     "is_literal_color",
     "is_workspace_theme",
@@ -402,6 +403,18 @@ def font_size(name: str) -> float:
 def font_family() -> str:
     """The theme's font family, or ``""`` to keep the platform default."""
     value = active_theme().typography.get("family")
+    return str(value) if value else ""
+
+
+def font_family_mono() -> str:
+    """The theme's monospace family, or ``""`` to keep the platform's fixed font.
+
+    Read off the preset directly rather than through :func:`_lookup`, like
+    :func:`font_family`: a preset saved before this token existed answers
+    ``None``, and "" is already the right answer for that — the platform's own
+    fixed-width font is a better guess than any theme file's.
+    """
+    value = active_theme().typography.get("family.mono")
     return str(value) if value else ""
 
 

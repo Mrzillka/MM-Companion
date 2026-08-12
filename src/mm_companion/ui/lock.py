@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QLineEdit,
+    QPlainTextEdit,
     QTextEdit,
     QWidget,
 )
@@ -70,13 +71,14 @@ def set_widget_locked(widget: QWidget, locked: bool) -> None:
     """Lock or unlock a single editable widget in place.
 
     Handles the input widgets the sheet uses (any spin box, ``QLineEdit``,
-    ``QTextEdit``, ``QComboBox``); anything else is left untouched.
+    ``QTextEdit``/``QPlainTextEdit``, ``QComboBox``); anything else is left
+    untouched.
     """
     if isinstance(widget, QAbstractSpinBox):
         widget.setReadOnly(locked)
         widget.setFrame(not locked)
         _set_spin_buttons_hidden(widget, locked)
-    elif isinstance(widget, QTextEdit):
+    elif isinstance(widget, (QTextEdit, QPlainTextEdit)):
         _set_text_edit_locked(widget, locked)
     elif isinstance(widget, QLineEdit):
         widget.setReadOnly(locked)
@@ -106,7 +108,7 @@ def _set_spin_buttons_hidden(spin: QAbstractSpinBox, hidden: bool) -> None:
         spin.setStyleSheet("")
 
 
-def _set_text_edit_locked(edit: QTextEdit, locked: bool) -> None:
+def _set_text_edit_locked(edit: QTextEdit | QPlainTextEdit, locked: bool) -> None:
     """Turn a multiline text box into plain wrapped text while locked.
 
     Read-only alone still draws the box's frame and input background; dropping the
@@ -117,7 +119,11 @@ def _set_text_edit_locked(edit: QTextEdit, locked: bool) -> None:
     if locked:
         edit.setFrameShape(QFrame.Shape.NoFrame)
         edit.viewport().setAutoFillBackground(False)
-        edit.setStyleSheet("QTextEdit { background: transparent; }")
+        # The Qt base class name, not ``type(edit).__name__``: a stylesheet
+        # selector matches subclasses, and a subclass's own name would not be a
+        # selector the sheet's other rules were written against.
+        selector = "QPlainTextEdit" if isinstance(edit, QPlainTextEdit) else "QTextEdit"
+        edit.setStyleSheet(f"{selector} {{ background: transparent; }}")
     else:
         edit.setFrameShape(QFrame.Shape.StyledPanel)
         edit.viewport().setAutoFillBackground(True)

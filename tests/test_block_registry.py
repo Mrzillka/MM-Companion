@@ -26,6 +26,7 @@ BASE_KEYS = {
     "skills",
     "powers",
     "equipment",
+    "notes",
     "dice",
 }
 
@@ -39,6 +40,7 @@ EXPECTED_DEFAULT_ROWS = [
     ["skills"],
     ["powers"],
     ["equipment"],
+    ["notes"],
 ]
 
 
@@ -78,13 +80,13 @@ def test_registering_a_mod_block_extends_the_set_and_layout() -> None:
         title="Mod Notes",
         factory=lambda data, character: None,  # never built in this pure test
         size=BlockSize(min_width=200, min_height=100),
-        default_row=7,
+        default_row=8,
         default_col=0,
     )
     register_block(descriptor)
     try:
         assert descriptor in block_descriptors()
-        # The new block lands in its own trailing row at default_row 7.
+        # The new block lands in its own trailing row, past the last base one.
         assert default_rows()[-1] == ["mod_notes"]
     finally:
         unregister_block("mod_notes")

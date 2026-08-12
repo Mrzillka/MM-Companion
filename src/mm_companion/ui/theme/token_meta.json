@@ -211,6 +211,15 @@
     "scale.inactive": {
       "label": "Switched-off card",
       "hint": "How much a switched-off power card shrinks. 1.0 is no change."
+    },
+    "family.mono": {
+      "label": "Monospace family",
+      "hint": "Code spans and fenced blocks in a note. Null takes the platform's own fixed-width font."
+    },
+    "size.notes": {"label": "Note body", "hint": "The markdown editor's body text."},
+    "scale.notes.heading": {
+      "label": "Note heading step",
+      "hint": "How much bigger each markdown heading level is than the one below it. 1.0 makes every heading body-sized."
     }
   }
 }

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui import theme
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
 
@@ -209,6 +210,8 @@ class BlockFrame(QFrame):
         # wants this one, which never goes stale.
         self.base_title = title
         self.section = section
+        # Built on first use: only a block that can be merged into ever needs one.
+        self._merge_feedback: DropFeedback | None = None
         self._size = BlockSize()
         self.setObjectName("blockFrame")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -344,6 +347,24 @@ class BlockFrame(QFrame):
             return
         policy.setVerticalPolicy(target)
         self.setSizePolicy(policy)
+
+    def set_merge_target(self, active: bool) -> None:
+        """Dress the frame as the block a drop would merge *into*.
+
+        The counterpart of the canvas's insert line, and deliberately a different
+        kind of mark: a line says "the block lands here", a wash over a whole
+        frame says "the block goes *in* here", which is what a merge does.
+        Built lazily so a frame that is never a merge target — every one but a
+        Notes block — costs nothing.
+        """
+        if self._merge_feedback is None:
+            if not active:
+                return
+            self._merge_feedback = DropFeedback(self, "#blockFrame", radius="radius.card")
+        if active:
+            self._merge_feedback.show_accept()
+        else:
+            self._merge_feedback.clear()
 
     def set_locked(self, locked: bool) -> None:
         """Forward read-only view mode to the section; the title bar stays live."""

@@ -1583,6 +1583,24 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   `ui/sections/powers.py` is the worked example, the same bargain `ui/lock.py` and
   `CompactOverlayButton` strike. `QToolButton:checked` *is* in the sheet; push
   buttons are the gap.
+- **Two more of the same trap, both found by a *text* tool button.** The Notes
+  toolbar's Preview toggle is the app's first text-only `QToolButton`, and it showed
+  that `QToolButton` stated **no `color` in either state**: Qt fell back to white, which
+  was invisible on Parchment — where the block title bars had all but lost their
+  `🖈 ↗ ✕` — and a *checked* one painted no label at all on the dark presets. Both
+  states state `color` now. And the **focus ring must give back as padding whatever it
+  takes as border**: a widget's size hint comes from its *resting* rule, so a 2px ring
+  replacing a 1px border stole two pixels from the caption ("Open…" came out "Open..").
+  `_focus_padding` subtracts the difference, styled presets only — Classic states no
+  resting padding to correct, and its buttons carry the platform's 80px minimum so they
+  had tens of pixels of slack to lose. `QToolButton`'s resting border is `focus.width`
+  for the same reason, since it has no padding to give back. Guarded as rules in
+  `tests/test_theme_qss.py`; the *label* half is guarded again as paint in
+  `tests/test_button_paint.py`, which must build a **real** Notes block (a standalone
+  button reads fine even with the rule gone — the cascade it sits in is what matters)
+  and is style-dependent, so it only bites on a real style, not under `offscreen`. The
+  *ring* half has no paint test on purpose: two pixels is below what counting ink can
+  tell apart, and one written for it passed with the bug present.
 - **The same trap, one level up: state a colour and you own its states.** The
   menus block states a flat `color` on `QMenuBar`/`QMenu` (it has to — the native
   Windows style paints menu chrome from the *system* theme and ignores the

@@ -55,13 +55,15 @@ SPLIT_THRESHOLD = 24
 #: The longest a tab caption gets before it is elided.
 MAX_TAB_CHARS = 22
 
-#: The preview toggle's two faces. Its glyph *is* the state read-out, the way the
-#: lock action's 🔒/🔓 and the compact button's ⤡/⤢ are: ``▤`` offers the note laid
-#: out, ``✎`` offers it back as source. Monochrome BMP marks rather than an emoji,
-#: which is the app's own vocabulary — ``✕ ⚠ ⌂ ↗ ↶ ↷ ▾ ▸ ★ ↺`` — and ``✎`` is
-#: already what "edit this" looks like on an equipment and a power card.
-GLYPH_RENDER = "▤"
-GLYPH_EDIT = "✎"
+#: The preview toggle's two faces, and they are **words**. A glyph is the right
+#: answer on a title bar, where there is room for nothing else and the same three
+#: marks recur on every block until they are learned; it is the wrong answer here,
+#: beside four text buttons, where one small symbol reads as neither a label nor
+#: an icon and says nothing about what a click would do. The button still carries
+#: the state the way the lock's 🔒/🔓 does — the label is always the action, so it
+#: needs no tooltip to be understood.
+LABEL_PREVIEW = "Preview"
+LABEL_EDIT = "Edit"
 
 _MISSING = "(missing)"
 
@@ -141,11 +143,17 @@ class NotesSection(QGroupBox):
 
         self._toolbar.addStretch(1)
 
+        # A QToolButton and not a QPushButton, for the reason spelled out in
+        # CLAUDE.md: the app's stylesheet states a push button's box and emits no
+        # `QPushButton:checked`, so a checked one paints exactly like an unchecked
+        # one. `QToolButton:checked` *is* in the sheet.
         self._preview_button = QToolButton()
         self._preview_button.setCheckable(True)
+        self._preview_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self._preview_button.toggled.connect(self._on_preview_toggled)
         self._toolbar.addWidget(self._preview_button)
         self._show_preview_state(False)
+        self._fix_preview_width()
         outer.addLayout(self._toolbar)
 
         # The tabs and the empty state share one slot, exactly one showing: an
@@ -440,11 +448,32 @@ class NotesSection(QGroupBox):
             self._open[index].editor.set_preview(preview)
 
     def _show_preview_state(self, preview: bool) -> None:
-        """Put the toggle's glyph and tooltip on what a click would now do."""
-        self._preview_button.setText(GLYPH_EDIT if preview else GLYPH_RENDER)
+        """Put the toggle's label on what a click would now do."""
+        self._preview_button.setText(LABEL_EDIT if preview else LABEL_PREVIEW)
         self._preview_button.setToolTip(
             "Edit the markdown source" if preview else "Show the note laid out"
         )
+
+    def _fix_preview_width(self) -> None:
+        """Hold the toggle at its wider label's width.
+
+        The two labels are different lengths and the button sits after a stretch,
+        so left to itself it would jump sideways every time the mode changed —
+        out from under the cursor that just clicked it.
+
+        The width is taken by *asking the button* for each label's size hint
+        rather than measuring the text and adding a guess at the chrome: how much
+        a tool button puts around its label is the style's business, and the
+        guess was 12px short under the shipped one.
+        """
+        button = self._preview_button
+        current = button.text()
+        widest = 0
+        for label in (LABEL_PREVIEW, LABEL_EDIT):
+            button.setText(label)
+            widest = max(widest, button.sizeHint().width())
+        button.setText(current)
+        button.setMinimumWidth(widest)
 
     # -- autosave ------------------------------------------------------------
 

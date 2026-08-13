@@ -1158,11 +1158,17 @@ block the sheet can have **more than one of**. `docs/` has no separate map; this
   left group with Open…/New/Import… because it acts on a note like they do, and *not*
   beside the preview toggle on the right, where a `✕` would sit directly under the title
   bar's, which closes the whole block.
-- **The preview toggle's glyph is the state read-out**, the way the lock's `🔒`/`🔓` and
-  the compact button's `⤡`/`⤢` are: `▤` offers the note laid out, `✎` offers it back as
-  source. Monochrome BMP marks rather than an emoji — the app's own vocabulary is
-  `✕ ⚠ ⌂ ↗ ↶ ↷ ▾ ▸ ★ ↺`, and `✎` is already what "edit this" looks like on an equipment
-  and a power card.
+- **The preview toggle is a word, not a glyph** — `Preview` / `Edit`, swapping so the
+  label is always the action, the way the lock's `🔒`/`🔓` is. A glyph is right on a
+  *title bar*, where there is room for nothing else and the same three marks recur on
+  every block until they are learned; it is wrong in a toolbar beside four text buttons,
+  where one small symbol reads as neither a label nor an icon (`👁`, then `▤`/`✎`, were
+  both tried and both just noise at real size). Two things it needs: a **`QToolButton`**,
+  since the sheet states a push button's box and emits no `QPushButton:checked` so a
+  checked one paints identically — the same trap `_mode_toggle_style` documents — and a
+  **held minimum width**, taken by asking the button for each label's `sizeHint` rather
+  than measuring the text and guessing the chrome (the guess was 12px short, and the
+  button sits after a stretch, so it jumped out from under the cursor that clicked it).
 - **The editor dims markers, it does not hide them** (`ui/notes/highlighter.py`).
   A `QPlainTextEdit` under a `MarkdownHighlighter`: headings large and bold, `**bold**`
   bold, code monospace on an accent wash, links accented — with the markers themselves

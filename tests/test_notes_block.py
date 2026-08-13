@@ -174,19 +174,35 @@ def test_an_empty_block_offers_neither_tabs_nor_close(make_sheet) -> None:
 
 def test_the_preview_toggle_reads_as_the_action_it_offers(make_sheet, two_notes) -> None:
     # Its glyph is the state read-out, like the lock's and the compact button's.
-    from mm_companion.ui.sections.notes import GLYPH_EDIT, GLYPH_RENDER
+    from mm_companion.ui.sections.notes import LABEL_EDIT, LABEL_PREVIEW
 
     origin, _log = two_notes
     sheet = make_sheet()
     sheet.notes.open_note(origin)
 
-    assert sheet.notes._preview_button.text() == GLYPH_RENDER
+    assert sheet.notes._preview_button.text() == LABEL_PREVIEW
     sheet.notes._preview_button.setChecked(True)
-    assert sheet.notes._preview_button.text() == GLYPH_EDIT
+    assert sheet.notes._preview_button.text() == LABEL_EDIT
     assert sheet.notes._open[0].editor.is_preview()
 
     sheet.notes._preview_button.setChecked(False)
-    assert sheet.notes._preview_button.text() == GLYPH_RENDER
+    assert sheet.notes._preview_button.text() == LABEL_PREVIEW
+
+
+def test_the_preview_toggle_does_not_move_when_it_flips(make_sheet, two_notes) -> None:
+    # The two labels are different lengths and the button sits after a stretch, so
+    # without a held width it would jump sideways out from under the cursor that
+    # just clicked it.
+    origin, _log = two_notes
+    sheet = make_sheet()
+    sheet.notes.open_note(origin)
+    pump()
+    before = sheet.notes._preview_button.geometry()
+
+    sheet.notes._preview_button.setChecked(True)
+    pump()
+
+    assert sheet.notes._preview_button.geometry() == before
 
 
 def test_a_locked_sheet_cannot_close_the_only_note(make_sheet, two_notes) -> None:

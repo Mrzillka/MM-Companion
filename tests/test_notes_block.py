@@ -132,6 +132,75 @@ def test_an_empty_block_shows_its_empty_state(make_sheet) -> None:
     assert sheet.notes._stack.currentWidget() is sheet.notes._empty
 
 
+def test_a_single_note_shows_no_tab_bar(make_sheet, two_notes) -> None:
+    # One tab is not a choice, and a strip of chrome that never changes is a row
+    # of the block's height spent saying nothing.
+    origin, log = two_notes
+    sheet = make_sheet()
+
+    sheet.notes.open_note(origin)
+    assert not sheet.notes._tabs.tabBar().isVisibleTo(sheet.notes)
+
+    sheet.notes.open_note(log)
+    assert sheet.notes._tabs.tabBar().isVisibleTo(sheet.notes)
+
+    sheet.notes._close_ref(log)
+    assert not sheet.notes._tabs.tabBar().isVisibleTo(sheet.notes)
+
+
+def test_close_takes_over_from_the_tab_x_when_the_bar_is_hidden(make_sheet, two_notes) -> None:
+    # Hiding the bar takes the per-tab ✕ with it, so the one note left has to stay
+    # closable some other way.
+    origin, log = two_notes
+    sheet = make_sheet()
+    sheet.notes.open_note(origin)
+
+    assert sheet.notes._close_button.isVisibleTo(sheet.notes)
+    sheet.notes.open_note(log)
+    assert not sheet.notes._close_button.isVisibleTo(sheet.notes)
+
+    sheet.notes._close_ref(log)
+    sheet.notes._close_button.click()
+
+    assert sheet.notes.open_refs() == ()
+    assert notes.read_note(origin).startswith("# Origin")  # still not a delete
+
+
+def test_an_empty_block_offers_neither_tabs_nor_close(make_sheet) -> None:
+    sheet = make_sheet()
+    assert not sheet.notes._tabs.tabBar().isVisibleTo(sheet.notes)
+    assert not sheet.notes._close_button.isVisibleTo(sheet.notes)
+
+
+def test_the_preview_toggle_reads_as_the_action_it_offers(make_sheet, two_notes) -> None:
+    # Its glyph is the state read-out, like the lock's and the compact button's.
+    from mm_companion.ui.sections.notes import GLYPH_EDIT, GLYPH_RENDER
+
+    origin, _log = two_notes
+    sheet = make_sheet()
+    sheet.notes.open_note(origin)
+
+    assert sheet.notes._preview_button.text() == GLYPH_RENDER
+    sheet.notes._preview_button.setChecked(True)
+    assert sheet.notes._preview_button.text() == GLYPH_EDIT
+    assert sheet.notes._open[0].editor.is_preview()
+
+    sheet.notes._preview_button.setChecked(False)
+    assert sheet.notes._preview_button.text() == GLYPH_RENDER
+
+
+def test_a_locked_sheet_cannot_close_the_only_note(make_sheet, two_notes) -> None:
+    origin, _log = two_notes
+    sheet = make_sheet()
+    sheet.notes.open_note(origin)
+
+    sheet.notes.set_locked(True)
+    assert not sheet.notes._close_button.isEnabled()
+
+    sheet.notes.set_locked(False)
+    assert sheet.notes._close_button.isEnabled()
+
+
 # -- autosave ------------------------------------------------------------------
 
 

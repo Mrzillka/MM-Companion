@@ -55,6 +55,14 @@ SPLIT_THRESHOLD = 24
 #: The longest a tab caption gets before it is elided.
 MAX_TAB_CHARS = 22
 
+#: The preview toggle's two faces. Its glyph *is* the state read-out, the way the
+#: lock action's 🔒/🔓 and the compact button's ⤡/⤢ are: ``▤`` offers the note laid
+#: out, ``✎`` offers it back as source. Monochrome BMP marks rather than an emoji,
+#: which is the app's own vocabulary — ``✕ ⚠ ⌂ ↗ ↶ ↷ ▾ ▸ ★ ↺`` — and ``✎`` is
+#: already what "edit this" looks like on an equipment and a power card.
+GLYPH_RENDER = "▤"
+GLYPH_EDIT = "✎"
+
 _MISSING = "(missing)"
 
 
@@ -121,14 +129,23 @@ class NotesSection(QGroupBox):
         self._import_button.clicked.connect(self._import_note)
         self._toolbar.addWidget(self._import_button)
 
+        # Only while the tab bar is hidden — with tabs showing, each one carries
+        # its own ✕. Here rather than beside the preview toggle on the right, both
+        # because it acts on a note like its three neighbours do and because a ✕
+        # over there would sit directly under the title bar's, which closes the
+        # whole block.
+        self._close_button = QPushButton("Close")
+        self._close_button.setToolTip("Close this note (the file is kept)")
+        self._close_button.clicked.connect(self._close_current)
+        self._toolbar.addWidget(self._close_button)
+
         self._toolbar.addStretch(1)
 
         self._preview_button = QToolButton()
-        self._preview_button.setText("👁")
         self._preview_button.setCheckable(True)
-        self._preview_button.setToolTip("Show the note rendered")
         self._preview_button.toggled.connect(self._on_preview_toggled)
         self._toolbar.addWidget(self._preview_button)
+        self._show_preview_state(False)
         outer.addLayout(self._toolbar)
 
         # The tabs and the empty state share one slot, exactly one showing: an
@@ -286,6 +303,9 @@ class NotesSection(QGroupBox):
         if 0 <= index < len(self._open):
             self._close_ref(self._open[index].ref)
 
+    def _close_current(self) -> None:
+        self._close_tab(self._tabs.currentIndex())
+
     def _close_ref(self, ref: str) -> None:
         """Close *ref*'s tab. The file is left alone — closing is not deleting."""
         self.flush()
@@ -380,7 +400,19 @@ class NotesSection(QGroupBox):
             self._tabs.setTabToolTip(index, f"{title}\n{item.ref}")
 
     def _refresh_empty_state(self) -> None:
+        """Show whichever of the three faces the open notes call for.
+
+        A single note gets **no tab bar**: one tab is not a choice, and a strip of
+        chrome that never changes is a row of the block's height spent saying
+        nothing. Its name is still on the block's title bar, which is what makes
+        hiding the bar safe, and the toolbar's Close takes over from the ✕ that
+        went with it.
+        """
         self._stack.setCurrentWidget(self._tabs if self._open else self._empty)
+        tabbed = len(self._open) > 1
+        self._tabs.tabBar().setVisible(tabbed)
+        self._close_button.setVisible(bool(self._open) and not tabbed)
+        self._close_button.setEnabled(not self._locked)
         self._preview_button.setEnabled(bool(self._open))
 
     def _emit_title(self) -> None:
@@ -400,11 +432,19 @@ class NotesSection(QGroupBox):
     # -- preview -------------------------------------------------------------
 
     def _on_preview_toggled(self, preview: bool) -> None:
+        self._show_preview_state(preview)
         index = self._tabs.currentIndex()
         if 0 <= index < len(self._open):
             if preview:
                 self.flush()  # render what is written, not what was last saved
             self._open[index].editor.set_preview(preview)
+
+    def _show_preview_state(self, preview: bool) -> None:
+        """Put the toggle's glyph and tooltip on what a click would now do."""
+        self._preview_button.setText(GLYPH_EDIT if preview else GLYPH_RENDER)
+        self._preview_button.setToolTip(
+            "Edit the markdown source" if preview else "Show the note laid out"
+        )
 
     # -- autosave ------------------------------------------------------------
 
@@ -477,6 +517,7 @@ class NotesSection(QGroupBox):
             item.editor.set_locked(locked)
         for button in (self._new_button, self._import_button):
             button.setEnabled(not locked)
+        self._close_button.setEnabled(not locked)
         self._tabs.setTabsClosable(not locked)
 
 

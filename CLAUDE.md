@@ -1151,6 +1151,18 @@ block the sheet can have **more than one of**. `docs/` has no separate map; this
   strikes between `image_path` and the pixels, and it is what makes a note shareable.
   `Character.restore` needs no change: it is driven by `dataclasses.fields`, so the
   block must mutate `character.notes` in place and never rebind it.
+- **One note means no tab bar.** One tab is not a choice, and a strip of chrome that
+  never changes is a row of the block's height spent saying nothing; the note's name is
+  on the block's title bar either way, which is what makes hiding the bar safe. Hiding it
+  takes the per-tab `✕` with it, so the toolbar's **Close** appears in its place — in the
+  left group with Open…/New/Import… because it acts on a note like they do, and *not*
+  beside the preview toggle on the right, where a `✕` would sit directly under the title
+  bar's, which closes the whole block.
+- **The preview toggle's glyph is the state read-out**, the way the lock's `🔒`/`🔓` and
+  the compact button's `⤡`/`⤢` are: `▤` offers the note laid out, `✎` offers it back as
+  source. Monochrome BMP marks rather than an emoji — the app's own vocabulary is
+  `✕ ⚠ ⌂ ↗ ↶ ↷ ▾ ▸ ★ ↺`, and `✎` is already what "edit this" looks like on an equipment
+  and a power card.
 - **The editor dims markers, it does not hide them** (`ui/notes/highlighter.py`).
   A `QPlainTextEdit` under a `MarkdownHighlighter`: headings large and bold, `**bold**`
   bold, code monospace on an accent wash, links accented — with the markers themselves

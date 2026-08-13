@@ -500,10 +500,24 @@ class CharacterSheet(QWidget):
         return self._locked
 
     def set_locked(self, locked: bool) -> None:
-        """Toggle read-only view mode across every block (incl. floated ones)."""
+        """Toggle read-only view mode across every block (incl. floated ones).
+
+        Through the *frames* rather than the sections directly, because locking
+        changes how big a block is and the frame is what re-reports that (see
+        :meth:`BlockFrame.set_locked`). ``block_keys`` is every block — docked,
+        pinned, floated or hidden — which is the same set the sections give.
+
+        The page's minimum is an explicit number behind a ``QScrollArea``, so it is
+        the one link no invalidation can cross — the same break
+        :meth:`PinnedPanel.eventFilter` exists to bridge. It is recomputed here
+        rather than left to ``arrangement_changed``, because a lock toggle is not a
+        rearrangement. Nothing here writes the model or emits ``edited``: locking is
+        a view switch.
+        """
         self._locked = locked
-        for section in self._sections():
-            section.set_locked(locked)
+        for key in self._canvas.block_keys():
+            self._canvas.block_frame(key).set_locked(locked)
+        self._update_min_width()
 
     def release_roller(self) -> tuple[QWidget, QWidget] | None:
         """Lend the dice roller out to a compact window, or ``None`` if there is none.

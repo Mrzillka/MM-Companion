@@ -429,6 +429,17 @@ shows the spec chip, the panel grows ~50px, and the strip answered with a scroll
   invalidation chain frame → strip → board → window is broken exactly there, and the
   window kept a minimum computed before the block grew.
 
+The board **only re-asserts the strip's thickness when the strip actually rebuilt**.
+`PinnedPanel.set_blocks` answers whether it did, and `PinnedBoard.set_blocks` settles on
+that answer. The canvas re-renders the strip on every structural change and most of them
+are about the *page*, so settling regardless meant five `setSizes` over ~80ms fighting a
+minimum that was already satisfied — on every dock, drop, hide and show. The retries are
+for a *stale* minimum, which only a rebuild leaves behind; a minimum that is genuinely
+larger never yields, and on a stock sheet it never can (the default extent is 320 against
+the Dice block's 360 floor), so the loop ran to its cap every time. That was the jitter
+when rearranging blocks. The paths that legitimately re-apply keep it: `set_extent`,
+`_apply_edge`, and the first render.
+
 Both of the strip's scrollbars stay on `AsNeeded`. They are the documented valve for a
 strip asked to hold more than the display can show — `PinnedPanel.minimumSizeHint` is
 capped at the usable screen, and past that a bar beats clipping a block. What the four
@@ -1796,6 +1807,21 @@ menu — `menu_bar.addAction(…)` with no submenu, so one click toggles it — 
 🔒/🔓 glyph *is* the state read-out (`_show_lock_state`). It is a play-time view
 switch reached constantly, not a preference; a GM's read-only `gm_view` window
 returns before it is built and so has none.
+
+**Toggling the lock is a resize, not only a costume change**, and the width must not be
+part of it. A locked field sheds its border and its padding, and several blocks hide
+their editing entry points outright — so the block's own minimum moves. The window does
+*not* resize itself on a toggle, so a block that grew when unlocked simply clipped
+against a window the user had already sized. The rule is therefore: **only the height may
+change**. Most blocks get that free, their `min_width` floor in `block_sizes.json`
+already covering the unlocked content; the Equipment block did not (three "Add…" buttons
+abreast are 360px against a 240px floor) and wraps them in a `FlowContainer` instead.
+`tests/test_lock_geometry.py` asserts the invariance per block, on the *frame* — the
+floors mask the section-level deltas, so a preset that lowers one would unmask it there.
+`BlockFrame.set_locked` raises the geometry invalidation and `CharacterSheet.set_locked`
+recomputes the page's minimum, since a lock toggle is not an `arrangement_changed` and
+the page's minimum is an explicit number behind a `QScrollArea` — the same link
+`PinnedPanel.eventFilter` exists to bridge.
 
 `set_widget_locked` sheds a field's chrome with a small **widget-level**
 stylesheet (`_LOCKED_SPIN_STYLE` / `_LOCKED_COMBO_STYLE`) as well as

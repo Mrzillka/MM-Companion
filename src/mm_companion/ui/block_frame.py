@@ -36,8 +36,14 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui import theme
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
+
+#: How strongly a block dropped *into* is washed. Heavier than the default
+#: 0.10 a small target gets, because this one has no outline to help it: the
+#: mark is the fill alone, and it has to carry a whole block's worth of area.
+MERGE_WASH = 0.24
 
 
 class DragHost(Protocol):
@@ -209,6 +215,8 @@ class BlockFrame(QFrame):
         # wants this one, which never goes stale.
         self.base_title = title
         self.section = section
+        # Built on first use: only a block that can be merged into ever needs one.
+        self._merge_feedback: DropFeedback | None = None
         self._size = BlockSize()
         self.setObjectName("blockFrame")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -344,6 +352,31 @@ class BlockFrame(QFrame):
             return
         policy.setVerticalPolicy(target)
         self.setSizePolicy(policy)
+
+    def set_merge_target(self, active: bool) -> None:
+        """Dress the frame as the block a drop would merge *into*.
+
+        The counterpart of the canvas's insert line, and deliberately a different
+        kind of mark: a line says "the block lands here", a wash over a whole
+        frame says "the block goes *in* here", which is what a merge does.
+        Built lazily so a frame that is never a merge target — every one but a
+        Notes block — costs nothing.
+        """
+        if self._merge_feedback is None:
+            if not active:
+                return
+            # A wash and **no border**. Partly because it is the right mark — a
+            # line says "the block lands here", a filled frame says "the block
+            # goes *in* here" — but mostly because a stylesheet border changes
+            # the frame's box, which relayouts the page *during the drag*: the
+            # target would shift out from under the cursor the instant it lit up.
+            self._merge_feedback = DropFeedback(
+                self, "#blockFrame", radius="radius.card", border=False, wash=MERGE_WASH
+            )
+        if active:
+            self._merge_feedback.show_accept()
+        else:
+            self._merge_feedback.clear()
 
     def set_locked(self, locked: bool) -> None:
         """Forward read-only view mode to the section; the title bar stays live."""

@@ -10,7 +10,14 @@ block by calling :func:`~mm_companion.ui.blocks.registry.register_block`.
 
 from __future__ import annotations
 
-from mm_companion.ui.blocks.base import Block, BlockDescriptor, BlockFactory
+from mm_companion.ui.blocks.base import (
+    INSTANCE_SEPARATOR,
+    Block,
+    BlockDescriptor,
+    BlockFactory,
+    instance_key,
+    instance_template,
+)
 from mm_companion.ui.blocks.bus import SignalBus
 from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.blocks.registry import (
@@ -24,6 +31,7 @@ from mm_companion.ui.blocks.registry import (
 )
 
 __all__ = [
+    "INSTANCE_SEPARATOR",
     "Block",
     "BlockDescriptor",
     "BlockFactory",
@@ -33,6 +41,8 @@ __all__ = [
     "block_descriptors",
     "default_pin_lines",
     "default_rows",
+    "instance_key",
+    "instance_template",
     "register_block",
     "sync_declarative_blocks",
     "unregister_block",

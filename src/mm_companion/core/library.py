@@ -45,15 +45,20 @@ def display_name(character: Character) -> str:
     return UNNAMED
 
 
-def _slugify(name: str) -> str:
-    """A filesystem-safe stem derived from a name (``"Iron Man" -> "iron-man"``)."""
+def slugify(name: str, fallback: str = "character") -> str:
+    """A filesystem-safe stem derived from a name (``"Iron Man" -> "iron-man"``).
+
+    *fallback* is what a name with nothing usable in it becomes, so a caller
+    naming something other than a character (a note) gets its own word rather
+    than a file called ``character``.
+    """
     slug = re.sub(r"[^\w-]+", "-", name.strip().lower()).strip("-")
-    return slug or "character"
+    return slug or fallback
 
 
 def suggested_filename(character: Character) -> str:
     """A default filename for *character*, e.g. ``"iron-man.json"``."""
-    return f"{_slugify(display_name(character))}{CHARACTER_SUFFIX}"
+    return f"{slugify(display_name(character))}{CHARACTER_SUFFIX}"
 
 
 def _characters_dir() -> Path:
@@ -61,7 +66,7 @@ def _characters_dir() -> Path:
     return storage.get_workspace().characters_dir
 
 
-def _unique_path(directory: Path, filename: str) -> Path:
+def unique_path(directory: Path, filename: str) -> Path:
     """A path under *directory* for *filename* that does not collide with a file.
 
     ``"iron-man.json"`` becomes ``"iron-man-2.json"`` when taken, and so on.
@@ -110,7 +115,7 @@ def _store_image(image_path: str | None) -> str | None:
     if not source.is_file():
         return image_path  # source is gone; keep the reference we were given
     images_dir.mkdir(parents=True, exist_ok=True)
-    target = _unique_path(images_dir, source.name)
+    target = unique_path(images_dir, source.name)
     shutil.copy2(source, target)
     return target.name
 
@@ -134,7 +139,7 @@ def save_character(
     else:
         directory = Path(directory) if directory is not None else _characters_dir()
         directory.mkdir(parents=True, exist_ok=True)
-        path = _unique_path(directory, suggested_filename(character))
+        path = unique_path(directory, suggested_filename(character))
 
     # Copy any external image into the workspace so the character is
     # self-contained; the model then references the stored copy.

@@ -87,6 +87,29 @@ def _guest_seat(bridge, display_name: str) -> str:
     return bridge.server.state.add_player(display_name).player_id
 
 
+NOTE_ORIGIN = """# Origin
+
+Bitten by a **radioactive** spider on a school trip to the *Osborn* labs.
+Told nobody for `three weeks`.
+
+## The turn
+
+- [x] Uncle Ben
+- [ ] tell MJ
+
+> With great power comes great responsibility.
+
+See the [house rules](http://example.com) for Enhanced Strength.
+"""
+
+NOTE_LOG = """# Session Log
+
+## Session 3
+
+The **bank** job went badly.
+"""
+
+
 def build(target: str):
     """Construct and show the window for ``target``; return it."""
     from mm_companion.core.storage import ensure_workspace
@@ -121,6 +144,44 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target in ("notes-demo", "notes-split"):
+        # The Notes block: a tabbed markdown editor over the workspace's notes/
+        # dir. The caret is parked mid-document so the marker rule shows both ways
+        # in one frame — the ## and ** are muted on every line but the caret's,
+        # and on its own line they are painted like the text they mark up.
+        # "notes-split" is the same with a second Notes block beside it, which is
+        # what the View menu's "New Notes Block" (or dragging a tab off the bar)
+        # produces.
+        from mm_companion.core import notes as notes_store
+        from mm_companion.ui.main_window import MainWindow
+
+        origin = notes_store.create_note("Origin")
+        notes_store.write_note(origin, NOTE_ORIGIN)
+        log = notes_store.create_note("Session Log")
+        notes_store.write_note(log, NOTE_LOG)
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        sheet.notes.open_note(origin)
+        sheet.notes.open_note(log)
+        if target == "notes-split":
+            second = sheet.add_block_instance("notes")
+            sheet.notes._close_ref(log)
+            sheet._sections_by_key[second].open_note(log)
+            keep = {"notes", second}
+        else:
+            sheet.notes._select(origin)
+            keep = {"notes"}
+        # Park the caret on the "## The turn" line: full-strength markers there,
+        # dimmed on every other line, which is the whole editor design in one shot.
+        editor = sheet.notes._open[0].editor
+        cursor = editor.source.textCursor()
+        cursor.setPosition(editor.text().index("## The turn") + 4)
+        editor.source.setTextCursor(cursor)
+        for key in sheet.block_keys():
+            if key not in keep:
+                sheet.hide_block(key)
+        win.resize(900, 640)
     elif target == "equipment-demo":
         # The Equipment block with gear on it: two categories (so the automatic
         # grouping and the group order show), a stowed item beside a worn one, and
@@ -538,6 +599,8 @@ def main(argv: list[str] | None = None) -> int:
             "sheet",
             "sheet-demo",
             "sheet-locked",
+            "notes-demo",
+            "notes-split",
             "equipment-demo",
             "equipment-vehicles",
             "equipment-platforms",

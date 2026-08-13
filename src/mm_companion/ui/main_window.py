@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Signal
-from PySide6.QtGui import QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -306,18 +306,24 @@ class MainWindow(QMainWindow):
         # reopened, plus a reset back to the default arrangement.
         self._block_actions: dict = {}
         for key in self._sheet.block_keys():
-            # `base_title`, not `title`: the live one carries a point subtotal that
-            # was current when this menu was built and is never re-labelled.
-            action = self._view_menu.addAction(self._sheet.block_frame(key).base_title)
-            action.setCheckable(True)
-            action.setChecked(not self._sheet.is_block_hidden(key))
-            action.toggled.connect(lambda visible, k=key: self._on_block_toggled(k, visible))
-            self._block_actions[key] = action
-        self._view_menu.addSeparator()
+            self._add_block_action(key)
+        # Everything below the separator acts on the menu rather than being one of
+        # its toggles, so the separator is held onto: a toggle added later has to
+        # be inserted *above* it, or "Reset Layout" stops being the last thing.
+        self._view_tail = self._view_menu.addSeparator()
+        for descriptor in self._sheet.multi_templates():
+            action = self._view_menu.addAction(f"New {descriptor.title} Block")
+            action.triggered.connect(
+                lambda _checked=False, t=descriptor.key: self._sheet.add_block_instance(t)
+            )
         self._view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         # Keep the View toggles in sync when a block is hidden/shown elsewhere
         # (its × button, a drag, or Reset Layout).
         self._sheet.canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
+        # …and in step with the block set itself, which a multi-instance block
+        # (Notes) makes something that changes while the window is open.
+        self._sheet.canvas.block_added.connect(self._on_block_added)
+        self._sheet.canvas.block_removed.connect(self._on_block_removed)
 
     def _join_session(self) -> None:
         """Join a GM's session, bringing the character already open in this window.
@@ -482,6 +488,33 @@ class MainWindow(QMainWindow):
         storage.update_settings(
             layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
         )
+
+    def _add_block_action(self, key: str) -> None:
+        """Give block *key* its show/hide toggle, above the menu's own actions.
+
+        ``base_title``, not ``title``: the live one carries a point subtotal that
+        was current when the menu was built and is never re-labelled.
+        """
+        if key in self._block_actions:
+            return
+        action = QAction(self._sheet.block_frame(key).base_title, self)
+        action.setCheckable(True)
+        action.setChecked(not self._sheet.is_block_hidden(key))
+        action.toggled.connect(lambda visible, k=key: self._on_block_toggled(k, visible))
+        tail = getattr(self, "_view_tail", None)
+        if tail is None:
+            self._view_menu.addAction(action)
+        else:
+            self._view_menu.insertAction(tail, action)
+        self._block_actions[key] = action
+
+    def _on_block_added(self, key: str) -> None:
+        self._add_block_action(key)
+
+    def _on_block_removed(self, key: str) -> None:
+        action = self._block_actions.pop(key, None)
+        if action is not None:
+            self._view_menu.removeAction(action)
 
     def _on_block_toggled(self, key: str, visible: bool) -> None:
         """Show or hide a block from its View-menu toggle."""

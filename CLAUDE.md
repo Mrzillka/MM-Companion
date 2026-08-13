@@ -162,7 +162,7 @@ clean (see Licensing below).
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
   Application Support elsewhere; override with `MM_COMPANION_HOME`) holding
-  `settings.json`, a `characters/` dir, and a `gm_characters/` dir. It is
+  `settings.json`, a `characters/` dir, a `gm_characters/` dir, and a `notes/` dir. It is
   idempotent and never clobbers edited settings. `core.storage` is pure Python
   (no Qt) and computes paths itself so it works headless in CI. `save_settings`/
   `update_settings` write the file back (e.g. the UI's window `layout`, stored as
@@ -248,15 +248,16 @@ clean (see Licensing below).
   rows are the last to claim a frame. The GM window gets the same strip, since it
   hosts the same canvas.
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
-  `QScrollArea` → `BlockCanvas`) → twelve blocks, each a section `QGroupBox` wrapped
+  `QScrollArea` → `BlockCanvas`) → thirteen blocks, each a section `QGroupBox` wrapped
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
   `ComplicationsSection`, `SkillsSection`, `PowersSection`, `EquipmentSection`,
-  `DiceSection`. The block set is **not** hardcoded in the sheet:
+  `NotesSection`, `DiceSection` — and Notes is the one there can be more than one of
+  (see "Blocks there can be two of" below). The block set is **not** hardcoded in the sheet:
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
   block (key, dock title, widget factory, `BlockSize`, default row/col, and
   `default_pinned` for a block that starts in the strip instead of a row), held in an
-  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The twelve
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The thirteen
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
   cross-block wiring still reaches it) and passes `default_rows()` plus
@@ -876,7 +877,7 @@ entry). Per window and in memory: closing the sheet discards the history.
   second click already reverses one, and it is not a persisted edit.
 - **`CharacterSheet.reseed()` is the widget half**, duck-typed and fanned out like
   `sync_session`, guarded by `_restoring` so the sheet's `EDITED` subscriber drops
-  the signal — the one chokepoint that covers all twelve blocks *and* any mod block
+  the signal — the one chokepoint that covers all thirteen blocks *and* any mod block
   (six sections carry no `_loading` flag of their own). Two passes, and the split is
   the rule for a new block: a block whose widgets hold model values exposes
   `reseed()`; **anything a topic already restates is left to the topics**, which is
@@ -1127,6 +1128,137 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
 - Budget breaches **warn, never block** (`equipment_violations`, a red bar and a ⚠).
   `core.storage.equipment_enforcement()` is the one seam that could change that, beside
   `pl_enforcement()` — read it through the accessor, never off `load_settings()`.
+
+## The Notes block (matters when touching Notes, or adding a block there can be two of)
+
+A tabbed markdown editor over ordinary `.md` files in the workspace, and the one
+block the sheet can have **more than one of**. `docs/` has no separate map; this is it.
+
+- **A note belongs to no character.** `core/notes.py` (pure Python) is the only seam
+  to the workspace `notes/` dir — `create_note`, `read_note`, `write_note` (atomic:
+  temp file + `os.replace`, because it runs on an autosave timer), `store_note`,
+  `rename_note`, `list_notes`, `resolve_note_path`. All of it is modelled on
+  `library.resolve_image_path`/`_store_image` and reuses their `slugify`/`unique_path`
+  (promoted to public for it). A character records only *which* notes its sheet has
+  open, so the same file can be open on two sheets, and nothing garbage-collects an
+  orphaned note — exactly as nothing prunes an unreferenced image.
+- **The split that shapes everything else.** `Character.notes` is
+  `dict[block key -> NotesState]` (`files` in tab order + the focused `active`),
+  omitted from `to_dict()` while empty so an older save round-trips unchanged.
+  Opening, closing or reordering a tab **is** a character edit: undoable, and it marks
+  the sheet dirty. The markdown **inside** a note is not — it autosaves to its own file
+  on a debounce and `Ctrl+Z` does not walk a paragraph back. Same bargain the portrait
+  strikes between `image_path` and the pixels, and it is what makes a note shareable.
+  `Character.restore` needs no change: it is driven by `dataclasses.fields`, so the
+  block must mutate `character.notes` in place and never rebind it.
+- **One note means no tab bar.** One tab is not a choice, and a strip of chrome that
+  never changes is a row of the block's height spent saying nothing; the note's name is
+  on the block's title bar either way, which is what makes hiding the bar safe. Hiding it
+  takes the per-tab `✕` with it, so the toolbar's **Close** appears in its place — in the
+  left group with Open…/New/Import… because it acts on a note like they do, and *not*
+  beside the preview toggle on the right, where a `✕` would sit directly under the title
+  bar's, which closes the whole block.
+- **The preview toggle is a word, not a glyph** — `Preview` / `Edit`, swapping so the
+  label is always the action, the way the lock's `🔒`/`🔓` is. A glyph is right on a
+  *title bar*, where there is room for nothing else and the same three marks recur on
+  every block until they are learned; it is wrong in a toolbar beside four text buttons,
+  where one small symbol reads as neither a label nor an icon (`👁`, then `▤`/`✎`, were
+  both tried and both just noise at real size). Two things it needs: a **`QToolButton`**,
+  since the sheet states a push button's box and emits no `QPushButton:checked` so a
+  checked one paints identically — the same trap `_mode_toggle_style` documents — and a
+  **held minimum width**, taken by asking the button for each label's `sizeHint` rather
+  than measuring the text and guessing the chrome (the guess was 12px short, and the
+  button sits after a stretch, so it jumped out from under the cursor that clicked it).
+- **The editor dims markers, it does not hide them** (`ui/notes/highlighter.py`).
+  A `QPlainTextEdit` under a `MarkdownHighlighter`: headings large and bold, `**bold**`
+  bold, code monospace on an accent wash, links accented — with the markers themselves
+  (`##`, `**`, the backticks) painted in `text.muted.rich` on every block **but the one
+  the caret is in**, where they come back to full strength (`set_active_block`, two
+  `rehighlightBlock` calls per cursor move). Obsidian *hides* a marker, which Qt has no
+  supported way to do: a `QSyntaxHighlighter` paints characters, it cannot remove them,
+  and the alternatives (rewriting the document per paragraph on every cursor move, a
+  custom `QAbstractTextDocumentLayout`) cost the native undo stack, selection across
+  paragraphs, and a relayout per keystroke. Dimming also keeps a property concealment
+  cannot: **nothing ever changes width**, so the text never reflows under the caret.
+  Note `text.muted.rich` and not `text.muted` — the plain one is `palette(placeholder-text)`
+  under Classic, and a `QTextCharFormat` needs a real colour now.
+- **Preview is Qt's own** — `document().setMarkdown(…, MarkdownDialectGitHub)` in a
+  `QTextBrowser`, so it costs no parser and no dependency, rendered on the toggle rather
+  than per keystroke. One wrinkle worth remembering: `setMarkdown` **bakes `#0000ff`
+  into each anchor as it parses**, so the palette's `Link` role is never consulted and
+  `setDefaultStyleSheet` (which only applies to `setHtml`) never sees the document.
+  `_recolour_links` walks the fragments afterwards; on a dark preset the default is
+  otherwise unreadable.
+- **This block scrolls, and that is the exception it looks like.** Every other block
+  shows all of its content and lets the page scroll; a note has no bound, so the block
+  takes `block_sizes.json`'s `notes` height and the text scrolls inside it — the same
+  call the roll history and `gm_rolls` already make. More room comes from floating or
+  pinning it.
+- Three new theme tokens, added to `classic.json` (which is also the `_lookup` fallback,
+  so one edit reaches every preset): `family.mono`, `size.notes`, `scale.notes.heading`.
+  **No new colour token** — code is told apart by monospace on a wash rather than a hue,
+  because a hue legible on both a light and a dark window is hard to pick and would be
+  one more thing to keep right in every preset.
+
+### Blocks there can be two of (matters when touching the canvas or the View menu)
+
+- A `BlockDescriptor` carrying an **`instance_factory`** is a *template*: further
+  instances take a `"notes#2"`-style key, are built by calling it with that key, and are
+  held by the **sheet** rather than the registry (which, being keyed by block key, can
+  hold one of anything). One field rather than a `multi` flag beside a lookup table, so a
+  mod ships a multi-instance block with nothing to register but its descriptor.
+  `blocks.base.instance_template` is the one rule for reading a template key back out,
+  and every lookup keyed by *kind* of block — `block_sizes.json`, a preset's `blocks`
+  overrides, the merge test — goes through it, so a per-instance key never has to appear
+  in a config file.
+- `BlockCanvas` gained `add_block`/`remove_block` (its `_frames` was write-once in the
+  constructor) plus `block_added`/`block_removed`, which both View menus follow —
+  `MainWindow._block_actions` is mutable now and inserts above a retained separator so
+  "Reset Layout" stays last.
+- **Placement is global, contents are per character.** A Notes block lives in the shared
+  `layout` settings key like every other block, so where it sits is remembered once; what
+  it has open is on the `Character`. The consequence is deliberate: a second Notes block
+  exists for *every* character, showing its "No notes open" state where one has nothing
+  in it.
+- The arrangement model gained an **`"instances"`** section, and `apply_arrangement`
+  reconciles `_frames` against it **before `_validate` runs** — that check is a strict
+  multiset equality against `set(self._frames)`, so an instance a saved layout names has
+  to exist first or the whole layout is rejected and the user loses their page. The
+  reconciler is narrow on purpose: only a key whose `instance_template` differs from
+  itself is touched, so an edited settings file can never conjure up or sweep away a base
+  block, and a host with no `instance_factory` (the GM window) reconciles nothing.
+  `SCHEMA_VERSION` is 7 for it.
+- **Merge is a drop onto a block, not between two.** `DropSlot` gained `onto`; `_hit_test`
+  checks a central band (`_MERGE_INSET`, the outer bands staying an ordinary insert so a
+  block can always be placed *beside* another) and asks the target *section* through a
+  duck-typed `accepts_merge(other_key)` that defaults absent. That default is why no
+  existing block's drag behaves any differently. The mark is a `DropFeedback` wash over
+  the whole target frame rather than an insert line — a line says "the block lands here",
+  a wash says "the block goes *in* here" — and **`border=False`, `wash=MERGE_WASH`**: a
+  stylesheet border would change the frame's box and relayout the page *while the block
+  is being dragged over it*, so the target would shift out from under the cursor the
+  instant it lit up, and without an outline the fill has to be heavier to read. The
+  canvas only emits `merge_requested`; what merging *means* is the sheet's, since the
+  sections are.
+- **`title_bar_released` hit-tests before `_end_drag`, and takes `onto` from
+  `_merge_hint`** — what the drag last *showed* — rather than asking again. Both halves
+  are one bug: `_end_drag` clears `_drag_key`, which `_merge_target` needs to know whose
+  drop it is judging, so re-deriving the merge afterwards made every drop an ordinary
+  dock and the merge never fired at all. The drop now does what the highlight promised.
+  Note also that a block scrolled off the page cannot be dropped on — `_hit_test` bounds
+  the gesture to the viewport — which is honest, and is why a test has to scroll first.
+- **Split is the same drag, adopted.** A tab dragged clear of its bar makes
+  `NotesSection` emit `splitRequested`; the sheet builds a new instance holding that one
+  note and calls `BlockCanvas.adopt_drag`, and because the **tab bar still holds the mouse
+  grab** it goes on forwarding moves and the release as `splitMoved`/`splitReleased`.
+  From there the gesture is indistinguishable from one begun on a title bar — dock, pin,
+  merge, or stay floating. Those three signals are connected in `_wire_section`, which
+  both the block built at startup and the copies made later go through; connecting only
+  the copies is exactly the bug where the first block's tabs could not be dragged out.
+- The template's own key (`notes`) is never removed — it is the block every sheet has and
+  every saved layout names, and closing it is what the View menu's checkbox is for. Only
+  a copy the user made is destroyed, by `✕` or by being merged away.
+- Screenshot it with `driver.py notes-demo` / `notes-split`.
 
 ## The session layer (matters when touching GM mode / online play)
 
@@ -1451,6 +1583,24 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   `ui/sections/powers.py` is the worked example, the same bargain `ui/lock.py` and
   `CompactOverlayButton` strike. `QToolButton:checked` *is* in the sheet; push
   buttons are the gap.
+- **Two more of the same trap, both found by a *text* tool button.** The Notes
+  toolbar's Preview toggle is the app's first text-only `QToolButton`, and it showed
+  that `QToolButton` stated **no `color` in either state**: Qt fell back to white, which
+  was invisible on Parchment — where the block title bars had all but lost their
+  `🖈 ↗ ✕` — and a *checked* one painted no label at all on the dark presets. Both
+  states state `color` now. And the **focus ring must give back as padding whatever it
+  takes as border**: a widget's size hint comes from its *resting* rule, so a 2px ring
+  replacing a 1px border stole two pixels from the caption ("Open…" came out "Open..").
+  `_focus_padding` subtracts the difference, styled presets only — Classic states no
+  resting padding to correct, and its buttons carry the platform's 80px minimum so they
+  had tens of pixels of slack to lose. `QToolButton`'s resting border is `focus.width`
+  for the same reason, since it has no padding to give back. Guarded as rules in
+  `tests/test_theme_qss.py`; the *label* half is guarded again as paint in
+  `tests/test_button_paint.py`, which must build a **real** Notes block (a standalone
+  button reads fine even with the rule gone — the cascade it sits in is what matters)
+  and is style-dependent, so it only bites on a real style, not under `offscreen`. The
+  *ring* half has no paint test on purpose: two pixels is below what counting ink can
+  tell apart, and one written for it passed with the bug present.
 - **The same trap, one level up: state a colour and you own its states.** The
   menus block states a flat `color` on `QMenuBar`/`QMenu` (it has to — the native
   Windows style paints menu chrome from the *system* theme and ignores the

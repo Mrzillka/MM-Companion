@@ -53,6 +53,41 @@ class Complication:
 
 
 @dataclass
+class NotesState:
+    """Which notes one Notes block on this character's sheet has open.
+
+    The *contents* half of the Notes block (see :mod:`..notes`): the markdown
+    itself lives in the workspace ``notes/`` dir as ordinary ``.md`` files, and a
+    character records only which of them its sheet has open and which tab was
+    focused. So a note can be open on two characters' sheets at once, and this
+    stays a list of references rather than a copy of anybody's text.
+
+    Note that *where* a Notes block sits is not here — that is in the shared
+    ``layout`` setting with every other block's position. This is keyed by block
+    key, so a sheet with two Notes blocks has two entries.
+    """
+
+    files: list[str] = field(default_factory=list)  # note refs, in tab order
+    active: str = ""  # the focused tab, "" for the first
+
+    def to_dict(self) -> dict:
+        return {
+            "files": list(self.files),
+            **({"active": self.active} if self.active else {}),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> NotesState:
+        if not isinstance(raw, dict):
+            return cls()
+        files = raw.get("files", [])
+        return cls(
+            files=[str(ref) for ref in files] if isinstance(files, list) else [],
+            active=str(raw.get("active", "")),
+        )
+
+
+@dataclass
 class AppliedCondition:
     """One condition currently on a character — an entity in the condition tracker.
 
@@ -160,6 +195,12 @@ class Character:
     #: :func:`~..rules.ability_cost_rate`, :func:`~..rules.resistance_cost_rate`,
     #: :func:`~..rules.skill_cost_rate`, :func:`~..rules.has_cost_overrides`).
     item_cost_overrides: dict[str, dict[str, int]] = field(default_factory=dict)
+    #: What each Notes block on the sheet has open, keyed by block key (``"notes"``,
+    #: ``"notes#2"``, …). Which notes are open **is** an edit — it is undoable and it
+    #: dirties the sheet — while the markdown inside them is not: a note's text
+    #: autosaves to its own file, the same split the portrait makes between
+    #: ``image_path`` and the pixels. See :class:`NotesState` and :mod:`..notes`.
+    notes: dict[str, NotesState] = field(default_factory=dict)
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -232,6 +273,15 @@ class Character:
                 if any(self.item_cost_overrides.values())
                 else {}
             ),
+            **(
+                {
+                    "notes": {
+                        key: state.to_dict() for key, state in self.notes.items() if state.files
+                    }
+                }
+                if any(state.files for state in self.notes.values())
+                else {}
+            ),
         }
 
     @classmethod
@@ -291,6 +341,10 @@ class Character:
             item_cost_overrides={
                 cat: {k: int(v) for k, v in items.items()}
                 for cat, items in raw.get("item_cost_overrides", {}).items()
+            },
+            notes={
+                str(key): NotesState.from_dict(value)
+                for key, value in (raw.get("notes") or {}).items()
             },
         )
 

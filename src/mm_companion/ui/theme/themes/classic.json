@@ -111,6 +111,7 @@
   "_typography": "Point sizes, applied with QFont.setPointSizeF — never as a stylesheet font-size, which would outrank the widget font and break the power card's switched-off transition. A null family keeps the platform default.",
   "typography": {
     "family": null,
+    "family.mono": null,
     "size.card-name": 11.0,
     "size.terms": 8.0,
     "size.cost-total": 12.0,
@@ -118,7 +119,9 @@
     "size.dice-face.compact": 24.0,
     "size.roll-readout": 16.0,
     "size.compact-button": 15.0,
-    "scale.inactive": 0.9
+    "scale.inactive": 0.9,
+    "size.notes": 10.0,
+    "scale.notes.heading": 1.1
   },
 
   "_blocks": "Per-block size overrides layered over ui/block_sizes.json. Empty here: Classic keeps the shipped sizes.",

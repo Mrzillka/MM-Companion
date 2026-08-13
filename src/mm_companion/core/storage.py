@@ -28,6 +28,7 @@ CHARACTERS_DIRNAME = "characters"
 GM_CHARACTERS_DIRNAME = "gm_characters"
 IMAGES_DIRNAME = "images"
 MODS_DIRNAME = "mods"
+NOTES_DIRNAME = "notes"
 SESSIONS_DIRNAME = "sessions"
 THEMES_DIRNAME = "themes"
 
@@ -235,6 +236,10 @@ class Workspace:
         return self.root / MODS_DIRNAME
 
     @property
+    def notes_dir(self) -> Path:
+        return self.root / NOTES_DIRNAME
+
+    @property
     def sessions_dir(self) -> Path:
         return self.root / SESSIONS_DIRNAME
 
@@ -276,6 +281,7 @@ def ensure_workspace() -> Workspace:
     workspace.gm_characters_dir.mkdir(parents=True, exist_ok=True)
     workspace.images_dir.mkdir(parents=True, exist_ok=True)
     workspace.mods_dir.mkdir(parents=True, exist_ok=True)
+    workspace.notes_dir.mkdir(parents=True, exist_ok=True)
     workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
     workspace.themes_dir.mkdir(parents=True, exist_ok=True)
     if not workspace.settings_file.exists():

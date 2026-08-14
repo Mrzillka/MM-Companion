@@ -789,6 +789,18 @@ class Modifier:
     has no game-term impact. Marks a power as homerule (see
     :func:`mm_companion.core.rules.power_has_custom_modifier`)."""
 
+    integration: Integration | None = None
+    """A ``statIntegration`` of the modifier's own — what taking it *grants*.
+
+    The same record a base effect carries, read by the same appliers, so an extra whose
+    text says "longer strides grant ranks of Speed" grants them instead of only costing
+    points. ``None`` for the overwhelming majority, which change a price, a game term or
+    a gate and nothing on the sheet.
+
+    The rank it is worth is the modifier's own when it is ``ranked``, and otherwise the
+    **host effect's** — which is what a per-rank price already says it is charging for.
+    """
+
 
 # --- Point costs & Power Level: per-rank trait costs and the PL-derived budget
 #     and caps (from ``costs.json``). ------------------------------------------
@@ -1005,9 +1017,10 @@ class SizeEffect:
     ``target`` the trait key or skill name it lands on. A ruleset that calls its defence
     something else, or maps a column somewhere else entirely, edits the data.
 
-    ``speedMod`` deliberately has no entry: ground speed is not a trait, and it is
-    applied to the base ground movement rank instead (see
-    :func:`~mm_companion.core.rules.base_ground_speed_rank`).
+    Two Size Table columns deliberately have no entry, because neither modifies a
+    trait: ``speedMod`` applies to the base ground movement rank
+    (:func:`~mm_companion.core.rules.base_ground_speed_rank`), and ``damageMod`` applies
+    to an effect's rank (:attr:`Measurements.size_rank_column`).
     """
 
     column: str
@@ -1027,6 +1040,11 @@ class Measurements:
     range), driving Growth/Shrinking's derived combat modifiers, and ``size_effects``
     says which trait each of those columns actually modifies (:class:`SizeEffect`).
 
+    ``size_rank_column`` names the one column that modifies no trait at all: how much
+    size raises the *rank* of an effect the character's own body drives, which is a
+    different kind of thing and is read by
+    :func:`~mm_companion.core.rules.effect_size_rank_shift`.
+
     ``distance_m`` returns the normalized numeric metric distance (metres) for a rank —
     the numeric sibling of the ``distance`` label — so a per-round distance can be
     converted to km/h; ``0.0`` when the rank is off-table.
@@ -1036,6 +1054,7 @@ class Measurements:
     size_by_rank: dict[int, SizeRow] = field(default_factory=dict)
     distance_m_by_rank: dict[int, float] = field(default_factory=dict)
     size_effects: tuple[SizeEffect, ...] = ()
+    size_rank_column: str = ""
 
     def label(self, column: str, rank: int, system: str = "imperial") -> str:
         return self.by_rank.get(rank, {}).get(system, {}).get(column, "")
@@ -2039,7 +2058,11 @@ def _parse_measure(raw: dict | None) -> Measure | None:
 
 
 def _parse_integration(raw: dict, configurable: bool) -> Integration:
-    """Build the typed :class:`Integration` from an effect's ``statIntegration``.
+    """Build the typed :class:`Integration` from a ``statIntegration`` block.
+
+    A base effect's, or a **modifier's**: an extra like Elongation's Striding ("longer
+    strides grant ranks of Speed") is a stat effect in every sense except that it hangs
+    off another effect, and it is read by the same appliers.
 
     A :class:`TraitBoost` is attached only for the trait-boosting effects — those
     the player targets (``configurable``, e.g. Enhanced Trait) or that carry a fixed
@@ -2171,6 +2194,11 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         custom=bool(m.get("custom", False)),
         description=m.get("description", ""),
+        integration=(
+            _parse_integration(m["statIntegration"], bool(m.get("configurableTarget", False)))
+            if m.get("statIntegration")
+            else None
+        ),
     )
 
 
@@ -2253,6 +2281,7 @@ def _parse_measurements(raw: dict) -> Measurements:
         size_by_rank=size_by_rank,
         distance_m_by_rank=distance_m_by_rank,
         size_effects=size_effects,
+        size_rank_column=raw.get("sizeRankColumn", ""),
     )
 
 

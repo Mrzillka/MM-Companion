@@ -99,6 +99,15 @@ class PowerEffectInstance:
     cosmetic: nothing about cost, terms or rolls changes, only what they are called
     (:func:`mm_companion.core.rules.power_rolls` prefixes with it).
 
+    ``size_scales_damage`` is the Power Constructor's *Extended settings* switch: while
+    it is on — and it is on by default — the wielder's size raises this effect's
+    effective rank by the Size Table's damage column, so a giant hits harder
+    (:func:`mm_companion.core.rules.effect_size_rank_shift`). It is off for the giant's
+    *laser*, which is why this is a switch and not a rule. Only an effect that forces a
+    resistance is affected either way. It lives on the effect rather than the power for
+    the reason ``attack_skill`` does — that is the level it applies at — even though
+    the constructor drives every effect in a power from one checkbox.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -119,6 +128,7 @@ class PowerEffectInstance:
     toggled_on: bool = True
     suppressed: bool = False
     attack_skill: str = ""
+    size_scales_damage: bool = True
     overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -135,6 +145,8 @@ class PowerEffectInstance:
         # byte-for-byte what it was.
         if self.label:
             data["label"] = self.label
+        if not self.size_scales_damage:
+            data["size_scales_damage"] = False
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
@@ -150,6 +162,7 @@ class PowerEffectInstance:
             config=dict(raw.get("config", {})),
             descriptors=list(raw.get("descriptors", [])),
             attack_skill=raw.get("attack_skill", ""),
+            size_scales_damage=bool(raw.get("size_scales_damage", True)),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 

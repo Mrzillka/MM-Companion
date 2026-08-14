@@ -318,6 +318,22 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target == "constructor-extended":
+        # The Extended settings section, on a Huge character's Damage power: it only
+        # appears once the build carries an effect it could apply to, and its note says
+        # what this wielder's size is worth.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        char.characteristics["size"] = "Huge"
+        char.abilities["ATK"] = 6
+        power = Power(name="Titan's Fists", effects=[PowerEffectInstance("damage", rank=8)])
+        power.description = "Slabs of fist the size of a car door."
+        win = PowerConstructorWindow(data, character=char, power=power)
     elif target == "equipment-constructor":
         # The same builder in gear mode, opened on a catalog sword: the shot is about
         # what differs — the Equipment title, the EP total, and the group combo beside
@@ -621,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",
+            "constructor-extended",
             "equipment-constructor",
             "focus",
             "dice",

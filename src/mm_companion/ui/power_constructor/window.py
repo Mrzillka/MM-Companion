@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +31,8 @@ from mm_companion.core.powers import (
     power_is_homerule,
 )
 from mm_companion.core.rules import (
+    effective_size,
+    effective_size_rank,
     item_ep_cost,
     modifier_label,
     power_allocation_violations,
@@ -50,7 +53,7 @@ from mm_companion.ui.power_constructor.common import (
 )
 from mm_companion.ui.power_constructor.terms_view import CostOverrideTarget, PowerTermsView
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import BOLD_STYLE, tinted_style
+from mm_companion.ui.widgets import BOLD_STYLE, muted_style, tinted_style
 
 
 class PowerConstructorWindow(QMainWindow):
@@ -157,6 +160,10 @@ class PowerConstructorWindow(QMainWindow):
 
         if self._editing:
             self._seed_from_power()
+
+        # Read, never write: an edited power's own switches are the authority until the
+        # user touches something (see :meth:`_apply_extended_settings`).
+        self._seed_extended_settings()
 
         self._refresh_cost()
         self._refresh_game_terms()
@@ -364,6 +371,8 @@ class PowerConstructorWindow(QMainWindow):
         if self._gear:
             layout.addWidget(self._build_gear_row())
 
+        layout.addWidget(self._build_extended_row())
+
         # Cross-power relationships (Independent / Array / Linked *between* whole powers)
         # are no longer set here — they're built on the character sheet by dragging one
         # power card onto another to form a group (see ``ui/sections/powers.py``). This
@@ -398,6 +407,7 @@ class PowerConstructorWindow(QMainWindow):
         self.canvas.changed.connect(self._refresh_cost)
         self.canvas.changed.connect(self._refresh_game_terms)
         self.canvas.changed.connect(self._refresh_pl_warning)
+        self.canvas.changed.connect(self._apply_extended_settings)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.canvas)
@@ -416,6 +426,140 @@ class PowerConstructorWindow(QMainWindow):
         actions.addWidget(self._save_button)
         layout.addLayout(actions)
         return panel
+
+    # -- extended settings -------------------------------------------------
+
+    #: Disclosure glyphs, matching the GM card's collapse control.
+    _EXPANDED_GLYPH = "▾"
+    _COLLAPSED_GLYPH = "▸"
+
+    def _build_extended_row(self) -> QWidget:
+        """The build's optional rules switches, folded away until they are wanted.
+
+        One setting today — whether the wielder's size raises this power's damage — and
+        it sits up here with the name rather than on an effect card because it reads as a
+        decision about the *power*: a giant's fists scale, a giant's laser does not, and
+        that is one answer however many effects carry it. (The flag itself lives on each
+        effect, which is the level it applies at and the journey ``attack_skill`` already
+        made; this checkbox drives them together.)
+
+        The section hides itself whenever the power has nothing it could apply to — the
+        way the structure bar appears only once there are two effects to structure. When
+        a second setting joins it, that becomes hiding the *row* rather than the section.
+        """
+
+        host = QWidget()
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        self._extended_toggle = QToolButton()
+        self._extended_toggle.setAutoRaise(True)
+        self._extended_toggle.setCheckable(True)
+        self._extended_toggle.setChecked(True)
+        self._extended_toggle.setText(f"{self._EXPANDED_GLYPH} Extended settings")
+        self._extended_toggle.toggled.connect(self._on_extended_toggled)
+        outer.addWidget(self._extended_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        self._extended_body = QWidget()
+        body = QVBoxLayout(self._extended_body)
+        body.setContentsMargins(16, 0, 0, 0)
+        self._size_damage = QCheckBox("Size modifies this power's damage")
+        # Checked *before* connecting: the handler recomputes the cost bar, which the
+        # panel has not built yet at this point in the constructor.
+        self._size_damage.setChecked(True)
+        self._size_damage.toggled.connect(self._on_size_damage_toggled)
+        body.addWidget(self._size_damage)
+        self._size_damage_note = QLabel()
+        self._size_damage_note.setStyleSheet(muted_style())
+        self._size_damage_note.setWordWrap(True)
+        body.addWidget(self._size_damage_note)
+        outer.addWidget(self._extended_body)
+
+        self._extended_row = host
+        host.setVisible(False)  # until an effect turns up that it could apply to
+        return host
+
+    def _size_scaled_effects(self) -> list:
+        """The effects in this build the Size Table's damage column could reach.
+
+        Exactly those that force a resistance — the same question
+        :func:`~mm_companion.core.rules.effect_size_rank_shift` asks, and the same one
+        the Power Level caps ask, so the section can never offer a switch that does
+        nothing.
+        """
+
+        by_id = {e.id: e for e in self._data.effects}
+        return [
+            effect
+            for effect in self.power.effects
+            if (base := by_id.get(effect.effect_id)) is not None
+            and base.resistance_dc_base is not None
+        ]
+
+    def _on_extended_toggled(self, expanded: bool) -> None:
+        glyph = self._EXPANDED_GLYPH if expanded else self._COLLAPSED_GLYPH
+        self._extended_toggle.setText(f"{glyph} Extended settings")
+        self._extended_body.setVisible(expanded)
+
+    def _on_size_damage_toggled(self, on: bool) -> None:
+        for effect in self._size_scaled_effects():
+            effect.size_scales_damage = on
+        self._refresh_cost()
+        self._refresh_game_terms()
+        self._refresh_pl_warning()
+        self._refresh_size_damage_note()
+
+    def _apply_extended_settings(self) -> None:
+        """Re-assert the section against a build whose effects have just changed.
+
+        The checkbox is authoritative once the window is open, so an effect dropped onto
+        the canvas **inherits it** rather than its own default. Without that, adding an
+        effect to a power whose switch is off would quietly turn the switch back on.
+        """
+
+        scaled = self._size_scaled_effects()
+        self._extended_row.setVisible(bool(scaled))
+        if not scaled:
+            return
+        on = self._size_damage.isChecked()
+        for effect in scaled:
+            effect.size_scales_damage = on
+        self._refresh_size_damage_note()
+
+    def _seed_extended_settings(self) -> None:
+        """Read the section back off a power being edited, without rewriting it."""
+
+        scaled = self._size_scaled_effects()
+        self._extended_row.setVisible(bool(scaled))
+        if scaled:
+            self._size_damage.blockSignals(True)
+            self._size_damage.setChecked(all(e.size_scales_damage for e in scaled))
+            self._size_damage.blockSignals(False)
+        self._refresh_size_damage_note()
+
+    def _refresh_size_damage_note(self) -> None:
+        """Say what the switch is worth *to this character*, right now."""
+
+        if self._character is None:
+            self._size_damage_note.setText(
+                "A larger wielder hits harder: the Size Table's Damage column raises "
+                "the rank of every effect here that forces a resistance."
+            )
+            return
+        column = self._data.measurements.size_rank_column
+        row = self._data.measurements.size_row(effective_size_rank(self._character, self._data))
+        amount = row.modifier(column) if row is not None and column else 0
+        size = effective_size(self._character, self._data)
+        if not amount:
+            self._size_damage_note.setText(
+                f"{size} size adds nothing — this matters once the wielder grows or shrinks."
+            )
+            return
+        self._size_damage_note.setText(
+            f"{size} size is worth {amount:+d} rank to every effect here that forces a "
+            "resistance, and shifts its Power Level cap by the same amount."
+        )
 
     # -- gear mode's extra build fields ------------------------------------
     def _build_gear_row(self) -> QWidget:

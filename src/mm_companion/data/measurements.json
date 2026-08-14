@@ -18,14 +18,22 @@
       "sizeRank": "Roughly the character's height/length on the distance column of the measurements table",
       "spaces": "How much room (in Spaces) the character needs to move unhindered at this size",
       "reach": "Close-attack range in Spaces",
-      "defenseMod": "Modifier to the character's Defense Power Level limit at this size",
-      "damageMod": "Modifier to the character's Damage/Strength rank Power Level limit at this size",
-      "toughnessMod": "Modifier to the character's Toughness Power Level limit at this size",
+      "defenseMod": "Modifier to the character's Defense at this size, and to its Power Level limit by the same amount",
+      "damageMod": "Modifier to the character's Strength at this size, and to its Damage Power Level limit by the same amount",
+      "toughnessMod": "Modifier to the character's Toughness at this size, and to its Power Level limit by the same amount",
       "speedMod": "Modifier to ground movement speed rank at this size",
       "intimidationMod": "Modifier to Intimidation skill checks at this size",
       "stealthMod": "Modifier to Stealth skill checks at this size"
-    }
+    },
+    "sizeEffectsNote": "Which trait each Size Table column modifies. The engine reads this rather than naming a trait in code, so a ruleset that calls its defence something else, or maps a column onto a different trait, only edits this list. 'speedMod' is deliberately absent: ground speed is not a trait, and it is applied to the base ground movement rank instead (see movement.json). A column mapped here also shifts the matching Power Level cap by the same amount, so a large character is not penalised twice."
   },
+  "sizeEffects": [
+    { "column": "defenseMod", "category": "resistance", "target": "DEF" },
+    { "column": "toughnessMod", "category": "resistance", "target": "TOUGHNESS" },
+    { "column": "damageMod", "category": "ability", "target": "STR" },
+    { "column": "intimidationMod", "category": "skill", "target": "Intimidation" },
+    { "column": "stealthMod", "category": "skill", "target": "Stealth" }
+  ],
   "rankMeasures": [
     {
       "rank": -5,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 from ..character import Character
 from ..data_loader import GameData, Modifier
@@ -13,7 +14,9 @@ from ..powers import (
     PowerGroup,
     PowerNode,
 )
+from .appliers import CATEGORY_ABILITY
 from .derived import effective_ability
+from .size import size_trait_modifier
 
 
 def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
@@ -200,7 +203,11 @@ def effect_total_cost(
 
 
 def effect_rank_trait_bonus(
-    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None,
+    *,
+    ability_offset: Callable[[str], int] | None = None,
 ) -> int:
     """Ranks a modifier folds in from a character ability *as it resolves in play*.
 
@@ -220,6 +227,11 @@ def effect_rank_trait_bonus(
     Whatever survives that cap is then put through
     :func:`ability_rank_contribution`, M&M's second divisor: an effect costing more
     than a point per rank only picks up ``floor(ability / cost per rank)``.
+
+    ``ability_offset`` subtracts from each ability *before* the cap and the divisor, so a
+    caller can ask what the rank would have been without some part of it — which is how
+    :func:`effect_size_rank_shift` isolates the ranks the character's size is paying
+    for, without a second copy of this arithmetic to keep in step.
     """
 
     if char is None:
@@ -231,10 +243,39 @@ def effect_rank_trait_bonus(
         modifier = catalog.get(selection.modifier_id)
         if modifier and modifier.adds_ability:
             ability = effective_ability(char, game_data, modifier.adds_ability)
+            if ability_offset is not None:
+                ability -= ability_offset(modifier.adds_ability)
             amount = selection.config.get("amount")
             raw = ability if amount is None else max(0, min(int(amount), ability))
             bonus += ability_rank_contribution(raw, per_rank)
     return bonus
+
+
+def effect_size_rank_shift(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> int:
+    """How many of this effect's *effective* ranks the character's **size** is paying for.
+
+    The same computation run twice — once as the sheet has it, once with the Size Table's
+    ability modifiers taken back out — because the Power Level cap must move by exactly
+    what size moved in its input, and that is not simply the size modifier. A
+    Strength-Based Damage bought against a fixed ``amount`` folds in
+    ``min(amount, Strength)``, so a large character whose Strength already exceeds the
+    amount gains no rank and is owed no extra cap; the same amount is then put through
+    M&M's per-rank-cost divisor, which is not linear either.
+
+    Zero for an effect that folds no ability in, which is most of them.
+    """
+
+    if char is None:
+        return 0
+
+    def offset(key: str) -> int:
+        return size_trait_modifier(char, game_data, CATEGORY_ABILITY, key)
+
+    return effect_rank_trait_bonus(effect, game_data, char) - effect_rank_trait_bonus(
+        effect, game_data, char, ability_offset=offset
+    )
 
 
 def effect_rank_trait_bonus_cost(

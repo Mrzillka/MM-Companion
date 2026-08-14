@@ -149,13 +149,21 @@ engine's registry seams. The whole contract is *import-time side effects*.
 # flat_bonus_mod.py
 from mm_companion.core.rules.powers_terms import READOUT_KINDS, EffectStat
 
-def _flat_bonus(readout, effect, game_data):
+def _flat_bonus(readout, effect, game_data, char=None):
     amount = int(readout.data.get("amount", 0))
     return [EffectStat("readout", readout.label or "Bonus", "", f"+{amount}", "")]
 
 # replace=True keeps re-import idempotent
 READOUT_KINDS.register("flat_bonus", _flat_bonus, replace=True)
 ```
+
+A readout handler takes `(readout, effect, game_data, char)`. The fourth argument
+is the wielding character, or `None` when the readout is asked about in the
+abstract — give it a default. Most readouts have no use for it; a *relative* one
+does, which is how Growth's `size_table` readout knows that a Small character
+growing 2 ranks is Large rather than Huge. A handler still written against the
+older three-argument signature is called again without the character, so an
+existing workspace mod keeps working.
 
 Its `effect_readouts.json` then uses the new kind, and any matching power renders
 it. The module resolves by its bare name — the mod's folder is put on `sys.path`

@@ -15,6 +15,7 @@ files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields, replace
 
 from . import mods as mods_module
@@ -957,6 +958,11 @@ class SystemRules:
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
 #     Size Table, and movement constants. --------------------------------------
+
+#: Splits a camelCase JSON key so it can be matched to its snake_case dataclass field.
+_CAMEL_TO_SNAKE = re.compile(r"(?<!^)(?=[A-Z])")
+
+
 @dataclass(frozen=True)
 class SizeRow:
     """One row of the Size Table (from ``measurements.json``'s ``sizeTable``).
@@ -976,6 +982,38 @@ class SizeRow:
     intimidation_mod: int
     stealth_mod: int
 
+    def modifier(self, column: str) -> int:
+        """This row's value for a Size Table column *named as the JSON names it*.
+
+        ``"defenseMod"`` → :attr:`defense_mod`. The translation lives here rather than
+        at the call site because :class:`SizeEffect` quotes the author's own column
+        name, and an unknown one reads as 0 rather than raising — a mod naming a column
+        this ruleset does not have grants nothing, exactly as an unregistered applier
+        kind does.
+        """
+
+        attribute = _CAMEL_TO_SNAKE.sub("_", column).lower()
+        return int(getattr(self, attribute, 0) or 0)
+
+
+@dataclass(frozen=True)
+class SizeEffect:
+    """Which trait one Size Table column modifies (``measurements.json``'s ``sizeEffects``).
+
+    The seam that keeps size out of Python: ``column`` names a field of :class:`SizeRow`,
+    ``category`` one of the applier categories (``ability``/``resistance``/``skill``) and
+    ``target`` the trait key or skill name it lands on. A ruleset that calls its defence
+    something else, or maps a column somewhere else entirely, edits the data.
+
+    ``speedMod`` deliberately has no entry: ground speed is not a trait, and it is
+    applied to the base ground movement rank instead (see
+    :func:`~mm_companion.core.rules.base_ground_speed_rank`).
+    """
+
+    column: str
+    category: str
+    target: str
+
 
 @dataclass(frozen=True)
 class Measurements:
@@ -986,7 +1024,8 @@ class Measurements:
     the book's own display string for a rank/column (e.g. distance rank 3 →
     ``"60 feet"``), or ``""`` when the rank is outside the tabulated −5…30 range.
     ``size_row`` returns the :class:`SizeRow` for a size rank (clamped to the table's
-    range), driving Growth/Shrinking's derived combat modifiers.
+    range), driving Growth/Shrinking's derived combat modifiers, and ``size_effects``
+    says which trait each of those columns actually modifies (:class:`SizeEffect`).
 
     ``distance_m`` returns the normalized numeric metric distance (metres) for a rank —
     the numeric sibling of the ``distance`` label — so a per-round distance can be
@@ -996,6 +1035,7 @@ class Measurements:
     by_rank: dict[int, dict[str, dict[str, str]]]  # rank -> system -> column -> label
     size_by_rank: dict[int, SizeRow] = field(default_factory=dict)
     distance_m_by_rank: dict[int, float] = field(default_factory=dict)
+    size_effects: tuple[SizeEffect, ...] = ()
 
     def label(self, column: str, rank: int, system: str = "imperial") -> str:
         return self.by_rank.get(rank, {}).get(system, {}).get(column, "")
@@ -2200,8 +2240,19 @@ def _parse_measurements(raw: dict) -> Measurements:
             intimidation_mod=int(row["intimidationMod"]),
             stealth_mod=int(row["stealthMod"]),
         )
+    size_effects = tuple(
+        SizeEffect(
+            column=entry["column"],
+            category=entry["category"],
+            target=entry["target"],
+        )
+        for entry in raw.get("sizeEffects", [])
+    )
     return Measurements(
-        by_rank=by_rank, size_by_rank=size_by_rank, distance_m_by_rank=distance_m_by_rank
+        by_rank=by_rank,
+        size_by_rank=size_by_rank,
+        distance_m_by_rank=distance_m_by_rank,
+        size_effects=size_effects,
     )
 
 
@@ -2855,7 +2906,7 @@ def _parse_block_spec(b: dict) -> BlockSpec:
 # Candidate id fields for record lists, tried in order. Whichever a list's dict
 # elements all carry identifies records for the by-id merge; a list whose elements
 # share none (e.g. an ``options`` list of strings) is replaced wholesale by a mod.
-_MERGE_ID_KEYS = ("id", "key", "name", "effect_id", "rank", "sizeRank")
+_MERGE_ID_KEYS = ("id", "key", "name", "effect_id", "rank", "sizeRank", "column")
 
 
 def _list_id_key(items: list) -> str | None:

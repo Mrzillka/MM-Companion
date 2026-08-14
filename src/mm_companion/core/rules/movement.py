@@ -9,6 +9,7 @@ from ..data_loader import GameData
 from .conditions import condition_speed_rank_mod
 from .powers_cost import effect_effective_rank
 from .runtime import effect_is_active, live_powers, worn_items
+from .size import effective_size_rank
 
 # -- movement / speed ------------------------------------------------------------
 
@@ -276,57 +277,3 @@ def _speed_kmh(rank: int, game_data: GameData) -> str:
         return "—"
     text = f"{kmh:.0f}" if kmh >= 10 else f"{kmh:.1f}"
     return f"{text} km/h"
-
-
-# -- size ------------------------------------------------------------------------
-
-
-def size_shift(char: Character, game_data: GameData) -> int:
-    """Net size-rank shift from active size-altering powers (Growth +, Shrinking −).
-
-    Reads each live effect's ``size_table`` readout (``effect_readouts.json``) and, when
-    the effect is currently active, applies its signed rank. Zero when no size power is
-    on, so the character sits at their bought size.
-    """
-
-    shift = 0
-    for power in live_powers(char.powers):
-        for effect in power.effects:
-            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-            if base is None:
-                continue
-            for readout in game_data.effect_readouts.get(effect.effect_id, ()):
-                if readout.kind != "size_table":
-                    continue
-                if not effect_is_active(power, effect, base, game_data, char):
-                    continue
-                sign = int(readout.data.get("sign", 1))
-                shift += sign * effect_effective_rank(effect, game_data, char)
-    return shift
-
-
-def base_size_rank(char: Character, game_data: GameData) -> int:
-    """The bought size category's rank (Medium → 0), defaulting to Medium."""
-
-    category = str(char.characteristics.get("size", "Medium"))
-    rank = game_data.measurements.size_rank_for_category(category)
-    return rank if rank is not None else 0
-
-
-def effective_size_rank(char: Character, game_data: GameData) -> int:
-    """The character's current size rank: their bought size plus any :func:`size_shift`."""
-
-    return base_size_rank(char, game_data) + size_shift(char, game_data)
-
-
-def effective_size(char: Character, game_data: GameData) -> str:
-    """The character's current size category, after active Growth/Shrinking.
-
-    The bought size (clamped to the Size Table) when nothing alters it; otherwise the
-    category the shifted rank lands on.
-    """
-
-    row = game_data.measurements.size_row(effective_size_rank(char, game_data))
-    if row is not None:
-        return row.size_category
-    return str(char.characteristics.get("size", "Medium"))

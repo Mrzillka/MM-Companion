@@ -14,6 +14,7 @@ from .appliers import trait_category
 from .derived import effective_ability
 from .powers_cost import array_alternate_cost, array_base_index, effect_effective_rank
 from .runtime import _resolved_trait_target, _trait_name
+from .size import base_size_rank
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -817,7 +818,7 @@ def effect_stat_rows(
         rows.append(EffectStat("enhances", "Enhances", "", raised, "better"))
     # Tier-5 derived readouts (Growth's size mods, Insubstantial's state, ...) — purely
     # computed information, appended as untinted (or sign-tinted) rows.
-    rows.extend(effect_readout_rows(effect, game_data))
+    rows.extend(effect_readout_rows(effect, game_data, char))
     # A Check Required-style flaw is a roll, not a footnote — its own row, which is
     # what carries it into the power card's dice footer.
     for note in required_check_notes(effect, game_data):
@@ -862,7 +863,9 @@ def _apply_row_overrides(rows: list[EffectStat], effect: PowerEffectInstance) ->
     return out
 
 
-def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
+def effect_readout_rows(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> list[EffectStat]:
     """The effect's Tier-5 derived readout rows (``docs/mm-powers-ui-design.md`` §2 Tier 5).
 
     Reads the effect's entries in ``effect_readouts.json`` and renders each by its
@@ -870,11 +873,15 @@ def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> lis
     Insubstantial rank into its state name, a Communication rank into its range band,
     a Burrowing rank into per-terrain speeds, and so on. These are never editable, so
     the UI shows them as read-only rows. Empty when the effect has no readouts.
+
+    ``char`` is the wielder, when there is one: a readout can be *relative* to what the
+    character already is, and a size shift is (Growth 2 makes a Small character Large,
+    not Huge). Optional, so a readout asked about in the abstract still renders.
     """
 
     rows: list[EffectStat] = []
     for readout in game_data.effect_readouts.get(effect.effect_id, ()):
-        rows.extend(_readout_rows(readout, effect, game_data))
+        rows.extend(_readout_rows(readout, effect, game_data, char))
     return rows
 
 
@@ -882,27 +889,49 @@ def effect_readout_rows(effect: PowerEffectInstance, game_data: GameData) -> lis
 # ``(readout, effect, game_data)`` and returns the rendered rows. The base kinds are
 # registered below; a mod's Python module can add a kind by registering another handler.
 # An unregistered kind resolves to no rows (see :func:`_readout_rows`).
-ReadoutHandler = Callable[[object, PowerEffectInstance, GameData], "list[EffectStat]"]
+ReadoutHandler = Callable[
+    [object, PowerEffectInstance, GameData, "Character | None"], "list[EffectStat]"
+]
 READOUT_KINDS: Registry[ReadoutHandler] = Registry("readout.kind")
 
 
 @READOUT_KINDS.handler("size_table")
-def _readout_size_table(readout, effect: PowerEffectInstance, game_data: GameData):
+def _readout_size_table(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
+    """Growth/Shrinking: the size this effect puts the wielder at, and what that changes.
+
+    Read **against the character**, because a size shift is relative: a Small character's
+    Growth 2 makes them Large, not Huge, and the sheet has always known that
+    (:func:`~.size.effective_size_rank`) while this card did not. Each modifier is the
+    *difference* between the row they land on and the row they started from, which is
+    what the power actually grants — and stays right past the ends of the table, where
+    the row lookup clamps and the columns stop being linear.
+
+    Without a character it falls back to the absolute row at the shift, which is the
+    best answer available when nobody is wielding the power yet.
+    """
+
     rank = effect.rank
     data = readout.data
     sign = int(data.get("sign", 1))
-    size = game_data.measurements.size_row(sign * rank)
-    if size is None or rank <= 0:
+    if rank <= 0:
+        return []
+    base_rank = base_size_rank(char, game_data) if char is not None else 0
+    size = game_data.measurements.size_row(base_rank + sign * rank)
+    start = game_data.measurements.size_row(base_rank)
+    if size is None or start is None:
         return []
     out = [EffectStat("size", readout.label or "Size", "", size.size_category, "")]
-    for label, mod in (
-        ("Defense", size.defense_mod),
-        ("Damage", size.damage_mod),
-        ("Toughness", size.toughness_mod),
-        ("Speed", size.speed_mod),
-        ("Intimidation", size.intimidation_mod),
-        ("Stealth", size.stealth_mod),
+    for label, column in (
+        ("Defense", "defenseMod"),
+        ("Damage", "damageMod"),
+        ("Toughness", "toughnessMod"),
+        ("Speed", "speedMod"),
+        ("Intimidation", "intimidationMod"),
+        ("Stealth", "stealthMod"),
     ):
+        mod = size.modifier(column) - start.modifier(column)
         if mod:
             change = "better" if mod > 0 else "worse"
             out.append(EffectStat(f"size_{label.lower()}", label, "", f"{mod:+d}", change))
@@ -910,7 +939,9 @@ def _readout_size_table(readout, effect: PowerEffectInstance, game_data: GameDat
 
 
 @READOUT_KINDS.handler("state")
-def _readout_state(readout, effect: PowerEffectInstance, game_data: GameData):
+def _readout_state(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
     rank = effect.rank
     by_rank = {int(k): v for k, v in readout.data.get("byRank", {}).items()}
     if not by_rank:
@@ -921,7 +952,9 @@ def _readout_state(readout, effect: PowerEffectInstance, game_data: GameData):
 
 
 @READOUT_KINDS.handler("measure_offsets")
-def _readout_measure_offsets(readout, effect: PowerEffectInstance, game_data: GameData):
+def _readout_measure_offsets(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
     rank = effect.rank
     data = readout.data
     column = data.get("column", "distance")
@@ -937,7 +970,9 @@ def _readout_measure_offsets(readout, effect: PowerEffectInstance, game_data: Ga
 
 
 @READOUT_KINDS.handler("thresholds")
-def _readout_thresholds(readout, effect: PowerEffectInstance, game_data: GameData):
+def _readout_thresholds(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
     rank = effect.rank
     return [
         EffectStat("readout", row.get("label", ""), "", row.get("text", ""), "")
@@ -947,7 +982,9 @@ def _readout_thresholds(readout, effect: PowerEffectInstance, game_data: GameDat
 
 
 @READOUT_KINDS.handler("config_flag")
-def _readout_config_flag(readout, effect: PowerEffectInstance, game_data: GameData):
+def _readout_config_flag(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
     data = readout.data
     on = bool(effect.config.get(data.get("key", "")))
     text = data.get("trueText", "") if on else data.get("falseText", "")
@@ -955,13 +992,17 @@ def _readout_config_flag(readout, effect: PowerEffectInstance, game_data: GameDa
 
 
 @READOUT_KINDS.handler("points_per_rank")
-def _readout_points_per_rank(readout, effect: PowerEffectInstance, game_data: GameData):
+def _readout_points_per_rank(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
     per = int(readout.data.get("perRank", 1))
     return [EffectStat("pool", readout.label, "", f"{effect.rank * per} points", "")]
 
 
 @READOUT_KINDS.handler("capped_rank_bonus")
-def _readout_capped_rank_bonus(readout, effect: PowerEffectInstance, game_data: GameData):
+def _readout_capped_rank_bonus(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
     """A per-rank bonus that stops climbing at a cap, applied to a chosen subject.
 
     Extra Limbs is the case: ``+1`` per rank to *either* Grab or Stability, no higher
@@ -996,17 +1037,31 @@ def _readout_capped_rank_bonus(readout, effect: PowerEffectInstance, game_data: 
     return [EffectStat("bonus", readout.label or "Bonus", "", text.strip(), "better")]
 
 
-def _readout_rows(readout, effect: PowerEffectInstance, game_data: GameData) -> list[EffectStat]:
+def _readout_rows(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> list[EffectStat]:
     """Render one :class:`~mm_companion.core.data_loader.Readout` to table rows.
 
     Dispatches on the readout's ``kind`` through :data:`READOUT_KINDS`; an unregistered
     kind renders nothing.
+
+    Handlers take ``(readout, effect, game_data, char)``. A handler written against the
+    older three-argument signature — a mod in somebody's workspace, which is the real
+    compatibility surface, since the ones in this repo are updated with it — is called
+    again without the character. The retry is guarded on the traceback having no next
+    frame, so a :class:`TypeError` raised *inside* a four-argument handler is never
+    swallowed and re-run.
     """
 
     handler = READOUT_KINDS.get(readout.kind)
     if handler is None:
         return []
-    return handler(readout, effect, game_data)
+    try:
+        return handler(readout, effect, game_data, char)
+    except TypeError as exc:
+        if exc.__traceback__ is not None and exc.__traceback__.tb_next is not None:
+            raise
+        return handler(readout, effect, game_data)
 
 
 # One handler per config-field ``type`` that renders its stored value specially

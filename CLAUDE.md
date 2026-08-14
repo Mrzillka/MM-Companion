@@ -1696,12 +1696,23 @@ exactly these pieces.
   *Reported live*, which is the point: the old `fit_table_height` did it once with
   `setFixedHeight`, before the stylesheet had touched a row, and the two stat blocks
   carried a hardcoded height "plus a little slack" to cover for it. Two flags:
-  `word_wrap` re-measures wrapped rows on resize, and `fit_width` reports the summed
-  column widths too — right for a table that *is* the whole block (the stat grids),
-  wrong for one panel of a column flow, whose section caps its own minimum at a
-  single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
+  `word_wrap` keeps wrapped rows fitted to their text, and `fit_width` reports the
+  summed column widths too — right for a table that *is* the whole block (the stat
+  grids), wrong for one panel of a column flow, whose section caps its own minimum at
+  a single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
   has not been shown has no visible children, and that is exactly when its minimum
   is first asked for.
+  **`word_wrap` follows the *header*, not the table's own geometry**, coalesced to
+  one `remeasure_wrapped_rows()` a turn on `sectionResized`. How tall a wrapped row
+  is depends on the width of the column it wraps in, and that width settles *after*
+  the rows are filled: a `ResizeToContents` sibling measures the items it was just
+  given, takes its share, and the stretching column shrinks — with no resize of the
+  table to notice. Measuring on the table's resize alone therefore fitted every row
+  to a column wider than it ended up with, which looks like a wrapped row with its
+  last line missing. A block that wants the height right *now*, without waiting for
+  the event loop, calls `remeasure_wrapped_rows()` itself — **last**, after whatever
+  fills the content-sized columns (`SkillsSection._rebuild` does it after
+  `_refresh_totals`, which is what finally writes the ABL/+/Total cells).
 - **`RowIndex`** — `(table, row, key)` entries in model order. A block that fans its
   rows across side-by-side panels has no positional row → model mapping, and the
   entry order *is* the block's order, so a drag reads its source and target
@@ -1719,6 +1730,41 @@ exactly these pieces.
   rows. It holds no model: the block supplies `on_move(source, target, before)` and
   an `accepts` predicate. `move_within` is the pop/insert with the downward
   correction a drop position needs.
+- **`ColumnFlowPanels.minimumSizeHint` reports exactly one panel** — its floor *and*
+  its ceiling (`ui/sections/column_flow.py`). A ceiling because the side-by-side
+  tables would otherwise inflate the section's minimum to the full multi-column
+  width, pinning the page wide and forcing at least two columns. A **floor** because
+  it used to be `min(hint.width(), _min_col_width())`, and whenever the section's own
+  layout minimum was the smaller of the two the block asked for *less than a panel
+  needs*: the frame's `block_sizes.json` floor applied instead and the stretching name
+  column silently absorbed the shortfall, which is what cut a long skill name off. It
+  also made the answer depend on the **lock** (a locked section hides its picker and
+  asks for less), which is the standing rule in `tests/test_lock_geometry.py` that a
+  lock toggle may change a block's height but never its width. Asking for a whole
+  panel is only safe because `_min_col_width` is now *bounded* — see the next bullet;
+  while it tracked the widest label without a ceiling, a name a player typed would
+  have held the window open at whatever width printed it on one line.
+- **`wrapping_column_width(metrics, texts, *, padding, cap, floor)`** — how wide a
+  **first column that wraps** should be. A name column that must not clip has only
+  two ways out, grow without limit or break the line, and the two blocks used to
+  take opposite wrong turns: Advantages sized column 0 `ResizeToContents`, so a
+  player's typed subject (`Benefit 3 (Wealthy — owns a mega-corp)`) grew it without
+  limit, the stretching Description column paid, and the block demanded that much
+  room wherever it went; Skills left its stretching name column to absorb a long
+  focus label and Qt painted `"…"`. Both **break** now: content up to a cap
+  (`column.advantage.name-max` / `column.skill.name-max`), wrapping past it, the row
+  getting taller — which is the sheet's own bargain, a block shows all of its
+  content and the page scrolls. The *floor* deliberately beats the cap, so a header's
+  own caption never clips. Because `_min_col_width` is both the flow's panel divisor
+  *and* what the section reports as its minimum, capping it is also what stops one long
+  label collapsing a block to a single panel. The cap is **hard**, and the one case it
+  cannot answer is a single *word* wider than the column: Qt's word wrap breaks between
+  words and not inside one, so such a label elides instead. Flooring at the longest word
+  was tried and is worse — it hands one typed 25-character word the power to pin the
+  block and the page behind it open, which is the complaint the cap exists to answer —
+  so the answer to *that* case is the **tooltip** every name cell now carries, the same
+  elide-plus-tooltip bargain `ElidingLabel` strikes. (Advantages' `refresh_conditions`
+  restores that tooltip rather than clearing it, or a struck-through row loses it.)
 - **`SortControl`** — the sort combo, and the standing rule that a preset mode
   stands the drag down (`SORT_MANUAL` is the shared mode id). Sorting is a
   **permanent rewrite** of the stored order, in both blocks that have one: the new
@@ -1742,15 +1788,21 @@ Two things the blocks add on top:
   The inline `✕` is gone (a focus/spec name cell is a plain item again, so the
   condition overlay can strike it); the `＋` stays, being an *add* affordance with
   nowhere else discoverable to live.
-  Two rules keep a long focus name from being clipped, and both are easy to
+  Three rules keep a long focus name from being clipped, and all three are easy to
   re-break. A focused skill's header spans from **`COL_NAME`**, not from
   `COL_ABILITY`: a `ResizeToContents` column measures a spanned cell widget as its
   own content, so parking the "Add focus…" buttons on the Ability column made that
-  column as wide as *they* are, and the stretching name column paid for it. And
+  column as wide as *they* are, and the stretching name column paid for it.
   `_min_col_width` budgets **every** column — the Ability column was missing from
   that sum, so the flow fitted one panel too many and the name column silently
   absorbed the shortfall. A column left out of that sum is a column the name column
-  pays for.
+  pays for. And the panel is `word_wrap`, so what is left over after all that
+  arithmetic **wraps** rather than eliding: the two sums above are heuristics, the
+  section's reported minimum is capped at one panel and can legitimately be *below*
+  what that panel wants, and a name silently cut off is the worst of the outcomes.
+  Only the indented focus/specialization rows and the locked view are plain items
+  and wrap; the two cell-widget name cells (the unlocked `＋` row, the group header)
+  hold a bare skill name, which the cap fits comfortably.
 
 ## Shared UI utilities and view modes (matters when adding widgets)
 

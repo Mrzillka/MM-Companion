@@ -14,6 +14,7 @@ from mm_companion.ui.sections.advantages import (
     SORT_RANK,
     SORT_TYPE,
     AdvantagesSection,
+    name_max_width,
 )
 
 
@@ -269,3 +270,71 @@ def test_heroic_ranks_free_backs_both_the_picker_cap_and_the_add_refusal() -> No
     # Over-budget reports negative rather than clamping — the callers decide.
     char.advantages.append(AdvantageSelection(heroic.name, rank=9))
     assert heroic_advantage_ranks_free(char, data) < 0
+
+
+# -- the Advantage column's width ----------------------------------------------
+
+#: An advantage whose subject the player types, which is what makes the column's
+#: content unbounded and is the whole reason it is capped.
+LONG_SUBJECT = "Wealthy — a controlling stake in a multiplanetary mega-corporation"
+
+
+def _shown(section: AdvantagesSection, width: int = 900) -> AdvantagesSection:
+    section.resize(width, 700)
+    section.show()
+    for _ in range(10):
+        QApplication.processEvents()
+    return section
+
+
+def test_a_long_advantage_name_wraps_instead_of_widening_the_block(
+    qapp: QApplication,
+) -> None:
+    """The Advantage column stops at its cap and the name takes a second line.
+
+    It used to be ``ResizeToContents``, so a subject the player typed grew the column
+    without limit: the stretching Description column paid for it, and the block
+    demanded that much room wherever it was put.
+    """
+    section = _shown(
+        _section(
+            [
+                AdvantageSelection(name="Benefit", rank=3, parameter=LONG_SUBJECT),
+                AdvantageSelection(name="Improved Initiative", rank=2),
+            ]
+        )
+    )
+    table = section._tables[0]
+    row = next(entry.row for entry in section._row_refs if entry.key.name == "Benefit")
+    text = table.item(row, 0).text()
+
+    assert section._name_col_width() == name_max_width()
+    assert table.columnWidth(0) == name_max_width()
+    # Too long for that share, so the row grew rather than the column.
+    assert table.fontMetrics().horizontalAdvance(text) > table.columnWidth(0)
+    assert table.rowHeight(row) >= table.sizeHintForRow(row)
+
+
+def test_a_typed_subject_does_not_widen_what_a_panel_demands(qapp: QApplication) -> None:
+    """``_min_col_width`` is the flow's divisor and the section's reported minimum.
+
+    So while it tracked the name column's raw content, one long subject was enough to
+    drop the block to a single panel and pin the page open at it. The claim is that it
+    has *stopped growing* — asserted by making the subject three times longer again,
+    which is font-independent in a way that comparing against a short one is not.
+    """
+    long = _section([AdvantageSelection(name="Benefit", rank=1, parameter=LONG_SUBJECT)])
+    longer = _section(
+        [AdvantageSelection(name="Benefit", rank=1, parameter=" ".join([LONG_SUBJECT] * 3))]
+    )
+
+    assert long._min_col_width() == longer._min_col_width()
+    assert long._name_col_width() == name_max_width()
+
+
+def test_the_advantage_header_is_never_clipped(qapp: QApplication) -> None:
+    """The floor: an empty block still has "Advantage" to print."""
+    section = _shown(_section([]))
+
+    header = section._tables[0].fontMetrics().horizontalAdvance("Advantage")
+    assert section._name_col_width() >= header

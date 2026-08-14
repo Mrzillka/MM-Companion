@@ -176,8 +176,16 @@
     "gm.thumb": {"label": "Collapsed portrait", "hint": "The portrait on a collapsed GM card, in pixels. It is still what opens the sheet."},
     "column.stat.spin": {"label": "Ability / resistance spin box"},
     "column.skill.name": {"label": "Skill name"},
+    "column.skill.name-max": {
+        "label": "Skill name (cap)",
+        "hint": "Widest the skill-name column grows before a long focus name wraps."
+    },
     "column.skill.spin": {"label": "Skill rank spin box"},
     "column.skill.mod": {"label": "Skill modifier"},
+    "column.advantage.name-max": {
+        "label": "Advantage name (cap)",
+        "hint": "Widest the Advantage column grows before a long name wraps."
+    },
     "column.advantage.desc": {"label": "Advantage description"},
     "column.advantage.combo": {"label": "Advantage picker"},
     "column.settings.nav": {"label": "Settings nav", "hint": "This window's own left-hand list."},

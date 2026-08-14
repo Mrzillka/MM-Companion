@@ -67,6 +67,7 @@ from mm_companion.ui.sections.row_table import (
     install_row_menu,
     move_within,
     remove_contributor,
+    wrapping_column_width,
 )
 from mm_companion.ui.sections.stat_table import CONDITION_TINT
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -84,9 +85,10 @@ SORT_NAME, SORT_RANK, SORT_TYPE = "name", "rank", "type"
 ROW_MIME = "application/x-mm-rows-advantages"
 
 # Rough widths used to decide how many panels fit without clipping a row. The Name
-# and Type columns size to content; the Description wraps but still wants a readable
-# minimum. Both minimums are theme metrics — a denser preset narrows them — while the
-# paddings below stay fixed heuristics.
+# column sizes to content up to a cap and *wraps* past it, the Type column sizes to
+# content, and the Description wraps but still wants a readable minimum. All three
+# bounds are theme metrics — a denser preset narrows them — while the paddings below
+# stay fixed heuristics.
 
 
 def picker_combo_min() -> int:
@@ -97,6 +99,11 @@ def picker_combo_min() -> int:
 def min_desc_width() -> int:
     """Readable minimum for the wrapping Description column."""
     return int(theme.metric("column.advantage.desc"))
+
+
+def name_max_width() -> int:
+    """Widest the Advantage column grows before a long name wraps instead."""
+    return int(theme.metric("column.advantage.name-max"))
 
 
 NAME_PADDING = 24
@@ -254,7 +261,9 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
                 item.setToolTip(f"Debilitated — {selection.name} is effectively lost")
             else:
                 item.setData(Qt.ItemDataRole.ForegroundRole, None)
-                item.setToolTip("")
+                # Back to the name, not to nothing: the column is capped and the cell's
+                # own tooltip is how a wrapped name is read in one piece.
+                item.setToolTip(item.text())
 
     # -- panel construction / rebuild ---------------------------------------
 
@@ -265,12 +274,25 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         table.setHorizontalHeaderLabels(["Advantage", "Type", "Description"])
         table.verticalHeader().setVisible(False)
         table.setWordWrap(True)
+        # A block shows all of its content and lets the *page* scroll, and column 0
+        # is a fixed width now, so a narrow panel must reflow rather than grow a bar.
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        # The Advantage column is *given* a width rather than sized to its content:
+        # a row's name carries the player's own typed subject ("Benefit 3 (Wealthy —
+        # owns a controlling stake in a mega-corp)"), so ResizeToContents grew it
+        # without limit, the stretching Description column paid for it, and the whole
+        # block demanded that much room wherever it was put. _name_col_width()
+        # instead, past which the name wraps and the row gets taller — see
+        # wrapping_column_width. Fixed rather than Interactive: a drag on the handle
+        # would be discarded by the next _rebuild, and a control that forgets what it
+        # was told is worse than no control.
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        table.setColumnWidth(0, self._name_col_width())
         table.itemSelectionChanged.connect(lambda t=table: self._on_selection_changed(t))
         table.cellDoubleClicked.connect(lambda row, _col, t=table: self._edit_row(t, row))
         # A panel built later by _ensure_tables is wired here too, so every panel is
@@ -298,8 +320,14 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         count = self._flow_column_count()
         self._column_count = count
         self._ensure_tables(count)
+        # Before the rows, not after: _render_row measures each row's wrapped height
+        # straight away, and it can only get that right once the column it wraps
+        # inside is at its final width. A panel built earlier may also have been
+        # sized for a shorter set of names than the model now holds.
+        name_width = self._name_col_width()
         buckets = even_split([1] * len(selections), count)
         for table, bucket in zip(self._tables, buckets, strict=True):
+            table.setColumnWidth(0, name_width)
             table.setRowCount(0)
             for index in bucket:
                 self._render_row(table, selections[index])
@@ -311,16 +339,18 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         """Append one row for *selection*, recording its row → model mapping."""
 
         advantage = self._advantages_by_name.get(selection.name)
-        ranked = bool(advantage and advantage.ranked)
-        text = f"{selection.name} {selection.rank}" if ranked else selection.name
-        subject = self._parameter_display(selection)
-        if subject:
-            text = f"{text} ({subject})"
+        text = self._name_text(selection)
         types = ", ".join(advantage.types) if advantage else ""
         description = advantage.description if advantage else ""
         row = table.rowCount()
         table.insertRow(row)
-        table.setItem(row, 0, QTableWidgetItem(text))
+        name_item = QTableWidgetItem(text)
+        # The column is capped, so a long name wraps — and a *very* long one still
+        # wants reading in one piece. The same belt-to-the-braces the skills block's
+        # indented rows carry, and refresh_conditions rewrites this tooltip when the
+        # row is struck through, which is the more urgent thing to say about it.
+        name_item.setToolTip(text)
+        table.setItem(row, 0, name_item)
         table.setItem(row, 1, QTableWidgetItem(types))
         table.setItem(row, 2, QTableWidgetItem(description))
         table.resizeRowToContents(row)
@@ -415,30 +445,51 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
     def _flow_item_count(self) -> int:
         return len(self._character.advantages)
 
-    def _min_col_width(self) -> int:
-        """Narrowest a panel may get before a row would clip.
+    def _name_text(self, selection: AdvantageSelection) -> str:
+        """What the Advantage column reads for *selection*.
 
-        Driven by the widest Name and Type text actually present (a longer
-        advantage raises it, forcing fewer panels) plus a readable Description
-        minimum.
+        The one place it is built, because it is both rendered
+        (:meth:`_render_row`) and measured (:meth:`_name_col_width`), and a column
+        sized for a different string than the one drawn in it is how a name gets
+        clipped.
+        """
+
+        advantage = self._advantages_by_name.get(selection.name)
+        ranked = bool(advantage and advantage.ranked)
+        text = f"{selection.name} {selection.rank}" if ranked else selection.name
+        subject = self._parameter_display(selection)
+        return f"{text} ({subject})" if subject else text
+
+    def _name_col_width(self) -> int:
+        """The Advantage column's width: its content, capped, wrapping past that.
+
+        Floored at the header's own caption so "Advantage" itself never clips.
         """
 
         fm = self.fontMetrics()
-        name_width = 0
+        return wrapping_column_width(
+            fm,
+            (self._name_text(selection) for selection in self._character.advantages),
+            padding=NAME_PADDING,
+            cap=name_max_width(),
+            floor=fm.horizontalAdvance("Advantage") + NAME_PADDING,
+        )
+
+    def _min_col_width(self) -> int:
+        """Narrowest a panel may get before a row would clip.
+
+        The Name column's capped share (a long name wraps rather than widening the
+        panel), plus the widest Type text actually present, plus a readable
+        Description minimum.
+        """
+
+        fm = self.fontMetrics()
         type_width = 0
         for selection in self._character.advantages:
             advantage = self._advantages_by_name.get(selection.name)
-            ranked = bool(advantage and advantage.ranked)
-            text = f"{selection.name} {selection.rank}" if ranked else selection.name
-            subject = self._parameter_display(selection)
-            if subject:
-                text = f"{text} ({subject})"
-            name_width = max(name_width, fm.horizontalAdvance(text))
             types = ", ".join(advantage.types) if advantage else ""
             type_width = max(type_width, fm.horizontalAdvance(types))
-        return (
-            name_width + NAME_PADDING + type_width + TYPE_PADDING + min_desc_width() + FRAME_PADDING
-        )
+        return self._name_col_width() + type_width + TYPE_PADDING + min_desc_width() + FRAME_PADDING
 
     def _apply_picker_mode(self, narrow: bool) -> None:
         """Lay the picker out on one or two rows.

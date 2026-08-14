@@ -18,6 +18,7 @@ from mm_companion.ui.sections.skills import (
     SORT_TOTAL,
     SkillRowKey,
     SkillsSection,
+    name_max_width,
 )
 
 
@@ -360,24 +361,127 @@ def test_the_group_header_spans_every_column(qapp: QApplication) -> None:
 
 @pytest.mark.parametrize("width", [700, 1000, 1100, 1300, 1500])
 def test_no_skill_name_is_clipped_at_any_width(qapp: QApplication, width: int) -> None:
-    """The panel count is chosen so every name fits; the flow must budget for it.
+    """Every name is shown in full — on a second line if that is what it takes.
 
-    The Ability column was missing from ``_min_col_width``, so at some widths the
-    flow fitted one panel too many and the stretching name column silently paid the
-    difference — which showed up as a long focus name being cut off. Swept across
-    widths because *which* ones broke was an accident of where the panel-count
-    boundaries happened to fall, and those move with the font: a single width would
-    have caught this on one machine and missed it on the next.
+    Two things have to hold, and they are the halves of one bargain.
+
+    The name column is never squeezed below its capped share: the Ability column was
+    once missing from ``_min_col_width``, so at some widths the flow fitted one panel
+    too many and the stretching name column silently paid the difference.
+
+    And every row is at least as tall as the view says its content needs. That is
+    the honest reading of "nothing is elided": ``wordWrap`` is on, so
+    ``sizeHintForRow`` is Qt's own answer for the room the row's lines take, and a
+    row that tall leaves the delegate no reason to cut anything. It is also the
+    assertion that catches the real bug — the rows were being fitted *before* the
+    ResizeToContents columns took their share, so they were sized for a name column
+    wider than they ended up with, and the last line went missing.
+
+    Swept across widths because *which* ones broke was an accident of where the
+    panel-count boundaries happened to fall, and those move with the font: a single
+    width would have caught this on one machine and missed it on the next.
     """
     data = load_game_data()
     char = Character.new_default(data)
-    char.focuses["Expertise"] = ["Science", "Streetwise"]
-    char.specializations["Stealth"] = ["Urban"]
+    # One focus long enough that its row genuinely has to wrap at every width in the
+    # sweep — with only short ones the height assertion below passes vacuously, the
+    # default row height already covering two lines of them.
+    char.focuses["Expertise"] = ["Interstellar Xenobiology and Comparative Anatomy", "Law"]
+    char.specializations["Stealth"] = ["Urban Infiltration and Countersurveillance"]
     section = _shown(SkillsSection(data, char), width)
 
     for entry in section._row_refs:
         item = entry.table.item(entry.row, S_COL_NAME)
         if item is None:
             continue  # a header or a row whose name cell carries the ＋ control
-        needed = entry.table.fontMetrics().horizontalAdvance(item.text())
-        assert entry.table.columnWidth(S_COL_NAME) >= needed, item.text()
+        table, row = entry.table, entry.row
+        needed = table.fontMetrics().horizontalAdvance(item.text())
+        assert table.columnWidth(S_COL_NAME) >= min(needed, name_max_width()), item.text()
+        assert table.rowHeight(row) >= table.sizeHintForRow(row), item.text()
+
+
+#: Long enough to pass the name column's cap in any font, and two words wide so it
+#: has somewhere to break (see ``wrapping_column_width`` on why one long word is a
+#: different case).
+LONG_FOCUS = "Interstellar Xenobiology and Comparative Anatomy"
+
+
+def _with_long_focus(width: int) -> SkillsSection:
+    """A sheet whose Expertise carries one very long focus and one short one."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.focuses["Expertise"] = [LONG_FOCUS, "Law"]
+    return _shown(SkillsSection(data, char), width)
+
+
+def test_a_long_focus_name_does_not_cost_the_block_its_second_panel(
+    qapp: QApplication,
+) -> None:
+    """``_min_col_width`` is the flow's divisor *and* the section's reported minimum.
+
+    So while it tracked the widest label without a ceiling, a single typed focus name
+    pushed a panel wider than the block would ever be given: one column, and the name
+    cut off inside it. Capped, the panel stays a panel.
+    """
+    assert len(_with_long_focus(1100)._tables) > 1
+
+
+def test_a_focus_name_too_wide_for_its_column_wraps(qapp: QApplication) -> None:
+    """Measured where the label is *certain* not to fit: one narrow panel.
+
+    At a roomy width the column may well be wide enough for it, and then there is
+    nothing to prove — which is how this passed with the wrapping switched off. The
+    two focuses are the comparison: same table, same kind of row, so the only thing
+    the taller one has is more lines.
+    """
+    section = _with_long_focus(420)
+    table, row = _row_for(
+        section, SkillRowKey("focus", "Expertise", LONG_FOCUS, f"Expertise::{LONG_FOCUS}")
+    )
+    _, short_row = _row_for(section, SkillRowKey("focus", "Expertise", "Law", "Expertise::Law"))
+
+    text = table.item(row, S_COL_NAME).text()
+    assert table.fontMetrics().horizontalAdvance(text) > table.columnWidth(S_COL_NAME)
+    assert table.rowHeight(row) > table.rowHeight(short_row)
+
+
+def test_the_name_column_is_capped_by_its_theme_metric(qapp: QApplication) -> None:
+    """A label longer than the cap adds nothing to what a panel demands.
+
+    Which is the whole point of the cap: past it the text wraps, so the block's
+    minimum stops tracking how much a player typed.
+    """
+    data = load_game_data()
+    short = Character.new_default(data)
+    short.focuses["Expertise"] = ["Law"]
+    long = Character.new_default(data)
+    long.focuses["Expertise"] = ["Interstellar Xenobiology and Comparative Anatomy"]
+
+    narrow = SkillsSection(data, short)._min_col_width()
+    wide = SkillsSection(data, long)._min_col_width()
+
+    assert wide >= narrow
+    assert wide - narrow <= name_max_width()
+
+
+def test_the_block_asks_for_a_whole_panel_locked_or_not(qapp: QApplication) -> None:
+    """One panel is the floor as well as the ceiling.
+
+    ``ColumnFlowPanels.minimumSizeHint`` used to report
+    ``min(layout_minimum, one_panel)``, so whenever the section's own layout minimum was
+    the smaller of the two the block asked for less than a panel needs — and the
+    stretching name column paid the difference. That also made the answer depend on the
+    lock, since a locked section hides controls and asks for less; see
+    ``tests/test_lock_geometry.py`` for the rule that says it must not.
+    """
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.focuses["Expertise"] = ["Interstellar Xenobiology and Comparative Anatomy"]
+    section = _shown(SkillsSection(data, char), 1100)
+
+    assert section.minimumSizeHint().width() == section._min_col_width()
+
+    section.set_locked(True)
+    QApplication.processEvents()
+
+    assert section.minimumSizeHint().width() == section._min_col_width()

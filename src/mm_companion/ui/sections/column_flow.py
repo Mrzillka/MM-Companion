@@ -216,12 +216,27 @@ class ColumnFlowPanels:
         return True
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Report a *single-column* minimum so the block can shrink to one panel.
+        """Report *exactly* one column — the block's floor and its ceiling both.
 
-        The side-by-side tables would otherwise inflate the section's minimum to the
-        full multi-column width, pinning the whole page (and window) wide and forcing
-        at least two columns. Capping the reported minimum at one column's width lets
-        the block narrow; ``resizeEvent`` then rebuilds to as many columns as fit.
+        A ceiling because the side-by-side tables would otherwise inflate the
+        section's minimum to the full multi-column width, pinning the whole page (and
+        window) wide and forcing at least two columns. One column lets the block
+        narrow; ``resizeEvent`` then rebuilds to as many as fit.
+
+        And a **floor**, which it was not: this used to be
+        ``min(hint.width(), self._min_col_width())``, so whenever the section's own
+        layout minimum was the smaller of the two the block asked for less than a
+        panel needs — the frame's ``block_sizes.json`` floor applied instead and the
+        stretching name column silently absorbed the shortfall, which is what cut a
+        long skill name off. It also made the answer depend on the *lock*, since a
+        locked section hides its picker and asks for less (see
+        ``tests/test_lock_geometry.py``, and the standing rule that a lock toggle may
+        change a block's height but never its width).
+
+        Asking for a whole panel is only safe because ``_min_col_width`` is now
+        *bounded*: its first column is capped and wraps past the cap (see
+        :func:`~mm_companion.ui.sections.row_table.wrapping_column_width`). While it
+        tracked the widest label without a ceiling, a name a player typed would have
+        held the window open at whatever width printed it on one line.
         """
-        hint = super().minimumSizeHint()
-        return QSize(min(hint.width(), self._min_col_width()), hint.height())
+        return QSize(self._min_col_width(), super().minimumSizeHint().height())

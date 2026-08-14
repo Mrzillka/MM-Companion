@@ -52,8 +52,12 @@ from .derived import (
 )
 from .equipment import item_effective_build
 from .rolls import (
+    KIND_ABILITY,
+    KIND_INITIATIVE,
     KIND_POWER_CHECK,
     KIND_POWER_SAVE,
+    KIND_RESISTANCE,
+    KIND_SKILL,
     RollSpec,
     ability_roll,
     initiative_roll,
@@ -698,6 +702,80 @@ def default_pin_choices(game_data: GameData) -> list[PinGroup]:
         PinGroup("Equipment", (choice(PinRef(PIN_EQUIPMENT, select=SELECT_FIRST_WEAPON)),)),
     )
     return groups
+
+
+# -- requested rolls ---------------------------------------------------------
+
+
+def requested_roll_choices(game_data: GameData) -> list[PinGroup]:
+    """Every trait one player may **ask another** to roll, grouped for a combobox.
+
+    A third character-free list beside :func:`default_pin_choices`, and a smaller
+    one again, because a request is answered on somebody else's sheet:
+
+    * **no Defence DC** — it resolves to no
+      :class:`~mm_companion.core.rules.rolls.RollSpec` at all (it is a difficulty,
+      not a roll), so there would be nothing to put in the recipient's roller;
+    * **no powers or equipment** — a pin names a power by an id that belongs to
+      one character. There is no honest thing to localize "roll my Blast" to on
+      anyone else's sheet, and sending the asker's own number would be a
+      confident wrong one.
+
+    What is left is exactly the four kinds :func:`localize_spec` can fill in from
+    a sheet: abilities, resistances, skills and initiative.
+
+    Each value carries a **template spec** rather than a reading: ``modifier=0``
+    (the asker must not send their own number — the recipient's sheet supplies
+    it) and a :attr:`~mm_companion.core.rules.rolls.RollSpec.trait_key` naming the
+    trait, which is the whole mechanism. Labels are full names rather than the
+    chip abbreviations :func:`pin_label` gives, since these are read in a combobox
+    and in a sentence ("asks for Awareness"), where ``AWE`` is a riddle.
+
+    The DC is not baked in: the caller applies it with
+    ``replace(spec, dc=...)`` at send time, so one template serves every request
+    of that trait.
+    """
+
+    def value(ref: PinRef, label: str, spec: RollSpec) -> PinnedValue:
+        return PinnedValue(ref=ref, label=label, value="", spec=spec)
+
+    def trait(ref: PinRef, label: str, kind: str, key: str) -> PinnedValue:
+        return value(ref, label, RollSpec(label=label, kind=kind, trait_key=key))
+
+    groups = [
+        PinGroup(
+            "Abilities",
+            tuple(
+                trait(PinRef(PIN_ABILITY, a.key), a.name, KIND_ABILITY, a.key)
+                for a in game_data.abilities
+            ),
+        ),
+        PinGroup(
+            "Resistances",
+            tuple(
+                trait(PinRef(PIN_RESISTANCE, r.key), r.name, KIND_RESISTANCE, r.key)
+                for r in game_data.resistances
+            ),
+        ),
+        PinGroup(
+            "Derived",
+            (
+                trait(
+                    PinRef(PIN_INITIATIVE),
+                    pin_label(PinRef(PIN_INITIATIVE), game_data),
+                    KIND_INITIATIVE,
+                    PIN_INITIATIVE,
+                ),
+            ),
+        ),
+    ]
+    skills = tuple(
+        trait(PinRef(PIN_SKILL, row_id), skill_row_label(row_id), KIND_SKILL, row_id)
+        for row_id in _catalog_skill_rows(game_data)
+    )
+    if skills:
+        groups.append(PinGroup("Skills", skills))
+    return [group for group in groups if group.values]
 
 
 # -- defaults ----------------------------------------------------------------

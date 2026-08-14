@@ -34,7 +34,7 @@ from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import RollSpec, localize_spec
+from mm_companion.core.rules import RollSpec, localize_spec, requested_roll_choices
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import live_session
@@ -55,6 +55,10 @@ class DiceSection(QGroupBox):
         # Every spec that reaches the roller — from the bus, or from a follow-up chip
         # on a history card — passes through here on its way in.
         self.view.panel.set_localizer(self._localize)
+        # And the traits the Request row may ask the table for. Character-free on
+        # purpose: a request is answered on somebody else's sheet.
+        self.view.panel.set_roll_choices(requested_roll_choices(self._data))
+        self.view.panel.rollRequested.connect(self.request_roll)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
@@ -112,6 +116,24 @@ class DiceSection(QGroupBox):
         bridge = live_session()
         if bridge is None or not bridge.post_note(text):
             self.view.add_local_note(text)
+
+    def request_roll(self, spec: object) -> None:
+        """Ask the table to roll something — the Request row's handler.
+
+        Where it goes is the question :meth:`post_note` already answers, and the
+        same answer: at a table it goes to the session, so the request lands in
+        everyone's shared log with a button on it; off the air it goes in the
+        private history, where the button still rolls it here.
+
+        Nothing is rolled from this side. The asker's own card carries the same
+        button as everyone else's — you are asking yourself too — and it is theirs
+        to press or ignore.
+        """
+        if not isinstance(spec, RollSpec):
+            return
+        bridge = live_session()
+        if bridge is None or not bridge.prompt_roll(spec.to_dict()):
+            self.view.add_local_request(spec)
 
     def sync_session(self) -> None:
         """Re-check whether there is a session, and show the matching history.

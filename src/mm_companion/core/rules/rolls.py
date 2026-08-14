@@ -86,11 +86,14 @@ class RollSpec:
     costs (see :func:`resistance_outcome`), which is what turns a rolled number into
     "Incapacitated!" or "Hit".
 
-    Two fields exist because a save is rolled by **the other side of the table**:
-    ``rolled_by_target`` marks a spec the wielder never rolls (so a power card shows
-    the line without a 🎲 — the follow-up chip is where it belongs), and
-    ``trait_key`` names the resistance it is, so whoever's sheet the chip is clicked
-    on can fill in their own number (:func:`localize_spec`).
+    Two fields exist because some rolls are made by **the other side of the
+    table**: ``rolled_by_target`` marks a spec the wielder never rolls (so a power
+    card shows the line without a 🎲 — the follow-up chip is where it belongs),
+    and ``trait_key`` names the trait it is, so whoever's sheet the chip is clicked
+    on can fill in their own number (:func:`localize_spec`). A save fills in a
+    resistance; a *requested* roll — one player asking the table for an Awareness
+    check — fills in whichever of the four trait kinds it names, which is why the
+    key is read together with ``kind`` and not on its own.
 
     A spec is plain, JSON-serializable data (:meth:`to_dict`) because it **travels**:
     it rides along with the roll so every screen at the table renders the same chain
@@ -405,24 +408,69 @@ def follow_up_for_result(
     return follow_up
 
 
+def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> RollSpec | None:
+    """This character's own roll of the trait *spec* names, or ``None``.
+
+    The dispatch is on :attr:`~RollSpec.kind`, because a bare key is ambiguous —
+    a mod is free to call an ability and a skill the same thing. An unknown kind,
+    or a key the ruleset no longer has, answers ``None`` rather than raising: a
+    trait that went away costs a fill-in, not the card it is drawn on.
+
+    An **empty** kind means a resistance. Before requested rolls there was only
+    one thing a trait key could name, so that is what a spec written by an older
+    client — or by anything that builds a save by hand — is saying. Reading it any
+    other way would quietly stop filling in Toughness on the one card this whole
+    mechanism was built for.
+    """
+
+    key = spec.trait_key
+    if spec.kind == KIND_ABILITY:
+        if any(a.key == key for a in game_data.abilities):
+            return ability_roll(char, game_data, key)
+    elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, ""):
+        if any(r.key == key for r in game_data.resistances):
+            return resistance_roll(char, game_data, key)
+    elif spec.kind == KIND_SKILL:
+        base = key.partition("::spec::")[0].partition(": ")[0]
+        if any(s.name == base for s in game_data.skills):
+            return skill_roll(char, game_data, key)
+    elif spec.kind == KIND_INITIATIVE:
+        if any(t.key == key for t in game_data.system.derived_traits):
+            return initiative_roll(char, game_data)
+    return None
+
+
 def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -> RollSpec:
     """Fill in what *this* sheet knows about a spec that came from someone else.
 
-    A save spec is built by the attacker, who cannot see the target's resistance —
-    so it travels with a modifier of 0 and a :attr:`~RollSpec.trait_key` naming which
-    resistance it is. When the chip is clicked on the resisting character's sheet,
-    this swaps in their own number, so a save is one click rather than a click and a
-    look-up.
+    Two specs arrive this way and both are built by somebody who cannot see the
+    number they are asking for: the **save** an attack forces (the attacker cannot
+    see the target's resistance) and a **requested roll** (the asker is asking
+    precisely because it is not their sheet). Both travel with a modifier of 0 and
+    a :attr:`~RollSpec.trait_key` naming the trait; clicked on a character's own
+    sheet, this swaps in their number, so answering is one click rather than a
+    click and a look-up.
 
-    A spec naming no trait, or arriving somewhere with no character (the GM window's
-    roller), comes back unchanged — the Bonus slider is then the answer, as before.
+    The gate is the **trait key**, not the kind. Every builder in this module
+    leaves it empty, so a spec loaded off one's own sheet — where the modifier is
+    already this character's — comes back untouched; only a spec built to be
+    handed to someone else fills it in. Keying on the kind alone would double a
+    double-clicked Initiative readout.
+
+    It **adds** rather than replaces, because the modifier may already carry the
+    natural-1 resist bonus :func:`follow_up_for_result` put there. A requested
+    spec travels at 0, where adding is the same thing.
+
+    A spec naming no trait, or arriving somewhere with no character (the GM
+    window's roller), comes back unchanged — the Bonus slider is then the answer,
+    as before.
     """
 
     if char is None or not spec.trait_key:
         return spec
-    if not any(r.key == spec.trait_key for r in game_data.resistances):
+    own = _own_trait_roll(spec, char, game_data)
+    if own is None:
         return spec
-    own = resistance_roll(char, game_data, spec.trait_key)
     return replace(spec, modifier=spec.modifier + own.modifier)
 
 

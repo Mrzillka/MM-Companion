@@ -43,12 +43,14 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from dataclasses import replace
 
 from PySide6.QtCore import QElapsedTimer, QMimeData, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
+    QComboBox,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -58,6 +60,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QVBoxLayout,
@@ -67,7 +70,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 from mm_companion.core.rules import RollSpec
-from mm_companion.core.session.model import KIND_NOTE
+from mm_companion.core.session.model import KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
@@ -78,6 +81,7 @@ from mm_companion.ui.roll_history import (
     MIN_HISTORY_WIDTH,
     NoteCard,
     QuickRollStar,
+    RequestCard,
     RollHistoryPanel,
     chain_widgets,
     degree_label,
@@ -371,6 +375,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: panel now needs.
     contentChanged = Signal()
 
+    #: The Request row's button was pressed — ask the table to roll this
+    #: :class:`~mm_companion.core.rules.RollSpec`. The panel neither sends it nor
+    #: rolls it: where a request goes is the same question its host already answers
+    #: for a note (the session, or the private history), and the panel has no
+    #: session of its own to answer it with.
+    rollRequested = Signal(object)
+
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
         self._hidden_option = hidden_option
@@ -390,6 +401,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._spec: RollSpec | None = None
         # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
         self._localizer: Callable[[RollSpec], RollSpec] | None = None
+        # The traits the Request row offers, pushed in by the host (the panel reads
+        # no game data) — see :meth:`set_roll_choices`. Empty until it is, which is
+        # why the row starts hidden.
+        self._request_specs: list[RollSpec] = []
         self._quick_rolls: list[dict] = self._load_quick_rolls()
         # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
         # in which case the width-driven reflow stands down — and the two separate
@@ -611,10 +626,101 @@ class DiceRollerPanel(ReflowBox, QWidget):
             "to a player, so there is nothing for them to see."
         )
         self._hidden_check.setVisible(self._hidden_option)
+        row = 4
         if self._hidden_option:
-            grid.addWidget(self._hidden_check, 4, 0, 1, 3)
+            grid.addWidget(self._hidden_check, row, 0, 1, 3)
+            row += 1
 
+        self._build_request_row(grid, row)
         return group
+
+    def _build_request_row(self, grid: QGridLayout, row: int) -> None:
+        """The Request row: a trait, a difficulty, and a button that asks the table.
+
+        Below the roll's own controls because it is a different verb — everything
+        above rolls something *here*, and this asks somebody else to. It borrows
+        their column layout so the two read as one form: caption, the wide middle
+        column, then the number.
+
+        The DC box is a plain spin box where **0 means no DC**, deliberately unlike
+        the Difficulty Class row above it. That row's checkbox exists because the
+        panel has to tell "no DC" from "DC 0" for a roll it grades; a request is
+        graded on the answerer's screen against whatever they end up rolling, and
+        "ask for a roll against DC 0" is not a thing anyone means. One control
+        beats two in a row that is already three wide.
+
+        The whole row is hidden until a host supplies traits
+        (:meth:`set_roll_choices`), so a roller with no ruleset behind it is the
+        panel it always was.
+        """
+
+        self._request_part = QWidget()
+        line = QHBoxLayout(self._request_part)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(int(theme.metric("space.xs")))
+
+        self._request_combo = QComboBox()
+        self._request_combo.setToolTip("What to ask the table to roll")
+        # Short on purpose: a placeholder is measured into the combo's size hint even
+        # when the minimum-contents policy below has capped everything else, so a
+        # roomier "— choose a trait —" would cost the block a hundred pixels of width
+        # to say what the "Request" caption beside it already says.
+        self._request_combo.setPlaceholderText("Trait…")
+        # A combo box asks to be as wide as its longest entry, and the longest here
+        # is a skill name the *ruleset* chose. Left alone that made the whole Dice
+        # block — and so the pinned strip holding it — demand half again the width
+        # it needs, for a row that is not even the point of the panel. So it shrinks
+        # and stretches instead, exactly as the Power Constructor's term combos do:
+        # the popup still shows every name in full, which is where they are read.
+        self._request_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._request_combo.setMinimumContentsLength(8)
+        self._request_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # And an explicit floor, which *replaces* the hint-derived one rather than
+        # raising it (``qSmartMinSize``) — so this is what finally lets the block be
+        # as narrow in the pinned strip as it was before the row existed.
+        self._request_combo.setMinimumWidth(int(theme.metric("column.request-trait")))
+        guard_wheel(self._request_combo)
+        self._request_combo.currentIndexChanged.connect(self._on_request_trait_changed)
+        line.addWidget(self._request_combo, stretch=1)
+
+        # Arrowless, and Fixed so every spare pixel in this cell goes to the combo
+        # beside it. The theme reserves a right-hand column for the arrows the
+        # platform style draws — 50px under ``windows11`` — which here is more than
+        # the two digits it frames: with them the number took 148px of a 210px cell
+        # and the trait name was clipped to "Trai". The same trade the sheet's own
+        # rank grids make, and the reason ``buttons=False`` exists.
+        self._request_dc = make_spin_box(0, 60, value=0, buttons=False)
+        self._request_dc.setToolTip("The difficulty to ask for — 0 for no DC")
+        self._request_dc.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        line.addWidget(self._request_dc)
+
+        self._request_button = QPushButton("Ask")
+        self._request_button.setToolTip(
+            "Put this roll in everyone's history, for them to roll on their own sheet"
+        )
+        self._request_button.clicked.connect(self._emit_request)
+
+        grid.addWidget(QLabel("Request"), row, 0)
+        grid.addWidget(self._request_part, row, 1)
+        grid.addWidget(self._request_button, row, 2)
+        self._request_label = grid.itemAtPosition(row, 0).widget()
+        self._show_request_row(False)
+
+    def _show_request_row(self, visible: bool) -> None:
+        """Show or hide the Request row as one thing, and say the panel changed size.
+
+        The ``contentChanged`` is not optional: a splitter child with no stretch
+        keeps the pixels it was given, so without it the view never re-divides and
+        the block keeps the room a row it no longer shows was using (or grows past
+        the window for one it now does).
+        """
+
+        for widget in (self._request_label, self._request_part, self._request_button):
+            widget.setVisible(visible)
+        self.updateGeometry()
+        self.contentChanged.emit()
 
     def _build_spec_chip(self) -> QWidget:
         """The strip naming what the sheet asked to roll — hidden until it does.
@@ -734,6 +840,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._dc_check,
             self._dc_spin,
             self._hidden_check,
+            self._request_combo,
+            self._request_dc,
+            self._request_button,
             self._quick_container,
         ]
 
@@ -756,6 +865,101 @@ class DiceRollerPanel(ReflowBox, QWidget):
         supplies it; a panel with no sheet behind it (GM Mode's) installs none.
         """
         self._localizer = localizer
+
+    # -- asking the table to roll --------------------------------------------
+
+    def set_roll_choices(self, groups: object) -> None:
+        """Fill the Request row's combobox from *groups*, or hide the row.
+
+        *groups* is what
+        :func:`~mm_companion.core.rules.pins.requested_roll_choices` returns — a
+        list of titled groups of values, each carrying a template
+        :class:`~mm_companion.core.rules.RollSpec`. The panel is handed the answer
+        rather than the game data, exactly as it is handed a localizer rather than
+        a character: it reads no ruleset, so a host that has none (or a mod with
+        nothing to offer) simply gets the panel as it was before this row existed.
+
+        The group titles go in as disabled items, the way the Power Constructor's
+        trait combo does it — a section heading in a combo box has no other home.
+        """
+
+        self._request_combo.blockSignals(True)
+        self._request_combo.clear()
+        self._request_specs = []
+
+        for group in groups or ():
+            values = [v for v in getattr(group, "values", ()) if v.spec is not None]
+            if not values:
+                continue
+            self._request_combo.addItem(getattr(group, "title", ""))
+            self._request_specs.append(None)
+            for value in values:
+                self._request_combo.addItem(f"  {value.label}")
+                self._request_specs.append(value.spec)
+
+        self._request_combo.blockSignals(False)
+        self._disable_request_headings()
+        # No entry is selected to begin with: a combo that opens on the first trait
+        # would make "Ask" send whatever happened to be first in the ruleset to a
+        # table nobody had chosen anything for.
+        self._request_combo.setCurrentIndex(-1)
+        self._sync_request_button()
+        self._show_request_row(any(spec is not None for spec in self._request_specs))
+
+    def _disable_request_headings(self) -> None:
+        """Grey the group titles so only the traits under them can be picked."""
+
+        model = self._request_combo.model()
+        for row, spec in enumerate(self._request_specs):
+            if spec is None:
+                item = model.item(row)
+                if item is not None:
+                    item.setEnabled(False)
+
+    def _requested_spec(self) -> RollSpec | None:
+        """The trait the Request row names, with its DC folded in, or ``None``.
+
+        ``dc`` of 0 is *no* DC and not a difficulty of zero — see
+        :meth:`_build_request_row`.
+        """
+
+        index = self._request_combo.currentIndex()
+        if not 0 <= index < len(self._request_specs):
+            return None
+        spec = self._request_specs[index]
+        if spec is None:
+            return None
+        dc = self._request_dc.value()
+        return replace(spec, dc=dc or None)
+
+    def _on_request_trait_changed(self) -> None:
+        """Re-check the button, and say in the tooltip what the combo may be clipping.
+
+        In the pinned strip this combo is the width the block can spare, which is
+        rarely the width of a skill name — the same elide-plus-tooltip bargain
+        ``ElidingLabel`` strikes, and the only one available: a combo box does not
+        tooltip its own clipped text.
+        """
+
+        self._sync_request_button()
+        chosen = self._requested_spec()
+        self._request_combo.setToolTip(
+            f"Ask the table to roll {chosen.label}" if chosen else "What to ask the table to roll"
+        )
+
+    def _sync_request_button(self) -> None:
+        """The Ask button is live only once a real trait is picked."""
+
+        if self._rolling:
+            return
+        self._request_button.setEnabled(self._requested_spec() is not None)
+
+    def _emit_request(self) -> None:
+        """Hand the chosen trait up to whoever knows where a request goes."""
+
+        spec = self._requested_spec()
+        if spec is not None:
+            self.rollRequested.emit(spec)
 
     def load_spec(self, spec: RollSpec | None) -> None:
         """Load *spec* as the thing this panel rolls, or ``None`` to go back to manual.
@@ -870,14 +1074,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
         its animation even once the number is known, so a fast answer does not
         cut the roll short.
 
-        The history feed carries notes as well as rolls, and one of ours can land
-        mid-tumble (spending a hero point on the attack being rolled is exactly
-        when it would). A note has no die, so taking one for the answer would
-        settle the d20 on zero — hence the ``kind`` check, not just the seat.
+        The history feed carries notes and requests as well as rolls, and one of
+        ours can land mid-tumble (spending a hero point on the attack being rolled
+        is exactly when it would). Neither has a die, so taking one for the answer
+        would settle the d20 on zero — hence the check is "is this a die roll",
+        not just the seat and not merely "is this not a note".
         """
         if not self._awaiting or not isinstance(roll, dict):
             return
-        if roll.get("kind") == KIND_NOTE:
+        if roll.get("kind", KIND_ROLL) != KIND_ROLL:
             return
         if str(roll.get("player_id", "")) != self._own_id:
             return
@@ -994,6 +1199,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
             widget.setEnabled(True)
         # The DC spin follows its checkbox, not the blanket re-enable above.
         self._dc_spin.setEnabled(self._dc_check.isChecked())
+        # And the Ask button follows whether a trait is chosen, for the same reason.
+        self._sync_request_button()
 
     def _update_readout(
         self,
@@ -1298,6 +1505,19 @@ class LocalRollHistory(QWidget):
         shows, which is the point of it living in the lower module.
         """
         card = NoteCard({"text": text}, show_author=False)
+        self._layout.insertWidget(0, card)
+
+    def add_request(self, spec: object) -> None:
+        """Write a requested roll that reached nobody — the off-air twin of one.
+
+        Asking the table with no table is still worth a card: the button rolls the
+        trait here, which makes the row a way of parking a roll for later even
+        solo. The author is left off for the reason :meth:`add_note` leaves it off.
+        """
+        card = RequestCard(
+            {"spec": spec.to_dict() if isinstance(spec, RollSpec) else spec}, show_author=False
+        )
+        card.rollRequested.connect(self.rollFollowUp)
         self._layout.insertWidget(0, card)
 
     def cards(self) -> list[RollCard]:
@@ -1696,6 +1916,16 @@ class DiceRollerView(ReflowBox, QWidget):
         """
         if self._given_history is None:
             self._local_history.add_note(text)
+
+    def add_local_request(self, spec: object) -> None:
+        """Put a requested roll in the private history — the off-air fallback.
+
+        The twin of :meth:`add_local_note`, and hollow for the same reason when a
+        host supplies its own history: in a session the request goes to the server
+        and comes back through the shared one.
+        """
+        if self._given_history is None:
+            self._local_history.add_request(spec)
 
     # -- lifecycle -----------------------------------------------------------
 

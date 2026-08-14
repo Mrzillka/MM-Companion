@@ -23,13 +23,20 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QContextMenuEvent, QMouseEvent
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox, QPushButton
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.npc import quick_npc
-from mm_companion.core.rules import PinRef, apply_condition, attach_accessory, build_item_from_entry
+from mm_companion.core.rules import (
+    KIND_SKILL,
+    PinRef,
+    RollSpec,
+    apply_condition,
+    attach_accessory,
+    build_item_from_entry,
+)
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
@@ -41,7 +48,7 @@ from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pin_picker import LABEL_ROLE, PIN_ROLE
-from mm_companion.ui.roll_history import HIDDEN_MARK
+from mm_companion.ui.roll_history import HIDDEN_MARK, RequestCard
 from mm_companion.ui.sections.conditions import addable_conditions, build_condition_menu
 from mm_companion.ui.session_bridge import active_session, set_active_session
 from mm_companion.ui.session_dialogs import (
@@ -2537,3 +2544,36 @@ def test_a_chip_right_click_never_reaches_the_cards_own_menu(
     right_click(card._initiative_badge)
 
     assert opened == []
+
+
+# -- requesting a roll --------------------------------------------------------
+
+
+def test_the_gm_can_ask_the_table_for_a_roll(qapp: QApplication, window: GMWindow) -> None:
+    """The GM's roller gets the Request row on the same terms a player's does."""
+    index = window._roller._request_combo.findText("  Perception")
+    assert index >= 0
+    window._roller._request_combo.setCurrentIndex(index)
+    window._roller._request_dc.setValue(15)
+    window._roller._request_button.click()
+    qapp.processEvents()
+
+    card = window._history.findChild(RequestCard)
+    assert card is not None
+    button = next(b for b in card.findChildren(QPushButton) if b.text().startswith("🎲"))
+    assert button.text() == "🎲 Perception vs. DC 15"
+
+
+def test_an_offline_request_is_strikeable_like_an_offline_roll(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """Before hosting there is no session to record it in, so it gets a negative seq.
+
+    Without one the button would silently do nothing off the air, which reads as a
+    bug — the same reason ``_show_offline_roll`` exists.
+    """
+    window._request_roll(RollSpec(label="Perception", kind=KIND_SKILL, trait_key="Perception"))
+    qapp.processEvents()
+
+    card = window._history.findChild(RequestCard)
+    assert card is not None and card.seq is not None and card.seq < 0

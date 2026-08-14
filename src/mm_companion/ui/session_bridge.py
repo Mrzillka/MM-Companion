@@ -271,6 +271,19 @@ class SessionBridge(QObject):
             return self._client.post_note(text)
         return False
 
+    def prompt_roll(self, spec: dict) -> bool:
+        """Ask the table for a roll — the request half of :meth:`post_note`.
+
+        Same two paths and the same answer: ``False`` when there is no session, so
+        the caller can fall back to its own private history.
+        """
+        if self._server is not None:
+            self._server.prompt_roll(spec)
+            return True
+        if self._client is not None:
+            return self._client.prompt_roll(spec)
+        return False
+
     def remove_roll(self, seq: int) -> bool:
         """Drop one roll from the shared log (a GM action).
 

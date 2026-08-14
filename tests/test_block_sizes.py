@@ -119,19 +119,31 @@ def test_a_configured_width_never_caps_what_a_block_asks_a_layout_for(
     ``if (minSize.width() > 0) s.setWidth(minSize.width())``. So a block whose
     content needed more than its JSON number told every enclosing layout it did
     not, and the pinned strip (whose own minimum is its splitter's) squashed it to
-    the number. Equipment is the block that already needed more; the roller under
-    the Extended layout is what made it visible.
+    the number.
+
+    The subject is whichever block currently outgrows a *stated* floor rather than a
+    named one. It used to be Equipment, until its three "Add…" buttons were made to
+    wrap (they were also what made the block change width with the lock — see
+    ``tests/test_lock_geometry.py``); which block it is depends on the font and the
+    preset, and the rule is about none of them in particular. A floor of zero is not
+    a subject: with no minimum stated there is nothing that could have replaced the
+    content in the first place.
     """
     sheet = CharacterSheet(load_game_data())
-    frame = sheet.block_frame("equipment")
-    content = frame.minimumSizeHint().width()
+    sizes = load_block_sizes()
+    outgrown = {
+        key: (sheet.block_frame(key).minimumSizeHint().width(), spec.min_width)
+        for key, spec in sizes.items()
+        if key in SHEET_BLOCKS
+        and spec.min_width > 0
+        and sheet.block_frame(key).minimumSizeHint().width() > spec.min_width
+    }
+    assert outgrown, f"no block outgrows its floor, so this rule is untested: {sizes}"
 
-    assert content > load_block_sizes()["equipment"].min_width
-
-    holder = QSplitter()
-    holder.addWidget(frame)
-
-    assert holder.minimumSizeHint().width() >= content
+    for key, (content, _floor) in outgrown.items():
+        holder = QSplitter()
+        holder.addWidget(sheet.block_frame(key))
+        assert holder.minimumSizeHint().width() >= content, key
 
 
 def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.data_loader import load_game_data
@@ -278,3 +279,70 @@ def test_without_fill_last_a_trailing_stretch_holds_the_slack(qapp: QApplication
     assert last.widget() is None and last.spacerItem() is not None
     assert canvas._frames["b"].sizePolicy().verticalPolicy() == QSizePolicy.Policy.Minimum
     canvas.deleteLater()
+
+
+# -- edge auto-scroll -------------------------------------------------------
+
+
+def _hot_point(sheet, x_source) -> QPoint:
+    """A global point in the page's bottom auto-scroll band, at *x_source*'s x."""
+    viewport = sheet.page_scroll_area().viewport()
+    y = viewport.mapToGlobal(QPoint(0, viewport.height() - 5)).y()
+    return QPoint(x_source.mapToGlobal(x_source.rect().center()).x(), y)
+
+
+def test_a_drag_crossing_the_strip_stops_the_page_scrolling(make_sheet) -> None:
+    # Regression: the velocity outlives the cursor leaving the page. update_drag
+    # returns early once the cursor is over the strip, and _autoscroll_tick calls
+    # straight back into update_drag — so the page scrolled forever under a gesture
+    # that had gone, until the drop. The hot band is measured from the viewport's y
+    # alone, so the strip beside it shares the band.
+    sheet = make_sheet()  # the default strip: the Dice block, pinned right
+    canvas = sheet.canvas
+    viewport = sheet.page_scroll_area().viewport()
+    panel = sheet.board.panel
+
+    page_point = _hot_point(sheet, viewport)
+    strip_point = _hot_point(sheet, panel)
+    assert canvas._pin_hit_test(strip_point) is not None  # it really is over the strip
+
+    start = sheet.block_frame("skills").title_bar.mapToGlobal(QPoint(10, 5))
+    canvas.title_bar_pressed("skills", start)
+    canvas.title_bar_moved("skills", start + QPoint(-30, -30))
+    QApplication.processEvents()
+
+    canvas.title_bar_moved("skills", page_point)
+    QApplication.processEvents()
+    assert canvas._autoscroll_timer.isActive()  # positive control: it did start
+
+    canvas.title_bar_moved("skills", strip_point)
+    QApplication.processEvents()
+    assert not canvas._autoscroll_timer.isActive()
+    assert canvas._autoscroll_velocity == 0
+
+    bar = sheet.page_scroll_area().verticalScrollBar()
+    resting = bar.value()
+    QTest.qWait(80)  # real time: the timer is 16ms, so processEvents alone proves nothing
+    assert bar.value() == resting
+
+    canvas.title_bar_released("skills", strip_point)
+    QApplication.processEvents()
+
+
+def test_update_drag_leaves_no_autoscroll_running_when_nothing_may_land(make_sheet) -> None:
+    # The same rule on update_drag's other early return. Entering compact mode
+    # mid-drag already ends the gesture outright, so this is the contract of the
+    # guard itself rather than of that path: asked to refresh a drag that cannot
+    # land, update_drag must leave nothing running behind it.
+    sheet = make_sheet()
+    canvas = sheet.canvas
+    viewport = sheet.page_scroll_area().viewport()
+
+    canvas._maybe_autoscroll(_hot_point(sheet, viewport))
+    assert canvas._autoscroll_timer.isActive()  # positive control
+
+    canvas._windows_suspended = True
+    canvas.update_drag(_hot_point(sheet, viewport))
+    QApplication.processEvents()
+    assert not canvas._autoscroll_timer.isActive()
+    assert canvas._autoscroll_velocity == 0

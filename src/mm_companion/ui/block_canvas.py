@@ -1352,8 +1352,7 @@ class BlockCanvas(QWidget):
         self._show_merge(None)
         self._drag_key = None
         self._drag_active = False
-        self._autoscroll_velocity = 0
-        self._autoscroll_timer.stop()
+        self._stop_autoscroll()
         self._indicator.hide_indicator()
         if self._board is not None:
             self._board.hide_drop()
@@ -1364,6 +1363,7 @@ class BlockCanvas(QWidget):
             # No insert line and no auto-scroll either: both would be promising a
             # landing place that the drop itself is going to refuse.
             self._indicator.hide_indicator()
+            self._stop_autoscroll()
             if self._board is not None:
                 self._board.hide_drop()
             return
@@ -1371,7 +1371,15 @@ class BlockCanvas(QWidget):
         if pin_at is not None:
             # Over the strip: it owns the feedback, and the page shows none — two
             # insert lines at once would be a lie about where the block lands.
+            #
+            # And the page stops scrolling. The velocity outlives the cursor leaving
+            # the page, and :meth:`_autoscroll_tick` calls straight back in here — so
+            # an early return that does not clear it leaves the page scrolling under a
+            # gesture that has gone, until the drop. The hot band is measured from the
+            # viewport's *y* alone, so the strip beside it shares the band: dragging
+            # up the right-hand edge into the strip is exactly where this fired.
             self._indicator.hide_indicator()
+            self._stop_autoscroll()
             self._board.show_drop(pin_at)  # type: ignore[union-attr] - set with pin_at
             return
         if self._board is not None:
@@ -1496,6 +1504,11 @@ class BlockCanvas(QWidget):
     # -- auto-scroll ---------------------------------------------------------
 
     _HOT = 40  # px band at the viewport edges that triggers auto-scroll
+
+    def _stop_autoscroll(self) -> None:
+        """Stand the edge auto-scroll down, wherever the gesture has got to."""
+        self._autoscroll_velocity = 0
+        self._autoscroll_timer.stop()
 
     def _maybe_autoscroll(self, global_pos: QPoint) -> None:
         if self._scroll_area is None:

@@ -9,6 +9,8 @@ from a single command:
     python .claude/skills/run-mm-companion/driver.py sheet        # editable character sheet
     python .claude/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
     python .claude/skills/run-mm-companion/driver.py sheet-locked # the read-only view
+    python .claude/skills/run-mm-companion/driver.py sheet-unlocked      # its editable twin
+    python .claude/skills/run-mm-companion/driver.py sheet-unlock-toggle # unlocked by the toggle
     python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
     python .claude/skills/run-mm-companion/driver.py compact      # the window shrunk to the roller
     python .claude/skills/run-mm-companion/driver.py compact-gm   # the same, from the GM window
@@ -122,15 +124,25 @@ def build(target: str):
 
         initialize_mods()
         win = StartWindow()
-    elif target == "sheet-locked":
+    elif target in ("sheet-locked", "sheet-unlocked", "sheet-unlock-toggle"):
         # The read-only view a saved character opens in, which is a different
         # question from "sheet": locking sheds every field's input chrome, so it is
         # the other half of any change to how a spin box or a combo box is dressed.
         from mm_companion.ui.main_window import MainWindow
 
-        win = MainWindow(locked=True)
+        # Three shots of one window, differing only in the lock, so they can be laid
+        # side by side: locking must change a block's height but never its width, and
+        # the *toggle* is the case a static shot cannot show — the sheet is built
+        # locked, laid out, and only then unlocked, which is where a block that grew
+        # used to clip against a window that stayed put.
+        win = MainWindow(locked=target == "sheet-locked")
         for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
             win._sheet.abilities._abilities[key].setValue(value)
+        if target == "sheet-unlock-toggle":
+            win.show()
+            _pump(_app())
+            # The real control, so the menu-bar wiring is in the picture too.
+            win._lock_action.setChecked(False)
     elif target in ("sheet", "sheet-demo"):
         from mm_companion.ui.main_window import MainWindow
 
@@ -599,6 +611,8 @@ def main(argv: list[str] | None = None) -> int:
             "sheet",
             "sheet-demo",
             "sheet-locked",
+            "sheet-unlocked",
+            "sheet-unlock-toggle",
             "notes-demo",
             "notes-split",
             "equipment-demo",

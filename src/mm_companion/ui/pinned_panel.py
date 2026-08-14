@@ -364,16 +364,25 @@ class PinnedPanel(QFrame):
         align: str,
         sizes: list[int],
         line_sizes: list[list[int]],
-    ) -> None:
+    ) -> bool:
         """Render *lines* along the strip, skipping the rebuild when nothing moved.
 
         The canvas re-renders on every structural change, most of which are about
         the page rather than the strip; rebuilding regardless would throw the
         proportions the user dragged away each time they reordered a docked row.
+
+        Answers **whether it rebuilt**, so the board only re-asserts the strip's
+        thickness when the strip itself actually changed (see
+        :meth:`PinnedBoard.set_blocks`).
+
+        ``sizes``/``line_sizes`` are deliberately not compared. They move on their
+        own only when a layout is *restored*, and a restore says so by calling
+        :meth:`invalidate` first — see ``BlockCanvas.apply_arrangement``. Everything
+        else that reshuffles the strip changes the key list in the same breath.
         """
         keys = [[frame.key for frame in line] for line in lines]
         if keys == self._keys and edge == self._edge and align == self._align:
-            return
+            return False
 
         edge_changed = edge != self._edge
         self._keys = keys
@@ -418,6 +427,7 @@ class PinnedPanel(QFrame):
         # one decapitated.
         self._scroll.verticalScrollBar().setValue(0)
         self._scroll.horizontalScrollBar().setValue(0)
+        return True
 
     def _clear(self) -> None:
         """Empty the strip, handing back every block that is still ours.
@@ -799,13 +809,25 @@ class PinnedBoard(QWidget):
         sizes: list[int],
         line_sizes: list[list[int]],
     ) -> None:
-        """Render the strip, re-laying the board out first when the edge changed."""
-        self._fresh_settle()
+        """Render the strip, re-laying the board out first when the edge changed.
+
+        The thickness is only re-asserted when the strip actually rebuilt. The canvas
+        re-renders the strip on every structural change, and most of them are about
+        the page — so settling a thickness nothing asked to change meant five
+        ``setSizes`` in 80ms fighting a minimum that was already satisfied, on every
+        single drop. The retries exist for a *stale* minimum, which is only possible
+        just after a rebuild; a minimum that is genuinely larger never yields, and on
+        a stock sheet it never can (the default extent is 320 against the Dice
+        block's 360 floor), so the loop ran to its cap every time. That was the
+        jitter when rearranging blocks.
+        """
         if edge != self._edge:
             self._edge = edge
-            self._apply_edge()
-        self.panel.set_blocks(lines, edge, align, sizes, line_sizes)
-        self._apply_extent()
+            self._fresh_settle()
+            self._apply_edge()  # ends in _apply_extent, as it always has
+        if self.panel.set_blocks(lines, edge, align, sizes, line_sizes):
+            self._fresh_settle()
+            self._apply_extent()
 
     def invalidate(self) -> None:
         """Make the next render rebuild the strip (see :meth:`PinnedPanel.invalidate`)."""

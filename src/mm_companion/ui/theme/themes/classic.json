@@ -95,8 +95,10 @@
 
     "column.stat.spin": 80,
     "column.skill.name": 100,
+    "column.skill.name-max": 200,
     "column.skill.spin": 56,
     "column.skill.mod": 36,
+    "column.advantage.name-max": 170,
     "column.advantage.desc": 180,
     "column.advantage.combo": 180,
     "column.settings.nav": 160,

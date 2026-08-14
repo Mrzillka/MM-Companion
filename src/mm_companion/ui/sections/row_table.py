@@ -22,6 +22,9 @@ assemble a table block *out of*:
 - :class:`RowReorder` — drag a row to a new place, across panels.
 - :class:`SortControl` — the sort combo, and the standing rule that a preset sort
   mode turns hand reordering off.
+- :func:`wrapping_column_width` — how wide a name column that *wraps* should be,
+  which is the one answer to "the first column must not clip" both blocks used to
+  give in opposite, wrong directions.
 
 The stat-family helpers (building the ability/resistance grid, tinting a total,
 the pin payload) stay in :mod:`~mm_companion.ui.sections.stat_table`, which is
@@ -30,11 +33,11 @@ the layer above this one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import NamedTuple
 
-from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QDrag, QResizeEvent
+from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QDrag, QFontMetrics, QResizeEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -98,6 +101,20 @@ class AutoHeightTable(QTableWidget):
         self._dragged = False
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # How tall a wrapped row is depends on the width of the column it wraps in,
+        # and that width settles *after* the rows are filled: a ResizeToContents
+        # sibling measures the items it was just given, takes its share, and the
+        # stretching column shrinks — with no resize of the table itself to notice.
+        # Measuring on the table's own geometry alone therefore sized every row for
+        # a column wider than it ended up, which is a name cut off in a row that
+        # looks like it wrapped. Following the header instead catches every cause,
+        # coalesced to once a turn because a layout moves several sections.
+        self._remeasure: QTimer | None = None
+        if word_wrap:
+            self._remeasure = QTimer(self)
+            self._remeasure.setSingleShot(True)
+            self._remeasure.timeout.connect(self.remeasure_wrapped_rows)
+            self.horizontalHeader().sectionResized.connect(lambda *_: self._remeasure.start(0))
 
     # -- content sizing ------------------------------------------------------
 
@@ -135,13 +152,30 @@ class AutoHeightTable(QTableWidget):
         width = max(hint.width(), self._content_width()) if self._fit_width else hint.width()
         return QSize(width, self._content_height())
 
+    def remeasure_wrapped_rows(self) -> None:
+        """Re-fit every row to its wrapped text (a no-op unless *word_wrap*).
+
+        Called for you whenever a column changes width; a block calls it directly
+        after a rebuild, so the height is right without waiting for the event loop.
+        """
+
+        if not self._word_wrap:
+            return
+        for row in range(self.rowCount()):
+            self.resizeRowToContents(row)
+        self.updateGeometry()
+
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
-        if self._word_wrap:
-            # A wider/narrower table re-wraps its text, changing row heights, so
-            # re-measure and let the block resize to the new content.
-            for row in range(self.rowCount()):
-                self.resizeRowToContents(row)
+        # A wider/narrower table re-wraps its text, changing row heights, so
+        # re-measure and let the block resize to the new content. Only on a *width*
+        # change: wrapping depends on nothing else, and a panel of forty skill rows
+        # is forty rows x six columns of delegate measuring, which a height-only
+        # resize (the page relaying out around it) would otherwise pay for every
+        # time. ``oldSize()`` is (-1, -1) on the first resize, so that one always
+        # measures.
+        if event.oldSize().width() != event.size().width():
+            self.remeasure_wrapped_rows()
         self.updateGeometry()
 
     # -- drag to reorder -----------------------------------------------------
@@ -208,6 +242,43 @@ class AutoHeightTable(QTableWidget):
             super().dropEvent(event)
             return
         self._reorder.drop(self, event)
+
+
+def wrapping_column_width(
+    metrics: QFontMetrics,
+    texts: Iterable[str],
+    *,
+    padding: int,
+    cap: int,
+    floor: int = 0,
+) -> int:
+    """How wide a *wrapping* name column should be: the widest label, capped.
+
+    A first column that must not clip has two ways out — grow without limit, or
+    break the line. Growing is what pinned the Advantages block open (a
+    ``ResizeToContents`` name column with a player's typed subject in it) and what
+    squeezed a skill's name into ``"…"`` (a stretching name column paying for a
+    long focus label out of room the panel never had), so both blocks break
+    instead, and this is the arithmetic that decides where.
+
+    *floor* wins over *cap*, and is what keeps the column sane when the labels are
+    short: a header's own caption, a block's density metric. Past the cap the text
+    wraps and the row grows taller, which is the sheet's own bargain — a block shows
+    all of its content and the page scrolls.
+
+    The cap is **hard**, and the one case it cannot answer is a single *word* wider
+    than the column: Qt's word wrap breaks between words and not inside one, so such
+    a label does not wrap at all, it elides. Flooring at the longest word was tried
+    and is worse — it hands one typed 25-character word the power to pin the block
+    (and the page behind it) open, which is the exact complaint this function exists
+    to answer. So the answer to *that* case is a tooltip carrying the whole label,
+    which every caller's name cell sets: elide-plus-tooltip, the same bargain
+    :class:`~mm_companion.ui.widgets.ElidingLabel` strikes wherever a caption has
+    to fit a box it cannot argue with.
+    """
+
+    widest = max((metrics.horizontalAdvance(text) for text in texts), default=0)
+    return max(floor, min(widest + padding, cap))
 
 
 class RowEntry(NamedTuple):
@@ -561,4 +632,5 @@ __all__ = [
     "install_row_menu",
     "move_within",
     "remove_contributor",
+    "wrapping_column_width",
 ]

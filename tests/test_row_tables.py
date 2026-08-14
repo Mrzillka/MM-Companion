@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PySide6.QtGui import QDropEvent
+from PySide6.QtGui import QDropEvent, QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication, QMenu, QTableWidgetItem
 
 from mm_companion.ui.sections.row_table import (
@@ -16,6 +16,7 @@ from mm_companion.ui.sections.row_table import (
     build_row_menu,
     move_within,
     remove_contributor,
+    wrapping_column_width,
 )
 
 
@@ -302,3 +303,58 @@ def test_the_sort_control_guards_the_wheel(qapp: QApplication) -> None:
     control = SortControl([(SORT_MANUAL, "Manual"), ("name", "Name")])
 
     assert control.combo.focusPolicy() == Qt.FocusPolicy.StrongFocus
+
+
+# -- how wide a wrapping name column should be ---------------------------------
+
+
+def _metrics(qapp: QApplication) -> QFontMetrics:
+    """Real font metrics, so the arithmetic is exercised against real widths."""
+    return QFontMetrics(QFont())
+
+
+def test_a_wrapping_column_fits_its_content_while_that_is_modest(
+    qapp: QApplication,
+) -> None:
+    """Short labels get exactly what they need, plus the padding asked for."""
+    fm = _metrics(qapp)
+    labels = ["Stealth", "Deception", "Perception"]
+    widest = max(fm.horizontalAdvance(label) for label in labels)
+
+    assert wrapping_column_width(fm, labels, padding=16, cap=10_000, floor=0) == widest + 16
+
+
+def test_a_wrapping_column_stops_at_its_cap(qapp: QApplication) -> None:
+    """Which is the whole point: past it the text breaks instead.
+
+    A block's minimum width must not track how much a player typed into a focus or
+    an advantage's subject, so however long the label is the answer is the cap.
+    """
+    fm = _metrics(qapp)
+    short = ["Law"]
+    long = ["Interstellar Xenobiology and Comparative Anatomy, Third Edition"]
+
+    assert wrapping_column_width(fm, long, padding=16, cap=200, floor=0) == 200
+    assert wrapping_column_width(fm, long, padding=16, cap=200, floor=0) >= (
+        wrapping_column_width(fm, short, padding=16, cap=200, floor=0)
+    )
+
+
+def test_the_floor_beats_the_content_and_the_cap(qapp: QApplication) -> None:
+    """Both, deliberately.
+
+    It is what keeps a column of short labels from collapsing to the width of the
+    longest of them — a block's density metric, a header's own caption ("Skill",
+    "Advantage"), which must never be the thing that clips. And it outranks the cap
+    too, so a preset that sets the two inconsistently still leaves a usable column
+    rather than a sliver.
+    """
+    fm = _metrics(qapp)
+
+    assert wrapping_column_width(fm, ["Law"], padding=0, cap=10_000, floor=150) == 150
+    assert wrapping_column_width(fm, ["Law"], padding=0, cap=20, floor=150) == 150
+
+
+def test_a_wrapping_column_with_nothing_in_it_is_its_floor(qapp: QApplication) -> None:
+    """An empty block still has a header to print."""
+    assert wrapping_column_width(_metrics(qapp), [], padding=16, cap=200, floor=100) == 100

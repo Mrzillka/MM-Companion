@@ -39,6 +39,7 @@ rows, and cannot restore the ranks.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import NamedTuple
 
 from PySide6.QtCore import Qt, Signal
@@ -83,6 +84,7 @@ from mm_companion.ui.sections.row_table import (
     install_row_menu,
     move_within,
     remove_contributor,
+    wrapping_column_width,
 )
 from mm_companion.ui.sections.stat_table import (
     CONDITION_TINT,
@@ -108,11 +110,12 @@ SORT_ALPHA, SORT_ABILITY, SORT_TOTAL, SORT_RANK = "alpha", "ability", "total", "
 #: This block's drag payload. Its own format, so no other block's rows can land here.
 ROW_MIME = "application/x-mm-rows-skills"
 # Rough widths used to decide how many panels fit without clipping a name. The
-# numeric columns are near-fixed; the name column needs room for the widest
-# skill/focus/specialization label. Kept lean so a second column appears before a
-# lone one stretches wide and leaves a big gap between names and their numbers.
-# The three that set the block's density are theme metrics — a denser preset wants
-# narrower ones — and are read through spin_width()/name_min_width()/mod_width().
+# numeric columns are near-fixed; the name column wants room for the widest
+# skill/focus/specialization label, up to a cap past which it *wraps* rather than
+# claiming the whole panel. Kept lean so a second column appears before a lone one
+# stretches wide and leaves a big gap between names and their numbers. The four that
+# set the block's density are theme metrics — a denser preset wants narrower ones —
+# read through spin_width()/name_min_width()/name_max_width()/mod_width().
 NAME_PADDING = 16
 FRAME_PADDING = 16
 # The fixed share of the ABL and Total columns, either side of the rank spin box.
@@ -132,6 +135,11 @@ def spin_width() -> int:
 def name_min_width() -> int:
     """Floor for the skill-name column, before the widest label widens it."""
     return int(theme.metric("column.skill.name"))
+
+
+def name_max_width() -> int:
+    """Widest that column grows before a long focus name wraps instead."""
+    return int(theme.metric("column.skill.name-max"))
 
 
 def mod_width() -> int:
@@ -282,7 +290,13 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # so panels of different heights top-align rather than stretch. No fit_width:
         # a panel is one of several, and the section caps its own minimum at one of
         # them (see ColumnFlowPanels.minimumSizeHint).
-        table = AutoHeightTable(0, len(HEADERS))
+        #
+        # word_wrap: the name column stretches, so a label longer than its share has
+        # to break. Without it the row stayed one line tall and Qt painted "…"
+        # instead — "    Expertise: Interstellar Xenobiology (specialized)" cut off
+        # mid-word, with nothing on screen saying so.
+        table = AutoHeightTable(0, len(HEADERS), word_wrap=True)
+        table.setWordWrap(True)
         table.setHorizontalHeaderLabels(HEADERS)
         table.verticalHeader().setVisible(False)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -413,6 +427,12 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
 
         self._apply_lock()
         self._refresh_totals()
+        # Last, and that order matters: _refresh_totals is what finally fills the
+        # ABL/+/Total cells, so it is what settles those ResizeToContents columns and
+        # therefore what the stretching name column is left with. Measuring the
+        # wrapped rows any earlier fits them to a column wider than they get.
+        for table in self._tables:
+            table.remeasure_wrapped_rows()
 
     def _split_blocks(self, skills: list[Skill], count: int) -> list[list[Skill]]:
         """Divide *skills* into *count* ordered groups of near-equal height.
@@ -434,24 +454,39 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     def _flow_item_count(self) -> int:
         return len(self._visible_skills())
 
+    def _name_labels(self) -> Iterator[str]:
+        """Every label the name column has to hold, in no particular order.
+
+        The same strings :meth:`_expand` renders, so what the panel is sized for
+        and what is drawn in it cannot drift. A focus or specialization row carries
+        its skill's name as well as its own and is always the longest of them.
+        """
+
+        for skill in self._visible_skills():
+            yield skill.name
+            for focus in self._focuses.get(skill.name, []):
+                yield f"    {skill.name}: {focus}"
+            for spec in self._specializations.get(skill.name, []):
+                yield f"    {skill.name}: {spec} (specialized)"
+
     def _min_col_width(self) -> int:
         """Narrowest a panel may get before a skill name would clip.
 
-        Driven by the widest label actually present (a long focus or
-        specialization name raises it, forcing fewer panels), plus the near-fixed
-        numeric columns.
+        The name column's share is the widest label actually present, floored at
+        the block's density metric and *capped*: past the cap a long focus name
+        wraps onto a second line rather than pushing the whole block wide enough to
+        print it on one, which used to collapse the flow to a single panel. Plus
+        the near-fixed numeric columns — every one of them, which is what the
+        docstring on :meth:`_ability_col_width` is about.
         """
 
-        fm = self.fontMetrics()
-        longest = 0
-        for skill in self._visible_skills():
-            longest = max(longest, fm.horizontalAdvance(skill.name))
-            for focus in self._focuses.get(skill.name, []):
-                longest = max(longest, fm.horizontalAdvance(f"    {skill.name}: {focus}"))
-            for spec in self._specializations.get(skill.name, []):
-                label = f"    {skill.name}: {spec} (specialized)"
-                longest = max(longest, fm.horizontalAdvance(label))
-        name_width = max(name_min_width(), longest + NAME_PADDING)
+        name_width = wrapping_column_width(
+            self.fontMetrics(),
+            self._name_labels(),
+            padding=NAME_PADDING,
+            cap=name_max_width(),
+            floor=name_min_width(),
+        )
         mods = mod_width() if self._show_mods else 0
         numeric = NUMERIC_PADDING + spin_width() + self._ability_col_width()
         return name_width + numeric + mods + FRAME_PADDING
@@ -631,16 +666,21 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         name = ("    " if indent else "") + display
         if self._locked or not can_specialize:
             item = readonly_item(name)
-            if indent:
-                # A focus or pool carries its skill's name as well as its own, so it
-                # is the longest label here and the one _min_col_width is really
-                # sizing the panel for. That sum is a heuristic, so this is the belt
-                # to its braces — and it costs nothing now the cell is a plain item
-                # rather than the widget that used to hold the ✕.
-                item.setToolTip(display)
+            # Every plain name cell, not just the indented ones it started on. A
+            # focus or pool carries its skill's name as well as its own, so it is
+            # still the longest label here and the one _min_col_width is really
+            # sizing the panel for — but that sum is a heuristic and the column is
+            # capped, so any name can end up wrapped or, if it is one long word Qt
+            # will not break, elided. This is the one place to read it whole.
+            item.setToolTip(display)
             table.setItem(row, COL_NAME, item)
             return item
 
+        # A plain QLabel, not a wrapping one: this cell only ever holds a bare
+        # skill name, which fits under name_max_width() comfortably, and a widget
+        # inside a cell is not reliably height-negotiated by resizeRowToContents.
+        # The long labels are the indented focus/specialization rows above, which
+        # are plain items and do wrap.
         add = QPushButton("＋")
         add.setFlat(True)
         add.setFixedWidth(20)

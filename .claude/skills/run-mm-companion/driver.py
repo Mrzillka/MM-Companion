@@ -346,6 +346,57 @@ def build(target: str):
         sheet.resistances.refresh_enhancements()
         sheet.skills._rebuild()
         sheet.system_info.refresh_derived()
+    elif target == "size-ladder":
+        # The Growth/Shrinking rung strip. A Growth 3 and a Shrinking 4 on a Medium
+        # character, each dialled somewhere other than full rank, plus a Growth 1 (whose
+        # single rung is the card's own switch, so it gets no strip) and a Growth 2 that
+        # is switched off (nothing lit). The System block stays so the sheet's own Size
+        # readout can be read against whichever rung is lit.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        for name, effect_id, rank, held, on in (
+            ("Giant Form", "growth", 3, 2, True),
+            ("Ant Size", "shrinking", 4, None, False),
+            ("Slightly Bigger", "growth", 1, None, True),
+        ):
+            power = Power(name=name, effects=[PowerEffectInstance(effect_id, rank=rank)])
+            power.activated = on
+            power.effects[0].toggled_on = on
+            power.effects[0].current_rank = held
+            char.powers.append(power)
+        sheet.powers.refresh()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 900)
+    elif target == "size-ladder-narrow":
+        # The strip in the width it is worst off in: a Growth 10 on a Diminutive
+        # character (whose ten rungs the Size Table clamps to eight), in a block narrow
+        # enough to force the flow to wrap, and in the locked sheet — where the rungs
+        # stay live, being a play action rather than a build edit. Pass --theme to see
+        # it under a light preset.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=True)
+        sheet = win._sheet
+        char = sheet.character
+        char.characteristics["size"] = "Diminutive"
+        power = Power(name="Titan Form", effects=[PowerEffectInstance("growth", rank=10)])
+        power.effects[0].current_rank = 5
+        char.powers.append(power)
+        sheet.powers.refresh()
+        sheet.system_info.reseed()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(420, 620)
     elif target == "constructor-extended":
         # The Extended settings section, on a Huge character's Damage power: it only
         # appears once the build carries an effect it could apply to, and its note says
@@ -667,6 +718,8 @@ def main(argv: list[str] | None = None) -> int:
             "constructor",
             "constructor-extended",
             "sheet-size",
+            "size-ladder",
+            "size-ladder-narrow",
             "equipment-constructor",
             "focus",
             "dice",

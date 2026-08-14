@@ -23,7 +23,7 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
     PowerGroup,
 )
-from mm_companion.core.rules import power_trait_bonuses
+from mm_companion.core.rules import effect_readout_rows, effective_size, power_trait_bonuses
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.powers import (
@@ -31,6 +31,7 @@ from mm_companion.ui.sections.powers import (
     _DraggableCard,
     _ModeToggle,
     _RollLine,
+    _SizeLadder,
 )
 
 
@@ -708,3 +709,156 @@ def test_the_locked_group_card_keeps_the_mode_and_drops_the_switch(qapp: QApplic
     shown = [b for b in toggle.findChildren(QPushButton) if not b.isHidden()]
     assert [b.text() for b in shown] == ["Independent", "Array", "Linked"]
     assert not shown[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+# -- the size ladder -----------------------------------------------------------
+
+
+def _size_sheet(rank: int = 3, *, effect: str = "growth", size: str = "Medium"):
+    """A sheet holding one size power, and that power."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = size
+    power = Power(name="Giant Form", effects=[PowerEffectInstance(effect, rank=rank)])
+    char.powers.append(power)
+    return CharacterSheet(data, char), char, power
+
+
+def _ladder(sec: PowersSection) -> _SizeLadder:
+    ladder = sec.findChild(_SizeLadder)
+    assert ladder is not None
+    return ladder
+
+
+def _rungs(sec: PowersSection) -> list[tuple[str, bool]]:
+    return [(b.text(), b.isChecked()) for b in _ladder(sec).findChildren(QPushButton)]
+
+
+def test_a_growth_card_carries_one_rung_per_rank(qapp: QApplication) -> None:
+    """Labelled with the size reached, not the rank paid — and the top one lit."""
+    sheet, _char, _power = _size_sheet(3)
+
+    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", True)]
+
+
+def test_picking_a_rung_moves_the_sheet_and_the_card(qapp: QApplication) -> None:
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+
+    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
+    huge.click()
+
+    assert power.effects[0].current_rank == 2
+    assert effective_size(char, data) == "Huge"
+    # The card is rebuilt from the model, so the new strip agrees with it.
+    assert _rungs(sheet.powers) == [("Large", False), ("Huge", True), ("Gargantuan", False)]
+
+
+def test_a_rung_wakes_a_dormant_power_at_that_rung(qapp: QApplication) -> None:
+    """One click from off to Huge, rather than on-at-full then down to Huge."""
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+    sheet.powers._set_power_active(power, False)
+
+    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+
+    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
+    huge.click()
+    assert power.activated and power.effects[0].toggled_on
+    assert effective_size(char, data) == "Huge"
+
+
+def test_a_rung_is_a_runtime_change_not_a_build_edit(qapp: QApplication) -> None:
+    """Like every other card switch: it must not mark the sheet dirty."""
+    sheet, _char, _power = _size_sheet(3)
+    edits: list[int] = []
+    runtime: list[int] = []
+    sheet.powers.changed.connect(lambda: edits.append(1))
+    sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+
+    assert edits == []
+    assert runtime == [1]
+
+
+def test_the_rungs_stay_live_in_the_locked_sheet(qapp: QApplication) -> None:
+    """How big you are standing there is a play action, not a build edit."""
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+    sheet.set_locked(True)
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    assert effective_size(char, data) == "Large"
+
+
+def test_a_single_rung_power_gets_no_strip(qapp: QApplication) -> None:
+    """A Growth 1's one rung *is* the card's own switch; a strip would be a second one."""
+    sheet, _char, _power = _size_sheet(1)
+
+    assert sheet.powers.findChild(_SizeLadder) is None
+
+
+def test_a_power_that_changes_no_size_gets_no_strip(qapp: QApplication) -> None:
+    sheet, _char = _sheet_with("Blast")
+
+    assert sheet.powers.findChild(_SizeLadder) is None
+
+
+def test_the_card_readout_follows_the_rung_that_is_lit(qapp: QApplication) -> None:
+    """The card's Size row and the sheet's Size line must never name two sizes."""
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+
+    row = next(r for r in effect_readout_rows(power.effects[0], data, char) if r.key == "size")
+    assert row.value == "Large" == effective_size(char, data)
+
+
+def test_a_rung_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplication) -> None:
+    """Visible — it still says where the power is set — but not a control.
+
+    Never ``setEnabled(False)``: nothing in this app greys a control out, so the
+    buttons go transparent to the mouse and the click falls through to the card.
+    """
+    data = load_game_data()
+    char = Character.new_default(data)
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    char.powers.append(PowerGroup(mode=STRUCTURE_LINKED, children=[growth, flight]))
+    sec = _sheet_for(char).powers
+    sec._set_group_active(char.powers[0], False)
+
+    buttons = _ladder(sec).findChildren(QPushButton)
+    assert [b.text() for b in buttons] == ["Large", "Huge", "Gargantuan"]
+    assert all(b.isEnabled() for b in buttons)
+    assert all(b.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) for b in buttons)
+
+
+def test_a_rung_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
+    """Picking a rung does whatever clicking the card would, then lands on that rung."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[flight, growth], active_child_id=flight.id)
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+
+    assert _rungs(sec) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+    next(b for b in _ladder(sec).findChildren(QPushButton) if b.text() == "Huge").click()
+
+    assert group.active_child_id == growth.id
+    assert effective_size(char, data) == "Huge"
+
+
+@pytest.mark.parametrize("preset", ["classic", "slate-dark", "parchment-light", "crimson-gold"])
+def test_the_lit_rung_states_its_own_look(qapp: QApplication, preset: str) -> None:
+    """The same trap the group's mode toggle fell into, on the same tokens."""
+    theme.set_active_theme(preset)
+    sheet, _char, _power = _size_sheet(3)
+
+    lit = _ladder(sheet.powers).styleSheet().split("QPushButton:checked")
+    assert len(lit) == 2, "the strip must state its own checked look"
+    assert "background:" in lit[1]

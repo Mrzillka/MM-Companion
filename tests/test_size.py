@@ -10,13 +10,16 @@ from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
     base_size_rank,
     defense_class,
+    effect_current_rank,
     effective_ability,
     effective_size,
     effective_size_rank,
+    power_total_cost,
     resistance_total,
     size_contributions,
     size_resistance_shift,
     size_skill_shift,
+    size_steps,
     size_trait_modifier,
     skill_total,
 )
@@ -144,3 +147,129 @@ def test_a_skill_cap_shift_follows_the_row_and_its_ability(data) -> None:
     # Nothing maps onto an ability in the base ruleset, so an unlisted skill is flat.
     assert size_skill_shift(char, data, "Athletics") == 0
     assert size_skill_shift(char, data, "No Such Skill") == 0
+
+
+# --- the rungs a size effect can be held at -------------------------------------------
+
+
+def _steps(power, char, data):
+    return size_steps(power, power.effects[0], char, data)
+
+
+def test_the_ladder_names_the_size_reached_at_each_rank(data) -> None:
+    """A rung is labelled by what the wielder *becomes*, not by what it cost."""
+    char = _char(data)
+    power = _growth(char, 3)
+
+    assert [(s.rank, s.category) for s in _steps(power, char, data)] == [
+        (1, "Large"),
+        (2, "Huge"),
+        (3, "Gargantuan"),
+    ]
+    # Full rank until something dials it down, so the top rung is the live one.
+    assert [s.current for s in _steps(power, char, data)] == [False, False, True]
+
+
+def test_the_ladder_is_read_against_the_wielder(data) -> None:
+    """A Small character's Growth 2 climbs Medium → Large, as the sheet already said."""
+    char = _char(data, "Small")
+    power = _growth(char, 2)
+
+    assert [s.category for s in _steps(power, char, data)] == ["Medium", "Large"]
+    assert effective_size(char, data) == "Large"
+
+
+def test_shrinking_walks_the_table_the_other_way(data) -> None:
+    char = _char(data)
+    power = _growth(char, 3, effect="shrinking")
+
+    assert [s.category for s in _steps(power, char, data)] == ["Small", "Tiny", "Diminutive"]
+
+
+def test_holding_a_rung_moves_the_whole_sheet(data) -> None:
+    """The dialled rank is the one number everything else follows from."""
+    char = _char(data)
+    power = _growth(char, 3)
+    char.abilities["STA"] = 2
+
+    power.effects[0].current_rank = 1
+    assert effective_size(char, data) == "Large"
+    assert size_trait_modifier(char, data, "resistance", "TOUGHNESS") == 1
+    assert resistance_total(char, data, "TOUGHNESS") == 3
+    assert [s.current for s in _steps(power, char, data)] == [True, False, False]
+
+    power.effects[0].current_rank = 3
+    assert effective_size(char, data) == "Gargantuan"
+    assert resistance_total(char, data, "TOUGHNESS") == 5
+
+
+def test_a_rung_left_over_from_a_larger_bought_rank_clamps(data) -> None:
+    """Editing Growth 3 down to 1 must not leave the effect running at 3."""
+    char = _char(data)
+    power = _growth(char, 3)
+    power.effects[0].current_rank = 3
+
+    power.effects[0].rank = 1
+    assert effect_current_rank(power.effects[0]) == 1
+    assert effective_size(char, data) == "Large"
+
+
+def test_a_switched_off_effect_lights_no_rung(data) -> None:
+    """The ladder says where the power *is*, and off is nowhere — not rank 1."""
+    char = _char(data)
+    power = _growth(char, 3)
+    power.effects[0].current_rank = 2
+    power.effects[0].toggled_on = False
+
+    assert [s.current for s in _steps(power, char, data)] == [False, False, False]
+    assert effective_size(char, data) == "Medium"
+    # And the rung is remembered, so switching back on returns to where it was.
+    power.effects[0].toggled_on = True
+    assert effective_size(char, data) == "Huge"
+
+
+def test_ranks_the_table_clamps_fold_into_one_rung(data) -> None:
+    """Four buttons all reading 'Awesome' would be four ways to do the same thing."""
+    char = _char(data, "Colossal")
+    power = _growth(char, 3)
+    power.effects[0].current_rank = 2
+
+    steps = _steps(power, char, data)
+    assert [(s.rank, s.last_rank, s.category) for s in steps] == [(1, 3, "Awesome")]
+    # The dialled rank is inside that rung's span, so the one button is still lit.
+    assert [s.current for s in steps] == [True]
+
+
+def test_only_a_size_effect_has_rungs(data) -> None:
+    char = _char(data)
+    power = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=5)])
+    char.powers.append(power)
+
+    assert _steps(power, char, data) == ()
+
+
+def test_dialling_down_refunds_nothing(data) -> None:
+    """What a power is worth is what it was bought at."""
+    char = _char(data)
+    power = _growth(char, 3)
+    full = power_total_cost(power, data, char)
+
+    power.effects[0].current_rank = 1
+    assert power_total_cost(power, data, char) == full
+
+
+def test_the_dialled_rank_is_runtime_and_survives_a_restore(data) -> None:
+    """Like every other runtime flag: out of the save, carried across an undo."""
+    char = _char(data)
+    power = _growth(char, 3)
+    power.effects[0].current_rank = 2
+
+    assert "current_rank" not in power.effects[0].to_dict()
+
+    snapshot = char.to_dict()
+    char.restore(snapshot)
+    assert char.powers[0].effects[0].current_rank == 2
+    assert effective_size(char, data) == "Huge"
+
+    # A plain load, with no runtime to carry, comes up at full rank.
+    assert Character.from_dict(snapshot).powers[0].effects[0].current_rank is None

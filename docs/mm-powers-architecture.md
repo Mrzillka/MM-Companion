@@ -322,6 +322,12 @@ PowerEffectInstance  (part of a character's Power)
 │                                          // effect's rank (the constructor's Extended
 │                                          // settings switch). Only ever reaches an effect
 │                                          // that forces a resistance.
+├── currentRank (int|null, default null)  // runtime, per §7: the rank the effect is
+│                                          // *currently* held at, null meaning full.
+│                                          // Read by the size layer — Growth 3 is a
+│                                          // ladder of rungs the card offers as buttons
+│                                          // (`size_steps`), not one leap. Never read by
+│                                          // cost: dialling down refunds nothing.
 └── computedCost
 
 Power

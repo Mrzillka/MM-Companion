@@ -13,7 +13,7 @@ from ..registry import Registry
 from .appliers import trait_category
 from .derived import effective_ability
 from .powers_cost import array_alternate_cost, array_base_index, effect_effective_rank
-from .runtime import _resolved_trait_target, _trait_name
+from .runtime import _resolved_trait_target, _trait_name, effect_current_rank
 from .size import base_size_rank
 
 
@@ -910,9 +910,14 @@ def _readout_size_table(
 
     Without a character it falls back to the absolute row at the shift, which is the
     best answer available when nobody is wielding the power yet.
+
+    The rank is the one the effect is **currently dialled to**
+    (:func:`~.runtime.effect_current_rank`), so the card's readout and the sheet's Size
+    line always name the same category. In the Power Constructor nothing is dialled, so
+    this is the bought rank there and the build preview is unchanged.
     """
 
-    rank = effect.rank
+    rank = effect_current_rank(effect)
     data = readout.data
     sign = int(data.get("sign", 1))
     if rank <= 0:

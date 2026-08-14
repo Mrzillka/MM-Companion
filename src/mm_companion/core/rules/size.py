@@ -9,9 +9,12 @@ import nothing but the character, the game data, ``appliers`` and ``runtime``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
+
 from ..character import Character
 from ..components import APPLY_BONUS
 from ..data_loader import GameData
+from ..powers import Power, PowerEffectInstance
 from .appliers import (
     CATEGORY_ABILITY,
     CATEGORY_RESISTANCE,
@@ -20,7 +23,12 @@ from .appliers import (
     STACK_SUM,
     TraitContribution,
 )
-from .runtime import effect_is_active, live_powers
+from .runtime import effect_current_rank, effect_is_active, live_powers
+
+#: The ``effect_readouts.json`` readout kind that marks an effect as a size shift.
+#: Nothing here names Growth or Shrinking: an effect is a size effect because the
+#: ruleset gave it this readout, and a mod's own one joins on the same terms.
+SIZE_READOUT_KIND = "size_table"
 
 
 def size_shift(char: Character, game_data: GameData) -> int:
@@ -30,6 +38,11 @@ def size_shift(char: Character, game_data: GameData) -> int:
     the effect is currently active, applies its signed rank. Growth and Shrinking both
     on nets to the difference between them, since the signs simply sum. Zero when no
     size power is on, so the character sits at their bought size.
+
+    The rank read is the one the effect is *currently dialled to*
+    (:func:`~.runtime.effect_current_rank`), which is what makes a Growth 3 a ladder of
+    three rungs rather than one leap: the player picks a rung on the card and the whole
+    sheet follows from this one number.
 
     The **bought** rank, not the effective one, for the reason
     :func:`~.runtime.build_contributions` uses it: an effective rank asks
@@ -45,12 +58,12 @@ def size_shift(char: Character, game_data: GameData) -> int:
             if base is None:
                 continue
             for readout in game_data.effect_readouts.get(effect.effect_id, ()):
-                if readout.kind != "size_table":
+                if readout.kind != SIZE_READOUT_KIND:
                     continue
                 if not effect_is_active(power, effect, base, game_data, char):
                     continue
                 sign = int(readout.data.get("sign", 1))
-                shift += sign * effect.rank
+                shift += sign * effect_current_rank(effect)
     return shift
 
 
@@ -189,3 +202,81 @@ def size_skill_shift(char: Character, game_data: GameData, row_id: str) -> int:
     if skill.ability:
         shift += size_trait_modifier(char, game_data, CATEGORY_ABILITY, skill.ability)
     return shift
+
+
+@dataclass(frozen=True)
+class SizeStep:
+    """One rung of a size effect's ladder — a rank the player can hold it at.
+
+    ``rank`` is the effect rank this rung runs at and ``category`` the size the wielder
+    *becomes* there, which is what the card's button is labelled with: a rung is only
+    meaningful as an outcome, and "Growth 2" says nothing a Small character can act on
+    while "Large" says everything.
+
+    ``last_rank`` closes the rung's span. It is ``rank`` for every ordinary rung and
+    larger only where the Size Table has **clamped** — a Colossal character's Growth 4
+    reaches Awesome at rank 1 and stays there, and four buttons all reading "Awesome"
+    would be four ways to do the same thing. Those ranks fold into the rung that first
+    reached them, which is also what keeps :attr:`current` honest when the effect is
+    dialled to one of the folded-away ranks.
+    """
+
+    rank: int
+    last_rank: int
+    category: str
+    current: bool = False
+
+
+def size_steps(
+    power: Power, effect: PowerEffectInstance, char: Character, game_data: GameData
+) -> tuple[SizeStep, ...]:
+    """The rungs a size effect can be held at, relative to *this* wielder.
+
+    Empty for anything that is not a size effect — an effect is one because the ruleset
+    gave it a :data:`SIZE_READOUT_KIND` readout, so nothing here names Growth or
+    Shrinking and a mod's own size effect gets the ladder for free.
+
+    The categories are read **against the character**, exactly as the card's size
+    readout is (:func:`~.powers_terms.effect_readout_rows`): a Small character's Growth
+    2 climbs Medium → Large, not Large → Huge. At most one rung is :attr:`~SizeStep
+    .current`, and none is while the effect is not standing on the sheet — the ladder
+    says where the power *is*, and a power switched off (or an array alternate nobody
+    picked) is nowhere, not at rank 1.
+    """
+
+    readout = next(
+        (
+            r
+            for r in game_data.effect_readouts.get(effect.effect_id, ())
+            if r.kind == SIZE_READOUT_KIND
+        ),
+        None,
+    )
+    if readout is None or effect.rank <= 0:
+        return ()
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return ()
+
+    sign = int(readout.data.get("sign", 1))
+    start = base_size_rank(char, game_data)
+    steps: list[SizeStep] = []
+    for rank in range(1, effect.rank + 1):
+        row = game_data.measurements.size_row(start + sign * rank)
+        if row is None:
+            return ()
+        if steps and steps[-1].category == row.size_category:
+            steps[-1] = replace(steps[-1], last_rank=rank)  # the table clamped here
+            continue
+        steps.append(SizeStep(rank=rank, last_rank=rank, category=row.size_category))
+
+    # The same pair :func:`size_shift` asks, and it has to be both: an array member
+    # that is not the live alternate answers ``effect_is_active`` perfectly happily
+    # (``array_active`` is a flag nothing maintains — the array's own
+    # ``active_child_id`` is the truth, and only ``live_powers`` reads it), so asking
+    # the effect alone lit a rung on a card contributing nothing to the sheet.
+    live = any(p is power for p in live_powers(char.powers))
+    if not live or not effect_is_active(power, effect, base, game_data, char):
+        return tuple(steps)
+    now = effect_current_rank(effect)
+    return tuple(replace(s, current=s.rank <= now <= s.last_rank) for s in steps)

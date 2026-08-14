@@ -71,6 +71,7 @@ from mm_companion.core.powers import (
     STRUCTURE_INDEPENDENT,
     STRUCTURE_LINKED,
     Power,
+    PowerEffectInstance,
     PowerGroup,
     PowerNode,
     power_is_homerule,
@@ -90,6 +91,7 @@ from mm_companion.core.rules import (
     power_rolls,
     power_runtime_gates,
     powers_points_spent,
+    size_steps,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -99,8 +101,10 @@ from mm_companion.ui.cards import (
     NodeList,
     RollLine,
     RollsFooter,
+    effect_title,
     effects_block,
 )
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -160,6 +164,11 @@ def _mode_toggle_style(locked: bool) -> str:
     The resting border is drawn rather than dropped so a segment does not jump
     sideways as it lights up, which is the lesson the theme's tool-button rules and
     ``QuickRollStar`` already carry. No ``font-size`` here: weight only.
+
+    Shared with :class:`_SizeLadder`, which is the same widget-level bargain over the
+    same tokens — a strip of checkable push buttons, exactly one lit. Keeping one
+    stylesheet for both is what stops a card carrying two segmented strips that agree
+    about nothing.
     """
     accent = theme.color("accent")
     rest = (
@@ -281,6 +290,84 @@ class _ModeToggle(QWidget):
             button.setCursor(
                 Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor
             )
+
+
+class _SizeLadder(QWidget):
+    """A size effect's rungs, as one button per size the wielder can hold themselves at.
+
+    Growth 3 is not one leap to Gargantuan — it is Large, then Huge, then Gargantuan,
+    and which of the three you are standing at is a mid-fight decision. So the card
+    carries a button per rung (:func:`~mm_companion.core.rules.size_steps`), labelled
+    with the **size the character becomes** rather than the rank it costs: a rank is an
+    accounting fact the card already prints, while "Huge" is the thing being chosen.
+    The labels are read against the wielder, so a Small character's ladder starts at
+    Medium.
+
+    Two things the strip does that a plain segmented control does not. Nothing is lit
+    while the power is switched off — the ladder reports where the power *is*, and off
+    is nowhere — and clicking a rung from there switches the power on at that rung, so
+    going from dormant to Huge is one click rather than two. And the buttons stay live
+    in the locked sheet, like every other runtime control on a card: how big you are
+    standing there is a play action, not a build edit.
+
+    It wraps (:class:`~mm_companion.ui.flow_layout.FlowContainer`), because a Growth 10
+    is ten buttons and a card in a pinned strip is narrow.
+    """
+
+    stepPicked = Signal(int)  #: the effect rank the player picked
+
+    def __init__(
+        self,
+        caption: str,
+        steps,
+        interactive: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(int(theme.metric("space.sm")))
+
+        label = QLabel(caption)
+        label.setStyleSheet(muted_style())
+        row.addWidget(label)
+
+        host = FlowContainer()
+        flow = FlowLayout(host, spacing=int(theme.metric("space.xs")))
+        # Exclusive, so lighting a rung puts the previous one out; but a strip with
+        # nothing lit is a legal state here (the power is off), which an exclusive
+        # QButtonGroup will not enter on its own — hence setChecked below rather than
+        # leaving it to the group.
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        for step in steps:
+            button = QPushButton(step.category)
+            button.setCheckable(True)
+            button.setChecked(step.current)
+            button.setFixedHeight(22)
+            button.setMinimumWidth(_lit_width(button))
+            button.setCursor(
+                Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
+            )
+            # Inside a switched-off Linked group the strip is a read-out: left visible
+            # (it still says where the power is set) but transparent to the mouse, so a
+            # click falls through to the card exactly as it does off the group's own
+            # chrome. Never setEnabled(False) — nothing in this app greys a control out.
+            button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
+            button.setFocusPolicy(
+                Qt.FocusPolicy.StrongFocus if interactive else Qt.FocusPolicy.NoFocus
+            )
+            button.setToolTip(
+                f"Hold this power at rank {step.rank} — {step.category}."
+                if step.rank == step.last_rank
+                else f"Hold this power at rank {step.rank} or above — {step.category} is as "
+                "far as the Size Table goes."
+            )
+            button.clicked.connect(lambda _checked=False, r=step.rank: self.stepPicked.emit(r))
+            self._group.addButton(button)
+            flow.addWidget(button)
+        row.addWidget(host, 1)
+        self.setStyleSheet(_mode_toggle_style(False))
 
 
 class PowersSection(TitledSection):
@@ -859,6 +946,12 @@ class PowersSection(TitledSection):
         if effects is not None:
             layout.addWidget(effects)
 
+        # A size effect is a ladder, not a switch: one rung per size the wielder can
+        # hold themselves at, under the effect breakdown that explains what each rung
+        # is worth and above the dice, with the rest of the mid-play controls.
+        for ladder in self._size_ladders(power, parent, interactive):
+            layout.addWidget(ladder)
+
         # A dedicated footer for the numbers that come up mid-play — one line per roll.
         # A power that rolls nothing gets neither the footer nor its rule.
         rolls = self._rolls_block(power)
@@ -950,6 +1043,65 @@ class PowersSection(TitledSection):
         layout.addWidget(remove)
         remove.setVisible(not self._locked)
         return host
+
+    # -- the size ladder --------------------------------------------------
+    def _size_ladders(
+        self, power: Power, parent: PowerGroup | None, interactive: bool
+    ) -> list[QWidget]:
+        """One :class:`_SizeLadder` per size effect the power carries; usually none.
+
+        Which effects qualify is :func:`~mm_companion.core.rules.size_steps`' answer,
+        so this block names neither Growth nor Shrinking — an effect has rungs because
+        the ruleset gave it a size readout, and a mod's own size effect gets the strip
+        without touching this file.
+
+        The caption names the *effect* only when the power has more than one, which is
+        the same bargain the dice footer's labels strike: on the ordinary single-effect
+        Growth card "Size" is the whole story, while a Growth linked to a Shrinking
+        needs to say which strip is which.
+        """
+        ladders: list[QWidget] = []
+        for effect in power.effects:
+            steps = size_steps(power, effect, self._character, self._data)
+            if len(steps) < 2:
+                # A single rung is not a choice — a Growth 1 is exactly the card's own
+                # on/off switch, and a strip of one button would be a second way to
+                # press it.
+                continue
+            caption = "Size"
+            if len(power.effects) > 1:
+                caption = effect_title(effect, self._character, self._data)
+            ladder = _SizeLadder(caption, steps, interactive)
+            ladder.stepPicked.connect(
+                lambda rank, p=power, e=effect, g=parent: self._on_size_step(p, e, g, rank)
+            )
+            ladders.append(ladder)
+        return ladders
+
+    def _on_size_step(
+        self, power: Power, effect: PowerEffectInstance, parent: PowerGroup | None, rank: int
+    ) -> None:
+        """Hold a size effect at *rank*, switching the power on if it wasn't already.
+
+        Picking a rung on a dormant power is a request to *be* that size, so it does
+        whatever clicking the card would have done to wake the power — flip its switches,
+        or become its array's live alternate — and lands on the chosen rung rather than
+        at full rank. That leaves exactly one way for a click here to do nothing: the
+        rung already in force.
+
+        The rank is written first, so whichever activation path runs below rebuilds the
+        cards with it already in place.
+        """
+        effect.current_rank = rank
+        if self._activation_role(power, parent) == "select":
+            if isinstance(parent, PowerGroup) and active_array_child(parent) is not power:
+                self._set_array_active(parent, power.id)  # rebuilds and emits
+                return
+        if not self._power_is_active(power):
+            self._set_power_active(power, True)  # rebuilds and emits
+            return
+        self._rebuild_list()
+        self.runtimeChanged.emit()
 
     # -- effect summary and dice footer -----------------------------------
     def _effects_block(self, power: Power) -> QWidget | None:

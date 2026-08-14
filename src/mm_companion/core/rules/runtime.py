@@ -144,6 +144,25 @@ def _effect_gates(effect: PowerEffectInstance, game_data: GameData) -> set[str]:
     return gates
 
 
+def effect_current_rank(effect: PowerEffectInstance) -> int:
+    """The rank an effect is *currently running at* — its bought rank unless dialled down.
+
+    :attr:`~mm_companion.core.powers.PowerEffectInstance.current_rank` is runtime state
+    (a Growth 3 held at Large rather than Gargantuan), so it is clamped here rather than
+    trusted: ``None`` means all the way up, and a value left over from a larger bought
+    rank comes back as the rank the effect actually has. The floor is 1, not 0 — "off"
+    is the effect's own toggle, not a zeroth rung, and a rank-0 effect would quietly
+    read as a rank-1 one nowhere else.
+
+    Cost never asks this. What a power is *worth* is what it was bought at, and dialling
+    one down mid-fight refunds nothing.
+    """
+
+    if effect.current_rank is None:
+        return effect.rank
+    return max(1, min(effect.rank, int(effect.current_rank)))
+
+
 def effect_is_active(
     power: Power,
     effect: PowerEffectInstance,

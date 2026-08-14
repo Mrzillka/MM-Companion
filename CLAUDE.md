@@ -1232,11 +1232,12 @@ data-first; nothing below names a trait, an effect or a column in Python.
 - **`core/rules/size.py` is its own module, and it has to be.** `derived` imports it, and
   `movement` reaches `powers_cost`, which imports `derived` back — so leaving the size
   math in `movement` is an import cycle at startup, not a style question. It may import
-  only `..character`, `..data_loader`, `.appliers` and `.runtime`. For the same reason
-  `size_shift` reads the **bought** `effect.rank`: an effective rank asks
-  `effective_ability`, which asks what is standing on the sheet, which now includes what
-  size grants. (`build_contributions` uses the bought rank for the same reason.) The DAG
-  is `appliers` → `runtime` → **`size`** → `derived` → `powers_cost` → …
+  only `..character`, `..data_loader`, `..powers`, `.appliers` and `.runtime`. For the
+  same reason `size_shift` reads the **bought** rank rather than the effective one: an
+  effective rank asks `effective_ability`, which asks what is standing on the sheet,
+  which now includes what size grants. (`build_contributions` uses the bought rank for
+  the same reason.) The DAG is `appliers` → `runtime` → **`size`** → `derived` →
+  `powers_cost` → …
 - **Which trait each Size Table column modifies is `sizeEffects` in
   `measurements.json`** — Defence, Toughness, Intimidation, Stealth. `size_contributions`
   emits one `TraitContribution` per non-zero column into `derived.trait_contributions`,
@@ -1280,12 +1281,54 @@ data-first; nothing below names a trait, an effect or a column in Python.
   false, so old saves are byte-identical and come up with it on. An effect dropped on the
   canvas **inherits the checkbox**, not its own default, or turning it off and then
   adding an effect would quietly turn it back on.
+- **Growth is a ladder, not a leap** — a Growth 3 can be *held* at Large, at Huge or at
+  Gargantuan, and which is a mid-round decision. The state is
+  `PowerEffectInstance.current_rank`: **runtime**, like `toggled_on` beside it, so it is
+  out of `to_dict` and carried across a restore by `capture_runtime` (the per-effect
+  tuple grew a third slot, read tolerantly by index). `None` means "all the way up", so
+  an effect nobody has dialled behaves exactly as it always did and a bought rank edited
+  *down* later re-clamps rather than running at a rank it no longer has — that clamp is
+  `rules.effect_current_rank`, which `size_shift` and `_readout_size_table` both read.
+  **Cost never asks it**: what a power is worth is what it was bought at, and dialling
+  one down mid-fight refunds nothing. The field is generic on the effect and only the
+  size layer reads it today; nothing else has rungs to offer.
+- **The rungs are `size_steps`, and they name sizes rather than ranks.** One
+  `SizeStep` per rank of a size effect — `category` being what the *wielder becomes*
+  there, read against their bought size exactly as the card's readout is, because "Huge"
+  is the thing being chosen while "rank 2" is an accounting fact the card already prints.
+  An effect has rungs because the ruleset gave it a `size_table` readout
+  (`SIZE_READOUT_KIND`), so nothing here names Growth or Shrinking and a mod's own size
+  effect gets the strip for free. Two rules that are easy to re-break: ranks the Size
+  Table **clamps** fold into the rung that first reached them (`last_rank` closes the
+  span, or a Colossal character's Growth 4 offers four buttons all reading "Awesome" —
+  and a rank dialled into the folded part would light none of them), and *current* is
+  gated on the power being **live on the character** as well as `effect_is_active` —
+  an array alternate nobody picked answers that second question happily, since
+  `array_active` is a flag nothing maintains and only `live_powers` reads the array's
+  `active_child_id`.
+- **`_SizeLadder` is the strip on the card** (`ui/sections/powers.py`), one button per
+  rung, under the effect's term grid and above the dice footer with the rest of the
+  mid-play controls. It shares `_mode_toggle_style` with the group's mode toggle — the
+  same widget-level bargain over the same tokens, since a checkable `QPushButton` has to
+  state its own checked look (see the theme section). Four things it does that a plain
+  segmented control does not. **Nothing is lit while the power is off** — the ladder
+  says where the power *is*, and off is nowhere, not rank 1 — and **clicking a rung from
+  there wakes the power at that rung**, doing whatever a click on the card body would
+  have done first (flip the switches, or become the array's live alternate), so dormant
+  → Huge is one click. It **stays live in the locked sheet** and emits `runtimeChanged`,
+  never `changed`, like every other card switch. And a **single-rung effect gets no
+  strip at all**: a Growth 1's one rung *is* the card's own on/off switch, and a strip of
+  one button would be a second way to press it. It wraps in a `FlowContainer`, because a
+  Growth 10 is ten buttons and a card in a pinned strip is narrow. Screenshot it with
+  `driver.py size-ladder`.
 - **The card's size readout is relative to the character** (`_readout_size_table`). It
   used to compute an absolute row from `sign × rank` and never look at the wielder, so a
   Small character's Growth 2 printed "Huge" while the sheet correctly said "Large". It
   shows `base_size_rank + sign × rank` and each column as the **delta** against the base
   row — which is also the only reading that stays right past the clamp, where the table
-  stops being linear. `READOUT_KINDS` handlers therefore take
+  stops being linear. It reads the **dialled** rank, so the card's Size row and the
+  System block's Size line can never name two different categories; in the constructor
+  nothing is dialled, so the build preview is unchanged. `READOUT_KINDS` handlers therefore take
   `(readout, effect, game_data, char)`; a three-argument handler from a *workspace* mod
   is retried without the character, guarded on `exc.__traceback__.tb_next is None` so a
   `TypeError` raised *inside* a four-argument handler is never swallowed and re-run.

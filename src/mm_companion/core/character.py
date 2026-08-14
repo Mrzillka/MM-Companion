@@ -464,7 +464,7 @@ def _power_runtime(power: Power) -> dict:
         "activated": power.activated,
         "item_present": power.item_present,
         "array_active": power.array_active,
-        "effects": [(e.toggled_on, e.suppressed) for e in power.effects],
+        "effects": [(e.toggled_on, e.suppressed, e.current_rank) for e in power.effects],
     }
 
 
@@ -477,9 +477,13 @@ def _restore_power_runtime(power: Power, state: dict) -> None:
     # writing them anyway is the one way this misapplies. Leave the new list alone.
     if len(effects) != len(power.effects):
         return
-    for effect, (toggled_on, suppressed) in zip(power.effects, effects, strict=True):
-        effect.toggled_on = toggled_on
-        effect.suppressed = suppressed
+    for effect, flags in zip(power.effects, effects, strict=True):
+        # Read positionally and tolerantly: the tuple has grown once already, and a
+        # shorter one simply leaves the newer flags at their dataclass defaults.
+        effect.toggled_on = flags[0]
+        effect.suppressed = flags[1]
+        if len(flags) > 2:
+            effect.current_rank = flags[2]
 
 
 def _migrate_flat_relations(nodes: list[PowerNode]) -> list[PowerNode]:

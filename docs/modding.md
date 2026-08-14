@@ -65,6 +65,17 @@ mods/
   are broken by the order in the `enabled_mods` setting.
 - A malformed manifest is **skipped**, not fatal — one bad mod can't stop the app.
 
+A few data keys worth knowing about, because they let a ruleset retune behaviour
+that used to be spelled in Python:
+
+| Key | File | Says |
+| --- | --- | --- |
+| `sizeEffects` | `measurements.json` | which trait each Size Table column modifies |
+| `sizeRankColumn` | `measurements.json` | which column raises the rank of an effect that forces a resistance |
+| `measure.mode` | `effects.json` | the movement mode a per-round speed belongs to; sources sharing one are netted into a single line (defaults to the effect's own id) |
+| `groundMode` | `movement.json` | which of those modes everybody walks in |
+| `statIntegration` | `modifiers.json`, `effect_modifiers.json` | what taking this extra or flaw *grants*, in the same shape a base effect uses |
+
 ## How content merges
 
 Content is **deep-merged by record id**, in load order (base first, then mods):
@@ -187,7 +198,11 @@ handler, replace=False)`), so extending them is the same call everywhere:
 
 `STAT_APPLIERS` has its own helper, `register_stat_applier(kind, applier)`, and is
 the seam between "this effect grants something" and "here is what it grants". An
-effect's `statIntegration.apply` names a kind; the handler is given an
+effect's `statIntegration.apply` names a kind — and so does a **modifier's**: an
+extra or flaw may carry a `statIntegration` block of its own, read by the same
+appliers, which is how Elongation's *Striding* grants ranks of Speed rather than
+only costing points. A modifier is worth its own rank when it is `ranked`, and the
+host effect's otherwise. The kind; the handler is given an
 `ApplyContext` (the record, the rank it stands at, the trait it resolved against,
 who is granting it) and returns `TraitContribution`s. The base ruleset registers
 five kinds — `bonus`, `speed`, `sense`, `penalty_removed`, `penalty_replaced` — and

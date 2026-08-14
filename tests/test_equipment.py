@@ -596,6 +596,20 @@ def test_worn_gear_reaches_the_speed_readout(data, hero) -> None:
     assert sheet[0].sources == ("Glider 6",)
 
 
+def test_worn_gear_is_weighed_against_a_power_rather_than_added_to_it(data, hero) -> None:
+    """Summing per mode must not quietly repeal the no-stacking rule for gear."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    hero.equipment = [_item(data, "glider")]  # Flight 6
+    wings = Power(name="Wings", effects=[PowerEffectInstance("flight", rank=4)])
+    wings.activated = True
+    hero.powers.append(wings)
+
+    flight = next(line for line in speed_lines(hero, data) if line.label.startswith("Flight"))
+    assert flight.rank == 6  # the better of the two, never 10
+    assert flight.sources == ("Glider 6",)
+
+
 def test_the_base_ground_line_stays_first(data, hero) -> None:
     """What lets the condition overlay keep landing on ``lines[0]``."""
     hero.equipment = [_item(data, "glider")]

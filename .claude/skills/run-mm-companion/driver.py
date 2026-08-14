@@ -318,6 +318,34 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target == "sheet-size":
+        # A Huge character's sheet: the Size Table reaching Defence, Toughness and the
+        # skills, and the Speed readout netting two Flight powers into one line.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.characteristics["size"] = "Huge"
+        char.abilities["STA"] = 4
+        char.abilities["AGL"] = 2
+        char.abilities["PRE"] = 3
+        char.skill_ranks["Stealth"] = 4
+        char.skill_ranks["Intimidation"] = 3
+        for name, rank in (("Wings", 4), ("Jets", 6)):
+            power = Power(name=name, effects=[PowerEffectInstance("flight", rank=rank)])
+            power.activated = True
+            char.powers.append(power)
+        sheet.abilities.reseed()
+        sheet.resistances.reseed()
+        sheet.skills.reseed()
+        sheet.system_info.reseed()
+        sheet.abilities.refresh_enhancements()
+        sheet.resistances.refresh_bases()
+        sheet.resistances.refresh_enhancements()
+        sheet.skills._rebuild()
+        sheet.system_info.refresh_derived()
     elif target == "constructor-extended":
         # The Extended settings section, on a Huge character's Damage power: it only
         # appears once the build carries an effect it could apply to, and its note says
@@ -638,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-pinned-bottom",
             "constructor",
             "constructor-extended",
+            "sheet-size",
             "equipment-constructor",
             "focus",
             "dice",

@@ -291,3 +291,112 @@ def test_speed_lines_itself_carries_no_condition_overlay() -> None:
     before = speed_lines(char, data)
     apply_condition(char, "hindered", data)
     assert speed_lines(char, data) == before
+
+
+# -- speed nets per mode ---------------------------------------------------------
+
+
+def _movement_power(char: Character, effect: str, rank: int, *, name: str = "") -> Power:
+    power = Power(
+        name=name or f"{effect.title()} {rank}", effects=[PowerEffectInstance(effect, rank=rank)]
+    )
+    power.activated = True
+    char.powers.append(power)
+    return power
+
+
+def test_two_flight_powers_are_one_flight_speed() -> None:
+    """The readout is a line per *mode*, not a line per source."""
+    data = load_game_data()
+    char = _char(data)
+    _movement_power(char, "flight", 4, name="Wings")
+    _movement_power(char, "flight", 6, name="Jets")
+
+    lines = speed_lines(char, data)
+    assert [line.label for line in lines] == ["Base", "Flight 10"]
+    assert lines[1].sources == ("Flight 4", "Flight 6")
+
+
+def test_the_speed_effect_feeds_the_ground_line_rather_than_a_line_of_its_own() -> None:
+    data = load_game_data()
+    char = _char(data)
+    _movement_power(char, "speed", 4)
+
+    lines = speed_lines(char, data)
+    assert [line.label for line in lines] == ["Base"]
+    assert lines[0].rank == 4  # replaces walking, rather than adding to it
+    assert lines[0].sources == ("Speed 4",)
+
+
+def test_a_speed_effect_below_the_walking_rank_leaves_it_alone() -> None:
+    """The ground line is a ``max``: Speed 1 is not slower than walking."""
+    data = load_game_data()
+    char = _char(data)
+    _movement_power(char, "speed", 0)
+
+    assert speed_lines(char, data)[0].rank == base_ground_speed_rank(char, data)
+
+
+def test_striding_grants_ranks_of_the_ground_mode() -> None:
+    """Elongation's extra says it grants Speed, and now it does."""
+    from mm_companion.core.powers import ModifierSelection
+
+    data = load_game_data()
+    char = _char(data)
+    power = _movement_power(char, "elongation", 6, name="Rubber Limbs")
+    power.effects[0].extras.append(ModifierSelection("striding"))
+
+    line = speed_lines(char, data)[0]
+    assert (line.rank, line.sources) == (6, ("Rubber Limbs (Striding)",))
+
+    power.activated = False  # the host's gate takes the grant with it
+    assert speed_lines(char, data)[0].rank == base_ground_speed_rank(char, data)
+
+
+def test_normal_speed_cancels_the_shrinking_penalty() -> None:
+    from mm_companion.core.powers import ModifierSelection
+
+    data = load_game_data()
+    char = _char(data)
+    power = _movement_power(char, "shrinking", 2, name="Shrink")
+    assert base_ground_speed_rank(char, data) == -1  # 1 - 2
+
+    power.effects[0].extras.append(ModifierSelection("normal_speed_shrinking", rank=2))
+    assert base_ground_speed_rank(char, data) == 1
+
+
+def test_normal_speed_never_makes_anyone_faster_than_normal() -> None:
+    """Lifting a penalty leaves you at your usual pace, not running."""
+    from mm_companion.core.powers import ModifierSelection
+
+    data = load_game_data()
+    char = _char(data)
+    power = _movement_power(char, "shrinking", 2, name="Shrink")
+    power.effects[0].extras.append(ModifierSelection("normal_speed_shrinking", rank=6))
+
+    assert base_ground_speed_rank(char, data) == 1
+
+
+def test_a_small_character_keeps_their_own_penalty_through_normal_speed() -> None:
+    """It cancels what the *power* imposed, not what the character already was."""
+    from mm_companion.core.powers import ModifierSelection
+
+    data = load_game_data()
+    char = _char(data)
+    char.characteristics["size"] = "Small"
+    power = _movement_power(char, "shrinking", 2, name="Shrink")
+    power.effects[0].extras.append(ModifierSelection("normal_speed_shrinking", rank=2))
+
+    assert base_ground_speed_rank(char, data) == 0  # 1 - 3 + 2
+
+
+def test_size_does_not_reach_strength() -> None:
+    """The Damage column scales an effect's rank; it is not a Strength bonus."""
+    from mm_companion.core.rules import effective_ability
+
+    data = load_game_data()
+    char = _char(data)
+    char.abilities["STR"] = 3
+    char.characteristics["size"] = "Colossal"
+
+    assert effective_ability(char, data, "STR") == 3

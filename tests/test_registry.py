@@ -79,7 +79,12 @@ def test_base_readout_kinds_are_registered() -> None:
 
 
 def test_mod_can_register_a_new_readout_kind() -> None:
-    """A Python mod registering a new ``kind`` flows through ``effect_readout_rows``."""
+    """A **three-argument** handler still works — the workspace-mod compatibility guard.
+
+    Readout handlers take ``(readout, effect, game_data, char)`` now. A mod written
+    against the older signature lives outside this repo and cannot be updated with it,
+    so the dispatcher retries without the character; this is the test that says so.
+    """
 
     data = load_game_data()
 
@@ -203,3 +208,38 @@ def test_mod_can_register_a_new_mechanism_scope() -> None:
     finally:
         MECHANISM_SCOPES.unregister(MECH_DEFENSE_MOD)
     assert not condition_scope_penalty(char, data, {"AGL"}).active
+
+
+def test_a_readout_kind_can_read_the_character() -> None:
+    """The fourth argument: a readout that is *relative* to whoever is wielding it."""
+
+    data = load_game_data()
+
+    class FakeReadout:
+        kind = "shout"
+        label = "Shout"
+        data: dict = {}
+
+    READOUT_KINDS.register(
+        "shout",
+        lambda ro, effect, gd, char: [
+            EffectStat(
+                "shout",
+                ro.label,
+                "",
+                "nobody" if char is None else str(char.characteristics.get("size", "")),
+                "",
+            )
+        ],
+    )
+    try:
+        from mm_companion.core.character import Character
+        from mm_companion.core.rules.powers_terms import _readout_rows
+
+        char = Character()
+        char.characteristics["size"] = "Colossal"
+        effect = PowerEffectInstance("growth", rank=1)
+        assert _readout_rows(FakeReadout(), effect, data, char)[0].value == "Colossal"
+        assert _readout_rows(FakeReadout(), effect, data)[0].value == "nobody"
+    finally:
+        READOUT_KINDS.unregister("shout")

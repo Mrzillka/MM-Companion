@@ -43,6 +43,8 @@ Single surfaces:
 python .claude/skills/run-mm-companion/driver.py start        # the launcher
 python .claude/skills/run-mm-companion/driver.py sheet        # blank editable character sheet
 python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+python .claude/skills/run-mm-companion/driver.py constructor-extended  # ...and its Extended settings section
+python .claude/skills/run-mm-companion/driver.py sheet-size    # a Huge character: size in the totals, speed netted per mode
 python .claude/skills/run-mm-companion/driver.py settings     # the Settings window (Themes page)
 python .claude/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)
 python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet

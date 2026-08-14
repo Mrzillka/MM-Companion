@@ -1312,15 +1312,31 @@ data-first; nothing below names a trait, an effect or a column in Python.
   same widget-level bargain over the same tokens, since a checkable `QPushButton` has to
   state its own checked look (see the theme section). Four things it does that a plain
   segmented control does not. **Nothing is lit while the power is off** — the ladder
-  says where the power *is*, and off is nowhere, not rank 1 — and **clicking a rung from
-  there wakes the power at that rung**, doing whatever a click on the card body would
-  have done first (flip the switches, or become the array's live alternate), so dormant
-  → Huge is one click. It **stays live in the locked sheet** and emits `runtimeChanged`,
-  never `changed`, like every other card switch. And a **single-rung effect gets no
-  strip at all**: a Growth 1's one rung *is* the card's own on/off switch, and a strip of
-  one button would be a second way to press it. It wraps in a `FlowContainer`, because a
-  Growth 10 is ten buttons and a card in a pinned strip is narrow. Screenshot it with
-  `driver.py size-ladder`.
+  says where the power *is*, and off is nowhere, not rank 1. **A rung does whatever a
+  click on the card body would have done, then lands where it was asked**: from off it
+  wakes the power at that rung (flipping the switches, or becoming the array's live
+  alternate), so dormant → Huge is one click, and **on the rung already lit it switches
+  the power off** — the strip is a whole control, not one that can only turn a power on.
+  The one exception is an array's *live* member, where a card click is deliberately a
+  no-op. That test goes through `size_steps` rather than comparing `current_rank`
+  directly, since a clamped rung spans several ranks and its button only carries the
+  lowest. It **stays live in the locked sheet** and emits `runtimeChanged`, never
+  `changed`, like every other card switch. And a **single-rung effect gets no strip at
+  all**: a Growth 1's one rung *is* the card's own on/off switch, and a strip of one
+  button would be a second way to press it — which also covers a ladder the Size Table
+  clamped down to one. It wraps in a `FlowContainer`, because a Growth 10 is ten buttons
+  and a card in a pinned strip is narrow. Screenshot it with `driver.py size-ladder`.
+- **The rungs are `NoFocus`, and `_rebuild_list` runs inside `preserved_scroll`.** Two
+  halves of one bug: every runtime setter rebuilds the whole card tree, so the block is
+  briefly empty *and* whatever held focus inside it is destroyed — Qt hands focus to the
+  next widget in the tab order, which is a table in some other block, and a `QScrollArea`
+  scrolls to show a child that has just taken focus. The page jumped away from the card
+  under the cursor. `NoFocus` closes the cause (a rung is destroyed by its own click, so
+  focus could never usefully rest there, and the card body it sits on is not focusable
+  either); `widgets.preserved_scroll` closes the rest — it restores the bar **twice**,
+  now and on the next turn of the event loop, because the range is only recomputed on the
+  following layout pass and an immediate `setValue` is clamped by the stale one.
+  `EquipmentSection._rebuild_list` takes it too: wearing an item is the same rebuild.
 - **The card's size readout is relative to the character** (`_readout_size_table`). It
   used to compute an absolute row from `sign × rank` and never look at the wielder, so a
   Small character's Growth 2 printed "Huge" while the sheet correctly said "Large". It

@@ -9,10 +9,12 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QDoubleSpinBox,
     QFrame,
     QLabel,
@@ -248,3 +250,52 @@ def tinted_style(token: str, *, bold: bool = True) -> str:
 #: "This label is the important one." A bare weight with no colour, so it works
 #: on any surface — the one style snippet with nothing to theme.
 BOLD_STYLE = "font-weight: bold;"
+
+
+def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
+    """The scroll area *widget* is scrolled by, or ``None``.
+
+    The **nearest** one, unlike :meth:`~mm_companion.ui.wheel_guard.WheelGuard.
+    _page_scroll_area`, which walks all the way to the outermost so a wheel over an
+    inner table still reaches the page. Here the nearest is the right answer wherever
+    a block ends up: the page's scroll area on the page, the strip's when it is
+    pinned, its own window's when it is floated out.
+    """
+
+    parent = widget.parentWidget()
+    while parent is not None:
+        if isinstance(parent, QAbstractScrollArea):
+            return parent
+        parent = parent.parentWidget()
+    return None
+
+
+@contextmanager
+def preserved_scroll(widget: QWidget) -> Iterator[None]:
+    """Keep the page where it was across a rebuild of *widget*'s contents.
+
+    A block that rebuilds by deleting every child and making new ones is briefly a
+    fraction of its own height, and Qt clamps the enclosing scroll bar to the smaller
+    maximum *while it is short*. The cards coming back widen the range again but not
+    the value, which Qt has already thrown away — so flipping a switch on a card near
+    the bottom of a long sheet jumped the page somewhere else entirely.
+
+    Restored **twice**: once now, and once on the next turn of the event loop, because
+    the range is only recomputed on the layout pass that follows and an immediate
+    ``setValue`` is clamped by the stale one. The deferred call is tied to the scroll
+    area's own lifetime, so a block closed mid-rebuild does not fire it at a dead
+    widget.
+    """
+
+    area = enclosing_scroll_area(widget)
+    if area is None:
+        yield
+        return
+    bars = [area.verticalScrollBar(), area.horizontalScrollBar()]
+    values = [(bar, bar.value()) for bar in bars if bar is not None]
+    try:
+        yield
+    finally:
+        for bar, value in values:
+            bar.setValue(value)
+        QTimer.singleShot(0, area, lambda: [bar.setValue(value) for bar, value in values])

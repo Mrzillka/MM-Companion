@@ -108,7 +108,13 @@ from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
-from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    BOLD_STYLE,
+    hline_separator,
+    muted_style,
+    preserved_scroll,
+    tinted_style,
+)
 
 # The card machinery moved to :mod:`mm_companion.ui.cards` so the Equipment block could
 # draw the same cards. These are the spellings anything that reached into this module
@@ -303,12 +309,14 @@ class _SizeLadder(QWidget):
     The labels are read against the wielder, so a Small character's ladder starts at
     Medium.
 
-    Two things the strip does that a plain segmented control does not. Nothing is lit
+    Three things the strip does that a plain segmented control does not. Nothing is lit
     while the power is switched off — the ladder reports where the power *is*, and off
     is nowhere — and clicking a rung from there switches the power on at that rung, so
-    going from dormant to Huge is one click rather than two. And the buttons stay live
-    in the locked sheet, like every other runtime control on a card: how big you are
-    standing there is a play action, not a build edit.
+    going from dormant to Huge is one click rather than two. Clicking the rung that is
+    already lit switches the power **off**, exactly as clicking the card would, so the
+    strip is a whole control rather than one that can only turn a power on. And the
+    buttons stay live in the locked sheet, like every other runtime control on a card:
+    how big you are standing there is a play action, not a build edit.
 
     It wraps (:class:`~mm_companion.ui.flow_layout.FlowContainer`), because a Growth 10
     is ten buttons and a card in a pinned strip is narrow.
@@ -354,14 +362,23 @@ class _SizeLadder(QWidget):
             # click falls through to the card exactly as it does off the group's own
             # chrome. Never setEnabled(False) — nothing in this app greys a control out.
             button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
-            button.setFocusPolicy(
-                Qt.FocusPolicy.StrongFocus if interactive else Qt.FocusPolicy.NoFocus
+            # NoFocus even when live, unlike the group's mode toggle: clicking a rung
+            # destroys the whole card, so focus lands on whatever the tab order offers
+            # next — a table in some other block — and a QScrollArea scrolls to show a
+            # child that has just taken focus. That was the page jumping away from the
+            # card under the cursor. Nothing here is reachable by keyboard anyway; the
+            # card body this strip sits on is not focusable either.
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            span = (
+                f"rank {step.rank}"
+                if step.rank == step.last_rank
+                else f"rank {step.rank} and above ({step.category} is as far as the "
+                "Size Table goes)"
             )
             button.setToolTip(
-                f"Hold this power at rank {step.rank} — {step.category}."
-                if step.rank == step.last_rank
-                else f"Hold this power at rank {step.rank} or above — {step.category} is as "
-                "far as the Size Table goes."
+                f"Switch this power off — it is already held at {span}, {step.category}."
+                if step.current
+                else f"Hold this power at {span} — {step.category}."
             )
             button.clicked.connect(lambda _checked=False, r=step.rank: self.stepPicked.emit(r))
             self._group.addButton(button)
@@ -623,17 +640,24 @@ class PowersSection(TitledSection):
         self._rebuild_list()
 
     def _rebuild_list(self) -> None:
-        """Rebuild the whole card tree from the model, toggling the empty label."""
-        self._normalize_arrays()  # a valid active member per array before drawing
-        # Hand the on-screen progress over to the cards about to be built, and start a
-        # fresh map — so a power that was removed or ungrouped leaves nothing behind for
-        # a later node to inherit.
-        self._card_off_prev, self._card_off = self._card_off, {}
-        self._list_host.clear()
-        for node in self._character.powers:
-            self._list_host.add_entry(node.id, self._render_node(node, None))
-        self._empty.setVisible(not self._character.powers)
-        self.set_priced_title("Powers", powers_points_spent(self._character, self._data))
+        """Rebuild the whole card tree from the model, toggling the empty label.
+
+        Every runtime setter ends here — flipping one power can restate another card's
+        numbers — so this runs on a plain mid-play click, and the block is momentarily
+        empty while it does. :func:`~mm_companion.ui.widgets.preserved_scroll` is what
+        stops that shrinking the page out from under the card just clicked.
+        """
+        with preserved_scroll(self):
+            self._normalize_arrays()  # a valid active member per array before drawing
+            # Hand the on-screen progress over to the cards about to be built, and start
+            # a fresh map — so a power that was removed or ungrouped leaves nothing
+            # behind for a later node to inherit.
+            self._card_off_prev, self._card_off = self._card_off, {}
+            self._list_host.clear()
+            for node in self._character.powers:
+                self._list_host.add_entry(node.id, self._render_node(node, None))
+            self._empty.setVisible(not self._character.powers)
+            self.set_priced_title("Powers", powers_points_spent(self._character, self._data))
 
     def _render_node(
         self, node: PowerNode, parent: PowerGroup | None, interactive: bool = True
@@ -1081,20 +1105,37 @@ class PowersSection(TitledSection):
     def _on_size_step(
         self, power: Power, effect: PowerEffectInstance, parent: PowerGroup | None, rank: int
     ) -> None:
-        """Hold a size effect at *rank*, switching the power on if it wasn't already.
+        """Hold a size effect at *rank* — or, on the rung already lit, switch it off.
 
-        Picking a rung on a dormant power is a request to *be* that size, so it does
-        whatever clicking the card would have done to wake the power — flip its switches,
-        or become its array's live alternate — and lands on the chosen rung rather than
-        at full rank. That leaves exactly one way for a click here to do nothing: the
-        rung already in force.
+        A rung does exactly what a click on the card would have done, and then lands on
+        the rung asked for. So picking one on a dormant power is a request to *be* that
+        size: it wakes the power (flipping its switches, or becoming its array's live
+        alternate) at the chosen rung rather than at full rank. And picking the rung
+        already in force is the card's own click again — off it goes, which is what
+        makes the strip a complete control rather than one that can only ever turn a
+        power on. The one exception is an array's live member, where clicking the card
+        is deliberately a no-op: an array always keeps exactly one member live, and
+        pressing its rung must not switch the whole array off.
 
-        The rank is written first, so whichever activation path runs below rebuilds the
-        cards with it already in place.
+        The rung is compared through :func:`~mm_companion.core.rules.size_steps` rather
+        than against ``current_rank`` directly, because a rung the Size Table clamped
+        spans several ranks and the button only ever carries the lowest of them.
+
+        The rank is written after that test and before any activation path, so whichever
+        one runs rebuilds the cards with it already in place.
         """
+        role = self._activation_role(power, parent)
+        lit = next(
+            (s for s in size_steps(power, effect, self._character, self._data) if s.current),
+            None,
+        )
+        if lit is not None and lit.rank == rank:
+            if role != "select":
+                self._set_power_active(power, False)  # rebuilds and emits
+            return
         effect.current_rank = rank
-        if self._activation_role(power, parent) == "select":
-            if isinstance(parent, PowerGroup) and active_array_child(parent) is not power:
+        if role == "select" and isinstance(parent, PowerGroup):
+            if active_array_child(parent) is not power:
                 self._set_array_active(parent, power.id)  # rebuilds and emits
                 return
         if not self._power_is_active(power):

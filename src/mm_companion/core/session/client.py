@@ -70,6 +70,7 @@ from .protocol import (
     RemoveCondition,
     RemoveRollRequest,
     RollAdded,
+    RollPrompt,
     RollRemoved,
     RollRequest,
     Roster,
@@ -392,6 +393,14 @@ class SessionClient:
         carrying ``kind="note"``.
         """
         return self.send(NoteRequest(text=text))
+
+    def prompt_roll(self, spec: dict) -> bool:
+        """Ask the table to roll something, without rolling it.
+
+        Comes back as :data:`EVENT_ROLL` like a roll and a note do — one history,
+        one feed — carrying ``kind="request"`` and the spec that makes its button.
+        """
+        return self.send(RollPrompt(spec=spec))
 
     def request_remove_roll(self, seq: int) -> bool:
         """Ask the server to drop one roll from the log (honored only for the GM).

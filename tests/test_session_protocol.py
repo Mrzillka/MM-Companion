@@ -35,6 +35,7 @@ from mm_companion.core.session.protocol import (
     RemoveRollRequest,
     RenameSessionRequest,
     RollAdded,
+    RollPrompt,
     RollRemoved,
     RollRequest,
     Roster,
@@ -59,6 +60,8 @@ ROUND_TRIP_CASES = [
     RollRequest(label="Athletics", bonus=6, penalty=2, dc=15, hidden=False),
     RollRequest(),  # a bare d20 with no DC
     NoteRequest(text="spent a hero point — 2 left"),
+    RollPrompt(spec={"label": "Perception", "kind": "skill", "trait_key": "Perception", "dc": 15}),
+    RollPrompt(),  # asking for nothing, which the server drops rather than records
     RemoveRollRequest(seq=3),
     KickRequest(player_id="p1", reason="afk"),
     SetSessionName(name="Friday Game"),
@@ -125,11 +128,14 @@ def test_hello_defaults_to_the_current_protocol_version() -> None:
 def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     """A deliberate tripwire, not a tautology.
 
-    v7 is what stops a mixed table: a v6 client never sends a keepalive, so a v7
-    server would reap it every ninety seconds. Changing this number is a decision
-    about who can still join, so it should not be possible to do by accident.
+    v7 was what stopped a mixed table over the keepalive: a v6 client never sends
+    one, so a v7 server would reap it every ninety seconds. v8 adds
+    :class:`RollPrompt`, which a v7 server rejects as an unknown type and a v7
+    client would render as a d20 that rolled zero. Either way changing this number
+    is a decision about who can still join, so it should not be possible to do by
+    accident.
     """
-    assert PROTOCOL_VERSION == 7
+    assert PROTOCOL_VERSION == 8
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:

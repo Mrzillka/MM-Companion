@@ -63,6 +63,7 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import (
     PinRef,
+    RollSpec,
     apply_condition,
     apply_damage_step,
     damage_step_summary,
@@ -70,9 +71,10 @@ from mm_companion.core.rules import (
     decrement_condition,
     default_pins,
     parse_pins,
+    requested_roll_choices,
 )
 from mm_companion.core.session import discovery, store
-from mm_companion.core.session.model import PlayerSlot, SessionState, new_session
+from mm_companion.core.session.model import KIND_REQUEST, PlayerSlot, SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
@@ -543,8 +545,39 @@ class GMWindow(QMainWindow):
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
         self._roller.localRoll.connect(self._show_offline_roll)
+        # The Request row, on the same terms a player's block gives it: the traits
+        # come from the ruleset (a request is answered on someone else's sheet, so
+        # they are character-free) and this window decides where the ask goes.
+        self._roller.set_roll_choices(requested_roll_choices(self._data))
+        self._roller.rollRequested.connect(self._request_roll)
         layout.addWidget(self._view)
         return box
+
+    def _request_roll(self, spec: object) -> None:
+        """Ask the table to roll something — the Request row's handler.
+
+        The twin of :meth:`~mm_companion.ui.sections.dice.DiceSection.request_roll`,
+        and it has to be written out here for the reason
+        :meth:`_show_offline_roll` does: this window owns its history, so the
+        view's own off-air fallback stands down and there would otherwise be no
+        card at all before hosting starts — a button that silently does nothing.
+        """
+        if not isinstance(spec, RollSpec):
+            return
+        if self._bridge.prompt_roll(spec.to_dict()):
+            return
+        self._offline_seq -= 1
+        self._history.add_roll(
+            {
+                "seq": self._offline_seq,
+                "player_name": self._name_of_gm(),
+                "die": 0,
+                "kind": KIND_REQUEST,
+                "label": spec.label,
+                "dc": spec.dc,
+                "spec": spec.to_dict(),
+            }
+        )
 
     # -- compact mode --------------------------------------------------------
 

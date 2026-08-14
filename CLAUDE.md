@@ -351,6 +351,11 @@ clean (see Licensing below).
   note has none, so holding one would hold it forever), and `_on_session_roll` **ignores
   it** — a note from one's own seat landing mid-tumble would otherwise be taken for the
   answer and settle the d20 on zero.
+- **And requests**, the third kind (`RequestCard`, `KIND_REQUEST`) — see "Asking the
+  table to roll" below. Both of the guards above are therefore written as *"is this a
+  die roll"* (`kind == KIND_ROLL`) rather than *"is this not a note"*: a request has
+  no die either, and `RollRecord.from_dict` back-fills `KIND_ROLL` for a log line
+  written before any of this, so the test is safe on replayed history.
 - **Quick rolls** are capped at `MAX_QUICK_ROLLS` (6). The cap is a layout constraint,
   not a preference: the strip shares the block with the controls and the die, so an
   unbounded chip list ratchets the block — and the pinned strip holding it — ever
@@ -706,6 +711,13 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   get it; GM Mode's roller has no sheet and installs none). Off on your **own** card:
   you are not the target of your own attack, and `chain_widgets(localize=False)` drops
   the trait key rather than presenting a confident wrong number.
+  `localize_spec` reads the key **together with `kind`**, so it answers an ability, a
+  resistance, a skill or initiative — a bare key is ambiguous, a mod may call an
+  ability and a skill the same thing, and an *empty* kind still means a resistance
+  (which is what a save written by hand or by an older client says). The gate stays
+  the **trait key**, never the kind: every builder in `rolls.py` leaves it empty, so a
+  trait double-clicked on one's own sheet already carries this character's number and
+  localizing on the kind alone would add it twice.
 - Outcome ladders are **data**: an effect's optional `resistanceOutcomes` in
   `effects.json` (parsed into `ResistanceOutcome` records), one rung per degree of
   failure, the last rung covering every deeper one — plus an optional `success` rung,
@@ -732,6 +744,49 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   time** (a spec captured when the row was built would be stale after any edit). Its
   one subtlety: a spin box is watched through `lineEdit()` as well as itself, and the
   `enabled` guard is how a caller says "only while locked".
+
+### Asking the table to roll (matters when touching the roller or the session log)
+
+The roller's **Request** row — a trait combo, a bare DC spin box, an "Ask" button —
+puts a roll in *everyone's* history for somebody else to make. The chain, run
+backwards: the save chip exists because an attack landed, and there was no way to
+ask for a check nobody had provoked.
+
+- **A request is an ordinary `RollSpec` with `modifier = 0` and a `trait_key`**, so
+  nothing about a spec on the wire changed (`sanitize_spec` already whitelists
+  `kind` and `trait_key`). Each recipient's Dice block fills in *their* number
+  through the localizer that was already installed for saves — which is the whole
+  implementation of "it arrives ready to roll".
+- **The choices are `rules/pins.requested_roll_choices(data)`** — a third
+  character-free list beside `default_pin_choices`, and smaller again: abilities,
+  resistances, skills and initiative, being exactly the four kinds `localize_spec`
+  can answer. **No Defence DC** (it resolves to no spec — it is a difficulty), and
+  **no powers or equipment** (a pin names a power by an id belonging to one
+  character, so there is nothing honest to localize on anyone else's sheet). Labels
+  are full names rather than `pin_label`'s chip abbreviations: these are read in a
+  combo and in a sentence, where `AWE` is a riddle.
+- **The panel is handed the answer, not the data** — `set_roll_choices(groups)`
+  beside `set_localizer`, and the row **hides itself** (emitting `contentChanged`,
+  which is not optional — see "The Dice block's height") when a host supplies none.
+  It emits `rollRequested` and neither sends nor rolls: where a request goes is the
+  question `post_note` already answers, so `DiceSection.request_roll` is that method
+  written twice — session first, private history off the air. The GM window answers
+  for itself, because it owns its history and the view's fallback stands down there.
+- **The DC box is a plain spin box where 0 means no DC.** The Difficulty Class row
+  above it needs a checkbox because the panel has to tell "no DC" from "DC 0" for a
+  roll it *grades*; nobody asks for a roll against DC 0. It is also **arrowless**:
+  the theme reserves ~50px for the arrows the platform style draws, which took 148px
+  of a 210px cell and clipped the trait name to "Trai".
+- **The button is on every card, including the asker's**, and this is the one place
+  the `chain_widgets(localize=False)` rule is deliberately reversed — you *are* a
+  target of your own request. Hence `request_widgets`, a sibling rather than a reuse:
+  `chain_widgets` asks a rolled spec what it *provoked* and needs a `follow_up` and a
+  passing degree, while a request **is** the roll, sitting in the log waiting.
+- Wire: `RollPrompt` → `SessionState.record_request` → a `KIND_REQUEST` record
+  needing **no new `RollRecord` field** (`label`/`dc`/`spec` were already there), and
+  `PROTOCOL_VERSION` **8**. Not GM-gated — anyone may ask. A spec that does not
+  survive `sanitize_spec` is dropped rather than recorded: a card with a dead button
+  is worse than no card.
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
   inner scroll area, sized to its content. A floated block moves into a

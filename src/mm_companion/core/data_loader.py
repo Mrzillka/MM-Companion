@@ -584,11 +584,19 @@ class Measure:
     ``"time"``/``"volume"``); ``label`` is the table row this measure is shown under
     (e.g. ``"Speed"``); ``per_round`` marks a speed — a distance covered each round —
     so the value reads e.g. ``"30 feet/round"`` rather than a bare distance.
+
+    ``mode`` names the *way of moving* a per-round distance is a speed **in**, which is
+    what lets the Speed readout net several sources into one line: two Flight powers are
+    one flight speed, and the Speed effect feeds the same ground line the character walks
+    on. Effects sharing a mode are reconciled; effects in different modes are simply
+    different ways to get about and each keep a line. Defaults to the effect's own id, so
+    an effect that names none is its own mode and behaves exactly as it always did.
     """
 
     column: str
     label: str
     per_round: bool = False
+    mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -1087,6 +1095,10 @@ class Movement:
     walking / dashing / running columns are the measurements-table distance at that
     rank plus ``walk_rank_step`` / ``dash_rank_step`` / ``run_rank_step``.
     ``round_seconds`` (6) converts a per-round distance into km/h.
+
+    ``ground_mode`` names the movement mode everybody has — the one
+    ``base_ground_speed_rank`` seeds and the Speed effect feeds. Every other mode's line
+    is built from its grants alone (:func:`~mm_companion.core.rules.speed_lines`).
     """
 
     base_ground_speed_rank: int = 1
@@ -1094,6 +1106,7 @@ class Movement:
     dash_rank_step: int = 1
     run_rank_step: int = 2
     round_seconds: int = 6
+    ground_mode: str = "ground"
 
 
 # --- Equipment: the gear catalog, its grouping axis, and the rules constants
@@ -2047,13 +2060,14 @@ def _parse_config_field(c: dict) -> EffectConfigField:
     )
 
 
-def _parse_measure(raw: dict | None) -> Measure | None:
+def _parse_measure(raw: dict | None, effect_id: str = "") -> Measure | None:
     if not raw:
         return None
     return Measure(
         column=raw.get("column", "distance"),
         label=raw["label"],
         per_round=bool(raw.get("perRound", False)),
+        mode=raw.get("mode", "") or effect_id,
     )
 
 
@@ -2149,7 +2163,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         ),
         description=e.get("description", ""),
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
-        measure=_parse_measure(e.get("measure")),
+        measure=_parse_measure(e.get("measure"), e["id"]),
         resistance_dc_base=e.get("resistanceDcBase"),
         resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
@@ -2292,6 +2306,7 @@ def _parse_movement(raw: dict) -> Movement:
         dash_rank_step=int(raw.get("dashRankStep", 1)),
         run_rank_step=int(raw.get("runRankStep", 2)),
         round_seconds=int(raw.get("roundSeconds", 6)),
+        ground_mode=raw.get("groundMode", "ground"),
     )
 
 

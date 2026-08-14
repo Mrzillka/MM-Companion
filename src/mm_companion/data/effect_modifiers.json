@@ -669,6 +669,7 @@
           "costFormula": "+1 point per rank",
           "costValue": 1,
           "flat": false,
+          "statIntegration": { "pattern": "passive_toggle", "affects": "movement", "target": "ground", "apply": "speed" },
           "description": "Longer strides grant ranks of Speed."
         },
         {
@@ -1836,6 +1837,7 @@
           "costFormula": "+1 point per rank",
           "costValue": 1,
           "flat": false,
+          "statIntegration": { "pattern": "passive_toggle", "affects": "movement", "target": "ground", "apply": "penalty_removed" },
           "description": "Your speed isn't reduced while shrunk."
         },
         {

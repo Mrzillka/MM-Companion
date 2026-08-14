@@ -486,9 +486,9 @@ def test_speed_unit_toggle_switches_to_km_per_hour(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     speed = sheet.system_info._speed
 
-    assert "ft" in speed._lines_label.text()
+    assert "ft" in speed.rendered_text()
     speed._toggle_unit()
-    assert "km/h" in speed._lines_label.text()
+    assert "km/h" in speed.rendered_text()
 
 
 def test_disabled_condition_lowers_the_initiative_readout(qapp: QApplication) -> None:
@@ -517,9 +517,8 @@ def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
     apply_condition(sheet.character, "hindered", data)  # -1 speed rank
     sheet.system_info.refresh_derived()
 
-    text = sheet.system_info._speed._lines_label.text()
-    assert "-1 rank" in text
-    assert theme.color("tint.worse") in text
+    assert "-1 rank" in sheet.system_info._speed.rendered_text()
+    assert theme.color("tint.worse") in sheet.system_info._speed.rendered_styles()
     assert "slowed" in sheet.system_info._speed.toolTip()
 
 
@@ -532,9 +531,8 @@ def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplicatio
     apply_condition(sheet.character, "immobile", data)  # zeroes ground speed
     sheet.system_info.refresh_derived()
 
-    text = sheet.system_info._speed._lines_label.text()
-    assert "immobilised" in text
-    assert theme.color("tint.worse") in text
+    assert "immobilised" in sheet.system_info._speed.rendered_text()
+    assert theme.color("tint.worse") in sheet.system_info._speed.rendered_styles()
 
 
 def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
@@ -550,7 +548,7 @@ def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
     apply_condition(sheet.character, "immobile", data)
     sheet.conditions.conditionsChanged.emit()
 
-    assert "immobilised" in sheet.system_info._speed._lines_label.text()
+    assert "immobilised" in sheet.system_info._speed.rendered_text()
 
 
 def test_high_resistance_total_is_not_clamped_away(qapp: QApplication) -> None:

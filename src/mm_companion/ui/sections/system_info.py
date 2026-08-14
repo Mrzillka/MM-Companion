@@ -12,8 +12,6 @@ inputs change. The widgets never compute rules themselves.
 
 from __future__ import annotations
 
-from html import escape
-
 from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -164,8 +162,13 @@ class SpeedWidget(QWidget):
 
     Each :class:`~mm_companion.core.rules.SpeedLine` renders as
     ``Label: walk / dash / run`` (see :func:`~mm_companion.core.rules.speed_columns`),
-    an active movement power adding its own line. The unit button flips every line
-    between the imperial per-round distance and the km/h equivalent.
+    every mode anything active grants adding its own line. The unit button flips every
+    line between the imperial per-round distance and the km/h equivalent.
+
+    One **label per row** rather than a single rich-text block, for the reason
+    :class:`MovementModesWidget` already builds rows: a line is the *mode* now, so what
+    granted it goes on the row's hover, and a tooltip cannot be applied to part of a
+    label.
     """
 
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
@@ -178,9 +181,11 @@ class SpeedWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
 
-        self._lines_label = QLabel()
-        self._lines_label.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(self._lines_label)
+        self._rows = QWidget()
+        rows = QVBoxLayout(self._rows)
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(1)
+        layout.addWidget(self._rows)
 
         self._unit_button = QPushButton()
         self._unit_button.setCheckable(False)
@@ -201,23 +206,74 @@ class SpeedWidget(QWidget):
         self._redraw()
 
     def _redraw(self) -> None:
-        # Rich text can't use a Qt palette() role, so a condition-affected line takes
-        # the literal tint colour. Resolved once per redraw rather than per line.
-        worse = theme.color("tint.worse")
-        html_lines = []
+        layout = self._rows.layout()
+        while layout.count():  # rebuilt wholesale — a speed list is a handful of rows
+            widget = layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
         for line in self._lines:
-            if line.immobilised:
-                label = escape(line.label)
-                html_lines.append(f'<span style="color: {worse};">{label}: immobilised</span>')
-                continue
+            layout.addWidget(self._row_label(line))
+
+    def _row_label(self, line) -> QLabel:
+        """One movement line, tinted by its condition overlay and explained on hover."""
+
+        if line.immobilised:
+            label = QLabel(f"{line.label}: immobilised")
+            label.setStyleSheet(tinted_style("tint.worse"))
+        else:
             walk, dash, run = speed_columns(line.rank, self._data, metric=self._metric)
             text = f"{line.label}: {_compact(walk)} / {_compact(dash)} / {_compact(run)}"
             if line.rank_mod:
                 text += f" ({line.rank_mod:+d} rank)"
-                html_lines.append(f'<span style="color: {worse};">{escape(text)}</span>')
-            else:
-                html_lines.append(escape(text))
-        self._lines_label.setText("<br>".join(html_lines))
+            label = QLabel(text)
+            if line.rank_mod:
+                label.setStyleSheet(tinted_style("tint.worse"))
+        if line.sources:
+            # A line is a mode, so its own caption cannot say what granted it — two
+            # Flight powers and a worn glider all land on one "Flight" row.
+            label.setToolTip("From " + ", ".join(line.sources))
+        return label
+
+    def rendered_text(self) -> str:
+        """Every speed row's caption, newline-joined — what the block actually reads.
+
+        A read-back seam rather than a private probe: the rows are built and thrown away
+        on each redraw, so a caller reaching into the layout would be reaching into an
+        implementation detail that has already changed once.
+        """
+
+        layout = self._rows.layout()
+        return "\n".join(
+            widget.text()
+            for i in range(layout.count())
+            if (widget := layout.itemAt(i).widget()) is not None
+        )
+
+    def rendered_tooltips(self) -> str:
+        """Every speed row's hover text, newline-joined — what *granted* each line."""
+
+        layout = self._rows.layout()
+        return "\n".join(
+            widget.toolTip()
+            for i in range(layout.count())
+            if (widget := layout.itemAt(i).widget()) is not None
+        )
+
+    def rendered_styles(self) -> str:
+        """Every speed row's inline style, newline-joined — which lines are tinted.
+
+        The tint moved off the text and onto the row when the readout stopped being one
+        rich-text block, so "is the slowed line red" is asked here rather than by looking
+        for a colour inside the caption.
+        """
+
+        layout = self._rows.layout()
+        return "\n".join(
+            widget.styleSheet()
+            for i in range(layout.count())
+            if (widget := layout.itemAt(i).widget()) is not None
+        )
 
     def _toggle_unit(self) -> None:
         self._metric = not self._metric

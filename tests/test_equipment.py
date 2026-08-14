@@ -589,8 +589,11 @@ def test_worn_gear_reaches_the_speed_readout(data, hero) -> None:
     lines = equipment_speed_lines(hero, data)
 
     assert [line.label for line in lines] == ["Glider 6"]
-    # ...and the sheet's own readout is the base line plus that one.
-    assert [line.label for line in speed_lines(hero, data)][1:] == ["Glider 6"]
+    # ...and the sheet's own readout is the base line plus a *flight* line, since it
+    # nets by mode rather than by source. The item is what the line names on hover.
+    sheet = speed_lines(hero, data)[1:]
+    assert [line.label for line in sheet] == ["Flight 6"]
+    assert sheet[0].sources == ("Glider 6",)
 
 
 def test_the_base_ground_line_stays_first(data, hero) -> None:
@@ -1147,7 +1150,8 @@ def test_a_vehicles_speed_reaches_the_speed_readout(data, hero) -> None:
 
     labels = [line.label for line in equipment_speed_lines(hero, data)]
     assert labels == ["Jumbo Jet 9"]
-    assert any(line.label == "Jumbo Jet 9" for line in speed_lines(hero, data))
+    flight = next(line for line in speed_lines(hero, data) if line.label == "Flight 9")
+    assert flight.sources == ("Jumbo Jet 9",)
 
 
 def test_a_parked_vehicle_moves_nobody(data, hero) -> None:

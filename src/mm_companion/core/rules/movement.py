@@ -5,10 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from ..character import Character
+from ..components import APPLY_PENALTY_REMOVED
 from ..data_loader import GameData
+from .appliers import (
+    CATEGORY_MOVEMENT,
+    CATEGORY_PENALTY,
+    GROUP_EQUIPMENT,
+    GROUP_POWERS,
+    STACK_MAX,
+    STACK_SUM,
+    TraitContribution,
+    resolve_contributions,
+)
 from .conditions import condition_speed_rank_mod
 from .powers_cost import effect_effective_rank
-from .runtime import effect_is_active, live_powers, worn_items
+from .runtime import build_contributions, effect_is_active, live_powers, worn_items
 from .size import effective_size_rank
 
 # -- movement / speed ------------------------------------------------------------
@@ -22,6 +33,10 @@ class SpeedLine:
     and rank, e.g. ``"Flight 2"``); ``rank`` is the speed rank the three distance
     columns derive from.
 
+    ``sources`` names everything that fed the line, because a line is now the *mode*
+    rather than any one power: two Flight powers make one flight speed, and the label
+    can only name the mode, so what granted it goes on the hover instead.
+
     ``rank_mod`` and ``immobilised`` carry a condition overlay
     (:func:`condition_speed_lines`): ``rank_mod`` is the penalty *already folded into*
     ``rank``, kept alongside so the UI can say how much was lost and tint the line, and
@@ -33,6 +48,7 @@ class SpeedLine:
     rank: int
     rank_mod: int = 0
     immobilised: bool = False
+    sources: tuple[str, ...] = ()
 
 
 def _size_speed_mod(char: Character, game_data: GameData) -> int:
@@ -46,35 +62,78 @@ def _size_speed_mod(char: Character, game_data: GameData) -> int:
     return row.speed_mod if row else 0
 
 
+def _ground_penalty_removed(char: Character, game_data: GameData) -> int:
+    """How much of a ground-speed *penalty* something active cancels.
+
+    The consumer for :data:`~..components.APPLY_PENALTY_REMOVED` on the ground mode:
+    Shrinking's *Normal Speed* extra says "your speed isn't reduced while shrunk", and
+    that is a penalty being lifted rather than a bonus being granted — which is the whole
+    reason the two appliers are separate. Only powers count; the character has to be the
+    one shrinking.
+    """
+
+    removed = 0
+    for power in live_powers(char.powers):
+        for grant in build_contributions(power, char, game_data):
+            if (
+                grant.category == CATEGORY_PENALTY
+                and grant.kind == APPLY_PENALTY_REMOVED
+                and grant.stat == game_data.movement.ground_mode
+            ):
+                removed += grant.amount
+    return removed
+
+
 def base_ground_speed_rank(char: Character, game_data: GameData) -> int:
     """The character's walking (ground) speed rank before per-mode columns.
 
     The data-driven base (``movement.json``) plus any size-derived speed modifier, so
-    growing or shrinking shifts ground movement.
+    growing or shrinking shifts ground movement — less whatever cancels that penalty
+    (:func:`_ground_penalty_removed`).
+
+    The cancellation is **clamped at zero**: lifting a penalty can leave you at your
+    normal speed and no faster, so a Shrinking 2 with Normal Speed 4 walks at its base
+    rank rather than running. It also only ever reaches a *negative* modifier — a Growth
+    is not a penalty to be cancelled.
     """
 
-    return game_data.movement.base_ground_speed_rank + _size_speed_mod(char, game_data)
+    size_mod = _size_speed_mod(char, game_data)
+    if size_mod < 0:
+        size_mod = min(0, size_mod + _ground_penalty_removed(char, game_data))
+    return game_data.movement.base_ground_speed_rank + size_mod
 
 
-def _build_speed_lines(
-    build, char: Character, game_data: GameData, *, name: str = ""
-) -> list[SpeedLine]:
-    """The speed lines **one** assembled build currently grants.
+def _measure_grants(
+    build,
+    char: Character,
+    game_data: GameData,
+    *,
+    name: str = "",
+    stacking: str = STACK_SUM,
+    group: str = GROUP_POWERS,
+) -> list[TraitContribution]:
+    """The movement one assembled build grants, as contributions keyed by **mode**.
 
     Every active effect carrying a per-round distance measure (Flight, Speed, Swimming,
-    Burrowing, …) at its *effective* rank. Shared by :func:`speed_lines` and
-    :func:`equipment_speed_lines`, since an item's
-    :attr:`~mm_companion.core.equipment.EquipmentItem.build` is a real
+    Burrowing, …) at its *effective* rank, lifted into the same
+    :class:`~.appliers.TraitContribution` shape the trait bonuses use so one resolver can
+    net them (:func:`speed_lines`). Shared by the powers and the gear walks, since an
+    item's :attr:`~mm_companion.core.equipment.EquipmentItem.build` is a real
     :class:`~mm_companion.core.powers.Power` — the same seam
     :func:`~.runtime.build_contributions` uses, so gear and powers cannot drift.
 
-    *name* is what to call the line. Empty (the powers case) labels it by the base
-    effect, because a power's own title is arbitrary while *Flight* is the mechanic; a
-    piece of gear passes its own name instead, since that is what the item **is** and
-    two worn items granting the same effect would otherwise read identically.
+    Deliberately *not* routed through ``STAT_APPLIERS`` like a trait boost: this walk
+    uses the **effective** rank where an applier gets the bought one, and giving these
+    effects a ``statIntegration.target`` would make :func:`_affects_movement` true and
+    drag them into :func:`movement_mode_lines`, which is a different readout entirely.
+
+    *name* is what to call the source. Empty (the powers case) names the base effect,
+    because a power's own title is arbitrary while *Flight* is the mechanic; a piece of
+    gear passes its own name instead, since that is what the item **is** and two worn
+    items granting the same effect would otherwise read identically.
     """
 
-    lines: list[SpeedLine] = []
+    grants: list[TraitContribution] = []
     for effect in build.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None or base.measure is None:
@@ -84,46 +143,138 @@ def _build_speed_lines(
         if not effect_is_active(build, effect, base, game_data, char):
             continue
         rank = effect_effective_rank(effect, game_data, char)
-        lines.append(SpeedLine(f"{name or base.name} {rank}", rank))
-    return lines
+        grants.append(
+            TraitContribution(
+                amount=rank,
+                stat=base.measure.mode or base.id,
+                category=CATEGORY_MOVEMENT,
+                source=f"{name or base.name} {rank}",
+                stacking=stacking,
+                group=group,
+            )
+        )
+    return grants
+
+
+def _movement_grants(char: Character, game_data: GameData) -> list[TraitContribution]:
+    """Everything on the sheet that grants a movement rank, in one list.
+
+    Two producers, and they stay two: the ``measure.perRound`` walk above, and the
+    ``movement``-category contributions a *modifier* can now grant (Elongation's
+    Striding, which the appliers turn into ranks of the ground mode). One reducer nets
+    them, in :func:`speed_lines`.
+
+    Gear travels under its own group and exclusivity, exactly as its trait bonuses do,
+    so a worn glider is weighed against a Flight power rather than piled on top of it
+    (``docs/mm-equipment-design.md`` §3).
+    """
+
+    grants: list[TraitContribution] = []
+    for power in live_powers(char.powers):
+        grants.extend(_measure_grants(power, char, game_data))
+        grants.extend(
+            c
+            for c in build_contributions(power, char, game_data)
+            if c.category == CATEGORY_MOVEMENT
+        )
+    for item in worn_items(char):
+        stacking = STACK_SUM if item.stacks else STACK_MAX
+        grants.extend(
+            _measure_grants(
+                item.build,
+                char,
+                game_data,
+                name=item.name,
+                stacking=stacking,
+                group=GROUP_EQUIPMENT,
+            )
+        )
+        grants.extend(
+            c
+            for c in build_contributions(
+                item.build, char, game_data, stacking=stacking, group=GROUP_EQUIPMENT
+            )
+            if c.category == CATEGORY_MOVEMENT
+        )
+    return grants
 
 
 def equipment_speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
-    """The movement speeds the character's **worn** gear currently grants.
+    """The movement speeds the character's **worn** gear currently grants, on its own.
 
-    A glider flies and a bicycle is faster than walking, so gear reaches the Speed
-    readout exactly as a movement power does. Only *worn* items count
-    (:func:`~.runtime.worn_items`) — a bicycle in the garage moves nobody — which is the
-    same runtime gate a power's on/off switch provides.
+    Only *worn* items count (:func:`~.runtime.worn_items`) — a bicycle in the garage
+    moves nobody — which is the same runtime gate a power's on/off switch provides.
 
     No base ground line here: that belongs to the character, not to any one source, and
-    :func:`speed_lines` supplies it once.
+    :func:`speed_lines` supplies it once. Note these are the gear's *unreconciled*
+    grants: the sheet's readout nets them against the powers' in :func:`speed_lines`,
+    where a glider can legitimately lose to a Flight power.
     """
 
     lines: list[SpeedLine] = []
     for item in worn_items(char):
-        lines.extend(_build_speed_lines(item.build, char, game_data, name=item.name))
+        for grant in _measure_grants(item.build, char, game_data, name=item.name):
+            lines.append(SpeedLine(grant.source, grant.amount, sources=(grant.source,)))
     return lines
 
 
-def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
-    """The character's movement speeds — a base ground line plus one per active mode.
+def _mode_label(mode: str, game_data: GameData) -> str:
+    """What to call a movement mode on the readout.
 
-    The first line is always ground movement (:func:`base_ground_speed_rank`). Then
-    every currently-active power effect that carries a per-round distance measure
-    (Flight, Speed, Swimming, Burrowing, …) adds its own line at its *effective* rank,
-    labelled by the effect name and rank, and finally the worn gear that does the same
-    (:func:`equipment_speed_lines`). A switched-off or suppressed movement power — and a
-    stowed item — contributes nothing (:func:`effect_is_active`).
+    The name of the effect that declares it, so nothing here spells "Flight": the four
+    movement effects name their own mode in ``effects.json``, and a mod's fifth is
+    labelled by the same rule. An unclaimed mode falls back to its own id.
+    """
+
+    for effect in game_data.effects:
+        if effect.measure is not None and effect.measure.mode == mode:
+            return effect.name
+    return mode.replace("_", " ").title()
+
+
+def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
+    """The character's movement speeds — one line per **mode**, not per source.
+
+    The first line is always ground movement. Then every other mode anything active
+    grants, netted by :func:`~.appliers.resolve_contributions`: two Flight powers sum
+    into one flight speed, a worn glider is weighed against them rather than added, and
+    each line names its contributors on :attr:`SpeedLine.sources`.
+
+    The **ground** line is the exception, and is a ``max``: a Speed effect *replaces*
+    walking rather than adding to it, so the line is the better of the character's own
+    ground rank (:func:`base_ground_speed_rank`, which is where size lands) and whatever
+    the ground-mode grants sum to. A switched-off movement power — and a stowed item —
+    contributes nothing (:func:`effect_is_active`).
 
     The base line stays first, which is what lets :func:`condition_speed_lines` overlay
     the ground penalty on ``lines[0]`` however many modes are appended after it.
     """
 
-    lines = [SpeedLine("Base", base_ground_speed_rank(char, game_data))]
-    for power in live_powers(char.powers):
-        lines.extend(_build_speed_lines(power, char, game_data))
-    lines.extend(equipment_speed_lines(char, game_data))
+    ground_mode = game_data.movement.ground_mode
+    by_mode: dict[str, list[TraitContribution]] = {}
+    for grant in _movement_grants(char, game_data):
+        by_mode.setdefault(grant.stat, []).append(grant)
+
+    base = base_ground_speed_rank(char, game_data)
+    ground = resolve_contributions(by_mode.pop(ground_mode, []))
+    lines = [
+        SpeedLine(
+            "Base",
+            max(base, ground.amount) if ground else base,
+            sources=ground.sources if ground else (),
+        )
+    ]
+    for mode, grants in by_mode.items():
+        netted = resolve_contributions(grants)
+        if netted is None:
+            continue
+        lines.append(
+            SpeedLine(
+                f"{_mode_label(mode, game_data)} {netted.amount}",
+                netted.amount,
+                sources=netted.sources,
+            )
+        )
     return lines
 
 

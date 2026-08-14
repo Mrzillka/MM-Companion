@@ -172,7 +172,7 @@
         "affects": "movement"
       },
       "description": "Grants the ability to tunnel through earth or similar material.",
-      "measure": { "column": "distance", "label": "Speed", "perRound": true }
+      "measure": { "column": "distance", "label": "Speed", "perRound": true, "mode": "burrowing" }
     },
     {
       "id": "communication",
@@ -570,7 +570,7 @@
         "affects": "movement"
       },
       "description": "Grants the ability to fly at a speed set by rank.",
-      "measure": { "column": "distance", "label": "Speed", "perRound": true }
+      "measure": { "column": "distance", "label": "Speed", "perRound": true, "mode": "flight" }
     },
     {
       "id": "fortune_control",
@@ -985,7 +985,7 @@
         "affects": "movement"
       },
       "description": "Increases your ground movement speed.",
-      "measure": { "column": "distance", "label": "Speed", "perRound": true }
+      "measure": { "column": "distance", "label": "Speed", "perRound": true, "mode": "ground" }
     },
     {
       "id": "summon",
@@ -1022,7 +1022,7 @@
         "affects": "movement"
       },
       "description": "Increases your swimming speed.",
-      "measure": { "column": "distance", "label": "Speed", "perRound": true }
+      "measure": { "column": "distance", "label": "Speed", "perRound": true, "mode": "swimming" }
     },
     {
       "id": "teleport",

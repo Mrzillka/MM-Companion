@@ -477,9 +477,5 @@ def test_a_note_is_shown_as_text_not_as_markup(qapp) -> None:
     """
     card = NoteCard({"player_name": "Volt", "text": "<b>not bold</b>"}, show_author=True)
 
-    label = next(
-        child
-        for child in card.findChildren(QLabel)
-        if "not bold" in child.text()
-    )
+    label = next(child for child in card.findChildren(QLabel) if "not bold" in child.text())
     assert label.textFormat() == Qt.TextFormat.PlainText

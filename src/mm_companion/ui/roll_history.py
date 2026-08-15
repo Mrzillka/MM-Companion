@@ -182,7 +182,8 @@ class QuickRollStar(QPushButton):
 
     Deliberately no font size: the glyph rides the widget font, so it needs no size
     token, and nothing here sets ``font-size`` in a stylesheet (which would outrank
-    a widget's own ``QFont`` — see the theme rules in ``CLAUDE.md``).
+    a widget's own ``QFont`` — see the theme rules in
+    ``docs/notes/theme.md``).
     """
 
     #: Kept the same in every state so the button's geometry doesn't jump as it

@@ -145,9 +145,9 @@ class NotesSection(QGroupBox):
         self._toolbar.addStretch(1)
 
         # A QToolButton and not a QPushButton, for the reason spelled out in
-        # CLAUDE.md: the app's stylesheet states a push button's box and emits no
-        # `QPushButton:checked`, so a checked one paints exactly like an unchecked
-        # one. `QToolButton:checked` *is* in the sheet.
+        # docs/notes/theme.md: the app's stylesheet states a push button's box
+        # and emits no `QPushButton:checked`, so a checked one paints exactly
+        # like an unchecked one. `QToolButton:checked` *is* in the sheet.
         self._preview_button = QToolButton()
         self._preview_button.setCheckable(True)
         self._preview_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)

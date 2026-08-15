@@ -316,7 +316,8 @@ class _SizeLadder(QWidget):
     already lit switches the power **off**, exactly as clicking the card would, so the
     strip is a whole control rather than one that can only turn a power on. And the
     buttons stay live in the locked sheet, like every other runtime control on a card:
-    how big you are standing there is a play action, not a build edit.
+    how big you are standing there is a play action, not a build edit — though it is
+    saved with the build, so picking a rung does mark the sheet unwritten.
 
     It wraps (:class:`~mm_companion.ui.flow_layout.FlowContainer`), because a Growth 10
     is ten buttons and a card in a pinned strip is narrow.
@@ -393,9 +394,10 @@ class PowersSection(TitledSection):
     # A build change (add/remove/edit a power, group, re-cost) — marks the sheet dirty.
     changed = Signal()
     # A runtime on/off toggle. It updates the live sheet numbers (a trait boost drops
-    # in or out) but is *not* part of the point build and is not persisted, so it must
-    # not mark the character dirty — the sheet wires this to the same refreshes as
-    # ``changed`` minus the unsaved-changes flag.
+    # in or out) but is *not* part of the point build, so it costs nothing and does not
+    # re-derive the block itself — the sheet wires it to the same refreshes as
+    # ``changed`` minus FACTS_CHANGED. It *is* saved with the character, though (a
+    # Growth held at Large reopens at Large), so it does carry the dirty flag.
     runtimeChanged = Signal()
     #: A card's roll line was right-clicked and pinned — carries a
     #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a

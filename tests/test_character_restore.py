@@ -5,8 +5,9 @@ under test, and both are the kind that fail silently:
 
 * the *containers* survive, because a block may hold a reference to one of them
   rather than to the character; and
-* the *runtime* flags survive, because ``to_dict`` deliberately omits them, so a
-  plain round trip would switch every power on and re-wear every stowed item.
+* the *runtime* flags survive. A power's own switches ride in the snapshot now, so
+  those come back with the build; what ``to_dict`` still omits is the gear in the
+  character's hands, which a plain round trip would re-wear.
 """
 
 from __future__ import annotations
@@ -114,7 +115,11 @@ def test_restore_keeps_a_stowed_item_stowed_and_a_vehicle_at_speed() -> None:
 
 
 def test_restore_keeps_runtime_on_an_items_own_build() -> None:
-    """An item's build *is* a Power, and carries the same flags a loose power does."""
+    """An item's build *is* a Power, so its switches ride in the snapshot too.
+
+    Only ``worn`` and ``current_speed`` are held over by hand; a rifle whose build is
+    switched off comes back off from the saved build itself.
+    """
     char = _built_character()
     char.equipment[0].build.activated = False
     char.equipment[0].build.effects[0].toggled_on = False
@@ -139,7 +144,7 @@ def test_restore_keeps_runtime_on_a_fitted_accessory() -> None:
 
 
 def test_restore_keeps_an_arrays_active_child() -> None:
-    """Which member of an array is live is runtime, and absent from ``to_dict``."""
+    """Which member of an array is live is runtime, and saved with the build."""
     char = Character.new_default(load_game_data())
     first = Power(name="Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
     second = Power(name="Burst", effects=[PowerEffectInstance(effect_id="damage", rank=6)])
@@ -186,13 +191,18 @@ def test_runtime_for_a_resized_effect_list_is_left_alone() -> None:
     assert char.powers[0].effects[0].toggled_on is True  # untouched, not misapplied
 
 
-def test_restore_without_keep_runtime_comes_up_all_active() -> None:
-    """The opt-out exists so the carrying is a choice, not a hidden rule of restore."""
+def test_restore_without_keep_runtime_re_wears_everything() -> None:
+    """The opt-out exists so the carrying is a choice, not a hidden rule of restore.
+
+    What it covers is only what the save leaves out, which is now the gear in your
+    hands: a power's own switch travels *in* the snapshot, so it comes back from
+    there either way.
+    """
     char = _built_character()
     char.powers[0].activated = False
     char.equipment[0].worn = False
 
     char.restore(char.to_dict(), keep_runtime=False)
 
-    assert char.powers[0].activated is True
     assert char.equipment[0].worn is True
+    assert char.powers[0].activated is False

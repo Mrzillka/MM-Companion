@@ -258,18 +258,28 @@ def test_dialling_down_refunds_nothing(data) -> None:
     assert power_total_cost(power, data, char) == full
 
 
-def test_the_dialled_rank_is_runtime_and_survives_a_restore(data) -> None:
-    """Like every other runtime flag: out of the save, carried across an undo."""
+def test_the_dialled_rank_is_saved_and_reloads_at_the_same_size(data) -> None:
+    """The rung a size power is held at is part of the save, not lost on reopening.
+
+    A Growth held at Large is a decision about the character — four of the sheet's
+    numbers hang off it — so a plain load has to come back at the same size rather
+    than at full rank.
+    """
     char = _char(data)
     power = _growth(char, 3)
     power.effects[0].current_rank = 2
 
-    assert "current_rank" not in power.effects[0].to_dict()
+    assert power.effects[0].to_dict()["current_rank"] == 2
 
     snapshot = char.to_dict()
     char.restore(snapshot)
     assert char.powers[0].effects[0].current_rank == 2
     assert effective_size(char, data) == "Huge"
 
-    # A plain load, with no runtime to carry, comes up at full rank.
-    assert Character.from_dict(snapshot).powers[0].effects[0].current_rank is None
+    # And a plain load — opening the saved file — lands on the same rung.
+    reloaded = Character.from_dict(snapshot)
+    assert reloaded.powers[0].effects[0].current_rank == 2
+    assert effective_size(reloaded, data) == "Huge"
+
+    # An effect nobody has dialled still writes nothing and comes up all the way up.
+    assert "current_rank" not in _growth(_char(data), 3).effects[0].to_dict()

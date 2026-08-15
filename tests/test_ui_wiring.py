@@ -132,7 +132,9 @@ def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
     card.clicked.emit()
 
     assert fired  # the section signals a runtime change so the sheet re-derives
-    assert not dirtied  # ...but a runtime toggle is not persisted, so it isn't an edit
+    # ...and marks the sheet dirty with it: what is switched on is saved with the
+    # build now, so a toggle nobody called an edit would be lost on close.
+    assert dirtied
     assert char.powers[0].item_present is False
     assert resistance_total(char, data, "TOUGHNESS") == 0
 

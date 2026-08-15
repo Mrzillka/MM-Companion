@@ -275,9 +275,12 @@ _BASE_BLOCKS = [
         0,
         {
             "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
-            # A runtime on/off toggle drives the live refresh but is not a persisted
-            # edit, so it omits EDITED (and FACTS_CHANGED, to avoid re-deriving itself).
-            "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED),
+            # A runtime on/off toggle drives the same live refreshes, and carries
+            # EDITED with them: a power's on/off state and a size effect's dialled
+            # rung are saved with the build now, so a toggle the sheet did not call an
+            # edit would show no `*`, prompt nothing on close, and be lost. It still
+            # omits FACTS_CHANGED, to avoid re-deriving itself.
+            "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
         _ROLLS,  # the 🎲 beside each of a power card's roll lines

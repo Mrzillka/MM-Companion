@@ -114,11 +114,13 @@ def test_the_history_is_capped_and_drops_the_oldest(qapp: QApplication) -> None:
     assert sheet.character.abilities["STR"] == 2  # as far back as the cap allows
 
 
-def test_a_runtime_toggle_is_not_a_step_and_survives_an_undo(qapp: QApplication) -> None:
-    """Switching a power off is a play action; a second click already reverses it.
+def test_a_runtime_toggle_is_a_step_of_its_own(qapp: QApplication) -> None:
+    """Switching a power off is a play action, and one that is saved with the build.
 
-    But it must not be *lost* by an undo of something else, which a plain ``to_dict``
-    round trip would do — the flags are not in the snapshot at all.
+    It used to be neither undoable nor in the snapshot — a second click was the only
+    way back. Now that the flags round-trip, a toggle is an ordinary step: ``Ctrl+Z``
+    puts the power back on, and undoing something *else* still leaves it where the
+    player left it, because every snapshot in the history carries it.
     """
     char = Character.new_default(load_game_data())
     char.powers.append(
@@ -136,7 +138,7 @@ def test_a_runtime_toggle_is_not_a_step_and_survives_an_undo(qapp: QApplication)
     card = sheet.powers.findChild(_DraggableCard)
     card.clicked.emit()  # the card *is* the on/off switch
     undo.flush()
-    assert not undo.can_undo  # a runtime toggle is not an edit
+    assert undo.can_undo  # the switch is saved, so taking it back is a step
     assert char.powers[0].item_present is False
 
     sheet.abilities._abilities["STR"].setValue(4)
@@ -145,6 +147,9 @@ def test_a_runtime_toggle_is_not_a_step_and_survives_an_undo(qapp: QApplication)
 
     assert char.abilities["STR"] == 0  # the build edit went back
     assert char.powers[0].item_present is False  # the switch did not
+
+    undo.undo()  # and one more step does take the switch back
+    assert char.powers[0].item_present is True
 
 
 def test_an_absorbed_change_becomes_the_baseline(qapp: QApplication) -> None:

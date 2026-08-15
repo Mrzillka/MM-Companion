@@ -12,6 +12,7 @@ from PySide6.QtCore import QEvent, QPointF, Qt, QVariantAnimation
 from PySide6.QtGui import QEnterEvent, QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
 
+from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
@@ -768,18 +769,48 @@ def test_a_rung_wakes_a_dormant_power_at_that_rung(qapp: QApplication) -> None:
     assert effective_size(char, data) == "Huge"
 
 
-def test_a_rung_is_a_runtime_change_not_a_build_edit(qapp: QApplication) -> None:
-    """Like every other card switch: it must not mark the sheet dirty."""
+def test_a_rung_is_a_runtime_change_that_still_marks_the_sheet_dirty(
+    qapp: QApplication,
+) -> None:
+    """Like every other card switch — and, like them, saved with the build.
+
+    It stays a *runtime* signal (``changed`` is for build edits, and a rung re-derives
+    rather than re-costing), but the rung is in the save now, so the sheet has to know
+    it has something unwritten or closing the window would drop it.
+    """
     sheet, _char, _power = _size_sheet(3)
     edits: list[int] = []
     runtime: list[int] = []
+    dirtied: list[int] = []
     sheet.powers.changed.connect(lambda: edits.append(1))
     sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
+    sheet.edited.connect(lambda: dirtied.append(1))
 
     next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
 
     assert edits == []
     assert runtime == [1]
+    assert dirtied
+
+
+def test_a_rung_picked_on_the_card_survives_a_save_and_a_reopen(
+    qapp: QApplication, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reported bug, end to end: click Large, save, open the file again.
+
+    The two halves are tested apart (the flag round-trips in ``tests/test_powers.py``,
+    the click is above), and this is the one that says the user's actual sequence
+    works — the sheet writes what the card is showing.
+    """
+    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
+    sheet, char, _power = _size_sheet(3)
+    char.profile["hero_name"] = "Colossus"
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    reopened = library.load_character(library.save_character(char))
+
+    assert reopened.powers[0].effects[0].current_rank == 1
+    assert effective_size(reopened, load_game_data()) == "Large"
 
 
 def test_the_rungs_stay_live_in_the_locked_sheet(qapp: QApplication) -> None:

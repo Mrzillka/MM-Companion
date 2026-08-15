@@ -143,6 +143,31 @@ def test_a_strength_based_damage_raises_the_save_dc_it_forces(hero, data) -> Non
     assert save.dc == 16
 
 
+def test_a_large_wielder_forces_a_harder_save(hero, data) -> None:
+    """The Size Table's Damage column reaches the DC through the effective rank."""
+    power = Power(name="Fists", effects=[PowerEffectInstance("damage", rank=8)])
+
+    hero.characteristics["size"] = "Medium"
+    assert power_rolls(power, hero, data)[1].dc == 18
+
+    hero.characteristics["size"] = "Large"
+    assert power_rolls(power, hero, data)[1].dc == 19
+
+    hero.characteristics["size"] = "Colossal"
+    assert power_rolls(power, hero, data)[1].dc == 22
+
+
+def test_a_power_opted_out_of_size_scaling_forces_the_dc_it_always_did(hero, data) -> None:
+    """The constructor's Extended settings switch, seen from the dice footer."""
+    power = Power(
+        name="Laser",
+        effects=[PowerEffectInstance("damage", rank=8, size_scales_damage=False)],
+    )
+    hero.characteristics["size"] = "Colossal"
+
+    assert power_rolls(power, hero, data)[1].dc == 18
+
+
 def test_a_multi_effect_power_says_which_effect_each_roll_belongs_to(hero, data) -> None:
     power = Power(
         name="Sleep Ray",

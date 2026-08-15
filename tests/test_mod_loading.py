@@ -133,6 +133,11 @@ def test_sample_python_mod_registers_readout_kind(_home: Path) -> None:
         effect = PowerEffectInstance(effect_id="damage", rank=5)
         rows = effect_readout_rows(effect, data)
         assert any(r.value == "+2" and r.label == "Signature Bonus" for r in rows)
+        # Handlers take a character now; a mod's own must survive being handed one.
+        from mm_companion.core.character import Character
+
+        with_char = effect_readout_rows(effect, data, Character())
+        assert [(r.label, r.value) for r in with_char] == [(r.label, r.value) for r in rows]
     finally:
         # This test mutates the process-global registry and sys.path; undo both so
         # other tests see a pristine engine.

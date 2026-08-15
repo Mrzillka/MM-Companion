@@ -144,6 +144,25 @@ def _effect_gates(effect: PowerEffectInstance, game_data: GameData) -> set[str]:
     return gates
 
 
+def effect_current_rank(effect: PowerEffectInstance) -> int:
+    """The rank an effect is *currently running at* — its bought rank unless dialled down.
+
+    :attr:`~mm_companion.core.powers.PowerEffectInstance.current_rank` is runtime state
+    (a Growth 3 held at Large rather than Gargantuan), so it is clamped here rather than
+    trusted: ``None`` means all the way up, and a value left over from a larger bought
+    rank comes back as the rank the effect actually has. The floor is 1, not 0 — "off"
+    is the effect's own toggle, not a zeroth rung, and a rank-0 effect would quietly
+    read as a rank-1 one nowhere else.
+
+    Cost never asks this. What a power is *worth* is what it was bought at, and dialling
+    one down mid-fight refunds nothing.
+    """
+
+    if effect.current_rank is None:
+        return effect.rank
+    return max(1, min(effect.rank, int(effect.current_rank)))
+
+
 def effect_is_active(
     power: Power,
     effect: PowerEffectInstance,
@@ -332,6 +351,15 @@ def build_contributions(
     fixed-target one like Protection — *and* is currently active
     (:func:`effect_is_active`, so a switched-off or suppressed one drops out).
 
+    **So does a modifier attached to it.** An extra like Elongation's Striding ("longer
+    strides grant ranks of Speed") is a stat effect that happens to hang off another
+    effect, and it carries a ``statIntegration`` of its own
+    (:attr:`~mm_companion.core.data_loader.Modifier.integration`). Note the walk is
+    therefore *not* gated on the base effect having a boost — Elongation has none, so
+    gating on it is exactly how Striding would go on granting nothing. A modifier is
+    worth its own rank when it is ``ranked`` and the **host effect's** otherwise, which
+    is what a per-rank price already says it is charging for.
+
     What the record then *means* is not decided here: the boost's ``apply`` kind picks
     an applier out of :data:`~.appliers.STAT_APPLIERS`, which yields the contributions
     (a numeric trait bonus for ``bonus``, a movement grant for ``speed``, and so on).
@@ -349,27 +377,58 @@ def build_contributions(
     none: a power's card explains itself from its own build.
     """
 
+    catalog = game_data.modifier_catalog()
     contributions: list[TraitContribution] = []
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None or base.integration is None:
             continue
-        boost = base.integration.trait_boost
-        if boost is None:
-            continue  # not a stat effect at all
         if not effect_is_active(power, effect, base, game_data, char):
             continue  # switched off, suppressed, or not a standing bonus
-        context = ApplyContext(
-            record=boost,
-            rank=effect.rank,
-            target=_boost_target(effect, boost),
-            source=power.name or base.name,
-            game_data=game_data,
-            stacking=stacking,
-            group=group,
-            origin=origin,
-        )
-        contributions.extend(apply_stat_effect(boost.apply, context))
+        source = power.name or base.name
+
+        boost = base.integration.trait_boost
+        if boost is not None:
+            contributions.extend(
+                apply_stat_effect(
+                    boost.apply,
+                    ApplyContext(
+                        record=boost,
+                        rank=effect.rank,
+                        target=_boost_target(effect, boost),
+                        source=source,
+                        game_data=game_data,
+                        stacking=stacking,
+                        group=group,
+                        origin=origin,
+                    ),
+                )
+            )
+
+        for selection in (*effect.extras, *effect.flaws):
+            modifier = catalog.get(selection.modifier_id)
+            if modifier is None or modifier.integration is None:
+                continue
+            granted = modifier.integration.trait_boost
+            if granted is None:
+                continue
+            contributions.extend(
+                apply_stat_effect(
+                    granted.apply,
+                    ApplyContext(
+                        record=granted,
+                        rank=selection.rank if modifier.ranked else effect.rank,
+                        target=_boost_target(effect, granted),
+                        # Named for the pair, since neither half explains it alone: the
+                        # power is what the sheet lists, the modifier is what granted it.
+                        source=f"{source} ({modifier.name})",
+                        game_data=game_data,
+                        stacking=stacking,
+                        group=group,
+                        origin=origin,
+                    ),
+                )
+            )
     return tuple(contributions)
 
 

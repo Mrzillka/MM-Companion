@@ -132,6 +132,7 @@ from mm_companion.ui.widgets import (
     hline_separator,
     make_spin_box,
     muted_style,
+    preserved_scroll,
     tinted_style,
 )
 
@@ -671,6 +672,12 @@ class EquipmentSection(TitledSection):
         self._rebuild_list()
 
     def _rebuild_list(self) -> None:
+        # Wearing an item rebuilds every card, and the block is momentarily empty while
+        # it does — see PowersSection._rebuild_list for what that costs the page.
+        with preserved_scroll(self):
+            self._rebuild_cards()
+
+    def _rebuild_cards(self) -> None:
         grouped = self._grouped_items()
         # Hand the on-screen progress over to the cards about to be built, and start a
         # fresh map, so a removed item leaves nothing behind for a later one to inherit.

@@ -15,6 +15,7 @@ files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields, replace
 
 from . import mods as mods_module
@@ -583,11 +584,19 @@ class Measure:
     ``"time"``/``"volume"``); ``label`` is the table row this measure is shown under
     (e.g. ``"Speed"``); ``per_round`` marks a speed — a distance covered each round —
     so the value reads e.g. ``"30 feet/round"`` rather than a bare distance.
+
+    ``mode`` names the *way of moving* a per-round distance is a speed **in**, which is
+    what lets the Speed readout net several sources into one line: two Flight powers are
+    one flight speed, and the Speed effect feeds the same ground line the character walks
+    on. Effects sharing a mode are reconciled; effects in different modes are simply
+    different ways to get about and each keep a line. Defaults to the effect's own id, so
+    an effect that names none is its own mode and behaves exactly as it always did.
     """
 
     column: str
     label: str
     per_round: bool = False
+    mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -697,6 +706,11 @@ class Modifier:
     the effect total rather than per rank. ``ranked`` is ``True`` when the modifier
     itself is bought in ranks (chosen independently of the effect's rank), so its
     contribution is ``cost_value × rank`` — e.g. Accurate, Extended Range.
+    ``max_rank`` is the ceiling the rules put on those ranks (Striding's 5), and
+    ``None`` when they give none — read it through
+    :func:`mm_companion.core.rules.modifier_rank_cap` rather than off the record, so a
+    caller need not carry the two cases. It says nothing about an *unranked* modifier,
+    which always stands at the one rank its host effect has.
 
     ``overrides`` maps a base-effect game-term field (``range``, ``action``,
     ``duration``, ``resistance``, ``check``, ``effect_type``) to the value this
@@ -759,6 +773,7 @@ class Modifier:
     cost_value: int = 0
     flat: bool = False
     ranked: bool = False
+    max_rank: int | None = None
     description: str = ""
     overrides: dict[str, str] = field(default_factory=dict)
     check_bonus: int = 0
@@ -787,6 +802,18 @@ class Modifier:
     name and point cost come from the selection's ``config``, not this record, and it
     has no game-term impact. Marks a power as homerule (see
     :func:`mm_companion.core.rules.power_has_custom_modifier`)."""
+
+    integration: Integration | None = None
+    """A ``statIntegration`` of the modifier's own — what taking it *grants*.
+
+    The same record a base effect carries, read by the same appliers, so an extra whose
+    text says "longer strides grant ranks of Speed" grants them instead of only costing
+    points. ``None`` for the overwhelming majority, which change a price, a game term or
+    a gate and nothing on the sheet.
+
+    The rank it is worth is the modifier's own when it is ``ranked``, and otherwise the
+    **host effect's** — which is what a per-rank price already says it is charging for.
+    """
 
 
 # --- Point costs & Power Level: per-rank trait costs and the PL-derived budget
@@ -957,6 +984,11 @@ class SystemRules:
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
 #     Size Table, and movement constants. --------------------------------------
+
+#: Splits a camelCase JSON key so it can be matched to its snake_case dataclass field.
+_CAMEL_TO_SNAKE = re.compile(r"(?<!^)(?=[A-Z])")
+
+
 @dataclass(frozen=True)
 class SizeRow:
     """One row of the Size Table (from ``measurements.json``'s ``sizeTable``).
@@ -976,6 +1008,39 @@ class SizeRow:
     intimidation_mod: int
     stealth_mod: int
 
+    def modifier(self, column: str) -> int:
+        """This row's value for a Size Table column *named as the JSON names it*.
+
+        ``"defenseMod"`` → :attr:`defense_mod`. The translation lives here rather than
+        at the call site because :class:`SizeEffect` quotes the author's own column
+        name, and an unknown one reads as 0 rather than raising — a mod naming a column
+        this ruleset does not have grants nothing, exactly as an unregistered applier
+        kind does.
+        """
+
+        attribute = _CAMEL_TO_SNAKE.sub("_", column).lower()
+        return int(getattr(self, attribute, 0) or 0)
+
+
+@dataclass(frozen=True)
+class SizeEffect:
+    """Which trait one Size Table column modifies (``measurements.json``'s ``sizeEffects``).
+
+    The seam that keeps size out of Python: ``column`` names a field of :class:`SizeRow`,
+    ``category`` one of the applier categories (``ability``/``resistance``/``skill``) and
+    ``target`` the trait key or skill name it lands on. A ruleset that calls its defence
+    something else, or maps a column somewhere else entirely, edits the data.
+
+    Two Size Table columns deliberately have no entry, because neither modifies a
+    trait: ``speedMod`` applies to the base ground movement rank
+    (:func:`~mm_companion.core.rules.base_ground_speed_rank`), and ``damageMod`` applies
+    to an effect's rank (:attr:`Measurements.size_rank_column`).
+    """
+
+    column: str
+    category: str
+    target: str
+
 
 @dataclass(frozen=True)
 class Measurements:
@@ -986,7 +1051,13 @@ class Measurements:
     the book's own display string for a rank/column (e.g. distance rank 3 →
     ``"60 feet"``), or ``""`` when the rank is outside the tabulated −5…30 range.
     ``size_row`` returns the :class:`SizeRow` for a size rank (clamped to the table's
-    range), driving Growth/Shrinking's derived combat modifiers.
+    range), driving Growth/Shrinking's derived combat modifiers, and ``size_effects``
+    says which trait each of those columns actually modifies (:class:`SizeEffect`).
+
+    ``size_rank_column`` names the one column that modifies no trait at all: how much
+    size raises the *rank* of an effect the character's own body drives, which is a
+    different kind of thing and is read by
+    :func:`~mm_companion.core.rules.effect_size_rank_shift`.
 
     ``distance_m`` returns the normalized numeric metric distance (metres) for a rank —
     the numeric sibling of the ``distance`` label — so a per-round distance can be
@@ -996,6 +1067,8 @@ class Measurements:
     by_rank: dict[int, dict[str, dict[str, str]]]  # rank -> system -> column -> label
     size_by_rank: dict[int, SizeRow] = field(default_factory=dict)
     distance_m_by_rank: dict[int, float] = field(default_factory=dict)
+    size_effects: tuple[SizeEffect, ...] = ()
+    size_rank_column: str = ""
 
     def label(self, column: str, rank: int, system: str = "imperial") -> str:
         return self.by_rank.get(rank, {}).get(system, {}).get(column, "")
@@ -1028,13 +1101,25 @@ class Movement:
     walking / dashing / running columns are the measurements-table distance at that
     rank plus ``walk_rank_step`` / ``dash_rank_step`` / ``run_rank_step``.
     ``round_seconds`` (6) converts a per-round distance into km/h.
+
+    ``run_is_ground_only`` drops that third column from every other mode: running is a
+    ground manoeuvre, so a flier moves at its speed or dashes at double it and has no
+    run distance to print.
+
+    ``ground_mode`` names the movement mode everybody has — the one
+    ``base_ground_speed_rank`` seeds and the Speed effect feeds, and ``ground_label``
+    is what that line is called on the sheet. Every other mode's line is built from its
+    grants alone (:func:`~mm_companion.core.rules.speed_lines`).
     """
 
     base_ground_speed_rank: int = 1
     walk_rank_step: int = 0
     dash_rank_step: int = 1
     run_rank_step: int = 2
+    run_is_ground_only: bool = True
     round_seconds: int = 6
+    ground_mode: str = "ground"
+    ground_label: str = "Ground speed"
 
 
 # --- Equipment: the gear catalog, its grouping axis, and the rules constants
@@ -1988,18 +2073,23 @@ def _parse_config_field(c: dict) -> EffectConfigField:
     )
 
 
-def _parse_measure(raw: dict | None) -> Measure | None:
+def _parse_measure(raw: dict | None, effect_id: str = "") -> Measure | None:
     if not raw:
         return None
     return Measure(
         column=raw.get("column", "distance"),
         label=raw["label"],
         per_round=bool(raw.get("perRound", False)),
+        mode=raw.get("mode", "") or effect_id,
     )
 
 
 def _parse_integration(raw: dict, configurable: bool) -> Integration:
-    """Build the typed :class:`Integration` from an effect's ``statIntegration``.
+    """Build the typed :class:`Integration` from a ``statIntegration`` block.
+
+    A base effect's, or a **modifier's**: an extra like Elongation's Striding ("longer
+    strides grant ranks of Speed") is a stat effect in every sense except that it hangs
+    off another effect, and it is read by the same appliers.
 
     A :class:`TraitBoost` is attached only for the trait-boosting effects — those
     the player targets (``configurable``, e.g. Enhanced Trait) or that carry a fixed
@@ -2086,7 +2176,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         ),
         description=e.get("description", ""),
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
-        measure=_parse_measure(e.get("measure")),
+        measure=_parse_measure(e.get("measure"), e["id"]),
         resistance_dc_base=e.get("resistanceDcBase"),
         resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
@@ -2112,6 +2202,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         cost_value=int(m.get("costValue", 0)),
         flat=bool(m.get("flat", False)),
         ranked=bool(m.get("ranked", False)),
+        max_rank=m.get("maxRank"),
         overrides={_OVERRIDE_KEYS.get(k, k): v for k, v in m.get("overrides", {}).items()},
         check_bonus=int(m.get("checkBonus", 0)),
         grants_attack=bool(m.get("grantsAttack", False)),
@@ -2131,6 +2222,11 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         custom=bool(m.get("custom", False)),
         description=m.get("description", ""),
+        integration=(
+            _parse_integration(m["statIntegration"], bool(m.get("configurableTarget", False)))
+            if m.get("statIntegration")
+            else None
+        ),
     )
 
 
@@ -2200,8 +2296,20 @@ def _parse_measurements(raw: dict) -> Measurements:
             intimidation_mod=int(row["intimidationMod"]),
             stealth_mod=int(row["stealthMod"]),
         )
+    size_effects = tuple(
+        SizeEffect(
+            column=entry["column"],
+            category=entry["category"],
+            target=entry["target"],
+        )
+        for entry in raw.get("sizeEffects", [])
+    )
     return Measurements(
-        by_rank=by_rank, size_by_rank=size_by_rank, distance_m_by_rank=distance_m_by_rank
+        by_rank=by_rank,
+        size_by_rank=size_by_rank,
+        distance_m_by_rank=distance_m_by_rank,
+        size_effects=size_effects,
+        size_rank_column=raw.get("sizeRankColumn", ""),
     )
 
 
@@ -2211,7 +2319,10 @@ def _parse_movement(raw: dict) -> Movement:
         walk_rank_step=int(raw.get("walkRankStep", 0)),
         dash_rank_step=int(raw.get("dashRankStep", 1)),
         run_rank_step=int(raw.get("runRankStep", 2)),
+        run_is_ground_only=bool(raw.get("runIsGroundOnly", True)),
         round_seconds=int(raw.get("roundSeconds", 6)),
+        ground_mode=raw.get("groundMode", "ground"),
+        ground_label=raw.get("groundLabel", "Ground speed"),
     )
 
 
@@ -2855,7 +2966,7 @@ def _parse_block_spec(b: dict) -> BlockSpec:
 # Candidate id fields for record lists, tried in order. Whichever a list's dict
 # elements all carry identifies records for the by-id merge; a list whose elements
 # share none (e.g. an ``options`` list of strings) is replaced wholesale by a mod.
-_MERGE_ID_KEYS = ("id", "key", "name", "effect_id", "rank", "sizeRank")
+_MERGE_ID_KEYS = ("id", "key", "name", "effect_id", "rank", "sizeRank", "column")
 
 
 def _list_id_key(items: list) -> str | None:

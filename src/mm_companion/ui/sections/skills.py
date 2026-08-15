@@ -88,9 +88,9 @@ from mm_companion.ui.sections.row_table import (
 )
 from mm_companion.ui.sections.stat_table import (
     CONDITION_TINT,
-    ENHANCED_TINT,
     ROLL_ROLE,
     PinMenuState,
+    bonus_tint,
     pin_menu_contributor,
     tint_item,
 )
@@ -1026,10 +1026,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     def _fill_modifier_cell(mod_item: QTableWidgetItem, mod: SkillModifiers) -> None:
         """Show a row's net outside modifier as a signed number, explained on hover.
 
-        Green while only powers/advantages grant it, red once a condition takes part
-        (matching the stat grids), and struck through for a lost-trait condition. Blank
-        for a row nothing modifies — the column as a whole hides only when *every* row
-        is blank, so a shown column still has empty cells.
+        Green while what grants it raises the row, red once a condition takes part or
+        the modifier itself is a penalty (a large creature's Stealth) — matching the
+        stat grids — and struck through for a lost-trait condition. Blank for a row
+        nothing modifies; the column as a whole hides only when *every* row is blank,
+        so a shown column still has empty cells.
         """
 
         if not mod.has_flat_modifier:
@@ -1050,7 +1051,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
 
         tint_item(
             mod_item,
-            CONDITION_TINT if penalised else ENHANCED_TINT,
+            CONDITION_TINT if penalised else bonus_tint(mod.amount),
             struck=mod.condition.trait_lost,
         )
 

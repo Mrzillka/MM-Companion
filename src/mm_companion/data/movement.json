@@ -1,8 +1,13 @@
 {
   "_comment": "Ground-movement and turn-timing constants for Mutants & Masterminds 4e (Open Game Content). Numeric game-mechanical facts only. Consumed by mm_companion.core.data_loader; core reads these rather than hardcoding movement rules in Python. A character's walking / dashing / running speeds are the measurements-table distance at speed rank + [walkRankStep, dashRankStep, runRankStep]; roundSeconds converts a per-round distance to km/h.",
+  "groundModeNote": "The movement mode a character walks in, and the one the Speed effect feeds. An effect names its own mode in effects.json; this says which of them is the one everybody has, so the Speed readout knows which line to seed from baseGroundSpeedRank rather than build from grants alone. Every mode is the sum of what grants it — for the ground mode that sum starts at baseGroundSpeedRank (shifted by the Size Table's speedMod); every other mode starts at nothing and exists only while something grants it.",
+  "groundMode": "ground",
+  "groundLabel": "Ground speed",
   "baseGroundSpeedRank": 1,
   "walkRankStep": 0,
   "dashRankStep": 1,
   "runRankStep": 2,
+  "runIsGroundOnlyNote": "Running is a ground manoeuvre: a flying or burrowing character moves at their speed or dashes at double it, and has no third column. Set false for a ruleset where every mode runs.",
+  "runIsGroundOnly": true,
   "roundSeconds": 6
 }

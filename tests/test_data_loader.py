@@ -68,6 +68,47 @@ def test_movement_and_measurement_conversions_load() -> None:
     assert data.measurements.size_rank_for_category("Medium") == 0
 
 
+def test_the_size_table_says_which_trait_each_column_modifies() -> None:
+    data = load_game_data()
+    by_column = {e.column: e for e in data.measurements.size_effects}
+
+    assert (by_column["defenseMod"].category, by_column["defenseMod"].target) == (
+        "resistance",
+        "DEF",
+    )
+    assert by_column["stealthMod"].target == "Stealth"
+    # The two columns that modify something which is not a trait are named elsewhere.
+    assert "speedMod" not in by_column
+    assert "damageMod" not in by_column
+    assert data.measurements.size_rank_column == "damageMod"
+
+
+def test_a_size_row_answers_to_its_json_column_name() -> None:
+    row = load_game_data().measurements.size_row(2)
+
+    assert row.modifier("intimidationMod") == 4
+    assert row.modifier("noSuchMod") == 0  # a mod naming an absent column grants nothing
+
+
+def test_a_movement_effect_names_the_mode_its_speed_is_in() -> None:
+    by_id = {e.id: e for e in load_game_data().effects}
+
+    assert by_id["speed"].measure.mode == "ground"
+    assert by_id["flight"].measure.mode == "flight"
+    # An effect that names none is its own mode.
+    assert by_id["leaping"].measure.mode == "leaping"
+
+
+def test_a_modifier_can_carry_a_stat_integration_of_its_own() -> None:
+    catalog = load_game_data().modifier_catalog()
+
+    striding = catalog["striding"].integration
+    assert striding is not None
+    assert (striding.trait_boost.apply, striding.trait_boost.target) == ("speed", "ground")
+    # The overwhelming majority change a price or a game term and nothing on the sheet.
+    assert catalog["accurate"].integration is None
+
+
 def test_initiative_advantages_carry_their_mechanics() -> None:
     data = load_game_data()
     by_name = {a.name: a for a in data.advantages}

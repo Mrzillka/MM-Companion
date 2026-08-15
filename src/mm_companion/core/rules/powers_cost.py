@@ -14,6 +14,7 @@ from ..powers import (
     PowerNode,
 )
 from .derived import effective_ability
+from .size import effective_size_rank
 
 
 def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
@@ -70,6 +71,27 @@ def _effective_ranked(modifier: Modifier, selection) -> bool:
         if option is not None:
             return option.ranked
     return modifier.ranked
+
+
+#: What a ranked modifier may be bought up to when the ruleset names no ceiling. Not a
+#: rule — a spin box has to stop somewhere, and this is the same "no practical limit"
+#: the effect ranks themselves use.
+MODIFIER_RANK_MAX = 250
+
+
+def modifier_rank_cap(modifier: Modifier) -> int:
+    """How many ranks of ``modifier`` may be bought — the data's ceiling, or 1 unranked.
+
+    An *unranked* modifier is not bought in ranks at all: it stands at whatever rank its
+    host effect has, so there is one of it. A ranked one takes the ruleset's ``max_rank``
+    (Striding's 5) and :data:`MODIFIER_RANK_MAX` when it names none. Asked here rather
+    than read off the record so the UI's spin box and any later validation cannot
+    disagree about what the cap is.
+    """
+
+    if not modifier.ranked:
+        return 1
+    return modifier.max_rank if modifier.max_rank is not None else MODIFIER_RANK_MAX
 
 
 def _modifier_magnitude(modifier: Modifier, selection) -> int:
@@ -237,6 +259,44 @@ def effect_rank_trait_bonus(
     return bonus
 
 
+def effect_size_rank_shift(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> int:
+    """Ranks this effect gains from the wielder's sheer **size**.
+
+    The Size Table's damage column (:attr:`Measurements.size_rank_column`), read at the
+    character's current size — so a Huge character's punch lands two ranks harder and a
+    Tiny one's two ranks softer, and Growth moves it in play.
+
+    It is a *rank*, not a trait bonus, which is the whole point of putting it here rather
+    than on Strength: it reaches the save DC and the Power Level cap together, and leaves
+    carrying capacity, Athletics and every other Strength roll alone.
+
+    Zero in three cases, and each is a decision:
+
+    * **The effect forces no resistance.** Size cannot make a Flight faster or a
+      Concealment thicker. The test is the base effect's ``resistance_dc_base``, which is
+      the same "not an attack/resisted effect" question
+      :func:`~.validation.power_pl_violations` already asks.
+    * **The player switched it off** (``size_scales_damage`` — the constructor's
+      *Extended settings*). A giant's fist hits harder; a giant's laser does not, and
+      only the player knows which this is.
+    * **There is no character.** Size is the wielder's, and an effect inspected in the
+      abstract has no wielder.
+    """
+
+    if char is None or not effect.size_scales_damage:
+        return 0
+    column = game_data.measurements.size_rank_column
+    if not column:
+        return 0
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or base.resistance_dc_base is None:
+        return 0
+    row = game_data.measurements.size_row(effective_size_rank(char, game_data))
+    return row.modifier(column) if row is not None else 0
+
+
 def effect_rank_trait_bonus_cost(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None
 ) -> int:
@@ -280,14 +340,23 @@ def effect_rank_trait_bonus_cost(
 def effect_effective_rank(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> int:
-    """The effect's rank as it resolves in play: bought rank plus any ability a
-    modifier folds in (:func:`effect_rank_trait_bonus`).
+    """The effect's rank as it resolves in play.
+
+    The bought rank, plus any ability a modifier folds in
+    (:func:`effect_rank_trait_bonus`), plus what the wielder's size is worth
+    (:func:`effect_size_rank_shift`).
 
     This is the rank that sets the resistance DC and counts against the Power Level
-    attack/effect cap — not the point-cost rank, which stays the bought value.
+    attack/effect cap — not the point-cost rank, which stays the bought value. Both
+    additions are free at the till for the same reason: the character already paid for
+    their Strength, and nobody pays for being large.
     """
 
-    return effect.rank + effect_rank_trait_bonus(effect, game_data, char)
+    return (
+        effect.rank
+        + effect_rank_trait_bonus(effect, game_data, char)
+        + effect_size_rank_shift(effect, game_data, char)
+    )
 
 
 def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -> list[int]:

@@ -245,6 +245,22 @@ un-enhanced rank to already sit far enough below the cap to leave room for the b
 
 ---
 
+### Effective rank vs. bought rank
+
+Cost counts the **bought** rank; the resistance DC and the Power Level cap read the
+**effective** one, which is the bought rank plus two things that are free at the till
+because the character already paid for them elsewhere:
+
+- an ability a modifier folds in (`addsAbility` — Strength-Based Damage picks up the
+  wielder's Strength), and
+- what the wielder's **size** is worth (`sizeRankColumn` in `measurements.json`), for an
+  effect that forces a resistance and has not had `sizeScalesDamage` switched off. A
+  giant's fist hits harder; a giant's laser does not, which is why it is a switch and
+  not a rule. The Power Level cap shifts by the same amount, so being large is never
+  paid for twice.
+
+---
+
 ## 7. General suppression/interaction rules to model
 
 A handful of cross-cutting mechanics affect whether *any* effect's bonus should currently
@@ -293,10 +309,25 @@ Modifier (from modifiers.json)
 │                                        // gets its own row and a dice-footer line, with
 │                                        // noteTemplate rendering it ("{trait} check, DC {dc}")
 ├── checkBonus, checkNote, stepField/stepBy, addsAbility, gate, hidden
+├── statIntegration: {}                 // optional, the same shape a base effect carries:
+│                                        // what *taking this modifier* grants, read by the
+│                                        // same appliers (Striding -> ranks of Speed).
+│                                        // Worth its own rank when `ranked`, the host
+│                                        // effect's otherwise.
 └── description
 
 PowerEffectInstance  (part of a character's Power)
 ├── effectId, rank, config{}, extras[]{modifierId, rank?}, flaws[]{modifierId, rank?}, descriptors[]
+├── sizeScalesDamage (bool, default true) // whether the wielder's size raises this
+│                                          // effect's rank (the constructor's Extended
+│                                          // settings switch). Only ever reaches an effect
+│                                          // that forces a resistance.
+├── currentRank (int|null, default null)  // runtime, per §7: the rank the effect is
+│                                          // *currently* held at, null meaning full.
+│                                          // Read by the size layer — Growth 3 is a
+│                                          // ladder of rungs the card offers as buttons
+│                                          // (`size_steps`), not one leap. Never read by
+│                                          // cost: dialling down refunds nothing.
 └── computedCost
 
 Power

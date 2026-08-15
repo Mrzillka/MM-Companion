@@ -27,6 +27,7 @@ from mm_companion.core.rules import (
     effect_makes_attack,
     effect_per_rank_cost,
     effect_readout_rows,
+    effect_size_rank_shift,
     effect_stat_rows,
     effect_total_cost,
     effective_ability,
@@ -118,6 +119,93 @@ def test_growth_readout_maps_rank_to_size_table_modifiers() -> None:
     }
     assert shrink["Size"].value == "Tiny"
     assert shrink["Stealth"].value == "+4" and shrink["Stealth"].change == "better"
+
+
+def test_a_growth_readout_is_relative_to_the_character_growing() -> None:
+    """A Small character's Growth 2 makes them Large — the card used to say Huge."""
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Small"
+
+    rows = {
+        r.label: r for r in effect_readout_rows(PowerEffectInstance("growth", rank=2), data, char)
+    }
+    assert rows["Size"].value == "Large"
+    # The modifiers are the *delta* between where they land and where they started.
+    assert rows["Toughness"].value == "+2"
+
+
+def test_a_growth_readout_past_the_table_shows_only_what_it_really_gains() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Colossal"  # +4, one rung off the top
+
+    rows = {
+        r.label: r for r in effect_readout_rows(PowerEffectInstance("growth", rank=2), data, char)
+    }
+    assert rows["Size"].value == "Awesome"
+    assert rows["Toughness"].value == "+1"
+
+
+# -- size scales what the character's own body drives -----------------------------
+
+
+def test_size_raises_a_resisted_effects_rank() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    effect = PowerEffectInstance("damage", rank=8)
+
+    char.characteristics["size"] = "Huge"
+    assert effect_size_rank_shift(effect, data, char) == 2
+    assert effect_effective_rank(effect, data, char) == 10
+
+    char.characteristics["size"] = "Small"
+    assert effect_effective_rank(effect, data, char) == 7
+
+
+def test_size_leaves_an_effect_that_forces_no_resistance_alone() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Huge"
+
+    assert effect_size_rank_shift(PowerEffectInstance("flight", rank=4), data, char) == 0
+
+
+def test_the_extended_setting_switches_size_scaling_off() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Huge"
+    effect = PowerEffectInstance("damage", rank=8, size_scales_damage=False)
+
+    assert effect_size_rank_shift(effect, data, char) == 0
+    assert effect_effective_rank(effect, data, char) == 8
+
+
+def test_size_scaling_costs_nothing_and_needs_a_wielder() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8)
+
+    assert effect_size_rank_shift(effect, data, None) == 0
+    assert effect_total_cost(effect, data) == 8
+
+
+def test_the_size_switch_round_trips_and_defaults_on_for_an_older_save() -> None:
+    effect = PowerEffectInstance("damage", rank=8)
+    assert "size_scales_damage" not in effect.to_dict()  # nothing written while it is on
+    assert PowerEffectInstance.from_dict({"effect_id": "damage"}).size_scales_damage is True
+
+    effect.size_scales_damage = False
+    assert PowerEffectInstance.from_dict(effect.to_dict()).size_scales_damage is False
 
 
 def test_state_readout_clamps_above_the_table() -> None:

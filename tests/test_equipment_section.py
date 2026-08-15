@@ -525,11 +525,12 @@ def test_wearing_a_glider_reaches_the_speed_readout(qapp, data) -> None:
     char = _hero(data, "glider")
     sheet = CharacterSheet(data, char)
 
-    assert "Glider" in sheet.system_info._speed._lines_label.text()
+    # The row is named for the *mode*; the item that granted it is on the hover.
+    assert "Glider" in sheet.system_info._speed.rendered_tooltips()
 
     sheet.equipment._toggle_worn(char.equipment[0])
 
-    assert "Glider" not in sheet.system_info._speed._lines_label.text()
+    assert "Glider" not in sheet.system_info._speed.rendered_tooltips()
 
 
 # --- Phase 8: accessories and the breakage warning on a card ---------------------------

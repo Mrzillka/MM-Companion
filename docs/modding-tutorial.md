@@ -218,7 +218,7 @@ from __future__ import annotations
 from mm_companion.core.rules.powers_terms import READOUT_KINDS, EffectStat
 
 
-def _flat_bonus(readout, effect, game_data):
+def _flat_bonus(readout, effect, game_data, char=None):
     """Render a `flat_bonus` readout as a single "+N" stat row."""
     amount = int(readout.data.get("amount", 0))
     label = readout.label or "Bonus"

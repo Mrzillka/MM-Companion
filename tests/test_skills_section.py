@@ -485,3 +485,24 @@ def test_the_block_asks_for_a_whole_panel_locked_or_not(qapp: QApplication) -> N
     QApplication.processEvents()
 
     assert section.minimumSizeHint().width() == section._min_col_width()
+
+
+# -- the "+" column appears only when something modifies a row --------------------
+
+
+def test_a_medium_character_shows_no_modifier_column(qapp: QApplication) -> None:
+    """Size contributes *nothing* at Medium, not zero.
+
+    A ``TraitBonus`` is always truthy, so a zero-amount contribution would switch this
+    column on for every character in the game.
+    """
+    assert _section()._show_mods is False
+
+
+def test_a_large_character_shows_it_for_the_skills_size_touches(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Large"
+    section = SkillsSection(data, char)
+
+    assert section._show_mods is True

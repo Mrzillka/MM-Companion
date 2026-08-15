@@ -72,6 +72,16 @@ STACK_MAX = "max"  # only the largest of its group's exclusive contributions cou
 GROUP_POWERS = "powers"
 GROUP_EQUIPMENT = "equipment"
 
+# The group that does not compete: what the creature simply *is* (its size), which is
+# added on top of whichever bought group won rather than being weighed against it. A
+# suit of armour must not delete a Colossal creature's Toughness, and a Colossal
+# creature must not stop the armour counting either.
+GROUP_INTRINSIC = "intrinsic"
+
+#: Groups that are always added rather than competing. Kept as a set so a mod can
+#: neither be surprised by the special case nor need a second resolver to express one.
+ALWAYS_ADDED_GROUPS = frozenset({GROUP_INTRINSIC})
+
 
 @dataclass(frozen=True)
 class TraitContribution:
@@ -308,15 +318,20 @@ def _resolve_group(
 def resolve_contributions(contributions: Iterable[TraitContribution]) -> TraitBonus | None:
     """Net every contribution standing on **one** trait into a single :class:`TraitBonus`.
 
-    Two rules, and they are not the same rule:
+    Three rules, and they are not the same rule:
 
     * **Within a group**, the ``sum`` contributions add up and the largest ``max`` one
       joins them — so several powers stack (as they always have) while several pieces
       of armour do not, and an item its owner marked "stacks with other bonuses" adds
       on top of the winner.
-    * **Between groups**, the larger total wins outright. Gear is never added to a
-      power's bonus; M&M grants the better of the two. Ties go to the group seen first,
-      which is the powers group whenever there is one.
+    * **Between the bought groups**, the larger total wins outright. Gear is never added
+      to a power's bonus; M&M grants the better of the two. Ties go to the group seen
+      first, which is the powers group whenever there is one.
+    * **An intrinsic group does not compete at all** (:data:`ALWAYS_ADDED_GROUPS`). What
+      the creature *is* — its size — is added on top of whichever bought group won, and
+      neither supersedes nor is superseded. Weighing it against gear would let a suit of
+      armour delete a Colossal creature's Toughness, and letting it win would delete the
+      armour.
 
     Everything that did not count is reported in :attr:`TraitBonus.superseded`, named
     against whichever source won, so a card can say *why* its bonus is not on the
@@ -328,22 +343,36 @@ def resolve_contributions(contributions: Iterable[TraitContribution]) -> TraitBo
         return None
 
     groups: dict[str, list[TraitContribution]] = {}
+    intrinsic: list[TraitContribution] = []
     for contribution in gathered:
-        groups.setdefault(contribution.group, []).append(contribution)
+        if contribution.group in ALWAYS_ADDED_GROUPS:
+            intrinsic.append(contribution)
+        else:
+            groups.setdefault(contribution.group, []).append(contribution)
+
+    # Intrinsic contributions always sum: their amounts are legitimately negative (a
+    # small creature's Defense is a *bonus*, its Stealth penalty is not), and an
+    # exclusive one would be picked or dropped by a comparison that means nothing here.
+    extra = sum(c.amount for c in intrinsic)
+    extra_sources = tuple(c.source for c in intrinsic)
+
+    if not groups:  # nothing bought stands on this trait — the intrinsic part is all of it
+        return TraitBonus(extra, extra_sources, ())
 
     resolved = {key: _resolve_group(members) for key, members in groups.items()}
     winner = max(resolved, key=lambda key: resolved[key][0])
     amount, sources, shut_out = resolved[winner]
 
     # Whatever won names itself to everything it beat: the winning group's own
-    # shut-out exclusives, plus every member of every losing group.
+    # shut-out exclusives, plus every member of every losing group. The intrinsic
+    # contributions are in neither list — they never lost.
     beaten_by = max(groups[winner], key=lambda c: c.amount).source
     superseded: list[SupersededBonus] = []
     for key, members in groups.items():
         beaten = shut_out if key == winner else tuple(members)
         superseded.extend(SupersededBonus(c.source, c.amount, beaten_by, c.origin) for c in beaten)
 
-    return TraitBonus(amount, sources, tuple(superseded))
+    return TraitBonus(amount + extra, sources + extra_sources, tuple(superseded))
 
 
 def resolve_bonuses(

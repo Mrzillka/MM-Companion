@@ -56,6 +56,23 @@ ROLL_ROLE = Qt.ItemDataRole.UserRole
 ENHANCED_TINT = "tint.better"
 #: The red a condition penalty's "→ total" reads in, matching the constructor's flaw tint.
 CONDITION_TINT = "tint.worse"
+#: The red a *standing* modifier that lowers a trait reads in — a small creature's
+#: Stealth is a bonus and a large one's is not. Deliberately its own name rather than a
+#: reuse of :data:`CONDITION_TINT`: they are the same red today, but one is a passing
+#: state and the other is what the character is, and a preset may want to say so.
+WORSE_TINT = "tint.worse"
+
+
+def bonus_tint(amount: int) -> str:
+    """Which tint a standing modifier of *amount* reads in.
+
+    Contributions are no longer all bonuses: the Size Table hands a large character
+    −1 Defence and −2 Stealth, and painting those the same green as a power boost
+    says the opposite of what happened.
+    """
+
+    return WORSE_TINT if amount < 0 else ENHANCED_TINT
+
 
 COL_NAME, COL_ABBR, COL_RANK, COL_TOTAL = range(4)
 HEADERS = ["Trait", "ABL", "Rank", "Total"]
@@ -307,10 +324,11 @@ def apply_stat_effects(
 ) -> None:
     """Fill or clear each trait's Total cell from power bonuses and conditions.
 
-    The cell reads ``→ N``, where ``N`` is the rank spin box's value plus any power
-    boost, then a condition overlay (a Hit penalty on Toughness, a halved/zeroed
-    active defense, a scoped check penalty). A pure power boost tints green; any
-    condition tints it red, struck through when the overlay reports the trait lost
+    The cell reads ``→ N``, where ``N`` is the rank spin box's value plus any standing
+    modifier, then a condition overlay (a Hit penalty on Toughness, a halved/zeroed
+    active defense, a scoped check penalty). A modifier tints by its **sign**
+    (:func:`bonus_tint`) — a power boost green, a large creature's −1 Defence red;
+    any condition tints it red regardless, struck through when the overlay reports the trait lost
     (``ConditionEffect.trait_lost`` — Disabled/Debilitated in the base data). A trait
     with neither keeps an empty cell, exactly as the Skills table's "+" column does.
     """
@@ -333,14 +351,14 @@ def apply_stat_effects(
 
         tips = []
         if bonus:
-            tips.append(f"+{bonus.amount} from {', '.join(bonus.sources)}")
+            tips.append(f"{bonus.amount:+d} from {', '.join(bonus.sources)}")
         if has_cond and effect.tooltip:
             tips.append(effect.tooltip)
         item.setToolTip("\n".join(tips))
 
         tint_item(
             item,
-            CONDITION_TINT if has_cond else ENHANCED_TINT,
+            CONDITION_TINT if has_cond else bonus_tint(bonus.amount if bonus else 0),
             struck=has_cond and effect.trait_lost,
         )
 
@@ -353,7 +371,9 @@ __all__ = [
     "COL_TOTAL",
     "ENHANCED_TINT",
     "ROLL_ROLE",
+    "WORSE_TINT",
     "apply_stat_effects",
+    "bonus_tint",
     "build_stat_table",
     "pin_menu_contributor",
     "set_stat_value",

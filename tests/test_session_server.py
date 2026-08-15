@@ -1534,3 +1534,23 @@ def test_the_gm_token_is_never_broadcast(running_server, connect) -> None:
     assert secret
     assert secret not in json.dumps(events.next_of(EVENT_CONNECTED))
     assert secret not in json.dumps(client.roster)
+
+
+def test_a_closed_listener_wakes_its_waiter_on_every_platform() -> None:
+    """Closing the socket wakes a blocked accept on Windows and not on Linux.
+
+    Which is the platform the relay and the hub run on: left to the close alone the
+    accept thread never returned, so the loop never exited, the thread leaked, and a
+    session whose listener had died went on looking perfectly healthy.
+    """
+    listener = TcpTransport().listen("127.0.0.1", 0)
+    result: list[object] = []
+    thread = threading.Thread(target=lambda: result.append(listener.accept()), daemon=True)
+    thread.start()
+    time.sleep(0.05)
+
+    listener.close()
+    thread.join(timeout=TIMEOUT)
+
+    assert not thread.is_alive(), "accept never noticed the listener close"
+    assert result == [None]

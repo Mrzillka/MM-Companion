@@ -85,9 +85,17 @@ def _dress(app, preset: str) -> None:
     theme.apply(app)
 
 
-def _spin_rects(spin: QSpinBox) -> tuple:
+def _spin_rects(spin: QSpinBox, *, focused: bool = False) -> tuple:
     option = QStyleOptionSpinBox()
     option.initFrom(spin)
+    if focused:
+        # Asked of the style directly rather than taken from the widget. Real
+        # keyboard focus needs an *active* window, and a headless X server with no
+        # window manager never activates one — so on CI the widget simply refuses to
+        # take it and the test could not run at all. The question here is "where do
+        # the sub-controls land when this thing is focused", which the style answers
+        # from the option's state, so state it.
+        option.state |= QStyle.StateFlag.State_HasFocus
     option.subControls = QStyle.SubControl.SC_All
     option.buttonSymbols = spin.buttonSymbols()
     option.frame = spin.hasFrame()
@@ -221,11 +229,11 @@ def test_a_focused_spin_boxs_arrows_survive_the_focus_ring(styled_app, preset: s
     layout.addWidget(spin)
     host.resize(200, 80)
     host.show()
+    host.activateWindow()
     spin.setFocus()
     styled_app.processEvents()
-    assert spin.hasFocus()
 
-    up, down, edit = _spin_rects(spin)
+    up, down, edit = _spin_rects(spin, focused=True)
     where = _under(styled_app, preset)
     assert not edit.intersects(up), f"{where}focused, the text field covers the up arrow"
     assert not edit.intersects(down), f"{where}focused, the text field covers the down arrow"

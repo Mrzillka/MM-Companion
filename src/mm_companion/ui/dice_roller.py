@@ -496,9 +496,20 @@ class DiceRollerPanel(ReflowBox, QWidget):
         Without this the panel would flip itself back out of the chosen shape the
         first time it was resized.
         """
-        if self._compact or self._column_locked:
+        if self.shape_locked:
             return False
         return super().sync_reflow()
+
+    @property
+    def shape_locked(self) -> bool:
+        """Whether this panel's arrangement is chosen rather than derived.
+
+        True under Compact and under Extended alike. What it is for is telling the
+        view how much width to offer: a panel that will not reflow wants what it
+        actually asks for, never the width of an arrangement it is not going to
+        adopt.
+        """
+        return self._compact or self._column_locked
 
     def set_compact(self, compact: bool) -> None:
         """Whether the *window* has shrunk to this roller alone."""
@@ -989,13 +1000,23 @@ class DiceRollerPanel(ReflowBox, QWidget):
         own DC (a power's save) ticks the DC box and fills it in, so the number it
         will roll against is visible rather than implied; a spec without one leaves
         the box exactly as the player left it.
+
+        Clearing the chip takes that DC back off again. It was left ticked, so every
+        later manual roll went on being graded against a difficulty belonging to a
+        trait that was no longer loaded — and the ✕ on the chip is precisely the
+        gesture for "forget what I loaded". Only a DC this method set is withdrawn;
+        one the player typed themselves is theirs.
         """
         if spec is not None and self._localizer is not None:
             spec = self._localizer(spec)
+        had_own_dc = self._spec is not None and self._spec.dc is not None
         self._spec = spec
         if spec is not None and spec.dc is not None:
             self._dc_check.setChecked(True)
             self._dc_spin.setValue(spec.dc)
+        elif had_own_dc:
+            self._dc_check.setChecked(False)
+            self._dc_spin.setValue(0)
         self._spec_chip.setVisible(spec is not None)
         if spec is not None:
             self._spec_label.setText(spec_caption(spec))
@@ -1724,12 +1745,15 @@ class DiceRollerView(ReflowBox, QWidget):
         whatever is left, which is the lion's share of a wide strip.
         """
         available = self.reflow_available_width()
-        if self._row_locked():
-            # Extended pins the panel to a column (see
-            # :attr:`DiceRollerPanel._column_locked`), so what it wants here is its
-            # *column* width — never the row-of-three width the auto branch below
-            # measures, which is a different arrangement entirely and would leave
-            # the controls stretched across half the block.
+        if self._shape_locked():
+            # A chosen shape gets the width it actually asks for — never the
+            # row-of-three width the auto branch below measures, which is a
+            # different arrangement entirely and would leave the controls stretched
+            # across half the block with the history squeezed beside them.
+            #
+            # Both chosen shapes, not just Extended. Compact pins the panel just as
+            # hard, and measuring it as a row handed it two-thirds of a wide block —
+            # the exact opposite of what somebody picking Compact asked for.
             floor = self.panel.column_minimum_width()
             wanted = max(floor, self.panel.sizeHint().width())
             wanted = min(wanted, max(floor, available - MIN_HISTORY_WIDTH))
@@ -1760,6 +1784,16 @@ class DiceRollerView(ReflowBox, QWidget):
         self.sync_reflow()
         self._divide_row()
         self._settle.start(0)  # and again once everything has settled
+
+    def _shape_locked(self) -> bool:
+        """Whether the panel's arrangement is chosen, by either preference.
+
+        The question :meth:`_row_sizes` asks, and a wider one than
+        :meth:`_row_locked`: what matters there is only that the panel will not
+        reflow, so offering it a shape's width it will never adopt is wrong under
+        Compact for exactly the reason it is wrong under Extended.
+        """
+        return self.panel.shape_locked and not self._lent
 
     def _row_locked(self) -> bool:
         """Whether the user has pinned the side-by-side (Extended) arrangement.

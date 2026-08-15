@@ -17,7 +17,7 @@ a mod can introduce a new kind (with a matching handler here) incrementally.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
@@ -81,14 +81,14 @@ class DeclarativeBlock(QGroupBox):
         """Restate every field from the model — the sheet put an earlier state back.
 
         A mod's declarative block joins the restore on the same terms a base block
-        does; the sheet finds this by name, not by knowing the block exists.
+        does; the sheet finds this by name, not by knowing the block exists — which
+        includes the rule that a reseed must not write the model, so each field is
+        blocked rather than merely flagged (see :meth:`BaseInfoSection.reseed`).
         """
-        self._loading = True
-        try:
-            for key, edit in self._edits.items():
-                edit.setText(self._character.profile.get(key, ""))
-        finally:
-            self._loading = False
+        for key, edit in self._edits.items():
+            blocker = QSignalBlocker(edit)
+            edit.setText(self._character.profile.get(key, ""))
+            del blocker
 
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back."""

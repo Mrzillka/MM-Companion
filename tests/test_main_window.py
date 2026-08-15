@@ -183,6 +183,61 @@ def test_undoing_back_to_the_saved_state_clears_the_title_marker(
     assert "*" not in win.windowTitle()
 
 
+def test_stepping_off_the_saved_state_puts_the_marker_back(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """The twin of the test above, and the direction that loses work.
+
+    A restore runs under ``_applying``, which suppresses ``edited`` — so nothing
+    sets the flag when an undo walks *away* from what is on disk. Left one-way,
+    save-then-undo closed without prompting and the change was gone.
+    """
+    win = MainWindow(locked=False)
+    assert win._write(tmp_path / "hero.json")
+
+    win._sheet.abilities._abilities["STR"].setValue(3)
+    assert win._write(tmp_path / "hero.json")  # STR 3 is now the saved state
+    assert "*" not in win.windowTitle()
+
+    win._undo.undo()  # back to STR 0, which is *not* what the file holds
+
+    assert win._dirty is True
+    assert "*" in win.windowTitle()
+
+
+def test_redoing_away_from_the_saved_state_puts_the_marker_back(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """The same hole reached the other way round: undo cleared it, redo left it."""
+    win = MainWindow(locked=False)
+    assert win._write(tmp_path / "hero.json")
+
+    win._sheet.abilities._abilities["STR"].setValue(3)
+    win._undo.undo()
+    assert win._dirty is False
+
+    win._undo.redo()
+
+    assert win._dirty is True
+    assert "*" in win.windowTitle()
+
+
+def test_a_never_saved_sheet_is_not_declared_dirty_by_the_history(
+    qapp: QApplication,
+) -> None:
+    """The guard on the two above: there is nothing to be clean *against* yet.
+
+    ``at_saved_state()`` is False for a sheet with no file, so re-deriving from it
+    alone would star a brand-new window before the user had touched it.
+    """
+    win = MainWindow(locked=False)
+
+    win._on_undo_state()
+
+    assert win._dirty is False
+    assert "*" not in win.windowTitle()
+
+
 def test_a_save_is_not_an_undo_step(qapp: QApplication, tmp_path: Path) -> None:
     """Saving rewrites an external image path — the app tidying up, not a user edit."""
     win = MainWindow(locked=False)

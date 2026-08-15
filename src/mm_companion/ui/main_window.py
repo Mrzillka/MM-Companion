@@ -274,20 +274,30 @@ class MainWindow(QMainWindow):
     def _on_undo_state(self) -> None:
         """Follow the history: what the two buttons offer, and whether we are dirty.
 
-        The dirty flag is *re-derived* here rather than only set: an undo back to the
-        state last written to disk really is clean, and the ``*`` should go away.
+        The dirty flag is *re-derived* here rather than only set, and it has to run
+        in **both** directions. An undo back to the state last written to disk
+        really is clean and the ``*`` should go away — but the reverse is the one
+        that loses work: a restore runs under ``_applying``, which suppresses
+        ``edited``, so stepping *off* the saved state sets nothing. Save, then
+        Ctrl+Z, and the model is a step behind the file with no marker and no
+        prompt on close.
+
+        The guard is :attr:`~.undo.UndoController.has_saved_baseline` rather than
+        the flag's own value: ``at_saved_state()`` answers False for a sheet that
+        has never been written, so re-deriving from it alone would star a brand-new
+        sheet before it has anywhere to be clean against. For that sheet
+        ``_on_edited`` stays the only setter.
         """
         if self._undo is None:
             return
         if hasattr(self, "_undo_action"):
             self._undo_action.setEnabled(self._undo.can_undo)
             self._redo_action.setEnabled(self._undo.can_redo)
-        # Only ever *clears* the flag: setting it is _on_edited's job, and
-        # at_saved_state() is False for a character that has never been written, so
-        # a brand-new sheet is not declared clean before it has anywhere to be clean
-        # against.
-        if self._dirty and self._undo.at_saved_state():
-            self._dirty = False
+        if not self._undo.has_saved_baseline:
+            return
+        dirty = not self._undo.at_saved_state()
+        if dirty != self._dirty:
+            self._dirty = dirty
             self._update_title()
 
     def _show_lock_state(self, locked: bool) -> None:

@@ -231,3 +231,46 @@ def test_the_summary_keeps_the_printed_order(data: GameData) -> None:
     char = Character()
 
     assert damage_step_summary(char, _step(data, 2), data) == "Hit + Stunned + Staggered"
+
+
+def test_the_terminal_rung_settles_instead_of_stacking_up(data) -> None:
+    """Three clicks on the last rung must leave one coherent state, not three.
+
+    Dead superseded only Staggered, so a corpse kept the Dying and Incapacitated it
+    had passed through on the way — three chips claiming different things at once —
+    and shedding them by hand let the escalation start over and put an Incapacitated
+    back on a dead creature.
+    """
+    char = Character.new_default(data)
+    rung = damage_steps(data)[3]
+
+    for _ in range(3):
+        apply_damage_step(char, rung, data)
+    settled = {applied.condition_id for applied in char.conditions}
+
+    assert "dead" in settled
+    assert "dying" not in settled
+    assert "incapacitated" not in settled
+
+    apply_damage_step(char, rung, data)  # and it stays put
+    assert {applied.condition_id for applied in char.conditions} == settled
+
+
+def test_a_rung_promises_only_what_will_still_be_standing(data) -> None:
+    """The tooltip is the button's whole selling point; it must not over-promise.
+
+    It was built from the escalation alone, so it named a Staggered that the Dead
+    beside it removes in the same call — and one that an already-incapacitated
+    target would never have kept either.
+    """
+    char = Character.new_default(data)
+    rung = damage_steps(data)[3]
+
+    assert "Staggered" not in damage_step_summary(char, rung, data)
+
+    for _ in range(3):
+        apply_damage_step(char, rung, data)
+
+    summary = damage_step_summary(char, rung, data)
+    assert "Dead" in summary
+    assert "Staggered" not in summary

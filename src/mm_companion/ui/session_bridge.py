@@ -276,10 +276,16 @@ class SessionBridge(QObject):
 
         Same two paths and the same answer: ``False`` when there is no session, so
         the caller can fall back to its own private history.
+
+        The host's answer is passed on rather than assumed. ``prompt_roll`` records
+        nothing when the spec does not survive ``sanitize_spec`` — deliberately, a
+        card with a dead button being worse than no card — and reporting that as a
+        success meant the fallback never fired either, so the Ask button produced no
+        card anywhere and looked simply broken. This is the shape :meth:`remove_roll`
+        already has.
         """
         if self._server is not None:
-            self._server.prompt_roll(spec)
-            return True
+            return self._server.prompt_roll(spec) is not None
         if self._client is not None:
             return self._client.prompt_roll(spec)
         return False

@@ -30,7 +30,7 @@ supersede anything in my own bundle? — keeps the printed order intact everywhe
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import Condition, Effect, GameData, ResistanceOutcome
@@ -252,12 +252,28 @@ def damage_step_summary(character: Character, step: DamageStep, game_data: GameD
     """
 
     resolved = resolve_damage_step(character, step, game_data)
+
+    # Name only what will still be standing afterwards. Resolving gives the apply
+    # *order*, and that order legitimately contains a condition something else takes
+    # straight back off — a sibling in the same rung (Dead removes the Staggered
+    # beside it) or one the target already has (an Incapacitated target keeps no
+    # Staggered). A button whose whole selling point is saying what it will do must
+    # not promise either. Answered by running it, on a stand-in carrying nothing but
+    # the conditions, since that is all apply_condition reads or writes.
+    probe = Character(conditions=[replace(applied) for applied in character.conditions])
+    for condition_id in resolved:
+        apply_condition(probe, condition_id, game_data)
+    standing = {applied.condition_id for applied in probe.conditions}
+    surviving = tuple(cid for cid in resolved if cid in standing)
+
     # Back into the printed order for reading; the sort above is an apply-order
     # detail, and "Staggered + Stunned" is not how the book says it.
     order = {cid: n for n, cid in enumerate(step.conditions)}
-    ordered = tuple(sorted(resolved, key=lambda cid: order.get(cid, len(order))))
+    ordered = tuple(sorted(surviving, key=lambda cid: order.get(cid, len(order))))
     summary = _caption(ordered, game_data)
-    if ordered != step.conditions:
+    # "Escalated" is a claim about the *ladder*, not about what supersession then
+    # tidied away, so it is read off the resolved ids rather than the surviving ones.
+    if tuple(sorted(resolved)) != tuple(sorted(step.conditions)):
         summary += " — escalated"
     elif step.note:
         summary += f" ({step.note})"

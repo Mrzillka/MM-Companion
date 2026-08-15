@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from mm_companion.core import storage
 from mm_companion.core.character import Character
@@ -189,6 +189,32 @@ def test_off_the_air_the_request_lands_in_the_private_history(qapp: QApplication
     card = sheet.dice.view._local_history.findChild(RequestCard)
     assert card is not None
     assert _roll_buttons(card)[0].text() == "🎲 Athletics vs. DC 15"
+
+
+def test_a_private_request_names_its_author_and_can_be_thrown_away(
+    qapp: QApplication,
+) -> None:
+    """Off the air a request card reads like the rest of the list: who, and a ✕.
+
+    A bare button says nothing about where it came from — parked in the history it
+    would be indistinguishable from the follow-up chip a roll left behind — and a
+    card in one's own list that cannot be removed is the only one there that can't.
+    """
+    sheet = _sheet()
+    panel = sheet.dice.panel
+    _pick(panel, "Athletics")
+    panel._request_button.click()
+
+    history = sheet.dice.view._local_history
+    card = history.findChild(RequestCard)
+    assert card is not None
+    assert "you" in card.findChild(QLabel).text()
+
+    remove = [b for b in card.findChildren(QPushButton) if b.text() == "✕"]
+    assert remove
+    remove[0].click()
+    qapp.processEvents()
+    assert history.findChild(RequestCard) is None
 
 
 def test_the_button_rolls_it_on_the_sheet_that_clicks_it(qapp: QApplication) -> None:

@@ -101,7 +101,7 @@
     "column.advantage.name-max": 170,
     "column.advantage.desc": 180,
     "column.advantage.combo": 180,
-    "column.request-trait": 60,
+    "column.request-trait": 130,
     "column.settings.nav": 160,
     "column.settings.label": 230,
     "column.settings.value": 220,

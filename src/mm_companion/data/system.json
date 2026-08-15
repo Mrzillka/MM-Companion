@@ -26,6 +26,8 @@
       }
     ],
     "unscoped_scope_values": ["All checks"],
+    "_damage_effect": "Which effect's resistance ladder is the generic damage ladder — the one the GM's quick-damage buttons walk. Named here rather than spelled in Python, so a ruleset whose damage effect is called something else retargets it.",
+    "damage_effect": "damage",
     "alternate_effect_modifier": "alternate_effect",
     "linked_modifier": "linked",
     "derived_traits": [

@@ -22,7 +22,7 @@ from mm_companion.core.session import discovery
 from mm_companion.core.session import relay as relay_transport
 from mm_companion.core.session.client import SessionClient
 from mm_companion.core.session.model import new_session
-from mm_companion.core.session.net import Connection
+from mm_companion.core.session.net import Connection, _peer_address
 from mm_companion.core.session.relay import (
     ENVELOPE_ERROR,
     ENVELOPE_INCOMING,
@@ -728,3 +728,21 @@ def test_a_connection_can_be_primed_with_bytes_read_before_it_existed():
     finally:
         left.close()
         right.close()
+
+
+@pytest.mark.parametrize("peer_name", ["", "/tmp/mm.sock", ()])
+def test_a_peer_name_that_is_not_a_host_and_port_reports_neither(peer_name):
+    """getpeername answers in its own family's shape, and only AF_INET's is a pair.
+
+    AF_UNIX names a path, and an unnamed socketpair — which is how these tests build
+    a channel — names the empty string. Indexing that raised, so on Linux a
+    Connection over anything but plain TCP died as it was constructed. Asserted on
+    the helper rather than on a real socketpair, because Windows emulates one with
+    AF_INET and would never reach the case.
+    """
+
+    class _Peer:
+        def getpeername(self):
+            return peer_name
+
+    assert _peer_address(_Peer()) == ("", 0)

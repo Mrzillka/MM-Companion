@@ -52,8 +52,8 @@ def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 NOTES_BLOCK = {
-    "id": "notes",
-    "title": "Notes",
+    "id": "campaign_log",
+    "title": "Campaign Log",
     "row": 7,
     "col": 0,
     "min_width": 300,
@@ -88,7 +88,12 @@ def test_mod_blocks_json_parses_into_block_specs(_home: Path) -> None:
     assert len(data.blocks) == 1
     spec = data.blocks[0]
     assert isinstance(spec, BlockSpec)
-    assert (spec.id, spec.title, spec.row, spec.min_width) == ("notes", "Notes", 7, 300)
+    assert (spec.id, spec.title, spec.row, spec.min_width) == (
+        "campaign_log",
+        "Campaign Log",
+        7,
+        300,
+    )
     assert spec.fields[0] == BlockFieldSpec(key="notes_general", label="General", kind="text")
     assert spec.fields[2].kind == "label"
     assert spec.fields[2].text == "Stay in character."
@@ -118,19 +123,19 @@ def test_sync_registers_a_descriptor_per_spec(_home: Path) -> None:
     data = load_game_data()
     sync_declarative_blocks(data)
     keys = [d.key for d in block_descriptors()]
-    assert "notes" in keys
-    notes = next(d for d in block_descriptors() if d.key == "notes")
-    assert notes.title == "Notes"
-    assert notes.size.min_width == 300
+    assert "campaign_log" in keys
+    block = next(d for d in block_descriptors() if d.key == "campaign_log")
+    assert block.title == "Campaign Log"
+    assert block.size.min_width == 300
 
 
 def test_sync_is_idempotent_and_never_clobbers_a_base_block(_home: Path) -> None:
     _write_blocks_mod(_home)
     data = load_game_data()
     sync_declarative_blocks(data)
-    sync_declarative_blocks(data)  # second sync must not duplicate 'notes'
+    sync_declarative_blocks(data)  # second sync must not duplicate it
     keys = [d.key for d in block_descriptors()]
-    assert keys.count("notes") == 1
+    assert keys.count("campaign_log") == 1
     # A spec colliding with a base key is skipped (can't restore a base block).
     collide = BlockSpec(id="skills", title="Hijack")
     sync_declarative_blocks(dataclasses.replace(data, blocks=(collide,)))
@@ -141,12 +146,12 @@ def test_sync_is_idempotent_and_never_clobbers_a_base_block(_home: Path) -> None
 def test_syncing_empty_blocks_drops_previously_synced_ones(_home: Path) -> None:
     _write_blocks_mod(_home)
     sync_declarative_blocks(load_game_data())
-    assert "notes" in {d.key for d in block_descriptors()}
+    assert "campaign_log" in {d.key for d in block_descriptors()}
     # Re-sync with base (no blocks): the declarative block should disappear.
     storage.update_settings(enabled_mods=[])
     clear_game_data_cache()
     sync_declarative_blocks(load_game_data())
-    assert "notes" not in {d.key for d in block_descriptors()}
+    assert "campaign_log" not in {d.key for d in block_descriptors()}
 
 
 # --- UI: the block appears on the sheet and edits the model -----------------
@@ -157,8 +162,8 @@ def test_declarative_block_widget_seeds_and_writes_the_model(qapp: QApplication)
     character = Character.new_default(data)
     character.profile["notes_general"] = "seeded"
     spec = BlockSpec(
-        id="notes",
-        title="Notes",
+        id="campaign_log",
+        title="Campaign Log",
         fields=(BlockFieldSpec(key="notes_general", label="General"),),
     )
     block = DeclarativeBlock(data, character, spec)
@@ -175,8 +180,8 @@ def test_declarative_block_widget_seeds_and_writes_the_model(qapp: QApplication)
 def test_declarative_block_appears_on_the_sheet(qapp: QApplication, _home: Path) -> None:
     _write_blocks_mod(_home)
     sheet = CharacterSheet(load_game_data())
-    assert "notes" in sheet.block_keys()
-    block = sheet._sections_by_key["notes"]
+    assert "campaign_log" in sheet.block_keys()
+    block = sheet._sections_by_key["campaign_log"]
     assert isinstance(block, DeclarativeBlock)
     # It edits the sheet's shared character and can lock like any block.
     block._edits["notes_general"].setText("field note")

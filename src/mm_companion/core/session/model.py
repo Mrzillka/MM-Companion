@@ -118,17 +118,26 @@ KIND_ROLL = "roll"
 #: down: a hero point spent, a hero point granted. It carries ``text`` and none of
 #: the dice fields, and the server composes none of it (see :meth:`SessionState.record_note`).
 KIND_NOTE = "note"
+#: A roll somebody **asked** for and nobody has made: "everyone roll Perception vs
+#: DC 15". Like a note it has no die and no grade; unlike one it carries a ``spec``,
+#: which is what puts a 🎲 button on every client's card. Whoever clicks it
+#: rolls it on their own sheet — the asker's screen included (see
+#: :meth:`SessionState.record_request`).
+KIND_REQUEST = "request"
 
 
 @dataclass(frozen=True)
 class RollRecord:
-    """One entry in the shared history: a resolved roll, or a note.
+    """One entry in the shared history: a resolved roll, a note, or a request.
 
-    ``kind`` says which (:data:`KIND_ROLL` or :data:`KIND_NOTE`). One record type
-    covers both because the history *is* the log — seq-numbered, appended to
+    ``kind`` says which (:data:`KIND_ROLL`, :data:`KIND_NOTE` or
+    :data:`KIND_REQUEST`). One record type covers all three because the history
+    *is* the log — seq-numbered, appended to
     ``rolls.jsonl``, replayed to a late joiner, strikeable by the GM — and a note
     wants every one of those. A note leaves the dice fields at their defaults and
-    carries its sentence in ``text``; a roll leaves ``text`` empty.
+    carries its sentence in ``text``; a roll leaves ``text`` empty; a request
+    leaves both the die and the grade alone and says what it asks for in ``label``,
+    ``dc`` and ``spec``.
 
     A roll is resolved *server-side* (:func:`~mm_companion.core.dice.resolve_check`)
     and then broadcast, so the numbers are the server's, not a client's claim.
@@ -409,6 +418,35 @@ class SessionState:
             die=0,
             kind=KIND_NOTE,
             text=text,
+        )
+        self.rolls.append(record)
+        self.touch()
+        return record
+
+    def record_request(
+        self, *, player_id: str, player_name: str, label: str, dc: int | None, spec: dict | None
+    ) -> RollRecord:
+        """Append a request — a roll asked for, which nobody has made yet.
+
+        The third kind of entry, and it needs no new field on
+        :class:`RollRecord`: the trait's name goes in ``label``, the difficulty in
+        ``dc`` and the descriptor in ``spec``, all of which a roll already carries.
+        ``die`` stays 0, as a note's does, because nothing was thrown — every
+        client renders the button and whoever presses it rolls a record of their
+        own.
+
+        Takes its sequence number from the same counter, for the reason
+        :meth:`record_note` does: one ordered stream, and the GM can strike it.
+        """
+        record = RollRecord(
+            seq=self.next_seq(),
+            player_id=player_id,
+            player_name=player_name,
+            die=0,
+            dc=dc,
+            label=label,
+            kind=KIND_REQUEST,
+            spec=spec,
         )
         self.rolls.append(record)
         self.touch()

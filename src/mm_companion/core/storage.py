@@ -28,6 +28,7 @@ CHARACTERS_DIRNAME = "characters"
 GM_CHARACTERS_DIRNAME = "gm_characters"
 IMAGES_DIRNAME = "images"
 MODS_DIRNAME = "mods"
+NOTES_DIRNAME = "notes"
 SESSIONS_DIRNAME = "sessions"
 THEMES_DIRNAME = "themes"
 
@@ -45,9 +46,14 @@ EQUIPMENT_ENFORCE_WARN = "warn"
 EQUIPMENT_ENFORCE_BLOCK = "block"
 
 # How the dice roller lays itself out as a sheet block: reflowing to whatever room
-# it is given, or always in the shape compact mode uses. See ``dice_layout`` below.
+# it is given, or pinned to one of the two shapes worth choosing outright. See
+# ``dice_layout`` below.
 DICE_LAYOUT_AUTO = "auto"
 DICE_LAYOUT_COMPACT = "compact"
+DICE_LAYOUT_EXTENDED = "extended"
+#: The whole vocabulary, and the only place it is spelled out — both the reader and
+#: the writer below validate against this, so a fourth shape is one entry here.
+DICE_LAYOUTS = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT, DICE_LAYOUT_EXTENDED)
 
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
@@ -168,6 +174,16 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # alternative is per-session state on the server, and pins are a GM's private
     # scratch note, not table state.
     "gm_pins": {},
+    # Which GM cards are shrunk to their short form, keyed the way ``gm_pins`` is
+    # (``"npc:<file name>"``). Read through :func:`gm_collapsed_cards`.
+    #
+    # Persisted, unlike the sheet's lock or compact mode, and the difference is
+    # what the choice is *about*: those are one window's current view, while this
+    # is a standing judgement about one creature — the mooks stay shrunk and the
+    # villain stays open, and a GM should not have to say so again next week. Only
+    # the shrunk ones are stored, so a fresh workspace and a fresh NPC both start
+    # expanded.
+    "gm_collapsed": {},
     # Compact mode — the mini dice roller a window collapses to (see
     # :mod:`mm_companion.ui.compact`). Read through :func:`compact_settings`.
     #
@@ -181,11 +197,14 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # How the dice roller arranges itself as an ordinary sheet block.
     #
     # ``"auto"`` lets it reflow to whatever space it is given — a column in the
-    # narrow side strip, one row in a wide bottom one. ``"compact"`` pins the shape
-    # compact mode uses (the roll settings across the top, the quick rolls beside a
-    # smaller die), everywhere and always. It is a preference rather than a mode
-    # because that arrangement turned out to be a good roller in its own right, not
-    # just a way to fit a mini window.
+    # narrow side strip, one row in a wide bottom one. The other two pin a shape
+    # everywhere and always, whatever the room: ``"compact"`` the one compact mode
+    # uses (the roll settings across the top, the quick rolls beside a smaller die,
+    # the history under both) and ``"extended"`` the roll controls as a column
+    # beside a history filling the rest. Both are preferences rather than modes
+    # because each turned out to be a good roller in its own right — the first was
+    # only a way to fit a mini window, the second only what GM Mode happened to be
+    # built as.
     "dice_layout": DICE_LAYOUT_AUTO,
 }
 
@@ -215,6 +234,10 @@ class Workspace:
     @property
     def mods_dir(self) -> Path:
         return self.root / MODS_DIRNAME
+
+    @property
+    def notes_dir(self) -> Path:
+        return self.root / NOTES_DIRNAME
 
     @property
     def sessions_dir(self) -> Path:
@@ -258,6 +281,7 @@ def ensure_workspace() -> Workspace:
     workspace.gm_characters_dir.mkdir(parents=True, exist_ok=True)
     workspace.images_dir.mkdir(parents=True, exist_ok=True)
     workspace.mods_dir.mkdir(parents=True, exist_ok=True)
+    workspace.notes_dir.mkdir(parents=True, exist_ok=True)
     workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
     workspace.themes_dir.mkdir(parents=True, exist_ok=True)
     if not workspace.settings_file.exists():
@@ -371,6 +395,31 @@ def set_gm_default_pins(pins: dict) -> None:
     update_settings(gm_default_pins=merged)
 
 
+def gm_collapsed_cards() -> dict[str, bool]:
+    """Which GM cards are shrunk, keyed ``"npc:<file name>"``.
+
+    Read through here rather than off :func:`load_settings`, for the reason spelled
+    out on :func:`gm_default_pins`: the settings file comes back verbatim, so a
+    workspace older than this key answers ``None``. Unreadable entries are dropped
+    rather than raising — the worst a wrong answer here can do is open a card.
+    """
+    stored = load_settings().get("gm_collapsed")
+    if not isinstance(stored, dict):
+        return {}
+    return {key: bool(value) for key, value in stored.items() if isinstance(key, str)}
+
+
+def set_gm_collapsed_cards(collapsed: dict[str, bool]) -> None:
+    """Record which cards are shrunk, keeping only the ones that are.
+
+    Wholesale rather than merged, unlike :func:`set_gm_default_pins`: the caller is
+    the GM window, which holds every card there is, so what it passes *is* the
+    answer. Dropping the expanded ones keeps the file to the exceptions, and costs
+    nothing — absent means expanded, which is where a card starts.
+    """
+    update_settings(gm_collapsed={key: True for key, value in collapsed.items() if value})
+
+
 def clear_gm_card_pins() -> None:
     """Forget every card's own strip, so each seeds from the defaults again.
 
@@ -382,7 +431,7 @@ def clear_gm_card_pins() -> None:
 
 
 def dice_layout() -> str:
-    """How the dice roller arranges itself as a block — ``auto`` or ``compact``.
+    """How the dice roller arranges itself as a block — one of :data:`DICE_LAYOUTS`.
 
     The one seam the UI consults, defaulting to :data:`DICE_LAYOUT_AUTO` when unset
     or unrecognized — the same shape :func:`pl_enforcement` has, and needed for the
@@ -390,13 +439,12 @@ def dice_layout() -> str:
     older than this key answers ``None``.
     """
     value = load_settings().get("dice_layout", DICE_LAYOUT_AUTO)
-    return value if value in (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT) else DICE_LAYOUT_AUTO
+    return value if value in DICE_LAYOUTS else DICE_LAYOUT_AUTO
 
 
 def set_dice_layout(layout: str) -> None:
     """Choose how the dice roller arranges itself; an unknown value means ``auto``."""
-    known = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT)
-    update_settings(dice_layout=layout if layout in known else DICE_LAYOUT_AUTO)
+    update_settings(dice_layout=layout if layout in DICE_LAYOUTS else DICE_LAYOUT_AUTO)
 
 
 def compact_settings() -> dict:

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -33,7 +34,7 @@ from mm_companion import __version__
 from mm_companion.core import library, storage
 from mm_companion.core.library import CharacterSummary, list_saved_characters
 from mm_companion.core.session.client import SessionClientError
-from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.session_bridge import SessionBridge
 
@@ -184,15 +185,32 @@ class StartWindow(QMainWindow):
 
     def _build_library(self) -> QScrollArea:
         """The right-hand scroll area holding one card per saved character."""
-        self._cards_container = QWidget()
+        # A FlowContainer, so the library reports the height its wrapped rows really
+        # need: a bare host claims one row's worth, and every card past the first row
+        # is clipped with no scroll bar to reach it.
+        self._cards_container = FlowContainer()
         self._cards_flow = FlowLayout(self._cards_container)
 
         self._empty_label = QLabel("No characters yet")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setEnabled(False)
 
+        # One host for the scroll area's whole life, with the grid and the empty state
+        # taking turns inside it. ``QScrollArea.setWidget`` *deletes* whatever it was
+        # already holding, so swapping these two in and out of it destroyed the one
+        # being put away: delete your only character and the empty state took the card
+        # grid with it, then creating the next one reached for the freed FlowLayout.
+        # A stacked layout is the swap without the funeral — it shows exactly one of
+        # them and owns both — and it still hands the visible one the whole viewport,
+        # which is what centres the empty state and lets the grid scroll.
+        host = QWidget()
+        self._library_stack = QStackedLayout(host)
+        self._library_stack.addWidget(self._cards_container)
+        self._library_stack.addWidget(self._empty_label)
+
         self._library = QScrollArea()
         self._library.setWidgetResizable(True)
+        self._library.setWidget(host)
         self._populate_cards()
         return self._library
 
@@ -207,7 +225,7 @@ class StartWindow(QMainWindow):
 
         summaries = list_saved_characters()
         if not summaries:
-            self._library.setWidget(self._empty_label)
+            self._library_stack.setCurrentWidget(self._empty_label)
             return
 
         for summary in summaries:
@@ -215,7 +233,7 @@ class StartWindow(QMainWindow):
             card.clicked.connect(self._open_summary)
             card.deleteRequested.connect(self._delete_summary)
             self._cards_flow.addWidget(card)
-        self._library.setWidget(self._cards_container)
+        self._library_stack.setCurrentWidget(self._cards_container)
 
     def _create_new_character(self) -> None:
         """Open a fresh, editable character sheet, hiding the launcher behind it."""

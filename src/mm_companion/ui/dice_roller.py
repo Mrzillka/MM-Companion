@@ -43,12 +43,14 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from dataclasses import replace
 
 from PySide6.QtCore import QElapsedTimer, QMimeData, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
+    QComboBox,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -58,6 +60,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QVBoxLayout,
@@ -67,7 +70,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 from mm_companion.core.rules import RollSpec
-from mm_companion.core.session.model import KIND_NOTE
+from mm_companion.core.session.model import KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
@@ -75,8 +78,10 @@ from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
     HISTORY_SIZE_HINT,
     MAX_QUICK_ROLLS,
+    MIN_HISTORY_WIDTH,
     NoteCard,
     QuickRollStar,
+    RequestCard,
     RollHistoryPanel,
     chain_widgets,
     degree_label,
@@ -370,6 +375,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: panel now needs.
     contentChanged = Signal()
 
+    #: The Request row's button was pressed — ask the table to roll this
+    #: :class:`~mm_companion.core.rules.RollSpec`. The panel neither sends it nor
+    #: rolls it: where a request goes is the same question its host already answers
+    #: for a note (the session, or the private history), and the panel has no
+    #: session of its own to answer it with.
+    rollRequested = Signal(object)
+
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
         self._hidden_option = hidden_option
@@ -389,6 +401,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._spec: RollSpec | None = None
         # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
         self._localizer: Callable[[RollSpec], RollSpec] | None = None
+        # The traits the Request row offers, pushed in by the host (the panel reads
+        # no game data) — see :meth:`set_roll_choices`. Empty until it is, which is
+        # why the row starts hidden.
+        self._request_specs: list[RollSpec] = []
         self._quick_rolls: list[dict] = self._load_quick_rolls()
         # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
         # in which case the width-driven reflow stands down — and the two separate
@@ -396,7 +412,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # user prefers this shape everywhere.
         self._compact = False
         self._window_compact = False
-        self._prefer_compact = storage.dice_layout() == storage.DICE_LAYOUT_COMPACT
+        # The user's chosen shape, one of ``storage.DICE_LAYOUTS``. Compact is the
+        # panel's own business; Extended is the *view's* (it pins the splitter's
+        # axis) and reaches the panel only as the column lock below — under it the
+        # controls stay stacked however wide the block, which is what makes Extended
+        # the controls-beside-the-history shape rather than a row of four.
+        self._preference = storage.dice_layout()
+        self._column_locked = False
 
         # The three reflowing parts, in order. The layout's *direction* is what the
         # reflow changes, so the parts are added once and never re-parented.
@@ -466,30 +488,42 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._box.insertStretch(self._box.indexOf(self._quick_part))
 
     def sync_reflow(self) -> bool:
-        """Re-run the width-driven reflow — unless the compact shape is in force.
+        """Re-run the width-driven reflow — unless a chosen shape is in force.
 
-        The compact shape is *chosen* — by the window shrinking, or by the user's
-        preference — rather than derived from the room available, so the reflow
-        stands down entirely while it lasts. Without this the panel would flip
-        itself back to a plain column the first time it was resized.
+        Both the compact shape and Extended's column lock are *chosen* — by the
+        window shrinking, or by the user's preference — rather than derived from
+        the room available, so the reflow stands down entirely while either lasts.
+        Without this the panel would flip itself back out of the chosen shape the
+        first time it was resized.
         """
-        if self._compact:
+        if self.shape_locked:
             return False
         return super().sync_reflow()
+
+    @property
+    def shape_locked(self) -> bool:
+        """Whether this panel's arrangement is chosen rather than derived.
+
+        True under Compact and under Extended alike. What it is for is telling the
+        view how much width to offer: a panel that will not reflow wants what it
+        actually asks for, never the width of an arrangement it is not going to
+        adopt.
+        """
+        return self._compact or self._column_locked
 
     def set_compact(self, compact: bool) -> None:
         """Whether the *window* has shrunk to this roller alone."""
         self._window_compact = bool(compact)
         self._apply_shape()
 
-    def set_layout_preference(self, compact: bool) -> None:
-        """Whether the user has asked for the compact shape everywhere, always.
+    def set_layout_preference(self, layout: str) -> None:
+        """The shape the user has asked for everywhere, always — a ``DICE_LAYOUT_*``.
 
         The other of the two reasons this panel might be compact, and they are kept
         apart on purpose: leaving compact mode must not undo the preference, which
         one shared flag would have done the first time someone expanded the window.
         """
-        self._prefer_compact = bool(compact)
+        self._preference = layout if layout in storage.DICE_LAYOUTS else storage.DICE_LAYOUT_AUTO
         self._apply_shape()
 
     def _apply_shape(self) -> None:
@@ -507,8 +541,23 @@ class DiceRollerPanel(ReflowBox, QWidget):
         the reflow never does; that is why each direction ends by handing them back
         to a layout before the old one can be emptied.
         """
-        compact = self._window_compact or self._prefer_compact
+        compact = self._window_compact or self._preference == storage.DICE_LAYOUT_COMPACT
+        # Extended keeps the controls stacked; the view puts the history beside
+        # them. Compact wins outright — a window shrunk to the roller alone has no
+        # room for anything else, whatever the preference says.
+        column_locked = not compact and self._preference == storage.DICE_LAYOUT_EXTENDED
+        if compact == self._compact and column_locked == self._column_locked:
+            return
+        self._column_locked = column_locked
         if compact == self._compact:
+            # Only the lock moved, so the parts are already where they belong and
+            # all that is left is to settle the axis it demands.
+            if column_locked:
+                self.force_reflow(False)
+            else:
+                self.sync_reflow()
+            self.updateGeometry()
+            self.contentChanged.emit()
             return
         self._compact = compact
         if compact:
@@ -538,7 +587,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
             # The reflow owns the arrangement again, and the width it last decided
             # from is the mini window's — so re-derive it rather than trusting it.
             self.apply_reflow(self.is_row)
-            self.sync_reflow()
+            if column_locked:
+                self.force_reflow(False)
+            else:
+                self.sync_reflow()
         self.updateGeometry()
         self.contentChanged.emit()
 
@@ -585,10 +637,113 @@ class DiceRollerPanel(ReflowBox, QWidget):
             "to a player, so there is nothing for them to see."
         )
         self._hidden_check.setVisible(self._hidden_option)
+        row = 4
         if self._hidden_option:
-            grid.addWidget(self._hidden_check, 4, 0, 1, 3)
+            grid.addWidget(self._hidden_check, row, 0, 1, 3)
+            row += 1
 
+        self._build_request_row(grid, row)
         return group
+
+    def _build_request_row(self, grid: QGridLayout, row: int) -> None:
+        """The Request row: a trait, a difficulty, and a button that asks the table.
+
+        Below the roll's own controls because it is a different verb — everything
+        above rolls something *here*, and this asks somebody else to. It borrows
+        their caption column so the two read as one form, but spans the rest of the
+        grid itself: see the button, below.
+
+        The DC box is a plain spin box where **0 means no DC**, deliberately unlike
+        the Difficulty Class row above it. That row's checkbox exists because the
+        panel has to tell "no DC" from "DC 0" for a roll it grades; a request is
+        graded on the answerer's screen against whatever they end up rolling, and
+        "ask for a roll against DC 0" is not a thing anyone means. One control
+        beats two in a row that is already three wide.
+
+        The whole row is hidden until a host supplies traits
+        (:meth:`set_roll_choices`), so a roller with no ruleset behind it is the
+        panel it always was.
+        """
+
+        self._request_part = QWidget()
+        line = QHBoxLayout(self._request_part)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(int(theme.metric("space.xs")))
+
+        self._request_combo = QComboBox()
+        self._request_combo.setToolTip("What to ask the table to roll")
+        # Short on purpose: a placeholder is measured into the combo's size hint even
+        # when the minimum-contents policy below has capped everything else, so a
+        # roomier "— choose a trait —" would cost the block a hundred pixels of width
+        # to say what the "Request" caption beside it already says.
+        self._request_combo.setPlaceholderText("Trait…")
+        # A combo box asks to be as wide as its longest entry, and the longest here
+        # is a skill name the *ruleset* chose. Left alone that made the whole Dice
+        # block — and so the pinned strip holding it — demand half again the width
+        # it needs, for a row that is not even the point of the panel. So it shrinks
+        # and stretches instead, exactly as the Power Constructor's term combos do:
+        # the popup still shows every name in full, which is where they are read.
+        self._request_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._request_combo.setMinimumContentsLength(8)
+        self._request_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # And an explicit floor, which *replaces* the hint-derived one rather than
+        # raising it (``qSmartMinSize``) — so this, and not the longest skill name,
+        # is how narrow the row can be squeezed. It is also what holds the *panel*
+        # open in the split shape, where the splitter hands the controls exactly
+        # their minimum and every spare pixel to the history: drop it and the die
+        # and its result line lose that width, wrapping the readout against the
+        # block's border. A trait name is worth about this much either way.
+        self._request_combo.setMinimumWidth(int(theme.metric("column.request-trait")))
+        guard_wheel(self._request_combo)
+        self._request_combo.currentIndexChanged.connect(self._on_request_trait_changed)
+        line.addWidget(self._request_combo, stretch=1)
+
+        # Arrowless, and Fixed so every spare pixel in this cell goes to the combo
+        # beside it. The theme reserves a right-hand column for the arrows the
+        # platform style draws — 50px under ``windows11`` — which here is more than
+        # the two digits it frames: with them the number took 148px of a 210px cell
+        # and the trait name was clipped to "Trai". The same trade the sheet's own
+        # rank grids make, and the reason ``buttons=False`` exists.
+        self._request_dc = make_spin_box(0, 60, value=0, buttons=False)
+        self._request_dc.setToolTip("The difficulty to ask for — 0 for no DC")
+        self._request_dc.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        line.addWidget(self._request_dc)
+
+        # In the row rather than the grid's third column, and Fixed so it is exactly
+        # as wide as the word on it. That column is sized by the Bonus and Penalty
+        # spin boxes above — two digits framed by fifty pixels of arrow column — and
+        # a button parked in it was stretched to match, spending on "Ask" the width
+        # the combo beside it needed to show a skill's name. Spanning both columns
+        # instead hands the difference to the combo, which is the one thing in this
+        # row worth widening.
+        self._request_button = QPushButton("Ask")
+        self._request_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._request_button.setToolTip(
+            "Put this roll in everyone's history, for them to roll on their own sheet"
+        )
+        self._request_button.clicked.connect(self._emit_request)
+        line.addWidget(self._request_button)
+
+        grid.addWidget(QLabel("Request"), row, 0)
+        grid.addWidget(self._request_part, row, 1, 1, 2)
+        self._request_label = grid.itemAtPosition(row, 0).widget()
+        self._show_request_row(False)
+
+    def _show_request_row(self, visible: bool) -> None:
+        """Show or hide the Request row as one thing, and say the panel changed size.
+
+        The ``contentChanged`` is not optional: a splitter child with no stretch
+        keeps the pixels it was given, so without it the view never re-divides and
+        the block keeps the room a row it no longer shows was using (or grows past
+        the window for one it now does).
+        """
+
+        for widget in (self._request_label, self._request_part, self._request_button):
+            widget.setVisible(visible)
+        self.updateGeometry()
+        self.contentChanged.emit()
 
     def _build_spec_chip(self) -> QWidget:
         """The strip naming what the sheet asked to roll — hidden until it does.
@@ -662,6 +817,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._readout.setWordWrap(True)
         self._readout.setTextFormat(Qt.TextFormat.RichText)
+        # Side margins because this is the widest thing in the panel and the only
+        # one not inside a group box: the die above it is a fixed square with room
+        # to spare, while a named roll ("Close Attack (Enhanced Strength)") is as
+        # long as the power it came from and wraps at whatever width the panel has.
+        # Without them it wraps flush against the block's own border, which reads as
+        # text that has overflowed rather than text that has wrapped.
+        pad = int(theme.metric("space.lg"))
+        self._readout.setContentsMargins(pad, 0, pad, 0)
         column.addWidget(self._readout)
         return part
 
@@ -708,6 +871,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._dc_check,
             self._dc_spin,
             self._hidden_check,
+            self._request_combo,
+            self._request_dc,
+            self._request_button,
             self._quick_container,
         ]
 
@@ -731,6 +897,101 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """
         self._localizer = localizer
 
+    # -- asking the table to roll --------------------------------------------
+
+    def set_roll_choices(self, groups: object) -> None:
+        """Fill the Request row's combobox from *groups*, or hide the row.
+
+        *groups* is what
+        :func:`~mm_companion.core.rules.pins.requested_roll_choices` returns — a
+        list of titled groups of values, each carrying a template
+        :class:`~mm_companion.core.rules.RollSpec`. The panel is handed the answer
+        rather than the game data, exactly as it is handed a localizer rather than
+        a character: it reads no ruleset, so a host that has none (or a mod with
+        nothing to offer) simply gets the panel as it was before this row existed.
+
+        The group titles go in as disabled items, the way the Power Constructor's
+        trait combo does it — a section heading in a combo box has no other home.
+        """
+
+        self._request_combo.blockSignals(True)
+        self._request_combo.clear()
+        self._request_specs = []
+
+        for group in groups or ():
+            values = [v for v in getattr(group, "values", ()) if v.spec is not None]
+            if not values:
+                continue
+            self._request_combo.addItem(getattr(group, "title", ""))
+            self._request_specs.append(None)
+            for value in values:
+                self._request_combo.addItem(f"  {value.label}")
+                self._request_specs.append(value.spec)
+
+        self._request_combo.blockSignals(False)
+        self._disable_request_headings()
+        # No entry is selected to begin with: a combo that opens on the first trait
+        # would make "Ask" send whatever happened to be first in the ruleset to a
+        # table nobody had chosen anything for.
+        self._request_combo.setCurrentIndex(-1)
+        self._sync_request_button()
+        self._show_request_row(any(spec is not None for spec in self._request_specs))
+
+    def _disable_request_headings(self) -> None:
+        """Grey the group titles so only the traits under them can be picked."""
+
+        model = self._request_combo.model()
+        for row, spec in enumerate(self._request_specs):
+            if spec is None:
+                item = model.item(row)
+                if item is not None:
+                    item.setEnabled(False)
+
+    def _requested_spec(self) -> RollSpec | None:
+        """The trait the Request row names, with its DC folded in, or ``None``.
+
+        ``dc`` of 0 is *no* DC and not a difficulty of zero — see
+        :meth:`_build_request_row`.
+        """
+
+        index = self._request_combo.currentIndex()
+        if not 0 <= index < len(self._request_specs):
+            return None
+        spec = self._request_specs[index]
+        if spec is None:
+            return None
+        dc = self._request_dc.value()
+        return replace(spec, dc=dc or None)
+
+    def _on_request_trait_changed(self) -> None:
+        """Re-check the button, and say in the tooltip what the combo may be clipping.
+
+        In the pinned strip this combo is the width the block can spare, which is
+        rarely the width of a skill name — the same elide-plus-tooltip bargain
+        ``ElidingLabel`` strikes, and the only one available: a combo box does not
+        tooltip its own clipped text.
+        """
+
+        self._sync_request_button()
+        chosen = self._requested_spec()
+        self._request_combo.setToolTip(
+            f"Ask the table to roll {chosen.label}" if chosen else "What to ask the table to roll"
+        )
+
+    def _sync_request_button(self) -> None:
+        """The Ask button is live only once a real trait is picked."""
+
+        if self._rolling:
+            return
+        self._request_button.setEnabled(self._requested_spec() is not None)
+
+    def _emit_request(self) -> None:
+        """Hand the chosen trait up to whoever knows where a request goes."""
+
+        spec = self._requested_spec()
+        if spec is not None:
+            self.rollRequested.emit(spec)
+
     def load_spec(self, spec: RollSpec | None) -> None:
         """Load *spec* as the thing this panel rolls, or ``None`` to go back to manual.
 
@@ -739,13 +1000,23 @@ class DiceRollerPanel(ReflowBox, QWidget):
         own DC (a power's save) ticks the DC box and fills it in, so the number it
         will roll against is visible rather than implied; a spec without one leaves
         the box exactly as the player left it.
+
+        Clearing the chip takes that DC back off again. It was left ticked, so every
+        later manual roll went on being graded against a difficulty belonging to a
+        trait that was no longer loaded — and the ✕ on the chip is precisely the
+        gesture for "forget what I loaded". Only a DC this method set is withdrawn;
+        one the player typed themselves is theirs.
         """
         if spec is not None and self._localizer is not None:
             spec = self._localizer(spec)
+        had_own_dc = self._spec is not None and self._spec.dc is not None
         self._spec = spec
         if spec is not None and spec.dc is not None:
             self._dc_check.setChecked(True)
             self._dc_spin.setValue(spec.dc)
+        elif had_own_dc:
+            self._dc_check.setChecked(False)
+            self._dc_spin.setValue(0)
         self._spec_chip.setVisible(spec is not None)
         if spec is not None:
             self._spec_label.setText(spec_caption(spec))
@@ -844,14 +1115,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
         its animation even once the number is known, so a fast answer does not
         cut the roll short.
 
-        The history feed carries notes as well as rolls, and one of ours can land
-        mid-tumble (spending a hero point on the attack being rolled is exactly
-        when it would). A note has no die, so taking one for the answer would
-        settle the d20 on zero — hence the ``kind`` check, not just the seat.
+        The history feed carries notes and requests as well as rolls, and one of
+        ours can land mid-tumble (spending a hero point on the attack being rolled
+        is exactly when it would). Neither has a die, so taking one for the answer
+        would settle the d20 on zero — hence the check is "is this a die roll",
+        not just the seat and not merely "is this not a note".
         """
         if not self._awaiting or not isinstance(roll, dict):
             return
-        if roll.get("kind") == KIND_NOTE:
+        if roll.get("kind", KIND_ROLL) != KIND_ROLL:
             return
         if str(roll.get("player_id", "")) != self._own_id:
             return
@@ -968,6 +1240,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
             widget.setEnabled(True)
         # The DC spin follows its checkbox, not the blanket re-enable above.
         self._dc_spin.setEnabled(self._dc_check.isChecked())
+        # And the Ask button follows whether a trait is chosen, for the same reason.
+        self._sync_request_button()
 
     def _update_readout(
         self,
@@ -1209,6 +1483,10 @@ class LocalRollHistory(QWidget):
         # star agrees; see :meth:`set_quick_roll_state`.
         self._saved_keys: set = set()
         self._quick_room = True
+        # Ids for the cards that need one to be removed by; negative, as the shared
+        # history's pre-hosting entries are, so they can never collide with a
+        # sequence number the server hands out.
+        self._offline_seq = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1274,6 +1552,34 @@ class LocalRollHistory(QWidget):
         card = NoteCard({"text": text}, show_author=False)
         self._layout.insertWidget(0, card)
 
+    def add_request(self, spec: object) -> None:
+        """Write a requested roll that reached nobody — the off-air twin of one.
+
+        Asking the table with no table is still worth a card: the button rolls the
+        trait here, which makes the row a way of parking a roll for later even
+        solo. Unlike :meth:`add_note` it *keeps* its author line — "Requested by
+        you" — because a bare button says nothing about where it came from, and a
+        parked request read back an hour later is otherwise indistinguishable from
+        the follow-up chip a roll left behind.
+
+        And it can be thrown away like every other card in this list. A private
+        card needs no permission (the ``can_remove`` gate is the shared log's, where
+        striking an entry is the GM's), only an id to be struck by — so it takes a
+        negative sequence number, the same convention a pre-hosting roll uses.
+        """
+        self._offline_seq -= 1
+        card = RequestCard(
+            {
+                "seq": self._offline_seq,
+                "player_name": "you",
+                "spec": spec.to_dict() if isinstance(spec, RollSpec) else spec,
+            },
+            can_remove=True,
+        )
+        card.rollRequested.connect(self.rollFollowUp)
+        card.removeRequested.connect(lambda _seq, c=card: self._remove_card(c))
+        self._layout.insertWidget(0, card)
+
     def cards(self) -> list[RollCard]:
         """The roll cards on screen, newest first (notes carry no parameters)."""
         found = []
@@ -1284,7 +1590,8 @@ class LocalRollHistory(QWidget):
                 found.append(widget)
         return found
 
-    def _remove_card(self, card: RollCard) -> None:
+    def _remove_card(self, card: QWidget) -> None:
+        """Drop one card from the list — a roll's ``−`` or a request's ``✕``."""
         self._layout.removeWidget(card)
         card.setParent(None)
         card.deleteLater()
@@ -1307,6 +1614,17 @@ class DiceRollerView(ReflowBox, QWidget):
     1. one column of four — the narrow right-hand pinned strip;
     2. ``[settings / die / quick rolls] [history]`` — a medium block;
     3. one row of four — a short, wide bottom strip.
+
+    That is the ``auto`` layout. The user can instead *choose* a shape and have it
+    everywhere: ``compact`` is the panel's business (see
+    :meth:`DiceRollerPanel._apply_shape`), while ``extended`` is this view's — it
+    pins the second arrangement above, the controls as a column beside a history
+    filling the rest, whatever the room. See :func:`mm_companion.core.storage.dice_layout`.
+
+    *history* is for a host that owns its own history panel and only wants the
+    arrangement: GM Mode passes its ``gm=True`` one, which follows the table (or
+    the log on disk between sessions) rather than the private/shared pair this view
+    would otherwise swap between.
     """
 
     def __init__(
@@ -1314,10 +1632,17 @@ class DiceRollerView(ReflowBox, QWidget):
         parent: QWidget | None = None,
         *,
         hidden_option: bool = False,
+        history: RollHistoryPanel | None = None,
     ) -> None:
         super().__init__(parent)
         self.panel = DiceRollerPanel(hidden_option=hidden_option)
-        self.panel.localRoll.connect(self._add_local_card)
+        # A history handed in by the host stands in for both of the ones below, and
+        # takes its attachment to the session with it: what the GM's panel shows off
+        # the air is last night's persisted log, which this view knows nothing about.
+        # So everything session-shaped here stands down when there is one.
+        self._given_history = history
+        if history is None:
+            self.panel.localRoll.connect(self._add_local_card)
         # Held so the same object can be disconnected again; a fresh lambda per
         # sync would leave the old one attached and stack up.
         self._session_bridge: SessionBridge | None = None
@@ -1344,6 +1669,9 @@ class DiceRollerView(ReflowBox, QWidget):
         # make from its own width is meaningless — and would be made against parts
         # that are being laid out by somebody else.
         self._lent = False
+        # The user's chosen shape (see :meth:`sync_dice_layout`). Only ``extended``
+        # means anything to this view; ``compact`` is the panel's own.
+        self._preference = storage.dice_layout()
         self._splitter.splitterMoved.connect(self._on_handle_dragged)
         # A resize arrives before the parts' own minimums have settled — the pinned
         # strip converges its thickness over several deferred turns — and the division
@@ -1359,6 +1687,10 @@ class DiceRollerView(ReflowBox, QWidget):
         layout.addWidget(self._splitter)
 
         self.init_reflow()
+        # And then, if the user prefers it, straight into the locked row — the
+        # reflow has to have laid the parts out once before the axis can be pinned.
+        if self._row_locked():
+            self.force_reflow(True)
         self._sync_session()
         self._sync_quick_roll_state()  # the strip may have been restored with chips in it
 
@@ -1413,6 +1745,19 @@ class DiceRollerView(ReflowBox, QWidget):
         whatever is left, which is the lion's share of a wide strip.
         """
         available = self.reflow_available_width()
+        if self._shape_locked():
+            # A chosen shape gets the width it actually asks for — never the
+            # row-of-three width the auto branch below measures, which is a
+            # different arrangement entirely and would leave the controls stretched
+            # across half the block with the history squeezed beside them.
+            #
+            # Both chosen shapes, not just Extended. Compact pins the panel just as
+            # hard, and measuring it as a row handed it two-thirds of a wide block —
+            # the exact opposite of what somebody picking Compact asked for.
+            floor = self.panel.column_minimum_width()
+            wanted = max(floor, self.panel.sizeHint().width())
+            wanted = min(wanted, max(floor, available - MIN_HISTORY_WIDTH))
+            return [wanted, max(1, available - wanted)]
         floor = self.panel.row_minimum_width() + self.REFLOW_HYSTERESIS
         spare = available - self._history_part.minimumSizeHint().width()
         if spare < floor:
@@ -1440,11 +1785,57 @@ class DiceRollerView(ReflowBox, QWidget):
         self._divide_row()
         self._settle.start(0)  # and again once everything has settled
 
+    def _shape_locked(self) -> bool:
+        """Whether the panel's arrangement is chosen, by either preference.
+
+        The question :meth:`_row_sizes` asks, and a wider one than
+        :meth:`_row_locked`: what matters there is only that the panel will not
+        reflow, so offering it a shape's width it will never adopt is wrong under
+        Compact for exactly the reason it is wrong under Extended.
+        """
+        return self.panel.shape_locked and not self._lent
+
+    def _row_locked(self) -> bool:
+        """Whether the user has pinned the side-by-side (Extended) arrangement.
+
+        Not while the parts are lent to a compact window: that window lays them out
+        itself, and compact mode wins over the preference the same way it does in
+        the panel.
+        """
+        return self._preference == storage.DICE_LAYOUT_EXTENDED and not self._lent
+
     def sync_reflow(self) -> bool:
-        """Re-run the width-driven reflow — unless the parts are out on loan."""
+        """Re-run the width-driven reflow — unless the shape is spoken for.
+
+        Either because the parts are out on loan to a compact window, or because
+        Extended has pinned the axis; a locked row still gets re-divided by the
+        ``resizeEvent`` that follows, since the panel's *share* of it moves with
+        the width even when the axis does not.
+        """
         if self._lent:
             return False
+        if self._row_locked():
+            return self.force_reflow(True)
         return super().sync_reflow()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """The row's width while Extended is locked, the column's otherwise.
+
+        :meth:`ReflowBox.minimumSizeHint` reports the column arrangement's width
+        whatever axis is in use, because a reflowing widget can always narrow by
+        flipping. A locked row cannot — the shape is chosen, not derived — so it
+        has to hold the block open (and through it the pinned strip and the window)
+        at what the two parts really need side by side.
+        """
+        hint = super().minimumSizeHint()
+        if not self._row_locked():
+            return hint
+        row = (
+            self.panel.column_minimum_width()
+            + self.REFLOW_SPACING
+            + self._history_part.minimumSizeHint().width()
+        )
+        return QSize(row, hint.height())
 
     def _divide_row(self) -> None:
         """Re-divide a row between the panel and the history (a no-op otherwise)."""
@@ -1480,12 +1871,18 @@ class DiceRollerView(ReflowBox, QWidget):
         self._redivide()
         self._settle.start(0)
 
+    def _histories(self) -> tuple[QWidget, ...]:
+        """The history panels this view drives — the injected one, or its own pair."""
+        if self._given_history is not None:
+            return (self._given_history,)
+        return (self._local_history, self._session_history)
+
     def _sync_quick_roll_state(self) -> None:
         """Push the strip's contents into whichever history is on screen."""
         keys = self.panel.quick_roll_keys()
         room = not self.panel.quick_rolls_full()
-        self._local_history.set_quick_roll_state(keys, room)
-        self._session_history.set_quick_roll_state(keys, room)
+        for history in self._histories():
+            history.set_quick_roll_state(keys, room)
 
     # -- construction --------------------------------------------------------
 
@@ -1493,6 +1890,20 @@ class DiceRollerView(ReflowBox, QWidget):
         holder = QWidget()
         outer = QVBoxLayout(holder)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        if self._given_history is not None:
+            # One box, always shown: the host's history is already the right one for
+            # whatever state the session is in, so there is nothing to swap between.
+            box = QGroupBox("Rolls")
+            box_layout = QVBoxLayout(box)
+            box_layout.addWidget(self._given_history)
+            self._given_history.saveToggled.connect(self.panel.toggle_quick_roll)
+            self._given_history.rollFollowUp.connect(self.panel.roll_spec)
+            # Hold this app's own roll until its die stops tumbling; the roller cues it.
+            self._given_history.set_defer_own(True)
+            self.panel.sessionRollRevealed.connect(self._given_history.release_roll)
+            outer.addWidget(box)
+            return holder
 
         self._local_box = QGroupBox("History")
         local_layout = QVBoxLayout(self._local_box)
@@ -1531,6 +1942,10 @@ class DiceRollerView(ReflowBox, QWidget):
         self._sync_session()
 
     def _sync_session(self) -> None:
+        if self._given_history is not None:
+            # The host owns the attachment (GM Mode's history follows the bridge
+            # while there is one and the workspace's saved log when there is not).
+            return
         bridge = live_session()
         if bridge is not self._session_bridge:
             self._follow(bridge)
@@ -1573,13 +1988,25 @@ class DiceRollerView(ReflowBox, QWidget):
         In a session the note goes to the server instead and comes back through the
         shared history like any other entry, so this is only ever the fallback.
         """
-        self._local_history.add_note(text)
+        if self._given_history is None:
+            self._local_history.add_note(text)
+
+    def add_local_request(self, spec: object) -> None:
+        """Put a requested roll in the private history — the off-air fallback.
+
+        The twin of :meth:`add_local_note`, and hollow for the same reason when a
+        host supplies its own history: in a session the request goes to the server
+        and comes back through the shared one.
+        """
+        if self._given_history is None:
+            self._local_history.add_request(spec)
 
     # -- lifecycle -----------------------------------------------------------
 
     def detach(self) -> None:
         """Let go of the session — the host block or window is going away."""
-        self._session_history.detach()
+        if self._given_history is None:
+            self._session_history.detach()
         self._follow(None)
 
     # -- compact mode --------------------------------------------------------
@@ -1605,7 +2032,25 @@ class DiceRollerView(ReflowBox, QWidget):
 
     def sync_dice_layout(self) -> None:
         """Re-read the layout preference — the Settings page just changed it."""
-        self.panel.set_layout_preference(storage.dice_layout() == storage.DICE_LAYOUT_COMPACT)
+        self.set_layout(storage.dice_layout())
+
+    def set_layout(self, layout: str) -> None:
+        """Take a chosen shape: this view's axis, and the panel's own arrangement.
+
+        The two halves of one preference, which is why they are set together from
+        one place rather than each reading the setting for itself.
+        """
+        self._preference = layout if layout in storage.DICE_LAYOUTS else storage.DICE_LAYOUT_AUTO
+        self.panel.set_layout_preference(self._preference)
+        # The axis first (locked or back under the room's control), then the
+        # division, which has to be re-run whether or not the axis moved: the panel
+        # has just changed shape, so its share of a row it was already in is the
+        # wrong one. The usual second pass, since the parts' hints only tell the
+        # truth on the following turn.
+        self.sync_reflow()
+        self._user_sized = False  # a chosen shape is not the one a handle was dragged to
+        self._redivide()
+        self._settle.start(0)
 
     def restore_roller(self) -> None:
         """Take the panel and the history back into the splitter."""

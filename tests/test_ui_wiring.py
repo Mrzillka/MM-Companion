@@ -132,7 +132,9 @@ def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
     card.clicked.emit()
 
     assert fired  # the section signals a runtime change so the sheet re-derives
-    assert not dirtied  # ...but a runtime toggle is not persisted, so it isn't an edit
+    # ...and marks the sheet dirty with it: what is switched on is saved with the
+    # build now, so a toggle nobody called an edit would be lost on close.
+    assert dirtied
     assert char.powers[0].item_present is False
     assert resistance_total(char, data, "TOUGHNESS") == 0
 
@@ -242,6 +244,7 @@ def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
         "skills",
         "powers",
         "equipment",
+        "notes",
         "dice",
     }
     # Every block is placed exactly once across the arrangement — the rows on the
@@ -481,13 +484,39 @@ def test_active_growth_shows_the_effective_size(qapp: QApplication) -> None:
     assert sheet.system_info._size_effective.text() == "→ Huge"
 
 
+def test_speed_readout_names_each_mode_and_runs_only_on_the_ground(qapp: QApplication) -> None:
+    """The worked example from the design: a walker who also flies."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    flight = Power(name="Fly", effects=[PowerEffectInstance("flight", rank=2)])
+    flight.activated = True
+    char.powers = [flight]
+    sheet = CharacterSheet(data, char)
+
+    assert sheet.system_info._speed.rendered_text() == (
+        "Ground speed: 15 ft / 30 ft / 60 ft\nFlight: 30 ft / 60 ft"
+    )
+
+
+def test_a_speed_power_makes_the_ground_line_faster(qapp: QApplication) -> None:
+    """Every rank bought counts: the ground line is a sum, not a ``max``."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    speed = Power(name="Fast", effects=[PowerEffectInstance("speed", rank=1)])
+    speed.activated = True
+    char.powers = [speed]
+    sheet = CharacterSheet(data, char)
+
+    assert sheet.system_info._speed.rendered_text() == "Ground speed: 30 ft / 60 ft / 120 ft"
+
+
 def test_speed_unit_toggle_switches_to_km_per_hour(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     speed = sheet.system_info._speed
 
-    assert "ft" in speed._lines_label.text()
+    assert "ft" in speed.rendered_text()
     speed._toggle_unit()
-    assert "km/h" in speed._lines_label.text()
+    assert "km/h" in speed.rendered_text()
 
 
 def test_disabled_condition_lowers_the_initiative_readout(qapp: QApplication) -> None:
@@ -516,9 +545,8 @@ def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
     apply_condition(sheet.character, "hindered", data)  # -1 speed rank
     sheet.system_info.refresh_derived()
 
-    text = sheet.system_info._speed._lines_label.text()
-    assert "-1 rank" in text
-    assert theme.color("tint.worse") in text
+    assert "-1 rank" in sheet.system_info._speed.rendered_text()
+    assert theme.color("tint.worse") in sheet.system_info._speed.rendered_styles()
     assert "slowed" in sheet.system_info._speed.toolTip()
 
 
@@ -531,9 +559,8 @@ def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplicatio
     apply_condition(sheet.character, "immobile", data)  # zeroes ground speed
     sheet.system_info.refresh_derived()
 
-    text = sheet.system_info._speed._lines_label.text()
-    assert "immobilised" in text
-    assert theme.color("tint.worse") in text
+    assert "immobilised" in sheet.system_info._speed.rendered_text()
+    assert theme.color("tint.worse") in sheet.system_info._speed.rendered_styles()
 
 
 def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
@@ -549,7 +576,7 @@ def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
     apply_condition(sheet.character, "immobile", data)
     sheet.conditions.conditionsChanged.emit()
 
-    assert "immobilised" in sheet.system_info._speed._lines_label.text()
+    assert "immobilised" in sheet.system_info._speed.rendered_text()
 
 
 def test_high_resistance_total_is_not_clamped_away(qapp: QApplication) -> None:

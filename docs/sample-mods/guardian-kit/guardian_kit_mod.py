@@ -25,13 +25,16 @@ from __future__ import annotations
 from mm_companion.core.rules.powers_terms import READOUT_KINDS, EffectStat
 
 
-def _flat_bonus(readout, effect, game_data):
+def _flat_bonus(readout, effect, game_data, char=None):
     """Render a ``flat_bonus`` readout as a single "+N" stat row.
 
     A readout handler is a pure function of (the readout record, the owning
-    effect instance, the merged game data). It returns a list of ``EffectStat``
-    rows the game-terms summary appends verbatim. Here we read the ``amount`` the
-    JSON supplied and format it as a plus-prefixed value.
+    effect instance, the merged game data, and the wielding character — ``None``
+    when there isn't one, so give it a default). It returns a list of
+    ``EffectStat`` rows the game-terms summary appends verbatim. Here we read the
+    ``amount`` the JSON supplied and format it as a plus-prefixed value; a readout
+    that is *relative* to the character, like Growth's size shift, is what the
+    fourth argument is for.
     """
     amount = int(readout.data.get("amount", 0))
     label = readout.label or "Bonus"

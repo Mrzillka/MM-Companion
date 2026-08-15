@@ -21,10 +21,25 @@ with the page. The split is dynamic: skills are grouped into blocks (a plain
 skill is one block; a focused skill with its focus rows, plus any skill's
 specialization rows, form a single block), and the blocks are divided across the
 panels so their heights are as even as possible without ever splitting a block.
+
+**Which rows, and in what order, is the player's** — the ruleset supplies the
+catalogue, not the sheet's layout. Any row is **dragged** to a new place and
+**right-clicked** to remove, the shared table-block gestures out of
+:mod:`mm_companion.ui.sections.row_table`, and a sort dropdown reorders the lot at
+once. Two levels, because the rows are two things: a skill moves among the skills
+and carries its focus/specialization rows with it, while a focus moves among its
+own skill's focuses and nowhere else (a drop outside is visibly refused). The
+order lives on the character as ``skill_order`` and a removed row as
+``hidden_skills``, both resolved against ``GameData.skills`` — so a ruleset that
+gains a skill still shows it, and the ``↺`` button puts the whole block back to
+the ruleset's own order and set. Removing a skill drops what was bought on it,
+which is why it asks first when there is anything to lose; ``↺`` restores the
+rows, and cannot restore the ranks.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import NamedTuple
 
 from PySide6.QtCore import Qt, Signal
@@ -34,11 +49,12 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QMessageBox,
     QPushButton,
-    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -58,13 +74,24 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
+from mm_companion.ui.sections.row_table import (
+    SORT_MANUAL,
+    AutoHeightTable,
+    RowEntry,
+    RowIndex,
+    RowReorder,
+    SortControl,
+    install_row_menu,
+    move_within,
+    remove_contributor,
+    wrapping_column_width,
+)
 from mm_companion.ui.sections.stat_table import (
     CONDITION_TINT,
-    ENHANCED_TINT,
     ROLL_ROLE,
     PinMenuState,
-    fit_table_height,
-    install_pin_menu,
+    bonus_tint,
+    pin_menu_contributor,
     tint_item,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -74,16 +101,30 @@ from mm_companion.ui.widgets import make_spin_box, readonly_item
 RANK_MIN, RANK_MAX = 0, 20
 COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
 HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
+
+# Sort modes for the skills list (UI-only state, not persisted; the *order* they
+# write is). SORT_MANUAL is the shared one — see row_table, which only lets rows be
+# dragged while it is in force.
+SORT_ALPHA, SORT_ABILITY, SORT_TOTAL, SORT_RANK = "alpha", "ability", "total", "rank"
+
+#: This block's drag payload. Its own format, so no other block's rows can land here.
+ROW_MIME = "application/x-mm-rows-skills"
 # Rough widths used to decide how many panels fit without clipping a name. The
-# numeric columns are near-fixed; the name column needs room for the widest
-# skill/focus/specialization label. Kept lean so a second column appears before a
-# lone one stretches wide and leaves a big gap between names and their numbers.
-# The three that set the block's density are theme metrics — a denser preset wants
-# narrower ones — and are read through spin_width()/name_min_width()/mod_width().
+# numeric columns are near-fixed; the name column wants room for the widest
+# skill/focus/specialization label, up to a cap past which it *wraps* rather than
+# claiming the whole panel. Kept lean so a second column appears before a lone one
+# stretches wide and leaves a big gap between names and their numbers. The four that
+# set the block's density are theme metrics — a denser preset wants narrower ones —
+# read through spin_width()/name_min_width()/name_max_width()/mod_width().
 NAME_PADDING = 16
 FRAME_PADDING = 16
 # The fixed share of the ABL and Total columns, either side of the rank spin box.
 NUMERIC_PADDING = 40 + 24
+#: Cell padding around the Ability column's short code. The column itself is
+#: *measured* (see ``_ability_col_width``) rather than being another constant here:
+#: it is the one near-fixed column whose content comes from the ruleset, so a mod
+#: with longer ability codes must widen the panel rather than squeeze the names.
+ABILITY_PADDING = 16
 
 
 def spin_width() -> int:
@@ -96,9 +137,30 @@ def name_min_width() -> int:
     return int(theme.metric("column.skill.name"))
 
 
+def name_max_width() -> int:
+    """Widest that column grows before a long focus name wraps instead."""
+    return int(theme.metric("column.skill.name-max"))
+
+
 def mod_width() -> int:
     """The derived "+" column's share, added only while that column is shown."""
     return int(theme.metric("column.skill.mod"))
+
+
+class SkillRowKey(NamedTuple):
+    """What one rendered row *is*, for the row menu and the drag.
+
+    Three kinds, and the difference is what may be done to them: a ``"skill"`` row
+    moves among the skills and takes its sub-rows with it, while a ``"focus"`` or
+    ``"spec"`` row moves only within its own skill. ``row_id`` is the
+    ``Character.skill_ranks`` key the row buys ranks under — empty for a focused
+    skill's header row, which is a skill with no pool of its own.
+    """
+
+    kind: str
+    skill: str
+    name: str = ""
+    row_id: str = ""
 
 
 class SkillRow(NamedTuple):
@@ -172,23 +234,72 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # Whether any row currently carries an outside bonus; drives the "+" column's
         # visibility (and, through _min_col_width, how many panels fit).
         self._show_mods = False
+        # Which model item each rendered row stands for, and the ordering gestures
+        # over it. One controller for every panel: they are one ordered list split
+        # for display, so a row has to be draggable from one into another.
+        self._row_refs = RowIndex()
+        self._sort_mode = SORT_MANUAL
+        self._reorder = RowReorder(
+            ROW_MIME,
+            self._row_refs,
+            self._on_row_moved,
+            enabled=lambda: not self._locked and self._sort.reorder_enabled(),
+            accepts=self._accepts_drop,
+        )
 
         layout = QVBoxLayout(self)
+
+        # Sort control plus the button that puts the whole block back to the
+        # ruleset's own order and set (hidden while locked).
+        self._controls = QWidget()
+        controls = QHBoxLayout(self._controls)
+        controls.setContentsMargins(0, 0, 0, 0)
+        self._sort = SortControl(
+            [
+                (SORT_MANUAL, "Manual"),
+                (SORT_ALPHA, "Name (A–Z)"),
+                (SORT_ABILITY, "Ability"),
+                (SORT_TOTAL, "Total (high→low)"),
+                (SORT_RANK, "Rank (high→low)"),
+            ]
+        )
+        self._sort.sortChanged.connect(self._on_sort_changed)
+        # The combo itself, for anything that drives the block by picking a mode.
+        self._sort_combo = self._sort.combo
+        controls.addWidget(self._sort)
+        self._reset_button = QToolButton()
+        self._reset_button.setText("↺")
+        self._reset_button.setAutoRaise(True)
+        self._reset_button.setToolTip(
+            "Put every skill back in the ruleset's own order, including any that were "
+            "removed. Ranks a removal dropped do not come back."
+        )
+        self._reset_button.clicked.connect(self.reset_skills)
+        controls.addWidget(self._reset_button)
+        controls.addStretch()
+        layout.addWidget(self._controls)
+
         # The skills fan out across a variable number of side-by-side panels; the
         # count adapts to the block's width (see ColumnFlowPanels).
         self._init_flow_panels(layout)
         self._rebuild()
 
-    def _make_table(self) -> QTableWidget:
-        table = QTableWidget(0, len(HEADERS))
+    def _make_table(self) -> AutoHeightTable:
+        # The table never scrolls itself; it reports its rows as its size, and shares
+        # its width equally with the sibling panels while keeping that fitted height,
+        # so panels of different heights top-align rather than stretch. No fit_width:
+        # a panel is one of several, and the section caps its own minimum at one of
+        # them (see ColumnFlowPanels.minimumSizeHint).
+        #
+        # word_wrap: the name column stretches, so a label longer than its share has
+        # to break. Without it the row stayed one line tall and Qt painted "…"
+        # instead — "    Expertise: Interstellar Xenobiology (specialized)" cut off
+        # mid-word, with nothing on screen saying so.
+        table = AutoHeightTable(0, len(HEADERS), word_wrap=True)
+        table.setWordWrap(True)
         table.setHorizontalHeaderLabels(HEADERS)
         table.verticalHeader().setVisible(False)
-        # The table never scrolls itself; it is resized to fit all its rows.
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Share width equally with sibling panels; keep the fitted height fixed so
-        # panels of different heights top-align rather than stretch.
-        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header = table.horizontalHeader()
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         for col in (COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
@@ -207,16 +318,22 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         table.cellClicked.connect(
             lambda row, _col, t=table: self._emit_row_spec(t, row, self.loadRequested)
         )
-        # The same "Pin to GM card" the two stat tables offer, off the same stashed
-        # payload — this table builds itself rather than going through
-        # build_stat_table, so it installs the menu directly.
-        install_pin_menu(
+        # A row menu with two independent entries: the same "Pin to GM card" the two
+        # stat tables offer, off the same stashed payload (this table builds itself
+        # rather than going through build_stat_table), and this block's own Remove.
+        install_row_menu(
             table,
-            self._pin_ref,
-            self.pinRequested.emit,
-            self.unpinRequested.emit,
-            self._pins,
+            pin_menu_contributor(
+                self._pin_ref,
+                self.pinRequested.emit,
+                self.unpinRequested.emit,
+                self._pins,
+            ),
+            remove_contributor(self._remove_label, self._remove_row),
         )
+        # A panel built later by _ensure_tables is wired here too, so every panel is
+        # both a source of dragged rows and a target for them.
+        self._reorder.attach(table)
         guard_wheel(table)
         return table
 
@@ -251,32 +368,74 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         """Which parameters are already on the card, so a row can offer Unpin."""
         self._pins.set_pinned(refs)
 
-    #: Fix the table's height to exactly show every row, so it never scrolls
-    #: internally and grows as focuses are added. Shared with the stat tables.
-    _fit_table_height = staticmethod(fit_table_height)
+    # -- which skills, in what order -----------------------------------------
+
+    def _ordered_skill_names(self) -> list[str]:
+        """Every skill name in the player's order, hidden ones included.
+
+        The same three-part rule the Equipment block's group order follows: the
+        stored order wins as far as it goes, names it doesn't mention trail in the
+        ruleset's own order, and a stored name the ruleset no longer has is kept
+        rather than dropped — so a skill from a mod that is off today comes back
+        where the player left it rather than at the end.
+        """
+
+        catalog = [skill.name for skill in self._skills]
+        stored = self._character.skill_order
+        ordered = list(stored)
+        ordered.extend(name for name in catalog if name not in stored)
+        return ordered
+
+    def _visible_skills(self) -> list[Skill]:
+        """The skills this block draws: the player's order, minus what they removed."""
+
+        by_name = {skill.name: skill for skill in self._skills}
+        hidden = set(self._character.hidden_skills)
+        return [
+            by_name[name]
+            for name in self._ordered_skill_names()
+            if name in by_name and name not in hidden
+        ]
+
+    def reseed(self) -> None:
+        """Re-render the rows from the model — the sheet put an earlier state back.
+
+        Deliberately *only* the render: the constructor also seeds an empty focus list
+        per focused skill, and a reseed that writes the model would make the undo
+        controller see a change it did not make and record a step for it.
+        """
+        self._rebuild()
 
     # -- data-driven rebuild -------------------------------------------------
 
     def _rebuild(self) -> None:
         self._rows.clear()
         self._editable_spins.clear()
+        self._row_refs.clear()
+        skills = self._visible_skills()
         count = self._flow_column_count()
         self._column_count = count
         self._ensure_tables(count)
-        for table, skills in zip(self._tables, self._split_blocks(count), strict=True):
-            specs = self._expand(skills)
+        for table, bucket in zip(self._tables, self._split_blocks(skills, count), strict=True):
+            specs = self._expand(bucket)
             table.setRowCount(0)
             table.clearSpans()
             table.setRowCount(len(specs))
             self._render_side(table, specs)
             table.setColumnHidden(COL_MODS, not self._show_mods)
-            self._fit_table_height(table)
+            table.updateGeometry()
 
         self._apply_lock()
         self._refresh_totals()
+        # Last, and that order matters: _refresh_totals is what finally fills the
+        # ABL/+/Total cells, so it is what settles those ResizeToContents columns and
+        # therefore what the stretching name column is left with. Measuring the
+        # wrapped rows any earlier fits them to a column wider than they get.
+        for table in self._tables:
+            table.remeasure_wrapped_rows()
 
-    def _split_blocks(self, count: int) -> list[list[Skill]]:
-        """Divide the skills into *count* ordered groups of near-equal height.
+    def _split_blocks(self, skills: list[Skill], count: int) -> list[list[Skill]]:
+        """Divide *skills* into *count* ordered groups of near-equal height.
 
         Each skill is a block whose height is one row, plus one row per focus for
         focused skills and one per specialization for any skill; blocks are never
@@ -284,38 +443,68 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         """
 
         sizes = []
-        for skill in self._skills:
-            size = 1 + len(self._focuses[skill.name]) if skill.focused else 1
+        for skill in skills:
+            size = 1 + len(self._focuses.get(skill.name, [])) if skill.focused else 1
             size += len(self._specializations.get(skill.name, []))
             sizes.append(size)
-        return [[self._skills[i] for i in bucket] for bucket in even_split(sizes, count)]
+        return [[skills[i] for i in bucket] for bucket in even_split(sizes, count)]
 
     # -- responsive panel count ---------------------------------------------
 
     def _flow_item_count(self) -> int:
-        return len(self._skills)
+        return len(self._visible_skills())
+
+    def _name_labels(self) -> Iterator[str]:
+        """Every label the name column has to hold, in no particular order.
+
+        The same strings :meth:`_expand` renders, so what the panel is sized for
+        and what is drawn in it cannot drift. A focus or specialization row carries
+        its skill's name as well as its own and is always the longest of them.
+        """
+
+        for skill in self._visible_skills():
+            yield skill.name
+            for focus in self._focuses.get(skill.name, []):
+                yield f"    {skill.name}: {focus}"
+            for spec in self._specializations.get(skill.name, []):
+                yield f"    {skill.name}: {spec} (specialized)"
 
     def _min_col_width(self) -> int:
         """Narrowest a panel may get before a skill name would clip.
 
-        Driven by the widest label actually present (a long focus or
-        specialization name raises it, forcing fewer panels), plus the near-fixed
-        numeric columns.
+        The name column's share is the widest label actually present, floored at
+        the block's density metric and *capped*: past the cap a long focus name
+        wraps onto a second line rather than pushing the whole block wide enough to
+        print it on one, which used to collapse the flow to a single panel. Plus
+        the near-fixed numeric columns — every one of them, which is what the
+        docstring on :meth:`_ability_col_width` is about.
+        """
+
+        name_width = wrapping_column_width(
+            self.fontMetrics(),
+            self._name_labels(),
+            padding=NAME_PADDING,
+            cap=name_max_width(),
+            floor=name_min_width(),
+        )
+        mods = mod_width() if self._show_mods else 0
+        numeric = NUMERIC_PADDING + spin_width() + self._ability_col_width()
+        return name_width + numeric + mods + FRAME_PADDING
+
+    def _ability_col_width(self) -> int:
+        """The Ability column's share: its own header, or the widest short code.
+
+        Budgeted here because it was not, and a column left out of this sum is a
+        column the *name* column silently pays for: the flow fitted one panel too
+        many and the stretching name column absorbed the whole shortfall, which is
+        what clipped a long focus name.
         """
 
         fm = self.fontMetrics()
-        longest = 0
-        for skill in self._skills:
-            longest = max(longest, fm.horizontalAdvance(skill.name))
-            for focus in self._focuses.get(skill.name, []):
-                longest = max(longest, fm.horizontalAdvance(f"    {skill.name}: {focus}"))
-            for spec in self._specializations.get(skill.name, []):
-                label = f"    {skill.name}: {spec} (specialized)"
-                longest = max(longest, fm.horizontalAdvance(label))
-        name_width = max(name_min_width(), longest + NAME_PADDING)
-        mods = mod_width() if self._show_mods else 0
-        numeric = NUMERIC_PADDING + spin_width()
-        return name_width + numeric + mods + FRAME_PADDING
+        codes = max(
+            (fm.horizontalAdvance(abbr) for abbr in self._ability_abbrs.values()), default=0
+        )
+        return max(fm.horizontalAdvance(HEADERS[COL_ABILITY]), codes) + ABILITY_PADDING
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
@@ -333,7 +522,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         for skill in skills:
             if skill.focused:
                 specs.append(("header", skill))
-                for focus in self._focuses[skill.name]:
+                for focus in self._focuses.get(skill.name, []):
                     display = f"{skill.name}: {focus}"
                     row_id = f"{skill.name}::{focus}"
                     specs.append(("focus", skill, display, row_id, focus))
@@ -367,28 +556,38 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     def _render_group_header(self, table: QTableWidget, row: int, skill: Skill) -> None:
         """Header cell block with 'Add focus' / 'Add specialization' for a focused skill."""
 
-        table.setItem(row, COL_NAME, readonly_item(skill.name))
+        # A focused skill's header row *is* that skill's row: it is what is dragged
+        # to move the skill and what is right-clicked to remove it. It buys no ranks
+        # of its own, hence the empty row id.
+        self._row_refs.add(table, row, SkillRowKey("skill", skill.name))
 
         # In the locked (read-only) view there's nothing to add, so the header
-        # is just the skill name with no buttons.
+        # is just the skill name in its own cell, with no buttons.
         if self._locked:
+            table.setItem(row, COL_NAME, readonly_item(skill.name))
             return
 
-        # The buttons span every column after the name so they read as one wide
-        # control rather than being crammed into a single narrow cell.
         add_focus = QPushButton("Add focus…")
         add_focus.clicked.connect(lambda _=False, s=skill: self._add_focus(s))
         add_spec = QPushButton("Add specialization…")
         add_spec.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
         host = QWidget()
         hbox = QHBoxLayout(host)
-        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setContentsMargins(4, 0, 0, 0)
         hbox.setSpacing(4)
+        hbox.addWidget(QLabel(skill.name))
         hbox.addWidget(add_focus)
         hbox.addWidget(add_spec)
         hbox.addStretch()
-        table.setSpan(row, COL_ABILITY, 1, len(HEADERS) - COL_ABILITY)
-        table.setCellWidget(row, COL_ABILITY, host)
+        # Spanned across **every** column, the skill's name included, and that is the
+        # point rather than a tidiness: a ``ResizeToContents`` column measures a
+        # spanned cell widget as if it were that column's own content, so parking the
+        # buttons on the Ability column made it as wide as they are — half again what
+        # a three-letter code needs — and the *name* column, the one that stretches,
+        # paid for it out of the room a focus name was relying on. Column 0 stretches,
+        # so it is the one column a wide widget cannot distort.
+        table.setSpan(row, COL_NAME, 1, len(HEADERS))
+        table.setCellWidget(row, COL_NAME, host)
 
     def _render_skill_row(
         self,
@@ -402,9 +601,14 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         spec_name: str | None = None,
         focus_name: str | None = None,
     ) -> None:
-        name_item = self._render_name_cell(
-            table, row, skill, display, indent, can_specialize, spec_name, focus_name
-        )
+        name_item = self._render_name_cell(table, row, skill, display, indent, can_specialize)
+        if spec_name is not None:
+            key = SkillRowKey("spec", skill.name, spec_name, row_id)
+        elif focus_name is not None:
+            key = SkillRowKey("focus", skill.name, focus_name, row_id)
+        else:
+            key = SkillRowKey("skill", skill.name, "", row_id)
+        self._row_refs.add(table, row, key)
 
         abbr = self._ability_abbrs.get(skill.ability, skill.ability)
         table.setItem(row, COL_ABILITY, readonly_item(abbr, center=True))
@@ -447,53 +651,52 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         display: str,
         indent: bool,
         can_specialize: bool,
-        spec_name: str | None,
-        focus_name: str | None = None,
     ) -> QTableWidgetItem | None:
-        """The skill's name cell, optionally with an inline add/remove control.
+        """The skill's name cell, with an inline ``＋`` where one belongs.
 
-        A plain read-only label unless (and only while unlocked) the row needs a
-        control: a ``＋`` to add a specialized pool on a non-focused skill's main row,
-        or a ``✕`` to drop a focus or specialization row. Returns the name
-        :class:`QTableWidgetItem` for a plain cell (so a condition can strike it through)
-        or ``None`` for a widget cell.
+        A plain read-only label unless (and only while unlocked) the row can grow a
+        specialized (half-cost) pool, which a non-focused skill's main row can: that
+        is an *add* affordance with nowhere else discoverable to live. Removing is
+        not here at all — it is the row's right-click menu, which is why a focus and
+        a specialization row are now plain cells and can be struck through by the
+        condition overlay like every other row. Returns the name
+        :class:`QTableWidgetItem` for a plain cell, or ``None`` for a widget cell.
         """
 
         name = ("    " if indent else "") + display
-        if self._locked or (not can_specialize and spec_name is None and focus_name is None):
+        if self._locked or not can_specialize:
             item = readonly_item(name)
+            # Every plain name cell, not just the indented ones it started on. A
+            # focus or pool carries its skill's name as well as its own, so it is
+            # still the longest label here and the one _min_col_width is really
+            # sizing the panel for — but that sum is a heuristic and the column is
+            # capped, so any name can end up wrapped or, if it is one long word Qt
+            # will not break, elided. This is the one place to read it whole.
+            item.setToolTip(display)
             table.setItem(row, COL_NAME, item)
             return item
 
+        # A plain QLabel, not a wrapping one: this cell only ever holds a bare
+        # skill name, which fits under name_max_width() comfortably, and a widget
+        # inside a cell is not reliably height-negotiated by resizeRowToContents.
+        # The long labels are the indented focus/specialization rows above, which
+        # are plain items and do wrap.
+        add = QPushButton("＋")
+        add.setFlat(True)
+        add.setFixedWidth(20)
+        add.setToolTip("Add a specialized (half-cost) rank pool for this skill")
+        add.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
         host = QWidget()
         hbox = QHBoxLayout(host)
         hbox.setContentsMargins(4, 0, 0, 0)
         hbox.setSpacing(4)
         hbox.addWidget(QLabel(name))
+        # Beside the name rather than pushed to the far side of the column: it means
+        # "add one of these to *this* skill", and the name is what it is pointing at.
+        # It used to be right-aligned, which read as attached only because the column
+        # was too narrow for the gap to show.
+        hbox.addWidget(add)
         hbox.addStretch()
-        if spec_name is not None:
-            remove = QPushButton("✕")
-            remove.setFlat(True)
-            remove.setFixedWidth(20)
-            remove.setToolTip("Remove this specialization")
-            remove.clicked.connect(
-                lambda _=False, s=skill, n=spec_name: self._remove_specialization(s, n)
-            )
-            hbox.addWidget(remove)
-        elif focus_name is not None:
-            remove = QPushButton("✕")
-            remove.setFlat(True)
-            remove.setFixedWidth(20)
-            remove.setToolTip("Remove this focus")
-            remove.clicked.connect(lambda _=False, s=skill, n=focus_name: self._remove_focus(s, n))
-            hbox.addWidget(remove)
-        else:  # can_specialize
-            add = QPushButton("＋")
-            add.setFlat(True)
-            add.setFixedWidth(20)
-            add.setToolTip("Add a specialized (half-cost) rank pool for this skill")
-            add.clicked.connect(lambda _=False, s=skill: self._add_specialization(s))
-            hbox.addWidget(add)
         table.setCellWidget(row, COL_NAME, host)
         return None
 
@@ -542,14 +745,231 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         self._rebuild()
         self.changed.emit()
 
+    # -- removing a row ------------------------------------------------------
+
+    def _skill_by_name(self, name: str) -> Skill | None:
+        return next((skill for skill in self._skills if skill.name == name), None)
+
+    def _remove_label(self, table: QTableWidget, row: int) -> str | None:
+        """How the row menu words its Remove entry — ``None`` while locked."""
+
+        if self._locked:
+            return None
+        key = self._row_refs.key_at(table, row)
+        if not isinstance(key, SkillRowKey):
+            return None
+        if key.kind == "focus":
+            return f"Remove {key.skill}: {key.name}"
+        if key.kind == "spec":
+            return f"Remove {key.skill}: {key.name} (specialized)"
+        return f"Remove {key.skill}"
+
+    def _remove_row(self, table: QTableWidget, row: int) -> None:
+        key = self._row_refs.key_at(table, row)
+        if not isinstance(key, SkillRowKey):
+            return
+        skill = self._skill_by_name(key.skill)
+        if skill is None:
+            return
+        if key.kind == "focus":
+            self._remove_focus(skill, key.name)
+        elif key.kind == "spec":
+            self._remove_specialization(skill, key.name)
+        else:
+            self.remove_skill(key.skill)
+
+    def _skill_has_anything_bought(self, name: str) -> bool:
+        """Whether removing *name* would cost the player something they bought."""
+
+        if self._focuses.get(name) or self._specializations.get(name):
+            return True
+        prefix = f"{name}::"
+        return any(
+            rank
+            for row_id, rank in self._ranks.items()
+            if row_id == name or row_id.startswith(prefix)
+        )
+
+    def remove_skill(self, name: str, *, confirm: bool = True) -> None:
+        """Take a whole skill off the sheet, and what was bought on it with it.
+
+        The seam the row menu lands on. Unlike a focus — one narrow pool, cheaply
+        rebought — a skill can carry ranks, focuses *and* specializations, so this
+        **asks first** whenever there is anything to lose. It is the one gesture on
+        this block that cannot be undone: :meth:`reset_skills` brings the row back,
+        never the ranks.
+
+        ``skill_order`` deliberately keeps the name, so a restored skill returns to
+        where the player had put it rather than to the end.
+        """
+
+        if name in self._character.hidden_skills:
+            return
+        if confirm and self._skill_has_anything_bought(name):
+            answer = QMessageBox.question(
+                self,
+                f"Remove {name}",
+                f"{name} has ranks, focuses or specializations bought on it. "
+                "Removing it drops them, and they cannot be brought back.\n\n"
+                "Remove it anyway?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._character.hidden_skills.append(name)
+        self._focuses.pop(name, None)
+        self._specializations.pop(name, None)
+        prefix = f"{name}::"
+        for row_id in [k for k in self._ranks if k == name or k.startswith(prefix)]:
+            del self._ranks[row_id]
+        self._rebuild()
+        self.changed.emit()
+
+    def reset_skills(self) -> None:
+        """Put every skill back, in the ruleset's own order.
+
+        Both halves of the block's display state go at once — the hand order and
+        what was removed — because they are one question ("show me the sheet the
+        ruleset ships") and answering half of it leaves a puzzle. Ranks a removal
+        dropped stay dropped; the tooltip on the button says so.
+        """
+
+        if not self._character.skill_order and not self._character.hidden_skills:
+            self._sort.set_mode(SORT_MANUAL)
+            self._sort_mode = SORT_MANUAL
+            return
+        self._character.skill_order = []
+        self._character.hidden_skills = []
+        for skill in self._skills:
+            if skill.focused:
+                self._focuses.setdefault(skill.name, [])
+        self._sort.set_mode(SORT_MANUAL)
+        self._sort_mode = SORT_MANUAL
+        self._rebuild()
+        self.changed.emit()
+
+    # -- ordering ------------------------------------------------------------
+
+    def _on_sort_changed(self, mode: str) -> None:
+        self._sort_mode = mode
+        # Only Manual mode offers hand reordering, which RowReorder asks about at
+        # gesture time (see the `enabled` predicate it was built with).
+        if mode == SORT_MANUAL:
+            return  # nothing to reorder; the current order stands
+        self._apply_sort()
+        self._rebuild()
+        self.changed.emit()  # a preset rewrites the saved order — mark it an edit
+
+    def _apply_sort(self) -> None:
+        """Rewrite ``skill_order`` for the current preset mode.
+
+        Permanent, like the Advantages block's: the new order is the one that
+        saves. Total and Rank are therefore a *snapshot* — they order the block by
+        what those numbers are now and do not follow later edits, which is the price
+        of the order being a stored fact rather than a live view.
+        """
+
+        keys = {
+            SORT_ALPHA: lambda name: (name.lower(),),
+            SORT_ABILITY: lambda name: (self._ability_of(name), name.lower()),
+            SORT_TOTAL: lambda name: (-self._best_of(name, self._row_total), name.lower()),
+            SORT_RANK: lambda name: (-self._best_of(name, self._row_rank), name.lower()),
+        }
+        key = keys.get(self._sort_mode)
+        if key is None:
+            return
+        names = self._ordered_skill_names()
+        names.sort(key=key)
+        self._character.skill_order = names
+
+    def _ability_of(self, name: str) -> str:
+        skill = self._skill_by_name(name)
+        return "" if skill is None else self._ability_abbrs.get(skill.ability, skill.ability)
+
+    def _row_ids_of(self, name: str) -> list[str]:
+        """Every rank-buying row this skill owns — its own, its focuses, its pools."""
+
+        skill = self._skill_by_name(name)
+        rows = [] if skill is not None and skill.focused else [name]
+        rows += [f"{name}::{focus}" for focus in self._focuses.get(name, [])]
+        rows += [f"{name}::spec::{spec}" for spec in self._specializations.get(name, [])]
+        return rows
+
+    def _best_of(self, name: str, of_row) -> int:
+        """The highest reading over the skill's rows — a focused skill has no own row."""
+
+        return max((of_row(row_id) for row_id in self._row_ids_of(name)), default=0)
+
+    def _row_rank(self, row_id: str) -> int:
+        return self._ranks.get(row_id, 0)
+
+    def _row_total(self, row_id: str) -> int:
+        return skill_total(self._character, self._data, row_id)
+
+    def _accepts_drop(self, source: RowEntry, target: RowEntry, before: bool) -> bool:
+        """Whether this pairing is a move at all (see :meth:`_on_row_moved`)."""
+
+        held, over = source.key, target.key
+        if not isinstance(held, SkillRowKey) or not isinstance(over, SkillRowKey):
+            return False
+        if held.kind == "skill":
+            # A skill lands beside another skill; dropping it on a sub-row means
+            # "beside that sub-row's skill", so only its own block is no move.
+            return over.skill != held.skill
+        # A focus or a pool belongs to its skill and moves only among its own kind.
+        return over.kind == held.kind and over.skill == held.skill and over.name != held.name
+
+    def _on_row_moved(self, source: RowEntry, target: RowEntry, before: bool) -> None:
+        held, over = source.key, target.key
+        if held.kind == "skill":
+            # Dropped on a sub-row: that names the enclosing skill, and there is no
+            # "before" half of a row that isn't the skill's own.
+            self.move_skill(held.skill, over.skill, before and over.kind == "skill")
+            return
+        self.move_sub_row(held, over.name, before)
+
+    def move_skill(self, name: str, target: str, before: bool) -> None:
+        """Move the skill *name* so it sits either side of the skill *target*.
+
+        The seam a dragged skill row lands on, and the headless-testable one: it
+        takes two names rather than a drop position. Its focus and specialization
+        rows travel with it, because they are rendered *from* it and were never
+        separately ordered.
+        """
+
+        order = self._ordered_skill_names()
+        if name == target or name not in order or target not in order:
+            return
+        move_within(order, order.index(name), order.index(target) + (0 if before else 1))
+        self._character.skill_order = order
+        self._rebuild()
+        self.changed.emit()
+
+    def move_sub_row(self, held: SkillRowKey, target: str, before: bool) -> None:
+        """Move a focus or specialized pool among its own skill's, in place."""
+
+        items = (
+            self._focuses.get(held.skill)
+            if held.kind == "focus"
+            else self._specializations.get(held.skill)
+        )
+        if not items or held.name not in items or target not in items or held.name == target:
+            return
+        move_within(items, items.index(held.name), items.index(target) + (0 if before else 1))
+        self._rebuild()
+        self.changed.emit()
+
     def set_locked(self, locked: bool) -> None:
         """Make the rank spin boxes read-only labels and drop the 'Add focus'
         buttons while locked.
 
         Rebuilds the tables so the focus buttons are omitted entirely: they live
-        in table cells, where toggling visibility isn't reliable.
+        in table cells, where toggling visibility isn't reliable. The two row
+        gestures need no rebuild — the drag asks ``_locked`` through the predicate
+        :class:`RowReorder` was built with, and the Remove entry through
+        :meth:`_remove_label`, which words nothing while locked.
         """
         self._locked = locked
+        self._controls.setVisible(not locked)
         self._rebuild()
 
     def _apply_lock(self) -> None:
@@ -606,10 +1026,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     def _fill_modifier_cell(mod_item: QTableWidgetItem, mod: SkillModifiers) -> None:
         """Show a row's net outside modifier as a signed number, explained on hover.
 
-        Green while only powers/advantages grant it, red once a condition takes part
-        (matching the stat grids), and struck through for a lost-trait condition. Blank
-        for a row nothing modifies — the column as a whole hides only when *every* row
-        is blank, so a shown column still has empty cells.
+        Green while what grants it raises the row, red once a condition takes part or
+        the modifier itself is a penalty (a large creature's Stealth) — matching the
+        stat grids — and struck through for a lost-trait condition. Blank for a row
+        nothing modifies; the column as a whole hides only when *every* row is blank,
+        so a shown column still has empty cells.
         """
 
         if not mod.has_flat_modifier:
@@ -630,7 +1051,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
 
         tint_item(
             mod_item,
-            CONDITION_TINT if penalised else ENHANCED_TINT,
+            CONDITION_TINT if penalised else bonus_tint(mod.amount),
             struck=mod.condition.trait_lost,
         )
 

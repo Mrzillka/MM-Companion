@@ -12,7 +12,7 @@ The model is JSON-serializable (:meth:`Character.to_dict` /
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from .data_loader import GameData
 from .equipment import EquipmentItem
@@ -50,6 +50,41 @@ class Complication:
     @classmethod
     def from_dict(cls, raw: dict) -> Complication:
         return cls(name=raw.get("name", ""), description=raw.get("description", ""))
+
+
+@dataclass
+class NotesState:
+    """Which notes one Notes block on this character's sheet has open.
+
+    The *contents* half of the Notes block (see :mod:`..notes`): the markdown
+    itself lives in the workspace ``notes/`` dir as ordinary ``.md`` files, and a
+    character records only which of them its sheet has open and which tab was
+    focused. So a note can be open on two characters' sheets at once, and this
+    stays a list of references rather than a copy of anybody's text.
+
+    Note that *where* a Notes block sits is not here — that is in the shared
+    ``layout`` setting with every other block's position. This is keyed by block
+    key, so a sheet with two Notes blocks has two entries.
+    """
+
+    files: list[str] = field(default_factory=list)  # note refs, in tab order
+    active: str = ""  # the focused tab, "" for the first
+
+    def to_dict(self) -> dict:
+        return {
+            "files": list(self.files),
+            **({"active": self.active} if self.active else {}),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> NotesState:
+        if not isinstance(raw, dict):
+            return cls()
+        files = raw.get("files", [])
+        return cls(
+            files=[str(ref) for ref in files] if isinstance(files, list) else [],
+            active=str(raw.get("active", "")),
+        )
 
 
 @dataclass
@@ -122,6 +157,15 @@ class Character:
     skill_ranks: dict[str, int] = field(default_factory=dict)
     focuses: dict[str, list[str]] = field(default_factory=dict)
     specializations: dict[str, list[str]] = field(default_factory=dict)
+    #: The player's chosen order for the Skills block, by skill name. Empty means the
+    #: ruleset's own order (``GameData.skills``); names it does not list trail the ones
+    #: it does. A name it lists that the ruleset no longer has is **kept**, not pruned,
+    #: so a skill from a mod that is off today returns to where the player put it.
+    skill_order: list[str] = field(default_factory=list)
+    #: Skills the player has taken off the sheet, by name. Display state, not a build
+    #: fact — but removing one *does* drop what was bought on it (the block says so
+    #: first), and the block's reset button restores the rows, not the ranks.
+    hidden_skills: list[str] = field(default_factory=list)
     advantages: list[AdvantageSelection] = field(default_factory=list)
     complications: list[Complication] = field(default_factory=list)
     conditions: list[AppliedCondition] = field(default_factory=list)
@@ -151,6 +195,12 @@ class Character:
     #: :func:`~..rules.ability_cost_rate`, :func:`~..rules.resistance_cost_rate`,
     #: :func:`~..rules.skill_cost_rate`, :func:`~..rules.has_cost_overrides`).
     item_cost_overrides: dict[str, dict[str, int]] = field(default_factory=dict)
+    #: What each Notes block on the sheet has open, keyed by block key (``"notes"``,
+    #: ``"notes#2"``, …). Which notes are open **is** an edit — it is undoable and it
+    #: dirties the sheet — while the markdown inside them is not: a note's text
+    #: autosaves to its own file, the same split the portrait makes between
+    #: ``image_path`` and the pixels. See :class:`NotesState` and :mod:`..notes`.
+    notes: dict[str, NotesState] = field(default_factory=dict)
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -198,6 +248,10 @@ class Character:
                 }
                 for a in self.advantages
             ],
+            # Both omitted while empty, like equipment_group_order below, so a save
+            # written before the Skills block could be reordered round-trips unchanged.
+            **({"skill_order": list(self.skill_order)} if self.skill_order else {}),
+            **({"hidden_skills": list(self.hidden_skills)} if self.hidden_skills else {}),
             "complications": [c.to_dict() for c in self.complications],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
@@ -217,6 +271,15 @@ class Character:
                     }
                 }
                 if any(self.item_cost_overrides.values())
+                else {}
+            ),
+            **(
+                {
+                    "notes": {
+                        key: state.to_dict() for key, state in self.notes.items() if state.files
+                    }
+                }
+                if any(state.files for state in self.notes.values())
                 else {}
             ),
         }
@@ -253,6 +316,8 @@ class Character:
             skill_ranks=dict(raw.get("skill_ranks", {})),
             focuses={k: list(v) for k, v in raw.get("focuses", {}).items()},
             specializations={k: list(v) for k, v in raw.get("specializations", {}).items()},
+            skill_order=[str(name) for name in raw.get("skill_order", [])],
+            hidden_skills=[str(name) for name in raw.get("hidden_skills", [])],
             advantages=[
                 AdvantageSelection(
                     name=a["name"], rank=int(a.get("rank", 1)), parameter=a.get("parameter", "")
@@ -277,7 +342,93 @@ class Character:
                 cat: {k: int(v) for k, v in items.items()}
                 for cat, items in raw.get("item_cost_overrides", {}).items()
             },
+            notes={
+                str(key): NotesState.from_dict(value)
+                for key, value in (raw.get("notes") or {}).items()
+            },
         )
+
+    def restore(self, raw: dict, *, keep_runtime: bool = True) -> None:
+        """Put this character back to the state *raw* describes, **in place**.
+
+        The same code path as a load — ``from_dict`` parses *raw*, and every field is
+        then copied across — but the object itself is kept, because a view over it
+        may hold more than the reference. :class:`SkillsSection` aliases three of the
+        model's dicts as its own attributes, so rebinding one here would desync the
+        block silently; dicts are therefore cleared and refilled and lists are sliced
+        in place, never reassigned. Driving that off :func:`~dataclasses.fields`
+        rather than naming the fields means one added later is carried for free.
+
+        ``keep_runtime`` carries the flags that :meth:`to_dict` deliberately omits
+        (see :func:`capture_runtime`) across the restore, so putting a *build* back
+        never re-wears a stowed item. A power's own runtime is in *raw* now, so it is
+        restored with the rest of the build rather than held over — which is what makes
+        switching a power off an ordinary undoable edit.
+        """
+
+        fresh = Character.from_dict(raw)
+        runtime = capture_runtime(self) if keep_runtime else None
+        for spec in fields(self):
+            new = getattr(fresh, spec.name)
+            current = getattr(self, spec.name)
+            if isinstance(current, dict) and isinstance(new, dict):
+                current.clear()
+                current.update(new)
+            elif isinstance(current, list) and isinstance(new, list):
+                current[:] = new
+            else:
+                setattr(self, spec.name, new)
+        if runtime is not None:
+            apply_runtime(self, runtime)
+
+
+def capture_runtime(character: Character) -> dict:
+    """Read the runtime flags :meth:`Character.to_dict` omits, keyed by item id.
+
+    That is now a short list. A power's own runtime — switched on, held at a rung,
+    which member of an array is live — *is* part of the saved build (see
+    :class:`~.powers.Power`), so it round-trips through ``to_dict`` like everything
+    else and needs no carrying. What is left is the gear a character is holding right
+    now: :attr:`~.equipment.EquipmentItem.worn` and
+    :attr:`~.equipment.EquipmentItem.current_speed`, which stay out of the file so a
+    loaded character comes up wearing everything.
+
+    This pair is how :meth:`Character.restore` carries those across a restore: what is
+    in your hands is not part of the build and must not move when the build is put
+    back.
+    """
+
+    equipment: dict[str, dict] = {}
+
+    def walk_item(item: EquipmentItem) -> None:
+        equipment[item.id] = {"worn": item.worn, "current_speed": item.current_speed}
+        for accessory in item.accessories:
+            walk_item(accessory)
+
+    for item in character.equipment:
+        walk_item(item)
+    return {"equipment": equipment}
+
+
+def apply_runtime(character: Character, captured: dict) -> None:
+    """Put the flags :func:`capture_runtime` read back onto *character*.
+
+    An id the capture never saw is left at its dataclass default — worn — which is
+    what undoing past an item's purchase should look like.
+    """
+
+    equipment = captured.get("equipment", {})
+
+    def walk_item(item: EquipmentItem) -> None:
+        state = equipment.get(item.id)
+        if state is not None:
+            item.worn = state.get("worn", item.worn)
+            item.current_speed = state.get("current_speed", item.current_speed)
+        for accessory in item.accessories:
+            walk_item(accessory)
+
+    for item in character.equipment:
+        walk_item(item)
 
 
 def _migrate_flat_relations(nodes: list[PowerNode]) -> list[PowerNode]:

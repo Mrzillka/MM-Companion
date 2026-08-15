@@ -41,7 +41,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
-from mm_companion.ui.widgets import hline_separator
+from mm_companion.ui.widgets import attach_context_removal, hline_separator
 
 CONDITIONS_ROW_HEIGHT = 44
 # Reserve enough height for the "+" header plus one category section (title, rule,
@@ -328,6 +328,10 @@ class ConditionsSection(QGroupBox):
                 widget.setParent(None)
                 widget.deleteLater()
 
+    def reseed(self) -> None:
+        """Restate the chips from the model — the sheet put an earlier state back."""
+        self._render_conditions()
+
     def _render_conditions(self) -> None:
         """Rebuild the chip groups from the model so a directly-applied condition, its
         bundled members, supersession, and stacking all stay 1:1 with the state, sorted
@@ -403,12 +407,11 @@ class ConditionsSection(QGroupBox):
             roll_button.clicked.connect(lambda checked=False, a=applied: self._roll_confused(a))
             chip_layout.addWidget(roll_button)
 
-        remove = QToolButton()
-        remove.setText("×")
-        remove.setAutoRaise(True)
-        remove.setToolTip(f"Remove {name}")
-        remove.clicked.connect(lambda checked=False, a=applied: self._shed_condition(a))
-        chip_layout.addWidget(remove)
+        # Right-click, not a "×" button — the same gesture the GM cards' chips use,
+        # so shedding a condition is one thing to learn wherever a chip appears.
+        # Installed last so it wins over nothing: the die button above keeps its own
+        # left-click, and the two do not collide.
+        attach_context_removal(chip, lambda a=applied: self._shed_condition(a), what=name)
         return chip
 
     @staticmethod

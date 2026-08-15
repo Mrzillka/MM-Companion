@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from mm_companion.core import storage
@@ -26,6 +27,7 @@ from mm_companion.ui.roll_history import (
     MAX_CARDS,
     MIN_HISTORY_HEIGHT,
     MIN_HISTORY_WIDTH,
+    NoteCard,
     RollHistoryPanel,
     degree_label,
     quick_roll_key,
@@ -464,3 +466,16 @@ def _pump(qapp: QApplication, done, timeout: float = 5.0) -> None:
         qapp.processEvents()
         time.sleep(0.01)
     qapp.processEvents()
+
+
+def test_a_note_is_shown_as_text_not_as_markup(qapp) -> None:
+    """The sentence comes off the wire from another player.
+
+    A QLabel defaults to AutoText, so a note containing markup rendered as HTML on
+    every screen at the table — which is why every other peer-supplied string in
+    this module is escaped.
+    """
+    card = NoteCard({"player_name": "Volt", "text": "<b>not bold</b>"}, show_author=True)
+
+    label = next(child for child in card.findChildren(QLabel) if "not bold" in child.text())
+    assert label.textFormat() == Qt.TextFormat.PlainText

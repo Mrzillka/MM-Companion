@@ -79,6 +79,58 @@ def test_a_styled_preset_says_what_a_checked_tool_button_looks_like(presets, the
     assert "border: none" not in sheet.split("/* buttons */")[1]
 
 
+@pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light", "crimson-gold"])
+def test_a_tool_button_states_its_label_colour_in_both_states(presets, theme_id: str) -> None:
+    """Stating the box is enough to stop Qt painting the label's own states.
+
+    The same trap the menu block's ``:disabled`` rule carries, one widget on. A
+    *checked* tool button came out with no visible text at all on the dark
+    presets, and the resting one was painted white — invisible on Parchment,
+    which had all but lost its block title bars' pin/float/close glyphs.
+    """
+    sheet = qss.build(presets[theme_id])
+    buttons = sheet.split("/* buttons */")[1]
+
+    for rule in ("QToolButton {", "QToolButton:checked {"):
+        body = buttons.split(rule)[1].split("}")[0]
+        assert "color:" in body, f"{theme_id}: {rule} states no label colour"
+
+
+@pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light", "crimson-gold"])
+def test_the_focus_ring_does_not_shrink_the_box_it_rings(presets, theme_id: str) -> None:
+    """A ring thicker than the resting border has to give the difference back.
+
+    A widget's size hint comes from its *resting* rule, so the extra border width
+    has nowhere to come from but the label: clicking a button took two pixels off
+    its content rect and clipped the tail of its caption. Only the styled presets
+    show it — Classic's buttons carry the platform's 80px minimum and have tens of
+    pixels of slack to lose — which is why this is parametrized over those three.
+    """
+    preset = presets[theme_id]
+    sheet = qss.build(preset)
+    extra = int(preset.metrics["focus.width"]) - int(preset.metrics["border.width"])
+    if extra <= 0:
+        pytest.skip("the ring is no thicker than the border it replaces")
+
+    assert "QPushButton:focus {" in sheet, (
+        f"{theme_id}: the ring is {extra}px thicker than the border it replaces "
+        "and gives none of it back, so a focused button clips its caption"
+    )
+    body = sheet.split("QPushButton:focus {")[1].split("}")[0]
+    vertical = int(preset.metrics["space.xs"]) - extra
+    horizontal = int(preset.metrics["space.lg"]) - extra
+    assert f"padding: {vertical}px {horizontal}px" in body
+
+
+def test_a_system_preset_compensates_no_padding_it_never_stated(presets) -> None:
+    """Classic states no resting padding, so there is no number to correct.
+
+    The platform owns the box there, and a padding invented here would replace it
+    rather than adjust it.
+    """
+    assert "QPushButton:focus {" not in qss.build(presets["classic"])
+
+
 @pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light"])
 def test_a_styled_preset_carries_its_colour_in_a_palette(presets, theme_id: str) -> None:
     from mm_companion.ui.theme.palette import build_palette
@@ -123,6 +175,32 @@ def test_no_preset_sets_a_font_size(presets, theme_id: str) -> None:
     pins it, and the transition silently stops working.
     """
     assert "font-size" not in qss.build(presets[theme_id])
+
+
+@pytest.mark.parametrize("theme_id", BUNDLED)
+def test_a_stated_menu_colour_restates_the_disabled_one(presets, theme_id: str) -> None:
+    """State a menu's text colour, restate what disabled looks like.
+
+    The same all-or-nothing bargain as ``QPushButton:checked``: once a property is
+    stated, ``QStyleSheetStyle`` stops painting that property's states, so a flat
+    ``color`` on ``QMenuBar`` paints a disabled action exactly like a live one. The
+    bar carries real disabled actions — Undo and Redo with an empty history — and
+    one that looks live but does nothing reads as broken rather than as empty.
+    Classic states no colour and so keeps the platform's own painting.
+    """
+    rules = qss.build(presets[theme_id]).splitlines()
+
+    for selector in ("QMenuBar", "QMenu"):
+        states = [r for r in rules if r.startswith(f"{selector} ") and "color:" in r]
+        if not states:
+            continue  # Classic: no colour stated, so the platform still paints it
+        restates = [
+            r for r in rules if r.startswith(f"{selector}::item:disabled") and "color:" in r
+        ]
+        assert restates, (
+            f"{theme_id} states {selector}'s colour ({states[0]}) without restating "
+            "its disabled one, so a disabled entry paints exactly like a live one"
+        )
 
 
 @pytest.mark.parametrize("theme_id", BUNDLED)

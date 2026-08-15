@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.main_window import MainWindow
+from mm_companion.ui.npc_window import NPCWindow
 
 
 @pytest.fixture(scope="module")
@@ -94,6 +95,163 @@ def test_settings_menu_opens_the_settings_window(qapp: QApplication) -> None:
 
     assert win._settings_window is not None
     win._settings_window.close()
+
+
+def test_the_undo_buttons_sit_on_the_bar_just_before_the_lock(qapp: QApplication) -> None:
+    """Same bargain the lock strikes — reached constantly, so one click, not three.
+
+    Order matters: the lock stays the bar's last entry (see the test below), so the
+    two glyphs go immediately before it.
+    """
+    win = MainWindow(locked=False)
+
+    entries = win.menuBar().actions()
+    assert entries[-3:-1] == [win._undo_action, win._redo_action]
+    assert win._undo_action.menu() is None
+    assert win._redo_action.menu() is None
+
+
+def test_the_undo_buttons_carry_the_expected_shortcuts(qapp: QApplication) -> None:
+    """Ctrl+Z back; both spellings of redo, since either is somebody's muscle memory."""
+    win = MainWindow(locked=False)
+
+    assert win._undo_action.shortcut() == QKeySequence("Ctrl+Z")
+    assert set(win._redo_action.shortcuts()) == {
+        QKeySequence("Ctrl+Shift+Z"),
+        QKeySequence("Ctrl+Y"),
+    }
+
+
+def test_the_shortcuts_also_belong_to_the_window(qapp: QApplication) -> None:
+    """Compact mode hides the menu bar, and a hidden widget's shortcuts go with it."""
+    win = MainWindow(locked=False)
+
+    assert win._undo_action in win.actions()
+    assert win._redo_action in win.actions()
+
+
+def test_the_undo_buttons_start_disabled_and_light_on_the_first_edit(
+    qapp: QApplication,
+) -> None:
+    win = MainWindow(locked=False)
+    assert not win._undo_action.isEnabled()
+    assert not win._redo_action.isEnabled()
+
+    win._sheet.abilities._abilities["STR"].setValue(3)
+
+    assert win._undo_action.isEnabled()
+    win._undo_action.trigger()
+    assert win._sheet.character.abilities["STR"] == 0
+    assert win._redo_action.isEnabled()
+
+    win._dirty = False  # a "save your changes?" modal would hang the teardown
+
+
+def test_a_gm_view_window_has_no_undo_at_all(qapp: QApplication) -> None:
+    """Nothing there can be edited, and the GM opens one per click on a card."""
+    win = MainWindow(gm_view=True)
+
+    assert win._undo is None
+    assert win.sheet.undo is None
+    assert not hasattr(win, "_undo_action")
+
+
+def test_an_npc_window_gets_undo_too(qapp: QApplication) -> None:
+    """NPCs open unlocked and are the sheets edited most destructively mid-session."""
+    win = NPCWindow()
+
+    assert win._undo is not None
+    assert win.menuBar().actions()[-3:-1] == [win._undo_action, win._redo_action]
+
+    win._dirty = False
+
+
+def test_undoing_back_to_the_saved_state_clears_the_title_marker(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """The ``*`` is a claim about the file, so walking back to it has to retract it."""
+    win = MainWindow(locked=False)
+    assert win._write(tmp_path / "hero.json")
+    assert "*" not in win.windowTitle()
+
+    win._sheet.abilities._abilities["STR"].setValue(3)
+    assert "*" in win.windowTitle()
+
+    win._undo.undo()
+
+    assert win._dirty is False
+    assert "*" not in win.windowTitle()
+
+
+def test_stepping_off_the_saved_state_puts_the_marker_back(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """The twin of the test above, and the direction that loses work.
+
+    A restore runs under ``_applying``, which suppresses ``edited`` — so nothing
+    sets the flag when an undo walks *away* from what is on disk. Left one-way,
+    save-then-undo closed without prompting and the change was gone.
+    """
+    win = MainWindow(locked=False)
+    assert win._write(tmp_path / "hero.json")
+
+    win._sheet.abilities._abilities["STR"].setValue(3)
+    assert win._write(tmp_path / "hero.json")  # STR 3 is now the saved state
+    assert "*" not in win.windowTitle()
+
+    win._undo.undo()  # back to STR 0, which is *not* what the file holds
+
+    assert win._dirty is True
+    assert "*" in win.windowTitle()
+
+
+def test_redoing_away_from_the_saved_state_puts_the_marker_back(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """The same hole reached the other way round: undo cleared it, redo left it."""
+    win = MainWindow(locked=False)
+    assert win._write(tmp_path / "hero.json")
+
+    win._sheet.abilities._abilities["STR"].setValue(3)
+    win._undo.undo()
+    assert win._dirty is False
+
+    win._undo.redo()
+
+    assert win._dirty is True
+    assert "*" in win.windowTitle()
+
+
+def test_a_never_saved_sheet_is_not_declared_dirty_by_the_history(
+    qapp: QApplication,
+) -> None:
+    """The guard on the two above: there is nothing to be clean *against* yet.
+
+    ``at_saved_state()`` is False for a sheet with no file, so re-deriving from it
+    alone would star a brand-new window before the user had touched it.
+    """
+    win = MainWindow(locked=False)
+
+    win._on_undo_state()
+
+    assert win._dirty is False
+    assert "*" not in win.windowTitle()
+
+
+def test_a_save_is_not_an_undo_step(qapp: QApplication, tmp_path: Path) -> None:
+    """Saving rewrites an external image path — the app tidying up, not a user edit."""
+    win = MainWindow(locked=False)
+    source = tmp_path / "face.png"
+    QPixmap(4, 4).save(str(source))
+    win._sheet.character.image_path = str(source)
+    win._sheet.edited.emit()
+
+    assert win._write(tmp_path / "hero.json")
+    depth = len(win._undo._undo)
+    win._undo.flush()
+
+    assert len(win._undo._undo) == depth
+    assert win._dirty is False
 
 
 def test_the_lock_toggle_sits_on_the_bar_and_not_in_a_menu(qapp: QApplication) -> None:

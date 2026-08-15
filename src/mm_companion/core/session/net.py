@@ -61,6 +61,13 @@ READ_CHUNK = 64 * 1024
 
 _BACKLOG = 16
 
+#: How often a blocked :meth:`TcpListener.accept` looks up to see whether the
+#: listener has been closed underneath it. Short enough that shutting a session
+#: down feels immediate, long enough to be free when nothing is happening — and
+#: only ever reached on a platform where closing the socket did not wake the
+#: waiter by itself.
+ACCEPT_POLL_INTERVAL = 0.25
+
 
 class TransportError(OSError):
     """A connection failed at the socket level, or was used after closing.
@@ -231,6 +238,7 @@ class TcpListener(Listener):
         try:
             self._sock.bind((host, port))
             self._sock.listen(_BACKLOG)
+            self._sock.settimeout(ACCEPT_POLL_INTERVAL)
         except OSError as exc:
             self._sock.close()
             raise TransportError(f"cannot listen on {host}:{port}: {exc}") from exc
@@ -242,20 +250,45 @@ class TcpListener(Listener):
         return self._address
 
     def accept(self) -> Connection | None:
-        try:
-            sock, address = self._sock.accept()
-        except OSError:
-            # Either we closed the listener (the normal way out of the accept
-            # loop) or the socket broke; both mean "stop accepting".
-            return None
-        if self._closed:
-            sock.close()
-            return None
-        tune_socket(sock)
-        return Connection(sock, (str(address[0]), int(address[1])))
+        """Block for the next peer, or return ``None`` once the listener closed.
+
+        Woken by a poll rather than by the close itself. Closing a socket another
+        thread is blocked in ``accept()`` on wakes that thread on Windows and does
+        **not** on Linux, where the call simply stays blocked on a descriptor that
+        is gone — so the accept loop never exits, the thread leaks, and a session
+        whose listener died goes on looking perfectly healthy. Which is the platform
+        the relay and the hub actually run on.
+
+        So the socket carries a timeout and this checks the flag between attempts:
+        a timeout is not an error, it is the chance to notice.
+        """
+        while True:
+            try:
+                sock, address = self._sock.accept()
+            except TimeoutError:
+                if self._closed:
+                    return None
+                continue
+            except OSError:
+                # Either we closed the listener (the other normal way out) or the
+                # socket broke; both mean "stop accepting".
+                return None
+            if self._closed:
+                sock.close()
+                return None
+            tune_socket(sock)
+            return Connection(sock, (str(address[0]), int(address[1])))
 
     def close(self) -> None:
         self._closed = True
+        # shutdown *then* close: on Linux this is what interrupts an accept already
+        # in flight, so the waiter usually leaves at once rather than after a poll.
+        # It is allowed to fail — a listening socket is not connected, and several
+        # platforms say so — and the timeout above is the guarantee either way.
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         try:
             self._sock.close()
         except OSError:
@@ -302,9 +335,19 @@ def tune_socket(sock: socket.socket) -> None:
 
 
 def _peer_address(sock: socket.socket) -> tuple[str, int]:
-    """The connected peer's ``(host, port)``, or a placeholder if it is gone."""
+    """The connected peer's ``(host, port)``, or a placeholder if there isn't one.
+
+    ``getpeername`` answers in its address family's own shape, and only AF_INET's is
+    a ``(host, port)`` pair: an AF_UNIX socket names a path, and an unnamed one — a
+    :func:`socket.socketpair`, which is how the relay's own tests build a channel —
+    names the empty string. Indexing that raised, so a connection over anything but
+    plain TCP died on construction. There is no host or port to report for those, so
+    say so rather than guessing.
+    """
     try:
         peer = sock.getpeername()
     except OSError:
+        return ("", 0)
+    if not isinstance(peer, tuple) or len(peer) < 2:
         return ("", 0)
     return (str(peer[0]), int(peer[1]))

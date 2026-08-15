@@ -44,7 +44,7 @@ from mm_companion.core.rules import (
     outcome_is_failure,
     resistance_outcome,
 )
-from mm_companion.core.session.model import KIND_NOTE
+from mm_companion.core.session.model import KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
 from mm_companion.ui.widgets import muted_style, tinted_style
@@ -182,7 +182,8 @@ class QuickRollStar(QPushButton):
 
     Deliberately no font size: the glyph rides the widget font, so it needs no size
     token, and nothing here sets ``font-size`` in a stylesheet (which would outrank
-    a widget's own ``QFont`` — see the theme rules in ``CLAUDE.md``).
+    a widget's own ``QFont`` — see the theme rules in
+    ``docs/notes/theme.md``).
     """
 
     #: Kept the same in every state so the button's geometry doesn't jump as it
@@ -295,6 +296,38 @@ def chain_widgets(
     return widgets
 
 
+def request_caption(spec: RollSpec) -> str:
+    """What a requested roll is called on its button: the trait, and any DC."""
+
+    return f"{spec.label} vs. DC {spec.dc}" if spec.dc is not None else spec.label
+
+
+def request_widgets(spec: object, *, on_roll: Callable[[RollSpec], None]) -> list[QWidget]:
+    """What a *requested* roll adds under its card: the one button that rolls it.
+
+    Deliberately not :func:`chain_widgets`, which asks a rolled spec what it
+    *provoked* — it needs a ``follow_up`` and a degree that passed. A request is
+    not something a roll provoked; it **is** the roll, sitting in the history
+    waiting for somebody to make it. Wrapping it as its own follow-up to reuse
+    that function would mean a spec whose label nothing ever reads.
+
+    It also never drops the spec's :attr:`~RollSpec.trait_key` the way
+    ``chain_widgets(localize=False)`` does on one's own card. That rule is about
+    *saves* — you are not the target of your own attack — and it does not hold
+    here: someone who asks the table to roll Perception is asking themselves too,
+    and their own sheet is the one screen that can fill the number in for certain.
+    """
+
+    resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
+    if resolved is None:
+        return []
+    button = QPushButton(f"🎲 {request_caption(resolved)}")
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setToolTip(resolved.hint or f"Roll {resolved.label} on this sheet")
+    button.clicked.connect(lambda _=False, s=resolved: on_roll(s))
+    return [button]
+
+
 class HistoryCard(QFrame):
     """What every card in a history has in common: an id, and a star or not.
 
@@ -350,7 +383,12 @@ class NoteCard(HistoryCard):
             name_line.setWordWrap(True)
             info.addWidget(name_line)
 
+        # Plain text explicitly: a QLabel defaults to AutoText and will render this
+        # as HTML the moment it looks like markup. The sentence comes off the wire
+        # from another player, and every other peer-supplied string in this file is
+        # escaped for exactly that reason.
         text = QLabel(str(note.get("text", "")))
+        text.setTextFormat(Qt.TextFormat.PlainText)
         text.setWordWrap(True)
         text.setStyleSheet(muted_style(italic=True))
         info.addWidget(text)
@@ -360,6 +398,63 @@ class NoteCard(HistoryCard):
         if can_remove and self.seq is not None:
             remove_button = QPushButton("✕")
             remove_button.setToolTip("Remove this note from the history")
+            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
+            remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
+            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+
+class RequestCard(HistoryCard):
+    """A roll somebody asked for: who asked, for what, and a button to answer it.
+
+    The third kind of entry, and it reads as a note that can be acted on — an
+    author line and a muted sentence, then the button. It is not a
+    :class:`SessionRollCard` because nothing was rolled: there is no number to
+    headline, no degree, and no parameters worth saving as a quick roll (the
+    button loads the trait, which is the better version of that).
+
+    The ``✕`` is the GM's in the shared log, exactly as it is on a note: a request
+    took a sequence number from the same counter, which is the whole reason it is a
+    record rather than a message beside it — and a call the table has answered is
+    worth striking. In the *private* history it is everyone's, since every card
+    there is one's own and each already carries a way to be thrown away.
+    """
+
+    removeRequested = Signal(int)
+    #: This card's button was pressed — roll this spec here, on this sheet.
+    rollRequested = Signal(object)
+
+    def __init__(
+        self,
+        request: dict,
+        *,
+        show_author: bool = True,
+        can_remove: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(request.get("seq"), parent)
+
+        layout = QHBoxLayout(self)
+        info = QVBoxLayout()
+
+        # "Requested by X" rather than "X asks for a roll", because the subject is
+        # not always a third party: off the air the asker is the reader, and the
+        # private history names them "you" — which the second phrasing cannot take
+        # without disagreeing with its own verb.
+        if show_author:
+            who = str(request.get("player_name", "")) or "Someone"
+            name_line = QLabel(f"Requested by <b>{escape_rich_text(who)}</b>")
+            name_line.setTextFormat(Qt.TextFormat.RichText)
+            name_line.setWordWrap(True)
+            info.addWidget(name_line)
+
+        for widget in request_widgets(request.get("spec"), on_roll=self.rollRequested.emit):
+            info.addWidget(widget)
+
+        layout.addLayout(info, stretch=1)
+
+        if can_remove and self.seq is not None:
+            remove_button = QPushButton("✕")
+            remove_button.setToolTip("Remove this request from the history")
             remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
             remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
             layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -624,15 +719,16 @@ class RollHistoryPanel(QWidget):
 
         One's own roll is held (not shown) while :attr:`_defer_own` is set, so a
         paired roller can release it as the die settles — see :meth:`release_roll`.
-        A note of one's own is *not* held: deferral waits on a die animation, and a
-        note has none to wait for, so holding one would hold it forever.
+        A note or a request of one's own is *not* held: deferral waits on a die
+        animation, and neither has one to wait for, so holding either would hold it
+        forever. Hence the test is "is this a die roll", not "is this not a note".
         """
         if not isinstance(roll, dict):
             return
         seq = roll.get("seq")
         if isinstance(seq, int) and seq in self._seen:
             return
-        if self._defer_own and roll.get("kind") != KIND_NOTE and self._is_own(roll):
+        if self._defer_own and roll.get("kind", KIND_ROLL) == KIND_ROLL and self._is_own(roll):
             if isinstance(seq, int):
                 self._held[seq] = roll
             return
@@ -662,6 +758,13 @@ class RollHistoryPanel(QWidget):
         if roll.get("kind") == KIND_NOTE:
             card = NoteCard(roll, can_remove=self._gm)
             card.removeRequested.connect(self._request_remove)
+        elif roll.get("kind") == KIND_REQUEST:
+            card = RequestCard(roll, can_remove=self._gm)
+            card.removeRequested.connect(self._request_remove)
+            # The same signal the follow-up chip travels on, and for the same
+            # reason: both are "roll this on your own sheet", and the roller
+            # already answers it (localizer and all).
+            card.rollRequested.connect(self.rollFollowUp)
         else:
             card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
             card.set_save_state(self._saved_keys, self._quick_room)

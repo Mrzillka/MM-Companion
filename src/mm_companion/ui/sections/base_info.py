@@ -11,7 +11,7 @@ tracking (they don't affect the point build, so there is no ``changed`` here).
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
@@ -105,6 +105,22 @@ class BaseInfoSection(QGroupBox):
         column.addWidget(self._details_group)
         column.addStretch()
         return column
+
+    def reseed(self) -> None:
+        """Restate every field from the model — the sheet put an earlier state back.
+
+        Blocked at each field rather than run under ``_loading``, which only ever
+        gated the *signal*: ``_on_profile_changed`` writes to ``profile`` before it
+        looks at the flag, so a plain ``setText`` here re-added every key the
+        restored state had left out, as ``""``. A reseed must not write the model —
+        and that write was not harmless, because ``at_saved_state()`` compares
+        canonical JSON, so a character byte-equivalent to its own file read dirty
+        for good and every save accreted another empty key.
+        """
+        for key, edit in self._profile_fields.items():
+            blocker = QSignalBlocker(edit)
+            edit.setText(self._character.profile.get(key, ""))
+            del blocker
 
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back."""

@@ -141,6 +141,14 @@ class CharacterImageSection(QGroupBox):
         self._image_label.set_source(pixmap)
         return True
 
+    def reseed(self) -> None:
+        """Show whatever portrait the model now carries (the sheet restored a state).
+
+        No guard needed: :meth:`_show_image` touches neither the model nor a signal,
+        and a ``None`` path renders the "No image" placeholder.
+        """
+        self._show_image(resolve_image_path(self._character.image_path))
+
     def set_locked(self, locked: bool) -> None:
         """Hide the image loader while locked; the portrait stays visible."""
         self._locked = locked

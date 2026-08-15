@@ -30,6 +30,7 @@ from mm_companion.core.session.protocol import CharacterSnapshot, encode, saniti
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 from mm_companion.ui.session_portrait import encode_portrait
+from mm_companion.ui.undo import absorbing
 
 #: How long a burst of edits is allowed to coalesce before one snapshot goes out.
 SNAPSHOT_DEBOUNCE_MS = 400
@@ -170,10 +171,14 @@ class ConditionReceiver(QObject):
         condition_id = str(payload.get("condition_id", "") or "")
         raw = payload.get("parameter")
         parameter = str(raw) if raw else None
-        if action == "apply":
-            changed = section.apply_condition_by_id(condition_id, parameter)
-        else:
-            changed = section.remove_condition_by_id(condition_id, parameter)
+        # Absorbed, not recorded: this is the GM's change, and Ctrl+Z is for
+        # taking back what *this* player did. Undoing the table's Stunned — and
+        # pushing that back up as a snapshot — is not something to offer.
+        with absorbing(self._sheet):
+            if action == "apply":
+                changed = section.apply_condition_by_id(condition_id, parameter)
+            else:
+                changed = section.remove_condition_by_id(condition_id, parameter)
         if changed:
             self.applied += 1
 
@@ -189,7 +194,8 @@ class ConditionReceiver(QObject):
         section = getattr(self._sheet, "system_info", None)
         if section is None:
             return
-        section.set_hero_points(value)
+        with absorbing(self._sheet):  # the GM's, not this player's — see handle()
+            section.set_hero_points(value)
         self.applied += 1
 
     def _is_for_us(self, player_id: str) -> bool:

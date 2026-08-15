@@ -278,6 +278,20 @@ The damage ladder itself (`hit → dazed → staggered → stunned → incapacit
 recorded in `_meta.damageLadder` for the Damage-effect resolver; conditions here just describe each
 rung. Object damage runs the shorter `hit → broken → destroyed` ladder.
 
+That resolver now exists: `core/rules/damage.py` reads the *rungs* off the Damage effect's
+`resistanceOutcomes` (`effects.json`) and applies one through the same `apply_condition` a
+hand-picked condition goes through, so bundling, supersession and Hit's stacking are unchanged.
+Two things it needed from the data rather than from Python. A rung's **`escalates`** map is the
+book's "Stunned instead of Dazed if already Dazed" — previously prose in a `note` — and it chains,
+which is what `further failed checks escalate to Dying, then Dead` means. And **`dead` supersedes
+`staggered`**: Dead is the terminal rung and, like Incapacitated, replaces it. Without that the
+escalation from Incapacitated to Dead left a corpse Staggered, since the rung still names it.
+
+Note the ordering trap, which is a fact about §3 rather than about damage: a rung's ids are printed
+in the book's order, and rung 2 (`hit, stunned, staggered`) cannot be applied in it. Staggered
+*includes* Dazed, so applying it after Stunned re-adds the Dazed the Stunned was there to supersede.
+The resolver applies the superseded sibling first; anything else in a rung keeps its printed order.
+
 ---
 
 ## 9. Out of scope for this file

@@ -9,6 +9,8 @@ from a single command:
     python .claude/skills/run-mm-companion/driver.py sheet        # editable character sheet
     python .claude/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
     python .claude/skills/run-mm-companion/driver.py sheet-locked # the read-only view
+    python .claude/skills/run-mm-companion/driver.py sheet-unlocked      # its editable twin
+    python .claude/skills/run-mm-companion/driver.py sheet-unlock-toggle # unlocked by the toggle
     python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
     python .claude/skills/run-mm-companion/driver.py compact      # the window shrunk to the roller
     python .claude/skills/run-mm-companion/driver.py compact-gm   # the same, from the GM window
@@ -87,6 +89,34 @@ def _guest_seat(bridge, display_name: str) -> str:
     return bridge.server.state.add_player(display_name).player_id
 
 
+NOTE_ORIGIN = """# Origin
+
+Bitten by a **radioactive** spider on a school trip to the *Osborn* labs.
+Told nobody for `three weeks`.
+
+## The turn
+
+- [x] Uncle Ben
+- [ ] tell MJ
+
+> With great power comes great responsibility.
+
+See the [house rules](http://example.com) for Enhanced Strength.
+"""
+
+NOTE_LOG = """# Session Log
+
+## Session 3
+
+The **bank** job went badly.
+"""
+
+
+#: Windows a target built along the way and must not let Python garbage-collect
+#: before the screenshot — a Qt window with no reference left is destroyed.
+_KEEP: list = []
+
+
 def build(target: str):
     """Construct and show the window for ``target``; return it."""
     from mm_companion.core.storage import ensure_workspace
@@ -99,15 +129,25 @@ def build(target: str):
 
         initialize_mods()
         win = StartWindow()
-    elif target == "sheet-locked":
+    elif target in ("sheet-locked", "sheet-unlocked", "sheet-unlock-toggle"):
         # The read-only view a saved character opens in, which is a different
         # question from "sheet": locking sheds every field's input chrome, so it is
         # the other half of any change to how a spin box or a combo box is dressed.
         from mm_companion.ui.main_window import MainWindow
 
-        win = MainWindow(locked=True)
+        # Three shots of one window, differing only in the lock, so they can be laid
+        # side by side: locking must change a block's height but never its width, and
+        # the *toggle* is the case a static shot cannot show — the sheet is built
+        # locked, laid out, and only then unlocked, which is where a block that grew
+        # used to clip against a window that stayed put.
+        win = MainWindow(locked=target == "sheet-locked")
         for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
             win._sheet.abilities._abilities[key].setValue(value)
+        if target == "sheet-unlock-toggle":
+            win.show()
+            _pump(_app())
+            # The real control, so the menu-bar wiring is in the picture too.
+            win._lock_action.setChecked(False)
     elif target in ("sheet", "sheet-demo"):
         from mm_companion.ui.main_window import MainWindow
 
@@ -121,6 +161,44 @@ def build(target: str):
             for key, value in {"STR": 4, "STA": 6, "AGL": 8}.items():
                 sheet.abilities._abilities[key].setValue(value)
             sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    elif target in ("notes-demo", "notes-split"):
+        # The Notes block: a tabbed markdown editor over the workspace's notes/
+        # dir. The caret is parked mid-document so the marker rule shows both ways
+        # in one frame — the ## and ** are muted on every line but the caret's,
+        # and on its own line they are painted like the text they mark up.
+        # "notes-split" is the same with a second Notes block beside it, which is
+        # what the View menu's "New Notes Block" (or dragging a tab off the bar)
+        # produces.
+        from mm_companion.core import notes as notes_store
+        from mm_companion.ui.main_window import MainWindow
+
+        origin = notes_store.create_note("Origin")
+        notes_store.write_note(origin, NOTE_ORIGIN)
+        log = notes_store.create_note("Session Log")
+        notes_store.write_note(log, NOTE_LOG)
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        sheet.notes.open_note(origin)
+        sheet.notes.open_note(log)
+        if target == "notes-split":
+            second = sheet.add_block_instance("notes")
+            sheet.notes._close_ref(log)
+            sheet._sections_by_key[second].open_note(log)
+            keep = {"notes", second}
+        else:
+            sheet.notes._select(origin)
+            keep = {"notes"}
+        # Park the caret on the "## The turn" line: full-strength markers there,
+        # dimmed on every other line, which is the whole editor design in one shot.
+        editor = sheet.notes._open[0].editor
+        cursor = editor.source.textCursor()
+        cursor.setPosition(editor.text().index("## The turn") + 4)
+        editor.source.setTextCursor(cursor)
+        for key in sheet.block_keys():
+            if key not in keep:
+                sheet.hide_block(key)
+        win.resize(900, 640)
     elif target == "equipment-demo":
         # The Equipment block with gear on it: two categories (so the automatic
         # grouping and the group order show), a stowed item beside a worn one, and
@@ -245,6 +323,138 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target == "sheet-size":
+        # A Huge character's sheet: the Size Table reaching Defence, Toughness and the
+        # skills, and the Speed readout netting two Flight powers into one line.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.characteristics["size"] = "Huge"
+        char.abilities["STA"] = 4
+        char.abilities["AGL"] = 2
+        char.abilities["PRE"] = 3
+        char.skill_ranks["Stealth"] = 4
+        char.skill_ranks["Intimidation"] = 3
+        for name, rank in (("Wings", 4), ("Jets", 6)):
+            power = Power(name=name, effects=[PowerEffectInstance("flight", rank=rank)])
+            power.activated = True
+            char.powers.append(power)
+        sheet.abilities.reseed()
+        sheet.resistances.reseed()
+        sheet.skills.reseed()
+        sheet.system_info.reseed()
+        sheet.abilities.refresh_enhancements()
+        sheet.resistances.refresh_bases()
+        sheet.resistances.refresh_enhancements()
+        sheet.skills._rebuild()
+        sheet.system_info.refresh_derived()
+    elif target == "size-ladder":
+        # The Growth/Shrinking rung strip. A Growth 3 and a Shrinking 4 on a Medium
+        # character, each dialled somewhere other than full rank, plus a Growth 1 (whose
+        # single rung is the card's own switch, so it gets no strip) and a Growth 2 that
+        # is switched off (nothing lit). The System block stays so the sheet's own Size
+        # readout can be read against whichever rung is lit.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        for name, effect_id, rank, held, on in (
+            ("Giant Form", "growth", 3, 2, True),
+            ("Ant Size", "shrinking", 4, None, False),
+            ("Slightly Bigger", "growth", 1, None, True),
+        ):
+            power = Power(name=name, effects=[PowerEffectInstance(effect_id, rank=rank)])
+            power.activated = on
+            power.effects[0].toggled_on = on
+            power.effects[0].current_rank = held
+            char.powers.append(power)
+        sheet.powers.refresh()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 900)
+    elif target == "size-ladder-reload":
+        # The round trip a size power's rung has to survive: a Growth 3 dialled to
+        # Large through the real rung strip, written to the workspace with
+        # ``save_character``, and reopened from the file in a fresh window. The shot is
+        # of the *reopened* sheet, so the rung that is lit and the Size line in the
+        # System block are what came back off disk — before runtime was persisted this
+        # came up at Gargantuan with everything switched on.
+        from PySide6.QtWidgets import QPushButton
+
+        from mm_companion.core import library
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+        from mm_companion.ui.sections.powers import _SizeLadder
+
+        first = MainWindow(locked=False)
+        sheet = first._sheet
+        sheet.character.profile["hero_name"] = "Colossus"
+        sheet.character.powers.append(
+            Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
+        )
+        sheet.powers.refresh()
+        _pump(_app())
+        ladder = sheet.powers.findChild(_SizeLadder)
+        next(b for b in ladder.findChildren(QPushButton) if b.text() == "Large").click()
+        path = library.save_character(sheet.character)
+        # Left open rather than closed: the rung dirtied the sheet (which is the point
+        # — a saved state that never marks the window unwritten is a state you lose),
+        # so closing it here would stop on the modal Save/Discard prompt.
+        first.hide()
+        _KEEP.append(first)
+
+        win = MainWindow(character=library.load_character(path), path=path, locked=False)
+        sheet = win._sheet
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 640)
+    elif target == "size-ladder-narrow":
+        # The strip in the width it is worst off in: a Growth 10 on a Diminutive
+        # character (whose ten rungs the Size Table clamps to eight), in a block narrow
+        # enough to force the flow to wrap, and in the locked sheet — where the rungs
+        # stay live, being a play action rather than a build edit. Pass --theme to see
+        # it under a light preset.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=True)
+        sheet = win._sheet
+        char = sheet.character
+        char.characteristics["size"] = "Diminutive"
+        power = Power(name="Titan Form", effects=[PowerEffectInstance("growth", rank=10)])
+        power.effects[0].current_rank = 5
+        char.powers.append(power)
+        sheet.powers.refresh()
+        sheet.system_info.reseed()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(420, 620)
+    elif target == "constructor-extended":
+        # The Extended settings section, on a Huge character's Damage power: it only
+        # appears once the build carries an effect it could apply to, and its note says
+        # what this wielder's size is worth.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        char.characteristics["size"] = "Huge"
+        char.abilities["ATK"] = 6
+        power = Power(name="Titan's Fists", effects=[PowerEffectInstance("damage", rank=8)])
+        power.description = "Slabs of fist the size of a car door."
+        win = PowerConstructorWindow(data, character=char, power=power)
     elif target == "equipment-constructor":
         # The same builder in gear mode, opened on a catalog sword: the shot is about
         # what differs — the Equipment title, the EP total, and the group combo beside
@@ -462,13 +672,18 @@ def build(target: str):
             # And filter down to the tokens the demo actually changed, so the shot
             # shows what the filter box is for rather than the top of a long form.
             page._filter_field.setText("accent")
-    elif target == "gm":
+    elif target in ("gm", "gm-collapsed"):
         # GM Mode with a cast already in it, so the NPC panel is not an empty
-        # state: two NPCs are written into the workspace gm_characters/ dir and
+        # state: NPCs are written into the workspace gm_characters/ dir and
         # registered with the session exactly as "Create NPC" would. Built through
         # quick_npc so they have the Damage power a card's default pinned strip
         # reads its third chip from — a cast of statless placeholders would show
         # that chip as a dash and say nothing about how the card really looks.
+        #
+        # "gm-collapsed" is the other half of the same picture: the same cast with
+        # every card shrunk to its combat readout, which is the whole point of the
+        # collapse (how many creatures fit on one screen) and cannot be judged from
+        # one card in isolation. A bigger cast for that reason.
         from mm_companion.core import library
         from mm_companion.core.data_loader import load_game_data
         from mm_companion.core.npc import quick_npc
@@ -476,9 +691,24 @@ def build(target: str):
 
         data = load_game_data()
         win = GMWindow(bind="127.0.0.1")
-        for name, rank in (("Bank Robber", 4), ("Ogre", 9)):
+        cast = (("Bank Robber", 4), ("Ogre", 9))
+        if target == "gm-collapsed":
+            cast = (("Bank Robber", 4), ("Ogre", 9), ("Goon", 3), ("Sniper", 5), ("Thug", 3))
+        for name, rank in cast:
             npc = quick_npc(data, name=name, attack=rank, effect=rank, defence=rank, toughness=rank)
             win._register_npc(library.save_character(npc, directory=win._npc_dir()))
+        if target == "gm-collapsed":
+            win.show()
+            # Through the caret each card really carries, so the shot is of the
+            # state a GM's click produces — including the conditions a couple of
+            # them have taken, which is what the damage row leaves behind.
+            for entry in win._npc_state.values():
+                if entry.card is not None:
+                    entry.card._collapse_button.click()
+            names = list(win._npc_state)
+            win._apply_npc_damage(names[0], 2)
+            win._apply_npc_damage(names[1], 1)
+            win._apply_npc_damage(names[1], 1)
     elif target == "gm-settings":
         # The GM Mode settings page, reached the way a GM reaches it: build the GM
         # window and fire its own Settings ▸ Preferences… handler, so the shot is of
@@ -518,12 +748,21 @@ def main(argv: list[str] | None = None) -> int:
             "sheet",
             "sheet-demo",
             "sheet-locked",
+            "sheet-unlocked",
+            "sheet-unlock-toggle",
+            "notes-demo",
+            "notes-split",
             "equipment-demo",
             "equipment-vehicles",
             "equipment-platforms",
             "sheet-pinned",
             "sheet-pinned-bottom",
             "constructor",
+            "constructor-extended",
+            "sheet-size",
+            "size-ladder",
+            "size-ladder-narrow",
+            "size-ladder-reload",
             "equipment-constructor",
             "focus",
             "dice",
@@ -537,6 +776,7 @@ def main(argv: list[str] | None = None) -> int:
             "settings",
             "settings-demo",
             "gm",
+            "gm-collapsed",
             "gm-settings",
             "npc",
             "all",
@@ -579,7 +819,7 @@ def main(argv: list[str] | None = None) -> int:
     targets = ["start", "sheet", "constructor"] if args.target == "all" else [args.target]
     for target in targets:
         win = build(target)
-        _pump(app)
+        _pump(_app())
         _shoot(win, args.out / f"{target}{suffix}.png")
         win.hide()
         win.deleteLater()

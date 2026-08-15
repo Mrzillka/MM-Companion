@@ -29,7 +29,7 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 | Module | What it holds |
 | --- | --- |
 | `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine. |
-| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`), `PlayerSlot`, and `RollRecord` — which is a roll *or* a note, per its `kind` (see "Notes" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
+| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`), `PlayerSlot`, and `RollRecord` — a roll, a note *or* a request, per its `kind` (see "Notes" and "Requests" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
 | `store.py` | Workspace persistence, modelled on `core/library.py`: `sessions/<id>/session.json` plus an **appended** `rolls.jsonl`, so a roll never rewrites the whole history. `save_session`, `append_roll`, `load_session` (stitches the two back and clears stale `connected` flags), `list_sessions`, `delete_session`. Session ids are validated against `^[A-Za-z0-9_-]{1,64}$` before they touch a path — an id can arrive over the wire. |
 | `net.py` | `Connection` (framed, buffered, lock-guarded writes), the `Transport`/`Listener` ABCs, and the loopback/LAN `TcpTransport`. `DEFAULT_PORT = 47331`. |
 | `server.py` | `SessionServer` — an accept thread, one reader thread per peer, one `RLock` over every mutation. It **rolls** (a client sends a request; the server resolves with `core.dice.resolve_check`, so no client edits its own number), persists on every change, and broadcasts. A callback `on_event(kind, payload)` reports to the owner; the payload is always a plain dict. No Qt. |
@@ -42,7 +42,8 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 `RollRequest.label` / `RollRecord.label` carry the **name** of what was rolled
 ("Athletics", "Blast: 7 vs. Defense"). The field was designed in from the start
 and sat empty until rolling from the character sheet landed; the dice roller now
-fills it from the loaded `RollSpec` (see CLAUDE.md, "Rolling from the sheet"), so
+fills it from the loaded `RollSpec` (see `docs/notes/dice-and-rolling.md`,
+"Rolling from the sheet"), so
 a shared history reads as who rolled *what*.
 
 `RollRequest.spec` / `RollRecord.spec` carry the **sheet's description** of the
@@ -92,6 +93,42 @@ The **author is the player's own app**, whichever end the change came from: a GM
 `SetHeroPoints` lands on the player's sheet and the note is raised there, so a grant
 and a click produce exactly one note and it reflects what actually landed. The GM's
 window shows it through the same shared feed.
+
+### Requests: the history's third kind of entry
+
+The mirror image of a note. A note is something that already happened; a **request**
+is something that has not happened yet — "everyone roll Perception vs DC 15" — and
+it exists because the only way one screen could ever put a roll button on another's
+was the attack → save chain, which needs an attack.
+
+A request is a `RollRecord` with `kind = "request"`, and it needs **no new field**:
+the trait's name goes in `label`, the difficulty in `dc`, and the descriptor — an
+ordinary serialized `RollSpec` — in `spec`, all three of which a roll already
+carried. `die` stays 0 as a note's does. Client → server it is `RollPrompt`, whose
+only field is that spec, run through the same `sanitize_spec` a roll's goes through
+and dropped rather than recorded if nothing survives (a card with a dead button on
+it is worse than no card). `PROTOCOL_VERSION` 8 exists for it, for the reason 6
+existed for notes: an old server rejects the unknown type, and an old client would
+render a request as a d20 that rolled zero.
+
+Three rules that are not a note's:
+
+- **Anyone may ask.** Unlike striking a card, this carries no `slot.is_gm` gate. A
+  player asking the GM to roll something is as ordinary as the reverse.
+- **The button is on every card, the asker's included** — the opposite of the save
+  chip, which is deliberately *not* localized on one's own card because you are not
+  the target of your own attack. Here you are: someone asking the table to roll
+  Perception is asking themselves too.
+- **It travels with `modifier = 0` and a `trait_key`.** The asker must not send
+  their own number; each client's Dice block fills in that character's through
+  `localize_spec`, which for this reads the key together with the spec's `kind` so
+  it can answer an ability, a resistance, a skill or initiative rather than only a
+  resistance. An empty `kind` still means a resistance, which is what an older
+  client's save says.
+
+Powers and equipment are deliberately not offerable: a pin names a power by an id
+belonging to one character, so there is nothing honest to localize it to on anyone
+else's sheet.
 
 ### The handshake
 

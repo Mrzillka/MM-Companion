@@ -10,7 +10,7 @@ the page and the pinned strip respectively.
 
 The registry reuses the generic :class:`~mm_companion.core.registry.Registry`, so
 it keeps insertion order and rejects a duplicate key unless ``replace=True`` — a
-mod overriding a base block is explicit. The twelve base blocks register at import;
+mod overriding a base block is explicit. The thirteen base blocks register at import;
 a mod's Python module can :func:`register_block` a new one (its size table entry
 travels on the descriptor, so no separate JSON edit is needed).
 """
@@ -22,7 +22,7 @@ from collections import defaultdict
 from mm_companion.core.data_loader import BlockSpec, GameData
 from mm_companion.core.registry import Registry
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize, load_block_sizes
-from mm_companion.ui.blocks.base import BlockDescriptor
+from mm_companion.ui.blocks.base import BlockDescriptor, instance_template
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
     BUILD_CHANGED,
@@ -49,6 +49,7 @@ from mm_companion.ui.sections import (
     ConditionsSection,
     DiceSection,
     EquipmentSection,
+    NotesSection,
     PowersSection,
     ResistancesSection,
     SkillsSection,
@@ -123,6 +124,7 @@ _ROLLS = {
 # one click there throws the die and it keeps the plain table above.
 _ROLLS_AND_LOADS = {**_ROLLS, "loadRequested": (LOAD_REQUESTED,)}
 
+
 # One row per base block: (key, dock title, factory, default_row, default_col,
 # publishes, subscribes, requests, serves). Listed in construction order; the
 # row/col fields drive the default layout (see default_rows). Sizes are read from
@@ -131,6 +133,20 @@ _ROLLS_AND_LOADS = {**_ROLLS, "loadRequested": (LOAD_REQUESTED,)}
 # section method that recomputes on it — together they reproduce the old hand-wired
 # cross-block signal web. `requests`/`serves` are the same pair on the bus's payload
 # channel, which today carries only "roll this" (see mm_companion.ui.blocks.bus).
+def _notes_factory(block_key: str):
+    """A block factory for one Notes instance, closed over which one it is.
+
+    Notes is the only ``multi`` block, and an instance has to know its own key to
+    find its entry in ``Character.notes``. The registered descriptor closes over
+    the template key; the sheet builds the same closure for ``notes#2`` and up.
+    """
+
+    def factory(data: GameData, character):
+        return NotesSection(data, character, block_key=block_key)
+
+    return factory
+
+
 _BASE_BLOCKS = [
     ("base_info", "Name & Details", BaseInfoSection, 0, 0, {"edited": (EDITED,)}, {}, {}, {}),
     (
@@ -259,9 +275,12 @@ _BASE_BLOCKS = [
         0,
         {
             "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
-            # A runtime on/off toggle drives the live refresh but is not a persisted
-            # edit, so it omits EDITED (and FACTS_CHANGED, to avoid re-deriving itself).
-            "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED),
+            # A runtime on/off toggle drives the same live refreshes, and carries
+            # EDITED with them: a power's on/off state and a size effect's dialled
+            # rung are saved with the build now, so a toggle the sheet did not call an
+            # edit would show no `*`, prompt nothing on close, and be lost. It still
+            # omits FACTS_CHANGED, to avoid re-deriving itself.
+            "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
         _ROLLS,  # the 🎲 beside each of a power card's roll lines
@@ -285,6 +304,24 @@ _BASE_BLOCKS = [
         # an advantage edit has to reach it.
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
         _ROLLS,  # the 🎲 beside each line of a weapon card's dice footer
+        {},
+    ),
+    (
+        "notes",
+        "Notes",
+        # The class itself, not ``_notes_factory("notes")``: a base descriptor's
+        # factory *is* its block class (tests/test_bus.py reads the signal names
+        # off it), and ``block_key`` already defaults to the template's own key.
+        # The closure is only how the *extra* instances are built.
+        NotesSection,
+        7,
+        0,
+        # Opening, closing or reordering a tab is a character edit. Typing in a
+        # note is not — that autosaves to its own file and never reaches the bus
+        # (see mm_companion.ui.sections.notes).
+        {"edited": (EDITED,)},
+        {},
+        {},
         {},
     ),
     (
@@ -314,9 +351,16 @@ _BASE_BLOCKS = [
 # through a fight rather than scrolling away under the sheet.
 _PINNED_BY_DEFAULT = frozenset({"dice"})
 
+# How a block the sheet may build more than one of makes its extra instances
+# (see BlockDescriptor.instance_factory): the builder is handed the new block's
+# key and returns a factory closed over it. The View menu offers "New <title>
+# Block" for each block listed here, and an instance beyond the first takes a
+# `notes#2`-style key the registry never sees.
+_INSTANCE_FACTORIES = {"notes": _notes_factory}
+
 
 def register_base_blocks(*, replace: bool = False) -> None:
-    """Register the twelve base M&M blocks (called once at import)."""
+    """Register the thirteen base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
     for key, title, factory, row, col, publishes, subscribes, requests, serves in _BASE_BLOCKS:
         register_block(
@@ -324,7 +368,7 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 key,
                 title,
                 factory,
-                sizes.get(key, BlockSize()),
+                sizes.get(instance_template(key), BlockSize()),
                 row,
                 col,
                 key in _PINNED_BY_DEFAULT,
@@ -332,6 +376,7 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 subscribes,
                 requests,
                 serves,
+                _INSTANCE_FACTORIES.get(key),
             ),
             replace=replace,
         )

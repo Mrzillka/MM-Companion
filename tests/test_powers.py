@@ -27,6 +27,7 @@ from mm_companion.core.rules import (
     effect_makes_attack,
     effect_per_rank_cost,
     effect_readout_rows,
+    effect_size_rank_shift,
     effect_stat_rows,
     effect_total_cost,
     effective_ability,
@@ -118,6 +119,93 @@ def test_growth_readout_maps_rank_to_size_table_modifiers() -> None:
     }
     assert shrink["Size"].value == "Tiny"
     assert shrink["Stealth"].value == "+4" and shrink["Stealth"].change == "better"
+
+
+def test_a_growth_readout_is_relative_to_the_character_growing() -> None:
+    """A Small character's Growth 2 makes them Large — the card used to say Huge."""
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Small"
+
+    rows = {
+        r.label: r for r in effect_readout_rows(PowerEffectInstance("growth", rank=2), data, char)
+    }
+    assert rows["Size"].value == "Large"
+    # The modifiers are the *delta* between where they land and where they started.
+    assert rows["Toughness"].value == "+2"
+
+
+def test_a_growth_readout_past_the_table_shows_only_what_it_really_gains() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Colossal"  # +4, one rung off the top
+
+    rows = {
+        r.label: r for r in effect_readout_rows(PowerEffectInstance("growth", rank=2), data, char)
+    }
+    assert rows["Size"].value == "Awesome"
+    assert rows["Toughness"].value == "+1"
+
+
+# -- size scales what the character's own body drives -----------------------------
+
+
+def test_size_raises_a_resisted_effects_rank() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    effect = PowerEffectInstance("damage", rank=8)
+
+    char.characteristics["size"] = "Huge"
+    assert effect_size_rank_shift(effect, data, char) == 2
+    assert effect_effective_rank(effect, data, char) == 10
+
+    char.characteristics["size"] = "Small"
+    assert effect_effective_rank(effect, data, char) == 7
+
+
+def test_size_leaves_an_effect_that_forces_no_resistance_alone() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Huge"
+
+    assert effect_size_rank_shift(PowerEffectInstance("flight", rank=4), data, char) == 0
+
+
+def test_the_extended_setting_switches_size_scaling_off() -> None:
+    from mm_companion.core.character import Character
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Huge"
+    effect = PowerEffectInstance("damage", rank=8, size_scales_damage=False)
+
+    assert effect_size_rank_shift(effect, data, char) == 0
+    assert effect_effective_rank(effect, data, char) == 8
+
+
+def test_size_scaling_costs_nothing_and_needs_a_wielder() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=8)
+
+    assert effect_size_rank_shift(effect, data, None) == 0
+    assert effect_total_cost(effect, data) == 8
+
+
+def test_the_size_switch_round_trips_and_defaults_on_for_an_older_save() -> None:
+    effect = PowerEffectInstance("damage", rank=8)
+    assert "size_scales_damage" not in effect.to_dict()  # nothing written while it is on
+    assert PowerEffectInstance.from_dict({"effect_id": "damage"}).size_scales_damage is True
+
+    effect.size_scales_damage = False
+    assert PowerEffectInstance.from_dict(effect.to_dict()).size_scales_damage is False
 
 
 def test_state_readout_clamps_above_the_table() -> None:
@@ -954,33 +1042,32 @@ def test_power_round_trips_through_dict() -> None:
     assert restored.effects[0].extras[0].modifier_id == "ranged"
     assert restored.structure == STRUCTURE_ARRAY
     assert restored.effects[0].attack_skill == "Close Combat::Blades"
-    # Runtime on/off state is *not* persisted — the round trip drops it and the power
-    # comes back in its default all-active state, regardless of the flags set above.
-    assert "activated" not in power.to_dict()
-    assert "toggled_on" not in power.to_dict()["effects"][0]
-    assert restored.activated is True and restored.item_present is True
-    assert restored.effects[0].toggled_on is True
-    assert restored.effects[0].suppressed is False
+    # Runtime on/off state *is* persisted, so a power switched off reopens switched
+    # off rather than coming up in a default all-active state.
+    assert power.to_dict()["activated"] is False
+    assert power.to_dict()["effects"][0]["toggled_on"] is False
+    assert restored.activated is False and restored.item_present is False
+    assert restored.effects[0].toggled_on is False
+    assert restored.effects[0].suppressed is True
 
 
-def test_runtime_flags_in_json_are_ignored_and_default_to_active() -> None:
-    # Runtime state is never persisted, so loading always reads as on — whether the
-    # JSON omits the flags (a legacy save) or still carries stale ones (an older save
-    # from before this changed): both come up active.
+def test_a_power_at_its_defaults_writes_no_runtime_keys() -> None:
+    """The flags are written only when they say something, so an old save is unmoved.
+
+    That is what makes persisting runtime additive: a power nobody has switched off,
+    suppressed or dialled down serializes byte-for-byte as it did before, and a save
+    written back then still loads all-active.
+    """
+    raw = Power(name="Plain", effects=[PowerEffectInstance("protection", rank=4)]).to_dict()
+    for key in ("activated", "item_present", "array_active"):
+        assert key not in raw
+    for key in ("toggled_on", "suppressed", "current_rank"):
+        assert key not in raw["effects"][0]
+
     legacy = Power.from_dict({"name": "Legacy", "effects": [{"effect_id": "protection"}]})
     assert legacy.activated is True and legacy.item_present is True
     assert legacy.effects[0].toggled_on is True and legacy.effects[0].suppressed is False
-
-    stale = Power.from_dict(
-        {
-            "name": "Stale",
-            "activated": False,
-            "item_present": False,
-            "effects": [{"effect_id": "protection", "toggled_on": False, "suppressed": True}],
-        }
-    )
-    assert stale.activated is True and stale.item_present is True
-    assert stale.effects[0].toggled_on is True and stale.effects[0].suppressed is False
+    assert legacy.effects[0].current_rank is None
 
 
 def test_structure_defaults_to_independent_and_rejects_junk() -> None:
@@ -1514,18 +1601,21 @@ def test_power_group_round_trips_and_dispatches() -> None:
         mode=STRUCTURE_ARRAY,
         children=[Power(name="Fire"), Power(name="Ice")],
     )
-    group.active_child_id = group.children[0].id
+    group.active_child_id = group.children[1].id
     raw = group.to_dict()
     assert raw["kind"] == "group"
-    # Which array member is live is runtime state — not persisted.
-    assert "active_child_id" not in raw
+    # Which array member is live is runtime state, and persisted with the rest of it.
+    assert raw["active_child_id"] == group.children[1].id
 
     clone = node_from_dict(raw)
     assert isinstance(clone, PowerGroup)
     assert clone.id == group.id
     assert clone.mode == STRUCTURE_ARRAY
-    # Runtime selection resets on load — an array defaults to its first child.
-    assert clone.active_child_id == ""
+    assert clone.active_child_id == group.children[1].id
+    # A group that has never had a child picked writes nothing and loads on its first.
+    untouched = PowerGroup(mode=STRUCTURE_ARRAY, children=[Power(name="Fire")])
+    assert "active_child_id" not in untouched.to_dict()
+    assert node_from_dict(untouched.to_dict()).active_child_id == ""
     assert [c.name for c in clone.children] == ["Fire", "Ice"]
 
     # A bare power dict (no "kind"/"children") still dispatches to a leaf Power.

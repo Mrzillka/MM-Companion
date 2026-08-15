@@ -9,22 +9,31 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt, QVariantAnimation
-from PySide6.QtGui import QEnterEvent
-from PySide6.QtWidgets import QApplication, QGridLayout, QLabel
+from PySide6.QtGui import QEnterEvent, QFont, QFontMetrics
+from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
 
+from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
+    STRUCTURE_INDEPENDENT,
     STRUCTURE_LINKED,
     ModifierSelection,
     Power,
     PowerEffectInstance,
     PowerGroup,
 )
-from mm_companion.core.rules import power_trait_bonuses
+from mm_companion.core.rules import effect_readout_rows, effective_size, power_trait_bonuses
+from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.sections.powers import PowersSection, _DraggableCard, _RollLine
+from mm_companion.ui.sections.powers import (
+    PowersSection,
+    _DraggableCard,
+    _ModeToggle,
+    _RollLine,
+    _SizeLadder,
+)
 
 
 @pytest.fixture(scope="module")
@@ -616,3 +625,373 @@ def test_a_top_level_power_keeps_its_own_switch(qapp: QApplication) -> None:
 
     assert sec._activation_role(flight, None) == "toggle"
     assert sec._linked_activation_set(flight) == [flight]
+
+
+# -- a group's mode is readable ------------------------------------------------
+
+
+def _grouped_sheet(mode: str) -> tuple[CharacterSheet, PowerGroup]:
+    """A sheet holding one group of two powers, in *mode*."""
+    sheet, char = _sheet_with("A", "B")
+    first, second = char.powers
+    sheet.powers._on_combine(second.id, first.id)
+    group = char.powers[0]
+    sheet.powers._set_group_mode(group, mode)
+    return sheet, group
+
+
+def _mode_toggle(sec: PowersSection) -> _ModeToggle:
+    toggle = sec.findChild(_ModeToggle)
+    assert toggle is not None
+    return toggle
+
+
+@pytest.mark.parametrize("preset", ["classic", "slate-dark", "parchment-light", "crimson-gold"])
+def test_a_group_card_states_which_mode_is_lit(qapp: QApplication, preset: str) -> None:
+    """The regression: the lit segment painted exactly like its two neighbours.
+
+    A styled preset states ``QPushButton``'s box in the application sheet, which
+    makes ``QStyleSheetStyle`` take the box over and stop painting the platform's
+    checked panel — and no ``:checked`` rule replaced it. Classic states no widget
+    chrome at all, so an app-level rule could not fix it for every preset either.
+    The switch therefore says what "lit" looks like itself, under all of them.
+    """
+    theme.set_active_theme(preset)
+    sheet, _group = _grouped_sheet(STRUCTURE_ARRAY)
+
+    toggle = _mode_toggle(sheet.powers)
+    assert [b.text() for b in toggle.findChildren(QPushButton) if b.isChecked()] == ["Array"]
+    lit = toggle.styleSheet().split("QPushButton:checked")
+    assert len(lit) == 2, "the widget must state its own checked look"
+    assert "background:" in lit[1]
+
+
+def test_a_lit_segment_has_room_for_its_bolder_label(qapp: QApplication) -> None:
+    """ "Independent" came out as "Independen" the moment it was the mode in force.
+
+    The lit segment is bold and the rest are not, so a width taken from the resting
+    font is a few pixels short of the label it has to hold. Every segment carries
+    the same allowance, which also stops the strip re-widthing as the mode changes.
+    """
+    sheet, group = _grouped_sheet(STRUCTURE_INDEPENDENT)
+    toggle = _mode_toggle(sheet.powers)
+
+    for button in toggle.findChildren(QPushButton):
+        bold = QFont(button.font())
+        bold.setBold(True)
+        assert button.minimumWidth() > QFontMetrics(bold).horizontalAdvance(button.text())
+
+    widths = {}
+    for mode in (STRUCTURE_INDEPENDENT, STRUCTURE_ARRAY, STRUCTURE_LINKED):
+        sheet.powers._set_group_mode(group, mode)
+        toggle = _mode_toggle(sheet.powers)
+        widths[mode] = [b.minimumWidth() for b in toggle.findChildren(QPushButton)]
+    assert len(set(map(tuple, widths.values()))) == 1
+
+
+def test_the_locked_group_card_keeps_the_mode_and_drops_the_switch(qapp: QApplication) -> None:
+    """Locking is not ``setEnabled(False)`` — a greyed strip of three reads as nothing.
+
+    The unlit segments go instead, leaving the lit one as a static chip naming the
+    mode, transparent to the mouse so the click falls through to the group card,
+    which is the switch.
+    """
+    sheet, _group = _grouped_sheet(STRUCTURE_LINKED)
+
+    sheet.powers.set_locked(True)
+    toggle = _mode_toggle(sheet.powers)
+    shown = [b for b in toggle.findChildren(QPushButton) if not b.isHidden()]
+    assert [b.text() for b in shown] == ["Linked"]
+    assert shown[0].isEnabled()
+    assert shown[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    sheet.powers.set_locked(False)
+    toggle = _mode_toggle(sheet.powers)
+    shown = [b for b in toggle.findChildren(QPushButton) if not b.isHidden()]
+    assert [b.text() for b in shown] == ["Independent", "Array", "Linked"]
+    assert not shown[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+# -- the size ladder -----------------------------------------------------------
+
+
+def _size_sheet(rank: int = 3, *, effect: str = "growth", size: str = "Medium"):
+    """A sheet holding one size power, and that power."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = size
+    power = Power(name="Giant Form", effects=[PowerEffectInstance(effect, rank=rank)])
+    char.powers.append(power)
+    return CharacterSheet(data, char), char, power
+
+
+def _ladder(sec: PowersSection) -> _SizeLadder:
+    ladder = sec.findChild(_SizeLadder)
+    assert ladder is not None
+    return ladder
+
+
+def _rungs(sec: PowersSection) -> list[tuple[str, bool]]:
+    return [(b.text(), b.isChecked()) for b in _ladder(sec).findChildren(QPushButton)]
+
+
+def test_a_growth_card_carries_one_rung_per_rank(qapp: QApplication) -> None:
+    """Labelled with the size reached, not the rank paid — and the top one lit."""
+    sheet, _char, _power = _size_sheet(3)
+
+    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", True)]
+
+
+def test_picking_a_rung_moves_the_sheet_and_the_card(qapp: QApplication) -> None:
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+
+    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
+    huge.click()
+
+    assert power.effects[0].current_rank == 2
+    assert effective_size(char, data) == "Huge"
+    # The card is rebuilt from the model, so the new strip agrees with it.
+    assert _rungs(sheet.powers) == [("Large", False), ("Huge", True), ("Gargantuan", False)]
+
+
+def test_a_rung_wakes_a_dormant_power_at_that_rung(qapp: QApplication) -> None:
+    """One click from off to Huge, rather than on-at-full then down to Huge."""
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+    sheet.powers._set_power_active(power, False)
+
+    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+
+    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
+    huge.click()
+    assert power.activated and power.effects[0].toggled_on
+    assert effective_size(char, data) == "Huge"
+
+
+def test_a_rung_is_a_runtime_change_that_still_marks_the_sheet_dirty(
+    qapp: QApplication,
+) -> None:
+    """Like every other card switch — and, like them, saved with the build.
+
+    It stays a *runtime* signal (``changed`` is for build edits, and a rung re-derives
+    rather than re-costing), but the rung is in the save now, so the sheet has to know
+    it has something unwritten or closing the window would drop it.
+    """
+    sheet, _char, _power = _size_sheet(3)
+    edits: list[int] = []
+    runtime: list[int] = []
+    dirtied: list[int] = []
+    sheet.powers.changed.connect(lambda: edits.append(1))
+    sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
+    sheet.edited.connect(lambda: dirtied.append(1))
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+
+    assert edits == []
+    assert runtime == [1]
+    assert dirtied
+
+
+def test_a_rung_picked_on_the_card_survives_a_save_and_a_reopen(
+    qapp: QApplication, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reported bug, end to end: click Large, save, open the file again.
+
+    The two halves are tested apart (the flag round-trips in ``tests/test_powers.py``,
+    the click is above), and this is the one that says the user's actual sequence
+    works — the sheet writes what the card is showing.
+    """
+    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
+    sheet, char, _power = _size_sheet(3)
+    char.profile["hero_name"] = "Colossus"
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    reopened = library.load_character(library.save_character(char))
+
+    assert reopened.powers[0].effects[0].current_rank == 1
+    assert effective_size(reopened, load_game_data()) == "Large"
+
+
+def test_the_rungs_stay_live_in_the_locked_sheet(qapp: QApplication) -> None:
+    """How big you are standing there is a play action, not a build edit."""
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+    sheet.set_locked(True)
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    assert effective_size(char, data) == "Large"
+
+
+def test_a_single_rung_power_gets_no_strip(qapp: QApplication) -> None:
+    """A Growth 1's one rung *is* the card's own switch; a strip would be a second one."""
+    sheet, _char, _power = _size_sheet(1)
+
+    assert sheet.powers.findChild(_SizeLadder) is None
+
+
+def test_a_power_that_changes_no_size_gets_no_strip(qapp: QApplication) -> None:
+    sheet, _char = _sheet_with("Blast")
+
+    assert sheet.powers.findChild(_SizeLadder) is None
+
+
+def test_the_card_readout_follows_the_rung_that_is_lit(qapp: QApplication) -> None:
+    """The card's Size row and the sheet's Size line must never name two sizes."""
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+
+    row = next(r for r in effect_readout_rows(power.effects[0], data, char) if r.key == "size")
+    assert row.value == "Large" == effective_size(char, data)
+
+
+def test_a_rung_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplication) -> None:
+    """Visible — it still says where the power is set — but not a control.
+
+    Never ``setEnabled(False)``: nothing in this app greys a control out, so the
+    buttons go transparent to the mouse and the click falls through to the card.
+    """
+    data = load_game_data()
+    char = Character.new_default(data)
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    char.powers.append(PowerGroup(mode=STRUCTURE_LINKED, children=[growth, flight]))
+    sec = _sheet_for(char).powers
+    sec._set_group_active(char.powers[0], False)
+
+    buttons = _ladder(sec).findChildren(QPushButton)
+    assert [b.text() for b in buttons] == ["Large", "Huge", "Gargantuan"]
+    assert all(b.isEnabled() for b in buttons)
+    assert all(b.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) for b in buttons)
+
+
+def test_a_rung_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
+    """Picking a rung does whatever clicking the card would, then lands on that rung."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[flight, growth], active_child_id=flight.id)
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+
+    assert _rungs(sec) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+    next(b for b in _ladder(sec).findChildren(QPushButton) if b.text() == "Huge").click()
+
+    assert group.active_child_id == growth.id
+    assert effective_size(char, data) == "Huge"
+
+
+@pytest.mark.parametrize("preset", ["classic", "slate-dark", "parchment-light", "crimson-gold"])
+def test_the_lit_rung_states_its_own_look(qapp: QApplication, preset: str) -> None:
+    """The same trap the group's mode toggle fell into, on the same tokens."""
+    theme.set_active_theme(preset)
+    sheet, _char, _power = _size_sheet(3)
+
+    lit = _ladder(sheet.powers).styleSheet().split("QPushButton:checked")
+    assert len(lit) == 2, "the strip must state its own checked look"
+    assert "background:" in lit[1]
+
+
+def test_the_rung_already_lit_switches_the_power_off(qapp: QApplication) -> None:
+    """A click on the lit rung is the card's own click — the strip is a whole control."""
+    sheet, char, power = _size_sheet(3)
+    data = load_game_data()
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    assert effective_size(char, data) == "Huge"
+
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    assert effective_size(char, data) == "Medium"
+    assert not power.activated
+    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+
+    # And the rung is remembered, so pressing it again comes back to Huge.
+    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    assert effective_size(char, data) == "Huge"
+
+
+def test_the_lit_rung_of_an_array_alternate_is_a_no_op(qapp: QApplication) -> None:
+    """An array always keeps exactly one live member, so its rung must not switch off."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=4)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, flight], active_child_id=growth.id)
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+
+    next(b for b in _ladder(sec).findChildren(QPushButton) if b.text() == "Gargantuan").click()
+
+    assert group.active_child_id == growth.id
+    assert effective_size(char, data) == "Gargantuan"
+
+
+def test_a_clamped_rung_spans_the_ranks_that_fold_into_it(qapp: QApplication) -> None:
+    """The button carries the span's lowest rank, so 'is this the lit one' must too."""
+    sheet, char, power = _size_sheet(6, size="Gargantuan")
+    data = load_game_data()
+
+    assert _rungs(sheet.powers) == [("Colossal", False), ("Awesome", True)]
+    assert power.effects[0].current_rank is None  # lit at full rank, inside the span
+
+    next(
+        b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Awesome"
+    ).click()
+    assert effective_size(char, data) == "Gargantuan"  # the span's rung switched it off
+
+
+def test_picking_a_rung_leaves_the_page_where_it_was(qapp: QApplication) -> None:
+    """The regression: the sheet jumped away from the card that was just clicked.
+
+    Every runtime setter rebuilds the whole card tree, so the block is briefly empty —
+    and whatever held focus inside it is destroyed, handing focus to a widget in some
+    other block, which a ``QScrollArea`` then scrolls into view. Forced here, because
+    the rungs themselves are ``NoFocus`` precisely so it cannot happen by hand.
+    """
+    from mm_companion.ui.main_window import MainWindow
+
+    win = MainWindow(locked=False)
+    char = win._sheet.character
+    for index in range(8):
+        char.powers.append(
+            Power(name=f"Giant {index}", effects=[PowerEffectInstance("growth", rank=3)])
+        )
+    win._sheet.powers.refresh()
+    win.resize(900, 700)
+    win.show()
+    for _ in range(12):
+        qapp.processEvents()
+
+    bar = win._sheet._scroll.verticalScrollBar()
+    bar.setValue(bar.maximum() // 2)
+    for _ in range(6):
+        qapp.processEvents()
+    before = bar.value()
+    assert before > 0, "the page has to be scrollable for this to mean anything"
+
+    button = next(
+        b
+        for b in win._sheet.powers.findChildren(_SizeLadder)[-1].findChildren(QPushButton)
+        if b.text() == "Huge"
+    )
+    button.setFocus()
+    for _ in range(4):
+        qapp.processEvents()
+    button.click()
+    for _ in range(10):
+        qapp.processEvents()
+
+    assert bar.value() == before
+    assert char.powers[-1].effects[0].current_rank == 2  # and the click still landed
+
+
+def test_a_rung_never_takes_focus(qapp: QApplication) -> None:
+    """The cause-level half: the button is destroyed by its own click, so focus on it
+    could only ever be handed to another block — which is what moved the page."""
+    sheet, _char, _power = _size_sheet(3)
+
+    for button in _ladder(sheet.powers).findChildren(QPushButton):
+        assert button.focusPolicy() == Qt.FocusPolicy.NoFocus

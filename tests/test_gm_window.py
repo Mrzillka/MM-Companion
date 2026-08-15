@@ -22,25 +22,33 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox
+from PySide6.QtGui import QContextMenuEvent, QMouseEvent
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox, QPushButton
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.npc import quick_npc
-from mm_companion.core.rules import PinRef, apply_condition, attach_accessory, build_item_from_entry
+from mm_companion.core.rules import (
+    KIND_SKILL,
+    PinRef,
+    RollSpec,
+    apply_condition,
+    attach_accessory,
+    build_item_from_entry,
+)
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
+from mm_companion.ui import npc_card as npc_card_module
 from mm_companion.ui.gm_window import GMWindow
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pin_picker import LABEL_ROLE, PIN_ROLE
-from mm_companion.ui.roll_history import HIDDEN_MARK
+from mm_companion.ui.roll_history import HIDDEN_MARK, RequestCard
 from mm_companion.ui.sections.conditions import addable_conditions, build_condition_menu
 from mm_companion.ui.session_bridge import active_session, set_active_session
 from mm_companion.ui.session_dialogs import (
@@ -193,11 +201,25 @@ def test_an_offline_roll_can_be_removed_before_any_session(
     assert window._history.cards() == []
 
 
+def test_the_rolls_block_starts_in_the_pinned_strip(qapp: QApplication, window: GMWindow) -> None:
+    """Where the sheet's Dice block starts, and for the same reason.
+
+    A roller that scrolls away with the board is no use mid-fight, so the strip is
+    the Rolls block's home rather than somewhere a GM has to drag it — and the page
+    holds only what is read between rolls.
+    """
+    assert window._canvas.pinned_keys() == ["rolls"]
+    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
+    assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
+
+
 def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
     qapp: QApplication, window: GMWindow
 ) -> None:
     # The GM board hosts the same canvas as a character sheet, so it gets the same
-    # pinned strip: the roll history stays put while the rest of the board scrolls.
+    # pinned strip, and a block moves either way across it.
+    window._canvas.unpin_block("rolls")
+    QApplication.processEvents()
     assert window._board.panel.is_empty()
 
     window._canvas.pin_block("rolls")
@@ -381,6 +403,20 @@ def test_an_unreadable_tunnel_address_refuses_to_host(
 
 
 # -- roster and clipboard --------------------------------------------------
+
+
+def right_click(widget) -> None:
+    """Right-click *widget*, the way a GM sheds a condition chip.
+
+    A real ``QContextMenuEvent`` rather than calling the handler: what is under
+    test is partly that the event is *consumed*, so it never reaches the context
+    menu of the card the chip sits on.
+    """
+    centre = widget.rect().center()
+    QApplication.sendEvent(
+        widget,
+        QContextMenuEvent(QContextMenuEvent.Reason.Mouse, centre, widget.mapToGlobal(centre)),
+    )
 
 
 def roster(*entries: dict) -> list[dict]:
@@ -970,24 +1006,33 @@ def test_a_chip_can_be_taken_off_again(
     card = window._cards["p0"]
     assert card.condition_names() == ["Dazed"]
 
-    card._chip_flow.itemAt(0).widget()._remove.click()
+    right_click(card._chip_flow.itemAt(0).widget())
 
     assert removed == [("p0", "dazed", None)]
 
 
-def test_an_offline_players_chips_lose_their_remove_button(
-    qapp: QApplication, window: GMWindow
+def test_an_offline_players_chips_cannot_be_removed(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     start_hosting(qapp, window, canned())
     window._show_roster(roster({"display_name": "Aria"}))
     window._on_snapshot("p0", a_character(conditions=["dazed"]))
+    removed: list[tuple] = []
+    monkeypatch.setattr(
+        window.bridge.server,
+        "remove_condition",
+        lambda *args: removed.append(args) or True,
+    )
     card = window._cards["p0"]
-    assert card._chip_flow.itemAt(0).widget()._remove is not None
+    assert card._chip_flow.itemAt(0).widget().removable is True
 
     window._show_roster(roster({"display_name": "Aria", "connected": False}))
 
     assert card.condition_names() == ["Dazed"]  # still shown, just not commandable
-    assert card._chip_flow.itemAt(0).widget()._remove is None
+    chip = card._chip_flow.itemAt(0).widget()
+    assert chip.removable is False
+    right_click(chip)
+    assert removed == []
 
 
 # -- the GM's roller and the shared history --------------------------------
@@ -1150,7 +1195,21 @@ def test_a_card_restates_its_hover_summary_from_the_model(window: GMWindow) -> N
 
     window._apply_npc_condition("ogre.json", "dazed", None)
 
-    assert card.toolTip() == card.summary_html()
+    assert card._name_label.toolTip() == card.summary_html()
+
+
+def test_the_hover_summary_is_on_the_name_and_not_the_whole_card(window: GMWindow) -> None:
+    """A tooltip on the card fires wherever the pointer rests, so it landed over
+    the pinned chip or the damage button a GM was lining up."""
+    window._register_npc(write_npc("Ogre"))
+    (card,) = npc_cards(window)
+
+    assert card.toolTip() == ""
+    assert "Abilities" in card._name_label.toolTip()
+    # And on the collapsed card's name, which is a different label — through the
+    # eliding label's own seam, or its next resize would wipe it.
+    card.set_collapsed(True)
+    assert "Abilities" in card._header_name.toolTip()
 
 
 def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWindow) -> None:
@@ -1373,6 +1432,32 @@ def test_an_npc_condition_leaves_the_other_blocks_where_they_were(
     settle(qapp)
     assert window._npc_container.minimumHeight() == npcs_height  # and given back
     assert players.minimumSizeHint().height() == players_height
+
+
+def test_a_condition_replayed_into_an_open_npc_sheet_is_not_undoable(
+    window: GMWindow,
+) -> None:
+    """The card's entry and the open sheet are two different Character objects.
+
+    They are kept in step by replaying the settled ids; an undo on the sheet would
+    roll one back and not the other, which is exactly the disagreement the replay
+    exists to prevent. So the replay is absorbed rather than recorded.
+    """
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._open_npc(path.name)
+    sheet_window = next(iter(window._npc_windows.values()))
+    sheet_window._sheet.abilities._abilities["STR"].setValue(4)
+
+    window._apply_npc_condition(path.name, "dazed", None)
+
+    assert [c.condition_id for c in sheet_window.sheet.character.conditions] == ["dazed"]
+
+    sheet_window._undo.undo()
+
+    assert sheet_window.sheet.character.abilities["STR"] == 0  # the GM's own edit
+    assert [c.condition_id for c in sheet_window.sheet.character.conditions] == ["dazed"]
+    sheet_window._dirty = False
 
 
 def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) -> None:
@@ -2155,3 +2240,340 @@ def test_every_pinnable_block_learns_what_is_on_the_card(window: GMWindow) -> No
     assert sheet.skills._pins.is_pinned(PinRef("skill", "Perception")) is True
     assert sheet.powers._pins.is_pinned(PinRef("power", "x", 1)) is True
     assert sheet.abilities._pins.is_pinned(PinRef("ability", "STR")) is False
+
+
+# --- collapsing a card, and the damage ladder on it -----------------------
+#
+# A collapsed card is the combat readout: name, initiative, the pinned numbers,
+# the conditions, and the damage row. What it sheds is everything that describes
+# the creature rather than tracks it through a fight.
+
+
+def test_a_card_starts_expanded_and_shrinks_from_the_caret(window: GMWindow) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    assert card.collapsed is False
+
+    card._collapse_button.click()
+
+    assert card.collapsed is True
+    # The full portrait, the PL and the roster buttons are what a collapse sheds.
+    assert card._portrait.isVisibleTo(card) is False
+    assert card._pl_label.isVisibleTo(card) is False
+    assert card._copy_button.isVisibleTo(card) is False
+    # What it keeps: a thumbnail that still opens the sheet, the "+", the damage
+    # row, and the pinned strip.
+    assert card._thumb.isVisibleTo(card) is True
+    assert card._condition_button.isVisibleTo(card) is True
+    assert card._damage.isVisibleTo(card) is True
+    assert card.pins.isVisibleTo(card) is True
+
+
+def test_a_collapsed_card_is_much_shorter(qapp: QApplication, window: GMWindow) -> None:
+    quick_npc_file(window)
+    window.show()
+    qapp.processEvents()
+    (card,) = npc_cards(window)
+    expanded = card.sizeHint().height()
+
+    card.set_collapsed(True)
+    qapp.processEvents()
+
+    assert card.sizeHint().height() < expanded / 1.5
+    window.hide()
+
+
+def test_collapsing_is_remembered_per_card(window: GMWindow) -> None:
+    """It survives the rebuild every initiative roll and condition change causes."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._collapse_button.click()
+    window._refresh_npcs()
+
+    (rebuilt,) = npc_cards(window)
+    assert rebuilt is not card
+    assert rebuilt.collapsed is True
+    assert storage.gm_collapsed_cards() == {f"npc:{name}": True}
+
+
+def test_reopening_a_card_is_remembered_too(window: GMWindow) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._collapse_button.click()
+    card._collapse_button.click()
+
+    assert card.collapsed is False
+    # Only the shrunk ones are stored, so the file stays down to the exceptions.
+    assert storage.gm_collapsed_cards() == {}
+
+
+def test_set_collapsed_is_silent(window: GMWindow) -> None:
+    """The owner telling the card what it already decided must not echo back."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    heard: list[bool] = []
+    card.collapsedChanged.connect(lambda _name, state: heard.append(state))
+
+    card.set_collapsed(True)
+
+    assert heard == []
+
+
+def test_a_copied_npc_inherits_the_shrunk_card(window: GMWindow) -> None:
+    """Copying a mook is how a GM makes the fourth guard, who wants guard three's
+    card rather than a fresh one."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card._collapse_button.click()
+
+    window._copy_npc(name)
+
+    assert storage.gm_collapsed_cards().get("npc:goon-2.json") is True
+    assert all(one.collapsed for one in npc_cards(window))
+
+
+def test_deleting_an_npc_forgets_that_it_was_shrunk(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card._collapse_button.click()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+
+    window._delete_npc(name)
+
+    assert storage.gm_collapsed_cards() == {}
+
+
+def test_the_collapsed_strip_shows_four_pins_and_scrolls_for_the_rest(
+    window: GMWindow,
+) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card.pins.set_pins([PinRef("ability", ability.key) for ability in load_game_data().abilities])
+    uncapped = card.pins.sizeHint().height()
+
+    card.set_collapsed(True)
+
+    assert card.pins.sizeHint().height() < uncapped
+    assert card.pins._scroll.maximumHeight() > 0
+    # Every pin is still *there* — the strip is a window onto them, not a cap.
+    assert len(card.pins.chip_texts()) == len(load_game_data().abilities)
+
+
+def test_the_damage_row_is_on_both_states(window: GMWindow) -> None:
+    """A GM who never collapses a card still wants one-click damage."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    assert card._damage.isVisibleTo(card) is True
+    card.set_collapsed(True)
+    assert card._damage.isVisibleTo(card) is True
+
+
+def test_a_degree_button_puts_the_whole_rung_on_the_npc(window: GMWindow) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._damage.stepChosen.emit(2)
+
+    ids = [applied.condition_id for applied in card.character.conditions]
+    assert {"hit", "staggered", "stunned"} <= set(ids)
+    assert "dazed" not in ids
+    assert "Stunned" in card.condition_names()
+
+
+def test_a_degree_button_escalates_against_what_the_npc_already_has(
+    window: GMWindow,
+) -> None:
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._damage.stepChosen.emit(1)
+    card._damage.stepChosen.emit(1)
+
+    ids = [applied.condition_id for applied in card.character.conditions]
+    assert "stunned" in ids
+    assert "dazed" not in ids
+    # And the GM is told which of the two rungs actually landed.
+    assert "Stunned" in window._notice_label.text()
+
+
+def test_damage_reaches_the_file(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    card._damage.stepChosen.emit(1)
+
+    saved = library.load_character(window._npc_state[name].path)
+    assert {"hit", "dazed"} <= {applied.condition_id for applied in saved.conditions}
+
+
+def test_damage_reaches_an_open_sheet_rather_than_the_file(window: GMWindow) -> None:
+    """An open sheet owns its own save, and holds its own copy of the character —
+    so it is handed the ids the escalation settled on, not the rung."""
+    name = quick_npc_file(window)
+    (card,) = npc_cards(window)
+    window._open_npc(name)
+    sheet = next(iter(window._npc_windows.values())).sheet
+
+    card._damage.stepChosen.emit(2)
+
+    ids = {applied.condition_id for applied in sheet.character.conditions}
+    assert {"hit", "staggered", "stunned"} <= ids
+    assert "dazed" not in ids
+
+
+def test_the_damage_buttons_say_what_they_will_do(window: GMWindow) -> None:
+    """Resolved against this creature, so an escalation is visible before the
+    click rather than a surprise after it."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    assert "Dazed" in card._damage.button_tooltips()[1]
+
+    apply_condition(card.character, "dazed", load_game_data())
+    card.refresh_conditions()
+
+    assert "Stunned" in card._damage.button_tooltips()[1]
+
+
+def test_the_initiative_badge_rolls(window: GMWindow) -> None:
+    """It is the roll affordance once the explicit button is collapsed away."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    assert card.initiative is None
+
+    card._initiative_badge.clicked.emit()
+
+    assert card.initiative is not None
+    assert npc_cards(window)[0]._initiative_badge.text().startswith("init ")
+
+
+def test_collapse_all_shrinks_every_card_and_says_what_it_will_do(
+    window: GMWindow,
+) -> None:
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+
+    window._collapse_all_button.click()
+
+    assert all(card.collapsed for card in npc_cards(window))
+    # The caption is a readout of the board as well as the next action.
+    assert window._collapse_all_button.text() == gm_window_module.EXPAND_ALL
+    assert len(storage.gm_collapsed_cards()) == 2
+
+    window._collapse_all_button.click()
+
+    assert not any(card.collapsed for card in npc_cards(window))
+    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+    assert storage.gm_collapsed_cards() == {}
+
+
+def test_one_card_still_open_means_collapse_all(window: GMWindow) -> None:
+    """Anything open means "collapse"; only a wholly shut board offers to expand."""
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    first, _second = npc_cards(window)
+
+    first._collapse_button.click()
+
+    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+    window._collapse_all_button.click()
+    assert all(card.collapsed for card in npc_cards(window))
+
+
+def test_collapse_all_is_dead_with_no_cast(window: GMWindow) -> None:
+    assert window._collapse_all_button.isEnabled() is False
+
+    quick_npc_file(window)
+
+    assert window._collapse_all_button.isEnabled() is True
+
+
+def test_the_card_has_no_initiative_button(window: GMWindow) -> None:
+    """The badge rolls in both states, so the button was a second way to do one
+    thing — and the one that existed on the expanded card only."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    assert not hasattr(card, "_initiative_button")
+
+
+def test_right_clicking_the_badge_clears_the_initiative(window: GMWindow) -> None:
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    goon = npc_cards(window)[0]
+    goon.roll_initiative()
+    assert npc_cards(window)[0].initiative is not None
+
+    right_click(npc_cards(window)[0]._initiative_badge)
+
+    # Cleared on the card, in the window's state, and back in the un-rolled zone.
+    assert all(card.initiative is None for card in npc_cards(window))
+    assert all(entry.initiative is None for entry in window._npc_state.values())
+    assert npc_cards(window)[0]._initiative_badge.text() == npc_card_module.NO_INITIATIVE
+
+
+def test_right_clicking_an_npc_chip_sheds_the_condition(window: GMWindow) -> None:
+    name = quick_npc_file(window)
+    window._apply_npc_condition(name, "dazed", None)
+    (card,) = npc_cards(window)
+    assert card.condition_names() == ["Dazed"]
+
+    right_click(card._chip_flow.itemAt(0).widget())
+
+    assert window._npc_state[name].card.condition_names() == []
+    assert library.load_character(window._npc_state[name].path).conditions == []
+
+
+def test_a_chip_right_click_never_reaches_the_cards_own_menu(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The card offers "Remove from this session / Delete" on a right-click, and
+    that must not be what someone aiming at a chip gets."""
+    name = quick_npc_file(window)
+    window._apply_npc_condition(name, "dazed", None)
+    (card,) = npc_cards(window)
+    opened: list[QMenu] = []
+    monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: opened.append(self))
+
+    right_click(card._chip_flow.itemAt(0).widget())
+    right_click(card._initiative_badge)
+
+    assert opened == []
+
+
+# -- requesting a roll --------------------------------------------------------
+
+
+def test_the_gm_can_ask_the_table_for_a_roll(qapp: QApplication, window: GMWindow) -> None:
+    """The GM's roller gets the Request row on the same terms a player's does."""
+    index = window._roller._request_combo.findText("  Perception")
+    assert index >= 0
+    window._roller._request_combo.setCurrentIndex(index)
+    window._roller._request_dc.setValue(15)
+    window._roller._request_button.click()
+    qapp.processEvents()
+
+    card = window._history.findChild(RequestCard)
+    assert card is not None
+    button = next(b for b in card.findChildren(QPushButton) if b.text().startswith("🎲"))
+    assert button.text() == "🎲 Perception vs. DC 15"
+
+
+def test_an_offline_request_is_strikeable_like_an_offline_roll(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """Before hosting there is no session to record it in, so it gets a negative seq.
+
+    Without one the button would silently do nothing off the air, which reads as a
+    bug — the same reason ``_show_offline_roll`` exists.
+    """
+    window._request_roll(RollSpec(label="Perception", kind=KIND_SKILL, trait_key="Perception"))
+    qapp.processEvents()
+
+    card = window._history.findChild(RequestCard)
+    assert card is not None and card.seq is not None and card.seq < 0

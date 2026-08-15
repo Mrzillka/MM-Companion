@@ -128,6 +128,17 @@ class ResistancesSection(TitledSection):
         self.refresh_bases()
         self.refresh_enhancements()
 
+    def reseed(self) -> None:
+        """Restate the whole block from the model — the sheet put an earlier state back.
+
+        Strictly this is already covered: ``ability-changed`` reaches
+        :meth:`follow_ability_change`, which re-seeds the spins. Spelling it out keeps
+        that from being an accident of which topics a restore happens to publish.
+        """
+        self.refresh_bases()
+        self.refresh_enhancements()
+        self.refresh_cost()
+
     def refresh_bases(self) -> None:
         """Show each resistance's total (derived base + bought delta) in its spin box.
 

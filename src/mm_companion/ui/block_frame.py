@@ -34,9 +34,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.ui import theme
 from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
+
+#: How strongly a block dropped *into* is washed. Heavier than the default
+#: 0.10 a small target gets, because this one has no outline to help it: the
+#: mark is the fill alone, and it has to carry a whole block's worth of area.
+MERGE_WASH = 0.24
 
 
 class DragHost(Protocol):
@@ -208,6 +215,8 @@ class BlockFrame(QFrame):
         # wants this one, which never goes stale.
         self.base_title = title
         self.section = section
+        # Built on first use: only a block that can be merged into ever needs one.
+        self._merge_feedback: DropFeedback | None = None
         self._size = BlockSize()
         self.setObjectName("blockFrame")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -253,7 +262,13 @@ class BlockFrame(QFrame):
     def _apply_size(self, size: BlockSize) -> None:
         """Pin the block's size from its :class:`BlockSize` (see class docstring)."""
         self._size = size
-        self.setMinimumWidth(size.min_width)
+        # Deliberately *not* setMinimumWidth: an explicit minimum does not raise a
+        # widget's layout minimum, it replaces it. ``qSmartMinSize`` ends with
+        # ``if (minSize.width() > 0) s.setWidth(minSize.width())`` - so a JSON floor
+        # of 360 told every enclosing layout the block could never need more than
+        # 360, whatever its content said, and the pinned strip squashed an Extended
+        # roller to it. The floor is carried by :meth:`minimumSizeHint` instead,
+        # where it is a floor: ``max(content, min_width)``.
         if size.max_width < UNBOUNDED:
             self.setMaximumWidth(size.max_width)
         if size.max_height < UNBOUNDED:
@@ -303,19 +318,23 @@ class BlockFrame(QFrame):
             self._relayout_tries = 0
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Never let a block shrink below its full content height.
+        """Never let a block shrink below its full content, in either dimension.
 
-        The JSON ``min_height`` is only a floor; the block's real minimum is its
-        content, so every block always shows *all* of its content and the page
-        scrolls when they don't all fit — rather than the layout squashing a
-        block down to the floor and clipping it (e.g. Base Info's image). Capped
-        at ``max_height`` when a block pins that dimension.
+        The JSON bounds are only floors; the block's real minimum is its content,
+        so every block always shows *all* of it and the page scrolls when they
+        don't all fit — rather than the layout squashing a block down to the floor
+        and clipping it (e.g. Base Info's image). Height is capped at
+        ``max_height`` when a block pins that dimension; width is left to
+        ``setMaximumWidth``, which Qt applies for us.
+
+        This is the *only* place either floor is stated — see :meth:`set_block_size`
+        for why the width one cannot also be an explicit ``setMinimumWidth``.
         """
         hint = super().minimumSizeHint()
         height = max(self._size.min_height, self.sizeHint().height())
         if self._size.max_height < UNBOUNDED:
             height = min(height, self._size.max_height)
-        return QSize(max(hint.width(), self.minimumWidth()), height)
+        return QSize(max(hint.width(), self._size.min_width), height)
 
     def set_vertical_fill(self, fill: bool) -> None:
         """Let this block grow past its content to fill slack (or stop it).
@@ -334,9 +353,46 @@ class BlockFrame(QFrame):
         policy.setVerticalPolicy(target)
         self.setSizePolicy(policy)
 
+    def set_merge_target(self, active: bool) -> None:
+        """Dress the frame as the block a drop would merge *into*.
+
+        The counterpart of the canvas's insert line, and deliberately a different
+        kind of mark: a line says "the block lands here", a wash over a whole
+        frame says "the block goes *in* here", which is what a merge does.
+        Built lazily so a frame that is never a merge target — every one but a
+        Notes block — costs nothing.
+        """
+        if self._merge_feedback is None:
+            if not active:
+                return
+            # A wash and **no border**. Partly because it is the right mark — a
+            # line says "the block lands here", a filled frame says "the block
+            # goes *in* here" — but mostly because a stylesheet border changes
+            # the frame's box, which relayouts the page *during the drag*: the
+            # target would shift out from under the cursor the instant it lit up.
+            self._merge_feedback = DropFeedback(
+                self, "#blockFrame", radius="radius.card", border=False, wash=MERGE_WASH
+            )
+        if active:
+            self._merge_feedback.show_accept()
+        else:
+            self._merge_feedback.clear()
+
     def set_locked(self, locked: bool) -> None:
-        """Forward read-only view mode to the section; the title bar stays live."""
+        """Forward read-only view mode to the section, and re-report the block's size.
+
+        Locking is not only a costume change. A locked field sheds its border and its
+        padding, and several blocks hide their editing entry points outright, so the
+        block's own minimum really does move — mostly in height, since the width is
+        held lock-invariant (see :mod:`mm_companion.ui.lock` and
+        ``tests/test_lock_geometry.py``). Much of that chrome lives in widgets no
+        layout ever sees — a table's cell widgets are index widgets, not layout items
+        — so Qt's own invalidation stops before it reaches this frame. Saying so here
+        is what makes the rest of the chain ask again: the row and the page's
+        minimum, and for a pinned block the slot, the strip and the window.
+        """
         self.section.set_locked(locked)
+        self.updateGeometry()
 
 
 class BlockWindow(QWidget):
@@ -347,11 +403,16 @@ class BlockWindow(QWidget):
     user can drag it back onto the sheet to re-dock. Closing it via the window
     chrome hides the block rather than losing it.
 
-    The frame lives inside a :class:`QScrollArea` so a tall block (e.g. Powers)
-    that doesn't fit the screen scrolls *within its window* — unlike when it is
-    docked, where the whole sheet scrolls as one page and each block shows all
-    of its content. The scroll area only ever scrolls vertically; the frame's
-    width tracks the window.
+    The frame lives inside a :class:`QScrollArea` so a block that doesn't fit
+    scrolls *within its window* — unlike when it is docked, where the whole sheet
+    scrolls as one page and each block shows all of its content. It scrolls **both
+    ways**, and that is what lets the window go as small as it is dragged: a
+    :class:`QScrollArea` does not pass its child's minimum on, so the only floor is
+    ``float.min-width``/``float.min-height``, exactly as the mini roller's is
+    ``compact.min-*`` (see :mod:`mm_companion.ui.compact`). A block popped out to
+    sit beside somebody else's application is one whose window someone will want to
+    shove into a corner, and clipping it there is not the alternative — scrolling
+    is.
 
     It is **frameless**, and that is a trade rather than a decoration: a popped-out
     block spends its life beside somebody else's application, where the OS title
@@ -377,10 +438,13 @@ class BlockWindow(QWidget):
         self._scroll.setObjectName("blockWindowScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self._scroll)
         layout.addWidget(size_grip_row(self))
+        self.setMinimumSize(
+            int(theme.metric("float.min-width")), int(theme.metric("float.min-height"))
+        )
 
     def set_on_top(self, on_top: bool) -> None:
         """Keep this window above other applications, or let it fall behind."""
@@ -390,10 +454,6 @@ class BlockWindow(QWidget):
         """Host *frame*, giving the window the frame's title as its window title."""
         self.setWindowTitle(frame.title)
         self._scroll.setWidget(frame)
-
-    def verticalScrollBar_extent(self) -> int:  # noqa: N802 - matches Qt naming style
-        """Width the vertical scrollbar occupies, to leave room for it in the min width."""
-        return self._scroll.verticalScrollBar().sizeHint().width()
 
     def closeEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
         """Closing the window hides the block instead of destroying it."""

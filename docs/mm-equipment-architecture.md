@@ -216,11 +216,17 @@ this landed. `tests/test_derived_stats.py` is the guard and passes unedited.
 
 ## 6. Runtime: worn, and what that gates
 
-`worn` is runtime state, exactly like a power's `activated` — taking a jacket off is a
-play-time action, not a build edit. So it is deliberately left out of
-`EquipmentItem.to_dict()`, a loaded character comes up wearing everything, and toggling a
-card emits `runtimeChanged` rather than `changed` (so it works in the locked read-only
-sheet and never marks it dirty).
+`worn` is runtime state — taking a jacket off is a play-time action, not a build edit. So
+it is deliberately left out of `EquipmentItem.to_dict()`, a loaded character comes up
+wearing everything, and toggling a card emits `runtimeChanged` rather than `changed` (so
+it works in the locked read-only sheet and never marks it dirty).
+
+It is *no longer* like a power's `activated`, which it was modelled on: a power's own
+runtime — switched on, held at a size rung, which array member is live — **is** saved
+with the build now, because a Growth held at Large is a standing decision about the
+character rather than what is in its hands this round (see `core/powers.py`). `worn` and
+`current_speed` are what `capture_runtime`/`apply_runtime` still carry across a restore
+by hand; an item's *build* rides in the snapshot with every other power.
 
 `worn_items(char)` is the gate. **Every** worn item applies at once — there is no
 array-style exclusivity here, so nothing switches off because something else switched

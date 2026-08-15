@@ -83,9 +83,10 @@ class PowerEffectInstance:
     ``docs/mm-powers-architecture.md`` §5-7), separate from the point build: a
     Sustained/Continuous effect the player has switched off is ``toggled_on=False``,
     and ``suppressed`` is a transient Nullify flag. Both feed
-    :func:`mm_companion.core.rules.effect_is_active`. Runtime state is **not
-    persisted** — it is deliberately left out of :meth:`to_dict`, so a loaded
-    character always comes up in its default all-active state.
+    :func:`mm_companion.core.rules.effect_is_active`. Runtime state **is** persisted:
+    a character switched off between sessions comes back switched off, so the sheet
+    reopens the way it was left. It is written only when it differs from the
+    all-active default, so a save from before this is byte-for-byte unchanged.
 
     ``attack_skill`` optionally links *this effect's* attack to a Close/Ranged Combat
     focus row on the wielder (a row id like ``"Close Combat::Blades"``, empty for
@@ -99,6 +100,27 @@ class PowerEffectInstance:
     cosmetic: nothing about cost, terms or rolls changes, only what they are called
     (:func:`mm_companion.core.rules.power_rolls` prefixes with it).
 
+    ``size_scales_damage`` is the Power Constructor's *Extended settings* switch: while
+    it is on — and it is on by default — the wielder's size raises this effect's
+    effective rank by the Size Table's damage column, so a giant hits harder
+    (:func:`mm_companion.core.rules.effect_size_rank_shift`). It is off for the giant's
+    *laser*, which is why this is a switch and not a rule. Only an effect that forces a
+    resistance is affected either way. It lives on the effect rather than the power for
+    the reason ``attack_skill`` does — that is the level it applies at — even though
+    the constructor drives every effect in a power from one checkbox.
+
+    ``current_rank`` is *runtime* too, and the one runtime flag that is a number: how
+    far a rank-dialled effect is currently turned up. ``None`` — the default — means
+    "all the way", so an effect nobody has dialled behaves exactly as it always did,
+    and an effect whose bought rank is later edited stays dialled where it was rather
+    than to a rank it no longer has (:func:`mm_companion.core.rules.effect_current_rank`
+    clamps). Only the size effects read it today: Growth 3 is a ladder of three steps,
+    not a single leap, and the card carries a button per step (see
+    :func:`mm_companion.core.rules.size_steps`). Like the flags above it is persisted,
+    and it is the one that made the case: a Growth held at Large is a decision about
+    the character, and reopening the sheet at Gargantuan silently changed four of its
+    numbers.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -106,7 +128,7 @@ class PowerEffectInstance:
     readout key, or a fresh ``custom_N`` key for a player-added row; ``order`` is
     ``"before"`` (applied to the base so modifiers still layer on top) or ``"after"``
     (applied last, so the manual value wins). ``label`` is stored only for a custom
-    row. Unlike the runtime flags below, this is *build* state, so it is persisted.
+    row. This is *build* state rather than runtime, but both are persisted now.
     """
 
     effect_id: str
@@ -119,6 +141,8 @@ class PowerEffectInstance:
     toggled_on: bool = True
     suppressed: bool = False
     attack_skill: str = ""
+    size_scales_damage: bool = True
+    current_rank: int | None = None
     overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -132,15 +156,26 @@ class PowerEffectInstance:
             "attack_skill": self.attack_skill,
         }
         # Written only when it says something, so an existing power's entry is
-        # byte-for-byte what it was.
+        # byte-for-byte what it was. That covers the runtime flags too: an effect
+        # nobody has switched off or dialled down writes none of them, so a save from
+        # before runtime was persisted is unchanged and still reads as all-active.
         if self.label:
             data["label"] = self.label
+        if not self.size_scales_damage:
+            data["size_scales_damage"] = False
+        if not self.toggled_on:
+            data["toggled_on"] = False
+        if self.suppressed:
+            data["suppressed"] = True
+        if self.current_rank is not None:
+            data["current_rank"] = self.current_rank
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
 
     @classmethod
     def from_dict(cls, raw: dict) -> PowerEffectInstance:
+        current = raw.get("current_rank")
         return cls(
             effect_id=raw["effect_id"],
             label=str(raw.get("label", "")),
@@ -150,6 +185,10 @@ class PowerEffectInstance:
             config=dict(raw.get("config", {})),
             descriptors=list(raw.get("descriptors", [])),
             attack_skill=raw.get("attack_skill", ""),
+            size_scales_damage=bool(raw.get("size_scales_damage", True)),
+            toggled_on=bool(raw.get("toggled_on", True)),
+            suppressed=bool(raw.get("suppressed", False)),
+            current_rank=None if current is None else int(current),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 
@@ -176,9 +215,9 @@ class Power:
     whether it is the currently-selected active one (only one member of an array is
     active at a time). All three default to the active state (see
     :func:`mm_companion.core.rules.effect_is_active`), so a standalone power and an
-    array's base are unaffected. Like the per-effect runtime flags, none of these are
-    **persisted** — they are left out of :meth:`to_dict`, so a loaded character comes
-    up in its default all-active state.
+    array's base are unaffected. Like the per-effect runtime flags they are persisted,
+    and written only when switched off, so a power nobody has touched adds nothing to
+    the file and an older save still loads all-active.
 
     An attack-skill link is per-effect now (see
     :attr:`PowerEffectInstance.attack_skill`), not whole-power.
@@ -216,6 +255,14 @@ class Power:
         }
         if self.cost_override is not None:
             data["cost_override"] = self.cost_override
+        # The runtime switches, written only when off — see the class docstring.
+        for key, value in (
+            ("activated", self.activated),
+            ("item_present", self.item_present),
+            ("array_active", self.array_active),
+        ):
+            if not value:
+                data[key] = False
         return data
 
     @classmethod
@@ -243,6 +290,9 @@ class Power:
             id=power_id,
             linked_with=list(raw.get("linked_with", [])),
             alternate_of=raw.get("alternate_of", ""),
+            activated=bool(raw.get("activated", True)),
+            item_present=bool(raw.get("item_present", True)),
+            array_active=bool(raw.get("array_active", True)),
             cost_override=None if raw_cost is None else int(raw_cost),
         )
 
@@ -279,9 +329,10 @@ class PowerGroup:
     ``active_child_id`` is *runtime* state (like :attr:`Power.array_active`): for an
     ``array`` group it names the currently-selected live child; empty means the first
     child. :func:`mm_companion.core.rules.power_trait_bonuses` descends only into the
-    active branch so an inactive array member's bonuses drop off the sheet. Being
-    runtime, it is **not persisted** — it is left out of :meth:`to_dict`, so a loaded
-    array defaults to its first child.
+    active branch so an inactive array member's bonuses drop off the sheet. It is
+    persisted with the rest of the runtime state, written only once a child has
+    actually been picked, so a group saved before this loads on its first child as it
+    always did.
 
     ``name`` is an optional player-given title for the group; when empty the UI falls
     back to a label derived from the :attr:`mode`.
@@ -294,13 +345,16 @@ class PowerGroup:
     name: str = ""
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "kind": "group",
             "mode": self.mode,
             "children": [c.to_dict() for c in self.children],
             "id": self.id,
             "name": self.name,
         }
+        if self.active_child_id:
+            data["active_child_id"] = self.active_child_id
+        return data
 
     @classmethod
     def from_dict(cls, raw: dict) -> PowerGroup:
@@ -309,6 +363,7 @@ class PowerGroup:
             mode=mode if mode in STRUCTURES else STRUCTURE_INDEPENDENT,
             children=[node_from_dict(c) for c in raw.get("children", [])],
             id=raw.get("id") or uuid4().hex,
+            active_child_id=str(raw.get("active_child_id", "")),
             name=raw.get("name", ""),
         )
 

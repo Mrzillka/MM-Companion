@@ -76,6 +76,14 @@
     "compact.min-height": 150,
     "_compact.button": "The diameter of the round button that floats over the roller's bottom-right corner and is the only way in and out of compact mode. Big enough to be found without hunting, small enough that the slice of roll history it covers is one card's corner.",
     "compact.button": 34,
+    "_gm.damage-button": "The diameter of one round degree-of-failure button on a GM card's damage row. Small: four of them plus a caption share the width of a 210px card, and the row repeats on every creature on the board.",
+    "gm.damage-button": 22,
+    "_gm.thumb": "The portrait on a collapsed GM card. Big enough to tell two goons apart at a glance and to be an easy click target, since it is still the only thing that opens the sheet.",
+    "gm.thumb": 30,
+
+    "_float.min-width": "How small a block popped out into its own window may be dragged. The same bargain the mini roller strikes above: the block lives in a scroll area, so past this it scrolls both ways rather than being clipped, and a popped-out block can be shrunk to a tile beside somebody else's application.",
+    "float.min-width": 200,
+    "float.min-height": 150,
 
     "card.margins": [8, 6, 8, 6],
     "card.margins.off": [5, 3, 5, 3],
@@ -87,10 +95,13 @@
 
     "column.stat.spin": 80,
     "column.skill.name": 100,
+    "column.skill.name-max": 200,
     "column.skill.spin": 56,
     "column.skill.mod": 36,
+    "column.advantage.name-max": 170,
     "column.advantage.desc": 180,
     "column.advantage.combo": 180,
+    "column.request-trait": 130,
     "column.settings.nav": 160,
     "column.settings.label": 230,
     "column.settings.value": 220,
@@ -103,6 +114,7 @@
   "_typography": "Point sizes, applied with QFont.setPointSizeF — never as a stylesheet font-size, which would outrank the widget font and break the power card's switched-off transition. A null family keeps the platform default.",
   "typography": {
     "family": null,
+    "family.mono": null,
     "size.card-name": 11.0,
     "size.terms": 8.0,
     "size.cost-total": 12.0,
@@ -110,7 +122,9 @@
     "size.dice-face.compact": 24.0,
     "size.roll-readout": 16.0,
     "size.compact-button": 15.0,
-    "scale.inactive": 0.9
+    "scale.inactive": 0.9,
+    "size.notes": 10.0,
+    "scale.notes.heading": 1.1
   },
 
   "_blocks": "Per-block size overrides layered over ui/block_sizes.json. Empty here: Classic keeps the shipped sizes.",

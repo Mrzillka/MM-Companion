@@ -27,6 +27,7 @@ from mm_companion.core.rules import (
     CATEGORY_PENALTY,
     CATEGORY_SKILL,
     GROUP_EQUIPMENT,
+    GROUP_INTRINSIC,
     GROUP_POWERS,
     STACK_MAX,
     STACK_SUM,
@@ -240,6 +241,51 @@ def test_a_tie_between_the_groups_goes_to_the_one_seen_first() -> None:
     plate = _bonus(3, source="Plate", stacking=STACK_MAX, group=GROUP_EQUIPMENT)
     resolved = resolve_contributions([field, plate])
     assert resolved.sources == ("Force Field",)
+
+
+# -- the intrinsic group: what the creature *is* ----------------------------------------
+
+
+def _intrinsic(amount: int, **kwargs):
+    kwargs.setdefault("source", "Size (Large)")
+    return _bonus(amount, group=GROUP_INTRINSIC, **kwargs)
+
+
+def test_size_alone_on_a_trait_resolves_without_a_group_to_join() -> None:
+    """The common case: a large character with no powers and no gear."""
+    resolved = resolve_contributions([_intrinsic(1)])
+    assert (resolved.amount, resolved.sources) == (1, ("Size (Large)",))
+    assert resolved.superseded == ()
+
+
+def test_size_is_added_on_top_of_whichever_group_won() -> None:
+    """Gear beats powers outright — but neither of them beats being Colossal."""
+    field = _bonus(2, source="Force Field")
+    plate = _bonus(6, source="Plate", stacking=STACK_MAX, group=GROUP_EQUIPMENT)
+    resolved = resolve_contributions([_intrinsic(4), field, plate])
+
+    assert resolved.amount == 10  # 6 from the winning group, plus 4 for being enormous
+    assert resolved.sources == ("Plate", "Size (Large)")
+
+
+def test_size_neither_supersedes_nor_is_superseded() -> None:
+    field = _bonus(2, source="Force Field")
+    plate = _bonus(6, source="Plate", stacking=STACK_MAX, group=GROUP_EQUIPMENT)
+    resolved = resolve_contributions([_intrinsic(4), field, plate])
+
+    beaten = {(s.source, s.beaten_by) for s in resolved.superseded}
+    assert beaten == {("Force Field", "Plate")}
+
+
+def test_a_negative_intrinsic_nets_against_a_bought_bonus() -> None:
+    """A small creature's Defence penalty is not a bonus to be picked over its rivals."""
+    resolved = resolve_contributions([_intrinsic(-2, source="Size (Tiny)"), _bonus(5)])
+    assert resolved.amount == 3
+
+
+def test_two_intrinsic_contributions_sum() -> None:
+    resolved = resolve_contributions([_intrinsic(1, source="A"), _intrinsic(2, source="B")])
+    assert resolved.amount == 3
 
 
 def test_resolve_bonuses_keys_by_category_then_stat() -> None:

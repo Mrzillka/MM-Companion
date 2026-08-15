@@ -15,7 +15,7 @@ instead (see :mod:`~mm_companion.ui.session_portrait`); a card with none shows a
 placeholder.
 
 The card is also where the GM *acts*: its "+" applies a condition straight onto
-that player's live sheet and a chip's "×" takes one off. Neither touches the
+that player's live sheet and a right-click on a chip takes one off. Neither touches the
 character here — the card only asks, the player's app applies it through the same
 rules resolver its own "+" uses, and the snapshot that comes back is what
 restates these chips. So what the GM sees is always the player's real state, not
@@ -55,6 +55,7 @@ from mm_companion.ui.sections.conditions import (
 )
 from mm_companion.ui.sections.system_info import HeroPointsWidget
 from mm_companion.ui.session_portrait import decode_portrait
+from mm_companion.ui.widgets import attach_context_removal
 
 #: How wide the card's own column is. Fixed, so a row of them lines up in the
 #: flow layout; the pinned-parameter strip adds its own width beside it.
@@ -316,9 +317,28 @@ class PlayerCard(QFrame):
 
 
 class _ConditionChip(QFrame):
-    """One condition, as a compact chip with an optional "×" to take it off."""
+    """One condition, as a compact chip a right-click takes off.
 
-    def __init__(self, text: str, *, tooltip: str = "", parent: QWidget | None = None) -> None:
+    The removal used to be a "×" on the chip. It is a right-click now, everywhere a
+    condition chip appears: the button was a third of the width of a short caption
+    like "Hit ×3", on the one part of a collapsed card that has to hold several of
+    them. See :func:`~mm_companion.ui.widgets.attach_context_removal` for the trade
+    that makes, and for why the tooltip has to say so.
+
+    *compact* is the collapsed GM card's version: the same chip in small print, so a
+    creature carrying five conditions still costs one line of a card that is mostly
+    pinned numbers. Only the type size and the padding change — a chip that reads
+    differently in the two states would be a second thing to recognise.
+    """
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        tooltip: str = "",
+        compact: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setStyleSheet(
             f"border: {int(theme.metric('border.width'))}px solid"
@@ -329,24 +349,44 @@ class _ConditionChip(QFrame):
         if tooltip:
             self.setToolTip(tooltip)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 1, 2, 1)
-        layout.setSpacing(2)
+        layout.setContentsMargins(*((3, 0, 1, 0) if compact else (5, 1, 2, 1)))
+        layout.setSpacing(1 if compact else 2)
         self._label = QLabel(text)
         self._label.setStyleSheet("border: none; background: transparent;")
+        if compact:
+            # On the QFont, never in the sheet above: a stylesheet ``font-size``
+            # outranks a widget's font everywhere in this app.
+            font = self._label.font()
+            font.setPointSizeF(theme.font_size("size.terms"))
+            self._label.setFont(font)
         layout.addWidget(self._label)
-        self._remove: QToolButton | None = None
+        self._compact = compact
+        self._removable = False
 
     def text(self) -> str:
         """The chip's caption — what :meth:`PlayerCard.condition_names` reads."""
         return self._label.text()
 
+    @property
+    def removable(self) -> bool:
+        """Whether a right-click here would take this condition off.
+
+        False on an offline player's chips: their card is a snapshot of somebody
+        else's sheet, and there is nobody to send the command to.
+        """
+        return self._removable
+
     def arm_removal(self, on_remove) -> None:
-        """Add the "×" that asks for this condition to come off."""
-        button = QToolButton()
-        button.setText("×")
-        button.setAutoRaise(True)
-        button.setStyleSheet("border: none; background: transparent;")
-        button.setToolTip(f"Remove {self.text()}")
-        button.clicked.connect(lambda checked=False: on_remove())
-        self.layout().addWidget(button)
-        self._remove = button
+        """Let a right-click ask for this condition to come off."""
+        attach_context_removal(self, on_remove, what=self.text())
+        self._removable = True
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Swallow a right-click that removal did not claim.
+
+        Reached only on a chip that cannot be removed — an offline player's, whose
+        app there is nobody to send the command to. Doing nothing is the point:
+        left to propagate, the click would reach the *card* and offer to remove the
+        player, which is not what someone aiming at a chip meant to ask for.
+        """
+        event.accept()

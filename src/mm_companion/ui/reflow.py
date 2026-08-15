@@ -178,6 +178,25 @@ class ReflowBox:
         self.updateGeometry()
         return True
 
+    def force_reflow(self, row: bool) -> bool:
+        """Put the parts on the given axis and leave them there.
+
+        For a widget whose shape is *chosen* rather than derived from the room
+        available — the roller's Compact and Extended preferences, which pin one
+        arrangement whatever the width. Pair it with a :meth:`sync_reflow` that
+        stands down while the choice is in force, or the next resize undoes it.
+
+        Guarded on the current axis, so calling it every resize (which a locked
+        widget does) neither re-applies the arrangement nor throws away whatever
+        the host has since divided between the parts.
+        """
+        if self.is_row == bool(row):
+            return False
+        self._reflow_row = bool(row)
+        self.apply_reflow(self._reflow_row)
+        self.updateGeometry()
+        return True
+
     def reflow_available_width(self) -> int:
         """The width the parts have to share, net of this widget's own margins."""
         layout = self.layout()

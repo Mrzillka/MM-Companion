@@ -1542,3 +1542,117 @@ def test_dev_mode_keeps_the_attack_skill_bonus_in_its_auto_values(qapp: QApplica
 
     # And nothing was recorded as an override just by opening the editor.
     assert card.instance.overrides == {}
+
+
+def test_allocation_checklist_is_tall_enough_for_every_wrapped_row(
+    qapp: QApplication,
+) -> None:
+    """A two-dozen-option checklist (Enhanced Senses, Enhanced Movement) wraps onto
+    several rows, and the card has to grow for all of them.
+
+    The flow deliberately reports no height-for-width, so a bare ``QWidget`` host is
+    sized by its one-row hint and the form row around it clips everything below the
+    first line. The host is a ``FlowContainer``, which pins its height to what the
+    flow really wraps to at the width it was given."""
+    from PySide6.QtWidgets import QCheckBox
+
+    from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+
+    window = PowerConstructorWindow(load_game_data())
+    for effect_id in ("enhanced_senses", "enhanced_movement"):
+        card = window.canvas.add_effect(effect_id)
+        window.show()
+        qapp.processEvents()
+
+        hosts = [
+            child
+            for child in card.findChildren(FlowContainer)
+            if isinstance(child.layout(), FlowLayout) and child.findChildren(QCheckBox)
+        ]
+        assert hosts, f"{effect_id} has no allocation checklist"
+        for host in hosts:
+            wrapped = host.layout().heightForWidth(host.width())
+            assert wrapped > host.layout().itemAt(0).sizeHint().height(), "expected >1 row"
+            assert host.height() >= wrapped, f"{effect_id}: checklist clipped"
+            # And the last option really lands inside the host, not painted past it.
+            last = host.findChildren(QCheckBox)[-1]
+            assert last.geometry().bottom() <= host.height()
+    window.close()
+
+
+# -- the Extended settings section ------------------------------------------------
+
+
+def test_extended_settings_appear_only_once_something_could_use_them(
+    qapp: QApplication,
+) -> None:
+    """The bargain the structure bar already makes: a control with no subject is hidden."""
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+
+    assert window._extended_row.isVisibleTo(window) is False
+
+    window.canvas.add_effect("flight")  # forces no resistance — still nothing to say
+    assert window._extended_row.isVisibleTo(window) is False
+
+    window.canvas.add_effect("damage")
+    assert window._extended_row.isVisibleTo(window) is True
+
+
+def test_the_size_switch_writes_every_effect_it_covers(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    window.canvas.add_effect("damage")
+    window.canvas.add_effect("affliction")
+
+    window._size_damage.setChecked(False)
+
+    assert [e.size_scales_damage for e in window.power.effects] == [False, False]
+
+
+def test_an_effect_added_later_inherits_the_switch(qapp: QApplication) -> None:
+    """Or turning it off and then adding an effect would quietly turn it back on."""
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    window.canvas.add_effect("damage")
+    window._size_damage.setChecked(False)
+
+    window.canvas.add_effect("affliction")
+
+    assert window._size_damage.isChecked() is False
+    assert all(not e.size_scales_damage for e in window.power.effects)
+
+
+def test_the_switch_seeds_from_the_power_it_opens_on(qapp: QApplication) -> None:
+    laser = Power(
+        name="Laser",
+        effects=[PowerEffectInstance("damage", rank=8, size_scales_damage=False)],
+    )
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character(), power=laser)
+
+    assert window._extended_row.isVisibleTo(window) is True
+    assert window._size_damage.isChecked() is False
+
+
+def test_the_switch_moves_the_save_dc_it_is_about(qapp: QApplication) -> None:
+    from mm_companion.core.rules import effect_effective_rank
+
+    data = load_game_data()
+    char = _pl10_character()
+    char.characteristics["size"] = "Huge"
+    window = PowerConstructorWindow(data, character=char)
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+
+    effect = window.power.effects[0]
+    assert effect_effective_rank(effect, data, char) == 10
+
+    window._size_damage.setChecked(False)
+    assert effect_effective_rank(effect, data, char) == 8
+
+
+def test_the_note_says_what_this_wielder_size_is_worth(qapp: QApplication) -> None:
+    char = _pl10_character()
+    char.characteristics["size"] = "Huge"
+    window = PowerConstructorWindow(load_game_data(), character=char)
+    window.canvas.add_effect("damage")
+
+    assert "Huge" in window._size_damage_note.text()
+    assert "+2" in window._size_damage_note.text()

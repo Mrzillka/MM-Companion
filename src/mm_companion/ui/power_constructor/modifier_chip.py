@@ -21,13 +21,13 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     effective_ability,
+    modifier_rank_cap,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
     CHIP_MIME,
-    RANK_MAX,
     STRENGTH_AMOUNT_MAX,
     TRAIT_SOURCES,
     _fill_trait_combo,
@@ -91,7 +91,10 @@ class ModifierChip(QFrame):
         self._title = QLabel(self._title_text())
         header.addWidget(self._title)
         if modifier.ranked:
-            rank = make_spin_box(1, RANK_MAX, value=selection.rank, buttons=False, max_width=44)
+            # The ceiling is the ruleset's when it states one (Striding's 5), never the
+            # widget's own number — see `modifier_rank_cap`.
+            cap = modifier_rank_cap(modifier)
+            rank = make_spin_box(1, cap, value=selection.rank, buttons=False, max_width=44)
             rank.setPrefix("×")
             rank.valueChanged.connect(self._on_rank_changed)
             header.addWidget(rank)

@@ -10,8 +10,9 @@ from ..data_loader import GameData
 from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
 from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
-from .powers_cost import effect_effective_rank
+from .powers_cost import effect_effective_rank, effect_size_rank_shift
 from .powers_terms import _effect_name, _effective_stats
+from .size import size_resistance_shift, size_skill_shift
 
 
 def effect_attack_skill_bonus(
@@ -67,6 +68,12 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
     - A resisted effect with **no attack roll** (auto-hit — Perception range, or a
       Perception-Range modifier) instead obeys ``effect_rank <= power_level``.
 
+    Both caps then shift by :func:`~.powers_cost.effect_size_rank_shift` — the ranks the
+    character's **size** is paying for. The Size Table raises a large creature's
+    Strength, so a Strength-Based Damage would otherwise breach a cap for being large;
+    the book raises the Damage limit by the same amount instead. An effect that folds no
+    ability in shifts by zero, so a Blast gains nothing.
+
     Returns one message per offending effect. Both caps derive from Power Level (the
     ``attack_effect`` cap for the ×2 ceiling), never hardcoded.
     """
@@ -75,7 +82,7 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
     if cap is None:
         return []
     power_level = char.power_level
-    limit = cap.limit(power_level)
+    base_limit = cap.limit(power_level)
 
     violations: list[str] = []
     for effect in power.effects:
@@ -91,6 +98,12 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         )
         impact = _effective_stats(effect, game_data)[3]
         rank = effect_effective_rank(effect, game_data, char)
+        # Size raises the Damage limit by as much as it raised the Strength folded into
+        # it, so a big creature is not charged twice for being big. Zero for an effect
+        # that folds no ability in, which is why a Blast gains nothing here.
+        size_shift = effect_size_rank_shift(effect, game_data, char)
+        limit = base_limit + size_shift
+        rank_limit = power_level + size_shift
         if effect_makes_attack(effect, game_data):
             attack = attack_ability + impact.check_bonus
             if attack + rank > limit:
@@ -98,9 +111,9 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
                     f"{base.name}: attack +{attack} plus rank {rank} = {attack + rank} "
                     f"exceeds the PL {power_level} cap of {limit}."
                 )
-        elif rank > power_level:  # auto-hit effect: rank alone is capped at PL
+        elif rank > rank_limit:  # auto-hit effect: rank alone is capped at PL
             violations.append(
-                f"{base.name} rank {rank} exceeds the PL {power_level} rank cap of {power_level}."
+                f"{base.name} rank {rank} exceeds the PL {power_level} rank cap of {rank_limit}."
             )
     return violations
 
@@ -190,7 +203,14 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
                 base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
                 if base is None or base.resistance_dc_base is None:
                     continue  # not an attack/resisted effect — these caps don't apply
+                # Size raises the effective rank *and* the cap it is measured
+                # against, so it has to come back off here or a big creature reads
+                # as needing a Power Level it does not: this is the same subtraction
+                # power_pl_violations makes by adding size_shift to its limits, and
+                # the two functions have to agree or the card claims a PL the
+                # validator says is legal several ranks lower.
                 rank = effect_effective_rank(effect, game_data, char)
+                rank -= effect_size_rank_shift(effect, game_data, char)
                 if effect_makes_attack(effect, game_data):
                     linked = effect_attack_skill_bonus(effect, char, game_data)
                     attack_ability = (
@@ -377,6 +397,15 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     special case to: :func:`resistance_total` reads the sheet-wide bonus, into which
     equipment contributions already flow (``docs/mm-equipment-design.md`` §2 — gear does
     not buy its way out of Power Level).
+
+    Size *does* get a special case, and it is one rule: **a cap moves by exactly what
+    size moved in its inputs**, so being large is never paid for twice. That is
+    :func:`~.size.size_skill_shift` per row and :func:`~.size.size_resistance_shift` per
+    paired trait — the latter following the resistance *derivation* rather than the
+    contribution list, since the Size Table's Defense column lands on the Defence trait
+    while the cap is written against Dodge. On the base ruleset the pair then cancels to
+    zero all by itself (Dodge −N, Toughness +N), which is the arithmetic the book
+    intends and the reason this is not simply "raise both caps".
     """
 
     caps = game_data.costs.power_level.caps
@@ -385,9 +414,10 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
 
     skill_cap = caps.get("skill_modifier")
     if skill_cap is not None:
-        limit = skill_cap.limit(pl)
+        base_limit = skill_cap.limit(pl)
         for row_id in char.skill_ranks:
             total = skill_total(char, game_data, row_id)
+            limit = base_limit + size_skill_shift(char, game_data, row_id)
             if total > limit:
                 violations.append(f"{row_id} modifier {total} exceeds PL cap {limit}.")
 
@@ -395,7 +425,9 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
         cap = caps.get(pair.cap)
         if cap is None:
             continue
-        limit = cap.limit(pl)
+        limit = cap.limit(pl) + sum(
+            size_resistance_shift(char, game_data, key) for key in pair.traits
+        )
         value = sum(resistance_total(char, game_data, key) for key in pair.traits)
         if value > limit:
             violations.append(f"{pair.label} {value} exceeds PL cap {limit}.")

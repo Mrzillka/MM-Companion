@@ -151,3 +151,32 @@ def test_clearing_the_card_pins_sends_every_card_back_to_the_defaults(_home: Pat
     storage.clear_gm_card_pins()
 
     assert load_settings()["gm_pins"] == {}
+
+
+# -- the dice roller's layout ------------------------------------------------
+
+
+def test_the_three_layouts_round_trip(_home: Path) -> None:
+    ensure_workspace()
+
+    for layout in storage.DICE_LAYOUTS:
+        storage.set_dice_layout(layout)
+        assert storage.dice_layout() == layout
+
+
+def test_an_unknown_layout_reads_and_writes_as_auto(_home: Path) -> None:
+    """The same fallback :func:`pl_enforcement` has, at both ends of the setting."""
+    ensure_workspace()
+
+    storage.set_dice_layout("sideways")
+    assert load_settings()["dice_layout"] == storage.DICE_LAYOUT_AUTO
+
+    update_settings(dice_layout="sideways")  # or hand-edited into the file
+    assert storage.dice_layout() == storage.DICE_LAYOUT_AUTO
+
+
+def test_the_layout_survives_a_workspace_that_predates_the_key(_home: Path) -> None:
+    ensure_workspace()
+    _drop_key("dice_layout")
+
+    assert storage.dice_layout() == storage.DICE_LAYOUT_AUTO

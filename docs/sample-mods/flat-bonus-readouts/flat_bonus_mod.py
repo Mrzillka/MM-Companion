@@ -22,12 +22,16 @@ from mm_companion.core.rules.powers_terms import READOUT_KINDS, EffectStat
 MOD_ID = "flat-bonus-readouts"
 
 
-def _flat_bonus(readout, effect, game_data):
+def _flat_bonus(readout, effect, game_data, char=None):
     """Render a ``flat_bonus`` readout as a single ``+N`` row.
 
     The size is the mod's ``bonus_amount`` option when the player has configured it
     (in the Mod Manager's *Configure…* dialog), otherwise the ``amount`` baked into
     the readout JSON — showing how a Python mod reads its own options at runtime.
+
+    ``char`` is the wielding character, or ``None`` when the readout is asked about in
+    the abstract; this readout has no use for it, but a relative one (a size shift)
+    does. Give it a default and a handler still works everywhere.
     """
     overrides = mods.mod_option_values(MOD_ID)
     amount = int(overrides.get("bonus_amount", readout.data.get("amount", 0)))

@@ -15,7 +15,8 @@ the session logic.
 Vocabulary (protocol v2):
 
 **Client → server** — :class:`Hello`, :class:`CharacterSnapshot`,
-:class:`RollRequest`, :class:`RemoveRollRequest`, :class:`Ping`.
+:class:`RollRequest`, :class:`NoteRequest`, :class:`RollPrompt`,
+:class:`RemoveRollRequest`, :class:`Ping`.
 
 **Server → client** — :class:`Welcome`, :class:`Roster`, :class:`RollAdded`,
 :class:`RollRemoved`, :class:`ApplyCondition`, :class:`RemoveCondition`,
@@ -57,7 +58,12 @@ from typing import ClassVar
 #: same "works until it suddenly doesn't" failure v5 was bumped for. Refusing at
 #: the door also means a table cannot end up half-updated, which is what makes
 #: the relay's stock idle timeout safe to trust again.
-PROTOCOL_VERSION = 7
+#:
+#: v8 added :class:`RollPrompt` — asking the table for a roll rather than making
+#: one — and the ``kind="request"`` record it becomes. Additive, and bumped for
+#: the v6 reason word for word: an old server rejects the unknown message type
+#: outright, and an old client renders a request as a d20 that rolled zero.
+PROTOCOL_VERSION = 8
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -262,6 +268,29 @@ class NoteRequest(Message):
     TYPE: ClassVar[str] = "note_request"
 
     text: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class RollPrompt(Message):
+    """A request that *somebody else* roll something: "Perception vs DC 15".
+
+    The asker rolls nothing. The server writes it into the shared log as a
+    ``kind="request"`` record and broadcasts it, and every client — the asker's
+    own screen included — renders it with a button that rolls it on that
+    character's sheet.
+
+    It carries one thing: the serialized
+    :class:`~mm_companion.core.rules.RollSpec` naming the trait and its
+    difficulty, run through :func:`sanitize_spec` exactly as a roll's is. Which is
+    the point of the shape — a request needs no field a roll did not already have,
+    so nothing about the spec on the wire changes and this file goes on knowing
+    nothing about traits.
+    """
+
+    TYPE: ClassVar[str] = "roll_prompt"
+
+    spec: dict | None = None
 
 
 @_register

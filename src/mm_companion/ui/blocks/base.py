@@ -36,6 +36,27 @@ from mm_companion.ui.block_sizes import BlockSize
 # block frame reparents them), so the factory is called with just the two.
 BlockFactory = Callable[[GameData, Character], QWidget]
 
+#: Separates a multi-instance block's template key from its instance number
+#: (``"notes#2"``). Chosen because no registered key contains it, so
+#: :func:`instance_template` is exact rather than a guess.
+INSTANCE_SEPARATOR = "#"
+
+
+def instance_template(key: str) -> str:
+    """The template key behind a block key: ``"notes#2" -> "notes"``.
+
+    The single rule for it. Anything keyed by *kind* of block rather than by the
+    particular one — ``block_sizes.json``, a preset's ``blocks`` overrides, the
+    merge test — asks this, so an instance is sized and themed like its template
+    and a per-instance key never has to appear in a config file.
+    """
+    return key.split(INSTANCE_SEPARATOR, 1)[0]
+
+
+def instance_key(template: str, number: int) -> str:
+    """The key of instance *number* of *template* (instance 1 is the bare key)."""
+    return template if number <= 1 else f"{template}{INSTANCE_SEPARATOR}{number}"
+
 
 @runtime_checkable
 class Block(Protocol):
@@ -69,6 +90,18 @@ class BlockDescriptor:
     ``subscribes`` maps a topic to the name of the block method that recomputes
     when it fires. Both default empty (a purely presentational block).
 
+    ``instance_factory`` is what makes a block one the sheet may build *more than
+    one of* — today only Notes. Supplying it makes the registered descriptor a
+    **template**: further instances take a key of ``"<key>#<n>"``, are built by
+    calling it with that key, and are held by the sheet rather than by the
+    registry (which, being keyed by block key, can only hold one of anything).
+    One field rather than a ``multi`` flag beside a lookup table, so a mod ships
+    a multi-instance block with nothing to register but its descriptor.
+    :func:`instance_template` is the one rule for reading a template key back out
+    of an instance key, and every lookup keyed by block (the size table, a
+    preset's ``blocks`` override) goes through it so an instance inherits the
+    template's entry.
+
     ``requests`` and ``serves`` are the same pair for the bus's **payload**
     channel, where one block asks another to *do* something rather than announcing
     that something changed: ``requests`` maps a Qt signal carrying the payload
@@ -88,3 +121,9 @@ class BlockDescriptor:
     subscribes: Mapping[str, str] = field(default_factory=dict)
     requests: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     serves: Mapping[str, str] = field(default_factory=dict)
+    instance_factory: Callable[[str], BlockFactory] | None = None
+
+    @property
+    def multi(self) -> bool:
+        """Whether the sheet may build more than one of this block."""
+        return self.instance_factory is not None

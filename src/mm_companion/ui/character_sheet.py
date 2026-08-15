@@ -23,6 +23,7 @@ host window can track unsaved changes.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
@@ -33,10 +34,13 @@ from mm_companion.core.rules import power_points_spent
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
+    INSTANCE_SEPARATOR,
     SignalBus,
     block_descriptors,
     default_pin_lines,
     default_rows,
+    instance_key,
+    instance_template,
     sync_declarative_blocks,
 )
 from mm_companion.ui.blocks.bus import (
@@ -44,6 +48,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     PIN_REQUESTED,
     QUIET_REQUESTS,
+    RESEED_TOPICS,
     UNPIN_REQUESTED,
 )
 from mm_companion.ui.pinned_panel import PinnedBoard
@@ -73,6 +78,11 @@ class CharacterSheet(QWidget):
         self.character = character or Character.new_default(self._data)
         self._npc = False
         self._locked = False
+        # True only while :meth:`reseed` is pushing a restored model back into the
+        # widgets. Putting an earlier state back is not a user edit, so the sheet
+        # must not report one while it happens.
+        self._restoring = False
+        self._undo = None
 
         # Register any data-described (declarative) blocks the active mods contribute
         # via blocks.json, so they join the registry before we iterate it below.
@@ -85,6 +95,11 @@ class CharacterSheet(QWidget):
         # feed the canvas's default arrangement.
         self._descriptors = block_descriptors()
         self._sections_by_key: dict[str, QWidget] = {}
+        # Every descriptor the sheet is currently running, keyed by block. Not the
+        # same list as the registry's: a multi-instance block (Notes) has one
+        # registered *template* and as many live descriptors as the user has made
+        # blocks, and those extras exist only here.
+        self._descriptor_by_key = {d.key: d for d in self._descriptors}
         panels = []
         sizes = {}
         for descriptor in self._descriptors:
@@ -94,7 +109,11 @@ class CharacterSheet(QWidget):
             panels.append((descriptor.key, descriptor.title, section))
             sizes[descriptor.key] = descriptor.size
         self._canvas = BlockCanvas(
-            panels, sizes, default_rows(), default_pinned=default_pin_lines()
+            panels,
+            sizes,
+            default_rows(),
+            default_pinned=default_pin_lines(),
+            instance_factory=self._build_instance,
         )
 
         self._scroll = QScrollArea()
@@ -118,6 +137,9 @@ class CharacterSheet(QWidget):
         # shrink narrow enough to clip a block (the fixed-width Abilities /
         # Resistances grids can't compress). Recomputed whenever the arrangement
         # changes — floating or hiding a block frees up the constraint.
+        # The block a tab was just split into, while its drag is still in flight.
+        self._split_key: str | None = None
+        self._canvas.merge_requested.connect(self._on_merge_requested)
         self._canvas.arrangement_changed.connect(self._update_min_width)
         self._update_min_width()
 
@@ -216,6 +238,163 @@ class CharacterSheet(QWidget):
         """Return the blocks to the default arrangement (un-float and un-hide)."""
         self._canvas.reset()
 
+    # -- multi-instance blocks ----------------------------------------------
+
+    def multi_templates(self) -> list:
+        """The registered descriptors a second copy can be made of (Notes)."""
+        return [d for d in block_descriptors() if d.multi]
+
+    def add_block_instance(self, template: str, *, near: str | None = None) -> str:
+        """Build another copy of the multi-instance block *template*.
+
+        Returns the new block's key. The number is the first one free rather than
+        one past the highest, so closing the middle of three and adding a fourth
+        reuses the gap instead of counting forever.
+        """
+        descriptor = next((d for d in self.multi_templates() if d.key == template), None)
+        if descriptor is None:
+            raise KeyError(f"{template!r} is not a multi-instance block")
+        key = self._free_instance_key(template)
+        title = f"{descriptor.title} {int(key.split(INSTANCE_SEPARATOR)[-1])}"
+        self._install_instance(descriptor, key, title, near=near)
+        return key
+
+    def remove_block_instance(self, key: str) -> None:
+        """Destroy a multi-instance block. The first instance is never removed.
+
+        The template's own key is the block every other sheet has, and closing it
+        is what the View menu's checkbox is for; only the copies a user made are
+        destroyable, which is also what keeps the default arrangement coherent.
+        """
+        if instance_template(key) == key or key not in self._sections_by_key:
+            return
+        section = self._sections_by_key.pop(key)
+        self._descriptor_by_key.pop(key, None)
+        self._descriptors = [d for d in self._descriptors if d.key != key]
+        flush = getattr(section, "flush", None)
+        if callable(flush):
+            flush()  # land any unwritten note before the widget goes
+        self._canvas.remove_block(key)
+        # The block is gone, so its entry in the model is nobody's. Left behind it
+        # would be an empty NotesState the next instance to reuse this key would
+        # inherit — and `notes#2` is reused as soon as the middle of three closes.
+        self.character.notes.pop(key, None)
+        section.setParent(None)
+        section.deleteLater()
+        attribute = key.replace(INSTANCE_SEPARATOR, "_")
+        if hasattr(self, attribute):
+            delattr(self, attribute)
+
+    def _free_instance_key(self, template: str) -> str:
+        number = 2
+        while instance_key(template, number) in self._sections_by_key:
+            number += 1
+        return instance_key(template, number)
+
+    def _build_instance(self, key: str):
+        """The canvas's hook: build the block a restored layout names.
+
+        Answers ``None`` for a key whose template is not a live multi-instance
+        block, which is what makes a layout naming a block this version no longer
+        has fail validation and fall back to the default rather than half-apply.
+        """
+        template = instance_template(key)
+        descriptor = next((d for d in self.multi_templates() if d.key == template), None)
+        if descriptor is None or key in self._sections_by_key:
+            return None
+        number = key.split(INSTANCE_SEPARATOR)[-1]
+        title = f"{descriptor.title} {number}" if number.isdigit() else descriptor.title
+        section = self._make_instance_section(descriptor, key)
+        return title, section, descriptor.size
+
+    def _make_instance_section(self, descriptor, key: str):
+        """Build and register one instance's section, wired onto the bus."""
+        section = descriptor.instance_factory(key)(self._data, self.character)
+        setattr(self, key.replace(INSTANCE_SEPARATOR, "_"), section)
+        self._sections_by_key[key] = section
+        instance = replace(descriptor, key=key)
+        self._descriptor_by_key[key] = instance
+        self._descriptors.append(instance)
+        self._wire_section(instance)
+        section.set_locked(self._locked)
+        return section
+
+    def _install_instance(self, descriptor, key: str, title: str, *, near: str | None) -> None:
+        section = self._make_instance_section(descriptor, key)
+        self._canvas.add_block(key, title, section, descriptor.size, near=near)
+
+    # -- merging and splitting ----------------------------------------------
+
+    def _connect_instance(self, section) -> None:
+        """Wire a block's split gesture, if it has one.
+
+        Called from :meth:`_wire_section` so the block built at startup and the
+        copies made later go through one path — connecting only the copies is
+        exactly the bug where a tab could be dragged out of every Notes block but
+        the first. Duck-typed like every other fan-out here, so a mod's
+        multi-instance block joins on the same terms Notes does.
+        """
+        for name, handler in (
+            ("splitRequested", self._on_split_requested),
+            ("splitMoved", self._on_split_moved),
+            ("splitReleased", self._on_split_released),
+        ):
+            signal = getattr(section, name, None)
+            if signal is not None:
+                signal.connect(lambda *args, s=section, h=handler: h(s, *args))
+
+    def _on_split_requested(self, section, ref: str, global_pos) -> None:
+        """A tab was dragged off its bar: give it a block of its own, mid-drag.
+
+        The new block is floated under the cursor and handed to the canvas's
+        ordinary drag controller, so the rest of the gesture is a block drag like
+        any other — it can be docked into a row, pinned to the strip, dropped
+        onto another Notes block to merge, or just let go to stay floating.
+        """
+        key = self._key_of(section)
+        if key is None:
+            return
+        new_key = self.add_block_instance(instance_template(key), near=key)
+        self._sections_by_key[new_key].adopt([ref], active=ref)
+        section.release(ref)
+        self._split_key = new_key
+        self._canvas.adopt_drag(new_key, global_pos)
+
+    def _on_split_moved(self, _section, global_pos) -> None:
+        if self._split_key is not None:
+            self._canvas.title_bar_moved(self._split_key, global_pos)
+
+    def _on_split_released(self, _section, global_pos) -> None:
+        key, self._split_key = self._split_key, None
+        if key is not None:
+            self._canvas.title_bar_released(key, global_pos)
+
+    def _on_merge_requested(self, source: str, target: str) -> None:
+        """A block was dropped onto another: move its content over and drop it.
+
+        The canvas asks rather than does, because the *sections* are the sheet's:
+        it knows nothing about tabs, and this is the only place that does.
+        """
+        giver = self._sections_by_key.get(source)
+        taker = self._sections_by_key.get(target)
+        if giver is None or taker is None or giver is taker:
+            return
+        refs = list(giver.open_refs())
+        for ref in refs:
+            giver.release(ref)
+        taker.adopt(refs, active=refs[-1] if refs else "")
+        # The template's own key is the block every sheet has and every layout
+        # names, so it stays where the drop put it, now empty; only a copy the
+        # user made is destroyed by being merged away.
+        if instance_template(source) != source:
+            self.remove_block_instance(source)
+
+    def _key_of(self, section) -> str | None:
+        for key, candidate in self._sections_by_key.items():
+            if candidate is section:
+                return key
+        return None
+
     # -- signal wiring -------------------------------------------------------
 
     def _wire_sections(self) -> None:
@@ -235,23 +414,10 @@ class CharacterSheet(QWidget):
         # on/off publishes BUILD_CHANGED but not EDITED, so a runtime toggle
         # re-derives without marking the character dirty.)
         self._bus.subscribe(BUILD_CHANGED, self._recompute_derived)
-        self._bus.subscribe(EDITED, self.edited.emit)
+        self._bus.subscribe(EDITED, self._relay_edited)
 
         for descriptor in self._descriptors:
-            section = self._sections_by_key[descriptor.key]
-            for signal_name, topics in descriptor.publishes.items():
-                signal = getattr(section, signal_name)
-                for topic in topics:
-                    signal.connect(self._bus.make_publisher(topic))
-            for topic, method_name in descriptor.subscribes.items():
-                self._bus.subscribe(topic, getattr(section, method_name))
-            # The payload channel: the same two tables, one topic further out.
-            for signal_name, topics in descriptor.requests.items():
-                signal = getattr(section, signal_name)
-                for topic in topics:
-                    signal.connect(self._bus.make_requester(topic))
-            for topic, method_name in descriptor.serves.items():
-                self._bus.serve(topic, getattr(section, method_name))
+            self._wire_section(descriptor)
 
         # A request is no use to a block the user has closed, so the sheet reveals
         # whichever block answers it. Named by *what it serves*, not by its key, so
@@ -270,6 +436,30 @@ class CharacterSheet(QWidget):
         # it is built), so seed the one build-wide readout the sheet owns — the
         # spent-power-points pool label — once now.
         self._recompute_derived()
+
+    def _wire_section(self, descriptor) -> None:
+        """Connect one block's four bus tables.
+
+        Its own method rather than the body of the constructor's loop, because a
+        multi-instance block joins the bus at *runtime* — a Notes block added from
+        the View menu has to be wired exactly as one built at startup, and one
+        copy of this is the only way those cannot drift.
+        """
+        section = self._sections_by_key[descriptor.key]
+        for signal_name, topics in descriptor.publishes.items():
+            signal = getattr(section, signal_name)
+            for topic in topics:
+                signal.connect(self._bus.make_publisher(topic))
+        for topic, method_name in descriptor.subscribes.items():
+            self._bus.subscribe(topic, getattr(section, method_name))
+        # The payload channel: the same two tables, one topic further out.
+        for signal_name, topics in descriptor.requests.items():
+            signal = getattr(section, signal_name)
+            for topic in topics:
+                signal.connect(self._bus.make_requester(topic))
+        for topic, method_name in descriptor.serves.items():
+            self._bus.serve(topic, getattr(section, method_name))
+        self._connect_instance(section)
 
     def _reveal_servers(self, topic: str) -> None:
         """Make sure every block serving *topic* is somewhere the user can see it.
@@ -310,10 +500,24 @@ class CharacterSheet(QWidget):
         return self._locked
 
     def set_locked(self, locked: bool) -> None:
-        """Toggle read-only view mode across every block (incl. floated ones)."""
+        """Toggle read-only view mode across every block (incl. floated ones).
+
+        Through the *frames* rather than the sections directly, because locking
+        changes how big a block is and the frame is what re-reports that (see
+        :meth:`BlockFrame.set_locked`). ``block_keys`` is every block — docked,
+        pinned, floated or hidden — which is the same set the sections give.
+
+        The page's minimum is an explicit number behind a ``QScrollArea``, so it is
+        the one link no invalidation can cross — the same break
+        :meth:`PinnedPanel.eventFilter` exists to bridge. It is recomputed here
+        rather than left to ``arrangement_changed``, because a lock toggle is not a
+        rearrangement. Nothing here writes the model or emits ``edited``: locking is
+        a view switch.
+        """
         self._locked = locked
-        for section in self._sections():
-            section.set_locked(locked)
+        for key in self._canvas.block_keys():
+            self._canvas.block_frame(key).set_locked(locked)
+        self._update_min_width()
 
     def release_roller(self) -> tuple[QWidget, QWidget] | None:
         """Lend the dice roller out to a compact window, or ``None`` if there is none.
@@ -367,6 +571,60 @@ class CharacterSheet(QWidget):
         :meth:`~mm_companion.ui.block_canvas.BlockCanvas.set_windows_suspended`.
         """
         self._canvas.set_windows_suspended(suspended)
+
+    def _relay_edited(self) -> None:
+        """Surface a block's edit — unless the sheet is the one that caused it.
+
+        The one chokepoint that catches every block *and* any mod block: six of the
+        base sections carry no ``_loading`` guard of their own, and a block's widgets
+        write the model and re-emit as they are re-seeded.
+        """
+        if not self._restoring:
+            self.edited.emit()
+
+    @property
+    def undo(self):
+        """This sheet's undo controller, or ``None`` — see :mod:`mm_companion.ui.undo`.
+
+        Held here rather than on the window because the two things that push changes
+        in from outside (a GM's session command, a replayed NPC damage rung) hold the
+        *sheet*, never the window that owns it.
+        """
+        return self._undo
+
+    def set_undo(self, controller) -> None:
+        """Give this sheet the controller that records and restores its states."""
+        self._undo = controller
+
+    def reseed(self) -> None:
+        """Restate every block from the model, which changed underneath them.
+
+        The other half of an undo (see :mod:`mm_companion.ui.undo`): the model has
+        already been put back, and this is what makes the widgets agree with it. Two
+        passes, and the split between them is the rule for adding a block —
+
+        * a block whose widgets hold model values directly exposes ``reseed()``, found
+          by name and duck-typed exactly like :meth:`sync_session`, so a mod block
+          joins on the same terms;
+        * everything a topic already restates is left to the topics. Powers and
+          Equipment have no ``reseed()`` for that reason: their ``refresh()`` *is* the
+          ``facts-changed`` handler, and a method here would rebuild the two costliest
+          card trees a second time.
+
+        Order-free, and deliberately so: the model is restored first and every refresh
+        reads it, so no block depends on another's widgets having been re-seeded yet.
+        ``edited`` is suppressed throughout — a restore is not an edit — and
+        ``RESEED_TOPICS`` is every notification topic but that one.
+        """
+        self._restoring = True
+        try:
+            for section in self._sections():
+                handler = getattr(section, "reseed", None)
+                if callable(handler):
+                    handler()
+            self._bus.publish_all(RESEED_TOPICS)
+        finally:
+            self._restoring = False
 
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference, fanned out like :meth:`sync_session`."""

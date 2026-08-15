@@ -18,14 +18,23 @@
       "sizeRank": "Roughly the character's height/length on the distance column of the measurements table",
       "spaces": "How much room (in Spaces) the character needs to move unhindered at this size",
       "reach": "Close-attack range in Spaces",
-      "defenseMod": "Modifier to the character's Defense Power Level limit at this size",
-      "damageMod": "Modifier to the character's Damage/Strength rank Power Level limit at this size",
-      "toughnessMod": "Modifier to the character's Toughness Power Level limit at this size",
+      "defenseMod": "Modifier to the character's Defense at this size, and to its Power Level limit by the same amount",
+      "damageMod": "Modifier to the rank of an effect the character's own size drives (see sizeRankColumn), and to its Damage Power Level limit by the same amount",
+      "toughnessMod": "Modifier to the character's Toughness at this size, and to its Power Level limit by the same amount",
       "speedMod": "Modifier to ground movement speed rank at this size",
       "intimidationMod": "Modifier to Intimidation skill checks at this size",
       "stealthMod": "Modifier to Stealth skill checks at this size"
-    }
+    },
+    "sizeEffectsNote": "Which trait each Size Table column modifies. The engine reads this rather than naming a trait in code, so a ruleset that calls its defence something else, or maps a column onto a different trait, only edits this list. A column mapped here also shifts the matching Power Level cap by the same amount, so a large character is not penalised twice. Two columns are deliberately absent because they modify something that is not a trait: 'speedMod' applies to the base ground movement rank (see movement.json), and 'damageMod' applies to an effect's rank (see sizeRankColumn).",
+    "sizeRankColumnNote": "Which Size Table column raises the effective rank of an effect that forces a resistance — how much harder a bigger creature hits. It is a rank, not a trait bonus, so it reaches the save DC and the Power Level cap together and leaves Strength (and with it carrying capacity and the Strength skills) alone. Each effect carries a player-set switch for it, on by default: a giant's fist hits harder, a giant's laser does not."
   },
+  "sizeRankColumn": "damageMod",
+  "sizeEffects": [
+    { "column": "defenseMod", "category": "resistance", "target": "DEF" },
+    { "column": "toughnessMod", "category": "resistance", "target": "TOUGHNESS" },
+    { "column": "intimidationMod", "category": "skill", "target": "Intimidation" },
+    { "column": "stealthMod", "category": "skill", "target": "Stealth" }
+  ],
   "rankMeasures": [
     {
       "rank": -5,

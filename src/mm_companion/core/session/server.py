@@ -60,6 +60,7 @@ from .protocol import (
     RemoveCondition,
     RemoveRollRequest,
     RollAdded,
+    RollPrompt,
     RollRemoved,
     RollRequest,
     Roster,
@@ -333,6 +334,19 @@ class SessionServer:
         if slot is None:
             raise KeyError(f"no player {player_id!r}")
         return self._record_note(slot, text)
+
+    def prompt_roll(self, spec: dict | None, *, player_id: str | None = None) -> RollRecord | None:
+        """Ask the table for a roll on behalf of the GM (or of *player_id*).
+
+        The third of the three ways an entry gets into the log, beside
+        :meth:`roll` and :meth:`note`, and the one path in for a
+        :class:`~.protocol.RollPrompt` from a client too.
+        """
+        with self._lock:
+            slot = self.state.players.get(player_id) if player_id else self.gm_slot()
+        if slot is None:
+            raise KeyError(f"no player {player_id!r}")
+        return self._record_request(slot, spec)
 
     def remove_roll(self, seq: int) -> bool:
         """Drop one roll from the shared log and tell every client (a GM action).
@@ -712,6 +726,11 @@ class SessionServer:
             )
         elif isinstance(message, NoteRequest):
             self._record_note(slot, message.text)
+        elif isinstance(message, RollPrompt):
+            # Deliberately not GM-only: asking the table to roll something is a
+            # thing any seat may do, and the entry is attributed to the seat it
+            # came from like every other.
+            self._record_request(slot, message.spec)
         elif isinstance(message, RemoveRollRequest) and slot.is_gm:
             # Removing a roll is a GM privilege; a player's request is ignored.
             self.remove_roll(message.seq)
@@ -819,6 +838,33 @@ class SessionServer:
                 player_id=slot.player_id,
                 player_name=slot.display_name,
                 text=text[:MAX_NOTE_CHARS],
+            )
+            self._append_roll(record)
+
+        payload = record.to_dict()
+        self._emit(EVENT_ROLL, payload)
+        self.broadcast(RollAdded(roll=payload))
+        return record
+
+    def _record_request(self, slot: PlayerSlot, spec: dict | None) -> RollRecord | None:
+        """Append a requested roll and publish it, the way a note is published.
+
+        The spec goes through :func:`~.protocol.sanitize_spec` for the reason a
+        roll's does — it is client-supplied data that will be rendered on other
+        people's screens — and a spec that does not survive it is dropped rather
+        than recorded, since a request with nothing to roll is a card with a dead
+        button on it. Never hidden: asking in secret would be asking nobody.
+        """
+        clean = sanitize_spec(spec)
+        if clean is None:
+            return None
+        with self._lock:
+            record = self.state.record_request(
+                player_id=slot.player_id,
+                player_name=slot.display_name,
+                label=str(clean.get("label", ""))[:MAX_LABEL_CHARS],
+                dc=clean.get("dc"),
+                spec=clean,
             )
             self._append_roll(record)
 

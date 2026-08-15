@@ -72,9 +72,26 @@ def test_to_dict_from_dict_round_trip() -> None:
     )
     char.cost_overrides["ability_per_rank"] = 3
     char.cost_overrides["pp_per_level"] = 20
+    char.skill_order = ["Stealth", "Acrobatics"]
+    char.hidden_skills = ["Vehicles"]
 
     restored = Character.from_dict(char.to_dict())
     assert restored == char
+
+
+def test_the_skills_display_state_is_omitted_when_untouched() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A player who has not reordered or removed a skill row saves neither key, so a
+    # character written before the Skills block could be rearranged round-trips
+    # byte-for-byte.
+    saved = char.to_dict()
+    assert "skill_order" not in saved
+    assert "hidden_skills" not in saved
+
+    restored = Character.from_dict(saved)
+    assert restored.skill_order == []
+    assert restored.hidden_skills == []
 
 
 def test_cost_overrides_are_omitted_when_empty() -> None:
@@ -456,6 +473,68 @@ def test_clean_build_has_no_violations() -> None:
     char.abilities["AGL"] = 2
     char.skill_ranks["Stealth"] = 4  # total 6, well under cap
     assert power_level_violations(char, data) == []
+
+
+# -- being large is never paid for twice ------------------------------------------
+
+
+def _capped(data, size: str = "Medium"):
+    """A character sitting exactly on the Dodge + Toughness cap."""
+    char = Character.new_default(data)
+    char.power_level = 10
+    char.characteristics["size"] = size
+    char.abilities["STA"] = 10  # Toughness 10
+    char.resistances["DEF"] = 10  # Dodge 10
+    return char
+
+
+def test_size_trips_no_paired_cap_warning_on_its_own() -> None:
+    """Dodge loses what Toughness gains, so the pair is unmoved and needs no shift."""
+    data = load_game_data()
+    for size in ("Medium", "Large", "Huge", "Small"):
+        assert power_level_violations(_capped(data, size), data) == [], size
+
+
+def test_the_paired_cap_still_bites_when_the_build_really_is_over() -> None:
+    data = load_game_data()
+    char = _capped(data, "Huge")
+    char.resistances["DEF"] = 11
+
+    assert any("Dodge" in v for v in power_level_violations(char, data))
+
+
+def test_size_trips_no_attack_cap_warning_on_the_effect_it_scaled() -> None:
+    """The rank and its cap move together, which is the book's own arithmetic."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+    from mm_companion.core.rules import power_pl_violations
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 10
+    char.abilities["ATK"] = 10
+    fists = Power(name="Fists", effects=[PowerEffectInstance("damage", rank=10)])
+
+    for size in ("Medium", "Large", "Colossal"):
+        char.characteristics["size"] = size
+        assert power_pl_violations(fists, char, data) == [], size
+
+
+def test_size_hands_an_unscaled_effect_no_extra_cap() -> None:
+    """A giant's laser is not a giant's fist — with the switch off, nothing moves."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+    from mm_companion.core.rules import power_pl_violations
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 10
+    char.abilities["ATK"] = 10
+    char.characteristics["size"] = "Colossal"
+    laser = Power(
+        name="Laser",
+        effects=[PowerEffectInstance("damage", rank=11, size_scales_damage=False)],
+    )
+
+    assert any("exceeds" in v for v in power_pl_violations(laser, char, data))
 
 
 def test_estimated_power_level_is_zero_for_a_trait_less_character() -> None:

@@ -112,6 +112,15 @@ def _focus_rules(theme: Theme) -> str:
     The only visible sign of the wheel guard's rule that a spin box or combo box
     ignores the scroll wheel until it holds keyboard focus — without it, "why did
     my scroll go to the page?" has no answer on screen.
+
+    A ring **thicker than the resting border eats the label**, and that is the
+    whole of :func:`_focus_padding` below. A widget's size hint is computed from
+    its resting rule, so the extra border width has nowhere to come from but the
+    text: clicking a button took two pixels off its content rect and clipped the
+    tail of its caption ("Open…" came out "Open.."). It only showed on the styled
+    presets, whose ``space.lg`` padding leaves a button exactly wide enough for
+    its words; Classic's buttons carry the platform's own 80px minimum and had
+    tens of pixels of slack to lose.
     """
     ring = _color(theme, "focus.ring")
     width = int(_metric(theme, "focus.width", 2))
@@ -122,8 +131,28 @@ def _focus_rules(theme: Theme) -> str:
         f"{selector} {{\n"
         f"    border: {width}px solid {ring};\n"
         f"    border-radius: {radius}px;\n"
-        f"}}"
+        f"}}" + _focus_padding(theme)
     )
+
+
+def _focus_padding(theme: Theme) -> str:
+    """Give back, as padding, whatever the focus ring took as border.
+
+    Only for a ``styled`` preset, because only there does the sheet state the
+    resting padding this has to subtract from — under ``system`` the platform owns
+    the box and there is no number here to correct. ``:focus`` carries a
+    pseudo-state, so it outranks the plain ``QPushButton`` rule wherever the two
+    sit in the sheet; this does not depend on ordering the way
+    :func:`_arrow_column_rules` does.
+    """
+    if not theme.styled:
+        return ""
+    extra = int(_metric(theme, "focus.width", 2)) - int(_metric(theme, "border.width", 1))
+    if extra <= 0:
+        return ""
+    vertical = max(int(_metric(theme, "space.xs", 2)) - extra, 0)
+    horizontal = max(int(_metric(theme, "space.lg", 8)) - extra, 0)
+    return f"\nQPushButton:focus {{ padding: {vertical}px {horizontal}px; }}"
 
 
 def _arrow_column_rules(theme: Theme, columns: ArrowColumns) -> str:
@@ -185,6 +214,7 @@ def _chrome_rules(theme: Theme) -> str:
     muted = c("text.muted")
     border = c("border.block")
     width = m("border.width")
+    focus_width = m("focus.width", 2)
     radius_block = m("radius.block", m("radius.card"))
     radius_field = m("radius.field", m("radius.card"))
     pad = m("space.sm")
@@ -200,8 +230,16 @@ def _chrome_rules(theme: Theme) -> str:
             "/* menus */\n"
             f"QMenuBar {{ background: {window}; color: {text}; }}\n"
             f"QMenuBar::item:selected {{ background: {titlebar}; }}\n"
+            # Stating a flat colour above takes the platform's *disabled* painting
+            # with it — the same bargain as ``QPushButton:checked`` (see the module
+            # docstring): once a property is stated, ``QStyleSheetStyle`` stops
+            # painting that property's states. The bar carries real disabled actions
+            # now (Undo and Redo with an empty history), and a button that looks live
+            # but does nothing reads as broken rather than as empty.
+            f"QMenuBar::item:disabled {{ color: {muted}; }}\n"
             f"QMenu {{ background: {block}; color: {text};"
             f" border: {width}px solid {border}; }}\n"
+            f"QMenu::item:disabled {{ color: {muted}; }}\n"
             f"QMenu::item:selected {{ background: {c('accent')};"
             f" color: {c('text.on-badge')}; }}",
             # One block: a titled frame on the block surface. Surfaces stop here —
@@ -289,9 +327,24 @@ def _chrome_rules(theme: Theme) -> str:
             # `border: none` here would make the glyph jump sideways the moment it
             # lit up; that is the same lesson QuickRollStar carries.
             #
+            # `color` is stated in *both* states, and the resting one is not
+            # belt-and-braces: without it Qt paints a tool button's label white,
+            # which is invisible on a light preset — Parchment's block title bars
+            # had all but lost their pin/float/close glyphs that way.
+            #
             # The lit state is the accent, not surface.card: on both dark presets
             # surface.card is *darker* than the title bar it sits on (~1.05:1),
-            # which is also why hover barely reads there.
+            # which is also why hover barely reads there. It also states `color`,
+            # and must: stating a background is enough for QStyleSheetStyle to stop
+            # painting the label's own state, and a checked tool button came out
+            # with **no visible text at all** on the dark presets — the same trap
+            # the menu block's :disabled rule carries, one widget further on.
+            #
+            # The resting border is `focus.width`, not `border.width`, so the ring,
+            # the checked border and the resting one are all the same box. A tool
+            # button carries no padding to give back the way a push button does
+            # (see _focus_padding), so a thicker ring would have nowhere to take
+            # its pixels from but the label.
             "/* buttons */\n"
             f"QPushButton {{\n"
             f"    border: {width}px solid {border};\n"
@@ -300,10 +353,12 @@ def _chrome_rules(theme: Theme) -> str:
             f"}}\n"
             f"QPushButton:hover {{ border-color: {c('accent')}; }}\n"
             f"QToolButton {{ background: transparent;"
-            f" border: {width}px solid transparent;"
+            f" color: {text};"
+            f" border: {focus_width}px solid transparent;"
             f" border-radius: {radius_field}px; }}\n"
             f"QToolButton:hover {{ background: {c('surface.card', block)}; }}\n"
             f"QToolButton:checked {{ background: {rgba(c('accent'), 0.25)};"
+            f" color: {text};"
             f" border-color: {c('accent')}; }}\n"
             f"QToolButton:checked:hover {{ background: {rgba(c('accent'), 0.35)}; }}",
         )

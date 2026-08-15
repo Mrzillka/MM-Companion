@@ -120,6 +120,7 @@ from mm_companion.ui.cards import (
     effects_block,
     terms_style,
 )
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.platform_editor import PlatformEditorDialog, platform_kind_title
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
@@ -131,6 +132,7 @@ from mm_companion.ui.widgets import (
     hline_separator,
     make_spin_box,
     muted_style,
+    preserved_scroll,
     tinted_style,
 )
 
@@ -306,9 +308,15 @@ class EquipmentSection(TitledSection):
         layout.addWidget(self._groups_host)
 
         # Two ways to acquire gear, side by side because they answer different
-        # questions: "what is there?" and "what do I have in mind?".
-        self._buttons = QWidget()
-        button_row = QHBoxLayout(self._buttons)
+        # questions: "what is there?" and "what do I have in mind?" — but *wrapping*
+        # rather than in a fixed row. Three buttons abreast are 360px wide, and a
+        # block only shows them unlocked, so the block was 120px wider unlocked than
+        # locked: toggling the lock resized the block while the window stayed put,
+        # and the content clipped. Wrapping puts the unlocked minimum back under the
+        # locked one (one button, not three), which is what makes the width
+        # lock-invariant — see tests/test_lock_geometry.py.
+        self._buttons = FlowContainer()
+        button_row = FlowLayout(self._buttons, spacing=6)
         button_row.setContentsMargins(0, 0, 0, 0)
         self._add_button = QPushButton("Add Equipment")
         self._add_button.setToolTip("Browse the catalog and pick something off it")
@@ -664,6 +672,12 @@ class EquipmentSection(TitledSection):
         self._rebuild_list()
 
     def _rebuild_list(self) -> None:
+        # Wearing an item rebuilds every card, and the block is momentarily empty while
+        # it does — see PowersSection._rebuild_list for what that costs the page.
+        with preserved_scroll(self):
+            self._rebuild_cards()
+
+    def _rebuild_cards(self) -> None:
         grouped = self._grouped_items()
         # Hand the on-screen progress over to the cards about to be built, and start a
         # fresh map, so a removed item leaves nothing behind for a later one to inherit.

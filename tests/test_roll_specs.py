@@ -13,8 +13,12 @@ from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    KIND_ABILITY,
+    KIND_INITIATIVE,
     KIND_POWER_CHECK,
     KIND_POWER_SAVE,
+    KIND_RESISTANCE,
+    KIND_SKILL,
     RollSpec,
     ability_roll,
     apply_condition,
@@ -137,6 +141,31 @@ def test_a_strength_based_damage_raises_the_save_dc_it_forces(hero, data) -> Non
     # 10 + (rank 2 folded with Strength 4): the effective rank sets the DC, the
     # bought rank pays for it.
     assert save.dc == 16
+
+
+def test_a_large_wielder_forces_a_harder_save(hero, data) -> None:
+    """The Size Table's Damage column reaches the DC through the effective rank."""
+    power = Power(name="Fists", effects=[PowerEffectInstance("damage", rank=8)])
+
+    hero.characteristics["size"] = "Medium"
+    assert power_rolls(power, hero, data)[1].dc == 18
+
+    hero.characteristics["size"] = "Large"
+    assert power_rolls(power, hero, data)[1].dc == 19
+
+    hero.characteristics["size"] = "Colossal"
+    assert power_rolls(power, hero, data)[1].dc == 22
+
+
+def test_a_power_opted_out_of_size_scaling_forces_the_dc_it_always_did(hero, data) -> None:
+    """The constructor's Extended settings switch, seen from the dice footer."""
+    power = Power(
+        name="Laser",
+        effects=[PowerEffectInstance("damage", rank=8, size_scales_damage=False)],
+    )
+    hero.characteristics["size"] = "Colossal"
+
+    assert power_rolls(power, hero, data)[1].dc == 18
 
 
 def test_a_multi_effect_power_says_which_effect_each_roll_belongs_to(hero, data) -> None:
@@ -313,3 +342,59 @@ def test_localizing_leaves_alone_what_it_cannot_answer(hero, data) -> None:
     # No sheet behind the roller (GM Mode) — the Bonus slider is the answer.
     _attack, save = power_rolls(_blast(), hero, data)
     assert localize_spec(save, None, data) is save
+
+
+def test_localizing_fills_in_an_ability_a_skill_and_initiative(hero, data) -> None:
+    """A requested roll is answered on the reader's own sheet, whatever it names.
+
+    The four kinds a request may ask for, each travelling at 0 as a save does and
+    each coming back with this character's number.
+    """
+    asked = {
+        KIND_ABILITY: ("STR", 4),  # Strength 4
+        KIND_RESISTANCE: ("TOUGHNESS", 5),  # Stamina 5
+        KIND_SKILL: ("Athletics", 9),  # Strength 4 + 5 ranks
+        KIND_INITIATIVE: ("initiative", initiative_roll(hero, data).modifier),
+    }
+    for kind, (key, expected) in asked.items():
+        spec = RollSpec(label="asked for", kind=kind, trait_key=key)
+        assert localize_spec(spec, hero, data).modifier == expected, kind
+
+
+def test_localizing_reads_the_key_together_with_the_kind(hero, data) -> None:
+    """The kind is what disambiguates a key, and a wrong pairing answers nothing.
+
+    "Athletics" is a real skill row and not an ability, so a spec claiming it is an
+    ability is left alone rather than resolved by whichever table matches first.
+    """
+    wrong = RollSpec(label="Athletics", kind=KIND_ABILITY, trait_key="Athletics")
+    assert localize_spec(wrong, hero, data) is wrong
+    gone = RollSpec(label="Ectoplasm", kind=KIND_ABILITY, trait_key="ECTO")
+    assert localize_spec(gone, hero, data) is gone
+
+
+def test_a_spec_off_ones_own_sheet_is_never_localized(hero, data) -> None:
+    """The regression that matters: the gate is the trait key, not the kind.
+
+    Every builder here leaves the key empty, so a trait double-clicked on one's own
+    sheet already carries this character's number. Localizing on the kind alone
+    would add it a second time — an Initiative readout of +3 rolling at +6.
+    """
+    for spec in (
+        ability_roll(hero, data, "STR"),
+        resistance_roll(hero, data, "TOUGHNESS"),
+        skill_roll(hero, data, "Athletics"),
+        initiative_roll(hero, data),
+    ):
+        assert spec.trait_key == ""
+        assert localize_spec(spec, hero, data) is spec
+
+
+def test_a_trait_key_with_no_kind_still_means_a_resistance(hero, data) -> None:
+    """Back-compat: before requested rolls, a key could only name a resistance.
+
+    A save built by hand, or written by an older client, carries no kind — and the
+    one card this mechanism exists for must go on filling in Toughness.
+    """
+    legacy = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS")
+    assert localize_spec(legacy, hero, data).modifier == 5

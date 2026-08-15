@@ -276,8 +276,7 @@ def test_moving_a_pinned_block_into_its_own_line_gives_it_a_fair_share(make_shee
 def test_the_strip_shrinks_back_when_the_block_needing_the_room_moves_away(make_sheet) -> None:
     # Regression: pinning a wide block pushes the strip open, and the board recorded
     # that width as if it had been dragged there. Move the block to a line of its
-    # own and the strip stayed wide, leaving dead space beside a block (Abilities is
-    # fixed at 280) that could not fill it — until the strip was resized by hand.
+    # own and the strip stayed wide — until it was resized by hand.
     sheet = make_sheet()
     sheet.pin_block("conditions")
     _settle()
@@ -293,8 +292,11 @@ def test_the_strip_shrinks_back_when_the_block_needing_the_room_moves_away(make_
     assert sheet.board.panel.width() == narrow
     frame = sheet.block_frame("abilities")
     slot = sheet.board.panel._lines[0].slots[0]
-    # Whatever room is left beside it is the strip's own minimum, not a stale width.
-    assert slot.width() - frame.width() == narrow - frame.maximumWidth()
+    # And the block occupies that width rather than sitting in a stale, wider one.
+    # Abilities states no bounds of its own any more (its table reports its real
+    # content), so it fills its slot exactly instead of leaving dead space beside it.
+    assert frame.width() == slot.width()
+    assert frame.minimumSizeHint().width() <= narrow
 
 
 def test_a_thickness_the_user_dragged_to_is_kept(make_sheet) -> None:
@@ -623,9 +625,14 @@ def test_dragging_a_pinned_block_back_onto_the_page_docks_it(make_sheet) -> None
 def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -> None:
     # Regression: on the way into the strip a block is briefly given zero height by
     # a container that hasn't been sized yet; its inner layout cached that (a
-    # *negative* geometry) and, because a fixed-size block reaches its real size
-    # while hidden, no resize event ever made Qt run the layout again. The block
-    # drew as an empty framed box until the strip was resized by hand.
+    # *negative* geometry) and no resize event ever made Qt run the layout again.
+    # The block drew as an empty framed box until the strip was resized by hand.
+    #
+    # Waited for **twice**, and one longer wait is not the same thing: the strip
+    # converges its thickness over several turns, and a block that is free to
+    # stretch (which every block now is — see test_block_sizes) is still riding
+    # that convergence when the first one ends. The question here is where the
+    # block *lands*, not what it looks like one frame in.
     sheet = make_sheet()
     canvas = sheet.canvas
     panel = sheet.board.panel
@@ -635,11 +642,14 @@ def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -
     beside = line.mapToGlobal(QPoint(line.width() - 5, line.height() // 2))
     _drag(canvas, sheet, "abilities", beside)
     _wait()
+    _wait()
 
     frame = sheet.block_frame("abilities")
     assert frame.layout().geometry().height() > 0
     assert frame.title_bar.height() > 0
     assert frame.section.height() > 0
+    # Laid out *by its slot*, not left at the width it had on the page.
+    assert frame.width() == frame.parentWidget().width()
 
 
 def test_dragging_one_pinned_block_beside_another_joins_its_line(make_sheet) -> None:
@@ -860,3 +870,96 @@ def test_the_page_scroll_area_is_still_the_sheets_own(make_sheet) -> None:
     assert isinstance(page, QScrollArea)
     assert sheet.board.page_scroll_area() is page
     assert page.widget() is sheet.canvas
+
+
+# -- what a render costs ----------------------------------------------------
+
+
+def test_a_page_side_change_does_not_re_settle_the_strip(make_sheet) -> None:
+    # Regression: the canvas re-renders the strip on every structural change, and
+    # the board re-asserted the thickness each time — even when the strip itself had
+    # not changed. On a stock sheet that request can never be met (the default extent
+    # is 320 against the Dice block's 360 floor), so every dock, drop, hide and show
+    # burned the full retry budget: five setSizes over ~80ms, fighting a minimum that
+    # was already satisfied. That was the jitter when rearranging blocks.
+    sheet = make_sheet(empty_strip=False)  # the stock strip, whose floor beats the extent
+    _settle()
+    _wait()
+    board = sheet.board
+    board._settle_tries = 0  # from here, any retry belongs to the rearrangement below
+    sizes = board._splitter.sizes()
+
+    sheet.dock_block("skills", 0, 0, new_row=True)
+    _settle()
+
+    assert board._settle_tries == 0
+    assert not board._settle.isActive()
+    assert board._splitter.sizes() == sizes  # the strip was not touched at all
+
+
+def test_a_change_to_the_strip_itself_still_settles(make_sheet) -> None:
+    # The other half: the retries exist for a *stale* minimum, which is exactly what
+    # a rebuild leaves behind — so a real change to the strip must still converge.
+    sheet = make_sheet(empty_strip=False)
+    _settle()
+    _wait()
+    board = sheet.board
+    board._settle_tries = 0
+
+    sheet.pin_block("conditions")
+    _settle()
+
+    assert board._settle_tries > 0 or board._settle.isActive()
+
+
+def test_the_strip_reports_whether_it_rebuilt(make_sheet) -> None:
+    """The contract the board reads to decide whether to settle."""
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    _settle()
+    panel = sheet.board.panel
+    args = (
+        [[sheet.block_frame(key) for key in line] for line in sheet.canvas._pinned],
+        sheet.canvas._pin_edge,
+        sheet.canvas._pin_align,
+        sheet.canvas._pin_sizes,
+        sheet.canvas._pin_line_sizes,
+    )
+    assert panel.set_blocks(*args) is False  # nothing moved -> skipped
+    panel.invalidate()
+    assert panel.set_blocks(*args) is True  # a restore always rebuilds
+
+
+def test_a_restore_rebuilds_the_strip_even_with_the_same_blocks_in_it(make_sheet) -> None:
+    # keys/edge/align are all set_blocks compares, so a layout restoring the same
+    # blocks at different proportions is invisible to it. invalidate() is the only
+    # thing that makes it look again — which is why apply_arrangement calls it, and
+    # this test is the fence on that call.
+    sheet = make_sheet()
+    sheet.resize(1900, 900)  # slack, or the two minimums fill the line exactly
+    sheet.pin_block("conditions")
+    sheet.pin_block("advantages", line=0, slot=1, new_line=False)
+    _settle()
+    board = sheet.board
+    page, strip = board._splitter.sizes()
+    board._splitter.setSizes([page - 300, strip + 300])
+    board._splitter.splitterMoved.emit(page - 300, 1)  # a handle drag: widen the strip
+    _settle()
+    _wait()
+
+    model = sheet.arrangement()
+    within = model["pinned"]["line_sizes"][0]
+    assert len(within) == 2
+    total = sum(within)
+    floors = [sheet.block_frame(k).minimumSizeHint().width() for k in ("conditions", "advantages")]
+    assert total > sum(floors) + 40, "no slack to redistribute; widen the strip further"
+    # Give the second block everything the first does not need.
+    model["pinned"]["line_sizes"][0] = [floors[0], total - floors[0]]
+    before = board.block_sizes()[0]
+
+    sheet.canvas.apply_arrangement(model)
+    _settle()
+    _wait()
+
+    after = board.block_sizes()[0]
+    assert after != before  # the restore was not swallowed by the early return

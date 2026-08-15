@@ -108,14 +108,28 @@ class PortraitButton(QLabel):
     :meth:`set_clickable` is what a player card gates on — before the first
     snapshot arrives there is no sheet to open, so the cursor and the tooltip stay
     off rather than promising something that would do nothing.
+
+    *size* is how big a box it draws in. A collapsed GM card wants a thumbnail
+    rather than the full portrait, and it is still the only thing there that opens
+    a sheet — so it is the same widget at a different size, not a second affordance
+    with its own rules. At thumbnail sizes "No image" does not fit, hence
+    *placeholder*.
     """
 
     clicked = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(NO_IMAGE, parent)
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        size: int = PORTRAIT_SIZE,
+        placeholder: str = NO_IMAGE,
+    ) -> None:
+        super().__init__(placeholder, parent)
+        self._size = size
+        self._placeholder = placeholder
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(PORTRAIT_SIZE, PORTRAIT_SIZE)
+        self.setFixedSize(size, size)
         self.setFrameShape(QLabel.Shape.Box)
         self._clickable = False
         self.set_clickable(True)
@@ -131,14 +145,14 @@ class PortraitButton(QLabel):
     def set_image(self, pixmap: QPixmap | None) -> None:
         """Show *pixmap* scaled into the box, or the placeholder for ``None``."""
         if pixmap is None or pixmap.isNull():
-            self.setText(NO_IMAGE)
+            self.setText(self._placeholder)
             self.setPixmap(QPixmap())
             return
         self.setText("")
         self.setPixmap(
             pixmap.scaled(
-                PORTRAIT_SIZE,
-                PORTRAIT_SIZE,
+                self._size,
+                self._size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )

@@ -14,6 +14,7 @@ from mm_companion.ui.sections.advantages import (
     SORT_RANK,
     SORT_TYPE,
     AdvantagesSection,
+    name_max_width,
 )
 
 
@@ -84,7 +85,7 @@ def test_type_sort_groups_by_type(qapp: QApplication) -> None:
     assert _names(section) == ["Agile Grab", "Assessment", "Animal Empathy"]
 
 
-def test_manual_move_mutates_the_model(qapp: QApplication) -> None:
+def test_dragging_a_row_mutates_the_model(qapp: QApplication) -> None:
     section = _section(
         [
             AdvantageSelection("Assessment", 1),
@@ -94,22 +95,61 @@ def test_manual_move_mutates_the_model(qapp: QApplication) -> None:
     )
     assert section._sort_mode == SORT_MANUAL
 
-    section._selected = section._character.advantages[2]  # Animal Empathy
-    section._move_selected(-1)  # move it earlier
+    advantages = section._character.advantages
+    # Animal Empathy, dropped on the near side of Agile Grab.
+    section.move_advantage(advantages[2], advantages[1], before=True)
 
-    assert [s.name for s in section._character.advantages] == [
-        "Assessment",
-        "Animal Empathy",
-        "Agile Grab",
-    ]
+    assert _names(section) == ["Assessment", "Animal Empathy", "Agile Grab"]
 
 
-def test_move_at_the_edge_is_a_no_op(qapp: QApplication) -> None:
+def test_dropping_a_row_on_itself_is_a_no_op(qapp: QApplication) -> None:
     section = _section([AdvantageSelection("Assessment", 1), AdvantageSelection("Benefit", 1)])
-    section._selected = section._character.advantages[0]
-    section._move_selected(-1)  # already first
+    first = section._character.advantages[0]
+    section.move_advantage(first, first, before=True)
 
-    assert [s.name for s in section._character.advantages] == ["Assessment", "Benefit"]
+    assert _names(section) == ["Assessment", "Benefit"]
+
+
+def test_a_row_dropped_past_the_last_one_goes_to_the_end(qapp: QApplication) -> None:
+    section = _section(
+        [
+            AdvantageSelection("Assessment", 1),
+            AdvantageSelection("Agile Grab", 1),
+            AdvantageSelection("Animal Empathy", 1),
+        ]
+    )
+    advantages = section._character.advantages
+    section.move_advantage(advantages[0], advantages[2], before=False)
+
+    assert _names(section) == ["Agile Grab", "Animal Empathy", "Assessment"]
+
+
+def test_the_row_menu_removes_that_advantage_alone(qapp: QApplication) -> None:
+    """Removal is by identity: two Benefits are two rows, and one goes."""
+    section = _section(
+        [
+            AdvantageSelection("Benefit", 1, "Wealth"),
+            AdvantageSelection("Assessment", 1),
+            AdvantageSelection("Benefit", 1, "Status"),
+        ]
+    )
+    table, row, selection = section._row_refs[2]
+    assert section._remove_label(table, row) == "Remove Benefit"
+
+    section._remove_row(table, row)
+
+    assert [s.parameter for s in section._character.advantages if s.name == "Benefit"] == ["Wealth"]
+    assert selection not in section._character.advantages
+
+
+def test_a_locked_block_offers_no_remove(qapp: QApplication) -> None:
+    section = _section([AdvantageSelection("Assessment", 1)])
+    section.set_locked(True)
+
+    table, row, _ = section._row_refs[0]
+    assert section._remove_label(table, row) is None
+    # ...and the drag stands down with it: reordering is a build edit.
+    assert section._reorder._enabled() is False
 
 
 def test_row_refs_map_every_advantage(qapp: QApplication) -> None:
@@ -230,3 +270,71 @@ def test_heroic_ranks_free_backs_both_the_picker_cap_and_the_add_refusal() -> No
     # Over-budget reports negative rather than clamping — the callers decide.
     char.advantages.append(AdvantageSelection(heroic.name, rank=9))
     assert heroic_advantage_ranks_free(char, data) < 0
+
+
+# -- the Advantage column's width ----------------------------------------------
+
+#: An advantage whose subject the player types, which is what makes the column's
+#: content unbounded and is the whole reason it is capped.
+LONG_SUBJECT = "Wealthy — a controlling stake in a multiplanetary mega-corporation"
+
+
+def _shown(section: AdvantagesSection, width: int = 900) -> AdvantagesSection:
+    section.resize(width, 700)
+    section.show()
+    for _ in range(10):
+        QApplication.processEvents()
+    return section
+
+
+def test_a_long_advantage_name_wraps_instead_of_widening_the_block(
+    qapp: QApplication,
+) -> None:
+    """The Advantage column stops at its cap and the name takes a second line.
+
+    It used to be ``ResizeToContents``, so a subject the player typed grew the column
+    without limit: the stretching Description column paid for it, and the block
+    demanded that much room wherever it was put.
+    """
+    section = _shown(
+        _section(
+            [
+                AdvantageSelection(name="Benefit", rank=3, parameter=LONG_SUBJECT),
+                AdvantageSelection(name="Improved Initiative", rank=2),
+            ]
+        )
+    )
+    table = section._tables[0]
+    row = next(entry.row for entry in section._row_refs if entry.key.name == "Benefit")
+    text = table.item(row, 0).text()
+
+    assert section._name_col_width() == name_max_width()
+    assert table.columnWidth(0) == name_max_width()
+    # Too long for that share, so the row grew rather than the column.
+    assert table.fontMetrics().horizontalAdvance(text) > table.columnWidth(0)
+    assert table.rowHeight(row) >= table.sizeHintForRow(row)
+
+
+def test_a_typed_subject_does_not_widen_what_a_panel_demands(qapp: QApplication) -> None:
+    """``_min_col_width`` is the flow's divisor and the section's reported minimum.
+
+    So while it tracked the name column's raw content, one long subject was enough to
+    drop the block to a single panel and pin the page open at it. The claim is that it
+    has *stopped growing* — asserted by making the subject three times longer again,
+    which is font-independent in a way that comparing against a short one is not.
+    """
+    long = _section([AdvantageSelection(name="Benefit", rank=1, parameter=LONG_SUBJECT)])
+    longer = _section(
+        [AdvantageSelection(name="Benefit", rank=1, parameter=" ".join([LONG_SUBJECT] * 3))]
+    )
+
+    assert long._min_col_width() == longer._min_col_width()
+    assert long._name_col_width() == name_max_width()
+
+
+def test_the_advantage_header_is_never_clipped(qapp: QApplication) -> None:
+    """The floor: an empty block still has "Advantage" to print."""
+    section = _shown(_section([]))
+
+    header = section._tables[0].fontMetrics().horizontalAdvance("Advantage")
+    assert section._name_col_width() >= header

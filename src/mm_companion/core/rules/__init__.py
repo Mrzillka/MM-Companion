@@ -11,9 +11,13 @@ trait lists, never hardcoded.
 Split from a single module into subsystem submodules; every public name is
 re-exported here so ``from mm_companion.core.rules import X`` keeps working
 unchanged. Submodules form a dependency DAG: ``appliers`` → ``runtime``/``advantages``/
-``conditions`` (base) → ``derived`` → ``powers_cost`` →
-``costs``/``movement``/``powers_terms`` → ``platforms`` → ``equipment`` →
+``conditions`` (base) → ``size`` → ``derived`` → ``powers_cost`` →
+``costs``/``movement``/``powers_terms``/``damage`` → ``platforms`` → ``equipment`` →
 ``validation`` → ``rolls`` → ``pins``.
+
+``size`` sits below ``derived`` on purpose: the Size Table grants real trait
+modifiers, so ``derived`` imports it, and it must therefore reach nothing that
+reaches ``derived`` back.
 """
 
 from .accessories import *  # noqa: F401,F403
@@ -21,6 +25,7 @@ from .advantages import *  # noqa: F401,F403
 from .appliers import *  # noqa: F401,F403
 from .conditions import *  # noqa: F401,F403
 from .costs import *  # noqa: F401,F403
+from .damage import *  # noqa: F401,F403
 from .derived import *  # noqa: F401,F403
 from .equipment import *  # noqa: F401,F403
 from .movement import *  # noqa: F401,F403
@@ -30,4 +35,5 @@ from .powers_cost import *  # noqa: F401,F403
 from .powers_terms import *  # noqa: F401,F403
 from .rolls import *  # noqa: F401,F403
 from .runtime import *  # noqa: F401,F403
+from .size import *  # noqa: F401,F403
 from .validation import *  # noqa: F401,F403

@@ -21,6 +21,7 @@ from .appliers import (
 )
 from .conditions import ConditionEffect, condition_scope_penalty
 from .runtime import equipment_contributions, power_contributions
+from .size import size_contributions
 
 
 def advantage_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
@@ -60,20 +61,26 @@ def advantage_contributions(char: Character, game_data: GameData) -> tuple[Trait
 def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
     """Every stat contribution standing on the sheet, in the order the sheet grants them.
 
-    The one place the derived totals gather what is raising a trait: the active powers
+    The one place the derived totals gather what is raising a trait: the character's
+    size (:func:`~.size.size_contributions`), then the active powers
     (:func:`~.runtime.power_contributions`), then the advantages
     (:func:`advantage_contributions`), then the worn gear
     (:func:`~.runtime.equipment_contributions`). Conditions are deliberately absent —
     they are a display-only overlay and never part of the build.
 
-    Order matters twice over. The first two are the Power-Point group and *sum*, so a
-    sheet with no equipment nets exactly what it always did; the gear arrives last in
-    its own group, where the resolver takes the better of the two rather than adding
-    them, and a tie goes to whichever group was seen first — the powers.
+    Order matters twice over. Size comes first because it is the one thing here nobody
+    bought: it sits in :data:`~.appliers.GROUP_INTRINSIC` and is added on top of
+    whatever wins, so where it appears changes no number — only which source a tooltip
+    names first, and what the creature *is* reads first. Of the rest, the powers and
+    advantages are the Power-Point group and *sum*, so a sheet with no equipment nets
+    exactly what it always did; the gear arrives last in its own group, where the
+    resolver takes the better of the two rather than adding them, and a tie goes to
+    whichever group was seen first — the powers.
     """
 
     return (
-        power_contributions(char, game_data)
+        size_contributions(char, game_data)
+        + power_contributions(char, game_data)
         + advantage_contributions(char, game_data)
         + equipment_contributions(char, game_data)
     )

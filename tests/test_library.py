@@ -9,6 +9,7 @@ import pytest
 from mm_companion.core import library, storage
 from mm_companion.core.character import AdvantageSelection, AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.powers import Power, PowerEffectInstance
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +41,26 @@ def test_save_then_load_round_trips_the_character(_home: Path) -> None:
 
     restored = library.load_character(path)
     assert restored == char
+
+
+def test_save_then_load_reopens_a_size_power_at_the_rung_it_was_left_at(_home: Path) -> None:
+    """The bug this pair of flags was persisted for.
+
+    A Growth 3 dialled down to Large, and a second power switched off, are decisions
+    about the character that half a dozen of the sheet's numbers hang off. Reopening
+    the file used to come back at Gargantuan with everything switched on.
+    """
+    char = _sample_character()
+    growth = Power(name="Growth", effects=[PowerEffectInstance("growth", rank=3)])
+    growth.effects[0].current_rank = 1
+    shrinking = Power(name="Shrinking", effects=[PowerEffectInstance("shrinking", rank=4)])
+    shrinking.activated = False
+    char.powers += [growth, shrinking]
+
+    restored = library.load_character(library.save_character(char))
+
+    assert restored.powers[0].effects[0].current_rank == 1
+    assert restored.powers[1].activated is False
 
 
 def test_save_with_explicit_path_overwrites_in_place(_home: Path) -> None:

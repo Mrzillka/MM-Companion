@@ -18,6 +18,7 @@ from mm_companion.core import notes
 from mm_companion.core.character import Character, NotesState
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.notes.events import note_events
 
 
 @pytest.fixture(scope="module")
@@ -641,3 +642,85 @@ def test_every_notes_block_can_be_split_from_not_just_the_copies(make_sheet, two
 
     assert sheet._split_key == "notes#3"
     assert sheet._sections_by_key["notes#3"].open_refs() == (log,)
+
+
+# -- the file under the tab ----------------------------------------------------
+
+
+def test_a_note_that_would_not_write_stays_dirty(make_sheet, two_notes, monkeypatch) -> None:
+    """write_note answers rather than raising, and that answer has to be read.
+
+    Dropping it declared the text written, cleared the dirty set, and left the next
+    refresh free to overwrite the editor from a file that never got the paragraph.
+    """
+    origin, _log = two_notes
+    sheet = make_sheet()
+    block = sheet.notes
+    block.open_note(origin)
+    item = block._open[0]
+    item.editor.set_text("something worth keeping")
+    block._on_note_edited(item.editor)
+
+    monkeypatch.setattr(notes, "write_note", lambda ref, text: False)
+    block.flush()
+
+    assert item.editor in block._dirty
+    assert item.editor.text() == "something worth keeping"
+
+
+def test_deleting_a_note_does_not_write_it_back(make_sheet, two_notes) -> None:
+    """Closing flushes, so a delete used to re-create the file it had just removed.
+
+    write_note builds the parent directory on the way, so nothing downstream stops
+    it — the note came back from the dead with the last keystroke inside it.
+    """
+    origin, _log = two_notes
+    sheet = make_sheet()
+    block = sheet.notes
+    block.open_note(origin)
+    block._open[0].editor.set_text("typed just before the delete")
+    block._on_note_edited(block._open[0].editor)
+
+    notes.delete_note(origin)
+    note_events().deleted.emit(origin)
+
+    assert notes.resolve_note_path(origin) is not None
+    assert not notes.resolve_note_path(origin).exists()
+    assert origin not in sheet.character.notes["notes"].files
+
+
+def test_a_delete_reaches_every_block_holding_the_note(make_sheet, two_notes) -> None:
+    """The picker belongs to one block; the file belongs to the workspace.
+
+    A second block with the same note open kept a ref to a file that was gone, and
+    the next keystroke there wrote it back out — two blocks, silently disagreeing.
+    """
+    origin, _log = two_notes
+    sheet = make_sheet()
+    first = sheet.notes
+    first.open_note(origin)
+    second = sheet._sections_by_key[sheet.add_block_instance("notes")]
+    second.open_note(origin)
+    assert origin in second.open_refs()
+
+    notes.delete_note(origin)
+    note_events().deleted.emit(origin)
+
+    assert origin not in first.open_refs()
+    assert origin not in second.open_refs()
+
+
+def test_a_rename_reaches_every_block_holding_the_note(make_sheet, two_notes) -> None:
+    """Same reasoning as the delete: both holders have to follow the file."""
+    origin, _log = two_notes
+    sheet = make_sheet()
+    first = sheet.notes
+    first.open_note(origin)
+    second = sheet._sections_by_key[sheet.add_block_instance("notes")]
+    second.open_note(origin)
+
+    new_ref = notes.rename_note(origin, "Beginnings")
+    note_events().renamed.emit(origin, new_ref)
+
+    assert first.open_refs() == (new_ref,)
+    assert second.open_refs() == (new_ref,)

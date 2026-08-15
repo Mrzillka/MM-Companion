@@ -43,6 +43,7 @@ from mm_companion.core import notes
 from mm_companion.core.character import Character, NotesState
 from mm_companion.core.data_loader import GameData
 from mm_companion.ui.notes.editor import NoteEditor
+from mm_companion.ui.notes.events import note_events
 from mm_companion.ui.notes.picker import NotePickerDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.widgets import muted_style
@@ -191,6 +192,13 @@ class NotesSection(QGroupBox):
         self._autosave.setSingleShot(True)
         self._autosave.setInterval(0)
         self._autosave.timeout.connect(self.flush)
+
+        # Renames and deletions are workspace events, not this picker's: the same
+        # note can be open in a second block after a split, or on another sheet
+        # entirely, and every holder has to follow it (see ui/notes/events.py).
+        events = note_events()
+        events.renamed.connect(self._follow_rename)
+        events.deleted.connect(self._follow_delete)
 
         self.reseed()
         self._loading = False
@@ -344,8 +352,6 @@ class NotesSection(QGroupBox):
         if self._picker is None:
             self._picker = NotePickerDialog(self, open_refs=self.open_refs())
             self._picker.noteChosen.connect(self.open_note)
-            self._picker.noteRenamed.connect(self._follow_rename)
-            self._picker.noteDeleted.connect(self._follow_delete)
         else:
             self._picker.set_open_refs(self.open_refs())
         self._picker.show()
@@ -368,8 +374,19 @@ class NotesSection(QGroupBox):
         self.edited.emit()
 
     def _follow_delete(self, ref: str) -> None:
-        if ref in self._state().files:
-            self._close_ref(ref)
+        """A note's file left the workspace; drop the tab without writing it back.
+
+        The discard is the whole point. ``_close_ref`` flushes first, so closing a
+        just-deleted note re-created the file it had only now removed — and
+        ``write_note`` builds the parent directory on its way, so there was nothing
+        to stop it. Anything typed into a note being deleted is being deleted too.
+        """
+        if ref not in self._state().files:
+            return
+        for item in self._open:
+            if item.ref == ref:
+                self._dirty.discard(item.editor)
+        self._close_ref(ref)
 
     # -- tabs ----------------------------------------------------------------
 
@@ -500,11 +517,22 @@ class NotesSection(QGroupBox):
         self._autosave.stop()
         if not self._dirty:
             return
+        # A note that would not write stays dirty. write_note is careful to answer
+        # rather than raise (a read-only file, a full disk, a Windows lock), and
+        # dropping that answer meant the text was declared written, never retried,
+        # and then overwritten from disk by the next refresh — the paragraph gone
+        # with nothing on screen having said so.
+        unwritten: set[NoteEditor] = set()
         for item in self._open:
-            if item.editor in self._dirty:
-                notes.write_note(item.ref, item.editor.text())
+            if item.editor not in self._dirty:
+                continue
+            if notes.write_note(item.ref, item.editor.text()):
                 item.mtime = notes.note_mtime(item.ref)
-        self._dirty.clear()
+            else:
+                unwritten.add(item.editor)
+        self._dirty = unwritten
+        if unwritten:
+            self._autosave.start()  # try again on the next settle
         self._refresh_tab_captions()
         self._emit_title()
 

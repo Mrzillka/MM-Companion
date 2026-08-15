@@ -203,7 +203,14 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
                 base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
                 if base is None or base.resistance_dc_base is None:
                     continue  # not an attack/resisted effect — these caps don't apply
+                # Size raises the effective rank *and* the cap it is measured
+                # against, so it has to come back off here or a big creature reads
+                # as needing a Power Level it does not: this is the same subtraction
+                # power_pl_violations makes by adding size_shift to its limits, and
+                # the two functions have to agree or the card claims a PL the
+                # validator says is legal several ranks lower.
                 rank = effect_effective_rank(effect, game_data, char)
+                rank -= effect_size_rank_shift(effect, game_data, char)
                 if effect_makes_attack(effect, game_data):
                     linked = effect_attack_skill_bonus(effect, char, game_data)
                     attack_ability = (

@@ -20,7 +20,7 @@ from .appliers import (
 from .conditions import condition_speed_rank_mod
 from .powers_cost import effect_effective_rank
 from .runtime import build_contributions, effect_is_active, live_powers, worn_items
-from .size import effective_size_rank
+from .size import base_size_rank, effective_size_rank
 
 # -- movement / speed ------------------------------------------------------------
 
@@ -65,6 +65,27 @@ def _size_speed_mod(char: Character, game_data: GameData) -> int:
     return row.speed_mod if row else 0
 
 
+def _size_speed_shift(char: Character, game_data: GameData) -> int:
+    """How much of the speed modifier an active size power is responsible for.
+
+    The difference between the effective row's ``speed_mod`` and the *bought* row's —
+    which is the only part a "your speed isn't reduced while shrunk" extra has any
+    claim on. The whole row's modifier is not: a character who is simply Small owns
+    that penalty, and cancelling it would have their Shrinking make them faster than
+    they are with the power switched off.
+
+    It has to be a difference rather than the effect's rank, too. The rank is what the
+    effect was *bought* at, while the row follows what it is currently dialled to
+    (:func:`~.runtime.effect_current_rank`), and the Size Table clamps at its ends — so
+    the two agree only on a linear stretch of the table with nothing dialled, and part
+    company exactly when someone uses the ladder.
+    """
+
+    effective = _size_speed_mod(char, game_data)
+    row = game_data.measurements.size_row(base_size_rank(char, game_data))
+    return effective - (row.speed_mod if row else 0)
+
+
 def _ground_penalty_removed(char: Character, game_data: GameData) -> int:
     """How much of a ground-speed *penalty* something active cancels.
 
@@ -97,12 +118,16 @@ def base_ground_speed_rank(char: Character, game_data: GameData) -> int:
     The cancellation is **clamped at zero**: lifting a penalty can leave you at your
     normal speed and no faster, so a Shrinking 2 with Normal Speed 4 walks at its base
     rank rather than running. It also only ever reaches a *negative* modifier — a Growth
-    is not a penalty to be cancelled.
+    is not a penalty to be cancelled — and only the part of it a size power *added*
+    (:func:`_size_speed_shift`), so a character who is simply Small keeps their own −1
+    however much of their Shrinking is cancelled.
     """
 
     size_mod = _size_speed_mod(char, game_data)
-    if size_mod < 0:
-        size_mod = min(0, size_mod + _ground_penalty_removed(char, game_data))
+    shift = _size_speed_shift(char, game_data)
+    if shift < 0:
+        cancelled = min(-shift, _ground_penalty_removed(char, game_data))
+        size_mod += cancelled
     return game_data.movement.base_ground_speed_rank + size_mod
 
 

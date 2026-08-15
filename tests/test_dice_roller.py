@@ -25,9 +25,10 @@ from PySide6.QtWidgets import QApplication, QBoxLayout, QLabel, QPushButton
 
 from mm_companion.core import storage
 from mm_companion.core.dice import resolve_check
+from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
-from mm_companion.ui.dice_roller import DiceRollerView, degree_text
+from mm_companion.ui.dice_roller import DiceRollerPanel, DiceRollerView, degree_text
 from mm_companion.ui.roll_history import (
     HISTORY_FLOOR_HEIGHT,
     MAX_QUICK_ROLLS,
@@ -710,3 +711,56 @@ def test_a_hidden_roll_never_reaches_the_wire(
     assert [roll.hidden for roll in recorded] == [True]
     assert hosting.server.state.visible_rolls() == []
     assert "only you" in panel._readout.text()
+
+
+@pytest.mark.parametrize("preference", [storage.DICE_LAYOUT_COMPACT, storage.DICE_LAYOUT_EXTENDED])
+def test_a_chosen_shape_is_offered_the_width_it_asks_for(qapp, preference: str) -> None:
+    """A panel that will not reflow must not be measured as one that might.
+
+    Only Extended took the locked branch, so a Compact preference fell through to
+    the auto one and was sized at its row-of-three minimum — an arrangement it is
+    pinned out of adopting. On a wide block that handed the controls two thirds of
+    the width and squeezed the history, the opposite of what Compact is for.
+    """
+    view = DiceRollerView()
+    view.set_layout(preference)
+    view.resize(1000, 500)
+    view.show()
+    qapp.processEvents()
+
+    panel_width, history_width = view._splitter.sizes()
+
+    assert panel_width == view.panel.sizeHint().width()
+    assert history_width > panel_width
+
+
+def test_clearing_the_chip_takes_back_the_dc_it_brought(qapp) -> None:
+    """The ✕ on the chip means "forget what I loaded", DC included.
+
+    A spec that names its own difficulty ticks the box; unloading it left the box
+    ticked, so every later manual roll was graded against a trait that was no longer
+    there. Requests made this the common path rather than a rare one.
+    """
+    panel = DiceRollerPanel()
+    panel.load_spec(RollSpec(label="Toughness", modifier=0, dc=18))
+    assert panel._dc_check.isChecked()
+    assert panel._dc_spin.value() == 18
+
+    panel.load_spec(None)
+
+    assert not panel._dc_check.isChecked()
+
+
+def test_a_dc_the_player_typed_is_left_alone(qapp) -> None:
+    """The guard on the one above: only a DC the chip supplied is withdrawn."""
+    panel = DiceRollerPanel()
+    panel._dc_check.setChecked(True)
+    panel._dc_spin.setValue(15)
+
+    panel.load_spec(RollSpec(label="Athletics", modifier=4))  # brings no DC of its own
+    assert panel._dc_check.isChecked()
+    assert panel._dc_spin.value() == 15
+
+    panel.load_spec(None)
+    assert panel._dc_check.isChecked()
+    assert panel._dc_spin.value() == 15

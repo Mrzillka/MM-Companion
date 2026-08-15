@@ -87,14 +87,17 @@ def test_the_lock_really_is_changing_the_widgets(sheet: CharacterSheet) -> None:
     If a future preset or platform style made unlocking a no-op for every widget,
     the invariance test would pass while measuring nothing at all. Something must
     move — it just has to be the height, or a width the block's floor absorbs.
+
+    Both dimensions, because that sentence means it: measuring only the width made
+    this a claim about the very thing the test above forbids, and it held solely
+    because some section happened to widen. Under a font where none did — DejaVu on
+    a Linux runner — the guard failed while the lock was working perfectly.
     """
     sheet.set_locked(True)
-    locked = {key: sheet.block_frame(key).section.sizeHint().width() for key in sheet.block_keys()}
+    locked = {key: sheet.block_frame(key).section.sizeHint() for key in sheet.block_keys()}
     sheet.set_locked(False)
     _settle()
-    unlocked = {
-        key: sheet.block_frame(key).section.sizeHint().width() for key in sheet.block_keys()
-    }
+    unlocked = {key: sheet.block_frame(key).section.sizeHint() for key in sheet.block_keys()}
     assert any(locked[key] != unlocked[key] for key in locked)
 
 

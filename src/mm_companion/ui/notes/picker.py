@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import notes
+from mm_companion.ui.notes.events import note_events
 from mm_companion.ui.widgets import muted_style
 
 HELP_TEXT = (
@@ -46,11 +47,6 @@ class NotePickerDialog(QDialog):
 
     #: The note reference the user picked.
     noteChosen = Signal(str)
-    #: A note's file was renamed (old ref, new ref); anyone holding the old one
-    #: should follow, since it no longer resolves.
-    noteRenamed = Signal(str, str)
-    #: A note's file was deleted; anyone holding it should close it.
-    noteDeleted = Signal(str)
 
     def __init__(self, parent: QWidget | None = None, *, open_refs: tuple[str, ...] = ()) -> None:
         super().__init__(parent)
@@ -160,8 +156,9 @@ class NotePickerDialog(QDialog):
         self.reload()
         if new_ref != ref:
             # Whoever has it open is holding the old filename, which no longer
-            # resolves; the block listens for this and follows the rename.
-            self.noteRenamed.emit(ref, new_ref)
+            # resolves. Announced workspace-wide rather than to this dialog's own
+            # block: the same note can be open in another block or another window.
+            note_events().renamed.emit(ref, new_ref)
 
     def _delete(self, ref: str) -> None:
         confirm = QMessageBox.question(
@@ -176,4 +173,4 @@ class NotePickerDialog(QDialog):
             return
         notes.delete_note(ref)
         self.reload()
-        self.noteDeleted.emit(ref)
+        note_events().deleted.emit(ref)

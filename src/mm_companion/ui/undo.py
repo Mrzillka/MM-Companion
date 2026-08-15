@@ -285,6 +285,18 @@ class UndoController(QObject):
         self._baseline = self._snapshot()
         self._saved = self._baseline
 
+    @property
+    def has_saved_baseline(self) -> bool:
+        """Whether there is a saved state to compare against at all.
+
+        A sheet that has never been written has nothing to be clean *against*, so
+        :meth:`at_saved_state` answers False for it — which is right for "is this
+        on disk?" and wrong for "should the title show a marker?". A caller
+        re-deriving the dirty flag asks this first and leaves a never-saved sheet
+        to whatever its own edits said.
+        """
+        return self._saved is not None
+
     def at_saved_state(self) -> bool:
         """Whether the model currently matches what was last saved.
 

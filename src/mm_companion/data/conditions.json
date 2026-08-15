@@ -313,7 +313,7 @@
         "stunned",
         "unaware"
       ],
-      "supersedes": ["staggered"],
+      "supersedes": ["staggered", "dying", "incapacitated"],
       "mechanisms": [
         "action_limit",
         "defense_mod",

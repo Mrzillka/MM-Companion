@@ -6,14 +6,17 @@ import pytest
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.powers import Power, PowerEffectInstance
+from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    base_ground_speed_rank,
     base_size_rank,
     defense_class,
     effect_current_rank,
     effective_ability,
     effective_size,
     effective_size_rank,
+    estimated_power_level,
+    power_pl_violations,
     power_total_cost,
     resistance_total,
     size_contributions,
@@ -283,3 +286,81 @@ def test_the_dialled_rank_is_saved_and_reloads_at_the_same_size(data) -> None:
 
     # An effect nobody has dialled still writes nothing and comes up all the way up.
     assert "current_rank" not in _growth(_char(data), 3).effects[0].to_dict()
+
+
+# -- what a size power does to walking pace ---------------------------------------
+
+
+def _shrink_with_normal_speed(char: Character, rank: int, *, dialled: int | None = None) -> Power:
+    """Shrinking with the extra that says your speed isn't reduced while shrunk."""
+    effect = PowerEffectInstance(
+        "shrinking",
+        rank=rank,
+        extras=[ModifierSelection(modifier_id="normal_speed_shrinking", rank=1)],
+    )
+    effect.current_rank = dialled
+    power = Power(name="Shrink", effects=[effect])
+    power.activated = True
+    char.powers.append(power)
+    return power
+
+
+@pytest.mark.parametrize("dialled", [None, 1, 2])
+def test_normal_speed_leaves_you_at_your_own_pace_however_far_you_are_dialled(
+    data, dialled
+) -> None:
+    """Cancelling the shrink's penalty must not cancel the one you were born with.
+
+    The removal is the effect's *bought* rank while the penalty follows the rung it
+    is dialled to, so the two agreed only on a linear stretch of the Size Table with
+    nothing dialled. Anywhere else the cancellation overshot and a Small character
+    out-walked their own unshrunk self.
+    """
+    plain = base_ground_speed_rank(_char(data, "Small"), data)
+
+    char = _char(data, "Small")
+    _shrink_with_normal_speed(char, 4, dialled=dialled)
+
+    assert base_ground_speed_rank(char, data) == plain
+
+
+def test_normal_speed_does_not_overshoot_past_the_tables_floor(data) -> None:
+    """Past the clamp the rank keeps climbing while the speed modifier stops."""
+    char = _char(data, "Small")
+    _shrink_with_normal_speed(char, 8)
+
+    assert base_ground_speed_rank(char, data) == base_ground_speed_rank(_char(data, "Small"), data)
+
+
+def test_shrinking_without_normal_speed_still_slows_you_down(data) -> None:
+    """The guard on the three above: the penalty is real when nothing lifts it."""
+    char = _char(data, "Medium")
+    _growth(char, 4, effect="shrinking")
+
+    assert base_ground_speed_rank(char, data) < base_ground_speed_rank(_char(data), data)
+
+
+def test_being_large_does_not_inflate_the_estimated_power_level(data) -> None:
+    """The estimator and the validator have to agree about what size is worth.
+
+    Size raises an attack effect's effective rank *and* the cap it is measured
+    against, which power_pl_violations does by shifting its limits. The estimator
+    used the raised rank against an unshifted cap, so switching a Growth on
+    advertised a mook at a Power Level its own validator called perfectly legal —
+    and on a GM card that estimate *is* the creature's PL.
+    """
+    plain = _char(data)
+    damage = Power(name="Smash", effects=[PowerEffectInstance("damage", rank=10)])
+    damage.activated = True
+    plain.powers.append(damage)
+    baseline = estimated_power_level(plain, data)
+
+    for rank in (2, 4):
+        char = _char(data)
+        smash = Power(name="Smash", effects=[PowerEffectInstance("damage", rank=10)])
+        smash.activated = True
+        char.powers.append(smash)
+        _growth(char, rank)
+
+        assert estimated_power_level(char, data) == baseline
+        assert power_pl_violations(char.powers[0], char, data) == []

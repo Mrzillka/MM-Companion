@@ -382,7 +382,12 @@ class NoteCard(HistoryCard):
             name_line.setWordWrap(True)
             info.addWidget(name_line)
 
+        # Plain text explicitly: a QLabel defaults to AutoText and will render this
+        # as HTML the moment it looks like markup. The sentence comes off the wire
+        # from another player, and every other peer-supplied string in this file is
+        # escaped for exactly that reason.
         text = QLabel(str(note.get("text", "")))
+        text.setTextFormat(Qt.TextFormat.PlainText)
         text.setWordWrap(True)
         text.setStyleSheet(muted_style(italic=True))
         info.addWidget(text)

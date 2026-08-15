@@ -79,6 +79,27 @@ def test_reseed_reports_no_edit(qapp: QApplication) -> None:
     assert not edits
 
 
+def test_reseed_does_not_write_the_model(qapp: QApplication) -> None:
+    """A reseed restates widgets from the model; it must not touch the model back.
+
+    ``BaseInfoSection`` wrote every profile key it had a field for, so a restored
+    state that omitted one came back carrying it as ``""``. That is not cosmetic:
+    ``at_saved_state()`` compares canonical JSON, so the sheet read dirty forever
+    against a file it exactly matched, and each save accreted another empty key.
+    """
+    sheet = CharacterSheet(load_game_data())
+    # The field has to *hold* something first: setText only fires textChanged when
+    # the text really changes, so a reseed over already-empty widgets writes nothing
+    # and the bug hides.
+    sheet.base_info._profile_fields["hero_name"].setText("Ghost")
+    assert sheet.character.profile["hero_name"] == "Ghost"
+
+    sheet.character.profile.clear()  # the restored state never had that key
+    sheet.reseed()
+
+    assert sheet.character.profile == {}
+
+
 def test_reseed_does_not_clamp_a_rank_above_the_trait_range(qapp: QApplication) -> None:
     """A spin box clamps silently, which here would *lose* the rank being restored."""
     sheet = CharacterSheet(load_game_data())

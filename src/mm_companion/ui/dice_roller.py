@@ -678,8 +678,12 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._request_combo.setMinimumContentsLength(8)
         self._request_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         # And an explicit floor, which *replaces* the hint-derived one rather than
-        # raising it (``qSmartMinSize``) — so this is what finally lets the block be
-        # as narrow in the pinned strip as it was before the row existed.
+        # raising it (``qSmartMinSize``) — so this, and not the longest skill name,
+        # is how narrow the row can be squeezed. It is also what holds the *panel*
+        # open in the split shape, where the splitter hands the controls exactly
+        # their minimum and every spare pixel to the history: drop it and the die
+        # and its result line lose that width, wrapping the readout against the
+        # block's border. A trait name is worth about this much either way.
         self._request_combo.setMinimumWidth(int(theme.metric("column.request-trait")))
         guard_wheel(self._request_combo)
         self._request_combo.currentIndexChanged.connect(self._on_request_trait_changed)
@@ -802,6 +806,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._readout.setWordWrap(True)
         self._readout.setTextFormat(Qt.TextFormat.RichText)
+        # Side margins because this is the widest thing in the panel and the only
+        # one not inside a group box: the die above it is a fixed square with room
+        # to spare, while a named roll ("Close Attack (Enhanced Strength)") is as
+        # long as the power it came from and wraps at whatever width the panel has.
+        # Without them it wraps flush against the block's own border, which reads as
+        # text that has overflowed rather than text that has wrapped.
+        pad = int(theme.metric("space.lg"))
+        self._readout.setContentsMargins(pad, 0, pad, 0)
         column.addWidget(self._readout)
         return part
 

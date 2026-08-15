@@ -73,6 +73,27 @@ def _effective_ranked(modifier: Modifier, selection) -> bool:
     return modifier.ranked
 
 
+#: What a ranked modifier may be bought up to when the ruleset names no ceiling. Not a
+#: rule — a spin box has to stop somewhere, and this is the same "no practical limit"
+#: the effect ranks themselves use.
+MODIFIER_RANK_MAX = 250
+
+
+def modifier_rank_cap(modifier: Modifier) -> int:
+    """How many ranks of ``modifier`` may be bought — the data's ceiling, or 1 unranked.
+
+    An *unranked* modifier is not bought in ranks at all: it stands at whatever rank its
+    host effect has, so there is one of it. A ranked one takes the ruleset's ``max_rank``
+    (Striding's 5) and :data:`MODIFIER_RANK_MAX` when it names none. Asked here rather
+    than read off the record so the UI's spin box and any later validation cannot
+    disagree about what the cap is.
+    """
+
+    if not modifier.ranked:
+        return 1
+    return modifier.max_rank if modifier.max_rank is not None else MODIFIER_RANK_MAX
+
+
 def _modifier_magnitude(modifier: Modifier, selection) -> int:
     """One modifier's cost magnitude: ``cost_value`` (or a config override), times its
     rank when ``ranked``."""

@@ -592,7 +592,7 @@ def test_worn_gear_reaches_the_speed_readout(data, hero) -> None:
     # ...and the sheet's own readout is the base line plus a *flight* line, since it
     # nets by mode rather than by source. The item is what the line names on hover.
     sheet = speed_lines(hero, data)[1:]
-    assert [line.label for line in sheet] == ["Flight 6"]
+    assert [line.label for line in sheet] == ["Flight"]
     assert sheet[0].sources == ("Glider 6",)
 
 
@@ -614,7 +614,7 @@ def test_the_base_ground_line_stays_first(data, hero) -> None:
     """What lets the condition overlay keep landing on ``lines[0]``."""
     hero.equipment = [_item(data, "glider")]
 
-    assert speed_lines(hero, data)[0].label == "Base"
+    assert speed_lines(hero, data)[0].label == "Ground speed"
 
 
 def test_stowed_gear_grants_no_speed(data, hero) -> None:
@@ -1164,7 +1164,7 @@ def test_a_vehicles_speed_reaches_the_speed_readout(data, hero) -> None:
 
     labels = [line.label for line in equipment_speed_lines(hero, data)]
     assert labels == ["Jumbo Jet 9"]
-    flight = next(line for line in speed_lines(hero, data) if line.label == "Flight 9")
+    flight = next(line for line in speed_lines(hero, data) if line.label == "Flight")
     assert flight.sources == ("Jumbo Jet 9",)
 
 

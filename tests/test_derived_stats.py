@@ -9,6 +9,7 @@ from mm_companion.core.rules import (
     base_ground_speed_rank,
     effective_size,
     effective_size_rank,
+    ground_speed_rank,
     initiative_ability,
     initiative_advantage_bonus,
     initiative_modifier,
@@ -32,14 +33,15 @@ def test_base_speed_columns_double_along_the_distance_table() -> None:
     rank = base_ground_speed_rank(char, data)
     assert rank == 1  # movement.json default ground rank
 
-    walk, dash, run = speed_columns(rank, data)
-    assert (walk, dash, run) == ("15 feet", "30 feet", "60 feet")
+    assert speed_columns(rank, data) == ("15 feet", "30 feet", "60 feet")
+    # Running is a ground manoeuvre, so every other mode is a move and a dash.
+    assert speed_columns(rank, data, ground=False) == ("15 feet", "30 feet")
 
 
 def test_speed_columns_convert_to_km_per_hour() -> None:
     data = load_game_data()
     # Flight rank 2 = 30 ft (8 m) per round: 8 m / 6 s = 4.8 km/h.
-    walk, _dash, _run = speed_columns(2, data, metric=True)
+    walk = speed_columns(2, data, metric=True)[0]
     assert walk == "4.8 km/h"
 
 
@@ -49,9 +51,10 @@ def test_active_movement_power_adds_its_own_speed_line() -> None:
     char.powers = [Power(name="Fly", effects=[PowerEffectInstance("flight", rank=2)])]
 
     lines = speed_lines(char, data)
-    assert [(line.label, line.rank) for line in lines] == [("Base", 1), ("Flight 2", 2)]
-    # The Flight line reproduces the design example 30 / 60 / 120 ft.
-    assert speed_columns(2, data) == ("30 feet", "60 feet", "120 feet")
+    assert [(line.label, line.rank) for line in lines] == [("Ground speed", 1), ("Flight", 2)]
+    # A mode's line is named for the mode alone; the rank that fed it is on the hover.
+    assert lines[1].sources == ("Flight 2",)
+    assert speed_columns(2, data, ground=False) == ("30 feet", "60 feet")
 
 
 def test_switched_off_movement_power_drops_its_speed_line() -> None:
@@ -61,7 +64,7 @@ def test_switched_off_movement_power_drops_its_speed_line() -> None:
     flight.effects[0].toggled_on = False  # a Sustained toggle turned off
     char.powers = [flight]
 
-    assert [line.label for line in speed_lines(char, data)] == ["Base"]
+    assert [line.label for line in speed_lines(char, data)] == ["Ground speed"]
 
 
 # -- specialised movement modes -------------------------------------------------
@@ -89,6 +92,19 @@ def test_movement_mode_moves_at_full_ground_speed_at_its_top_tier() -> None:
     # Tier 2 is full ground speed, so the mode's rank is the ground rank itself.
     assert [(line.label, line.rank) for line in lines] == [("Wall-Crawling 2", 1)]
     assert lines[0].note == "not vulnerable"
+
+
+def test_a_relative_movement_mode_tracks_the_speed_the_character_really_moves_at() -> None:
+    """ "Full ground speed" means the ground line, Speed power and all."""
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [_wall_crawler(2)]
+    _movement_power(char, "speed", 3)
+
+    assert ground_speed_rank(char, data) == base_ground_speed_rank(char, data) + 3
+    assert [line.rank for line in movement_mode_lines(char, data)] == [
+        ground_speed_rank(char, data)
+    ]
 
 
 def test_lower_tier_wall_crawling_is_a_rank_slower_and_leaves_you_vulnerable() -> None:
@@ -313,7 +329,7 @@ def test_two_flight_powers_are_one_flight_speed() -> None:
     _movement_power(char, "flight", 6, name="Jets")
 
     lines = speed_lines(char, data)
-    assert [line.label for line in lines] == ["Base", "Flight 10"]
+    assert [(line.label, line.rank) for line in lines] == [("Ground speed", 1), ("Flight", 10)]
     assert lines[1].sources == ("Flight 4", "Flight 6")
 
 
@@ -323,34 +339,53 @@ def test_the_speed_effect_feeds_the_ground_line_rather_than_a_line_of_its_own() 
     _movement_power(char, "speed", 4)
 
     lines = speed_lines(char, data)
-    assert [line.label for line in lines] == ["Base"]
-    assert lines[0].rank == 4  # replaces walking, rather than adding to it
+    assert [line.label for line in lines] == ["Ground speed"]
+    assert lines[0].rank == base_ground_speed_rank(char, data) + 4  # adds to walking
     assert lines[0].sources == ("Speed 4",)
 
 
-def test_a_speed_effect_below_the_walking_rank_leaves_it_alone() -> None:
-    """The ground line is a ``max``: Speed 1 is not slower than walking."""
+def test_every_rank_of_speed_makes_the_character_faster() -> None:
+    """The ground line is a sum: the first rank of Speed must not be swallowed."""
     data = load_game_data()
     char = _char(data)
-    _movement_power(char, "speed", 0)
+    base = base_ground_speed_rank(char, data)
+    _movement_power(char, "speed", 1)
 
-    assert speed_lines(char, data)[0].rank == base_ground_speed_rank(char, data)
+    assert speed_lines(char, data)[0].rank == base + 1
 
 
-def test_striding_grants_ranks_of_the_ground_mode() -> None:
-    """Elongation's extra says it grants Speed, and now it does."""
+def test_striding_grants_its_own_ranks_of_the_ground_mode() -> None:
+    """Elongation's extra says it grants Speed, at the ranks of *Striding* bought.
+
+    It is a ranked modifier — "+1 point per rank flat", capped at 5 — so a Striding 2
+    on an Elongation 6 is two ranks of ground movement, not six.
+    """
     from mm_companion.core.powers import ModifierSelection
 
     data = load_game_data()
     char = _char(data)
     power = _movement_power(char, "elongation", 6, name="Rubber Limbs")
-    power.effects[0].extras.append(ModifierSelection("striding"))
+    power.effects[0].extras.append(ModifierSelection("striding", rank=2))
 
+    base = base_ground_speed_rank(char, data)
     line = speed_lines(char, data)[0]
-    assert (line.rank, line.sources) == (6, ("Rubber Limbs (Striding)",))
+    assert (line.rank, line.sources) == (base + 2, ("Rubber Limbs (Striding)",))
 
     power.activated = False  # the host's gate takes the grant with it
     assert speed_lines(char, data)[0].rank == base_ground_speed_rank(char, data)
+
+
+def test_striding_is_capped_at_the_rank_the_ruleset_gives_it() -> None:
+    from mm_companion.core.rules import MODIFIER_RANK_MAX, modifier_rank_cap
+
+    data = load_game_data()
+    catalog = data.modifier_catalog()
+
+    assert modifier_rank_cap(catalog["striding"]) == 5
+    # An unranked modifier is not bought in ranks at all; an uncapped one is only
+    # bounded by the number a spin box has to stop at.
+    assert modifier_rank_cap(catalog["accurate"]) == MODIFIER_RANK_MAX
+    assert modifier_rank_cap(catalog["ranged"]) == 1
 
 
 def test_normal_speed_cancels_the_shrinking_penalty() -> None:

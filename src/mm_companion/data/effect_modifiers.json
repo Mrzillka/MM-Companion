@@ -666,9 +666,11 @@
         {
           "id": "striding",
           "name": "Striding",
-          "costFormula": "+1 point per rank",
+          "costFormula": "+1 point per rank flat",
           "costValue": 1,
-          "flat": false,
+          "flat": true,
+          "ranked": true,
+          "maxRank": 5,
           "statIntegration": { "pattern": "passive_toggle", "affects": "movement", "target": "ground", "apply": "speed" },
           "description": "Longer strides grant ranks of Speed."
         },

@@ -706,6 +706,11 @@ class Modifier:
     the effect total rather than per rank. ``ranked`` is ``True`` when the modifier
     itself is bought in ranks (chosen independently of the effect's rank), so its
     contribution is ``cost_value × rank`` — e.g. Accurate, Extended Range.
+    ``max_rank`` is the ceiling the rules put on those ranks (Striding's 5), and
+    ``None`` when they give none — read it through
+    :func:`mm_companion.core.rules.modifier_rank_cap` rather than off the record, so a
+    caller need not carry the two cases. It says nothing about an *unranked* modifier,
+    which always stands at the one rank its host effect has.
 
     ``overrides`` maps a base-effect game-term field (``range``, ``action``,
     ``duration``, ``resistance``, ``check``, ``effect_type``) to the value this
@@ -768,6 +773,7 @@ class Modifier:
     cost_value: int = 0
     flat: bool = False
     ranked: bool = False
+    max_rank: int | None = None
     description: str = ""
     overrides: dict[str, str] = field(default_factory=dict)
     check_bonus: int = 0
@@ -1096,17 +1102,24 @@ class Movement:
     rank plus ``walk_rank_step`` / ``dash_rank_step`` / ``run_rank_step``.
     ``round_seconds`` (6) converts a per-round distance into km/h.
 
+    ``run_is_ground_only`` drops that third column from every other mode: running is a
+    ground manoeuvre, so a flier moves at its speed or dashes at double it and has no
+    run distance to print.
+
     ``ground_mode`` names the movement mode everybody has — the one
-    ``base_ground_speed_rank`` seeds and the Speed effect feeds. Every other mode's line
-    is built from its grants alone (:func:`~mm_companion.core.rules.speed_lines`).
+    ``base_ground_speed_rank`` seeds and the Speed effect feeds, and ``ground_label``
+    is what that line is called on the sheet. Every other mode's line is built from its
+    grants alone (:func:`~mm_companion.core.rules.speed_lines`).
     """
 
     base_ground_speed_rank: int = 1
     walk_rank_step: int = 0
     dash_rank_step: int = 1
     run_rank_step: int = 2
+    run_is_ground_only: bool = True
     round_seconds: int = 6
     ground_mode: str = "ground"
+    ground_label: str = "Ground speed"
 
 
 # --- Equipment: the gear catalog, its grouping axis, and the rules constants
@@ -2189,6 +2202,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         cost_value=int(m.get("costValue", 0)),
         flat=bool(m.get("flat", False)),
         ranked=bool(m.get("ranked", False)),
+        max_rank=m.get("maxRank"),
         overrides={_OVERRIDE_KEYS.get(k, k): v for k, v in m.get("overrides", {}).items()},
         check_bonus=int(m.get("checkBonus", 0)),
         grants_attack=bool(m.get("grantsAttack", False)),
@@ -2305,8 +2319,10 @@ def _parse_movement(raw: dict) -> Movement:
         walk_rank_step=int(raw.get("walkRankStep", 0)),
         dash_rank_step=int(raw.get("dashRankStep", 1)),
         run_rank_step=int(raw.get("runRankStep", 2)),
+        run_is_ground_only=bool(raw.get("runIsGroundOnly", True)),
         round_seconds=int(raw.get("roundSeconds", 6)),
         ground_mode=raw.get("groundMode", "ground"),
+        ground_label=raw.get("groundLabel", "Ground speed"),
     )
 
 

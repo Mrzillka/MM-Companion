@@ -29,9 +29,12 @@ from .size import effective_size_rank
 class SpeedLine:
     """One movement mode's speed, as a rank the UI expands into walk/dash/run columns.
 
-    ``label`` names the mode (``"Base"`` for ground movement, else the power's effect
-    and rank, e.g. ``"Flight 2"``); ``rank`` is the speed rank the three distance
-    columns derive from.
+    ``label`` names the mode and nothing else — ``"Ground speed"`` for the line
+    everybody has (:attr:`~mm_companion.core.data_loader.Movement.ground_label`), else
+    the name of the effect that declares the mode (``"Flight"``, ``"Burrowing"``).
+    ``rank`` is the speed rank the distance columns derive from, and it is deliberately
+    *not* in the caption: a line is the net of everything granting that mode, so the one
+    rank a label could name is nobody's in particular — what fed it is on ``sources``.
 
     ``sources`` names everything that fed the line, because a line is now the *mode*
     rather than any one power: two Flight powers make one flight speed, and the label
@@ -240,14 +243,17 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
     into one flight speed, a worn glider is weighed against them rather than added, and
     each line names its contributors on :attr:`SpeedLine.sources`.
 
-    The **ground** line is the exception, and is a ``max``: a Speed effect *replaces*
-    walking rather than adding to it, so the line is the better of the character's own
-    ground rank (:func:`base_ground_speed_rank`, which is where size lands) and whatever
-    the ground-mode grants sum to. A switched-off movement power — and a stowed item —
-    contributes nothing (:func:`effect_is_active`).
+    A mode's rank is the **sum** of everything granting it, and the ground mode is that
+    same sum started from what the character has for free: their own ground rank
+    (:func:`base_ground_speed_rank`, which is where size lands) plus whatever the
+    ground-mode grants net to. So a Speed 1 makes a Medium character *faster* than
+    walking rather than merely matching it, and Elongation's Striding adds on top of
+    both. (It used to be a ``max`` against the base — which meant the first rank or two
+    of Speed a character bought did nothing at all.) A switched-off movement power — and
+    a stowed item — contributes nothing (:func:`effect_is_active`).
 
-    The base line stays first, which is what lets :func:`condition_speed_lines` overlay
-    the ground penalty on ``lines[0]`` however many modes are appended after it.
+    The ground line stays first, which is what lets :func:`condition_speed_lines`
+    overlay the ground penalty on ``lines[0]`` however many modes are appended after it.
     """
 
     ground_mode = game_data.movement.ground_mode
@@ -259,8 +265,8 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
     ground = resolve_contributions(by_mode.pop(ground_mode, []))
     lines = [
         SpeedLine(
-            "Base",
-            max(base, ground.amount) if ground else base,
+            game_data.movement.ground_label,
+            base + (ground.amount if ground else 0),
             sources=ground.sources if ground else (),
         )
     ]
@@ -270,12 +276,25 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
             continue
         lines.append(
             SpeedLine(
-                f"{_mode_label(mode, game_data)} {netted.amount}",
+                _mode_label(mode, game_data),
                 netted.amount,
                 sources=netted.sources,
             )
         )
     return lines
+
+
+def ground_speed_rank(char: Character, game_data: GameData) -> int:
+    """How fast the character actually moves on the ground, everything counted.
+
+    The rank of :func:`speed_lines`' first line — the base rank plus every active grant
+    on the ground mode — as opposed to :func:`base_ground_speed_rank`, which is only the
+    part nobody paid for. This is the one a mode expressed *relative* to walking is
+    measured against (:func:`movement_mode_lines`): a character with Speed 4 crawls up a
+    wall at their real pace, not at the pace they would have had without the power.
+    """
+
+    return speed_lines(char, game_data)[0].rank
 
 
 def condition_speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
@@ -389,9 +408,14 @@ def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementMo
     and the like are real capabilities, but they are not speeds, so listing them under a
     speed readout would say nothing; they stay on the power's own card instead. Empty
     when nothing is switched on.
+
+    A mode expressed against walking is measured against :func:`ground_speed_rank` — how
+    fast the character *actually* moves, Speed powers and Striding included — rather than
+    the bare :func:`base_ground_speed_rank`, or a speedster would crawl up a wall at the
+    pace they walk without their power.
     """
 
-    ground = base_ground_speed_rank(char, game_data)
+    ground = ground_speed_rank(char, game_data)
     lines: list[MovementModeLine] = []
     for power in live_powers(char.powers):
         lines.extend(_build_mode_lines(power, char, game_data, ground))
@@ -400,22 +424,32 @@ def movement_mode_lines(char: Character, game_data: GameData) -> list[MovementMo
     return lines
 
 
-def speed_columns(rank: int, game_data: GameData, *, metric: bool = False) -> tuple[str, str, str]:
+def speed_columns(
+    rank: int, game_data: GameData, *, metric: bool = False, ground: bool = True
+) -> tuple[str, ...]:
     """The walk / dash / run distances for a speed ``rank``.
 
     Each column is the measurements-table distance at ``rank`` plus the movement
     steps (``walk``/``dash``/``run`` rank steps). With ``metric=False`` the columns are
     the table's imperial per-round labels; with ``metric=True`` they are the sustained
     speed in km/h, computed from the metric distance per round and ``round_seconds``.
+
+    With ``ground=False`` — any mode but the one the character walks in — the run column
+    is dropped, since running is a ground manoeuvre and a flier's line has only a move
+    and a dash to print. Whether that holds is the ruleset's to say
+    (:attr:`~mm_companion.core.data_loader.Movement.run_is_ground_only`), which is why
+    the result is a variable-length tuple rather than always three columns.
     """
 
     move = game_data.movement
     steps = (move.walk_rank_step, move.dash_rank_step, move.run_rank_step)
+    if not ground and move.run_is_ground_only:
+        steps = steps[:-1]
     if not metric:
-        return tuple(  # type: ignore[return-value]
+        return tuple(
             (game_data.measurements.label("distance", rank + step) or "—") for step in steps
         )
-    return tuple(_speed_kmh(rank + step, game_data) for step in steps)  # type: ignore[return-value]
+    return tuple(_speed_kmh(rank + step, game_data) for step in steps)
 
 
 def _speed_kmh(rank: int, game_data: GameData) -> str:

@@ -291,7 +291,8 @@ clean (see Licensing below).
   data lists — no hardcoded ability/skill names.
 - `SystemInfoSection` shows several **derived** readouts computed in `core.rules`, never
   in the widget: `speed_lines`/`speed_columns` (one line **per movement mode** — see
-  "Size and movement" below — each rank expanded to walk/dash/run distances, with a
+  "Size and movement" below — each rank expanded to walk/dash/run distances (walk/dash
+  off the ground), with a
   ft-per-round ↔ km/h toggle; a **label per row**, since a line is a mode and what
   granted it goes on the hover), `initiative_modifier` (effective initiative
   ability + Improved Initiative's +4/rank; Alternate Initiative swaps the ability via a
@@ -1136,7 +1137,11 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
   none, so gating on it is exactly how Striding would go on granting nothing. A modifier
   is worth its own rank when `ranked` and the **host effect's** otherwise, which is what
   a per-rank price already says it is charging for; the host's gates take the grant with
-  them for free.
+  them for free. Striding is `ranked` — "+1 point per rank flat", capped at 5 — so a
+  Striding 2 on an Elongation 6 grants two ranks of ground movement and not six. That
+  cap is `maxRank` on the record, asked through `rules.modifier_rank_cap` (1 unranked,
+  `MODIFIER_RANK_MAX` uncapped) so the constructor's spin box and any later validation
+  cannot disagree about it.
 - **A contribution carries an `origin`** — the granting item's id — beside its `source`
   name, and `item_superseded` matches on it. Two copies of one armour share a name and an
   amount, so matching by those had *both* cards claiming to have lost while the bonus
@@ -1358,12 +1363,30 @@ data-first; nothing below names a trait, an effect or a column in Python.
   power's line would have quietly repealed `GROUP_EQUIPMENT`/`STACK_MAX`.
   `TraitBonus.sources` becomes `SpeedLine.sources`, which is why `SpeedWidget` is a label
   per row now: the caption can only name the mode.
-- **The ground line is a `max`, not a sum.** Speed 5 *replaces* walking rather than adding
-  to it, while the grants feeding it (a Speed power, Striding) still sum among
-  themselves. `SpeedLine("Base", …)` stays `lines[0]` — `condition_speed_lines` overlays
-  that index. The **size** speed modifier stays folded into `base_ground_speed_rank`
-  rather than joining as a grant, which is why `speedMod` is absent from `sizeEffects`:
-  as a grant the `max` would swallow it and a Huge character would lose their speed.
+- **Every mode is a sum, the ground one included.** A mode's rank is everything granting
+  it added together; ground is that same sum started from `base_ground_speed_rank` (the
+  data's base rank, shifted by the Size Table's `speedMod`), so base + Speed + Striding
+  is what the character walks at. It was a `max(base, grants)` once — which meant the
+  first rank or two of Speed a character bought *did nothing at all*, a Medium walker
+  with Speed 1 reading exactly as fast as one with none. The **size** modifier still
+  folds into `base_ground_speed_rank` rather than joining as a grant (which is why
+  `speedMod` is absent from `sizeEffects`): it is the base the grants add to, and the
+  `penalty_removed` cancellation has to reach it there. `lines[0]` stays the ground line
+  — `condition_speed_lines` overlays that index.
+- **A line names its mode and nothing else** — `Ground speed` (`movement.groundLabel`),
+  `Flight`, `Burrowing`. It carried the netted rank once (`"Flight 10"`), which was a
+  number belonging to no one source; the ranks that fed it are on `SpeedLine.sources`,
+  which is the hover. `ground_speed_rank` is the resolved ground line as a number, and
+  is what a mode expressed *relative* to walking (Wall-Crawling's "full ground speed")
+  is measured against — `base_ground_speed_rank` would have a speedster crawling at the
+  pace they walk without their power.
+- **Only the ground mode runs.** `speed_columns(…, ground=False)` drops the run column,
+  since running is a ground manoeuvre: a flier moves and dashes and has nothing to put
+  in a third one. It is the ruleset's call (`movement.runIsGroundOnly`), which is why
+  the result is a variable-length tuple rather than always a triple — unpacking it as
+  `walk, dash, run` is the thing that breaks. `MovementModesWidget` renders its
+  specialised modes through the same call, so `Swinging: 30 ft / 60 ft` reads like the
+  Flight line above it rather than like a different quantity.
 - Do **not** route the four movement effects through `STAT_APPLIERS`. That walk uses the
   *effective* rank where an applier gets the bought one, a `TraitContribution` carries no
   rank or effect identity (so `"Glider 6"` could not be reconstructed), and giving them a

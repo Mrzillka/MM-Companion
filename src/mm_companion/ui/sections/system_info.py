@@ -162,8 +162,10 @@ class SpeedWidget(QWidget):
 
     Each :class:`~mm_companion.core.rules.SpeedLine` renders as
     ``Label: walk / dash / run`` (see :func:`~mm_companion.core.rules.speed_columns`),
-    every mode anything active grants adding its own line. The unit button flips every
-    line between the imperial per-round distance and the km/h equivalent.
+    every mode anything active grants adding its own line. Only the first — the ground
+    line everybody has — carries the run column; every other mode moves or dashes. The
+    unit button flips every line between the imperial per-round distance and the km/h
+    equivalent.
 
     One **label per row** rather than a single rich-text block, for the reason
     :class:`MovementModesWidget` already builds rows: a line is the *mode* now, so what
@@ -212,18 +214,20 @@ class SpeedWidget(QWidget):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
-        for line in self._lines:
-            layout.addWidget(self._row_label(line))
+        for index, line in enumerate(self._lines):
+            # The first line is the ground one, and the only mode with a run column —
+            # see :func:`~mm_companion.core.rules.speed_columns`.
+            layout.addWidget(self._row_label(line, ground=index == 0))
 
-    def _row_label(self, line) -> QLabel:
+    def _row_label(self, line, *, ground: bool) -> QLabel:
         """One movement line, tinted by its condition overlay and explained on hover."""
 
         if line.immobilised:
             label = QLabel(f"{line.label}: immobilised")
             label.setStyleSheet(tinted_style("tint.worse"))
         else:
-            walk, dash, run = speed_columns(line.rank, self._data, metric=self._metric)
-            text = f"{line.label}: {_compact(walk)} / {_compact(dash)} / {_compact(run)}"
+            columns = speed_columns(line.rank, self._data, metric=self._metric, ground=ground)
+            text = f"{line.label}: " + " / ".join(_compact(column) for column in columns)
             if line.rank_mod:
                 text += f" ({line.rank_mod:+d} rank)"
             label = QLabel(text)
@@ -312,7 +316,11 @@ class MovementModesWidget(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
         for line in lines:
-            text = f"{line.label}: {_compact(speed_columns(line.rank, self._data)[0])}/round"
+            # Read like a SpeedLine — move / dash, no run column — since a specialised
+            # mode is a way of moving too, and one row saying "30 ft/round" beside
+            # another saying "30 ft / 60 ft" reads as two different quantities.
+            columns = speed_columns(line.rank, self._data, ground=False)
+            text = f"{line.label}: " + " / ".join(_compact(column) for column in columns)
             if line.note:
                 text += f" ({line.note})"
             label = QLabel(text)

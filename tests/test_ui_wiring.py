@@ -482,6 +482,32 @@ def test_active_growth_shows_the_effective_size(qapp: QApplication) -> None:
     assert sheet.system_info._size_effective.text() == "→ Huge"
 
 
+def test_speed_readout_names_each_mode_and_runs_only_on_the_ground(qapp: QApplication) -> None:
+    """The worked example from the design: a walker who also flies."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    flight = Power(name="Fly", effects=[PowerEffectInstance("flight", rank=2)])
+    flight.activated = True
+    char.powers = [flight]
+    sheet = CharacterSheet(data, char)
+
+    assert sheet.system_info._speed.rendered_text() == (
+        "Ground speed: 15 ft / 30 ft / 60 ft\nFlight: 30 ft / 60 ft"
+    )
+
+
+def test_a_speed_power_makes_the_ground_line_faster(qapp: QApplication) -> None:
+    """Every rank bought counts: the ground line is a sum, not a ``max``."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    speed = Power(name="Fast", effects=[PowerEffectInstance("speed", rank=1)])
+    speed.activated = True
+    char.powers = [speed]
+    sheet = CharacterSheet(data, char)
+
+    assert sheet.system_info._speed.rendered_text() == "Ground speed: 30 ft / 60 ft / 120 ft"
+
+
 def test_speed_unit_toggle_switches_to_km_per_hour(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     speed = sheet.system_info._speed

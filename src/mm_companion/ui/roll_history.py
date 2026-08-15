@@ -406,10 +406,11 @@ class RequestCard(HistoryCard):
     headline, no degree, and no parameters worth saving as a quick roll (the
     button loads the trait, which is the better version of that).
 
-    The ``✕`` is the GM's, exactly as it is on a note. A request took a sequence
-    number from the same counter, which is the whole reason it is a record in the
-    log rather than a message beside it — and a call the table has answered is
-    worth striking.
+    The ``✕`` is the GM's in the shared log, exactly as it is on a note: a request
+    took a sequence number from the same counter, which is the whole reason it is a
+    record rather than a message beside it — and a call the table has answered is
+    worth striking. In the *private* history it is everyone's, since every card
+    there is one's own and each already carries a way to be thrown away.
     """
 
     removeRequested = Signal(int)
@@ -429,12 +430,13 @@ class RequestCard(HistoryCard):
         layout = QHBoxLayout(self)
         info = QVBoxLayout()
 
-        # Left off in the private history, exactly as a note's is: that list is
-        # one's own, so "Someone asks for a roll" above one's own request is a line
-        # of chrome saying nothing. The button says the rest.
+        # "Requested by X" rather than "X asks for a roll", because the subject is
+        # not always a third party: off the air the asker is the reader, and the
+        # private history names them "you" — which the second phrasing cannot take
+        # without disagreeing with its own verb.
         if show_author:
             who = str(request.get("player_name", "")) or "Someone"
-            name_line = QLabel(f"<b>{escape_rich_text(who)}</b> asks for a roll")
+            name_line = QLabel(f"Requested by <b>{escape_rich_text(who)}</b>")
             name_line.setTextFormat(Qt.TextFormat.RichText)
             name_line.setWordWrap(True)
             info.addWidget(name_line)

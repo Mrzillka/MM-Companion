@@ -639,8 +639,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
 
         Below the roll's own controls because it is a different verb — everything
         above rolls something *here*, and this asks somebody else to. It borrows
-        their column layout so the two read as one form: caption, the wide middle
-        column, then the number.
+        their caption column so the two read as one form, but spans the rest of the
+        grid itself: see the button, below.
 
         The DC box is a plain spin box where **0 means no DC**, deliberately unlike
         the Difficulty Class row above it. That row's checkbox exists because the
@@ -696,15 +696,23 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._request_dc.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         line.addWidget(self._request_dc)
 
+        # In the row rather than the grid's third column, and Fixed so it is exactly
+        # as wide as the word on it. That column is sized by the Bonus and Penalty
+        # spin boxes above — two digits framed by fifty pixels of arrow column — and
+        # a button parked in it was stretched to match, spending on "Ask" the width
+        # the combo beside it needed to show a skill's name. Spanning both columns
+        # instead hands the difference to the combo, which is the one thing in this
+        # row worth widening.
         self._request_button = QPushButton("Ask")
+        self._request_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._request_button.setToolTip(
             "Put this roll in everyone's history, for them to roll on their own sheet"
         )
         self._request_button.clicked.connect(self._emit_request)
+        line.addWidget(self._request_button)
 
         grid.addWidget(QLabel("Request"), row, 0)
-        grid.addWidget(self._request_part, row, 1)
-        grid.addWidget(self._request_button, row, 2)
+        grid.addWidget(self._request_part, row, 1, 1, 2)
         self._request_label = grid.itemAtPosition(row, 0).widget()
         self._show_request_row(False)
 
@@ -1442,6 +1450,10 @@ class LocalRollHistory(QWidget):
         # star agrees; see :meth:`set_quick_roll_state`.
         self._saved_keys: set = set()
         self._quick_room = True
+        # Ids for the cards that need one to be removed by; negative, as the shared
+        # history's pre-hosting entries are, so they can never collide with a
+        # sequence number the server hands out.
+        self._offline_seq = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1512,12 +1524,27 @@ class LocalRollHistory(QWidget):
 
         Asking the table with no table is still worth a card: the button rolls the
         trait here, which makes the row a way of parking a roll for later even
-        solo. The author is left off for the reason :meth:`add_note` leaves it off.
+        solo. Unlike :meth:`add_note` it *keeps* its author line — "Requested by
+        you" — because a bare button says nothing about where it came from, and a
+        parked request read back an hour later is otherwise indistinguishable from
+        the follow-up chip a roll left behind.
+
+        And it can be thrown away like every other card in this list. A private
+        card needs no permission (the ``can_remove`` gate is the shared log's, where
+        striking an entry is the GM's), only an id to be struck by — so it takes a
+        negative sequence number, the same convention a pre-hosting roll uses.
         """
+        self._offline_seq -= 1
         card = RequestCard(
-            {"spec": spec.to_dict() if isinstance(spec, RollSpec) else spec}, show_author=False
+            {
+                "seq": self._offline_seq,
+                "player_name": "you",
+                "spec": spec.to_dict() if isinstance(spec, RollSpec) else spec,
+            },
+            can_remove=True,
         )
         card.rollRequested.connect(self.rollFollowUp)
+        card.removeRequested.connect(lambda _seq, c=card: self._remove_card(c))
         self._layout.insertWidget(0, card)
 
     def cards(self) -> list[RollCard]:
@@ -1530,7 +1557,8 @@ class LocalRollHistory(QWidget):
                 found.append(widget)
         return found
 
-    def _remove_card(self, card: RollCard) -> None:
+    def _remove_card(self, card: QWidget) -> None:
+        """Drop one card from the list — a roll's ``−`` or a request's ``✕``."""
         self._layout.removeWidget(card)
         card.setParent(None)
         card.deleteLater()

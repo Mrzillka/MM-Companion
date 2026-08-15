@@ -112,6 +112,11 @@ The **bank** job went badly.
 """
 
 
+#: Windows a target built along the way and must not let Python garbage-collect
+#: before the screenshot — a Qt window with no reference left is destroyed.
+_KEEP: list = []
+
+
 def build(target: str):
     """Construct and show the window for ``target``; return it."""
     from mm_companion.core.storage import ensure_workspace
@@ -374,6 +379,43 @@ def build(target: str):
             if key not in ("powers", "system_info"):
                 sheet.hide_block(key)
         win.resize(820, 900)
+    elif target == "size-ladder-reload":
+        # The round trip a size power's rung has to survive: a Growth 3 dialled to
+        # Large through the real rung strip, written to the workspace with
+        # ``save_character``, and reopened from the file in a fresh window. The shot is
+        # of the *reopened* sheet, so the rung that is lit and the Size line in the
+        # System block are what came back off disk — before runtime was persisted this
+        # came up at Gargantuan with everything switched on.
+        from PySide6.QtWidgets import QPushButton
+
+        from mm_companion.core import library
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+        from mm_companion.ui.sections.powers import _SizeLadder
+
+        first = MainWindow(locked=False)
+        sheet = first._sheet
+        sheet.character.profile["hero_name"] = "Colossus"
+        sheet.character.powers.append(
+            Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
+        )
+        sheet.powers.refresh()
+        _pump(_app())
+        ladder = sheet.powers.findChild(_SizeLadder)
+        next(b for b in ladder.findChildren(QPushButton) if b.text() == "Large").click()
+        path = library.save_character(sheet.character)
+        # Left open rather than closed: the rung dirtied the sheet (which is the point
+        # — a saved state that never marks the window unwritten is a state you lose),
+        # so closing it here would stop on the modal Save/Discard prompt.
+        first.hide()
+        _KEEP.append(first)
+
+        win = MainWindow(character=library.load_character(path), path=path, locked=False)
+        sheet = win._sheet
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(820, 640)
     elif target == "size-ladder-narrow":
         # The strip in the width it is worst off in: a Growth 10 on a Diminutive
         # character (whose ten rungs the Size Table clamps to eight), in a block narrow
@@ -720,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-size",
             "size-ladder",
             "size-ladder-narrow",
+            "size-ladder-reload",
             "equipment-constructor",
             "focus",
             "dice",
@@ -776,7 +819,7 @@ def main(argv: list[str] | None = None) -> int:
     targets = ["start", "sheet", "constructor"] if args.target == "all" else [args.target]
     for target in targets:
         win = build(target)
-        _pump(app)
+        _pump(_app())
         _shoot(win, args.out / f"{target}{suffix}.png")
         win.hide()
         win.deleteLater()

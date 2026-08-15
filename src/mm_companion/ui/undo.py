@@ -24,10 +24,12 @@ which is the property that makes this safe to bolt onto a sheet this large.
 * A **depth cap**, so a long session cannot grow without bound.
 
 **What is undoable** is everything that marks the sheet dirty — everything reaching
-the bus's ``edited`` topic. Runtime state (a power switched on, a jacket worn, an
-array's live member) is deliberately *not*: a second click already reverses it, and
-the model does not persist it. It must still survive an undo, which is
-:meth:`Character.restore`'s job, not this module's.
+the bus's ``edited`` topic. A power's runtime state (switched on, held at a size rung,
+which member of an array is live) is part of that: it is saved with the build, so it is
+in every snapshot and a toggle steps back like any other change. What is *not* is the
+gear in the character's hands — :attr:`~mm_companion.core.equipment.EquipmentItem.worn`
+and ``current_speed`` — which stays out of the file and must survive an undo instead,
+which is :meth:`Character.restore`'s job, not this module's.
 
 **What is absorbed.** A change pushed in from outside the window — a GM applying a
 condition or setting hero points over a session, a damage rung replayed onto an

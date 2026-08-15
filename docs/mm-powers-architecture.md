@@ -281,6 +281,12 @@ apply, regardless of which effect it is:
   Best modeled as a free-text condition your UI displays rather than something the engine can
   auto-evaluate — flag it for the player to self-apply.
 
+All of these flags are **saved with the character**, written only when they differ from
+the all-active default. They are not part of the point build and cost nothing, but which
+powers are up and how far a Growth is dialled are decisions a player expects to find
+again on reopening the sheet — so a toggle marks the sheet unwritten, and a file saved
+before any of this still loads all-active.
+
 ---
 
 ## 8. Suggested schema summary

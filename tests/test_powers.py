@@ -1042,33 +1042,32 @@ def test_power_round_trips_through_dict() -> None:
     assert restored.effects[0].extras[0].modifier_id == "ranged"
     assert restored.structure == STRUCTURE_ARRAY
     assert restored.effects[0].attack_skill == "Close Combat::Blades"
-    # Runtime on/off state is *not* persisted — the round trip drops it and the power
-    # comes back in its default all-active state, regardless of the flags set above.
-    assert "activated" not in power.to_dict()
-    assert "toggled_on" not in power.to_dict()["effects"][0]
-    assert restored.activated is True and restored.item_present is True
-    assert restored.effects[0].toggled_on is True
-    assert restored.effects[0].suppressed is False
+    # Runtime on/off state *is* persisted, so a power switched off reopens switched
+    # off rather than coming up in a default all-active state.
+    assert power.to_dict()["activated"] is False
+    assert power.to_dict()["effects"][0]["toggled_on"] is False
+    assert restored.activated is False and restored.item_present is False
+    assert restored.effects[0].toggled_on is False
+    assert restored.effects[0].suppressed is True
 
 
-def test_runtime_flags_in_json_are_ignored_and_default_to_active() -> None:
-    # Runtime state is never persisted, so loading always reads as on — whether the
-    # JSON omits the flags (a legacy save) or still carries stale ones (an older save
-    # from before this changed): both come up active.
+def test_a_power_at_its_defaults_writes_no_runtime_keys() -> None:
+    """The flags are written only when they say something, so an old save is unmoved.
+
+    That is what makes persisting runtime additive: a power nobody has switched off,
+    suppressed or dialled down serializes byte-for-byte as it did before, and a save
+    written back then still loads all-active.
+    """
+    raw = Power(name="Plain", effects=[PowerEffectInstance("protection", rank=4)]).to_dict()
+    for key in ("activated", "item_present", "array_active"):
+        assert key not in raw
+    for key in ("toggled_on", "suppressed", "current_rank"):
+        assert key not in raw["effects"][0]
+
     legacy = Power.from_dict({"name": "Legacy", "effects": [{"effect_id": "protection"}]})
     assert legacy.activated is True and legacy.item_present is True
     assert legacy.effects[0].toggled_on is True and legacy.effects[0].suppressed is False
-
-    stale = Power.from_dict(
-        {
-            "name": "Stale",
-            "activated": False,
-            "item_present": False,
-            "effects": [{"effect_id": "protection", "toggled_on": False, "suppressed": True}],
-        }
-    )
-    assert stale.activated is True and stale.item_present is True
-    assert stale.effects[0].toggled_on is True and stale.effects[0].suppressed is False
+    assert legacy.effects[0].current_rank is None
 
 
 def test_structure_defaults_to_independent_and_rejects_junk() -> None:
@@ -1602,18 +1601,21 @@ def test_power_group_round_trips_and_dispatches() -> None:
         mode=STRUCTURE_ARRAY,
         children=[Power(name="Fire"), Power(name="Ice")],
     )
-    group.active_child_id = group.children[0].id
+    group.active_child_id = group.children[1].id
     raw = group.to_dict()
     assert raw["kind"] == "group"
-    # Which array member is live is runtime state — not persisted.
-    assert "active_child_id" not in raw
+    # Which array member is live is runtime state, and persisted with the rest of it.
+    assert raw["active_child_id"] == group.children[1].id
 
     clone = node_from_dict(raw)
     assert isinstance(clone, PowerGroup)
     assert clone.id == group.id
     assert clone.mode == STRUCTURE_ARRAY
-    # Runtime selection resets on load — an array defaults to its first child.
-    assert clone.active_child_id == ""
+    assert clone.active_child_id == group.children[1].id
+    # A group that has never had a child picked writes nothing and loads on its first.
+    untouched = PowerGroup(mode=STRUCTURE_ARRAY, children=[Power(name="Fire")])
+    assert "active_child_id" not in untouched.to_dict()
+    assert node_from_dict(untouched.to_dict()).active_child_id == ""
     assert [c.name for c in clone.children] == ["Fire", "Ice"]
 
     # A bare power dict (no "kind"/"children") still dispatches to a leaf Power.

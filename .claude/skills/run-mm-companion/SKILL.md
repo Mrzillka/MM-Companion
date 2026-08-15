@@ -46,6 +46,7 @@ python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constr
 python .claude/skills/run-mm-companion/driver.py constructor-extended  # ...and its Extended settings section
 python .claude/skills/run-mm-companion/driver.py sheet-size    # a Huge character: size in the totals, speed netted per mode
 python .claude/skills/run-mm-companion/driver.py size-ladder   # the Growth/Shrinking rung strip on a power card
+python .claude/skills/run-mm-companion/driver.py size-ladder-reload  # ...a dialled rung, saved and reopened from disk
 python .claude/skills/run-mm-companion/driver.py size-ladder-narrow  # ...wrapped, in a narrow locked sheet
 python .claude/skills/run-mm-companion/driver.py settings     # the Settings window (Themes page)
 python .claude/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)

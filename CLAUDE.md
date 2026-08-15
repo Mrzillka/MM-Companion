@@ -936,15 +936,16 @@ entry). Per window and in memory: closing the sheet discards the history.
   attributes, so rebinding one would desync the block silently; driving it off
   `fields()` also carries a field added later for free.
 - **Runtime survives a restore.** `capture_runtime`/`apply_runtime` carry the flags
-  `to_dict` deliberately omits — `activated`/`item_present`/`array_active`,
-  `PowerGroup.active_child_id`, each effect's `toggled_on`/`suppressed`,
-  `EquipmentItem.worn`/`current_speed`, **and an item's own `build`**, recursing
-  into accessories — keyed by node/item **id**. Without them a plain round trip
-  switches every power on and re-wears every stowed item, which is the lesson
-  already written on `equipment.py`'s deep-copy comment. Effects have no id, so
-  they are keyed by *position* and a resized list is skipped rather than
-  misapplied. Runtime toggles are therefore not undoable **and not lost** — a
-  second click already reverses one, and it is not a persisted edit.
+  `to_dict` deliberately omits, which since powers started saving their own runtime
+  (see "Runtime is saved" below) is just `EquipmentItem.worn`/`current_speed`,
+  recursing into accessories, keyed by item **id**. Without them a plain round trip
+  re-wears every stowed item, which is the lesson already written on `equipment.py`'s
+  deep-copy comment. A *power's* runtime — `activated`/`item_present`/`array_active`,
+  `PowerGroup.active_child_id`, each effect's `toggled_on`/`suppressed`/`current_rank`,
+  and an item's own `build` — travels in the snapshot instead, so it is restored with
+  the build and a runtime toggle is an ordinary undoable step. That is also why the
+  per-effect position-keyed tuple is gone: an effect carries no id, and no longer
+  needs one.
 - **`CharacterSheet.reseed()` is the widget half**, duck-typed and fanned out like
   `sync_session`, guarded by `_restoring` so the sheet's `EDITED` subscriber drops
   the signal — the one chokepoint that covers all thirteen blocks *and* any mod block
@@ -1028,6 +1029,26 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `effect.suppressed` and `power.activated` / `power.item_present` gate whether a
   passive bonus currently applies (`effect_is_active`). The UI drives all of a
   power's gates from one "Active" switch.
+- **Runtime is saved.** It used to be the other way round — every runtime flag was
+  left out of `to_dict()` on the argument that what is switched on is not part of the
+  build — and the size ladder is what broke it: a Growth 3 *held* at Large is a
+  standing decision about the character that four of the sheet's numbers hang off,
+  and reopening the file at Gargantuan silently changed them. So
+  `activated`/`item_present`/`array_active`, `PowerGroup.active_child_id` and each
+  effect's `toggled_on`/`suppressed`/`current_rank` all round-trip now. Four things
+  make that additive rather than a migration. Each is **written only when it differs
+  from the all-active default**, so a power nobody has touched serializes
+  byte-for-byte as before and a file saved earlier still loads all-active — there is
+  no schema version and no reader that needs one. It is still not **cost**: nothing
+  here is a term in `power_total_cost`, and dialling a Growth down refunds nothing.
+  `capture_runtime`/`apply_runtime` shed the powers half entirely (the snapshot
+  carries it), which is what makes a runtime toggle an ordinary undoable step instead
+  of a change `restore` had to hold over. And the Powers block's `runtimeChanged`
+  gained `EDITED` on the bus: a state that is saved but never marks the sheet dirty
+  shows no `*`, prompts nothing on close, and is lost — the exact bug again, one
+  layer up. **Equipment's `worn` is deliberately not part of this** (see the
+  equipment layer): what is in your hands this round is not what your powers are set
+  to.
 - **Game-term summary**: `effect_stat_rows` / `effect_game_terms` /
   `power_game_terms` render each effect's Type/Range/Action/Duration/Check/
   Resistance with modifier and config overrides applied, tinting a field an extra
@@ -1080,7 +1101,8 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   label with an explicit size must set it on its `QFont`, **not** in a stylesheet:
   a stylesheet `font-size` outranks the card's font and would sit the transition
   out. Runtime toggling stays available in the locked read-only view — it is a
-  mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`.
+  mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`
+  (which still marks the sheet unwritten, since the state is saved).
 
 ## The equipment layer (matters when touching equipment, gear or vehicles)
 
@@ -1174,9 +1196,11 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
   Intrinsic amounts are also legitimately **negative** (a small creature's Stealth
   bonus is a large one's penalty), so they are forced `STACK_SUM`: an exclusive
   comparison over signed amounts means nothing here.
-- **`worn` is runtime**, exactly like a power's `activated`: left out of `to_dict()`, a
-  loaded character comes up wearing everything, and a card toggle emits `runtimeChanged`
-  (not `changed`), so it works in the locked sheet and never marks it dirty. Three
+- **`worn` is runtime**, and now the *only* kind that is not saved: left out of
+  `to_dict()`, a loaded character comes up wearing everything, and a card toggle emits
+  `runtimeChanged` (not `changed`), so it works in the locked sheet and never marks it
+  dirty. It was modelled on a power's `activated`, which has since gone the other way —
+  what is in your hands this round is not what your powers are set to. Three
   things deliberately ignore it: the **price** (sheathing a sword refunds nothing), **PL
   validation** (`offensive_builds` yields every item — a sheet that passed by sheathing
   its sword would validate nothing), and a **GM's pinned chips** (a strip must not
@@ -1288,9 +1312,8 @@ data-first; nothing below names a trait, an effect or a column in Python.
   adding an effect would quietly turn it back on.
 - **Growth is a ladder, not a leap** — a Growth 3 can be *held* at Large, at Huge or at
   Gargantuan, and which is a mid-round decision. The state is
-  `PowerEffectInstance.current_rank`: **runtime**, like `toggled_on` beside it, so it is
-  out of `to_dict` and carried across a restore by `capture_runtime` (the per-effect
-  tuple grew a third slot, read tolerantly by index). `None` means "all the way up", so
+  `PowerEffectInstance.current_rank`: **runtime**, like `toggled_on` beside it — and
+  saved with the build, like `toggled_on` is now (see "Runtime is saved"). `None` means "all the way up", so
   an effect nobody has dialled behaves exactly as it always did and a bought rank edited
   *down* later re-clamps rather than running at a rank it no longer has — that clamp is
   `rules.effect_current_rank`, which `size_shift` and `_readout_size_table` both read.
@@ -1326,11 +1349,13 @@ data-first; nothing below names a trait, an effect or a column in Python.
   no-op. That test goes through `size_steps` rather than comparing `current_rank`
   directly, since a clamped rung spans several ranks and its button only carries the
   lowest. It **stays live in the locked sheet** and emits `runtimeChanged`, never
-  `changed`, like every other card switch. And a **single-rung effect gets no strip at
+  `changed`, like every other card switch — which, the rung being saved, does now mark
+  the sheet unwritten (see "Runtime is saved"). And a **single-rung effect gets no strip at
   all**: a Growth 1's one rung *is* the card's own on/off switch, and a strip of one
   button would be a second way to press it — which also covers a ladder the Size Table
   clamped down to one. It wraps in a `FlowContainer`, because a Growth 10 is ten buttons
-  and a card in a pinned strip is narrow. Screenshot it with `driver.py size-ladder`.
+  and a card in a pinned strip is narrow. Screenshot it with `driver.py size-ladder`,
+  and the rung coming back off disk with `driver.py size-ladder-reload`.
 - **The rungs are `NoFocus`, and `_rebuild_list` runs inside `preserved_scroll`.** Two
   halves of one bug: every runtime setter rebuilds the whole card tree, so the block is
   briefly empty *and* whatever held focus inside it is destroyed — Qt hands focus to the

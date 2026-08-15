@@ -42,7 +42,8 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 `RollRequest.label` / `RollRecord.label` carry the **name** of what was rolled
 ("Athletics", "Blast: 7 vs. Defense"). The field was designed in from the start
 and sat empty until rolling from the character sheet landed; the dice roller now
-fills it from the loaded `RollSpec` (see CLAUDE.md, "Rolling from the sheet"), so
+fills it from the loaded `RollSpec` (see `docs/notes/dice-and-rolling.md`,
+"Rolling from the sheet"), so
 a shared history reads as who rolled *what*.
 
 `RollRequest.spec` / `RollRecord.spec` carry the **sheet's description** of the

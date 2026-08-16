@@ -52,6 +52,7 @@ from mm_companion.core.rules import (
     advantage_points_spent,
     advantage_rank_cap,
     debilitated_traits,
+    granted_advantages,
     heroic_advantage_budget,
     heroic_advantage_ranks,
     heroic_advantage_ranks_free,
@@ -213,6 +214,11 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._selected: AdvantageSelection | None = None
         self._syncing_selection = False
         self._row_refs = RowIndex()
+        # Power-granted advantage rows, kept apart from _row_refs: they are not the
+        # player's list, so nothing may reorder, edit or remove them — but the
+        # Debilitated overlay still has to reach them.
+        self._granted_refs: list[tuple[AutoHeightTable, int, AdvantageSelection]] = []
+        self._granted_signature: tuple = ()
         # One controller for every panel: they are one ordered list split for
         # display, so a row has to be draggable from one into another.
         self._reorder = RowReorder(
@@ -248,7 +254,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         """
 
         lost = debilitated_traits(self._character, self._data)
-        for table, row, selection in self._row_refs:
+        for table, row, selection in [*self._row_refs, *self._granted_refs]:
             item = table.item(row, 0)
             if item is None:
                 continue
@@ -308,15 +314,51 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self.refresh_cost()
         self.refresh_limits()
 
+    def _granted_entries(self) -> list[tuple[AdvantageSelection, str]]:
+        """Advantages a power or item grants, as ``(selection, granting source)`` pairs.
+
+        Not part of ``Character.advantages`` and never written back to it: the power paid
+        for these, so they cost no advantage points and draw on no Heroic budget (see
+        :func:`~mm_companion.core.rules.granted_advantages`). They are shown all the same
+        — an Enhanced Advantage that left no mark on the sheet would read as a power that
+        does nothing.
+        """
+
+        return [
+            (AdvantageSelection(name=name, rank=bonus.amount), ", ".join(bonus.sources))
+            for name, bonus in granted_advantages(self._character, self._data).items()
+        ]
+
+    def refresh_granted(self) -> None:
+        """Re-render when the powers' granted advantages have changed.
+
+        Wired to the sheet's enhancements signal, which is the same one the abilities and
+        resistances enhancement columns listen to — a toggled-off power must drop its
+        granted advantage exactly as it drops its Strength boost. Rebuilds only when the
+        set actually moved, since a rebuild costs the block its selection.
+        """
+
+        signature = tuple((s.name, s.rank, source) for s, source in self._granted_entries())
+        if signature == self._granted_signature:
+            return
+        self._granted_signature = signature
+        self._rebuild()
+
     def _rebuild(self) -> None:
         """Re-render every panel from the ordered advantage list.
 
         Called on add/remove, on a sort or manual move, and when the panel count
         changes on resize.
+
+        The bought advantages come first and the power-granted ones after, so the list
+        the player controls reads as itself and the rest as what the build did to it.
         """
 
         self._row_refs.clear()
-        selections = self._character.advantages
+        self._granted_refs.clear()
+        granted = self._granted_entries()
+        self._granted_signature = tuple((s.name, s.rank, src) for s, src in granted)
+        entries = [(selection, "") for selection in self._character.advantages] + granted
         count = self._flow_column_count()
         self._column_count = count
         self._ensure_tables(count)
@@ -325,23 +367,35 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         # inside is at its final width. A panel built earlier may also have been
         # sized for a shorter set of names than the model now holds.
         name_width = self._name_col_width()
-        buckets = even_split([1] * len(selections), count)
+        buckets = even_split([1] * len(entries), count)
         for table, bucket in zip(self._tables, buckets, strict=True):
             table.setColumnWidth(0, name_width)
             table.setRowCount(0)
             for index in bucket:
-                self._render_row(table, selections[index])
+                self._render_row(table, *entries[index])
             table.updateGeometry()
         self.refresh_conditions()
         self._restore_selection()
 
-    def _render_row(self, table: AutoHeightTable, selection: AdvantageSelection) -> None:
-        """Append one row for *selection*, recording its row → model mapping."""
+    def _render_row(
+        self, table: AutoHeightTable, selection: AdvantageSelection, source: str = ""
+    ) -> None:
+        """Append one row for *selection*, recording its row → model mapping.
+
+        ``source`` names the power or item that *granted* the advantage, for a row the
+        player did not buy. Such a row is muted and not selectable — there is nothing to
+        rank, reorder or remove about it, and offering the gesture would only promise an
+        edit the block cannot make. It is kept out of ``_row_refs`` (which is what the
+        reorder, remove and edit gestures address) and tracked in ``_granted_refs``
+        instead, so the Debilitated overlay still reaches it.
+        """
 
         advantage = self._advantages_by_name.get(selection.name)
         text = self._name_text(selection)
         types = ", ".join(advantage.types) if advantage else ""
         description = advantage.description if advantage else ""
+        if source:
+            description = f"From {source}. {description}".strip()
         row = table.rowCount()
         table.insertRow(row)
         name_item = QTableWidgetItem(text)
@@ -349,12 +403,21 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         # wants reading in one piece. The same belt-to-the-braces the skills block's
         # indented rows carry, and refresh_conditions rewrites this tooltip when the
         # row is struck through, which is the more urgent thing to say about it.
-        name_item.setToolTip(text)
+        name_item.setToolTip(text if not source else f"{text} — granted by {source}")
         table.setItem(row, 0, name_item)
         table.setItem(row, 1, QTableWidgetItem(types))
         table.setItem(row, 2, QTableWidgetItem(description))
+        if source:
+            muted = QBrush(QColor(theme.color("text.muted.rich")))
+            for column in range(3):
+                item = table.item(row, column)
+                item.setForeground(muted)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
         table.resizeRowToContents(row)
-        self._row_refs.add(table, row, selection)
+        if source:
+            self._granted_refs.append((table, row, selection))
+        else:
+            self._row_refs.add(table, row, selection)
 
     # -- ordering / sorting --------------------------------------------------
 
@@ -469,7 +532,13 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         fm = self.fontMetrics()
         return wrapping_column_width(
             fm,
-            (self._name_text(selection) for selection in self._character.advantages),
+            (
+                self._name_text(selection)
+                for selection in (
+                    *self._character.advantages,
+                    *(s for s, _source in self._granted_entries()),
+                )
+            ),
             padding=NAME_PADDING,
             cap=name_max_width(),
             floor=fm.horizontalAdvance("Advantage") + NAME_PADDING,

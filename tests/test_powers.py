@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
@@ -32,6 +34,7 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_ability,
     effective_effect_stats,
+    granted_advantages,
     group_array_base_index,
     live_powers,
     modifier_label,
@@ -1319,6 +1322,11 @@ def test_effect_stat_rows_attack_bonus_overrides_the_attack_roll() -> None:
 
 
 # -- trait boosts from powers (Enhanced Trait, Protection) --------------------
+#
+# The tests in this first block use the *legacy* single-``config['target']`` shape,
+# which is exactly why they are left in it: an Enhanced Trait now allocates its rank
+# across a list of traits, and every character saved before that must keep boosting and
+# costing precisely what it always did. The multi-trait block follows below.
 
 
 def _char_with(power: Power) -> Character:
@@ -1537,6 +1545,196 @@ def test_trait_boost_does_not_change_point_cost() -> None:
     # STR costs for the 2 *bought* ranks (4 PP), not the boosted 5; the boost is
     # paid by the power's own cost (enhanced_trait 2/rank × 3 = 6).
     assert power_points_spent(char, data) == 2 * 2 + 6
+
+
+# -- Enhanced Trait's multi-trait allocation ----------------------------------
+
+
+def _enhanced(rank: int, rows, *, extras=(), flaws=()) -> PowerEffectInstance:
+    """An Enhanced Trait allocating ``(trait, ranks)`` pairs out of ``rank``."""
+
+    return PowerEffectInstance(
+        "enhanced_trait",
+        rank=rank,
+        config={"traits": [{"trait": t, "ranks": r} for t, r in rows]},
+        extras=[ModifierSelection(m) for m in extras],
+        flaws=[ModifierSelection(m) for m in flaws],
+    )
+
+
+def test_one_enhanced_trait_raises_every_allocated_trait() -> None:
+    data = load_game_data()
+    char = _char_with(
+        Power(
+            name="Berserker Rage",
+            effects=[_enhanced(10, [("STR", 2), ("Treatment", 6), ("Fearless", 2)])],
+        )
+    )
+    char.abilities["STR"] = 3
+
+    assert effective_ability(char, data, "STR") == 5  # 3 bought + 2 allocated
+    assert skill_total(char, data, "Treatment") == 6
+    granted = granted_advantages(char, data)
+    assert granted["Fearless"].amount == 2
+    assert granted["Fearless"].sources == ("Berserker Rage",)
+
+
+def test_each_allocated_trait_is_priced_at_its_own_rate() -> None:
+    """The worked example: Strength 2, Treatment 6, Expertise 2, Limited = 4 PP.
+
+    Strength at 2 PP a rank is 4; the eight skill ranks at two a point are 3 + 1; the
+    -1/rank Limited then halves the 8.
+    """
+
+    data = load_game_data()
+    rows = [("STR", 2), ("Treatment", 6), ("Expertise", 2)]
+    assert effect_total_cost(_enhanced(10, rows), data) == 8
+    assert effect_total_cost(_enhanced(10, rows, flaws=["limited_enhanced_trait"]), data) == 4
+
+
+def test_sustained_is_free_and_a_second_flaw_quarters_the_cost() -> None:
+    data = load_game_data()
+    rows = [("STR", 4)]  # 8 PP flat
+    assert effect_total_cost(_enhanced(4, rows, extras=["sustained_enhanced_trait"]), data) == 8
+    # Two -1/rank flaws take the nominal 2/rank to 0, i.e. 1 point per 2 ranks: a quarter.
+    both = _enhanced(4, rows, flaws=["limited_enhanced_trait", "limited_enhanced_trait"])
+    assert effect_total_cost(both, data) == 2
+
+
+def test_one_point_buys_a_rank_in_each_of_two_skills() -> None:
+    """Skill ranks pool and round *once*, as the bought skills do.
+
+    A point buys two skill ranks, and those two ranks may go into two different skills —
+    charging each row on its own would make the same two ranks cost two points.
+    """
+
+    data = load_game_data()
+    assert effect_total_cost(_enhanced(2, [("Stealth", 1), ("Treatment", 1)]), data) == 1
+    assert effect_total_cost(_enhanced(2, [("Stealth", 2)]), data) == 1
+
+
+def test_an_unallocated_enhanced_trait_costs_nothing() -> None:
+    data = load_game_data()
+    assert effect_total_cost(_enhanced(6, []), data) == 0
+
+
+def test_allocating_more_than_the_rank_is_a_warning() -> None:
+    data = load_game_data()
+    power = Power(effects=[_enhanced(3, [("STR", 2), ("Treatment", 7)])])
+    assert effect_allocation_used(power.effects[0], data) == 9
+    assert "over budget" in power_allocation_violations(power, data)[0]
+
+
+def test_a_legacy_single_target_costs_and_boosts_as_it_always_did() -> None:
+    """A save written before the allocation existed reads as the one trait it named."""
+
+    data = load_game_data()
+    legacy = PowerEffectInstance("enhanced_trait", rank=4, config={"target": "STR"})
+    char = _char_with(Power(name="Old", effects=[legacy]))
+    assert effective_ability(char, data, "STR") == 4
+    assert effect_total_cost(legacy, data) == 8  # 4 ranks at the 2 PP an ability rank costs
+
+
+def test_a_legacy_skill_target_is_now_priced_as_a_skill() -> None:
+    """The bug this change fixes: a boosted skill was charged at 2 PP a rank.
+
+    Enhanced Trait's base cost is "as trait", so four ranks of a skill cost the two
+    points four ranks of that skill cost — not the eight a flat 2/rank charged.
+    """
+
+    data = load_game_data()
+    legacy = PowerEffectInstance("enhanced_trait", rank=4, config={"target": "Stealth"})
+    assert effect_total_cost(legacy, data) == 2
+
+
+def test_an_enhanced_advantage_reaches_the_sheet_without_costing_advantage_points() -> None:
+    from mm_companion.core.rules import (
+        advantage_points_spent,
+        heroic_advantage_ranks,
+        powers_points_spent,
+    )
+
+    data = load_game_data()
+    char = _char_with(Power(name="Rage", effects=[_enhanced(2, [("Fearless", 2)])]))
+
+    assert granted_advantages(char, data)["Fearless"].amount == 2
+    # The power paid for it: it is not a bought advantage, so neither the advantage
+    # points nor the shared Heroic budget moves.
+    assert advantage_points_spent(char, data) == 0
+    assert heroic_advantage_ranks(char, data) == 0
+    assert powers_points_spent(char, data) == 2  # 2 ranks at the 1 PP an advantage costs
+
+
+def test_a_granted_advantage_chains_its_own_skill_bonus() -> None:
+    """An Enhanced Advantage grants whatever the advantage itself would have granted."""
+
+    import dataclasses
+
+    data = load_game_data()
+    granting = dataclasses.replace(
+        data.advantages[0], skill_bonus_per_rank=2, skill_bonus_target="Stealth"
+    )
+    data = dataclasses.replace(data, advantages=(granting, *data.advantages[1:]))
+
+    char = Character.new_default(data)
+    char.powers.append(Power(name="Knack", effects=[_enhanced(3, [(granting.name, 3)])]))
+
+    bonus = skill_bonus(char, data, "Stealth")
+    assert bonus is not None
+    assert bonus.amount == 6  # 3 granted ranks at 2 points of Stealth each
+    assert granting.name in bonus.sources[0] and "Knack" in bonus.sources[0]
+
+
+def test_reduced_trait_discounts_by_what_the_lowered_trait_cost() -> None:
+    data = load_game_data()
+    reduced = ModifierSelection(
+        "reduced_trait", config={"reduced": [{"trait": "DODGE", "ranks": 3}]}
+    )
+    effect = _enhanced(4, [("STR", 4)])
+    effect.flaws.append(reduced)
+    assert effect_total_cost(effect, data) == 5  # 8 less the 3 PP three ranks of Dodge cost
+
+    reduced.config["reduced"] = [{"trait": "DODGE", "ranks": 50}]
+    assert effect_total_cost(effect, data) == 1  # the rules floor the effect at 1 point
+
+
+def test_a_trait_allocation_survives_a_save_and_load() -> None:
+    """The rows are lists of dicts, not scalars — the one config shape that could break."""
+
+    data = load_game_data()
+    effect = _enhanced(6, [("STR", 2), ("Treatment", 4)])
+    effect.flaws.append(
+        ModifierSelection("reduced_trait", config={"reduced": [{"trait": "DODGE", "ranks": 2}]})
+    )
+    power = Power(name="Rage", effects=[effect])
+
+    restored = Power.from_dict(json.loads(json.dumps(power.to_dict())))
+    assert restored.effects[0].config == effect.config
+    assert restored.effects[0].flaws[0].config == effect.flaws[0].config
+    assert effect_total_cost(restored.effects[0], data) == effect_total_cost(effect, data)
+
+
+def test_the_cost_formula_shows_each_traits_own_price() -> None:
+    """The footer explains the number beside it — including why the halves pooled."""
+
+    data = load_game_data()
+    rows = [("STR", 2), ("Treatment", 6), ("Expertise", 2)]
+    assert effect_cost_formula(_enhanced(10, rows), data) == "4 + 3 + 1"
+    limited = _enhanced(10, rows, flaws=["limited_enhanced_trait"])
+    assert effect_cost_formula(limited, data) == "(4 + 3 + 1) × 1/2"
+    # A rank in each of two skills is half a point each — which is the whole reason
+    # the terms are shown unrounded rather than as the 1 point they come to.
+    assert (
+        effect_cost_formula(_enhanced(2, [("Stealth", 1), ("Treatment", 1)]), data) == "1/2 + 1/2"
+    )
+
+
+def test_the_enhances_row_names_every_allocated_trait() -> None:
+    data = load_game_data()
+    effect = _enhanced(10, [("STR", 2), ("Treatment", 6)])
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "enhances")
+    assert row.value == "Strength +2, Treatment +6"
+    assert "Enhances: Strength +2, Treatment +6" in effect_game_terms(effect, data)
 
 
 def test_linked_effects_with_matching_range_are_clean() -> None:

@@ -323,6 +323,72 @@ def build(target: str):
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         win = PowerConstructorWindow()
+    elif target == "enhanced-trait":
+        # Enhanced Trait's trait allocation, built through the real widgets: several
+        # traits raised out of one rank pool, each charged at what buying it costs.
+        # The worked case from docs/mm-powers-architecture.md §6 — Strength 2 (4 PP) +
+        # Treatment 6 (3) + Expertise 2 (1) = 8, halved by Limited to 4.
+        from PySide6.QtWidgets import QComboBox, QPushButton, QSpinBox
+
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        win = PowerConstructorWindow()
+        win._name.setText("Berserker Rage")
+        card = win.canvas.add_effect("enhanced_trait")
+        card._rank.setValue(10)
+
+        def _rows():
+            return [c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0]
+
+        add = next(b for b in card.findChildren(QPushButton) if b.text().endswith("Add"))
+        allocation = [("STR", 2), ("Treatment", 6), ("Expertise", 2)]
+        while len(_rows()) < len(allocation):
+            add.click()
+        for combo, (trait, ranks) in zip(_rows(), allocation, strict=True):
+            combo.setCurrentIndex(combo.findData(trait))
+            combo.parent().findChild(QSpinBox).setValue(ranks)
+        card.attach_modifier("limited_enhanced_trait")
+    elif target == "enhanced-trait-sheet":
+        # The other half of "enhanced-trait": what one Enhanced Trait does to the sheet
+        # once saved. Three traits out of one rank pool — an ability, a skill and an
+        # *advantage* — so the enhancement column, the skill total and the Advantages
+        # block each have to show their share of the same 4-point power.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.abilities["STR"] = 3
+        char.skill_ranks["Treatment"] = 2
+        char.powers.append(
+            Power(
+                name="Berserker Rage",
+                effects=[
+                    PowerEffectInstance(
+                        "enhanced_trait",
+                        rank=10,
+                        config={
+                            "traits": [
+                                {"trait": "STR", "ranks": 2},
+                                {"trait": "Treatment", "ranks": 6},
+                                {"trait": "Fearless", "ranks": 2},
+                            ]
+                        },
+                    )
+                ],
+            )
+        )
+        sheet.abilities.reseed()
+        sheet.skills.reseed()
+        sheet.advantages.reseed()
+        sheet.powers.refresh()
+        sheet.abilities.refresh_enhancements()
+        sheet.abilities.refresh_cost()
+        sheet.advantages.refresh_cost()
+        sheet.skills.refresh_totals()
+        sheet.system_info.refresh_derived()
+        sheet._recompute_derived()  # the spent-PP total the pool shows
     elif target == "sheet-size":
         # A Huge character's sheet: the Size Table reaching Defence, Toughness and the
         # skills, and the Speed readout netting two Flight powers into one line.
@@ -759,6 +825,8 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-pinned-bottom",
             "constructor",
             "constructor-extended",
+            "enhanced-trait",
+            "enhanced-trait-sheet",
             "sheet-size",
             "size-ladder",
             "size-ladder-narrow",

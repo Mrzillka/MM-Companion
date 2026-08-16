@@ -10,6 +10,7 @@ from ..data_loader import GameData, Resistance, Skill
 from .advantages import advantage_by_name
 from .appliers import (
     CATEGORY_ABILITY,
+    CATEGORY_ADVANTAGE,
     CATEGORY_RESISTANCE,
     CATEGORY_SKILL,
     GROUP_POWERS,
@@ -24,37 +25,112 @@ from .runtime import equipment_contributions, power_contributions
 from .size import size_contributions
 
 
-def advantage_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
-    """Every trait bonus the character's advantages grant.
+def granted_advantages(
+    char: Character,
+    game_data: GameData,
+    contributions: tuple[TraitContribution, ...] | None = None,
+) -> dict[str, TraitBonus]:
+    """Advantages a power or an item *grants*, ``name ->`` the ranks it stands at.
 
-    Data-driven: an advantage contributes when it carries a ``skill_bonus_per_rank``,
-    times its bought rank, on the skill its ``skill_bonus_target`` names — or, lacking
-    one, the skill the selection's ``parameter`` chose. So a mod adds a granting
-    advantage without touching this resolver.
+    An Enhanced Trait may raise an advantage as readily as an ability (the rules' own
+    Berserker Rage is *Enhanced Advantage: Fearless 2* alongside Enhanced Strength), so
+    an advantage is a trait like any other here — it simply totals nothing, which is why
+    :data:`~.appliers.CATEGORY_ADVANTAGE` sits outside
+    :data:`~.appliers.NUMERIC_CATEGORIES`.
+
+    A granted advantage is **paid for by the power that grants it**. It is deliberately
+    absent from :func:`~.costs.advantage_points_spent` and from the shared Heroic budget
+    (:func:`~.advantages.heroic_advantage_ranks`), both of which read the *bought*
+    ``char.advantages`` and nothing else — charging for it twice is exactly the bug the
+    trait boosts avoid on the ability side.
+
+    Gathers the same sources :func:`trait_contributions` does, less the advantages
+    themselves: an advantage cannot grant an advantage, and reading its own output back
+    would be a loop rather than a rule. Pass ``contributions`` to reuse a gather already
+    in hand — :func:`trait_contributions` does, since every derived total on the sheet
+    goes through it and walking the powers twice per lookup would be paid for on every
+    skill row.
+    """
+
+    if contributions is None:
+        contributions = (
+            size_contributions(char, game_data)
+            + power_contributions(char, game_data)
+            + equipment_contributions(char, game_data)
+        )
+    return dict(resolve_bonuses(contributions).get(CATEGORY_ADVANTAGE, {}))
+
+
+def _advantage_skill_contribution(
+    advantage, rank: int, parameter: str, source: str
+) -> TraitContribution | None:
+    """The skill bonus one advantage at one rank grants, or ``None`` when it grants none.
+
+    Data-driven: an advantage contributes when it carries a ``skill_bonus_per_rank``, on
+    the skill its ``skill_bonus_target`` names — or, lacking one, the skill ``parameter``
+    chose. So a mod adds a granting advantage without touching this resolver.
+    """
+
+    if advantage is None or not advantage.skill_bonus_per_rank:
+        return None
+    target = advantage.skill_bonus_target or parameter
+    if not target:
+        return None
+    return TraitContribution(
+        amount=advantage.skill_bonus_per_rank * rank,
+        stat=target,
+        category=CATEGORY_SKILL,
+        source=source,
+        stacking=STACK_SUM,
+        group=GROUP_POWERS,
+        kind=APPLY_BONUS,
+    )
+
+
+def advantage_contributions(
+    char: Character,
+    game_data: GameData,
+    granted: dict[str, TraitBonus] | None = None,
+) -> tuple[TraitContribution, ...]:
+    """Every trait bonus the character's advantages grant — bought and granted alike.
 
     Advantages are bought with Power Points like powers, so they join the same
     stacking group and add on top of a power's boost rather than competing with it.
+
+    A **granted** advantage (:func:`granted_advantages`) grants whatever it would have
+    granted if bought, so an Enhanced Advantage naming one that carries a skill bonus
+    reaches the skill total rather than stopping at a name on the sheet. Only advantages
+    that name their own ``skill_bonus_target`` can chain that way: a granted one has no
+    ``parameter``, since nothing asked the player which skill it was for.
+
+    ``granted`` may be passed to reuse a :func:`granted_advantages` result already in
+    hand; it is resolved here when it isn't.
     """
 
     contributions: list[TraitContribution] = []
     for selection in char.advantages:
-        advantage = advantage_by_name(game_data, selection.name)
-        if advantage is None or not advantage.skill_bonus_per_rank:
-            continue
-        target = advantage.skill_bonus_target or selection.parameter
-        if not target:
-            continue
-        contributions.append(
-            TraitContribution(
-                amount=advantage.skill_bonus_per_rank * selection.rank,
-                stat=target,
-                category=CATEGORY_SKILL,
-                source=advantage.name,
-                stacking=STACK_SUM,
-                group=GROUP_POWERS,
-                kind=APPLY_BONUS,
-            )
+        contribution = _advantage_skill_contribution(
+            advantage_by_name(game_data, selection.name),
+            selection.rank,
+            selection.parameter,
+            selection.name,
         )
+        if contribution is not None:
+            contributions.append(contribution)
+
+    if granted is None:
+        granted = granted_advantages(char, game_data)
+    for name, bonus in granted.items():
+        contribution = _advantage_skill_contribution(
+            advantage_by_name(game_data, name),
+            bonus.amount,
+            "",
+            # Named for the pair: the advantage is what grants the bonus, the power is
+            # what put the advantage there, and neither half explains the row alone.
+            f"{name} ({', '.join(bonus.sources)})" if bonus.sources else name,
+        )
+        if contribution is not None:
+            contributions.append(contribution)
     return tuple(contributions)
 
 
@@ -64,9 +140,9 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     The one place the derived totals gather what is raising a trait: the character's
     size (:func:`~.size.size_contributions`), then the active powers
     (:func:`~.runtime.power_contributions`), then the advantages
-    (:func:`advantage_contributions`), then the worn gear
-    (:func:`~.runtime.equipment_contributions`). Conditions are deliberately absent —
-    they are a display-only overlay and never part of the build.
+    (:func:`advantage_contributions`) — the bought ones and the ones a power granted —
+    then the worn gear (:func:`~.runtime.equipment_contributions`). Conditions are
+    deliberately absent — they are a display-only overlay and never part of the build.
 
     Order matters twice over. Size comes first because it is the one thing here nobody
     bought: it sits in :data:`~.appliers.GROUP_INTRINSIC` and is added on top of
@@ -78,12 +154,14 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     whichever group was seen first — the powers.
     """
 
-    return (
-        size_contributions(char, game_data)
-        + power_contributions(char, game_data)
-        + advantage_contributions(char, game_data)
-        + equipment_contributions(char, game_data)
-    )
+    size = size_contributions(char, game_data)
+    powers = power_contributions(char, game_data)
+    equipment = equipment_contributions(char, game_data)
+    # Gathered once and handed on: the advantages resolver needs this very same set to
+    # find the advantages a power granted, and this function sits on the path of every
+    # derived total the sheet prints — gathering twice would be paid for per skill row.
+    granted = granted_advantages(char, game_data, size + powers + equipment)
+    return size + powers + advantage_contributions(char, game_data, granted) + equipment
 
 
 def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:

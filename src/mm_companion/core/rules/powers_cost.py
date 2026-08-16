@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
+from dataclasses import dataclass
+from fractions import Fraction
 
 from ..character import Character
-from ..data_loader import GameData, Modifier
+from ..data_loader import Effect, GameData, Modifier
 from ..powers import (
     STRUCTURE_ARRAY,
     Power,
@@ -13,8 +16,11 @@ from ..powers import (
     PowerGroup,
     PowerNode,
 )
+from ..registry import Registry
 from .derived import effective_ability
+from .runtime import boost_allocations, config_trait_allocation
 from .size import effective_size_rank
+from .trait_rates import trait_allocation_cost, trait_rate
 
 
 def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
@@ -94,16 +100,30 @@ def modifier_rank_cap(modifier: Modifier) -> int:
     return modifier.max_rank if modifier.max_rank is not None else MODIFIER_RANK_MAX
 
 
-def _modifier_magnitude(modifier: Modifier, selection) -> int:
+def _modifier_magnitude(
+    modifier: Modifier, selection, game_data: GameData, char: Character | None = None
+) -> int:
     """One modifier's cost magnitude: ``cost_value`` (or a config override), times its
-    rank when ``ranked``."""
+    rank when ``ranked``.
+
+    A modifier whose ``cost_mode`` is :data:`BASE_COST_AS_TRAIT` is priced from its own
+    trait allocation instead of a fixed number — Enhanced Trait's Reduced Trait flaw is
+    worth "the cost of the reduced trait", whatever the player lowered and by how much.
+    It is a flat magnitude, so it is never multiplied by a rank.
+    """
+
+    if modifier.cost_mode == BASE_COST_AS_TRAIT:
+        rows = config_trait_allocation(selection.config, modifier)
+        return math.ceil(trait_allocation_cost(rows, char, game_data))
 
     override = _modifier_config_cost(modifier, selection)
     magnitude = modifier.cost_value if override is None else override
     return magnitude * (selection.rank if _effective_ranked(modifier, selection) else 1)
 
 
-def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: bool) -> int:
+def _signed_modifier_cost(
+    mods: list, sign: int, game_data: GameData, *, flat: bool, char: Character | None = None
+) -> int:
     """Sum the ``cost_value`` of the given modifier selections in one bucket.
 
     ``sign`` is ``+1`` for extras and ``-1`` for flaws; ``flat`` selects either the
@@ -118,17 +138,29 @@ def _signed_modifier_cost(mods: list, sign: int, game_data: GameData, *, flat: b
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or _effective_flat(modifier, selection) != flat:
             continue
-        total += sign * _modifier_magnitude(modifier, selection)
+        total += sign * _modifier_magnitude(modifier, selection, game_data, char)
     return total
 
 
-def _net_per_rank_modifiers(effect: PowerEffectInstance, game_data: GameData) -> int:
+def _net_per_rank_modifiers(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
     """Net per-rank extra/flaw cost of an effect (base cost excluded):
     ``Σ per-rank extras − Σ per-rank flaws``."""
 
-    return _signed_modifier_cost(effect.extras, +1, game_data, flat=False) + _signed_modifier_cost(
-        effect.flaws, -1, game_data, flat=False
-    )
+    return _signed_modifier_cost(
+        effect.extras, +1, game_data, flat=False, char=char
+    ) + _signed_modifier_cost(effect.flaws, -1, game_data, flat=False, char=char)
+
+
+def _net_flat_modifiers(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
+    """Net one-time extra/flaw cost of an effect: ``Σ flat extras − Σ flat flaws``."""
+
+    return _signed_modifier_cost(
+        effect.extras, +1, game_data, flat=True, char=char
+    ) + _signed_modifier_cost(effect.flaws, -1, game_data, flat=True, char=char)
 
 
 def effect_per_rank_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
@@ -190,19 +222,151 @@ def _ranked_cost(net_per_rank: int, rank: int) -> int:
     return math.ceil(rank / (2 - net_per_rank))
 
 
+# --- the base-cost registry -----------------------------------------------------------
+
+#: Priced at a fixed number of points per rank — every effect but one.
+BASE_COST_FLAT = "flat"
+
+#: Priced "as trait" (the rules' own words for Enhanced Trait's base cost): the effect
+#: costs whatever the traits it raises would cost to buy outright. Also the ``cost_mode``
+#: of the Reduced Trait flaw, which discounts by what the lowered trait was worth.
+BASE_COST_AS_TRAIT = "as_trait"
+
+
+@dataclass(frozen=True)
+class BaseCostContext:
+    """Everything a base-cost kind needs to price one assembled effect.
+
+    ``net_per_rank`` and ``flat`` are the modifier sums already bucketed by
+    :func:`_net_per_rank_modifiers` / :func:`_net_flat_modifiers`, so a kind decides only
+    how the *base* is charged and how the modifiers land on it. ``folded_ranks`` is the
+    ranks an ability-folding modifier contributes (Strength-Based Damage) — free of base
+    cost, but still paying every per-rank modifier.
+
+    ``char`` may be ``None``: a power is priced with or without a character in hand, and
+    what it costs must not depend on having one.
+    """
+
+    effect: PowerEffectInstance
+    base: Effect
+    game_data: GameData
+    char: Character | None
+    net_per_rank: int
+    flat: int
+    folded_ranks: int
+
+
+@dataclass(frozen=True)
+class BaseCostKind:
+    """How one ``baseCostMode`` prices an effect, and how it explains itself.
+
+    ``price`` returns the points; ``formula`` returns the breakdown the card's footer
+    shows. Both take a :class:`BaseCostContext`, and they are one record rather than two
+    registries because a rule whose explanation is registered separately is a rule whose
+    explanation can silently stop matching the number beside it.
+    """
+
+    price: Callable[[BaseCostContext], int]
+    formula: Callable[[BaseCostContext], str]
+
+
+#: One handler per ``baseCostMode`` in ``effects.json``. A mod's Python module can
+#: :func:`register_base_cost_kind` a pricing rule of its own — the same seam
+#: :data:`~.appliers.STAT_APPLIERS` gives stat effects — and an effect naming an
+#: unregistered mode falls back to :data:`BASE_COST_FLAT`, i.e. behaves as it always has.
+BASE_COST_KINDS: Registry[BaseCostKind] = Registry("baseCostMode")
+
+
+def register_base_cost_kind(mode: str, kind: BaseCostKind, *, replace: bool = False) -> None:
+    """Register a pricing rule for a ``baseCostMode``, for a mod to call at load time."""
+
+    BASE_COST_KINDS.register(mode, kind, replace=replace)
+
+
+def _base_cost_kind(base: Effect) -> BaseCostKind:
+    """The pricing rule an effect declares, falling back to the flat one."""
+
+    return BASE_COST_KINDS.get(base.base_cost_mode) or BASE_COST_KINDS.get(BASE_COST_FLAT)
+
+
+def _flat_base_cost(context: BaseCostContext) -> int:
+    """The ordinary rule: ``rank × (base + net mods) + folded × net mods + flat``.
+
+    The historical arithmetic, unchanged — see :func:`_ranked_cost` for what happens
+    when flaws push the per-rank cost below 1 PP.
+    """
+
+    ranked = _ranked_cost(context.base.base_cost_value + context.net_per_rank, context.effect.rank)
+    ranked += context.folded_ranks * context.net_per_rank
+    return ranked + context.flat
+
+
+def _modifier_scale(nominal: int, net_per_rank: int) -> Fraction:
+    """What per-rank modifiers multiply an "as trait" effect's cost by.
+
+    An as-trait effect has no single price per rank to add ``-1`` to — Strength costs 2
+    a rank and Stealth costs half of one, in the same effect. So the modifiers are read
+    against the effect's *nominal* rate (its ``baseCostValue``, the 2 points per rank a
+    trait ordinarily costs) and the result applied to the real total as a ratio: the
+    typical -1/rank Limited turns 2 into 1 and so halves the whole thing, which is
+    exactly what that flaw is understood to do to an Enhanced Trait.
+
+    Below 1 PP/rank it follows the same "1 point per ``2 - net`` ranks" rule
+    :func:`_ranked_cost` uses, so a second flaw quarters the cost rather than zeroing it.
+    """
+
+    if nominal <= 0:
+        return Fraction(1)
+    net = nominal + net_per_rank
+    if net >= 1:
+        return Fraction(net, nominal)
+    return Fraction(1, (2 - net) * nominal)
+
+
+def _as_trait_rows(context: BaseCostContext) -> tuple[tuple[str, int], ...]:
+    """The ``(trait, ranks)`` rows an as-trait effect is priced from."""
+
+    boost = context.base.integration.trait_boost if context.base.integration else None
+    return boost_allocations(context.effect, context.base, boost) if boost else ()
+
+
+def _as_trait_cost(context: BaseCostContext) -> int:
+    """Enhanced Trait's rule: the effect costs what its traits cost to buy.
+
+    Each allocated trait is priced at its own rate (:func:`~.trait_rates.trait_rate`)
+    and the fractions summed unrounded, so a rank of Stealth and a rank of Treatment
+    cost 1 point together rather than 1 point each — the same pooling the bought skills
+    get from :func:`~.costs.skill_points_spent`. Per-rank modifiers then scale that total
+    (:func:`_modifier_scale`), flat ones are added after, and the result cannot fall
+    below the 1 point the rules floor an Enhanced Trait at.
+
+    An effect with nothing allocated costs nothing: an empty Enhanced Trait is a power
+    the player has not finished building, and charging for it would read as a bug.
+    """
+
+    total = trait_allocation_cost(_as_trait_rows(context), context.char, context.game_data)
+    if total <= 0:
+        return 0
+    scale = _modifier_scale(context.base.base_cost_value, context.net_per_rank)
+    return max(1, math.ceil(total * scale) + context.flat)
+
+
 def effect_total_cost(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> int:
     """Power-point cost of one assembled effect (``docs/mm-powers-architecture.md`` §2).
 
-    ``ranked = ceil`` of the per-rank cost times rank (see :func:`_ranked_cost` for
-    the sub-1 PP/rank fraction rule), then ``total = ranked + Σ flat extras − Σ flat
-    flaws``. An unknown effect id contributes nothing.
+    *How* the base is charged is data — the effect's ``baseCostMode`` picks a handler out
+    of :data:`BASE_COST_KINDS`. The default :data:`BASE_COST_FLAT` is the familiar
+    ``ranked = ceil`` of the per-rank cost times rank (see :func:`_ranked_cost` for the
+    sub-1 PP/rank fraction rule), then ``total = ranked + Σ flat extras − Σ flat flaws``;
+    :data:`BASE_COST_AS_TRAIT` prices Enhanced Trait from the traits it raises. An unknown
+    effect id contributes nothing, and an unknown mode prices as flat.
 
     When an ability a modifier folds in raises the effect's rank (Strength-Based
     Damage picking up the wielder's Strength), the per-rank extras and flaws apply
     to those folded-in ranks too — the ranks come free of *base* cost, but each
-    per-rank modifier still costs against them, so the total is
+    per-rank modifier still costs against them, so the flat rule is
     ``rank × (base + net mods) + strength × net mods + flat``. This needs ``char``
     to know how much ability is folded in; without one, only the bought ranks count.
     """
@@ -211,14 +375,23 @@ def effect_total_cost(
     if base is None:
         return 0
 
-    net_mods = _net_per_rank_modifiers(effect, game_data)
-    ranked = _ranked_cost(base.base_cost_value + net_mods, effect.rank)
-    ranked += effect_rank_trait_bonus_cost(effect, game_data, char) * net_mods
+    return _base_cost_kind(base).price(_base_cost_context(effect, base, game_data, char))
 
-    flat = _signed_modifier_cost(effect.extras, +1, game_data, flat=True)
-    flat += _signed_modifier_cost(effect.flaws, -1, game_data, flat=True)
 
-    return ranked + flat
+def _base_cost_context(
+    effect: PowerEffectInstance, base: Effect, game_data: GameData, char: Character | None
+) -> BaseCostContext:
+    """Bucket an effect's modifiers and folded ranks for a base-cost kind to read."""
+
+    return BaseCostContext(
+        effect=effect,
+        base=base,
+        game_data=game_data,
+        char=char,
+        net_per_rank=_net_per_rank_modifiers(effect, game_data, char),
+        flat=_net_flat_modifiers(effect, game_data, char),
+        folded_ranks=effect_rank_trait_bonus_cost(effect, game_data, char),
+    )
 
 
 def effect_rank_trait_bonus(
@@ -359,7 +532,9 @@ def effect_effective_rank(
     )
 
 
-def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -> list[int]:
+def _modifier_terms(
+    mods: list, sign: int, game_data: GameData, *, flat: bool, char: Character | None = None
+) -> list[int]:
     """Signed ``cost_value`` of each modifier in one bucket, for formula display.
 
     Same selection as :func:`_signed_modifier_cost` but keeps the terms apart so a
@@ -372,32 +547,46 @@ def _modifier_terms(mods: list, sign: int, game_data: GameData, *, flat: bool) -
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or _effective_flat(modifier, selection) != flat:
             continue
-        terms.append(sign * _modifier_magnitude(modifier, selection))
+        terms.append(sign * _modifier_magnitude(modifier, selection, game_data, char))
     return terms
 
 
-def effect_cost_formula(
-    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
-) -> str:
-    """Human-readable cost breakdown for one effect, e.g. ``3 × (2 + 1 − 1) + 1``.
+def _flat_terms(context: BaseCostContext) -> list[int]:
+    """The one-time modifier terms of an effect, kept apart for display."""
 
-    Mirrors :func:`effect_total_cost`: the parenthesised group is the per-rank cost
-    (base plus per-rank extras minus per-rank flaws), multiplied by rank, then flat
-    extras/flaws added outside. The raw terms are always shown — when flaws push the
-    group below 1 PP/rank it is annotated with the resulting fraction (e.g.
-    ``4 × (1 − 1 − 1 = 1/3)``), since the total is then a ceil, not that arithmetic.
-    When an ability folds ranks in (Strength-Based Damage), a ``+ strength × (mods)``
-    term is appended for the per-rank modifiers those ranks also pay. Returns ``""``
-    for an unknown effect.
+    terms = _modifier_terms(
+        context.effect.extras, +1, context.game_data, flat=True, char=context.char
+    )
+    terms += _modifier_terms(
+        context.effect.flaws, -1, context.game_data, flat=True, char=context.char
+    )
+    return terms
+
+
+def _append_flat_terms(formula: str, terms: list[int]) -> str:
+    """Append ``+ n`` / ``− n`` for each one-time modifier."""
+
+    for term in terms:
+        formula += f" {'−' if term < 0 else '+'} {abs(term)}"
+    return formula
+
+
+def _flat_cost_formula(context: BaseCostContext) -> str:
+    """Breakdown of the ordinary rule, e.g. ``3 × (2 + 1 − 1) + 1``.
+
+    The parenthesised group is the per-rank cost (base plus per-rank extras minus
+    per-rank flaws), multiplied by rank, then flat extras/flaws added outside. The raw
+    terms are always shown — when flaws push the group below 1 PP/rank it is annotated
+    with the resulting fraction (e.g. ``4 × (1 − 1 − 1 = 1/3)``), since the total is then
+    a ceil, not that arithmetic. When an ability folds ranks in (Strength-Based Damage),
+    a ``+ strength × (mods)`` term is appended for the per-rank modifiers those ranks
+    also pay.
     """
 
-    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-    if base is None:
-        return ""
-
-    per_rank_terms = [base.base_cost_value]
-    mod_terms = _modifier_terms(effect.extras, +1, game_data, flat=False)
-    mod_terms += _modifier_terms(effect.flaws, -1, game_data, flat=False)
+    effect, game_data = context.effect, context.game_data
+    per_rank_terms = [context.base.base_cost_value]
+    mod_terms = _modifier_terms(effect.extras, +1, game_data, flat=False, char=context.char)
+    mod_terms += _modifier_terms(effect.flaws, -1, game_data, flat=False, char=context.char)
     per_rank_terms += mod_terms
     net = sum(per_rank_terms)
 
@@ -413,17 +602,72 @@ def effect_cost_formula(
     # modifiers, but not the base cost — a separate ``strength × (mods)`` term. This
     # is the bought amount (:func:`effect_rank_trait_bonus_cost`), so the breakdown
     # matches the cost even when the wielder's current ability differs.
-    strength = effect_rank_trait_bonus_cost(effect, game_data, char)
-    if strength and sum(mod_terms) != 0:
+    if context.folded_ranks and sum(mod_terms) != 0:
         mods_str = _join_terms(mod_terms)
-        formula += f" + {strength} × {f'({mods_str})' if len(mod_terms) > 1 else mods_str}"
+        formula += (
+            f" + {context.folded_ranks} × {f'({mods_str})' if len(mod_terms) > 1 else mods_str}"
+        )
 
-    flat_terms = _modifier_terms(effect.extras, +1, game_data, flat=True)
-    flat_terms += _modifier_terms(effect.flaws, -1, game_data, flat=True)
-    for term in flat_terms:
-        formula += f" {'−' if term < 0 else '+'} {abs(term)}"
+    return _append_flat_terms(formula, _flat_terms(context))
 
-    return formula
+
+def _fraction_str(value: Fraction) -> str:
+    """A Fraction as ``4`` or ``1/2`` — the way the rules write a part of a point."""
+
+    return (
+        str(value.numerator) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
+    )
+
+
+def _as_trait_formula(context: BaseCostContext) -> str:
+    """Breakdown of the as-trait rule, e.g. ``(4 + 3 + 1) × 1/2``.
+
+    One term per allocated trait, at what those ranks cost to buy, then the per-rank
+    modifiers as the ratio they scale the total by (:func:`_modifier_scale`) and the
+    flat ones after. The terms are shown *unrounded* on purpose: a pair of ``1/2``
+    terms is how the footer explains why one point bought a rank in each of two skills
+    rather than costing a point apiece.
+    """
+
+    terms = []
+    for target, ranks in _as_trait_rows(context):
+        rate = trait_rate(context.char, context.game_data, target)
+        if rate is None or not ranks:
+            continue
+        terms.append(rate * int(ranks))
+    if not terms:
+        return ""
+
+    body = " + ".join(_fraction_str(term) for term in terms)
+    scale = _modifier_scale(context.base.base_cost_value, context.net_per_rank)
+    if scale != 1:
+        body = (
+            f"({body}) × {_fraction_str(scale)}"
+            if len(terms) > 1
+            else f"{body} × {_fraction_str(scale)}"
+        )
+    return _append_flat_terms(body, _flat_terms(context))
+
+
+BASE_COST_KINDS.register(BASE_COST_FLAT, BaseCostKind(_flat_base_cost, _flat_cost_formula))
+BASE_COST_KINDS.register(BASE_COST_AS_TRAIT, BaseCostKind(_as_trait_cost, _as_trait_formula))
+
+
+def effect_cost_formula(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> str:
+    """Human-readable cost breakdown for one effect, e.g. ``3 × (2 + 1 − 1) + 1``.
+
+    Mirrors :func:`effect_total_cost` term for term, and through the same
+    :data:`BASE_COST_KINDS` record — a mode's price and its explanation are registered
+    together so the footer can never drift from the number beside it. Returns ``""``
+    for an unknown effect.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return ""
+    return _base_cost_kind(base).formula(_base_cost_context(effect, base, game_data, char))
 
 
 def _join_terms(terms: list[int]) -> str:

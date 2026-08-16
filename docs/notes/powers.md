@@ -26,17 +26,49 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   derived from a flaw's `gate` tag (`activation`, `removable`, `toggle`,
   `limited`). The *systems* reading these — `effect_is_active`,
   `power_trait_bonuses`, `effective_ability`, … — live in `rules`.
-- **Cost** (`rules`): `effect_total_cost` = `ceil` of net per-rank cost × rank
-  (with M&M's sub-1-PP/rank fraction rule) plus flat modifiers; `power_total_cost`
-  folds in the structure. `effect_cost_formula` renders the human-readable
-  breakdown. All numbers are data-driven (`base_cost_value`, modifier
-  `cost_value`, config `cost_value` overrides) — never hardcoded.
+- **Cost** (`rules`): *how* an effect is priced is data — its `baseCostMode`
+  picks a handler out of the `BASE_COST_KINDS` registry in `powers_cost`, and a
+  mod registers another rather than editing that module. The default `flat` is
+  `ceil` of net per-rank cost × rank (with M&M's sub-1-PP/rank fraction rule)
+  plus flat modifiers; `power_total_cost` folds in the structure.
+  `effect_cost_formula` renders the human-readable breakdown. All numbers are
+  data-driven (`base_cost_value`, modifier `cost_value`, config `cost_value`
+  overrides) — never hardcoded.
+- **`as_trait`**: Enhanced Trait's base cost is "as trait" — it costs whatever the
+  traits it raises cost to buy. Each allocated row is priced at its own
+  `trait_rate` and the fractions are summed **unrounded**, then rounded once, so a
+  rank of Stealth and a rank of Treatment cost 1 point *together* — the same
+  pooling `skill_points_spent` gives the bought skills, and the reason
+  `trait_rates` was split out of `costs` (which sits *above* `powers_cost` in the
+  DAG and so cannot be imported from it). Per-rank modifiers scale that total
+  against the effect's *nominal* rate, since there is no one per-rank price to
+  subtract from: the typical −1/rank Limited takes 2 to 1 and so halves it. The
+  total is floored at 1 PP. `Reduced Trait` is the same rule with a minus sign —
+  a flat flaw whose `costMode` is `as_trait` and whose own rows say what was
+  lowered.
 - **Effective vs. bought**: `effect_effective_rank` adds an ability a modifier
   folds in (Strength-Based Damage → Strength) to the bought rank — this is the
   rank that sets save DCs and PL caps, while cost counts only the bought rank.
   A power's active `TraitBoost` feeds `effective_ability` / `resistance_total` /
   `skill_total`, so an Enhanced-Trait boost flows through the whole sheet; the
   power pays for it, so the boosted trait's own point cost is unchanged.
+- **One boost, many traits.** A `TraitBoost` yields one contribution *per allocated
+  trait*, not one per effect: `boost_allocations` reads the effect's trait-allocation
+  config field (a `repeatable` with a `trait` column and an `int` column) and returns
+  `(trait, ranks)` pairs. When there are no rows it falls back to a single
+  `config["target"]` at the effect's full rank — which is exactly how Protection's
+  baked-in target, a shield's authored `{"target": "DEF"}` and every character saved
+  before the allocation existed keep working. **Nothing is migrated on load**; the
+  fallback is the compatibility story, and deleting it would silently blank old sheets.
+- **Advantages are traits too.** `CATEGORY_ADVANTAGE` is a trait category an Enhanced
+  Trait can raise, but deliberately *not* one of `NUMERIC_CATEGORIES` — an advantage is
+  presence-and-rank, not a number on a printed total. `granted_advantages` is what reads
+  them, and the Advantages block shows them as muted, unselectable rows naming the
+  granting power. A granted advantage is paid for by that power, so it enters neither
+  `advantage_points_spent` nor the shared Heroic budget; both read the *bought*
+  `char.advantages` and nothing else. If the advantage itself carries a
+  `skill_bonus_per_rank`, `advantage_contributions` chains it through to the skill total,
+  so an Enhanced Advantage grants what buying the advantage would have granted.
 - **Runtime state** (separate from the point build): `effect.toggled_on` /
   `effect.suppressed` and `power.activated` / `power.item_present` gate whether a
   passive bonus currently applies (`effect_is_active`). The UI drives all of a

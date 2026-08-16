@@ -49,10 +49,17 @@ from mm_companion.ui.power_constructor.canvas import PowerCanvas, PowerModeBar
 from mm_companion.ui.power_constructor.common import (
     _GROUP_HEADER,
     CONFIG_WIDGET_BUILDERS,
+    REPEATABLE_CELL_KINDS,
     STRENGTH_AMOUNT_MAX,
+    TRAIT_SOURCES,
     ConfigWidgetBuilder,
+    RepeatableCellKind,
     combat_focus_options,
+    fill_trait_combo,
+    is_trait_allocation,
     register_base_config_widgets,
+    register_base_repeatable_cells,
+    repeatable_cell_kind,
 )
 from mm_companion.ui.power_constructor.effect_card import EffectCard
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
@@ -71,8 +78,15 @@ __all__ = [
     "PowerConstructorWindow",
     "PowerModeBar",
     "PowerTermsView",
+    "REPEATABLE_CELL_KINDS",
+    "RepeatableCellKind",
     "STRENGTH_AMOUNT_MAX",
+    "TRAIT_SOURCES",
     "_GROUP_HEADER",
     "combat_focus_options",
+    "fill_trait_combo",
+    "is_trait_allocation",
     "register_base_config_widgets",
+    "register_base_repeatable_cells",
+    "repeatable_cell_kind",
 ]

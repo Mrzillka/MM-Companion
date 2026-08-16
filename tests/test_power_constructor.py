@@ -710,23 +710,55 @@ def test_constructor_summary_shows_the_characters_attack_bonus(qapp: QApplicatio
     assert rows["check"].value == "7 vs. Defense"
 
 
-# -- Enhanced Trait target picker & trait-boost display -----------------------
+# -- Enhanced Trait trait allocation & trait-boost display --------------------
 
 
 def _target_combo(card):
-    """The Enhanced-Trait target combo on an effect card, or None."""
+    """The single-target boost combo on an effect card, or None.
+
+    Enhanced Trait no longer has one — it allocates ranks across several traits through
+    :func:`_trait_rows` instead. Kept to assert exactly that, and that the boosters which
+    never had a picker still don't.
+    """
     from PySide6.QtWidgets import QComboBox
 
     return next((c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0), None)
 
 
-def test_configurable_effect_offers_a_trait_target_picker(qapp: QApplication) -> None:
+def _trait_rows(card):
+    """The (trait combo, rank spin) pairs of an effect card's trait-allocation rows."""
+    from PySide6.QtWidgets import QComboBox, QSpinBox
+
+    combos = [c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0]
+    rows = []
+    for combo in combos:
+        spin = combo.parent().findChild(QSpinBox)
+        rows.append((combo, spin))
+    return rows
+
+
+def _allocate(card, pairs) -> None:
+    """Fill the card's trait-allocation rows with ``(trait key, ranks)``, adding as needed."""
+    from PySide6.QtWidgets import QPushButton
+
+    add = next(b for b in card.findChildren(QPushButton) if b.text().endswith("Add"))
+    while len(_trait_rows(card)) < len(pairs):
+        add.click()
+    for (combo, spin), (target, ranks) in zip(_trait_rows(card), pairs, strict=False):
+        combo.setCurrentIndex(combo.findData(target))
+        spin.setValue(ranks)
+
+
+def test_configurable_effect_offers_a_trait_allocation(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_trait")
-    combo = _target_combo(card)
-    assert combo is not None  # abilities, resistances, skills all offered
+    rows = _trait_rows(card)
+    assert len(rows) == 1  # one blank row to start — the picker *is* the question
+    combo, spin = rows[0]
     assert combo.findData("TOUGHNESS") >= 0
     assert combo.findData("Acrobatics") >= 0
+    assert combo.findData("Fearless") >= 0  # advantages are traits an Enhanced Trait raises
+    assert spin is not None
 
 
 def test_fixed_and_plain_effects_have_no_target_picker(qapp: QApplication) -> None:
@@ -734,14 +766,34 @@ def test_fixed_and_plain_effects_have_no_target_picker(qapp: QApplication) -> No
     # Protection's target is fixed (Toughness), Damage isn't a booster at all.
     assert _target_combo(window.canvas.add_effect("protection")) is None
     assert _target_combo(window.canvas.add_effect("damage")) is None
+    # Enhanced Trait's rows replace the old one-trait combo rather than joining it.
+    card = window.canvas.add_effect("enhanced_trait")
+    assert card._build_target_picker(card._effect()) is None
 
 
-def test_picking_a_target_writes_it_to_the_effect_config(qapp: QApplication) -> None:
+def test_allocating_traits_writes_rows_to_the_effect_config(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_trait")
-    combo = _target_combo(card)
-    combo.setCurrentIndex(combo.findData("AWE"))
-    assert card.instance.config["target"] == "AWE"
+    card._rank.setValue(8)
+    _allocate(card, [("AWE", 2), ("Stealth", 6)])
+    assert card.instance.config["traits"] == [
+        {"trait": "AWE", "ranks": 2},
+        {"trait": "Stealth", "ranks": 6},
+    ]
+
+
+def test_each_allocated_trait_is_priced_at_its_own_rate(qapp: QApplication) -> None:
+    """The worked example: Strength 2 + Treatment 6 + Expertise 2, Limited, is 4 PP.
+
+    4 + 3 + 1 = 8 at each trait's own buying rate, halved by the -1/rank Limited flaw.
+    """
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(10)
+    _allocate(card, [("STR", 2), ("Treatment", 6), ("Expertise", 2)])
+    assert effect_total_cost(card.instance, load_game_data()) == 8
+    card.attach_modifier("limited_enhanced_trait")
+    assert effect_total_cost(card.instance, load_game_data()) == 4
 
 
 def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplication) -> None:
@@ -753,8 +805,7 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
     window._name.setText("Mighty")
     card = window.canvas.add_effect("enhanced_trait")
     card._rank.setValue(3)
-    combo = _target_combo(card)
-    combo.setCurrentIndex(combo.findData("STR"))
+    _allocate(card, [("STR", 3)])
     window._save_power()
 
     enh = sheet.abilities._ability_enh["STR"]
@@ -1124,22 +1175,43 @@ def test_limited_degree_hides_the_chosen_degree_picker(qapp: QApplication) -> No
     assert "degree3" not in card.instance.config  # the disabled tier stores no condition
 
 
-def test_reduced_trait_offers_a_data_driven_trait_picker(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QComboBox
+def test_reduced_trait_offers_data_driven_trait_rows(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox, QSpinBox
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_trait")
-    card.attach_modifier("reduced_trait")  # an Enhanced Trait flaw: which trait drops
+    card.attach_modifier("reduced_trait")  # an Enhanced Trait flaw: which traits drop
     chip = card._chips[0]
     combo = chip.findChild(QComboBox)
     assert combo is not None
-    # The picker is populated from the game data (abilities/resistances/skills), not
-    # a static option list, and defaults to the unset "choose a trait" row.
+    # The picker is populated from the game data (abilities/resistances/skills/
+    # advantages), not a static option list, and defaults to the unset "choose" row.
     labels = [combo.itemText(i).strip() for i in range(combo.count())]
     assert "Strength" in labels and "Dodge" in labels
     assert combo.currentData() == ""  # no trait forced by default
     combo.setCurrentIndex(combo.findData("STR"))
-    assert card.instance.flaws[0].config["reduced_target"] == "STR"
+    chip.findChild(QSpinBox).setValue(2)
+    assert card.instance.flaws[0].config["reduced"] == [{"trait": "STR", "ranks": 2}]
+
+
+def test_reduced_trait_discounts_by_what_the_lowered_trait_cost(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox, QSpinBox
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+    assert effect_total_cost(card.instance, data) == 8  # 4 ranks at 2 PP a rank
+
+    card.attach_modifier("reduced_trait")
+    chip = card._chips[0]
+    chip.findChild(QComboBox).setCurrentIndex(chip.findChild(QComboBox).findData("DODGE"))
+    chip.findChild(QSpinBox).setValue(3)
+    assert effect_total_cost(card.instance, data) == 5  # 8 less the 3 PP of Dodge
+
+    chip.findChild(QSpinBox).setValue(50)  # more than the effect was ever worth
+    assert effect_total_cost(card.instance, data) == 1  # the rules' 1 PP floor holds
 
 
 # Cross-power relationships (Independent / Array / Linked between whole powers) are no

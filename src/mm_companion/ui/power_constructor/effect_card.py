@@ -29,6 +29,7 @@ from mm_companion.core.rules import (
     effect_makes_attack,
     effect_total_cost,
     effective_ability,
+    trait_allocation_field,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
@@ -37,9 +38,12 @@ from mm_companion.ui.power_constructor.common import (
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
     RANK_MAX,
-    _fill_trait_combo,
+    TRAIT_SOURCE_BUYABLE,
     _mime_id,
     _move_item,
+    fill_trait_combo,
+    is_trait_allocation,
+    repeatable_cell_kind,
 )
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -549,12 +553,14 @@ class EffectCard(QFrame):
         return container
 
     def _repeatable_widget(self, field) -> QWidget:
-        """A Tier-4 variable-length row list (Immunity scopes, Features).
+        """A Tier-4 variable-length row list (Immunity scopes, Enhanced Trait's traits).
 
-        Each row has one widget per :class:`RepeatableColumn` (a line edit for text, a
-        spin for an ``int`` rank) plus a remove button; an "Add" button appends a row.
+        Each row has one widget per :class:`RepeatableColumn` plus a remove button; an
+        "Add" button appends a row. What a column's cell looks like and how its value is
+        read back comes from :data:`REPEATABLE_CELL_KINDS`, so a mod adds a column kind
+        without editing this method and an unregistered one still renders as text.
         A "used / rank" readout meters the rows against the effect's rank (summed ranks
-        for Immunity, one per row for Feature). Rows are stored in
+        for Immunity and for Enhanced Trait, one per row for Feature). Rows are stored in
         ``instance.config[key]`` as a list of ``{column_key: value}`` dicts.
         """
 
@@ -581,8 +587,7 @@ class EffectCard(QFrame):
             for _widget, cells in row_widgets:
                 row = {}
                 for column in field.columns:
-                    cell = cells[column.key]
-                    row[column.key] = cell.value() if column.type == "int" else cell.text().strip()
+                    row[column.key] = repeatable_cell_kind(column).read(cells[column.key])
                 if any(str(v).strip() for v in row.values()):
                     rows.append(row)
             self.instance.config[field.key] = rows
@@ -597,21 +602,9 @@ class EffectCard(QFrame):
             row_layout.setSpacing(3)
             cells: dict = {}
             for column in field.columns:
-                if column.type == "int":
-                    cell = make_spin_box(
-                        0,
-                        RANK_MAX,
-                        value=int(initial.get(column.key, 0) or 0),
-                        buttons=False,
-                        max_width=48,
-                    )
-                    cell.valueChanged.connect(lambda _v: commit())
-                    row_layout.addWidget(cell)
-                else:
-                    cell = QLineEdit(str(initial.get(column.key, "")))
-                    cell.setPlaceholderText(column.label)
-                    cell.textChanged.connect(lambda _t: commit())
-                    row_layout.addWidget(cell, 1)
+                kind = repeatable_cell_kind(column)
+                cell = kind.build(self._data, column, initial, commit)
+                row_layout.addWidget(cell, kind.stretch)
                 cells[column.key] = cell
             remove = QPushButton("✕")
             remove.setFlat(True)
@@ -633,6 +626,8 @@ class EffectCard(QFrame):
         for row_data in existing:
             if isinstance(row_data, dict):
                 add_row(row_data)
+        if not row_widgets and is_trait_allocation(field):
+            add_row()  # the picker is the question; an empty one reads as a missing control
 
         add_button = QPushButton("＋ Add")
         add_button.clicked.connect(lambda: add_row())
@@ -676,13 +671,20 @@ class EffectCard(QFrame):
 
     # -- enhanced-trait target picker -------------------------------------
     def _build_target_picker(self, effect) -> QWidget | None:
-        """A combo choosing which trait a configurable booster (Enhanced Trait) raises.
+        """A combo choosing which single trait a configurable booster raises.
 
         Returns ``None`` unless the effect's :class:`TraitBoost` is ``configurable``
-        and its ``affects`` names a numeric trait category (so senses/movement pickers
-        don't appear). The options — abilities, resistances, and skills — are read
-        from the game data, not hardcoded; the chosen key is stored in
-        ``instance.config['target']``.
+        and its ``affects`` names a raisable trait category (so senses/movement pickers
+        don't appear). The options are read from the game data, not hardcoded; the
+        chosen key is stored in ``instance.config['target']``.
+
+        Also ``None`` once the effect declares a *trait allocation* config field: that
+        field's rows say which traits are raised and by how much, and a second picker
+        claiming the same thing in one word would be a second answer to one question.
+        The combo therefore survives only for a booster that really does raise one
+        thing — none in the base data since Enhanced Trait grew its rows, but the seam
+        a mod's simpler booster still reaches, and the shape old saves are read back
+        through (see :func:`~mm_companion.core.rules.boost_allocations`).
         """
 
         boost = effect.integration.trait_boost if effect and effect.integration else None
@@ -690,12 +692,16 @@ class EffectCard(QFrame):
             return None
         if not (boost.affects & TRAIT_CATEGORIES):
             return None
+        if trait_allocation_field(effect) is not None:
+            return None
 
         host = QWidget()
         form = QFormLayout(host)
         form.setContentsMargins(0, 0, 0, 0)
         combo = QComboBox()
-        _fill_trait_combo(combo, self._data, self.instance.config.get("target", ""))
+        fill_trait_combo(
+            combo, self._data, self.instance.config.get("target", ""), TRAIT_SOURCE_BUYABLE
+        )
         guard_wheel(combo)
         combo.currentIndexChanged.connect(
             lambda _i, c=combo: self._on_config_changed("target", c.currentData())

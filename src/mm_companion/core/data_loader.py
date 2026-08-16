@@ -503,13 +503,24 @@ class AllocationOption:
 class RepeatableColumn:
     """One column of a Tier-4 ``repeatable`` field's rows (Immunity, Feature).
 
-    ``type`` is ``"text"`` (free text) or ``"int"`` (a rank spin). ``key`` names
-    where the value lives inside each stored row dict.
+    ``type`` is ``"text"`` (free text), ``"int"`` (a rank spin), or ``"trait"`` (a
+    trait picker, populated from the game data the same way a ``select`` field with
+    ``source="traits"`` is). ``key`` names where the value lives inside each stored
+    row dict.
+
+    A field carrying a ``"trait"`` column is a *trait allocation* — each row names a
+    trait and, through the field's ``int`` column, the ranks put into it. That is what
+    lets one Enhanced Trait raise several traits at once out of a single rank pool; see
+    :func:`mm_companion.core.rules.boost_allocations`.
     """
 
     key: str
     label: str
     type: str = "text"
+    #: For a ``"trait"`` column, which trait list the picker offers — the same
+    #: vocabulary a ``select`` field's ``source`` uses (see
+    #: :data:`mm_companion.ui.power_constructor.TRAIT_SOURCES`). Empty elsewhere.
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -639,9 +650,13 @@ class Effect:
     A power is assembled from one or more of these, each carrying its own extras
     and flaws. ``base_cost`` is the human-readable prose (e.g. ``"1 per rank"``);
     ``base_cost_value`` is the canonical machine-readable points-per-rank used for
-    automatic cost calculation. ``integration`` is the parsed ``statIntegration``
-    component (see :class:`mm_companion.core.components.Integration`) describing how
-    the effect patches stats — its activation ``pattern`` and, for the passive
+    automatic cost calculation, and ``base_cost_mode`` names *how* that is charged —
+    one of :data:`mm_companion.core.rules.BASE_COST_KINDS`. Effects are priced flat
+    (points per rank) unless they say otherwise; Enhanced Trait is priced ``as_trait``,
+    where the cost comes from the traits it raises and ``base_cost_value`` is only the
+    nominal rate its per-rank modifiers are read against. ``integration`` is the parsed
+    ``statIntegration`` component (see :class:`mm_companion.core.components.Integration`)
+    describing how the effect patches stats — its activation ``pattern`` and, for the passive
     trait-boosting effects (Enhanced Trait, Protection), a ``trait_boost`` naming the
     trait categories it can raise and any fixed target.
     ``config_fields`` are the effect's configurable qualities (Affliction's
@@ -677,6 +692,7 @@ class Effect:
     resistance: str | None = None
     base_cost: str = ""
     base_cost_value: int = 1
+    base_cost_mode: str = "flat"
     integration: Integration = field(default_factory=Integration)
     description: str = ""
     config_fields: tuple[EffectConfigField, ...] = ()
@@ -702,9 +718,12 @@ class Modifier:
     ``category`` is ``"extra"`` (adds cost/benefit) or ``"flaw"`` (subtracts
     cost/adds a restriction). ``cost_formula`` is the prose; ``cost_value`` is the
     canonical numeric magnitude (always non-negative — the sign comes from
-    ``category``). ``flat`` is ``True`` when the cost is a one-time add/subtract to
-    the effect total rather than per rank. ``ranked`` is ``True`` when the modifier
-    itself is bought in ranks (chosen independently of the effect's rank), so its
+    ``category``). ``cost_mode`` names how that magnitude is arrived at, from the same
+    vocabulary as :attr:`Effect.base_cost_mode`: the default reads ``cost_value``, while
+    ``"as_trait"`` computes it from the modifier's own trait allocation (Reduced Trait is
+    worth whatever the trait it lowers was worth). ``flat`` is ``True`` when the cost is a
+    one-time add/subtract to the effect total rather than per rank. ``ranked`` is ``True``
+    when the modifier itself is bought in ranks (chosen independently of the effect's rank), so its
     contribution is ``cost_value × rank`` — e.g. Accurate, Extended Range.
     ``max_rank`` is the ceiling the rules put on those ranks (Striding's 5), and
     ``None`` when they give none — read it through
@@ -771,6 +790,7 @@ class Modifier:
     category: str
     cost_formula: str = ""
     cost_value: int = 0
+    cost_mode: str = ""
     flat: bool = False
     ranked: bool = False
     max_rank: int | None = None
@@ -2066,7 +2086,10 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         ),
         columns=tuple(
             RepeatableColumn(
-                key=col["key"], label=col.get("label", col["key"]), type=col.get("type", "text")
+                key=col["key"],
+                label=col.get("label", col["key"]),
+                type=col.get("type", "text"),
+                source=col.get("source", ""),
             )
             for col in c.get("columns", [])
         ),
@@ -2171,6 +2194,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         resistance=e.get("resistance"),
         base_cost=e.get("baseCost", ""),
         base_cost_value=int(e.get("baseCostValue", 1)),
+        base_cost_mode=e.get("baseCostMode", "flat"),
         integration=_parse_integration(
             e.get("statIntegration", {}), bool(e.get("configurableTarget", False))
         ),
@@ -2200,6 +2224,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         category=category or m["category"],
         cost_formula=m.get("costFormula", ""),
         cost_value=int(m.get("costValue", 0)),
+        cost_mode=m.get("costMode", ""),
         flat=bool(m.get("flat", False)),
         ranked=bool(m.get("ranked", False)),
         max_rank=m.get("maxRank"),

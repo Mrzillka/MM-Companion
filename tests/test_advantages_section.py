@@ -338,3 +338,71 @@ def test_the_advantage_header_is_never_clipped(qapp: QApplication) -> None:
 
     header = section._tables[0].fontMetrics().horizontalAdvance("Advantage")
     assert section._name_col_width() >= header
+
+
+# -- power-granted advantages -------------------------------------------------
+
+
+def _granted_section(rows) -> AdvantagesSection:
+    """A section whose character has one Enhanced Trait allocating ``(trait, ranks)``."""
+    from mm_companion.core.powers import PowerEffectInstance
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.powers.append(
+        Power(
+            name="Berserker Rage",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=sum(r for _t, r in rows),
+                    config={"traits": [{"trait": t, "ranks": r} for t, r in rows]},
+                )
+            ],
+        )
+    )
+    return AdvantagesSection(data, char)
+
+
+def _row_texts(section: AdvantagesSection) -> list[tuple[str, str]]:
+    """Every rendered ``(name, description)`` pair across the section's panels."""
+    return [
+        (table.item(row, 0).text(), table.item(row, 2).text())
+        for table in section._tables
+        for row in range(table.rowCount())
+    ]
+
+
+def test_a_power_granted_advantage_is_shown_and_names_its_power(qapp: QApplication) -> None:
+    section = _granted_section([("Fearless", 2)])
+    names = [name for name, _desc in _row_texts(section)]
+    assert "Fearless 2" in names
+    description = next(desc for name, desc in _row_texts(section) if name == "Fearless 2")
+    assert description.startswith("From Berserker Rage.")
+
+
+def test_a_granted_advantage_is_not_the_players_to_edit(qapp: QApplication) -> None:
+    section = _granted_section([("Fearless", 2)])
+    # Not in the model list, so nothing writes it back to the character...
+    assert section._character.advantages == []
+    # ...and not in the index the reorder/remove/edit gestures address.
+    assert list(section._row_refs) == []
+    assert [selection.name for _t, _r, selection in section._granted_refs] == ["Fearless"]
+
+
+def test_a_granted_advantage_costs_no_advantage_points(qapp: QApplication) -> None:
+    from mm_companion.core.rules import advantage_points_spent, heroic_advantage_ranks
+
+    section = _granted_section([("Fearless", 2)])
+    data = load_game_data()
+    assert advantage_points_spent(section._character, data) == 0
+    assert heroic_advantage_ranks(section._character, data) == 0
+
+
+def test_switching_the_granting_power_off_drops_the_row(qapp: QApplication) -> None:
+    section = _granted_section([("Fearless", 2)])
+    assert "Fearless 2" in [name for name, _desc in _row_texts(section)]
+
+    section._character.powers[0].activated = False
+    section.refresh_granted()
+    assert "Fearless 2" not in [name for name, _desc in _row_texts(section)]

@@ -108,17 +108,108 @@ def _boost_target(effect: PowerEffectInstance, boost) -> str:
     return (effect.config.get("target", "") if boost.configurable else boost.target) or ""
 
 
+#: The ``repeatable`` column ``type`` whose stored value is a trait key. A config field
+#: carrying one is a *trait allocation*: each row names a trait and the ranks put into
+#: it, which is how Enhanced Trait raises several traits at once out of one rank pool.
+TRAIT_COLUMN_TYPE = "trait"
+
+
+def trait_allocation_field(record) -> tuple[object, str, str] | None:
+    """An effect's or modifier's trait-allocation field as ``(field, trait key, rank key)``.
+
+    The first ``repeatable`` config field carrying a :data:`TRAIT_COLUMN_TYPE` column,
+    with the column keys its rows are shaped by. ``None`` for a record that has none —
+    which is every record but Enhanced Trait and its Reduced Trait flaw today, and is
+    exactly what keeps the single-target path below alive for all of them.
+
+    The rank key is ``""`` when the field declares no ``int`` column, in which case each
+    row counts as one rank.
+    """
+
+    for field in getattr(record, "config_fields", ()):
+        if field.type != "repeatable":
+            continue
+        trait_key = next((c.key for c in field.columns if c.type == TRAIT_COLUMN_TYPE), "")
+        if not trait_key:
+            continue
+        rank_key = next((c.key for c in field.columns if c.type == "int"), "")
+        return field, trait_key, rank_key
+    return None
+
+
+def config_trait_allocation(config: dict, record) -> tuple[tuple[str, int], ...]:
+    """The ``(trait, ranks)`` rows a config dict holds for ``record``'s allocation field.
+
+    Rows missing a trait or standing at zero ranks are dropped — a half-filled row in
+    the constructor is a row the player is still typing, not a trait worth nothing.
+    Shared by the effect's own allocation and a modifier selection's (Reduced Trait),
+    since both store the same shape against the same kind of field.
+    """
+
+    found = trait_allocation_field(record)
+    if found is None:
+        return ()
+    field, trait_key, rank_key = found
+    rows: list[tuple[str, int]] = []
+    for row in config.get(field.key) or ():
+        if not isinstance(row, dict):
+            continue
+        target = str(row.get(trait_key, "") or "")
+        ranks = int(row.get(rank_key, 0) or 0) if rank_key else 1
+        if target and ranks:
+            rows.append((target, ranks))
+    return tuple(rows)
+
+
+def boost_allocations(effect: PowerEffectInstance, base, boost) -> tuple[tuple[str, int], ...]:
+    """Which traits one effect raises, and by how many ranks each.
+
+    An Enhanced Trait spreads its rank across several traits at once (the book's own
+    Berserker Rage is *Enhanced Advantage: Fearless 2* plus *Enhanced Strength*), so a
+    boost is a *list* of targets rather than one. The rows come from the effect's
+    trait-allocation config field.
+
+    Falling back to a single ``(target, effect rank)`` pair is what keeps everything
+    that predates the allocation working untouched: Protection's baked-in
+    ``"TOUGHNESS"``, a shield's authored ``config["target"]``, and every character
+    saved before this existed. Nothing is migrated on load — an instance with no rows
+    simply reads as the one target it always had.
+    """
+
+    rows = config_trait_allocation(effect.config, base)
+    if rows:
+        return rows
+    return ((_boost_target(effect, boost), effect.rank),)
+
+
 def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
     """The **numeric** trait key one effect boosts, or ``""`` when it isn't one.
 
-    :func:`_boost_target` narrowed to the boosts whose ``affects`` names a numeric
-    trait category — what the game-terms summary renders a "Trait +N" line for.
+    :func:`_boost_target` narrowed to the boosts whose ``affects`` names a raisable
+    trait category. Single-target by definition — for an effect that may raise several
+    at once, ask :func:`resolved_trait_allocation`.
     """
 
     boost = base.integration.trait_boost if base.integration else None
     if boost is None or not (boost.affects & TRAIT_CATEGORIES):
         return ""
     return _boost_target(effect, boost)
+
+
+def resolved_trait_allocation(effect: PowerEffectInstance, base) -> tuple[tuple[str, int], ...]:
+    """Every trait one effect raises and by how much, or ``()`` when it raises none.
+
+    :func:`boost_allocations` narrowed to the boosts whose ``affects`` names a raisable
+    trait category — what the game-terms summary renders its "Trait +N" line from. An
+    Enhanced Trait returns one pair per allocated row; Protection returns its single
+    fixed target, and an effect with no target chosen returns nothing at all.
+    """
+
+    boost = base.integration.trait_boost if base.integration else None
+    if boost is None or not (boost.affects & TRAIT_CATEGORIES):
+        return ()
+    allocation = boost_allocations(effect, base, boost)
+    return tuple((target, ranks) for target, ranks in allocation if target)
 
 
 def _trait_name(game_data: GameData, target: str) -> str:
@@ -347,9 +438,10 @@ def build_contributions(
 
     An effect contributes when it carries a
     :class:`~mm_companion.core.components.TraitBoost` — an Enhanced-Trait-style boost
-    (``configurable``, the target read from the instance ``config['target']``) or a
-    fixed-target one like Protection — *and* is currently active
-    (:func:`effect_is_active`, so a switched-off or suppressed one drops out).
+    or a fixed-target one like Protection — *and* is currently active
+    (:func:`effect_is_active`, so a switched-off or suppressed one drops out). Which
+    traits it raises and at what rank each comes from :func:`boost_allocations`, so
+    one Enhanced Trait yields one contribution *per allocated trait*.
 
     **So does a modifier attached to it.** An extra like Elongation's Striding ("longer
     strides grant ranks of Speed") is a stat effect that happens to hang off another
@@ -389,21 +481,22 @@ def build_contributions(
 
         boost = base.integration.trait_boost
         if boost is not None:
-            contributions.extend(
-                apply_stat_effect(
-                    boost.apply,
-                    ApplyContext(
-                        record=boost,
-                        rank=effect.rank,
-                        target=_boost_target(effect, boost),
-                        source=source,
-                        game_data=game_data,
-                        stacking=stacking,
-                        group=group,
-                        origin=origin,
-                    ),
+            for target, ranks in boost_allocations(effect, base, boost):
+                contributions.extend(
+                    apply_stat_effect(
+                        boost.apply,
+                        ApplyContext(
+                            record=boost,
+                            rank=ranks,
+                            target=target,
+                            source=source,
+                            game_data=game_data,
+                            stacking=stacking,
+                            group=group,
+                            origin=origin,
+                        ),
+                    )
                 )
-            )
 
         for selection in (*effect.extras, *effect.flaws):
             modifier = catalog.get(selection.modifier_id)

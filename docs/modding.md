@@ -192,9 +192,30 @@ handler, replace=False)`), so extending them is the same call everywhere:
 | `rules.runtime.PATTERN_BEHAVIOURS` | core | statIntegration **patterns** |
 | `rules.runtime.GATE_KINDS` | core | flaw **gate** kinds |
 | `rules.appliers.STAT_APPLIERS` | core | statIntegration **apply** kinds — what a stat effect is *worth* |
+| `rules.powers_cost.BASE_COST_KINDS` | core | `baseCostMode` / `costMode` **pricing rules** — how a record's base cost is charged |
 | `rules.conditions.MECHANISM_SCOPES` | core | condition **mechanisms** |
 | `ui.power_constructor.CONFIG_WIDGET_BUILDERS` | ui | config-field **input widgets** |
+| `ui.power_constructor.REPEATABLE_CELL_KINDS` | ui | `repeatable` **column cells** — one row's inputs |
 | `ui.blocks.register_block(BlockDescriptor)` | ui | whole **sheet blocks** (Python) |
+
+`BASE_COST_KINDS` has its own helper too, `register_base_cost_kind(mode, kind)`, and
+decides *how* a record is priced rather than what it grants. A `BaseCostKind` is a
+`price` function and a `formula` function registered together — one returns the points,
+the other the breakdown the card's footer shows — so a mode's explanation cannot drift
+from the number beside it. Both take a `BaseCostContext` carrying the effect, its base
+record, the game data, the character (which may be `None`), and the modifier sums already
+bucketed into per-rank, flat and ability-folded ranks. The base ruleset registers two:
+`flat` (points per rank, the default for any record that names no mode) and `as_trait`
+(Enhanced Trait's "it costs what the trait costs"). An unregistered mode prices as
+`flat`, so a record from a disabled mod still costs something sane.
+
+`REPEATABLE_CELL_KINDS` is the same idea one level down from `CONFIG_WIDGET_BUILDERS`: a
+`repeatable` config field's rows are shaped by its `columns`, and a column's `type` picks
+a `RepeatableCellKind` — a `build` function, a `read` function, and the layout `stretch`
+the cell takes. Builders receive the game data (not the hosting widget), which is what
+lets an effect's rows and a modifier selection's rows be literally the same cells. The
+base ruleset registers `text`, `int` and `trait`; an unregistered type falls back to
+`text`.
 
 `STAT_APPLIERS` has its own helper, `register_stat_applier(kind, applier)`, and is
 the seam between "this effect grants something" and "here is what it grants". An

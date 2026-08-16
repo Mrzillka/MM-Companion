@@ -46,21 +46,28 @@ from ..registry import Registry
 # declared here so an applier has somewhere honest to put a non-numeric grant; the
 # movement readout still derives its own lines in :mod:`.movement`, and nothing reads
 # ``penalty`` yet (the equipment phases do).
+#
+# ``advantage`` is a trait a power can raise but *not* a number on a printed total:
+# an Enhanced Advantage grants the advantage itself at the ranks it names, so it is
+# deliberately outside :data:`NUMERIC_CATEGORIES` and read by the Advantages block
+# rather than added to anything.
 CATEGORY_ABILITY = "ability"
 CATEGORY_RESISTANCE = "resistance"
 CATEGORY_SKILL = "skill"
+CATEGORY_ADVANTAGE = "advantage"
 CATEGORY_MOVEMENT = "movement"
 CATEGORY_SENSE = "sense"
 CATEGORY_PENALTY = "penalty"
 
 NUMERIC_CATEGORIES = (CATEGORY_ABILITY, CATEGORY_RESISTANCE, CATEGORY_SKILL)
 
-# The ``affects`` categories a record may declare that mean "this raises a number on
+# The ``affects`` categories a record may declare that mean "this raises a trait on
 # the sheet" — the author's own statement of intent, which is why the :data:`APPLY_BONUS`
 # applier honours it rather than inferring everything from the target key. (``defense``
-# is here because the defence resistances live in the resistances list.) A record
-# declaring no ``affects`` at all states nothing, and is taken at its target.
-BOOST_TRAIT_CATEGORIES = frozenset({"ability", "resistance", "defense", "skill"})
+# is here because the defence resistances live in the resistances list; ``advantage``
+# because Enhanced Trait can raise one, even though an advantage totals nothing.) A
+# record declaring no ``affects`` at all states nothing, and is taken at its target.
+BOOST_TRAIT_CATEGORIES = frozenset({"ability", "resistance", "defense", "skill", "advantage"})
 
 # How one contribution combines with the others on the same trait.
 STACK_SUM = "sum"  # adds on top of everything else in its group
@@ -203,11 +210,16 @@ def apply_stat_effect(kind: str, context: ApplyContext) -> tuple[TraitContributi
 
 
 def trait_category(game_data: GameData, target: str) -> str:
-    """Which trait list ``target`` belongs to — ``ability``/``resistance``/``skill``, or ``""``.
+    """Which trait list ``target`` belongs to — ability/resistance/skill/advantage, or ``""``.
 
     A target naming nothing the sheet tracks (a descriptor an Immunity names, a sense)
     resolves to ``""``, which is how the :data:`APPLY_BONUS` applier declines to
     contribute rather than inventing a row.
+
+    Advantages resolve **last**, after the three keyed lists, so a target that is both
+    a skill name and an advantage name reads as the skill it always did. The same order
+    is what :func:`~.trait_rates.trait_rate` prices in, so the list a target lands in and
+    the rate it is charged at can never disagree.
     """
 
     if any(a.key == target for a in game_data.abilities):
@@ -216,6 +228,8 @@ def trait_category(game_data: GameData, target: str) -> str:
         return CATEGORY_RESISTANCE
     if any(s.name == target for s in game_data.skills):
         return CATEGORY_SKILL
+    if any(a.name == target for a in game_data.advantages):
+        return CATEGORY_ADVANTAGE
     return ""
 
 

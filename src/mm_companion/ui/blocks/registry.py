@@ -237,6 +237,7 @@ _BASE_BLOCKS = [
             CONDITION_CHANGED: "refresh_conditions",
             FACTS_CHANGED: "refresh_power_options",
             COST_RATES_CHANGED: "refresh_cost",
+            ENHANCEMENTS_CHANGED: "refresh_granted",
         },
         {},
         {},

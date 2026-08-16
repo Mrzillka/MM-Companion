@@ -34,9 +34,13 @@ Speed, Summon (aside from minion template, Tier 2), Swimming, Teleport, Transmut
 
 ### Tier 2 — One configurable target/category field
 A single dropdown or text field alongside the rank stepper.
+
+> Enhanced Trait *used* to live here, as a category dropdown cascading into a specific-trait
+> picker. It doesn't: it raises several traits at once out of one rank pool, so it is a
+> Tier-4 allocation — see below.
+
 | Effect | Field | Widget |
 |---|---|---|
-| Enhanced Trait | Which trait this boosts | Dropdown: Ability / Skill / Defense / Resistance / Advantage, then a second dropdown for the specific trait |
 | Damage | Strength-Based toggle | Checkbox (adds the Strength-Based extra) |
 | Deflect | Limited-to category (if the Limited flaw is taken) | Free text, e.g. "thrown weapons only" |
 | Nullify | What it nullifies | Free text/tag, GM-approved (a descriptor, effect type, or named power) — flag broad ones for GM review |
@@ -73,6 +77,7 @@ running-total validation (`sum(selected option costs) <= effect.rank`).
 
 | Effect | Menu items (abbreviated) | Notes |
 |---|---|---|
+| **Enhanced Trait** | Not a fixed menu: the player names each **trait** raised and the ranks put into it — a repeatable row of (trait picker, rank spin) with the same running total against the effect's rank | The picker lists abilities, non-derived resistances, skills and **advantages** (`source: "boost_traits"`), all read from the game data. Unlike every other Tier-4 effect the rows also decide the **cost**: each trait is charged at what buying it costs, so the rank is a budget rather than a price (see `mm-powers-architecture.md` §6). The Reduced Trait flaw carries the same rows on its chip, for the traits lowered to pay for the raised ones. |
 | **Enhanced Movement** | Dimensional Travel (2/4/6), Environmental Adaptation (1/environment), Permeate (2/4/6), Safe Fall (1), Slithering (1), Space Travel (2/4/6), Stable (1/mode), Swinging (2), Trackless (1/sense), Water-Walking (1/2) | Some options are themselves tiered (2/4/6 for increasing scope) — model as a sub-radio within the checklist item, not a separate checkbox per tier |
 | **Enhanced Senses** | A sense **type** selector (Sight/Hearing/Smell/Taste/Touch/Mental/Radio/Special/etc.) crossed with ability tags: Accurate (2/4), Acute (1/2), Analytical (1/2), Danger Sense (2), Dark-Vision (2), Direction Sense (1), Distance Sense (1), Extended (1/2), Infra-Vision (1), Low-Light Vision (1), Microscopic Vision (1-4), Penetrates Concealment (2/4), Radio (1), Radius (1/2), Ranged (1/2), Rapid (1+), Tracking (1/2), Ultra-Hearing (1), Ultra-Vision (1) | The biggest menu in the game. UI should be a two-axis picker: choose a sense, then choose which abilities apply to it, with per-item rank cost and a running total against the effect's rank |
 | **Comprehend** | Animals (1/2), Computers (1/2), Languages (1/2/3/4), Objects (2), Plants (2), Spirits (1/2) | Each category is independently tiered; Languages notably scales furthest (rank 4 grants physically-impossible communication) |
@@ -111,7 +116,7 @@ For fast lookup — every effect, its tier, and a one-line UI note.
 | Elongation | 1 | Standard |
 | Enhanced Movement | 4 | Menu checklist, see Tier 4 |
 | Enhanced Senses | 4 | Two-axis menu, see Tier 4 — biggest one in the game |
-| Enhanced Trait | 2 | Trait-target dropdown, cascading to a specific-trait picker |
+| Enhanced Trait | 4 | Trait-allocation rows, see Tier 4 |
 | Environment | 1 (mostly) | Rank buys a hazard intensity; the specific hazard type is largely free-text/GM-set, similar in spirit to Immunity but lower-stakes |
 | Extra Limbs | 1 | Standard |
 | Feature | 4 | Free-text capability name/description per rank, with example autocomplete |
@@ -180,8 +185,10 @@ object whose shape depends on the effect's tier:
 PowerEffectInstance
 ├── effectId, rank, extras[], flaws[], descriptors[]
 └── config: {
-      // Tier 2 example (Enhanced Trait)
-      target?: { category: "ability"|"skill"|"defense"|"resistance"|"advantage", trait: string }
+      // Tier 4 example (Enhanced Trait): each row a trait and the ranks put into it
+      traits?: [{ trait: string, ranks: number }]
+      // ...and the pre-allocation shape, still read on load at the effect's full rank
+      target?: string
 
       // Tier 3 example (Affliction)
       resistedBy?: "dodge"|"fortitude"|"will"

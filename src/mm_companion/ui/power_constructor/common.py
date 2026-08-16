@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from html import escape
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QLineEdit,
     QWidget,
 )
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.registry import Registry
+from mm_companion.core.rules import TRAIT_COLUMN_TYPE
+from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import make_spin_box
 
 if TYPE_CHECKING:  # forward ref only — importing EffectCard here would cycle
     from mm_companion.ui.power_constructor.effect_card import EffectCard
@@ -50,6 +55,116 @@ def register_base_config_widgets() -> None:
 
 
 register_base_config_widgets()
+
+
+# -- repeatable column-cell registry -------------------------------------------
+# A ``repeatable`` config field's rows are shaped by its columns, and each column's
+# ``type`` decides what one cell looks like, how its value is read back, and whether it
+# stretches. Same seam as ``CONFIG_WIDGET_BUILDERS`` one level down: a mod's Python
+# module can register a column kind of its own. An unregistered type falls back to the
+# plain line edit, which is what every column was before there were kinds.
+@dataclass(frozen=True)
+class RepeatableCellKind:
+    """How one ``repeatable`` column's cell is built, read back, and laid out.
+
+    ``build`` receives the game data, the column, the row's stored dict and a
+    ``commit`` callback, and returns the input widget — wiring the widget's own change
+    signal to ``commit`` is the builder's job, since only it knows which signal that is.
+    ``read`` turns the widget back into the value stored in the row. ``stretch`` is the
+    layout stretch the cell takes: a free-text or trait cell earns the leftover width,
+    a rank spin does not.
+
+    The builders take the game data rather than the widget that hosts them so the same
+    row of cells serves an effect's config field and a modifier selection's — Enhanced
+    Trait's traits and its Reduced Trait flaw's are the same rows, and would drift if
+    each side built its own.
+    """
+
+    build: Callable[[GameData, object, dict, Callable[[], None]], QWidget]
+    read: Callable[[QWidget], object]
+    stretch: int = 0
+
+
+REPEATABLE_CELL_KINDS: Registry[RepeatableCellKind] = Registry("repeatable-column")
+
+
+def _repeatable_text_cell(game_data, column, initial: dict, commit) -> QWidget:
+    """A free-text cell (an Immunity scope's name, a Feature's description)."""
+    cell = QLineEdit(str(initial.get(column.key, "")))
+    cell.setPlaceholderText(column.label)
+    cell.textChanged.connect(lambda _t: commit())
+    return cell
+
+
+def _repeatable_int_cell(game_data, column, initial: dict, commit) -> QWidget:
+    """A rank spin — the ranks this row spends out of the effect's rank pool."""
+    cell = make_spin_box(
+        0, RANK_MAX, value=int(initial.get(column.key, 0) or 0), buttons=False, max_width=48
+    )
+    cell.valueChanged.connect(lambda _v: commit())
+    return cell
+
+
+def _repeatable_trait_cell(game_data, column, initial: dict, commit) -> QWidget:
+    """A trait picker — which trait this row raises (Enhanced Trait) or lowers.
+
+    Data-driven from the column's own ``source``, so which traits a row offers is the
+    data's decision and not this widget's.
+    """
+    cell = QComboBox()
+    fill_trait_combo(
+        cell, game_data, str(initial.get(column.key, "")), column.source or TRAIT_SOURCE_BUYABLE
+    )
+    guard_wheel(cell)
+    cell.currentIndexChanged.connect(lambda _i: commit())
+    return cell
+
+
+def register_base_repeatable_cells() -> None:
+    """Register the built-in ``repeatable`` column kinds (idempotent-safe via replace)."""
+    REPEATABLE_CELL_KINDS.register(
+        "text",
+        RepeatableCellKind(build=_repeatable_text_cell, read=lambda c: c.text().strip(), stretch=1),
+        replace=True,
+    )
+    REPEATABLE_CELL_KINDS.register(
+        "int",
+        RepeatableCellKind(build=_repeatable_int_cell, read=lambda c: c.value()),
+        replace=True,
+    )
+    REPEATABLE_CELL_KINDS.register(
+        "trait",
+        RepeatableCellKind(
+            build=_repeatable_trait_cell, read=lambda c: c.currentData() or "", stretch=1
+        ),
+        replace=True,
+    )
+
+
+register_base_repeatable_cells()
+
+
+def is_trait_allocation(field) -> bool:
+    """Whether a ``repeatable`` field's rows name traits (Enhanced Trait, Reduced Trait).
+
+    Such a field starts with one blank row rather than an "Add" button alone: the row is
+    the whole question the field asks ("which trait?"), and an Enhanced Trait showing no
+    trait picker at all reads as a missing control rather than an empty list. A scope or
+    feature list, which really can be empty, still starts empty.
+    """
+
+    return any(c.type == TRAIT_COLUMN_TYPE for c in getattr(field, "columns", ()))
+
+
+def repeatable_cell_kind(column) -> RepeatableCellKind:
+    """The cell kind for one ``repeatable`` column.
+
+    An unregistered column type reads as free text — what every column was before the
+    kinds existed, so a mod's unknown type degrades rather than raising in the middle
+    of building a card.
+    """
+
+    return REPEATABLE_CELL_KINDS.get(column.type) or REPEATABLE_CELL_KINDS.get("text")
 
 
 def combat_focus_options(character: Character | None, game_data: GameData) -> list[tuple[str, str]]:
@@ -142,23 +257,41 @@ def _disable_section_headings(combo: QComboBox) -> None:
 
 
 #: Config-field ``source`` values the trait picker answers to. ``"traits"`` lists only
-#: the traits a power can *buy* up or down; ``"all_traits"`` adds the derived stats that
-#: can still be rolled, for a field asking what the player checks rather than what the
-#: power changes.
-TRAIT_SOURCES = ("traits", "all_traits")
+#: the traits a power can *buy* up or down; ``"boost_traits"`` adds the advantages, which
+#: an Enhanced Trait may raise and a Reduced Trait lower; ``"all_traits"`` instead adds
+#: the derived stats that can still be rolled, for a field asking what the player checks
+#: rather than what the power changes.
+TRAIT_SOURCE_BUYABLE = "traits"
+TRAIT_SOURCE_BOOSTABLE = "boost_traits"
+TRAIT_SOURCE_ALL = "all_traits"
+TRAIT_SOURCES = (TRAIT_SOURCE_BUYABLE, TRAIT_SOURCE_BOOSTABLE, TRAIT_SOURCE_ALL)
 
 
-def _fill_trait_combo(combo: QComboBox, game_data, current: str, *, derived: bool = False) -> None:
+def _fill_trait_combo(
+    combo: QComboBox,
+    game_data,
+    current: str,
+    *,
+    derived: bool = False,
+    advantages: bool = False,
+) -> None:
     """Populate ``combo`` with the character's traits (abilities, resistances, skills)
     grouped under disabled headings, and select ``current``. Data-driven — the trait
     names come from the game data, never hardcoded. Shared by Enhanced Trait's "which
-    trait goes up" picker and any modifier config field with ``source="traits"`` (the
-    Reduced Trait flaw's "which trait goes down").
+    trait goes up" rows and any modifier config field with a trait ``source`` (the
+    Reduced Trait flaw's "which trait goes down", Check Required's "which check").
 
     With ``derived`` the list also covers the numeric stats that are computed rather
     than bought — the derived Defence aggregate and the ``derived_traits`` named in
     ``system.json`` (Initiative). Those can be *checked* but not raised, so they belong
-    in Check Required's "which check" picker and not in a trait-boosting one."""
+    in Check Required's "which check" picker and not in a trait-boosting one.
+
+    With ``advantages`` it also covers the advantages, which an Enhanced Trait can raise
+    and a Reduced Trait lower even though an advantage totals nothing on the sheet. They
+    are equally deliberately *not* in the checked-trait list: nobody rolls an advantage.
+
+    Prefer :func:`fill_trait_combo` where the field's ``source`` is to hand — it maps the
+    data's own vocabulary onto these two switches so no caller has to."""
     combo.addItem("— choose a trait —", "")
     combo.addItem("Abilities", None)  # a disabled section heading
     for ability in game_data.abilities:
@@ -170,6 +303,10 @@ def _fill_trait_combo(combo: QComboBox, game_data, current: str, *, derived: boo
     combo.addItem("Skills", None)
     for skill in game_data.skills:
         combo.addItem(f"  {skill.name}", skill.name)
+    if advantages:
+        combo.addItem("Advantages", None)
+        for advantage in game_data.advantages:
+            combo.addItem(f"  {advantage.name}", advantage.name)
     if derived:
         extra = [d for d in game_data.system.derived_traits if combo.findData(d.key) < 0]
         if extra:
@@ -179,3 +316,19 @@ def _fill_trait_combo(combo: QComboBox, game_data, current: str, *, derived: boo
     _disable_section_headings(combo)
     index = combo.findData(current)
     combo.setCurrentIndex(index if index >= 0 else 0)
+
+
+def fill_trait_combo(combo: QComboBox, game_data, current: str, source: str) -> None:
+    """Populate a trait combo for a config field's declared ``source``.
+
+    The one place the data's :data:`TRAIT_SOURCES` vocabulary is turned into which lists
+    :func:`_fill_trait_combo` offers, so an effect column, a modifier field and a mod's
+    own field all read the same word the same way. An unknown source reads as the
+    plain buyable-traits list."""
+    _fill_trait_combo(
+        combo,
+        game_data,
+        current,
+        derived=source == TRAIT_SOURCE_ALL,
+        advantages=source == TRAIT_SOURCE_BOOSTABLE,
+    )

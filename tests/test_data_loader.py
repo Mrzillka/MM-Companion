@@ -169,6 +169,30 @@ def test_effect_carries_numeric_base_cost_and_integration() -> None:
     enhanced = by_id["enhanced_trait"]
     assert enhanced.integration.trait_boost is not None
     assert enhanced.integration.trait_boost.configurable is True
+    # ...and the one effect priced "as trait" rather than at a flat rate per rank.
+    assert damage.base_cost_mode == "flat"  # the default every other effect keeps
+    assert enhanced.base_cost_mode == "as_trait"
+    assert "advantage" in enhanced.integration.trait_boost.affects
+
+
+def test_enhanced_trait_declares_a_trait_allocation() -> None:
+    """Its rank is spread across a list of traits, not spent on one."""
+
+    data = load_game_data()
+    enhanced = next(e for e in data.effects if e.id == "enhanced_trait")
+    field = next(f for f in enhanced.config_fields if f.type == "repeatable")
+    kinds = {c.type: c for c in field.columns}
+    assert set(kinds) == {"trait", "int"}
+    assert kinds["trait"].source == "boost_traits"  # advantages included
+
+
+def test_reduced_trait_is_priced_from_its_own_trait_rows() -> None:
+    data = load_game_data()
+    reduced = data.modifier_catalog()["reduced_trait"]
+    assert reduced.flat is True
+    assert reduced.cost_mode == "as_trait"  # not the flat costValue, which stays 0
+    field = next(f for f in reduced.config_fields if f.type == "repeatable")
+    assert {c.type for c in field.columns} == {"trait", "int"}
 
 
 def test_modifiers_are_categorised_with_numeric_cost() -> None:

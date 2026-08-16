@@ -1,7 +1,17 @@
 {
   "_meta": {
     "description": "Base power effects for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (effectType, action, range, duration, check, resistance, baseCost, statIntegration, config) reflect game rules/facts, not copyrighted prose. Companion to docs/mm-powers-architecture.md (read first) and modifiers.json.",
-    "configNote": "config is the effect's list of configurable qualities (the per-effect choices docs/mm-powers-architecture.md §9 defers). Each entry is { key, label, type ('select'|'multiselect'|'text'), overrides?, multiselectWith?, options? }. The player's choice is stored under 'key' in the power effect instance's config: a single value for select/text, a list of values for multiselect. 'overrides' names a base game-term field (e.g. 'resistance') the chosen value replaces in the generated summary; without it the choice is appended. 'multiselectWith' names an extra modifier whose presence upgrades a select field to multiselect (e.g. Affliction's degrees become multiselect only once the 'extra_condition' extra is attached). For select/multiselect fields, options are { value, label } pairs (condition options use the condition id as value).",
+    "configNote": "config is the effect's list of configurable qualities (the per-effect choices docs/mm-powers-architecture.md §9 defers). Each entry is { key, label, type ('select'|'multiselect'|'text'|'checkbox'|'allocation'|'repeatable'|'points'), overrides?, multiselectWith?, options? }. The player's choice is stored under 'key' in the power effect instance's config: a single value for select/text, a list of values for multiselect. 'overrides' names a base game-term field (e.g. 'resistance') the chosen value replaces in the generated summary; without it the choice is appended. 'multiselectWith' names an extra modifier whose presence upgrades a select field to multiselect (e.g. Affliction's degrees become multiselect only once the 'extra_condition' extra is attached). For select/multiselect fields, options are { value, label } pairs (condition options use the condition id as value). A 'repeatable' field's rows are shaped by its 'columns', each { key, label, type } with type 'text', 'int' or 'trait'; a 'trait' column is a trait picker whose 'source' names which list it offers (see traitSourceKey). A field carrying both a 'trait' column and an 'int' column is a TRAIT ALLOCATION: each row names a trait and the ranks put into it, and those ranks are spent out of the effect's own rank. Enhanced Trait is the one base effect built that way.",
+    "baseCostModeNote": "baseCostMode names HOW an effect's base cost is charged; core.rules.powers_cost holds one registered handler per mode and a mod's python_module can register another. Omitting the key means 'flat'.",
+    "baseCostModeKey": {
+      "flat": "baseCostValue points per rank - the ordinary rule, and the default when the key is absent",
+      "as_trait": "The effect costs whatever the traits it raises cost to buy outright, summed unrounded across its trait allocation and rounded once. baseCostValue is then only the NOMINAL rate the per-rank extras and flaws are read against: a -1/rank flaw takes 2 to 1 and so halves the whole total. The final cost is floored at 1 point."
+    },
+    "traitSourceKey": {
+      "traits": "The traits a power can buy up or down: abilities, non-derived resistances, skills",
+      "boost_traits": "As 'traits', plus advantages - what an Enhanced Trait may raise or a Reduced Trait lower",
+      "all_traits": "As 'traits', plus the derived stats that can be rolled but not bought (Defence, Initiative) - for a field asking what is CHECKED rather than what is changed"
+    },
     "implicitModifiersNote": "implicitModifiers lists modifier ids the effect carries as part of its own definition rather than as a player's choice. core.rules folds them into the effect's BASE game terms, untinted, before any attached modifier — so they read as part of the record, cost nothing (they never sit on the instance) and render no chip. Only their 'overrides' and 'grantsAttack' apply; stepping/checkBonus/checkNote are for attached modifiers. Today's sole use: an attacking effect implicitly has the 'attack' extra, which is what supplies its 'Attack vs. Defense' check — which is why these effects declare 'check': null of their own.",
     "effectTypeNote": "effectType is the CATALOG TAXONOMY: it groups the constructor's effect palette and seeds the Type game-term row. It is not what makes an effect an attack — the 'attack' modifier is (see implicitModifiersNote), and that modifier overrides the effective Type row. So an offensive Control effect files under Control in the palette while its card reads Type 'Attack'.",
     "effectTypeKey": {
@@ -22,6 +32,7 @@
     "affectsKey": {
       "ability": "One of the six core abilities",
       "skill": "A specific skill",
+      "advantage": "A specific advantage, granted at the ranks named rather than added to a printed total",
       "defense": "Attack, Defense, or a resistance (Dodge/Fortitude/Toughness/Will)",
       "resistance": "Grants/boosts resistance to a specific effect or descriptor rather than a general trait",
       "movement": "Movement speed/mode",
@@ -32,7 +43,7 @@
     },
     "applyNote": "statIntegration.apply names WHICH RULE reads a stat effect once its effect is active; core.rules.appliers holds one registered applier per kind and a mod's python_module can register another. Alongside it, amountPerRank (default 1) and amountFlat (default 0) say what the record is worth at a given rank: flat + rank * perRank. All three default to M&M's own rule -- a bonus worth exactly the effect's rank -- so an effect that states none of them behaves as it always has. A record only carries a stat effect at all when it is configurableTarget or names a statIntegration.target.",
     "applyKey": {
-      "bonus": "Add the amount to the numeric trait the record targets (Enhanced Trait, Protection). A target the sheet does not total contributes nothing.",
+      "bonus": "Add the amount to the trait the record targets (Enhanced Trait, Protection) - or, for an advantage, grant it at that many ranks. A target the sheet does not track contributes nothing.",
       "penalty_removed": "Cancel that much of a penalty standing on the target, rather than granting a bonus",
       "penalty_replaced": "Leave a smaller penalty in place of the one standing on the target; the amount is what remains",
       "speed": "Grant ranks of the named movement mode",
@@ -464,15 +475,28 @@
       "duration": "Permanent",
       "check": null,
       "resistance": null,
-      "baseCost": "Same as buying the target trait directly",
+      "baseCost": "As Trait",
       "baseCostValue": 2,
+      "baseCostMode": "as_trait",
       "configurableTarget": true,
+      "config": [
+        {
+          "key": "traits",
+          "label": "Enhances",
+          "type": "repeatable",
+          "hint": "One row per trait you raise, and the ranks put into it. Ranks are allocated out of this effect's rank, and each trait is charged at what it costs to buy normally - so two ranks of a skill cost the same one point whether they go into one skill or two.",
+          "columns": [
+            { "key": "trait", "label": "Trait", "type": "trait", "source": "boost_traits" },
+            { "key": "ranks", "label": "Ranks", "type": "int" }
+          ]
+        }
+      ],
       "statIntegration": {
         "pattern": "passive_permanent",
-        "affects": "ability|skill|defense|resistance",
+        "affects": "ability|skill|defense|resistance|advantage",
         "apply": "bonus"
       },
-      "description": "A bonus to a chosen ability, skill, defense, or resistance, held as a power rather than a bought-in trait."
+      "description": "A bonus to chosen abilities, skills, defenses, resistances, or advantages, held as a power rather than as bought-in traits."
     },
     {
       "id": "environment",

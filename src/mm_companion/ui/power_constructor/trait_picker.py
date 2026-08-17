@@ -30,7 +30,14 @@ from dataclasses import dataclass
 from html import escape
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLineEdit,
+    QToolButton,
+    QWidget,
+)
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, ParameterSpec, Skill
@@ -212,7 +219,8 @@ class TraitPicker(QWidget):
       skill's suggested ones from the game data, and free text past both — the same
       freedom the Skills block's *Add focus* has, because an Enhanced Trait may perfectly
       well grant a focus the hero has not bought;
-    * a **skill with specialized pools** → the whole skill, or one of those pools;
+    * **any skill** → its specialized (narrow, half-cost) rank pools, alongside a "+"
+      that names a new one, since a power may grant a pool no sheet carries yet;
     * an **advantage with a subject** → whatever its
       :class:`~mm_companion.core.data_loader.ParameterSpec` asks for, resolved through
       :mod:`mm_companion.ui.advantage_parameters` so it offers exactly what the
@@ -229,6 +237,7 @@ class TraitPicker(QWidget):
         super().__init__()
         self._context = context
         self._value = value
+        self._skill: Skill | None = None
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
@@ -252,6 +261,20 @@ class TraitPicker(QWidget):
         # whatever its own row did not need.
         self._spacer = QWidget()
         layout.addWidget(self._spacer, 1)
+        # Naming a *new* specialized pool — the one answer no list can offer, because the
+        # pool a power grants need not exist on anyone's sheet yet.
+        self._add_pool = QToolButton()
+        self._add_pool.setText("+")
+        self._add_pool.setToolTip("Name a specialized (half-cost) rank pool for this skill")
+        self._add_pool.setVisible(False)
+        self._add_pool.clicked.connect(self._on_add_pool)
+        layout.addWidget(self._add_pool)
+        # The button's own width, held open on the rows that do not have one: a fixed
+        # widget on some rows and not others is the same misalignment ``_spacer`` exists
+        # to prevent, one column further right.
+        self._pool_pad = QWidget()
+        self._pool_pad.setFixedWidth(self._add_pool.sizeHint().width())
+        layout.addWidget(self._pool_pad)
 
         self._sync_qualifier(split_trait_key(value)[1])
         self._trait.currentIndexChanged.connect(self._on_trait_changed)
@@ -281,7 +304,13 @@ class TraitPicker(QWidget):
 
         if not self._choice.isHidden():
             if self._choice.isEditable():
-                return self._choice.currentText().strip()
+                text = self._choice.currentText().strip()
+                # An editable combo answers with what is *typed*, except where a row's
+                # label is not its value: a specialized pool reads "Urban (specialized)"
+                # and means ``spec::Urban``. Everything else is its own value, so a
+                # focus still comes back exactly as the player wrote it.
+                index = self._choice.findText(text)
+                return str(self._choice.itemData(index) or "") if index >= 0 else text
             return str(self._choice.currentData() or "")
         if not self._text.isHidden():
             return self._text.text().strip()
@@ -305,6 +334,7 @@ class TraitPicker(QWidget):
         self._choice.setVisible(False)
         self._text.setVisible(False)
         target = self._trait.currentData() or ""
+        skill = None
         if target:
             skill = next((s for s in self._context.game_data.skills if s.name == target), None)
             if skill is not None:
@@ -313,28 +343,87 @@ class TraitPicker(QWidget):
                 advantage = advantage_by_name(self._context.game_data, target)
                 if advantage is not None and advantage.parameter is not None:
                     self._sync_advantage_qualifier(advantage.parameter, current)
+        # Remembered for the "+", which has to know *which* skill it is naming a pool for
+        # long after the trait combo was last read.
+        self._skill = skill
+        self._add_pool.setVisible(skill is not None)
+        self._pool_pad.setVisible(skill is None)
         self._spacer.setVisible(self._choice.isHidden() and self._text.isHidden())
 
-    def _sync_skill_qualifier(self, skill: Skill, current: str) -> None:
-        """A focus (free), or one of the character's specialized pools (a closed list)."""
+    def _pool_rows(self, skill: Skill, current: str) -> list[tuple[str, str]]:
+        """The specialized pools this picker knows of, as ``(value, label)`` rows.
+
+        The character's own, plus whatever ``current`` names. That second half is not
+        politeness: a granted pool need not be on the sheet at all — naming one the hero
+        has not bought is the point of the "+" — and a closed list that did not carry it
+        would reselect the whole skill and silently drop the row a saved power came in
+        with, the first time its cell committed.
+        """
 
         character = self._context.character
         pools = list((character.specializations if character else {}).get(skill.name, []))
+        if current.startswith(SPECIALIZED_ROW_MARKER):
+            granted = current.removeprefix(SPECIALIZED_ROW_MARKER)
+            if granted and granted not in pools:
+                pools.append(granted)
+        return [(f"{SPECIALIZED_ROW_MARKER}{name}", f"{name} (specialized)") for name in pools]
+
+    def _sync_skill_qualifier(self, skill: Skill, current: str) -> None:
+        """A focus (free), or one of the specialized pools (chosen from a list)."""
+
+        character = self._context.character
+        pools = self._pool_rows(skill, current)
         if skill.focused:
             focuses = list((character.focuses if character else {}).get(skill.name, []))
             # The hero's own focuses first — those are the rows already on the sheet, and
-            # the ones an enhancement usually means — then the catalog's suggestions.
+            # the ones an enhancement usually means — then the catalog's suggestions, then
+            # the pools, which are a different kind of row and so come after both.
             suggestions = focuses + [f for f in skill.focuses if f not in focuses]
             self._fill_choice(
-                [(f, f) for f in suggestions], current, editable=True, hint=skill.focus_note
+                [(f, f) for f in suggestions] + pools,
+                current,
+                editable=True,
+                hint=skill.focus_note,
             )
             self._choice.lineEdit().setPlaceholderText("Focus")
             return
-        if pools:
-            options = [("", _WHOLE_SKILL_LABEL)] + [
-                (f"{SPECIALIZED_ROW_MARKER}{name}", f"{name} (specialized)") for name in pools
-            ]
-            self._fill_choice(options, current, editable=False)
+        # Shown even with no pools yet: it is what names the whole-skill default, and it
+        # is where the pool the "+" beside it creates will appear.
+        self._fill_choice([("", _WHOLE_SKILL_LABEL)] + pools, current, editable=False)
+
+    def _on_add_pool(self) -> None:
+        """Name a new specialized pool for the chosen skill, and select it.
+
+        Deliberately writes *nothing* to the character. The power grants the pool and
+        pays for it; the constructor often has no character to write to at all; and a
+        granted row the sheet carries none of its own is exactly what
+        :func:`~mm_companion.core.rules.granted_skill_rows` grows a muted row for. The
+        skill's own catalog specializations are offered as suggestions and never as a
+        closed list, and its ``specialization_note`` becomes the prompt where they cannot
+        be listed — the same question the Skills block's *Add specialization…* asks, so a
+        pool granted by a power and one bought on the sheet are named the same way.
+        """
+
+        skill = self._skill
+        if skill is None:
+            return
+        offered = {
+            value.removeprefix(SPECIALIZED_ROW_MARKER)
+            for value, _ in self._pool_rows(skill, self._qualifier())
+        }
+        options = [name for name in skill.specializations if name not in offered]
+        prompt = skill.specialization_note or "Specialization:"
+        name, ok = QInputDialog.getItem(
+            self, f"Add {skill.name} specialization", prompt, options, 0, True
+        )
+        name = name.strip()
+        if not ok or not name:
+            return
+        # Rebuilt through the ordinary path rather than by poking a row in: the new pool
+        # is just another one this picker knows of, and ``_pool_rows`` already folds a
+        # pool nobody has bought into the list and selects it.
+        self._sync_qualifier(f"{SPECIALIZED_ROW_MARKER}{name}")
+        self._emit()
 
     def _sync_advantage_qualifier(self, spec: ParameterSpec, current: str) -> None:
         """Whatever the advantage's own parameter spec asks for."""
@@ -369,7 +458,10 @@ class TraitPicker(QWidget):
         for value, label in options:
             self._choice.addItem(label, value)
         if editable:
-            self._choice.setCurrentText(current)
+            # By value, not by text: a pool's row reads "Urban (specialized)" and the
+            # raw ``spec::Urban`` in the line edit would be both wrong and unreadable.
+            index = self._choice.findData(current)
+            self._choice.setCurrentText(self._choice.itemText(index) if index >= 0 else current)
         else:
             index = self._choice.findData(current)
             self._choice.setCurrentIndex(max(index, 0))

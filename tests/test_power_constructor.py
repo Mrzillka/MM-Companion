@@ -1880,6 +1880,133 @@ def test_a_specialized_pool_is_offered_but_the_whole_skill_is_the_default(
     assert picker.value() == "Stealth::spec::Urban"
 
 
+def test_a_new_specialization_can_be_named_for_a_skill_that_has_none(
+    qapp: QApplication, monkeypatch
+) -> None:
+    """The pool a power grants need not be one anybody bought — an Enhanced Trait may
+    invent *Stealth: Rooftops*, and a list of the hero's existing pools could never
+    offer it."""
+
+    from PySide6.QtWidgets import QToolButton
+
+    from mm_companion.ui.power_constructor import trait_picker as picker_module
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)  # no character at all
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+
+    add = picker.findChild(QToolButton)
+    assert add is not None and not add.isHidden()
+    asked: list[tuple] = []
+
+    def fake(_parent, _title, label, items, *a, **k):
+        asked.append((label, list(items)))
+        return ("Rooftops", True)
+
+    monkeypatch.setattr(picker_module.QInputDialog, "getItem", staticmethod(fake))
+    add.click()
+    # The same question the Skills block's *Add specialization…* asks: the catalog's
+    # suggestions, and the skill's own guidance as the prompt.
+    assert asked[-1] == ("By specific environment or terrain", ["Hiding", "Sneaking", "Tailing"])
+    assert picker.value() == "Stealth::spec::Rooftops"
+    # And it is a row of the list from here on, not a value the widget merely remembers.
+    assert _qualifier(picker).findData("spec::Rooftops") >= 0
+
+
+def test_naming_a_specialization_is_not_a_purchase(qapp: QApplication, monkeypatch) -> None:
+    """The power pays for the pool it grants, so nothing lands on the sheet: the Skills
+    block grows the row itself, muted, out of the granted bonus."""
+
+    from PySide6.QtWidgets import QToolButton
+
+    from mm_companion.ui.power_constructor import trait_picker as picker_module
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+    monkeypatch.setattr(
+        picker_module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("Rooftops", True))
+    )
+    picker.findChild(QToolButton).click()
+
+    assert character.specializations.get("Stealth") is None
+
+
+def test_a_cancelled_specialization_leaves_the_row_alone(qapp: QApplication, monkeypatch) -> None:
+    from PySide6.QtWidgets import QToolButton
+
+    from mm_companion.ui.power_constructor import trait_picker as picker_module
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.specializations["Stealth"] = ["Urban"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+    pool = _qualifier(picker)
+    pool.setCurrentIndex(pool.findData("spec::Urban"))
+
+    monkeypatch.setattr(
+        picker_module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("", False))
+    )
+    picker.findChild(QToolButton).click()
+    assert picker.value() == "Stealth::spec::Urban"
+
+
+def test_a_focused_skill_offers_its_pools_beside_its_focuses(qapp: QApplication) -> None:
+    """Expertise carries both kinds of row, so the one qualifier control has to answer
+    for both — and a pool reads as a pool rather than as its raw key."""
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.focuses["Expertise"] = ["Law"]
+    character.specializations["Expertise"] = ["Case Law"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Expertise"))
+
+    choice = _qualifier(picker)
+    index = choice.findData("spec::Case Law")
+    assert index >= 0 and choice.itemText(index) == "Case Law (specialized)"
+    choice.setCurrentIndex(index)
+    assert picker.value() == "Expertise::spec::Case Law"
+    choice.setCurrentText("Law")  # and a focus is still whatever was typed
+    assert picker.value() == "Expertise::Law"
+
+
+def test_a_granted_pool_survives_reopening_the_power(qapp: QApplication) -> None:
+    """A saved Enhanced Trait naming a pool nobody bought has to find it in the list it
+    is rebuilt against, or committing the row would quietly reselect the whole skill."""
+
+    data = load_game_data()
+    power = Power(
+        name="Rooftop Runner",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_trait",
+                rank=4,
+                config={"traits": [{"trait": "Stealth::spec::Rooftops", "ranks": 4}]},
+            )
+        ],
+    )
+    window = PowerConstructorWindow(data, power=power)
+    card = window.canvas.cards[0]
+    picker, _spin = _trait_rows(card)[0]
+
+    assert picker.value() == "Stealth::spec::Rooftops"
+
+
 def test_an_advantage_with_a_subject_asks_for_it(qapp: QApplication) -> None:
     """Improved Critical is bought per attack; granting it without saying which would be
     granting an advantage that names nothing."""

@@ -178,8 +178,9 @@ Skill (from skills-design.json.skills[])
 ├── categories: ("combat"|"interaction"|"manipulation"|"technical")[]   // rule bundles, see §6
 ├── action: default action time for the skill
 ├── summary: string            // one-line mechanical gloss (original paraphrase)
-├── specializations[] | focuses[]   // focuses[] only when focused=true; focus NAMES only
+├── specializations[] | focuses[]   // focuses[] only when focused=true; NAMES only, both
 ├── focusNote?: string         // guidance for a focused skill whose focuses can't be listed
+├── specializationNote?: string  // ...the same, for a skill whose pools can't be listed
 ├── plLimit?: "attack"|"none"  // overrides the default skill-bonus cap (§4)
 ├── rankTable? / complexityTable?   // Languages' doubling table; technical build table
 └── uses: Use[]
@@ -246,7 +247,10 @@ Enhanced Trait may grant a focus the character never bought.
 `specializations[]` on a **non-focused** skill are the opposite: they're just illustrative common
 uses of the one shared skill (and map loosely onto that skill's `uses[]`), *unless* the player
 deliberately buys **specialized ranks** — the half-cost narrow rank pool from §7 — in which case
-that specialization becomes its own capped rank pool too.
+that specialization becomes its own capped rank pool too. Because any of them may be bought that
+way, the list holds pool **names** on the same rule `focuses[]` does, and a skill whose pools are
+drawn from something unlistable ("by specific sense", "by terrain") puts that in
+`specializationNote` instead — shown as the prompt where a pool is named, never offered as one.
 
 ---
 

@@ -814,7 +814,19 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         self.changed.emit()
 
     def _add_specialization(self, skill: Skill) -> None:
-        name, ok = QInputDialog.getText(self, f"Add {skill.name} specialization", "Specialization:")
+        """Ask for a specialized (half-cost) rank pool, the way :meth:`_add_focus` asks
+        for a focus: the catalog's common uses of the skill as ready choices, its
+        ``specialization_note`` as the prompt where those cannot be listed ("By specific
+        sense"), and free text past both — a pool is whatever the player narrowed to,
+        and the list was never a closed one.
+        """
+
+        taken = self._specializations.get(skill.name, [])
+        options = [name for name in skill.specializations if name not in taken]
+        prompt = skill.specialization_note or "Specialization:"
+        name, ok = QInputDialog.getItem(
+            self, f"Add {skill.name} specialization", prompt, options, 0, True
+        )
         name = name.strip()
         if not ok or not name:
             return

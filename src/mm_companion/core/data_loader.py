@@ -119,7 +119,11 @@ class Skill:
     wherever a focus is picked, never a closed list; ``focus_note`` carries the guidance
     for a skill whose focuses cannot be enumerated (Expertise, Languages), shown as a
     hint rather than offered as something selectable.
-    ``specializations`` lists illustrative common uses of a non-focused skill.
+    ``specializations`` lists illustrative common uses of a skill — and, since any of
+    them may be bought as a narrow half-cost rank pool, the suggested *names* wherever a
+    specialization is named; ``specialization_note`` is their ``focus_note``, carrying
+    the guidance for a skill whose pools are drawn from something that cannot be listed
+    ("By specific sense"), shown as a prompt rather than offered as a name.
     ``trained_only`` marks skills that can't be used untrained.
     ``specialized_cost`` prices this skill's ordinary ranks at the cheaper
     specialized rate (Expertise, whose mandatory focus makes it 4 ranks/PP).
@@ -132,6 +136,7 @@ class Skill:
     trained_only: bool = False
     action: str = ""
     specializations: tuple[str, ...] = ()
+    specialization_note: str = ""
     focuses: tuple[str, ...] = ()
     focus_note: str = ""
     description: str = ""
@@ -1834,6 +1839,7 @@ def _parse_skill(s: dict) -> Skill:
         trained_only=bool(s.get("trainedOnly", False)),
         action=s.get("action", ""),
         specializations=tuple(s.get("specializations", ())),
+        specialization_note=s.get("specializationNote", ""),
         focuses=tuple(s.get("focuses", ())),
         focus_note=s.get("focusNote", ""),
         description=s.get("description", ""),
@@ -1847,6 +1853,7 @@ def _parse_skill(s: dict) -> Skill:
             "trainedOnly",
             "action",
             "specializations",
+            "specializationNote",
             "focuses",
             "focusNote",
             "description",

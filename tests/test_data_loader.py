@@ -59,6 +59,24 @@ def test_focused_skills_say_what_their_focuses_are() -> None:
     assert "Blades" in close_combat.focuses and not close_combat.focus_note
 
 
+def test_specializations_are_names_and_guidance_is_a_note() -> None:
+    """The same split ``focuses``/``focus_note`` makes, one field over.
+
+    Any of a skill's ``specializations`` may be bought as a narrow half-cost rank pool,
+    so the list is offered as *names* wherever a pool is named. Guidance for a skill
+    whose pools are drawn from something that cannot be listed lives in
+    ``specialization_note`` — "By specific sense" is not a pool anybody has.
+    """
+
+    data = load_game_data()
+    for skill in data.skills:
+        assert not any(name.startswith("By ") for name in skill.specializations), skill.name
+    perception = next(s for s in data.skills if s.name == "Perception")
+    assert perception.specializations == () and perception.specialization_note
+    stealth = next(s for s in data.skills if s.name == "Stealth")
+    assert "Hiding" in stealth.specializations and stealth.specialization_note
+
+
 def test_advantages_carry_type_tags() -> None:
     data = load_game_data()
     valid_kinds = {"fixed", "power_level", "power_level_half", "heroic_budget", "none"}

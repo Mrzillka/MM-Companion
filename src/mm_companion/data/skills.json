@@ -19,7 +19,8 @@
     },
     "costRule": "Normal skill ranks cost 1 Power Point per 2 ranks. Skills bought as a narrow focus (see 'focused': true) instead cost 1 Power Point per 4 ranks in that focus, but each focus is tracked as its own independent rank pool.",
     "focusNoteNote": "focuses is a list of suggested focus NAMES, offered as ready choices wherever a focus is picked (the skills block's Add focus, an Enhanced Trait's trait picker) and always free-text-editable past them. A skill whose focuses are not an enumerable list leaves it empty and puts the guidance in focusNote instead, which is shown as a hint rather than as something selectable.",
-    "focusedNote": "When 'focused' is true, a character must pick one or more specific focuses (e.g. a language, a field of expertise, a weapon type) and buy ranks separately per focus, effectively treating each focus as its own skill. When 'focused' is false, any 'specializations' listed are just common illustrative uses of the single skill, not separate rank pools."
+    "specializationNoteNote": "specializations follows the same rule as focuses: it holds NAMES, offered wherever a specialized rank pool is named (the skills block's Add specialization, an Enhanced Trait's trait picker) and always free-text-editable past them. A skill whose pools are drawn from something unlistable (a sense, a terrain) puts that guidance in specializationNote instead, shown as the prompt rather than offered as a pool.",
+    "focusedNote": "When 'focused' is true, a character must pick one or more specific focuses (e.g. a language, a field of expertise, a weapon type) and buy ranks separately per focus, effectively treating each focus as its own skill. When 'focused' is false, any 'specializations' listed are just common illustrative uses of the single skill and not separate rank pools — until the player deliberately buys one as a narrow half-cost pool, which any of them may be."
   },
   "skills": [
     {
@@ -94,9 +95,8 @@
       "trainedOnly": false,
       "action": "extended",
       "focused": false,
-      "specializations": [
-        "By disguise type"
-      ],
+      "specializations": [],
+      "specializationNote": "By disguise type",
       "description": "Building a convincing false identity out of makeup, costuming, and careful attention to detail."
     },
     {
@@ -183,9 +183,8 @@
       "trainedOnly": false,
       "action": "free",
       "focused": false,
-      "specializations": [
-        "By specific sense, e.g. sight, hearing, smell"
-      ],
+      "specializations": [],
+      "specializationNote": "By specific sense, e.g. sight, hearing, smell",
       "description": "Staying alert to your surroundings — catching a sound, a shape in the shadows, or a detail everyone else missed."
     },
     {
@@ -259,9 +258,9 @@
       "specializations": [
         "Hiding",
         "Sneaking",
-        "Tailing",
-        "By specific environment or terrain"
+        "Tailing"
       ],
+      "specializationNote": "By specific environment or terrain",
       "description": "Staying unseen and unheard — sneaking past guards, hiding in plain sight, or trailing someone unnoticed."
     },
     {
@@ -275,9 +274,9 @@
         "Avoid Hazards",
         "Construction",
         "Foraging",
-        "Navigation",
-        "By specific environment or terrain"
+        "Navigation"
       ],
+      "specializationNote": "By specific environment or terrain",
       "description": "Getting by in the wild — finding food, shelter, and a safe path through hostile terrain."
     },
     {

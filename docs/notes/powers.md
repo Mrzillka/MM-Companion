@@ -92,6 +92,14 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   muted, un-editable row for each (rollable, but with no rank spin and no entry in
   `_row_refs`), the way the Advantages block already shows a granted advantage. Without
   it the bonus is paid for and invisible, which reads as a power that does nothing.
+  A **specialized pool** is granted the same way, and the `TraitPicker` has a "+" beside
+  its qualifier that *names* one, because the pool a power invents (*Stealth: Rooftops*)
+  is by definition not in any list of what the hero has. It writes nothing to
+  `Character.specializations` — the power pays for the pool, the constructor often has no
+  character in hand at all, and the orphan row above is what makes it visible. The list
+  the picker offers therefore always folds in the pool its *current* value names: a
+  closed list rebuilt without it would reselect the whole skill and drop a saved power's
+  row the first time its cell committed.
 - **Rank as allocation, not budget.** An effect declaring `rankFollowsAllocation`
   (Enhanced Trait alone, in the base data) has its rank *written from* its rows —
   `synced_effect_rank` — and shown read-only; `power_allocation_violations` skips it,

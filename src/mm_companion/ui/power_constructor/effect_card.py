@@ -592,6 +592,9 @@ class EffectCard(QFrame):
                     rows.append(row)
             self.instance.config[field.key] = rows
             update_total()
+            # As in :meth:`_on_config_changed`: a trait-allocation row *is* the cost of
+            # an as-trait effect, so the footer moves with it and not only the readout.
+            self._refresh_cost()
             self.changed.emit()
 
         def add_row(initial: dict | None = None) -> None:
@@ -667,6 +670,11 @@ class EffectCard(QFrame):
             self.instance.config[key] = value
         else:  # "", empty list, or None all clear the choice
             self.instance.config.pop(key, None)
+        # A config choice can decide what the effect *costs* — an Enhanced Trait is
+        # priced entirely from the traits it raises — so the card's own footer has to
+        # be redrawn here, exactly as a rank or a modifier change redraws it. The
+        # window's total tracks ``changed`` on its own; this label does not.
+        self._refresh_cost()
         self.changed.emit()
 
     # -- enhanced-trait target picker -------------------------------------

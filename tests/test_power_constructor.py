@@ -1728,3 +1728,63 @@ def test_the_note_says_what_this_wielder_size_is_worth(qapp: QApplication) -> No
 
     assert "Huge" in window._size_damage_note.text()
     assert "+2" in window._size_damage_note.text()
+
+
+def test_allocating_a_trait_updates_the_cards_own_cost_line(qapp: QApplication) -> None:
+    """The card's footer must move when the allocation does.
+
+    Every other cost-changing gesture on a card refreshes it — a rank change, a
+    modifier attaching, a chip reordering. An effect's *config* never did, because
+    until Enhanced Trait was priced "as trait" no config field could change a cost.
+    It can now, and the footer is the only place the arithmetic is shown.
+    """
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    before = card._cost.text()
+
+    _allocate(card, [("STR", 4)])
+    assert card._cost.text() != before
+    assert card._cost.text().endswith("8 PP")
+
+
+def test_allocating_a_trait_updates_the_windows_total(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+    assert "8" in window._cost.text()
+
+
+def test_clearing_an_allocated_trait_takes_the_cost_back_down(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+
+    # Back to nothing chosen: an unallocated Enhanced Trait costs nothing, and the
+    # footer has to say so rather than keeping the number it last showed.
+    combo, spin = _trait_rows(card)[0]
+    spin.setValue(0)
+    assert isinstance(spin, QSpinBox)
+    assert card._cost.text().endswith("0 PP")
+
+
+def test_reduced_trait_rows_update_the_cost_line_too(qapp: QApplication) -> None:
+    """The flaw's rows travel a different wire — the chip's ``changed`` — so prove it."""
+    from PySide6.QtWidgets import QComboBox, QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+    assert card._cost.text().endswith("8 PP")
+
+    card.attach_modifier("reduced_trait")
+    chip = card._chips[0]
+    combo = chip.findChild(QComboBox)
+    combo.setCurrentIndex(combo.findData("DODGE"))
+    chip.findChild(QSpinBox).setValue(3)
+    assert card._cost.text().endswith("5 PP")  # 8 less the 3 PP three ranks of Dodge cost

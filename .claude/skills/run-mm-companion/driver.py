@@ -340,6 +340,10 @@ def build(target: str):
         def _rows():
             return [c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0]
 
+        # The flaw goes on *first* so the last thing driven is an allocation edit —
+        # the path whose footer refresh was missing. Ending on attach_modifier would
+        # redraw the cost line for its own reasons and hide that.
+        card.attach_modifier("limited_enhanced_trait")
         add = next(b for b in card.findChildren(QPushButton) if b.text().endswith("Add"))
         allocation = [("STR", 2), ("Treatment", 6), ("Expertise", 2)]
         while len(_rows()) < len(allocation):
@@ -347,7 +351,6 @@ def build(target: str):
         for combo, (trait, ranks) in zip(_rows(), allocation, strict=True):
             combo.setCurrentIndex(combo.findData(trait))
             combo.parent().findChild(QSpinBox).setValue(ranks)
-        card.attach_modifier("limited_enhanced_trait")
     elif target == "enhanced-trait-sheet":
         # The other half of "enhanced-trait": what one Enhanced Trait does to the sheet
         # once saved. Three traits out of one rank pool — an ability, a skill and an

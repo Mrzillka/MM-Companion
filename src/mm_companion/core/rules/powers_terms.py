@@ -14,10 +14,10 @@ from .appliers import trait_category
 from .derived import effective_ability
 from .powers_cost import array_alternate_cost, array_base_index, effect_effective_rank
 from .runtime import (
-    _trait_name,
     effect_current_rank,
     resolved_trait_allocation,
     trait_allocation_field,
+    trait_display_name,
 )
 from .size import base_size_rank
 
@@ -160,7 +160,7 @@ def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str
 def _config_trait_name(game_data: GameData | None, value: str) -> str:
     """A stored config value shown as a trait name — ``"AGL"`` → ``"Agility"``.
 
-    Falls through :func:`_trait_name` (abilities/resistances/skills) to the derived
+    Falls through :func:`trait_display_name` (abilities/resistances/skills) to the derived
     stats ``system.json`` names, so a checkable-but-unbuyable stat like Initiative
     still reads by its label. Anything else (a free-text value) passes through.
     """
@@ -170,7 +170,7 @@ def _config_trait_name(game_data: GameData | None, value: str) -> str:
     for trait in game_data.system.derived_traits:
         if trait.key == value:
             return trait.label
-    return _trait_name(game_data, value)
+    return trait_display_name(game_data, value)
 
 
 def _render_note(
@@ -823,7 +823,7 @@ def effect_stat_rows(
     # how much — green, since it's an improvement — so the summary isn't blank. An
     # Enhanced Trait raises several at once, each at its own allocated rank.
     raised = [
-        f"{_trait_name(game_data, target)} +{ranks}"
+        f"{trait_display_name(game_data, target)} +{ranks}"
         for target, ranks in resolved_trait_allocation(effect, base_effect)
         if trait_category(game_data, target)
     ]
@@ -1182,7 +1182,7 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
         if value:
             chosen.append(f"{field.label}: {_config_display(field, value)}")
     raised = [
-        f"{_trait_name(game_data, target)} +{ranks}"
+        f"{trait_display_name(game_data, target)} +{ranks}"
         for target, ranks in resolved_trait_allocation(effect, base)
         if trait_category(game_data, target)
     ]

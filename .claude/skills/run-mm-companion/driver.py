@@ -325,37 +325,67 @@ def build(target: str):
         win = PowerConstructorWindow()
     elif target == "enhanced-trait":
         # Enhanced Trait's trait allocation, built through the real widgets: several
-        # traits raised out of one rank pool, each charged at what buying it costs.
-        # The worked case from docs/mm-powers-architecture.md §6 — Strength 2 (4 PP) +
-        # Treatment 6 (3) + Expertise 2 (1) = 8, halved by Limited to 4.
-        from PySide6.QtWidgets import QComboBox, QPushButton, QSpinBox
+        # traits raised out of one rank pool, each charged at what buying it costs, and
+        # each narrowed to the row it really means. Strength 2 (4 PP) + Expertise:
+        # Stealth 2 (1) + Improved Critical: Sword (1) = 6, halved by Limited to 3 —
+        # and the rank spin reads 5 without anyone setting it.
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QComboBox, QLineEdit, QPushButton, QSpinBox
 
-        from mm_companion.ui.power_constructor import PowerConstructorWindow
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.core.rules import split_trait_key
+        from mm_companion.ui.power_constructor import PowerConstructorWindow, TraitPicker
 
-        win = PowerConstructorWindow()
+        game_data = load_game_data()
+        character = Character.new_default(game_data)
+        character.focuses["Expertise"] = ["Law"]  # a focus of their own, offered first
+        character.powers.append(
+            Power(name="Sword", effects=[PowerEffectInstance("damage", rank=3)])
+        )
+        win = PowerConstructorWindow(game_data, character=character)
         win._name.setText("Berserker Rage")
         card = win.canvas.add_effect("enhanced_trait")
-        card._rank.setValue(10)
 
         def _rows():
-            return [c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0]
+            return card.findChildren(TraitPicker)
 
         # The flaw goes on *first* so the last thing driven is an allocation edit —
         # the path whose footer refresh was missing. Ending on attach_modifier would
         # redraw the cost line for its own reasons and hide that.
         card.attach_modifier("limited_enhanced_trait")
         add = next(b for b in card.findChildren(QPushButton) if b.text().endswith("Add"))
-        allocation = [("STR", 2), ("Treatment", 6), ("Expertise", 2)]
+        allocation = [("STR", 2), ("Expertise::Stealth", 2), ("Improved Critical::Sword", 1)]
         while len(_rows()) < len(allocation):
             add.click()
-        for combo, (trait, ranks) in zip(_rows(), allocation, strict=True):
-            combo.setCurrentIndex(combo.findData(trait))
-            combo.parent().findChild(QSpinBox).setValue(ranks)
+        for picker, (key, ranks) in zip(_rows(), allocation, strict=True):
+            base, qualifier = split_trait_key(key)
+            combo = next(c for c in picker.findChildren(QComboBox) if c.findData("STR") >= 0)
+            combo.setCurrentIndex(combo.findData(base))
+            if qualifier:
+                direct = Qt.FindChildOption.FindDirectChildrenOnly
+                controls = [
+                    *picker.findChildren(QComboBox, options=direct),
+                    *picker.findChildren(QLineEdit, options=direct),
+                ]
+                cell = next(w for w in controls if not w.isHidden() and w is not combo)
+                if isinstance(cell, QComboBox):
+                    index = cell.findData(qualifier)
+                    if index >= 0:
+                        cell.setCurrentIndex(index)
+                    else:
+                        cell.setCurrentText(qualifier)
+                else:
+                    cell.setText(qualifier)
+            picker.parent().findChild(QSpinBox).setValue(ranks)
     elif target == "enhanced-trait-sheet":
         # The other half of "enhanced-trait": what one Enhanced Trait does to the sheet
-        # once saved. Three traits out of one rank pool — an ability, a skill and an
-        # *advantage* — so the enhancement column, the skill total and the Advantages
-        # block each have to show their share of the same 4-point power.
+        # once saved. Five traits out of one rank pool — an ability, a skill, an
+        # *advantage*, a skill *focus* the hero never bought, and an advantage bought for
+        # a subject — so the enhancement column, the skill total and the Advantages block
+        # each have to show their share of one power, and two of the rows have to be
+        # grown by the blocks themselves.
         from mm_companion.core.powers import Power, PowerEffectInstance
         from mm_companion.ui.main_window import MainWindow
 
@@ -376,6 +406,10 @@ def build(target: str):
                                 {"trait": "STR", "ranks": 2},
                                 {"trait": "Treatment", "ranks": 6},
                                 {"trait": "Fearless", "ranks": 2},
+                                # A focus the hero never bought and an advantage bought
+                                # for a subject: both have to find a row on the sheet.
+                                {"trait": "Expertise::Stealth", "ranks": 2},
+                                {"trait": "Improved Critical::Sword", "ranks": 1},
                             ]
                         },
                     )

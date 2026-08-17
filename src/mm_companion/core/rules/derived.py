@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..character import Character
+from ..character import AdvantageSelection, Character
 from ..components import APPLY_BONUS
-from ..data_loader import GameData, Resistance, Skill
+from ..data_loader import GameData, Resistance
 from .advantages import advantage_by_name
 from .appliers import (
     CATEGORY_ABILITY,
@@ -14,11 +14,14 @@ from .appliers import (
     CATEGORY_RESISTANCE,
     CATEGORY_SKILL,
     GROUP_POWERS,
+    SPECIALIZED_ROW_MARKER,
     STACK_SUM,
     TraitBonus,
     TraitContribution,
     resolve_bonuses,
     resolve_contributions,
+    skill_for_row,
+    split_trait_key,
 )
 from .conditions import ConditionEffect, condition_scope_penalty
 from .runtime import equipment_contributions, power_contributions
@@ -99,9 +102,9 @@ def advantage_contributions(
 
     A **granted** advantage (:func:`granted_advantages`) grants whatever it would have
     granted if bought, so an Enhanced Advantage naming one that carries a skill bonus
-    reaches the skill total rather than stopping at a name on the sheet. Only advantages
-    that name their own ``skill_bonus_target`` can chain that way: a granted one has no
-    ``parameter``, since nothing asked the player which skill it was for.
+    reaches the skill total rather than stopping at a name on the sheet. Its subject is
+    the qualifier on its own trait key (``"Skill Mastery::Stealth"``), which is what lets
+    a granted advantage whose target is the player's choice chain like a bought one.
 
     ``granted`` may be passed to reuse a :func:`granted_advantages` result already in
     hand; it is resolved here when it isn't.
@@ -120,11 +123,16 @@ def advantage_contributions(
 
     if granted is None:
         granted = granted_advantages(char, game_data)
-    for name, bonus in granted.items():
+    for key, bonus in granted.items():
+        name, parameter = split_trait_key(key)
         contribution = _advantage_skill_contribution(
             advantage_by_name(game_data, name),
             bonus.amount,
-            "",
+            # A granted advantage *can* carry the subject its key names, so one bought
+            # for a skill ("Skill Mastery::Stealth") chains onto that skill exactly as
+            # the bought one would. Unqualified keys still pass "" and chain only when
+            # the advantage names its own target.
+            parameter,
             # Named for the pair: the advantage is what grants the bonus, the power is
             # what put the advantage there, and neither half explains the row alone.
             f"{name} ({', '.join(bonus.sources)})" if bonus.sources else name,
@@ -132,6 +140,84 @@ def advantage_contributions(
         if contribution is not None:
             contributions.append(contribution)
     return tuple(contributions)
+
+
+def granted_advantage_selections(
+    char: Character,
+    game_data: GameData,
+    granted: dict[str, TraitBonus] | None = None,
+) -> tuple[tuple[AdvantageSelection, str], ...]:
+    """Granted advantages as ``(selection, granting source)`` pairs, ready to render.
+
+    :func:`granted_advantages` keyed by the raw trait key; this splits that key into the
+    advantage's name and the subject it was granted for
+    (``"Improved Critical::Sword"`` → ``Improved Critical`` for ``Sword``), so the sheet
+    prints a granted advantage exactly as it prints a bought one. The split lives here
+    rather than in the block, because the key format is the rules layer's and a second
+    reading of it in the UI is a second thing to keep in step.
+
+    These selections are **not** part of :attr:`Character.advantages` and are never
+    written back to it: the power paid for them, so they cost no advantage points and
+    draw on no Heroic budget.
+    """
+
+    if granted is None:
+        granted = granted_advantages(char, game_data)
+    return tuple(
+        (
+            AdvantageSelection(name=name, rank=bonus.amount, parameter=parameter),
+            ", ".join(bonus.sources),
+        )
+        for name, parameter, bonus in (
+            (*split_trait_key(key), bonus) for key, bonus in granted.items()
+        )
+    )
+
+
+def skill_row_exists(char: Character, game_data: GameData, row_id: str) -> bool:
+    """Whether ``row_id`` names a skill row this character actually has.
+
+    A row exists when the character bought ranks in it, when the focus or specialized
+    pool it names is declared on the sheet (even at zero ranks), or when it is an
+    unfocused skill from the catalog — every character can try Perception at +AWE. A
+    focus nobody took is not a row: a pin to it should say so rather than quietly reading
+    as the bare ability, and a power granting it has to bring its own row along
+    (:func:`granted_skill_rows`).
+    """
+
+    if not row_id:
+        return False
+    if row_id in char.skill_ranks:
+        return True
+    base, qualifier = split_trait_key(row_id)
+    if qualifier:
+        return qualifier in char.focuses.get(base, []) or qualifier.removeprefix(
+            SPECIALIZED_ROW_MARKER
+        ) in char.specializations.get(base, [])
+    return any(s.name == row_id and not s.focused for s in game_data.skills)
+
+
+def granted_skill_rows(char: Character, game_data: GameData) -> dict[str, TraitBonus]:
+    """Skill *rows* a power or item grants that the character has no row of its own for.
+
+    An Enhanced Trait may name a focus or specialized pool the sheet does not carry —
+    *Expertise: Stealth* on a hero who bought no Expertise — and that row has nowhere to
+    land: the Skills block builds its rows from :attr:`Character.focuses` and
+    :attr:`Character.specializations`, so the boost would be paid for and invisible.
+    These are the rows the block has to grow for itself.
+
+    Only *qualified* keys can be orphans. A bonus on a bare skill name reaches every row
+    of that skill, and a skill always has at least the row the catalog gives it.
+    """
+
+    bonuses = trait_bonuses(char, game_data).get(CATEGORY_SKILL, {})
+    return {
+        row_id: bonus
+        for row_id, bonus in bonuses.items()
+        if split_trait_key(row_id)[1]
+        and not skill_row_exists(char, game_data, row_id)
+        and skill_for_row(game_data, row_id) is not None
+    }
 
 
 def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
@@ -184,20 +270,6 @@ def _trait_bonus(
     return trait_bonuses(char, game_data).get(category, {}).get(key)
 
 
-def _skill_for_row(game_data: GameData, row_id: str) -> Skill | None:
-    """Resolve a skill *row id* to its :class:`Skill` record.
-
-    A row id is either a skill name (non-focused) or ``"<Skill>: <focus>"`` for a
-    focused instance; both map back to the same base skill.
-    """
-
-    by_name = {s.name: s for s in game_data.skills}
-    if row_id in by_name:
-        return by_name[row_id]
-    base = row_id.split(":", 1)[0].strip()
-    return by_name.get(base)
-
-
 def _resistance(game_data: GameData, key: str) -> Resistance | None:
     for res in game_data.resistances:
         if res.key == key:
@@ -243,7 +315,7 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
     netted by the stacking resolver.
     """
 
-    skill = _skill_for_row(game_data, row_id)
+    skill = skill_for_row(game_data, row_id)
     if skill is None:
         return None
 
@@ -328,7 +400,7 @@ def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
     rewrites what the character bought.
     """
 
-    skill = _skill_for_row(game_data, row_id)
+    skill = skill_for_row(game_data, row_id)
     ability_key = skill.ability if skill else ""
     total = effective_ability(char, game_data, ability_key) + char.skill_ranks.get(row_id, 0)
     bonus = skill_bonus(char, game_data, row_id)

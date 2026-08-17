@@ -197,7 +197,7 @@ def test_add_with_text_parameter_stores_the_typed_value(qapp: QApplication) -> N
 def test_alternate_initiative_display_uses_the_ability_name(qapp: QApplication) -> None:
     section = _section([AdvantageSelection("Alternate Initiative", 1, "INT")])
     added = section._character.advantages[0]
-    assert section._parameter_display(added) == section._ability_names["INT"]
+    assert section._parameter_display(added) == "Intellect"
 
 
 def test_alternate_initiative_offers_only_the_mental_abilities(qapp: QApplication) -> None:
@@ -406,3 +406,19 @@ def test_switching_the_granting_power_off_drops_the_row(qapp: QApplication) -> N
     section._character.powers[0].activated = False
     section.refresh_granted()
     assert "Fearless 2" not in [name for name, _desc in _row_texts(section)]
+
+
+def test_a_granted_advantage_shows_the_subject_it_was_granted_for(qapp: QApplication) -> None:
+    """Improved Critical is bought per attack, and granted per attack too — a row that
+    dropped the subject would be a row nothing on the sheet could act on."""
+
+    section = _granted_section([("Improved Critical::Sword", 1)])
+    names = [name for name, _desc in _row_texts(section)]
+    assert "Improved Critical 1 (Sword)" in names
+
+
+def test_the_same_advantage_granted_twice_reads_as_two_rows(qapp: QApplication) -> None:
+    section = _granted_section([("Improved Critical::Sword", 1), ("Improved Critical::Bow", 1)])
+    names = [name for name, _desc in _row_texts(section)]
+    assert "Improved Critical 1 (Sword)" in names
+    assert "Improved Critical 1 (Bow)" in names

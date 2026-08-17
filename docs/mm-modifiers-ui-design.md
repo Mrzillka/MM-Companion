@@ -242,4 +242,6 @@ weren't in your list:
   `REPEATABLE_CELL_KINDS` registry so a row reads and stores identically whether it hangs off
   the effect or off one of its flaws — which is what lets `config_trait_allocation` read both
   with a single function. The effects UI doc has been patched to match (Enhanced Trait is
-  Tier 4 there now, not Tier 2).
+  Tier 4 there now, not Tier 2). The chip's rows get the full trait picker, qualifiers
+  included, for the same reason: a Reduced Trait that could only name a whole skill while
+  the effect above it could name one focus would be a way around the cost.

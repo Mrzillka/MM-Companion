@@ -17,6 +17,13 @@ from ..powers import (
     PowerNode,
 )
 from ..registry import Registry
+from .appliers import (
+    CATEGORY_ABILITY,
+    CATEGORY_ADVANTAGE,
+    CATEGORY_RESISTANCE,
+    CATEGORY_SKILL,
+    trait_category,
+)
 from .derived import effective_ability
 from .runtime import boost_allocations, config_trait_allocation
 from .size import effective_size_rank
@@ -619,31 +626,127 @@ def _fraction_str(value: Fraction) -> str:
     )
 
 
-def _as_trait_formula(context: BaseCostContext) -> str:
-    """Breakdown of the as-trait rule, e.g. ``(4 + 3 + 1) × 1/2``.
+def _mixed_fraction_str(value: Fraction) -> str:
+    """A Fraction as ``2``, ``1/2`` or ``2 1/2`` — how a pooled subtotal is read aloud.
 
-    One term per allocated trait, at what those ranks cost to buy, then the per-rank
-    modifiers as the ratio they scale the total by (:func:`_modifier_scale`) and the
-    flat ones after. The terms are shown *unrounded* on purpose: a pair of ``1/2``
-    terms is how the footer explains why one point bought a rank in each of two skills
-    rather than costing a point apiece.
+    :func:`_fraction_str` writes a bare improper fraction, which is right for a single
+    rate (a skill rank *is* half a point) and wrong for a subtotal: ``5/2`` points of
+    skills is five ranks, and nobody counts them that way. Whole and fractional parts are
+    kept apart so the number reads at a glance, with the sign carried out in front.
     """
 
-    terms = []
+    sign = "−" if value < 0 else ""
+    value = abs(value)
+    whole, remainder = divmod(value.numerator, value.denominator)
+    if not remainder:
+        return f"{sign}{whole}"
+    part = f"{remainder}/{value.denominator}"
+    return f"{sign}{part}" if not whole else f"{sign}{whole} {part}"
+
+
+@dataclass(frozen=True)
+class TraitTerm:
+    """One allocated trait's contribution to an as-trait effect's price.
+
+    ``cost`` is ``ranks × rate`` left **unrounded**, which is the whole point of keeping
+    the terms apart: a rank of Stealth and a rank of Treatment are half a point each and
+    one point together, and only the unrounded fractions can say so. ``category`` is the
+    trait list it came from (:func:`~.appliers.trait_category`), which is what the footer
+    groups by.
+    """
+
+    target: str
+    ranks: int
+    category: str
+    rate: Fraction
+    cost: Fraction
+
+
+#: The order an as-trait breakdown lists its groups in, with the noun each is called by.
+#: Presentation, not rules content — the categories themselves are
+#: :mod:`.appliers`', and a trait's *rate* is data as it always was. Kept as a tuple so
+#: the footer's order is fixed rather than following whichever row was typed first.
+_TRAIT_GROUP_LABELS = (
+    (CATEGORY_ABILITY, "Abilities"),
+    (CATEGORY_RESISTANCE, "Resistances"),
+    (CATEGORY_SKILL, "Skills"),
+    (CATEGORY_ADVANTAGE, "Advantages"),
+)
+
+
+def _as_trait_terms(context: BaseCostContext) -> tuple[TraitTerm, ...]:
+    """One :class:`TraitTerm` per priced row of an as-trait effect's allocation."""
+
+    terms: list[TraitTerm] = []
     for target, ranks in _as_trait_rows(context):
         rate = trait_rate(context.char, context.game_data, target)
         if rate is None or not ranks:
             continue
-        terms.append(rate * int(ranks))
+        terms.append(
+            TraitTerm(
+                target=target,
+                ranks=int(ranks),
+                category=trait_category(context.game_data, target),
+                rate=rate,
+                cost=rate * int(ranks),
+            )
+        )
+    return tuple(terms)
+
+
+def effect_cost_breakdown(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> tuple[TraitTerm, ...]:
+    """What each allocated trait added to an as-trait effect's price — ``()`` otherwise.
+
+    The per-trait detail behind :func:`effect_cost_formula`'s grouped subtotals, so the
+    card can show the workings without recomputing them beside the number. Empty for
+    every effect priced the ordinary way, which has no traits to break down.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or base.base_cost_mode != BASE_COST_AS_TRAIT:
+        return ()
+    return _as_trait_terms(_base_cost_context(effect, base, game_data, char))
+
+
+def _as_trait_formula(context: BaseCostContext) -> str:
+    """Breakdown of the as-trait rule, e.g. ``(Abilities 4 + Skills 2 1/2) × 1/2``.
+
+    One term per *kind* of trait rather than one per row, with the rows' fractions pooled
+    inside each — which is the arithmetic the rules actually do, and the difference
+    between reading ``Skills 2`` and reading ``1/2 + 1/2 + 1/2 + 1/2``. A subtotal that
+    lands between points keeps its fraction (``Skills 2 1/2``), since that half point is
+    real and the next skill rank is free because of it.
+
+    After the groups come the per-rank modifiers, as the ratio they scale the total by
+    (:func:`_modifier_scale`), and the flat ones after that. The per-trait rows behind
+    the groups are :func:`effect_cost_breakdown`, which the card hangs off the same label.
+    """
+
+    terms = _as_trait_terms(context)
     if not terms:
         return ""
 
-    body = " + ".join(_fraction_str(term) for term in terms)
+    groups = []
+    for category, label in _TRAIT_GROUP_LABELS:
+        subtotal = sum((t.cost for t in terms if t.category == category), Fraction(0))
+        if subtotal:
+            groups.append(f"{label} {_mixed_fraction_str(subtotal)}")
+    # A row naming something the sheet does not list still costs what it costs; group it
+    # under no label rather than dropping it from a sum it is part of.
+    other = sum((t.cost for t in terms if t.category not in dict(_TRAIT_GROUP_LABELS)), Fraction(0))
+    if other:
+        groups.append(_mixed_fraction_str(other))
+    if not groups:
+        return ""
+
+    body = " + ".join(groups)
     scale = _modifier_scale(context.base.base_cost_value, context.net_per_rank)
     if scale != 1:
         body = (
             f"({body}) × {_fraction_str(scale)}"
-            if len(terms) > 1
+            if len(groups) > 1
             else f"{body} × {_fraction_str(scale)}"
         )
     return _append_flat_terms(body, _flat_terms(context))

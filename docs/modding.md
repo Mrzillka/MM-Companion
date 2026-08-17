@@ -212,10 +212,17 @@ bucketed into per-rank, flat and ability-folded ranks. The base ruleset register
 `REPEATABLE_CELL_KINDS` is the same idea one level down from `CONFIG_WIDGET_BUILDERS`: a
 `repeatable` config field's rows are shaped by its `columns`, and a column's `type` picks
 a `RepeatableCellKind` — a `build` function, a `read` function, and the layout `stretch`
-the cell takes. Builders receive the game data (not the hosting widget), which is what
-lets an effect's rows and a modifier selection's rows be literally the same cells. The
-base ruleset registers `text`, `int` and `trait`; an unregistered type falls back to
-`text`.
+the cell takes. Builders receive a `CellContext` — the game data plus the character, if
+there is one — rather than the hosting widget, which is what lets an effect's rows and a
+modifier selection's rows be literally the same cells. Treat the character as optional:
+the standalone Power Constructor has no build in hand, and a cell that offers something
+*this hero* has must degrade to the catalog rather than assume one.
+
+The base ruleset registers `text`, `int` and `trait`; an unregistered type falls back to
+`text`. The `trait` cell is a `TraitPicker`: a trait combo plus a *qualifier* control that
+appears only when the chosen trait leaves a question open (which focus of Expertise, which
+attack for Improved Critical). It reads and writes one composed key — `Expertise::Law` —
+so the stored value stays a single string whatever the cell looks like.
 
 `STAT_APPLIERS` has its own helper, `register_stat_applier(kind, applier)`, and is
 the seam between "this effect grants something" and "here is what it grants". An

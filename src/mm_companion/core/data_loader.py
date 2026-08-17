@@ -115,7 +115,10 @@ class Skill:
 
     ``focused`` skills have no ranks of their own; the character instead buys
     focused instances (e.g. Close Combat: Swords), one rank pool per focus.
-    ``focuses`` lists the suggested focuses for a focused skill;
+    ``focuses`` lists the suggested focus *names* for a focused skill — ready choices
+    wherever a focus is picked, never a closed list; ``focus_note`` carries the guidance
+    for a skill whose focuses cannot be enumerated (Expertise, Languages), shown as a
+    hint rather than offered as something selectable.
     ``specializations`` lists illustrative common uses of a non-focused skill.
     ``trained_only`` marks skills that can't be used untrained.
     ``specialized_cost`` prices this skill's ordinary ranks at the cheaper
@@ -130,6 +133,7 @@ class Skill:
     action: str = ""
     specializations: tuple[str, ...] = ()
     focuses: tuple[str, ...] = ()
+    focus_note: str = ""
     description: str = ""
     specialized_cost: bool = False
     #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
@@ -693,6 +697,11 @@ class Effect:
     base_cost: str = ""
     base_cost_value: int = 1
     base_cost_mode: str = "flat"
+    #: Whether the effect's rank *is* the ranks its config allocates, rather than a
+    #: budget the player sets by hand. True for Enhanced Trait, whose cost comes from
+    #: the traits it raises and whose rank has no other meaning — so the constructor
+    #: shows the rank read-only and keeps it in step with the rows.
+    rank_follows_allocation: bool = False
     integration: Integration = field(default_factory=Integration)
     description: str = ""
     config_fields: tuple[EffectConfigField, ...] = ()
@@ -1826,6 +1835,7 @@ def _parse_skill(s: dict) -> Skill:
         action=s.get("action", ""),
         specializations=tuple(s.get("specializations", ())),
         focuses=tuple(s.get("focuses", ())),
+        focus_note=s.get("focusNote", ""),
         description=s.get("description", ""),
         specialized_cost=bool(s.get("specializedCost", False)),
         extra=_extras(
@@ -1838,6 +1848,7 @@ def _parse_skill(s: dict) -> Skill:
             "action",
             "specializations",
             "focuses",
+            "focusNote",
             "description",
             "specializedCost",
         ),
@@ -2195,6 +2206,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         base_cost=e.get("baseCost", ""),
         base_cost_value=int(e.get("baseCostValue", 1)),
         base_cost_mode=e.get("baseCostMode", "flat"),
+        rank_follows_allocation=bool(e.get("rankFollowsAllocation", False)),
         integration=_parse_integration(
             e.get("statIntegration", {}), bool(e.get("configurableTarget", False))
         ),

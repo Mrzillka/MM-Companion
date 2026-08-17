@@ -7,6 +7,7 @@ mutation methods the drop handlers delegate to (``add_effect`` / ``attach_modifi
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
@@ -726,26 +727,70 @@ def _target_combo(card):
 
 
 def _trait_rows(card):
-    """The (trait combo, rank spin) pairs of an effect card's trait-allocation rows."""
-    from PySide6.QtWidgets import QComboBox, QSpinBox
+    """The (trait picker, rank spin) pairs of an effect card's trait-allocation rows.
 
-    combos = [c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0]
-    rows = []
-    for combo in combos:
-        spin = combo.parent().findChild(QSpinBox)
-        rows.append((combo, spin))
-    return rows
+    The picker is a composite now — a trait combo plus the qualifier control that
+    appears for a focused skill or a subject-taking advantage — so a row is addressed
+    through it rather than through the bare combo it contains.
+    """
+    from PySide6.QtWidgets import QSpinBox
+
+    from mm_companion.ui.power_constructor import TraitPicker
+
+    return [(p, p.parent().findChild(QSpinBox)) for p in card.findChildren(TraitPicker)]
+
+
+def _trait_combo(picker):
+    """The trait half of a picker — the combo that names the trait."""
+    from PySide6.QtWidgets import QComboBox
+
+    return next(c for c in picker.findChildren(QComboBox) if c.findData("STR") >= 0)
+
+
+def _qualifier(picker):
+    """The picker's qualifier control, or ``None`` while the chosen trait needs none."""
+    from PySide6.QtWidgets import QComboBox, QLineEdit
+
+    trait = _trait_combo(picker)
+    # Direct children only: an *editable* combo owns an internal QLineEdit, and a
+    # recursive search would hand that back as though it were the qualifier field.
+    direct = Qt.FindChildOption.FindDirectChildrenOnly
+    controls = [
+        *picker.findChildren(QComboBox, options=direct),
+        *picker.findChildren(QLineEdit, options=direct),
+    ]
+    # isHidden, not isVisible: nothing in an unshown window is "visible".
+    return next((w for w in controls if not w.isHidden() and w is not trait), None)
 
 
 def _allocate(card, pairs) -> None:
-    """Fill the card's trait-allocation rows with ``(trait key, ranks)``, adding as needed."""
-    from PySide6.QtWidgets import QPushButton
+    """Fill the card's trait-allocation rows with ``(trait key, ranks)``, adding as needed.
+
+    A *qualified* key ("Expertise::Law") is set on both halves of the picker, the way a
+    player would: the trait, then the focus or subject it narrows to.
+    """
+    from PySide6.QtWidgets import QComboBox, QPushButton
+
+    from mm_companion.core.rules import split_trait_key
 
     add = next(b for b in card.findChildren(QPushButton) if b.text().endswith("Add"))
     while len(_trait_rows(card)) < len(pairs):
         add.click()
-    for (combo, spin), (target, ranks) in zip(_trait_rows(card), pairs, strict=False):
-        combo.setCurrentIndex(combo.findData(target))
+    for (picker, spin), (target, ranks) in zip(_trait_rows(card), pairs, strict=False):
+        base, qualifier = split_trait_key(target)
+        combo = _trait_combo(picker)
+        combo.setCurrentIndex(combo.findData(base))
+        if qualifier:
+            control = _qualifier(picker)
+            assert control is not None, f"{base} offers no qualifier control"
+            if isinstance(control, QComboBox):
+                index = control.findData(qualifier)
+                if index >= 0:
+                    control.setCurrentIndex(index)
+                else:
+                    control.setCurrentText(qualifier)
+            else:
+                control.setText(qualifier)
         spin.setValue(ranks)
 
 
@@ -754,11 +799,15 @@ def test_configurable_effect_offers_a_trait_allocation(qapp: QApplication) -> No
     card = window.canvas.add_effect("enhanced_trait")
     rows = _trait_rows(card)
     assert len(rows) == 1  # one blank row to start — the picker *is* the question
-    combo, spin = rows[0]
+    picker, spin = rows[0]
+    combo = _trait_combo(picker)
     assert combo.findData("TOUGHNESS") >= 0
     assert combo.findData("Acrobatics") >= 0
     assert combo.findData("Fearless") >= 0  # advantages are traits an Enhanced Trait raises
     assert spin is not None
+    # An ability has one row and nothing to narrow, so no second control appears.
+    combo.setCurrentIndex(combo.findData("STR"))
+    assert _qualifier(picker) is None
 
 
 def test_fixed_and_plain_effects_have_no_target_picker(qapp: QApplication) -> None:
@@ -1788,3 +1837,151 @@ def test_reduced_trait_rows_update_the_cost_line_too(qapp: QApplication) -> None
     combo.setCurrentIndex(combo.findData("DODGE"))
     chip.findChild(QSpinBox).setValue(3)
     assert card._cost.text().endswith("5 PP")  # 8 less the 3 PP three ranks of Dodge cost
+
+
+# --- the trait + qualifier picker -----------------------------------------------------
+
+
+def test_a_focused_skill_asks_which_focus(qapp: QApplication) -> None:
+    """Picking "Expertise" alone would silently raise every field of study the hero has,
+    so the picker asks which — offering their own focuses first, and taking anything."""
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.focuses["Expertise"] = ["Law"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Expertise"))
+
+    focus = _qualifier(picker)
+    assert focus is not None and focus.isEditable()
+    assert focus.itemText(0) == "Law"  # the hero's own row leads
+    focus.setCurrentText("Stealth")  # and anything else may simply be typed
+    assert picker.value() == "Expertise::Stealth"
+
+
+def test_a_specialized_pool_is_offered_but_the_whole_skill_is_the_default(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.specializations["Stealth"] = ["Urban"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+
+    pool = _qualifier(picker)
+    assert picker.value() == "Stealth"  # the whole skill, every row of it
+    pool.setCurrentIndex(pool.findData("spec::Urban"))
+    assert picker.value() == "Stealth::spec::Urban"
+
+
+def test_an_advantage_with_a_subject_asks_for_it(qapp: QApplication) -> None:
+    """Improved Critical is bought per attack; granting it without saying which would be
+    granting an advantage that names nothing."""
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(Power(name="Sword", effects=[PowerEffectInstance("damage", rank=3)]))
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Improved Critical"))
+
+    subject = _qualifier(picker)
+    assert subject is not None
+    subject.setCurrentIndex(subject.findData("Sword"))
+    assert picker.value() == "Improved Critical::Sword"
+
+
+def test_changing_the_trait_drops_the_qualifier_it_answered(qapp: QApplication) -> None:
+    """ "Law" is not a focus of Close Combat; carrying it over would be a row nobody
+    chose."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Expertise"))
+    _qualifier(picker).setCurrentText("Law")
+    assert picker.value() == "Expertise::Law"
+    combo.setCurrentIndex(combo.findData("STR"))
+    assert picker.value() == "STR"
+    assert _qualifier(picker) is None
+
+
+def test_the_trait_list_explains_its_advantages(qapp: QApplication) -> None:
+    """Ninety bare names is not a list anyone can build from; every one of them hints,
+    as the palette bricks beside it do."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    combo = _trait_combo(_trait_rows(card)[0][0])
+    hint = combo.itemData(combo.findData("Fearless"), Qt.ItemDataRole.ToolTipRole)
+    assert "Fearless" in hint and "not ranked" not in hint  # Fearless is ranked, max 2
+    assert "max 2" in hint
+    assert "Acrobatics" in combo.itemData(combo.findData("Acrobatics"), Qt.ItemDataRole.ToolTipRole)
+
+
+# --- the rank that follows its allocation ---------------------------------------------
+
+
+def test_an_enhanced_traits_rank_follows_its_rows(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    assert card._rank.isReadOnly()
+    _allocate(card, [("STR", 2), ("Treatment", 6)])
+    assert card.instance.rank == 8
+    assert card._rank.value() == 8
+    # And the readout meters nothing, because there is no budget to meter against.
+    label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
+    assert label.text() == "Allocated 8 ranks"
+
+
+def test_an_ordinary_allocation_effect_keeps_its_hand_set_rank(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_senses")
+    assert not card._rank.isReadOnly()
+    label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
+    assert "/" in label.text()
+
+
+def test_a_rank_spin_stops_at_the_advantages_own_ceiling(qapp: QApplication) -> None:
+    """Three ranks of a two-rank advantage is a point thrown away; the spin says so
+    before the point is spent rather than after."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Fearless"))
+    assert spin.maximum() == 2
+    combo.setCurrentIndex(combo.findData("Agile Grab"))  # not ranked at all
+    assert spin.maximum() == 1
+    combo.setCurrentIndex(combo.findData("STR"))  # an ability: bounded by the PL, not here
+    assert spin.maximum() > 2
+
+
+# --- the cost line and what it hides --------------------------------------------------
+
+
+def test_the_cost_line_groups_by_trait_kind_and_hovers_the_detail(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    _allocate(card, [("STR", 2), ("Stealth", 1), ("Perception", 1)])
+    assert card._cost.text() == "Abilities 4 + Skills 1 = 5 PP"
+    detail = card._cost.toolTip()
+    for trait in ("Strength", "Stealth", "Perception"):
+        assert trait in detail
+    assert "1/2" in detail  # the halves the grouped line pooled
+
+
+def test_an_ordinary_effects_cost_line_hides_nothing(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    assert card._cost.toolTip() == ""

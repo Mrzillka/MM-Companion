@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from fractions import Fraction
+from html import escape
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -25,11 +28,14 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     TRAIT_CATEGORIES,
     effect_allocation_used,
+    effect_cost_breakdown,
     effect_cost_formula,
     effect_makes_attack,
     effect_total_cost,
     effective_ability,
+    synced_effect_rank,
     trait_allocation_field,
+    trait_display_name,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
@@ -39,15 +45,23 @@ from mm_companion.ui.power_constructor.common import (
     MODIFIER_MIME,
     RANK_MAX,
     TRAIT_SOURCE_BUYABLE,
+    CellContext,
     _mime_id,
     _move_item,
     fill_trait_combo,
     is_trait_allocation,
+    link_trait_row,
     repeatable_cell_kind,
 )
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
+
+
+def _fraction_text(value: Fraction) -> str:
+    """A cost or rate as ``4`` or ``1/2`` - the way the rules write a part of a point."""
+
+    return str(value) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
 
 
 def _idle_card_rules() -> str:
@@ -153,9 +167,23 @@ class EffectCard(QFrame):
         header.addWidget(self._role_badge)
         header.addStretch()
         header.addWidget(QLabel("Rank"))
+        # An effect whose rank *is* its allocation has no rank to set: the spin shows
+        # what the rows come to and is read-only, so a rank is decided in one place
+        # rather than two that have to be kept level (see ``synced_effect_rank``).
+        self._rank_synced = bool(effect and effect.rank_follows_allocation)
         self._rank = make_spin_box(
-            1, RANK_MAX, value=self.instance.rank, buttons=False, max_width=44
+            0 if self._rank_synced else 1,
+            RANK_MAX,
+            value=self.instance.rank,
+            buttons=False,
+            max_width=44,
         )
+        if self._rank_synced:
+            self._rank.setReadOnly(True)
+            self._rank.setToolTip(
+                "Set by the traits below - an Enhanced Trait's rank is the ranks it "
+                "allocates, and its cost comes from the traits themselves."
+            )
         self._rank.valueChanged.connect(self._on_rank_changed)
         header.addWidget(self._rank)
         remove = QPushButton("✕")
@@ -462,6 +490,12 @@ class EffectCard(QFrame):
 
         def update_total() -> None:
             used = effect_allocation_used(self.instance, self._data)
+            if self._rank_synced:
+                # No budget, so no "of what" and nothing to overspend: the number is
+                # what the rows add up to, which is also the effect's rank.
+                label.setText(f"Allocated {used} ranks")
+                label.setStyleSheet("")
+                return
             rank = self._rank.value()
             label.setText(f"Allocated {used} / {rank} ranks")
             over = f"color: {theme.color('tint.worse')}; font-weight: bold;"
@@ -591,6 +625,7 @@ class EffectCard(QFrame):
                 if any(str(v).strip() for v in row.values()):
                     rows.append(row)
             self.instance.config[field.key] = rows
+            self._sync_rank_to_allocation()
             update_total()
             # As in :meth:`_on_config_changed`: a trait-allocation row *is* the cost of
             # an as-trait effect, so the footer moves with it and not only the readout.
@@ -606,7 +641,7 @@ class EffectCard(QFrame):
             cells: dict = {}
             for column in field.columns:
                 kind = repeatable_cell_kind(column)
-                cell = kind.build(self._data, column, initial, commit)
+                cell = kind.build(self._cell_context(), column, initial, commit)
                 row_layout.addWidget(cell, kind.stretch)
                 cells[column.key] = cell
             remove = QPushButton("✕")
@@ -616,6 +651,7 @@ class EffectCard(QFrame):
             rows_layout.addWidget(row)
             entry = (row, cells)
             row_widgets.append(entry)
+            link_trait_row(self._cell_context(), field.columns, cells)
 
             def do_remove(_checked: bool = False) -> None:
                 if entry in row_widgets:
@@ -886,11 +922,64 @@ class EffectCard(QFrame):
         self._refresh_cost()
         self.changed.emit()
 
+    def _cell_context(self) -> CellContext:
+        """What a config row's cells are built against - the data, and whose sheet.
+
+        The character travels with the data because a trait row offers *this hero's*
+        skill focuses and specialized pools; without one it degrades to the catalog.
+        """
+
+        return CellContext(self._data, self._character)
+
+    def _sync_rank_to_allocation(self) -> None:
+        """Write an as-trait effect's rank back from its rows, and restate the spin.
+
+        A no-op for every other effect, whose rank the player sets. The spin's signal is
+        blocked while it is restated: it is being *told* the answer, and letting it
+        re-emit would run the rank handler in the middle of a config commit.
+        """
+
+        rank = synced_effect_rank(self.instance, self._data)
+        if rank is None or rank == self.instance.rank:
+            return
+        self.instance.rank = rank
+        self._rank.blockSignals(True)
+        self._rank.setValue(rank)
+        self._rank.blockSignals(False)
+
     def _refresh_cost(self) -> None:
         formula = effect_cost_formula(self.instance, self._data, self._character)
         total = effect_total_cost(self.instance, self._data, self._character)
         unit = self._unit
         self._cost.setText(f"{formula} = {total} {unit}" if formula else f"{total} {unit}")
+        self._cost.setToolTip(self._cost_detail())
+
+    def _cost_detail(self) -> str:
+        """The per-trait workings behind an as-trait footer - empty for anything else.
+
+        The footer pools its terms by kind, which is what makes it readable and what
+        loses the individual rows; this puts them back one hover away, each at the rate
+        it was charged. Rich text, since a column of figures wants a table.
+        """
+
+        terms = effect_cost_breakdown(self.instance, self._data, self._character)
+        if not terms:
+            return ""
+        rows = "".join(
+            "<tr>"
+            f"<td>{escape(trait_display_name(self._data, term.target))}</td>"
+            f"<td align='right'>&nbsp;{term.ranks}&nbsp;</td>"
+            f"<td>&times; {_fraction_text(term.rate)}</td>"
+            f"<td align='right'>&nbsp;= {_fraction_text(term.cost)}</td>"
+            "</tr>"
+            for term in terms
+        )
+        total = sum((term.cost for term in terms), Fraction(0))
+        return (
+            f"<table cellspacing='0'>{rows}"
+            "<tr><td colspan='3'><b>Total</b></td>"
+            f"<td align='right'><b>&nbsp;{_fraction_text(total)}</b></td></tr></table>"
+        )
 
     # -- structure role (driven by the canvas) ----------------------------
     def set_role(self, role: str, note: str = "") -> None:

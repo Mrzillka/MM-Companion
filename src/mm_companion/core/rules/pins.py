@@ -48,6 +48,7 @@ from .derived import (
     effective_ability,
     initiative_modifier,
     resistance_total,
+    skill_row_exists,
     skill_total,
 )
 from .equipment import item_effective_build
@@ -353,7 +354,7 @@ def _from_defense_class(char: Character, game_data: GameData, ref: PinRef) -> Pi
 def _from_skill(
     char: Character, game_data: GameData, ref: PinRef, with_conditions: bool = True
 ) -> PinnedValue:
-    if not _skill_row_exists(char, game_data, ref.key):
+    if not skill_row_exists(char, game_data, ref.key):
         return _missing(ref, pin_label(ref, game_data))
     spec = skill_roll(char, game_data, ref.key)
     shown = spec.modifier if with_conditions else skill_total(char, game_data, ref.key)
@@ -558,26 +559,6 @@ def _hint(name: str, spec: RollSpec) -> str:
     if spec.hint:
         parts.append(spec.hint)
     return "\n".join(parts)
-
-
-def _skill_row_exists(char: Character, game_data: GameData, row_id: str) -> bool:
-    """Whether *row_id* names a skill this character actually has a row for.
-
-    A row exists when the character bought ranks in it, or when it is an
-    unfocused skill from the catalog (every character can try Perception at +AWE).
-    A focus or specialization the character never took is gone, and a pin to it
-    should say so rather than quietly reading as the bare ability.
-    """
-    if not row_id:
-        return False
-    if row_id in char.skill_ranks:
-        return True
-    base, sep, _rest = row_id.partition("::")
-    if sep:
-        return _rest in char.focuses.get(base, []) or _rest.removeprefix("spec::") in (
-            char.specializations.get(base, [])
-        )
-    return any(s.name == row_id and not s.focused for s in game_data.skills)
 
 
 # -- what can be pinned ------------------------------------------------------

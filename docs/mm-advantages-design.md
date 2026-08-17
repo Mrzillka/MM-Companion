@@ -248,11 +248,29 @@ advantages to compete for the pool is making a house rule, not fixing an oversig
 
 A granted advantage otherwise behaves as the advantage it is: if it carries a
 `skillBonusPerRank` it grants that bonus at the granted ranks, chained through
-`advantage_contributions`. Only advantages naming their own `skillBonusTarget` can chain,
-since nothing prompted the player for a `parameter` on a grant. In the UI it appears in the
-Advantages block as a muted, unselectable row whose description names the granting power —
-present because a power that left no mark on the sheet reads as a power that does nothing,
-and unselectable because there is nothing about it for the player to rank, reorder or remove.
+`advantage_contributions`. In the UI it appears in the Advantages block as a muted,
+unselectable row whose description names the granting power — present because a power that
+left no mark on the sheet reads as a power that does nothing, and unselectable because
+there is nothing about it for the player to rank, reorder or remove.
+
+### A granted advantage's subject
+
+An advantage that attaches to a *subject* (§3.4's `parameter` — Improved Critical's attack,
+Skill Mastery's skill) is granted for a subject too. The power's allocation row stores it on
+the trait key itself, `"Improved Critical::Sword"`, and `granted_advantage_selections`
+splits that back into name and parameter so the row prints as *Improved Critical (Sword)*,
+exactly as the bought one does. Three things fall out of that, and each is the point:
+
+- the **same advantage can be granted twice** for two subjects, because the two keys differ;
+- the subject **chains** like a bought one, so a granted `skillBonusPerRank` advantage whose
+  target is the player's choice still reaches the skill it names;
+- the constructor's picker asks for the subject through the *same* `ParameterSpec`
+  resolution the Advantages block uses (`ui/advantage_parameters.py`), so an advantage
+  cannot offer one set of subjects when bought and another when granted.
+
+The picker also holds a granted advantage to its own rank rules — `trait_rank_cap` stops the
+row's rank spin at 1 for an unranked advantage and at `maxRank` for a fixed-cap one, which
+is the same ceiling §3.3 applies to a bought one.
 
 ---
 

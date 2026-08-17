@@ -30,10 +30,12 @@ from mm_companion.ui.power_constructor.common import (
     CHIP_MIME,
     STRENGTH_AMOUNT_MAX,
     TRAIT_SOURCES,
+    CellContext,
     _move_item,
     brick_tooltip,
     fill_trait_combo,
     is_trait_allocation,
+    link_trait_row,
     repeatable_cell_kind,
 )
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -202,7 +204,7 @@ class ModifierChip(QFrame):
             cells: dict = {}
             for column in cfg.columns:
                 kind = repeatable_cell_kind(column)
-                cell = kind.build(self._data, column, initial, commit)
+                cell = kind.build(CellContext(self._data, self._character), column, initial, commit)
                 row_layout.addWidget(cell, kind.stretch)
                 cells[column.key] = cell
             remove = QPushButton("✕")
@@ -212,6 +214,7 @@ class ModifierChip(QFrame):
             rows_layout.addWidget(row_widget)
             entry = (row_widget, cells)
             row_widgets.append(entry)
+            link_trait_row(CellContext(self._data, self._character), cfg.columns, cells)
 
             def do_remove(_checked: bool = False) -> None:
                 if entry in row_widgets:

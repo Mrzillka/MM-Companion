@@ -7,9 +7,12 @@ from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.ui.sections.row_table import SORT_MANUAL, build_row_menu
 from mm_companion.ui.sections.skills import COL_ABILITY as S_COL_ABILITY
 from mm_companion.ui.sections.skills import COL_NAME as S_COL_NAME
+from mm_companion.ui.sections.skills import COL_RANKS as S_COL_RANKS
+from mm_companion.ui.sections.skills import COL_TOTAL as S_COL_TOTAL
 from mm_companion.ui.sections.skills import HEADERS as S_HEADERS
 from mm_companion.ui.sections.skills import (
     SORT_ABILITY,
@@ -20,6 +23,7 @@ from mm_companion.ui.sections.skills import (
     SkillsSection,
     name_max_width,
 )
+from mm_companion.ui.sections.stat_table import ROLL_ROLE
 
 
 @pytest.fixture(scope="module")
@@ -506,3 +510,88 @@ def test_a_large_character_shows_it_for_the_skills_size_touches(qapp: QApplicati
     section = SkillsSection(data, char)
 
     assert section._show_mods is True
+
+
+# --- rows a power granted -------------------------------------------------------------
+
+
+def _with_enhanced(row_id: str, ranks: int, name: str = "Chameleon Field") -> Character:
+    """A character whose one power raises ``row_id`` by ``ranks``."""
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(
+        Power(
+            name=name,
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=ranks,
+                    config={"traits": [{"trait": row_id, "ranks": ranks}]},
+                )
+            ],
+        )
+    )
+    return character
+
+
+def _granted_row(section: SkillsSection, display: str):
+    """The (table, row) a granted row is drawn at, found by its rendered name."""
+
+    for table in section._tables:
+        for row in range(table.rowCount()):
+            item = table.item(row, S_COL_NAME)
+            if item is not None and item.text().strip() == display:
+                return table, row
+    return None
+
+
+def test_a_granted_focus_gets_a_row_the_character_never_bought(qapp: QApplication) -> None:
+    """An Enhanced Trait naming a focus the hero has no row for still has to show:
+    the power paid for it, and a bonus with nowhere to land reads as a power that does
+    nothing."""
+
+    section = _section(_with_enhanced("Expertise::Stealth", 2))
+    found = _granted_row(section, "Expertise: Stealth")
+    assert found is not None
+    table, row = found
+    # Nothing about it is the player's to edit, so there is no rank spin — a read-only
+    # dash in its place — and no row key for the reorder/remove gestures to address.
+    assert table.cellWidget(row, S_COL_RANKS) is None
+    key = SkillRowKey("focus", "Expertise", "Stealth", "Expertise::Stealth")
+    assert section._row_refs.find(key) is None
+    assert "granted by Chameleon Field" in table.item(row, S_COL_NAME).toolTip()
+
+
+def test_a_granted_row_is_still_rollable(qapp: QApplication) -> None:
+    """A granted focus is a real skill; the ＋2 is on it and it rolls like any other."""
+
+    section = _section(_with_enhanced("Expertise::Stealth", 2))
+    table, row = _granted_row(section, "Expertise: Stealth")
+    assert table.item(row, S_COL_TOTAL).data(ROLL_ROLE) == (
+        "Expertise::Stealth",
+        "Expertise: Stealth",
+    )
+    assert table.item(row, S_COL_TOTAL).text() == "2"  # INT 0 + 0 ranks + the granted 2
+
+
+def test_a_focus_the_character_owns_needs_no_granted_row(qapp: QApplication) -> None:
+    character = _with_enhanced("Expertise::Stealth", 2)
+    character.focuses["Expertise"] = ["Stealth"]
+    section = _section(character)
+    # One row, and it is the bought one — addressable, with its own rank spin.
+    key = SkillRowKey("focus", "Expertise", "Stealth", "Expertise::Stealth")
+    assert section._row_refs.find(key) is not None
+    table, row = _granted_row(section, "Expertise: Stealth")
+    assert table.cellWidget(row, S_COL_RANKS) is not None
+
+
+def test_losing_the_power_takes_the_granted_row_away(qapp: QApplication) -> None:
+    """The row belongs to the power, not to the sheet — it goes when the power does."""
+
+    character = _with_enhanced("Expertise::Stealth", 2)
+    section = _section(character)
+    assert _granted_row(section, "Expertise: Stealth") is not None
+    character.powers.clear()
+    section.refresh_granted()
+    assert _granted_row(section, "Expertise: Stealth") is None

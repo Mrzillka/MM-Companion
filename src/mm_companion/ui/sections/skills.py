@@ -43,7 +43,7 @@ from collections.abc import Iterator
 from typing import NamedTuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtGui import QBrush, QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -66,10 +66,13 @@ from mm_companion.core.rules import (
     PinRef,
     SkillModifiers,
     effective_ability,
+    granted_skill_rows,
     skill_modifiers,
     skill_points_spent,
     skill_roll,
     skill_total,
+    split_trait_key,
+    trait_display_name,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
@@ -234,6 +237,10 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # Whether any row currently carries an outside bonus; drives the "+" column's
         # visibility (and, through _min_col_width, how many panels fit).
         self._show_mods = False
+        # Rows a power or item granted that the character never bought — an Enhanced
+        # Trait naming a focus they have no row for. Re-read on every rebuild, and
+        # remembered so refresh_granted can tell a real change from a redundant signal.
+        self._granted_signature: tuple[tuple[str, int], ...] = ()
         # Which model item each rendered row stands for, and the ordering gestures
         # over it. One controller for every panel: they are one ordered list split
         # for display, so a row has to be draggable from one into another.
@@ -442,10 +449,12 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         split across groups.
         """
 
+        granted = self._granted_rows()
         sizes = []
         for skill in skills:
             size = 1 + len(self._focuses.get(skill.name, [])) if skill.focused else 1
             size += len(self._specializations.get(skill.name, []))
+            size += sum(1 for row_id in granted if split_trait_key(row_id)[0] == skill.name)
             sizes.append(size)
         return [[skills[i] for i in bucket] for bucket in even_split(sizes, count)]
 
@@ -462,12 +471,16 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         its skill's name as well as its own and is always the longest of them.
         """
 
+        granted = self._granted_rows()
         for skill in self._visible_skills():
             yield skill.name
             for focus in self._focuses.get(skill.name, []):
                 yield f"    {skill.name}: {focus}"
             for spec in self._specializations.get(skill.name, []):
                 yield f"    {skill.name}: {spec} (specialized)"
+            for row_id in granted:
+                if split_trait_key(row_id)[0] == skill.name:
+                    yield f"    {trait_display_name(self._data, row_id)}"
 
     def _min_col_width(self) -> int:
         """Narrowest a panel may get before a skill name would clip.
@@ -510,14 +523,47 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         super().resizeEvent(event)
         self._sync_column_count()
 
+    def _granted_rows(self) -> dict[str, str]:
+        """Granted skill rows the character has no row of their own for, ``row_id -> source``.
+
+        An Enhanced Trait may raise *Expertise: Stealth* on a hero who bought no
+        Expertise. The boost is real and paid for, and without a row here it would be
+        invisible — so the block grows one, muted and un-editable, the way the Advantages
+        block shows a granted advantage.
+        """
+
+        return {
+            row_id: ", ".join(bonus.sources)
+            for row_id, bonus in granted_skill_rows(self._character, self._data).items()
+        }
+
+    def refresh_granted(self) -> None:
+        """Re-render when the granted rows have changed, and restate the totals either way.
+
+        Wired to the enhancements topic, which fires whenever a power is toggled, edited
+        or re-costed. Most of those move numbers only, and a rebuild would cost the block
+        its selection and its scroll — so the rows are rebuilt only when the granted
+        *set* actually moved, and every other signal is the ordinary totals refresh this
+        replaced.
+        """
+
+        signature = tuple(sorted((row_id, 0) for row_id in self._granted_rows()))
+        if signature == self._granted_signature:
+            self.refresh_totals()
+            return
+        self._granted_signature = signature
+        self._rebuild()
+
     def _expand(self, skills: list[Skill]) -> list[tuple]:
         """Flatten skills into per-row specs.
 
         A focused skill yields a header row followed by one row per focus; a plain
         skill yields a single row. Either way, any specialized pools follow as extra
-        indented ``"spec"`` rows.
+        indented ``"spec"`` rows, and any rows a power *granted* (:meth:`_granted_rows`)
+        follow those.
         """
 
+        granted = self._granted_rows()
         specs: list[tuple] = []
         for skill in skills:
             if skill.focused:
@@ -532,6 +578,10 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
                 display = f"{skill.name}: {spec} (specialized)"
                 row_id = f"{skill.name}::spec::{spec}"
                 specs.append(("spec", skill, display, row_id, spec))
+            for row_id, source in granted.items():
+                if split_trait_key(row_id)[0] == skill.name:
+                    display = trait_display_name(self._data, row_id)
+                    specs.append(("granted", skill, display, row_id, source))
         return specs
 
     def _render_side(self, table: QTableWidget, specs: list[tuple]) -> None:
@@ -548,6 +598,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
                 _, skill, display, row_id, focus_name = spec
                 self._render_skill_row(
                     table, row, skill, display, row_id, indent=True, focus_name=focus_name
+                )
+            elif kind == "granted":
+                _, skill, display, row_id, source = spec
+                self._render_skill_row(
+                    table, row, skill, display, row_id, indent=True, granted_source=source
                 )
             else:
                 _, skill, display, row_id = spec
@@ -600,15 +655,29 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         can_specialize: bool = False,
         spec_name: str | None = None,
         focus_name: str | None = None,
+        granted_source: str = "",
     ) -> None:
-        name_item = self._render_name_cell(table, row, skill, display, indent, can_specialize)
-        if spec_name is not None:
-            key = SkillRowKey("spec", skill.name, spec_name, row_id)
+        """Render one rankable row.
+
+        ``granted_source`` names the power or item that granted a row the character never
+        bought (see :meth:`_granted_rows`). Such a row buys nothing, so it gets a
+        read-only ranks cell in place of a spin and is muted throughout; it is kept out of
+        ``_row_refs`` too, since reordering or removing it would promise an edit the block
+        cannot make. It keeps its Total cell and its roll payload — a granted focus is a
+        real skill and is rolled like one.
+        """
+
+        name_item = self._render_name_cell(
+            table, row, skill, display, indent, can_specialize and not granted_source
+        )
+        if granted_source:
+            pass  # not a model row: nothing addresses it, so it names no SkillRowKey
+        elif spec_name is not None:
+            self._row_refs.add(table, row, SkillRowKey("spec", skill.name, spec_name, row_id))
         elif focus_name is not None:
-            key = SkillRowKey("focus", skill.name, focus_name, row_id)
+            self._row_refs.add(table, row, SkillRowKey("focus", skill.name, focus_name, row_id))
         else:
-            key = SkillRowKey("skill", skill.name, "", row_id)
-        self._row_refs.add(table, row, key)
+            self._row_refs.add(table, row, SkillRowKey("skill", skill.name, "", row_id))
 
         abbr = self._ability_abbrs.get(skill.ability, skill.ability)
         table.setItem(row, COL_ABILITY, readonly_item(abbr, center=True))
@@ -616,16 +685,21 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         ability_rank_item = readonly_item("", center=True)
         table.setItem(row, COL_ABILITY_RANK, ability_rank_item)
 
-        ranks_spin = make_spin_box(
-            RANK_MIN,
-            RANK_MAX,
-            value=self._ranks.get(row_id, 0),
-            buttons=False,
-            max_width=spin_width(),
-        )
-        ranks_spin.valueChanged.connect(lambda value, rid=row_id: self._on_rank_changed(rid, value))
-        table.setCellWidget(row, COL_RANKS, ranks_spin)
-        self._editable_spins.append(ranks_spin)
+        if granted_source:
+            table.setItem(row, COL_RANKS, readonly_item("—", center=True))
+        else:
+            ranks_spin = make_spin_box(
+                RANK_MIN,
+                RANK_MAX,
+                value=self._ranks.get(row_id, 0),
+                buttons=False,
+                max_width=spin_width(),
+            )
+            ranks_spin.valueChanged.connect(
+                lambda value, rid=row_id: self._on_rank_changed(rid, value)
+            )
+            table.setCellWidget(row, COL_RANKS, ranks_spin)
+            self._editable_spins.append(ranks_spin)
 
         # Imposed from outside, never typed in — a read-only cell whose text, tint and
         # tooltip are all filled by _refresh_totals.
@@ -639,6 +713,14 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # "nothing to roll here".
         total_item.setData(ROLL_ROLE, (row_id, display))
         table.setItem(row, COL_TOTAL, total_item)
+        if granted_source:
+            muted = QBrush(QColor(theme.color("text.muted.rich")))
+            for column in range(len(HEADERS)):
+                item = table.item(row, column)
+                if item is not None:
+                    item.setForeground(muted)
+            if name_item is not None:
+                name_item.setToolTip(f"{display} — granted by {granted_source}")
         self._rows.append(
             SkillRow(skill.ability, row_id, ability_rank_item, mod_item, total_item, name_item)
         )
@@ -703,7 +785,19 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
     # -- interaction ---------------------------------------------------------
 
     def _add_focus(self, skill: Skill) -> None:
-        focus, ok = QInputDialog.getText(self, f"Add {skill.name} focus", "Focus:")
+        """Ask for a focus, offering the catalog's suggestions but accepting anything.
+
+        ``getItem`` rather than ``getText`` so a skill with an enumerable set of focuses
+        (Close Combat's weapon groups, Performance's arts) offers them; it stays editable,
+        because the list is a suggestion and never a closed one. A skill whose focuses
+        cannot be listed (Expertise, Languages) carries a ``focus_note`` instead, which
+        becomes the prompt — the same split the Enhanced Trait picker reads.
+        """
+
+        taken = self._focuses[skill.name]
+        options = [f for f in skill.focuses if f not in taken]
+        prompt = skill.focus_note or "Focus:"
+        focus, ok = QInputDialog.getItem(self, f"Add {skill.name} focus", prompt, options, 0, True)
         focus = focus.strip()
         if ok and focus and focus not in self._focuses[skill.name]:
             self._focuses[skill.name].append(focus)

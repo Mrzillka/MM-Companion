@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import math
+from fractions import Fraction
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -18,10 +21,12 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     ability_rank_contribution,
+    advantage_points_spent,
     array_alternate_cost,
     array_base_index,
     effect_allocation_used,
     effect_attack_skill_bonus,
+    effect_cost_breakdown,
     effect_cost_formula,
     effect_effective_rank,
     effect_game_terms,
@@ -34,7 +39,9 @@ from mm_companion.core.rules import (
     effect_total_cost,
     effective_ability,
     effective_effect_stats,
+    granted_advantage_selections,
     granted_advantages,
+    granted_skill_rows,
     group_array_base_index,
     live_powers,
     modifier_label,
@@ -51,11 +58,16 @@ from mm_companion.core.rules import (
     power_runtime_gates,
     power_strength_amount_violations,
     power_total_cost,
+    power_trait_allocation_violations,
     power_trait_bonuses,
     powers_points_spent,
     resistance_total,
     skill_bonus,
+    skill_points_spent,
     skill_total,
+    synced_effect_rank,
+    trait_display_name,
+    trait_rate,
 )
 
 
@@ -1618,11 +1630,25 @@ def test_an_unallocated_enhanced_trait_costs_nothing() -> None:
     assert effect_total_cost(_enhanced(6, []), data) == 0
 
 
-def test_allocating_more_than_the_rank_is_a_warning() -> None:
+def test_an_enhanced_traits_rank_is_its_allocation_not_a_budget() -> None:
+    """Its rank has no meaning of its own, so it cannot be overspent — see
+    :func:`synced_effect_rank`. The budget warning is for the effects that do have one."""
+
     data = load_game_data()
     power = Power(effects=[_enhanced(3, [("STR", 2), ("Treatment", 7)])])
     assert effect_allocation_used(power.effects[0], data) == 9
-    assert "over budget" in power_allocation_violations(power, data)[0]
+    assert synced_effect_rank(power.effects[0], data) == 9
+    assert power_allocation_violations(power, data) == []
+
+
+def test_an_ordinary_allocation_effect_still_warns_when_overspent() -> None:
+    data = load_game_data()
+    senses = PowerEffectInstance(
+        "enhanced_senses",
+        rank=2,
+        config={"senses": [{"id": "accurate", "tier": 2}, {"id": "acute", "tier": 1}]},
+    )
+    assert "over budget" in power_allocation_violations(Power(effects=[senses]), data)[0]
 
 
 def test_a_legacy_single_target_costs_and_boosts_as_it_always_did() -> None:
@@ -1719,14 +1745,29 @@ def test_the_cost_formula_shows_each_traits_own_price() -> None:
 
     data = load_game_data()
     rows = [("STR", 2), ("Treatment", 6), ("Expertise", 2)]
-    assert effect_cost_formula(_enhanced(10, rows), data) == "4 + 3 + 1"
+    assert effect_cost_formula(_enhanced(10, rows), data) == "Abilities 4 + Skills 4"
     limited = _enhanced(10, rows, flaws=["limited_enhanced_trait"])
-    assert effect_cost_formula(limited, data) == "(4 + 3 + 1) × 1/2"
-    # A rank in each of two skills is half a point each — which is the whole reason
-    # the terms are shown unrounded rather than as the 1 point they come to.
-    assert (
-        effect_cost_formula(_enhanced(2, [("Stealth", 1), ("Treatment", 1)]), data) == "1/2 + 1/2"
-    )
+    assert effect_cost_formula(limited, data) == "(Abilities 4 + Skills 4) × 1/2"
+    # A rank in each of two skills is half a point each, and the pooled subtotal is the
+    # one point they come to — the run of raw halves this replaced said nothing.
+    assert effect_cost_formula(_enhanced(2, [("Stealth", 1), ("Treatment", 1)]), data) == "Skills 1"
+    # A subtotal that lands between points keeps its half: the next rank is free from it.
+    assert effect_cost_formula(_enhanced(5, [("Stealth", 5)]), data) == "Skills 2 1/2"
+
+
+def test_the_cost_breakdown_keeps_every_row_apart() -> None:
+    """The grouped footer pools; the breakdown behind it does not, so the card can
+    explain which trait bought which part of the subtotal."""
+
+    data = load_game_data()
+    terms = effect_cost_breakdown(_enhanced(4, [("STR", 2), ("Stealth", 1), ("Fearless", 1)]), data)
+    assert [(t.target, t.ranks, t.category, str(t.cost)) for t in terms] == [
+        ("STR", 2, "ability", "4"),
+        ("Stealth", 1, "skill", "1/2"),
+        ("Fearless", 1, "advantage", "1"),
+    ]
+    # Nothing to break down for an effect priced the ordinary way.
+    assert effect_cost_breakdown(PowerEffectInstance("damage", rank=5), data) == ()
 
 
 def test_the_enhances_row_names_every_allocated_trait() -> None:
@@ -2276,3 +2317,102 @@ def test_the_divisor_is_arithmetic_and_needs_no_data() -> None:
     assert ability_rank_contribution(5, 6) == 0
     assert ability_rank_contribution(0, 2) == 0
     assert ability_rank_contribution(-3, 1) == 0
+
+
+# --- qualified trait keys: focuses, specialized pools, advantage subjects -------------
+
+
+def test_a_skill_row_is_priced_the_same_bought_or_granted() -> None:
+    """The point of one :func:`skill_row_rate`: an Enhanced Trait cannot make a rank of
+    a skill cost something other than what buying it costs."""
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.specializations["Stealth"] = ["Urban"]
+    for row_id, expected in (
+        ("Stealth", Fraction(1, 2)),
+        ("Expertise::Law", Fraction(1, 2)),  # a plain focus is priced at the normal rate
+        ("Stealth::spec::Urban", Fraction(1, 4)),  # a narrow pool at the specialized one
+    ):
+        assert trait_rate(char, data, row_id) == expected
+        char.skill_ranks = {row_id: 4}
+        assert skill_points_spent(char, data) == math.ceil(expected * 4)
+
+
+def test_a_per_skill_homebrew_rate_prices_every_row_of_that_skill() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.item_cost_overrides["skills"] = {"Expertise": 1}  # 1 rank per point
+    assert trait_rate(char, data, "Expertise") == 1
+    assert trait_rate(char, data, "Expertise::Law") == 1
+
+
+def test_enhancing_one_focus_leaves_the_others_alone() -> None:
+    """The bug the qualifier fixes: allocating to bare "Expertise" raised every focus."""
+
+    data = load_game_data()
+    effect = _enhanced(2, [("Expertise::Stealth", 2)])
+    char = _char_with(Power(name="Chameleon Field", effects=[effect]))
+    char.focuses["Expertise"] = ["Stealth", "Law"]
+    assert effect_total_cost(effect, data) == 1
+    assert skill_bonus(char, data, "Expertise::Stealth").amount == 2
+    assert skill_bonus(char, data, "Expertise::Law") is None
+
+
+def test_a_granted_focus_the_hero_never_bought_still_has_a_row_to_land_on() -> None:
+    data = load_game_data()
+    effect = _enhanced(2, [("Expertise::Stealth", 2)])
+    char = _char_with(Power(name="Chameleon Field", effects=[effect]))
+    granted = granted_skill_rows(char, data)
+    assert list(granted) == ["Expertise::Stealth"]
+    assert granted["Expertise::Stealth"].amount == 2
+    assert granted["Expertise::Stealth"].sources == ("Chameleon Field",)
+    # Once it *is* bought it is an ordinary row, and the block needs no help with it.
+    char.focuses["Expertise"] = ["Stealth"]
+    assert granted_skill_rows(char, data) == {}
+
+
+def test_the_same_advantage_can_be_granted_twice_for_two_subjects() -> None:
+    data = load_game_data()
+    effect = _enhanced(2, [("Improved Critical::Sword", 1), ("Improved Critical::Bow", 1)])
+    char = _char_with(Power(name="Duellist", effects=[effect]))
+    granted = granted_advantage_selections(char, data)
+    assert [(s.name, s.parameter, s.rank) for s, _src in granted] == [
+        ("Improved Critical", "Sword", 1),
+        ("Improved Critical", "Bow", 1),
+    ]
+    assert effect_total_cost(effect, data) == 2  # one point each, as bought
+    # Still outside the advantage tally and the Heroic budget: the power paid for them.
+    assert advantage_points_spent(char, data) == 0
+
+
+def test_a_granted_advantages_subject_chains_into_the_skill_it_names() -> None:
+    """Skill Mastery-shaped advantage: its skill bonus lands on the subject it was
+    granted for, exactly as a bought one lands on the subject the player chose."""
+
+    data = load_game_data()
+    base = next(a for a in data.advantages if a.name == "Improved Initiative")
+    granting = dataclasses.replace(base, name="Deft Touch", skill_bonus_per_rank=2)
+    data = dataclasses.replace(data, advantages=(*data.advantages, granting))
+    effect = _enhanced(1, [("Deft Touch::Sleight of Hand", 1)])
+    char = _char_with(Power(name="Nimble Fingers", effects=[effect]))
+    assert skill_bonus(char, data, "Sleight of Hand").amount == 2
+
+
+def test_an_over_ranked_advantage_row_is_a_warning() -> None:
+    data = load_game_data()
+    power = Power(effects=[_enhanced(4, [("Fearless", 4)])])
+    assert power_trait_allocation_violations(power, data) == [
+        "Enhanced Trait: Fearless is capped at 2 ranks; 4 allocated."
+    ]
+    # An ability has no cap of its own — the Power Level bounds it, checked elsewhere.
+    mighty = Power(effects=[_enhanced(20, [("STR", 20)])])
+    assert power_trait_allocation_violations(mighty, data) == []
+
+
+def test_a_qualified_key_reads_as_a_name_everywhere_it_is_shown() -> None:
+    data = load_game_data()
+    effect = _enhanced(4, [("Expertise::Law", 2), ("Improved Critical::Sword", 1)])
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "enhances")
+    assert row.value == "Expertise: Law +2, Improved Critical (Sword) +1"
+    assert trait_display_name(data, "Stealth::spec::Urban") == "Stealth: Urban (specialized)"

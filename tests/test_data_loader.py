@@ -40,11 +40,23 @@ def test_some_skills_are_focused() -> None:
     assert any(skill.focused for skill in data.skills)
 
 
-def test_focused_skills_expose_focuses() -> None:
+def test_focused_skills_say_what_their_focuses_are() -> None:
+    """Every focused skill answers "which focus?" — with a list, or with guidance.
+
+    ``focuses`` is a list of suggested focus *names*, offered wherever a focus is picked;
+    a skill whose focuses cannot be enumerated (Expertise's fields of study, Languages)
+    leaves it empty and puts the guidance in ``focus_note`` instead, so a picker never
+    offers a sentence as though it were a choice.
+    """
+
     data = load_game_data()
     focused = [s for s in data.skills if s.focused]
     assert focused
-    assert all(s.focuses for s in focused)
+    assert all(s.focuses or s.focus_note for s in focused)
+    expertise = next(s for s in focused if s.name == "Expertise")
+    assert expertise.focuses == () and expertise.focus_note
+    close_combat = next(s for s in focused if s.name == "Close Combat")
+    assert "Blades" in close_combat.focuses and not close_combat.focus_note
 
 
 def test_advantages_carry_type_tags() -> None:

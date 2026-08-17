@@ -32,6 +32,7 @@ from .appliers import (
     GROUP_EQUIPMENT,
     GROUP_POWERS,
     NUMERIC_CATEGORIES,
+    SPECIALIZED_ROW_MARKER,
     STACK_MAX,
     STACK_SUM,
     ApplyContext,
@@ -39,6 +40,7 @@ from .appliers import (
     TraitContribution,
     apply_stat_effect,
     resolve_bonuses,
+    split_trait_key,
 )
 
 # The trait categories a ``TraitBoost`` can name that map to a numeric trait bonus on
@@ -212,15 +214,43 @@ def resolved_trait_allocation(effect: PowerEffectInstance, base) -> tuple[tuple[
     return tuple((target, ranks) for target, ranks in allocation if target)
 
 
-def _trait_name(game_data: GameData, target: str) -> str:
-    """The display name for a trait key (its ``name``; skills are named by key)."""
+def trait_display_name(game_data: GameData, target: str) -> str:
+    """The display name for a trait key — ``"AGL"`` → ``"Agility"``.
+
+    Skills and advantages are named by their key, since the key *is* the name. A
+    *qualified* key (:func:`~.appliers.split_trait_key`) is rendered by its two halves so
+    a stored row id never reaches a reader raw: ``"Expertise::Law"`` reads
+    ``"Expertise: Law"``, ``"Stealth::spec::Urban"`` reads ``"Stealth: Urban
+    (specialized)"``, and an advantage bought for a subject reads
+    ``"Improved Critical (Sword)"`` — the same shapes the Skills and Advantages blocks
+    print, so the Enhances row and the sheet agree.
+
+    Anything unrecognised passes through unchanged; a descriptor an Immunity names is
+    free text and has no better name than itself.
+    """
+
+    base, qualifier = split_trait_key(target)
+    plain = _plain_trait_display_name(game_data, base)
+    if not qualifier:
+        return plain
+    if qualifier.startswith(SPECIALIZED_ROW_MARKER):
+        return f"{plain}: {qualifier[len(SPECIALIZED_ROW_MARKER):]} (specialized)"
+    if any(s.name == base for s in game_data.skills):
+        return f"{plain}: {qualifier}"
+    # An advantage's subject is a parenthetical, the way the Advantages block prints it.
+    return f"{plain} ({qualifier})"
+
+
+def _plain_trait_display_name(game_data: GameData, target: str) -> str:
+    """The display name for an *unqualified* trait key."""
+
     for a in game_data.abilities:
         if a.key == target:
             return a.name
     for r in game_data.resistances:
         if r.key == target:
             return r.name
-    return target  # skills (and anything else) display by their key/name
+    return target  # skills, advantages (and anything else) display by their key/name
 
 
 def _effect_gates(effect: PowerEffectInstance, game_data: GameData) -> set[str]:

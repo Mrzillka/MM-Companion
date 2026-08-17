@@ -77,7 +77,46 @@ running-total validation (`sum(selected option costs) <= effect.rank`).
 
 | Effect | Menu items (abbreviated) | Notes |
 |---|---|---|
-| **Enhanced Trait** | Not a fixed menu: the player names each **trait** raised and the ranks put into it — a repeatable row of (trait picker, rank spin) with the same running total against the effect's rank | The picker lists abilities, non-derived resistances, skills and **advantages** (`source: "boost_traits"`), all read from the game data. Unlike every other Tier-4 effect the rows also decide the **cost**: each trait is charged at what buying it costs, so the rank is a budget rather than a price (see `mm-powers-architecture.md` §6). The Reduced Trait flaw carries the same rows on its chip, for the traits lowered to pay for the raised ones. |
+| **Enhanced Trait** | Not a fixed menu: the player names each **trait** raised and the ranks put into it — a repeatable row of (trait picker, rank spin) | The picker lists abilities, non-derived resistances, skills and **advantages** (`source: "boost_traits"`), all read from the game data, and every skill and advantage row hints what it is. Unlike every other Tier-4 effect the rows also decide the **cost** (each trait is charged at what buying it costs), and the effect's rank *follows* them rather than budgeting them — see below and `mm-powers-architecture.md` §6. The Reduced Trait flaw carries the same rows on its chip, for the traits lowered to pay for the raised ones. |
+#### The trait picker: a trait, then which row of it
+
+A trait cell is **two controls**, and the second appears only when the first left a
+question open. Picking *Expertise* alone would silently raise every field of study the
+character has; picking *Improved Critical* alone would grant an advantage that names no
+attack. So beside the trait combo sits a qualifier control chosen by what was picked:
+
+| Chosen trait | Qualifier control | Stored key |
+|---|---|---|
+| ability, resistance, plain advantage | none — the trait combo takes the row | `STR` |
+| focused skill | editable combo: the character's own focuses first, then the catalog's suggestions, free text past both | `Expertise::Stealth` |
+| skill with specialized pools | the whole skill, or one of those pools | `Stealth::spec::Urban` |
+| advantage with a `parameter` | whatever its `ParameterSpec` asks for, resolved exactly as the Advantages block resolves it when bought | `Improved Critical::Sword` |
+
+The pair reads and writes **one** composed key, so the rows, the pricing, the sheet and
+the game-terms line all still see a single string. Free text matters: an Enhanced Trait may
+perfectly well grant a focus the character never bought, and the Skills block grows a muted
+read-only row for it (`granted_skill_rows`) rather than letting a paid-for bonus land
+nowhere. The qualifier is dropped when the trait changes — "Law" is not a focus of Close
+Combat.
+
+The row's **rank spin** stops at the chosen trait's own ceiling where it has one
+(`trait_rank_cap`): 1 for an unranked advantage, its `maxRank` for a fixed-cap one, no
+limit for abilities and skills, which the Power Level bounds instead.
+
+#### Enhanced Trait's rank is not a budget
+
+Every other Tier-4 effect shows *Allocated N / rank* and warns on an overspend. Enhanced
+Trait shows *Allocated N ranks* and its rank spin is **read-only**, tracking the rows: its
+cost comes from the traits, so a hand-set rank would be a second number to keep level with
+the first and nothing more. The data says so (`rankFollowsAllocation`), not the widget.
+
+#### The cost line
+
+Grouped by trait kind — `(Abilities 4 + Skills 4) × 1/2 = 4 PP` — because a row of raw
+`1/2 + 1/2 + 1/2` terms explains nothing about why they came to a point. A subtotal landing
+between points keeps its fraction (`Skills 2 1/2`). The per-trait workings are one hover
+away, off the same label, from `effect_cost_breakdown`.
+
 | **Enhanced Movement** | Dimensional Travel (2/4/6), Environmental Adaptation (1/environment), Permeate (2/4/6), Safe Fall (1), Slithering (1), Space Travel (2/4/6), Stable (1/mode), Swinging (2), Trackless (1/sense), Water-Walking (1/2) | Some options are themselves tiered (2/4/6 for increasing scope) — model as a sub-radio within the checklist item, not a separate checkbox per tier |
 | **Enhanced Senses** | A sense **type** selector (Sight/Hearing/Smell/Taste/Touch/Mental/Radio/Special/etc.) crossed with ability tags: Accurate (2/4), Acute (1/2), Analytical (1/2), Danger Sense (2), Dark-Vision (2), Direction Sense (1), Distance Sense (1), Extended (1/2), Infra-Vision (1), Low-Light Vision (1), Microscopic Vision (1-4), Penetrates Concealment (2/4), Radio (1), Radius (1/2), Ranged (1/2), Rapid (1+), Tracking (1/2), Ultra-Hearing (1), Ultra-Vision (1) | The biggest menu in the game. UI should be a two-axis picker: choose a sense, then choose which abilities apply to it, with per-item rank cost and a running total against the effect's rank |
 | **Comprehend** | Animals (1/2), Computers (1/2), Languages (1/2/3/4), Objects (2), Plants (2), Spirits (1/2) | Each category is independently tiered; Languages notably scales furthest (rank 4 grants physically-impossible communication) |
@@ -185,7 +224,9 @@ object whose shape depends on the effect's tier:
 PowerEffectInstance
 ├── effectId, rank, extras[], flaws[], descriptors[]
 └── config: {
-      // Tier 4 example (Enhanced Trait): each row a trait and the ranks put into it
+      // Tier 4 example (Enhanced Trait): each row a trait and the ranks put into it.
+      // A trait key may be qualified with "::" to name one row of it —
+      // "Expertise::Law", "Stealth::spec::Urban", "Improved Critical::Sword".
       traits?: [{ trait: string, ranks: number }]
       // ...and the pre-allocation shape, still read on load at the effect's full rank
       target?: string

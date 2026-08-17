@@ -22,6 +22,12 @@ from fractions import Fraction
 from ..character import Character
 from ..data_loader import Ability, GameData, Resistance, Skill, TraitCosts
 from .advantages import advantage_by_name
+from .appliers import (
+    SPECIALIZED_ROW_MARKER,
+    skill_for_row,
+    split_trait_key,
+    trait_key_candidates,
+)
 
 #: The three per-item override categories keyed on ``Character.item_cost_overrides``.
 ABILITIES_CATEGORY = "abilities"
@@ -113,6 +119,62 @@ def skill_cost_rate(char: Character | None, game_data: GameData, skill: Skill) -
     return getattr(effective_trait_costs(char, game_data), skill_category_key(skill))
 
 
+def skill_row_rate(char: Character | None, game_data: GameData, row_id: str) -> int:
+    """The ranks-per-PP one *skill row* costs — a focus or specialized pool included.
+
+    The single statement of M&M's skill pricing, read by both sides of the sheet:
+    :func:`~.costs.skill_points_spent` for the ranks the character bought and
+    :func:`trait_rate` for the ranks a power grants. They were two rules until an
+    Enhanced Trait could name a row, and two rules would have priced the same
+    ``"Stealth::spec::Urban"`` differently depending on who paid for it.
+
+    Precedence, highest first: a per-skill homebrew override (keyed by the *base* skill,
+    so it prices every row of that skill alike), then the cheaper specialized rate for a
+    ``spec::`` pool or a skill flagged ``specialized_cost``, then the ordinary rate.
+    Ordinary is deliberately where a plain *focus* lands (``docs/mm-skills-design.md``).
+
+    The ``spec::`` marker is read off the row id rather than looked up in
+    :attr:`Character.specializations` so a power can be priced with no character in hand
+    — and so an orphaned row (a pool removed from the sheet while ranks remained) is
+    still charged at the rate it was bought at.
+    """
+
+    skill = skill_for_row(game_data, row_id)
+    if skill is not None:
+        override = _item_override(char, SKILLS_CATEGORY, skill.name)
+        if override is not None:
+            return override
+    costs = effective_trait_costs(char, game_data)
+    if SPECIALIZED_ROW_MARKER in split_trait_key(row_id)[1] or (
+        skill is not None and skill.specialized_cost
+    ):
+        return costs.skill_specialized_ranks_per_pp
+    return costs.skill_ranks_per_pp
+
+
+def trait_rank_cap(char: Character | None, game_data: GameData, target: str) -> int | None:
+    """The most ranks of ``target`` one allocation row may sensibly hold, or ``None``.
+
+    ``1`` for an advantage the rules do not rank at all, its own ``max_rank`` for one
+    capped at a fixed number, and ``None`` — no cap of its own — for everything else:
+    abilities, resistances and skills are bounded by the Power Level rather than by a
+    per-trait ceiling, as are the advantages whose cap is drawn from the PL or the shared
+    Heroic budget (neither is a property of the trait, and both are checked against the
+    whole build elsewhere).
+
+    Asked here so the constructor's rank spin and
+    :func:`~.validation.power_trait_allocation_violations` cannot disagree about what the
+    ceiling is.
+    """
+
+    advantage = advantage_by_name(game_data, split_trait_key(target)[0])
+    if advantage is None:
+        return None
+    if not advantage.ranked:
+        return 1
+    return advantage.max_rank if advantage.max_rank_kind == "fixed" else None
+
+
 def advantage_cost_rate(char: Character | None, game_data: GameData) -> int:
     """The PP-per-rank an advantage costs.
 
@@ -135,24 +197,31 @@ def trait_rate(char: Character | None, game_data: GameData, target: str) -> Frac
     ranks per point is ``Fraction(1, 2)`` per rank, and it is exactly that fraction
     surviving unrounded into :func:`trait_allocation_cost` that lets one point buy a
     rank in each of two different skills.
+
+    A *qualified* key (:func:`~.appliers.split_trait_key`) is tried whole and then by its
+    base, so ``"Expertise::Law"`` is a skill and ``"Improved Critical::Sword"`` an
+    advantage. A qualified skill is then priced by :func:`skill_row_rate` against the
+    whole row, which is what makes a specialized pool cheaper than its parent skill.
     """
 
     if not target:
         return None
-    ability = next((a for a in game_data.abilities if a.key == target), None)
-    if ability is not None:
-        return Fraction(ability_cost_rate(char, game_data, ability))
-    resistance = next((r for r in game_data.resistances if r.key == target), None)
-    if resistance is not None:
-        return Fraction(resistance_cost_rate(char, game_data, resistance))
-    skill = next((s for s in game_data.skills if s.name == target), None)
-    if skill is not None:
-        per_point = skill_cost_rate(char, game_data, skill)
-        # A homebrew rate of zero ranks per point would divide by zero; read it as free
-        # rather than crashing the sheet on a nonsense number.
-        return Fraction(1, per_point) if per_point > 0 else Fraction(0)
-    if advantage_by_name(game_data, target) is not None:
-        return Fraction(advantage_cost_rate(char, game_data))
+    for key in trait_key_candidates(target):
+        ability = next((a for a in game_data.abilities if a.key == key), None)
+        if ability is not None:
+            return Fraction(ability_cost_rate(char, game_data, ability))
+        resistance = next((r for r in game_data.resistances if r.key == key), None)
+        if resistance is not None:
+            return Fraction(resistance_cost_rate(char, game_data, resistance))
+        if any(s.name == key for s in game_data.skills):
+            # Priced against the *row*, not the base skill: a specialized pool costs the
+            # cheaper rate whether its ranks were bought or granted.
+            per_point = skill_row_rate(char, game_data, target)
+            # A homebrew rate of zero ranks per point would divide by zero; read it as
+            # free rather than crashing the sheet on a nonsense number.
+            return Fraction(1, per_point) if per_point > 0 else Fraction(0)
+        if advantage_by_name(game_data, key) is not None:
+            return Fraction(advantage_cost_rate(char, game_data))
     return None
 
 

@@ -41,9 +41,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   raising. `as_trait` is Enhanced Trait's "the cost of the chosen trait" rule — see
   `docs/notes/powers.md` and `docs/mm-powers-architecture.md` §6. Each file's own
   `_meta` block documents its keys (`effects.json` carries `baseCostModeKey`,
-  `traitSourceKey`, `affectsKey`, `applyKey`); **extend the `_meta` when you add a
-  key**, since that block is what a mod author reads and it is the only place the
-  vocabulary is written down.
+  `traitSourceKey`, `affectsKey`, `applyKey`, `rankFollowsAllocationNote`); **extend the
+  `_meta` when you add a key**, since that block is what a mod author reads and it is the
+  only place the vocabulary is written down.
+- An effect's `rankFollowsAllocation` says its rank *is* what its trait allocation spends
+  rather than a budget the allocation is metered against. Only meaningful with a trait
+  allocation, and only Enhanced Trait sets it: that effect's cost comes from the traits it
+  raises, so its rank has no independent meaning and the constructor shows it read-only.
+  Omit it and the rank stays hand-set — which is what Enhanced Senses, Enhanced Movement,
+  Comprehend, Immunity and Feature want.
 - A `repeatable` config field's rows are shaped by its `columns`, each
   `{ key, label, type }` with type `text`, `int` or `trait`. A `trait` column is a
   trait picker whose `source` names which list it offers (`traits`, `boost_traits` —
@@ -54,3 +60,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   records built that way. Column kinds are a registry too
   (`ui.power_constructor.REPEATABLE_CELL_KINDS`), so a mod adds one without editing
   the row builder.
+- A `trait` column's stored value may be **qualified** with `::` to narrow it to one row
+  of that trait: `Expertise::Law` (a skill focus), `Stealth::spec::Urban` (a specialized
+  pool), `Improved Critical::Sword` (an advantage bought for a subject). Those are the
+  character sheet's own row ids, not a new format, which is what lets a granted row land
+  exactly where a bought one would. The picker composes the key from two controls and
+  stores one string, so data and every reader still see a single value — see
+  `docs/notes/powers.md`.
+- Skills split "which focus?" across two keys. `focuses` is a list of suggested focus
+  **names**, offered as ready choices wherever a focus is picked and never a closed list;
+  a skill whose focuses cannot be enumerated (Expertise's fields of study, Languages)
+  leaves it empty and puts the guidance in `focusNote`, which is shown as a hint. Putting
+  prose in `focuses` makes a sentence look like something selectable.

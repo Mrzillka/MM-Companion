@@ -46,18 +46,18 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import Advantage, GameData, ParameterSpec
-from mm_companion.core.powers import PowerGroup
 from mm_companion.core.rules import (
     HEROIC_TYPE,
     advantage_points_spent,
     advantage_rank_cap,
     debilitated_traits,
-    granted_advantages,
+    granted_advantage_selections,
     heroic_advantage_budget,
     heroic_advantage_ranks,
     heroic_advantage_ranks_free,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.advantage_parameters import parameter_display, parameter_options
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.row_table import (
     SORT_MANUAL,
@@ -127,7 +127,6 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._data = data
         self._character = character
         self._advantages_by_name = {a.name: a for a in data.advantages}
-        self._ability_names = {a.key: a.name for a in data.abilities}
 
         outer = QVBoxLayout(self)
 
@@ -322,12 +321,13 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         :func:`~mm_companion.core.rules.granted_advantages`). They are shown all the same
         — an Enhanced Advantage that left no mark on the sheet would read as a power that
         does nothing.
+
+        Built in core (:func:`~mm_companion.core.rules.granted_advantage_selections`) so
+        a granted advantage's *subject* — the attack an Enhanced Improved Critical names —
+        is unpacked by the layer that keys it, and the row reads exactly as a bought one.
         """
 
-        return [
-            (AdvantageSelection(name=name, rank=bonus.amount), ", ".join(bonus.sources))
-            for name, bonus in granted_advantages(self._character, self._data).items()
-        ]
+        return list(granted_advantage_selections(self._character, self._data))
 
     def refresh_granted(self) -> None:
         """Re-render when the powers' granted advantages have changed.
@@ -646,43 +646,13 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             self._advantage_param.setVisible(False)
 
     def _parameter_options(self, spec: ParameterSpec) -> list[tuple[str, str]]:
-        """Resolve a choice spec to ``(stored value, display label)`` pairs.
+        """This block's view of :func:`~mm_companion.ui.advantage_parameters.parameter_options`.
 
-        A dynamic ``options_from`` source draws from the live build —
-        ``"skills"``/``"abilities"`` from the game data (abilities store their key but
-        display their name), ``"powers"`` from the character's own powers. When the
-        spec *also* lists ``options``, those restrict the source to that subset in the
-        given order (e.g. Alternate Initiative offers only INT/AWE/PRE, not every
-        ability). Without a source, a fixed ``options`` list maps each value to itself.
+        Shared with the Power Constructor's trait picker, so an Enhanced Trait granting
+        Skill Mastery offers the same skills the block does when it is bought.
         """
 
-        if spec.options_from == "skills":
-            source = [(s.name, s.name) for s in self._data.skills]
-        elif spec.options_from == "abilities":
-            source = [(a.key, a.name) for a in self._data.abilities]
-        elif spec.options_from == "powers":
-            source = [(name, name) for name in self._power_names()]
-        else:
-            return [(option, option) for option in spec.options]
-        if spec.options:
-            labels = dict(source)
-            return [(value, labels.get(value, value)) for value in spec.options]
-        return source
-
-    def _power_names(self) -> list[str]:
-        """Every named leaf power on the character, descending array/linked groups."""
-
-        names: list[str] = []
-
-        def walk(nodes) -> None:
-            for node in nodes:
-                if isinstance(node, PowerGroup):
-                    walk(node.children)
-                elif node.name:
-                    names.append(node.name)
-
-        walk(self._character.powers)
-        return names
+        return parameter_options(spec, self._data, self._character)
 
     def _populate_choice_combo(self, combo: QComboBox, spec: ParameterSpec) -> None:
         combo.clear()
@@ -717,9 +687,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
 
         advantage = self._advantages_by_name.get(selection.name)
         spec = advantage.parameter if advantage else None
-        if spec is not None and spec.options_from == "abilities":
-            return self._ability_names.get(selection.parameter, selection.parameter)
-        return selection.parameter
+        return parameter_display(spec, selection.parameter, self._data)
 
     def refresh_power_options(self) -> None:
         """Re-populate the picker combo when it lists the character's powers.

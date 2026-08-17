@@ -45,7 +45,11 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   subtract from: the typical −1/rank Limited takes 2 to 1 and so halves it. The
   total is floored at 1 PP. `Reduced Trait` is the same rule with a minus sign —
   a flat flaw whose `costMode` is `as_trait` and whose own rows say what was
-  lowered.
+  lowered. The card's footer groups the priced rows by *kind*
+  (`(Abilities 4 + Skills 4) × 1/2`), because a run of raw `1/2 + 1/2 + 1/2` terms says
+  nothing about why they came to a point; `effect_cost_breakdown` returns the per-row
+  detail behind those subtotals and the card hangs it off the same label as a tooltip,
+  so a number and its workings can never come from two places.
 - **Effective vs. bought**: `effect_effective_rank` adds an ability a modifier
   folds in (Strength-Based Damage → Strength) to the bought rank — this is the
   rank that sets save DCs and PL caps, while cost counts only the bought rank.
@@ -69,6 +73,34 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `char.advantages` and nothing else. If the advantage itself carries a
   `skill_bonus_per_rank`, `advantage_contributions` chains it through to the skill total,
   so an Enhanced Advantage grants what buying the advantage would have granted.
+- **A trait key may be *qualified*** to name one row rather than a whole trait, with
+  `::` and the character sheet's own row-id shapes: `Expertise::Law` (a focus),
+  `Stealth::spec::Urban` (a specialized pool), `Improved Critical::Sword` (an advantage
+  bought for a subject). `split_trait_key` / `trait_key_candidates` (in `appliers`, the
+  bottom of the DAG, so everything can reach them) are the one place the halves come
+  apart, and *every* resolver walks the same whole-then-base order — `trait_category`,
+  `trait_rate`, `trait_display_name`. That order is the invariant: which list a target
+  lands in, what it costs and how it prints cannot be decided by three different rules.
+  Unqualified keys behave exactly as before, which is why nothing needed migrating.
+- **One skill rate, both sides.** `skill_row_rate` prices a skill *row* — homebrew
+  override, then the specialized rate for a `spec::` pool or a `specialized_cost` skill,
+  then the ordinary rate — and both `skill_points_spent` (bought ranks) and `trait_rate`
+  (granted ranks) go through it. They were two rules until a power could name a row, and
+  two rules would have priced the same pool differently depending on who paid for it.
+- **A granted row may not exist yet.** An Enhanced Trait can name a focus the character
+  never bought. `granted_skill_rows` finds those orphans and the Skills block grows a
+  muted, un-editable row for each (rollable, but with no rank spin and no entry in
+  `_row_refs`), the way the Advantages block already shows a granted advantage. Without
+  it the bonus is paid for and invisible, which reads as a power that does nothing.
+- **Rank as allocation, not budget.** An effect declaring `rankFollowsAllocation`
+  (Enhanced Trait alone, in the base data) has its rank *written from* its rows —
+  `synced_effect_rank` — and shown read-only; `power_allocation_violations` skips it,
+  since there is no budget to overspend. Every other allocation effect keeps the hand-set
+  rank and the warning. The one per-trait ceiling that does exist is an advantage's, via
+  `trait_rank_cap`: the constructor's rank spin stops there and
+  `power_trait_allocation_violations` warns about a stored row that went past it. It
+  warns rather than clamps — repricing a row the player can see would leave the cost line
+  disagreeing with the rows above it.
 - **Runtime state** (separate from the point build): `effect.toggled_on` /
   `effect.suppressed` and `power.activated` / `power.item_present` gate whether a
   passive bonus currently applies (`effect_is_active`). The UI drives all of a

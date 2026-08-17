@@ -12,7 +12,9 @@ from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
 from .powers_cost import effect_effective_rank, effect_size_rank_shift
 from .powers_terms import _effect_name, _effective_stats
+from .runtime import config_trait_allocation, trait_display_name
 from .size import size_resistance_shift, size_skill_shift
+from .trait_rates import trait_rank_cap
 
 
 def effect_attack_skill_bonus(
@@ -269,18 +271,42 @@ def effect_allocation_used(effect: PowerEffectInstance, game_data: GameData) -> 
     return used
 
 
+def synced_effect_rank(effect: PowerEffectInstance, game_data: GameData) -> int | None:
+    """The rank an effect's own allocation dictates, or ``None`` when it dictates none.
+
+    An effect whose base declares ``rankFollowsAllocation`` (Enhanced Trait) has no rank
+    of its own to set: what it costs comes from the traits it raises, so its rank is
+    simply how many ranks those rows spend. Every other allocation effect — Enhanced
+    Senses, Comprehend, Immunity, Feature — keeps a rank the player buys and allocates
+    *within*, and gets ``None`` here.
+
+    The constructor writes this back onto the instance as the rows change, so the saved
+    rank and the rows can never drift apart; :func:`power_allocation_violations` skips
+    the same effects, since an effect that *is* its allocation cannot overspend it.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or not base.rank_follows_allocation:
+        return None
+    return effect_allocation_used(effect, game_data)
+
+
 def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
     """Over-allocation breaches: a Tier-4 effect spending more ranks than it has.
 
     Enhanced Senses/Movement, Comprehend, Immunity, and Feature allocate the effect's
     rank across a menu (see :func:`effect_allocation_used`); spending more than the
     effect's rank is invalid. Returns one message per over-allocated effect.
+
+    An effect whose rank *follows* its allocation (:func:`synced_effect_rank`) is skipped:
+    there is no budget to breach, and warning about one would be warning about a number
+    the player cannot set.
     """
 
     violations: list[str] = []
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-        if base is None:
+        if base is None or base.rank_follows_allocation:
             continue
         if not any(f.type in ("allocation", "repeatable") for f in base.config_fields):
             continue
@@ -290,6 +316,36 @@ def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
                 f"{base.name}: allocated {used} of {effect.rank} ranks "
                 f"— {used - effect.rank} over budget."
             )
+    return violations
+
+
+def power_trait_allocation_violations(
+    power: Power, game_data: GameData, char: Character | None = None
+) -> list[str]:
+    """Allocation rows holding more ranks of a trait than that trait can be taken at.
+
+    An advantage is the only trait with a ceiling of its own: most are not ranked at all
+    (three ranks of Fearless is not a stronger Fearless, it is three points wasted), and
+    a few carry a fixed ``maxRank``. Abilities, resistances and skills are bounded by the
+    Power Level instead, which :func:`power_pl_violations` checks against the whole build.
+
+    A warning rather than a clamp. The row is the player's, it is on screen, and silently
+    charging for fewer ranks than it shows would leave the footer disagreeing with the
+    rows above it — the one thing a cost line must never do.
+    """
+
+    violations: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        for target, ranks in config_trait_allocation(effect.config, base):
+            cap = trait_rank_cap(char, game_data, target)
+            if cap is None or ranks <= cap:
+                continue
+            name = trait_display_name(game_data, target)
+            reason = "is not ranked" if cap == 1 else f"is capped at {cap} ranks"
+            violations.append(f"{base.name}: {name} {reason}; {ranks} allocated.")
     return violations
 
 

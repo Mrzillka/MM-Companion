@@ -608,6 +608,40 @@ def test_resistance_range_comes_from_the_data(qapp: QApplication) -> None:
     assert sheet.abilities._abilities["STR"].maximum() == ability.max
 
 
+def test_add_specialization_offers_the_catalog_without_closing_the_list(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """*Add specialization…* asks the way *Add focus…* does — the skill's common uses as
+    ready choices, its note as the prompt where they cannot be listed, and anything the
+    player types accepted past both."""
+    from PySide6.QtWidgets import QInputDialog
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    stealth = next(s for s in data.skills if s.name == "Stealth")
+    perception = next(s for s in data.skills if s.name == "Perception")
+    asked: list[tuple] = []
+
+    def fake(_parent, _title, label, items, *a, **k):
+        asked.append((label, list(items)))
+        return ("Rooftops", True)
+
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(fake))
+    sheet.skills._add_specialization(stealth)
+    label, items = asked[-1]
+    assert "Hiding" in items  # the catalog's own suggestions
+    assert label == "By specific environment or terrain"  # …and its guidance as the prompt
+    assert sheet.character.specializations["Stealth"] == ["Rooftops"]  # free text still wins
+
+    # A pool already bought is not offered a second time.
+    sheet.skills._add_specialization(stealth)
+    assert "Rooftops" not in asked[-1][1]
+
+    # A skill with nothing enumerable offers nothing, and asks for it in its own words.
+    sheet.skills._add_specialization(perception)
+    assert asked[-1] == ("By specific sense, e.g. sight, hearing, smell", [])
+
+
 def test_cancelling_add_specialization_leaves_the_model_untouched(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -619,11 +653,11 @@ def test_cancelling_add_specialization_leaves_the_model_untouched(
     sheet = CharacterSheet(data)
     skill = next(s for s in data.skills if not s.focused)
 
-    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", False)))
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: ("", False)))
     sheet.skills._add_specialization(skill)
     assert skill.name not in sheet.character.specializations
 
     # An accepted dialog still records the specialization.
-    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Forgery", True)))
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: ("Forgery", True)))
     sheet.skills._add_specialization(skill)
     assert sheet.character.specializations[skill.name] == ["Forgery"]

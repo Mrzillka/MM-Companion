@@ -399,7 +399,9 @@ class TraitPicker(QWidget):
         granted row the sheet carries none of its own is exactly what
         :func:`~mm_companion.core.rules.granted_skill_rows` grows a muted row for. The
         skill's own catalog specializations are offered as suggestions and never as a
-        closed list, the way the Skills block's *Add focus* offers its focuses.
+        closed list, and its ``specialization_note`` becomes the prompt where they cannot
+        be listed — the same question the Skills block's *Add specialization…* asks, so a
+        pool granted by a power and one bought on the sheet are named the same way.
         """
 
         skill = self._skill
@@ -410,8 +412,9 @@ class TraitPicker(QWidget):
             for value, _ in self._pool_rows(skill, self._qualifier())
         }
         options = [name for name in skill.specializations if name not in offered]
+        prompt = skill.specialization_note or "Specialization:"
         name, ok = QInputDialog.getItem(
-            self, f"Add {skill.name} specialization", "Specialization:", options, 0, True
+            self, f"Add {skill.name} specialization", prompt, options, 0, True
         )
         name = name.strip()
         if not ok or not name:

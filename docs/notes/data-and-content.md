@@ -72,3 +72,10 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   a skill whose focuses cannot be enumerated (Expertise's fields of study, Languages)
   leaves it empty and puts the guidance in `focusNote`, which is shown as a hint. Putting
   prose in `focuses` makes a sentence look like something selectable.
+- `specializations`/`specializationNote` split the same way, and for the same reason.
+  Any of a skill's specializations may be bought as a narrow half-cost rank pool, so the
+  list is offered as **names** by both places that name one — the Skills block's *Add
+  specialization…* and the Power Constructor's trait picker, where an Enhanced Trait may
+  grant a pool nobody bought. "By specific sense, e.g. sight, hearing, smell" is guidance
+  about how to choose, so it sits in the note and is shown as the prompt; it was in the
+  list until both dialogs started offering it as a pool anyone could pick.

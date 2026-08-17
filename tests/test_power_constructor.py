@@ -1900,10 +1900,17 @@ def test_a_new_specialization_can_be_named_for_a_skill_that_has_none(
 
     add = picker.findChild(QToolButton)
     assert add is not None and not add.isHidden()
-    monkeypatch.setattr(
-        picker_module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("Rooftops", True))
-    )
+    asked: list[tuple] = []
+
+    def fake(_parent, _title, label, items, *a, **k):
+        asked.append((label, list(items)))
+        return ("Rooftops", True)
+
+    monkeypatch.setattr(picker_module.QInputDialog, "getItem", staticmethod(fake))
     add.click()
+    # The same question the Skills block's *Add specialization…* asks: the catalog's
+    # suggestions, and the skill's own guidance as the prompt.
+    assert asked[-1] == ("By specific environment or terrain", ["Hiding", "Sneaking", "Tailing"])
     assert picker.value() == "Stealth::spec::Rooftops"
     # And it is a row of the list from here on, not a value the widget merely remembers.
     assert _qualifier(picker).findData("spec::Rooftops") >= 0

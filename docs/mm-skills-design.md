@@ -178,7 +178,8 @@ Skill (from skills-design.json.skills[])
 ├── categories: ("combat"|"interaction"|"manipulation"|"technical")[]   // rule bundles, see §6
 ├── action: default action time for the skill
 ├── summary: string            // one-line mechanical gloss (original paraphrase)
-├── specializations[] | focuses[]   // focuses[] only when focused=true
+├── specializations[] | focuses[]   // focuses[] only when focused=true; focus NAMES only
+├── focusNote?: string         // guidance for a focused skill whose focuses can't be listed
 ├── plLimit?: "attack"|"none"  // overrides the default skill-bonus cap (§4)
 ├── rankTable? / complexityTable?   // Languages' doubling table; technical build table
 └── uses: Use[]
@@ -233,6 +234,14 @@ Combat: Blades and Close Combat: Unarmed are two rows, not one skill with two su
 the Attack PL cap applies to each focus's row independently. `focuses[]` lists *common* examples
 only; the GM may approve others, so the config UI should allow a free-text focus, not just a
 dropdown of the listed values.
+
+`focuses[]` therefore holds focus **names** and nothing else. A skill whose focuses cannot be
+enumerated at all — Expertise's fields of study, Languages' languages — leaves it empty and puts
+the guidance in `focusNote`, which is shown as a prompt rather than offered as something
+selectable. Prose in `focuses[]` reads as a choice the player can pick, and "Chosen freely per
+field of study, e.g. Science, Law, History" is not a focus. Both keys are read by the two places a
+focus is named: the Skills block's *Add focus…* and the Power Constructor's trait picker, where an
+Enhanced Trait may grant a focus the character never bought.
 
 `specializations[]` on a **non-focused** skill are the opposite: they're just illustrative common
 uses of the one shared skill (and map loosely onto that skill's `uses[]`), *unless* the player

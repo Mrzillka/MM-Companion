@@ -18,6 +18,7 @@
       "extended": "Takes longer than a standard action; typically resolved outside of round-by-round action time"
     },
     "costRule": "Normal skill ranks cost 1 Power Point per 2 ranks. Skills bought as a narrow focus (see 'focused': true) instead cost 1 Power Point per 4 ranks in that focus, but each focus is tracked as its own independent rank pool.",
+    "focusNoteNote": "focuses is a list of suggested focus NAMES, offered as ready choices wherever a focus is picked (the skills block's Add focus, an Enhanced Trait's trait picker) and always free-text-editable past them. A skill whose focuses are not an enumerable list leaves it empty and puts the guidance in focusNote instead, which is shown as a hint rather than as something selectable.",
     "focusedNote": "When 'focused' is true, a character must pick one or more specific focuses (e.g. a language, a field of expertise, a weapon type) and buy ranks separately per focus, effectively treating each focus as its own skill. When 'focused' is false, any 'specializations' listed are just common illustrative uses of the single skill, not separate rank pools."
   },
   "skills": [
@@ -105,9 +106,8 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": true,
-      "focuses": [
-        "Chosen freely per field of study, e.g. Science, Law, History, Streetwise"
-      ],
+      "focuses": [],
+      "focusNote": "Chosen freely per field of study, e.g. Science, Law, History, Streetwise",
       "description": "Deep, formal knowledge in a specific academic, professional, or scholarly field — each field you study is its own focus. Expertise ranks cost 1 PP per 2 ranks (the normal skill rate)."
     },
     {
@@ -156,9 +156,8 @@
       "trainedOnly": true,
       "action": "extended",
       "focused": true,
-      "focuses": [
-        "Chosen freely per language beyond the character's native tongue"
-      ],
+      "focuses": [],
+      "focusNote": "Chosen freely per language beyond the character's native tongue",
       "description": "Fluent, literate command of a language other than your own — every additional language is its own focus."
     },
     {

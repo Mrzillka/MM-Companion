@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from fractions import Fraction
+from html import escape
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -25,10 +28,14 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     TRAIT_CATEGORIES,
     effect_allocation_used,
+    effect_cost_breakdown,
     effect_cost_formula,
     effect_makes_attack,
     effect_total_cost,
     effective_ability,
+    synced_effect_rank,
+    trait_allocation_field,
+    trait_display_name,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
@@ -37,13 +44,24 @@ from mm_companion.ui.power_constructor.common import (
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
     RANK_MAX,
-    _fill_trait_combo,
+    TRAIT_SOURCE_BUYABLE,
+    CellContext,
     _mime_id,
     _move_item,
+    fill_trait_combo,
+    is_trait_allocation,
+    link_trait_row,
+    repeatable_cell_kind,
 )
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
+
+
+def _fraction_text(value: Fraction) -> str:
+    """A cost or rate as ``4`` or ``1/2`` - the way the rules write a part of a point."""
+
+    return str(value) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
 
 
 def _idle_card_rules() -> str:
@@ -149,9 +167,23 @@ class EffectCard(QFrame):
         header.addWidget(self._role_badge)
         header.addStretch()
         header.addWidget(QLabel("Rank"))
+        # An effect whose rank *is* its allocation has no rank to set: the spin shows
+        # what the rows come to and is read-only, so a rank is decided in one place
+        # rather than two that have to be kept level (see ``synced_effect_rank``).
+        self._rank_synced = bool(effect and effect.rank_follows_allocation)
         self._rank = make_spin_box(
-            1, RANK_MAX, value=self.instance.rank, buttons=False, max_width=44
+            0 if self._rank_synced else 1,
+            RANK_MAX,
+            value=self.instance.rank,
+            buttons=False,
+            max_width=44,
         )
+        if self._rank_synced:
+            self._rank.setReadOnly(True)
+            self._rank.setToolTip(
+                "Set by the traits below - an Enhanced Trait's rank is the ranks it "
+                "allocates, and its cost comes from the traits themselves."
+            )
         self._rank.valueChanged.connect(self._on_rank_changed)
         header.addWidget(self._rank)
         remove = QPushButton("✕")
@@ -458,6 +490,12 @@ class EffectCard(QFrame):
 
         def update_total() -> None:
             used = effect_allocation_used(self.instance, self._data)
+            if self._rank_synced:
+                # No budget, so no "of what" and nothing to overspend: the number is
+                # what the rows add up to, which is also the effect's rank.
+                label.setText(f"Allocated {used} ranks")
+                label.setStyleSheet("")
+                return
             rank = self._rank.value()
             label.setText(f"Allocated {used} / {rank} ranks")
             over = f"color: {theme.color('tint.worse')}; font-weight: bold;"
@@ -549,12 +587,14 @@ class EffectCard(QFrame):
         return container
 
     def _repeatable_widget(self, field) -> QWidget:
-        """A Tier-4 variable-length row list (Immunity scopes, Features).
+        """A Tier-4 variable-length row list (Immunity scopes, Enhanced Trait's traits).
 
-        Each row has one widget per :class:`RepeatableColumn` (a line edit for text, a
-        spin for an ``int`` rank) plus a remove button; an "Add" button appends a row.
+        Each row has one widget per :class:`RepeatableColumn` plus a remove button; an
+        "Add" button appends a row. What a column's cell looks like and how its value is
+        read back comes from :data:`REPEATABLE_CELL_KINDS`, so a mod adds a column kind
+        without editing this method and an unregistered one still renders as text.
         A "used / rank" readout meters the rows against the effect's rank (summed ranks
-        for Immunity, one per row for Feature). Rows are stored in
+        for Immunity and for Enhanced Trait, one per row for Feature). Rows are stored in
         ``instance.config[key]`` as a list of ``{column_key: value}`` dicts.
         """
 
@@ -581,12 +621,15 @@ class EffectCard(QFrame):
             for _widget, cells in row_widgets:
                 row = {}
                 for column in field.columns:
-                    cell = cells[column.key]
-                    row[column.key] = cell.value() if column.type == "int" else cell.text().strip()
+                    row[column.key] = repeatable_cell_kind(column).read(cells[column.key])
                 if any(str(v).strip() for v in row.values()):
                     rows.append(row)
             self.instance.config[field.key] = rows
+            self._sync_rank_to_allocation()
             update_total()
+            # As in :meth:`_on_config_changed`: a trait-allocation row *is* the cost of
+            # an as-trait effect, so the footer moves with it and not only the readout.
+            self._refresh_cost()
             self.changed.emit()
 
         def add_row(initial: dict | None = None) -> None:
@@ -597,21 +640,9 @@ class EffectCard(QFrame):
             row_layout.setSpacing(3)
             cells: dict = {}
             for column in field.columns:
-                if column.type == "int":
-                    cell = make_spin_box(
-                        0,
-                        RANK_MAX,
-                        value=int(initial.get(column.key, 0) or 0),
-                        buttons=False,
-                        max_width=48,
-                    )
-                    cell.valueChanged.connect(lambda _v: commit())
-                    row_layout.addWidget(cell)
-                else:
-                    cell = QLineEdit(str(initial.get(column.key, "")))
-                    cell.setPlaceholderText(column.label)
-                    cell.textChanged.connect(lambda _t: commit())
-                    row_layout.addWidget(cell, 1)
+                kind = repeatable_cell_kind(column)
+                cell = kind.build(self._cell_context(), column, initial, commit)
+                row_layout.addWidget(cell, kind.stretch)
                 cells[column.key] = cell
             remove = QPushButton("✕")
             remove.setFlat(True)
@@ -620,6 +651,7 @@ class EffectCard(QFrame):
             rows_layout.addWidget(row)
             entry = (row, cells)
             row_widgets.append(entry)
+            link_trait_row(self._cell_context(), field.columns, cells)
 
             def do_remove(_checked: bool = False) -> None:
                 if entry in row_widgets:
@@ -633,6 +665,8 @@ class EffectCard(QFrame):
         for row_data in existing:
             if isinstance(row_data, dict):
                 add_row(row_data)
+        if not row_widgets and is_trait_allocation(field):
+            add_row()  # the picker is the question; an empty one reads as a missing control
 
         add_button = QPushButton("＋ Add")
         add_button.clicked.connect(lambda: add_row())
@@ -672,17 +706,29 @@ class EffectCard(QFrame):
             self.instance.config[key] = value
         else:  # "", empty list, or None all clear the choice
             self.instance.config.pop(key, None)
+        # A config choice can decide what the effect *costs* — an Enhanced Trait is
+        # priced entirely from the traits it raises — so the card's own footer has to
+        # be redrawn here, exactly as a rank or a modifier change redraws it. The
+        # window's total tracks ``changed`` on its own; this label does not.
+        self._refresh_cost()
         self.changed.emit()
 
     # -- enhanced-trait target picker -------------------------------------
     def _build_target_picker(self, effect) -> QWidget | None:
-        """A combo choosing which trait a configurable booster (Enhanced Trait) raises.
+        """A combo choosing which single trait a configurable booster raises.
 
         Returns ``None`` unless the effect's :class:`TraitBoost` is ``configurable``
-        and its ``affects`` names a numeric trait category (so senses/movement pickers
-        don't appear). The options — abilities, resistances, and skills — are read
-        from the game data, not hardcoded; the chosen key is stored in
-        ``instance.config['target']``.
+        and its ``affects`` names a raisable trait category (so senses/movement pickers
+        don't appear). The options are read from the game data, not hardcoded; the
+        chosen key is stored in ``instance.config['target']``.
+
+        Also ``None`` once the effect declares a *trait allocation* config field: that
+        field's rows say which traits are raised and by how much, and a second picker
+        claiming the same thing in one word would be a second answer to one question.
+        The combo therefore survives only for a booster that really does raise one
+        thing — none in the base data since Enhanced Trait grew its rows, but the seam
+        a mod's simpler booster still reaches, and the shape old saves are read back
+        through (see :func:`~mm_companion.core.rules.boost_allocations`).
         """
 
         boost = effect.integration.trait_boost if effect and effect.integration else None
@@ -690,12 +736,16 @@ class EffectCard(QFrame):
             return None
         if not (boost.affects & TRAIT_CATEGORIES):
             return None
+        if trait_allocation_field(effect) is not None:
+            return None
 
         host = QWidget()
         form = QFormLayout(host)
         form.setContentsMargins(0, 0, 0, 0)
         combo = QComboBox()
-        _fill_trait_combo(combo, self._data, self.instance.config.get("target", ""))
+        fill_trait_combo(
+            combo, self._data, self.instance.config.get("target", ""), TRAIT_SOURCE_BUYABLE
+        )
         guard_wheel(combo)
         combo.currentIndexChanged.connect(
             lambda _i, c=combo: self._on_config_changed("target", c.currentData())
@@ -872,11 +922,64 @@ class EffectCard(QFrame):
         self._refresh_cost()
         self.changed.emit()
 
+    def _cell_context(self) -> CellContext:
+        """What a config row's cells are built against - the data, and whose sheet.
+
+        The character travels with the data because a trait row offers *this hero's*
+        skill focuses and specialized pools; without one it degrades to the catalog.
+        """
+
+        return CellContext(self._data, self._character)
+
+    def _sync_rank_to_allocation(self) -> None:
+        """Write an as-trait effect's rank back from its rows, and restate the spin.
+
+        A no-op for every other effect, whose rank the player sets. The spin's signal is
+        blocked while it is restated: it is being *told* the answer, and letting it
+        re-emit would run the rank handler in the middle of a config commit.
+        """
+
+        rank = synced_effect_rank(self.instance, self._data)
+        if rank is None or rank == self.instance.rank:
+            return
+        self.instance.rank = rank
+        self._rank.blockSignals(True)
+        self._rank.setValue(rank)
+        self._rank.blockSignals(False)
+
     def _refresh_cost(self) -> None:
         formula = effect_cost_formula(self.instance, self._data, self._character)
         total = effect_total_cost(self.instance, self._data, self._character)
         unit = self._unit
         self._cost.setText(f"{formula} = {total} {unit}" if formula else f"{total} {unit}")
+        self._cost.setToolTip(self._cost_detail())
+
+    def _cost_detail(self) -> str:
+        """The per-trait workings behind an as-trait footer - empty for anything else.
+
+        The footer pools its terms by kind, which is what makes it readable and what
+        loses the individual rows; this puts them back one hover away, each at the rate
+        it was charged. Rich text, since a column of figures wants a table.
+        """
+
+        terms = effect_cost_breakdown(self.instance, self._data, self._character)
+        if not terms:
+            return ""
+        rows = "".join(
+            "<tr>"
+            f"<td>{escape(trait_display_name(self._data, term.target))}</td>"
+            f"<td align='right'>&nbsp;{term.ranks}&nbsp;</td>"
+            f"<td>&times; {_fraction_text(term.rate)}</td>"
+            f"<td align='right'>&nbsp;= {_fraction_text(term.cost)}</td>"
+            "</tr>"
+            for term in terms
+        )
+        total = sum((term.cost for term in terms), Fraction(0))
+        return (
+            f"<table cellspacing='0'>{rows}"
+            "<tr><td colspan='3'><b>Total</b></td>"
+            f"<td align='right'><b>&nbsp;{_fraction_text(total)}</b></td></tr></table>"
+        )
 
     # -- structure role (driven by the canvas) ----------------------------
     def set_role(self, role: str, note: str = "") -> None:

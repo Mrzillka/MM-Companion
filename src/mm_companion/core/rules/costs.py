@@ -3,85 +3,29 @@
 from __future__ import annotations
 
 import math
-from dataclasses import fields, replace
 from fractions import Fraction
 
 from ..character import Character
-from ..data_loader import Ability, GameData, Resistance, Skill, TraitCosts
-from .derived import _skill_for_row
+from ..data_loader import GameData
 from .powers_cost import node_cost
+from .trait_rates import (
+    ABILITIES_CATEGORY,
+    RESISTANCES_CATEGORY,
+    SKILLS_CATEGORY,
+    ability_category_key,
+    ability_cost_rate,
+    advantage_cost_rate,
+    effective_pp_per_level,
+    resistance_category_key,
+    resistance_cost_rate,
+    skill_category_key,
+    skill_row_rate,
+)
 
-#: The three per-item override categories keyed on ``Character.item_cost_overrides``.
-ABILITIES_CATEGORY = "abilities"
-RESISTANCES_CATEGORY = "resistances"
-SKILLS_CATEGORY = "skills"
-
-
-def effective_trait_costs(char: Character, game_data: GameData) -> TraitCosts:
-    """The trait-cost rates for a character, with any homebrew overrides applied.
-
-    Reads ``char.cost_overrides`` (see :attr:`Character.cost_overrides`) and layers the
-    per-rank / ranks-per-point rates the player has changed over the ruleset defaults
-    from ``costs.json``. Overrides for non-``TraitCosts`` keys (e.g. ``pp_per_level``)
-    are ignored here — see :func:`effective_pp_per_level`.
-    """
-
-    names = {f.name for f in fields(TraitCosts)}
-    changes = {k: int(v) for k, v in char.cost_overrides.items() if k in names}
-    if not changes:
-        return game_data.costs.traits
-    return replace(game_data.costs.traits, **changes)
-
-
-def effective_pp_per_level(char: Character, game_data: GameData) -> int:
-    """The power-points-per-Power-Level budget rate, with any homebrew override applied."""
-
-    return int(char.cost_overrides.get("pp_per_level", game_data.costs.power_level.pp_per_level))
-
-
-def ability_category_key(ability: Ability) -> str:
-    """The ``TraitCosts`` rate field an ability's cost draws from (combat vs. core)."""
-
-    return "combat_per_rank" if ability.derived else "ability_per_rank"
-
-
-def resistance_category_key(resistance: Resistance) -> str:
-    """The ``TraitCosts`` rate field a resistance's cost draws from (combat vs. core)."""
-
-    return "combat_per_rank" if resistance.derived else "resistance_per_rank"
-
-
-def skill_category_key(skill: Skill) -> str:
-    """The ``TraitCosts`` ranks-per-PP field a skill's cost draws from (specialized vs. normal)."""
-
-    return "skill_specialized_ranks_per_pp" if skill.specialized_cost else "skill_ranks_per_pp"
-
-
-def ability_cost_rate(char: Character, game_data: GameData, ability: Ability) -> int:
-    """The PP-per-rank an ability costs: a per-item homebrew override, else the category rate."""
-
-    override = char.item_cost_overrides.get(ABILITIES_CATEGORY, {}).get(ability.key)
-    if override is not None:
-        return int(override)
-    return getattr(effective_trait_costs(char, game_data), ability_category_key(ability))
-
-
-def resistance_cost_rate(char: Character, game_data: GameData, resistance: Resistance) -> int:
-    """The PP-per-rank a resistance costs: a per-item homebrew override, else the category rate."""
-
-    override = char.item_cost_overrides.get(RESISTANCES_CATEGORY, {}).get(resistance.key)
-    if override is not None:
-        return int(override)
-    return getattr(effective_trait_costs(char, game_data), resistance_category_key(resistance))
-
-
-def skill_cost_rate(char: Character, game_data: GameData, skill: Skill) -> int:
-    """The ranks-per-PP a skill costs: a per-item homebrew override, else the category rate."""
-
-    override = char.item_cost_overrides.get(SKILLS_CATEGORY, {}).get(skill.name)
-    if override is not None:
-        return int(override)
-    return getattr(effective_trait_costs(char, game_data), skill_category_key(skill))
+# The per-trait purchase rates live in :mod:`.trait_rates` so the powers cost path —
+# which sits *below* this module in the dependency DAG — can price an "as trait" effect
+# at the very same rates. ``rules.ability_cost_rate`` and friends still resolve, since
+# the package re-exports that module too; nothing outside had to change.
 
 
 def _item_overrides_differ(char: Character, game_data: GameData) -> bool:
@@ -155,46 +99,24 @@ def resistance_points_spent(char: Character, game_data: GameData) -> int:
     return total
 
 
-def _specialized_row_ids(char: Character) -> set[str]:
-    """Row ids of every specialized (narrow, half-cost) skill pool on the character.
-
-    A specialization is stored as a distinct row id ``"<Skill>::spec::<name>"`` whose
-    ranks live in ``skill_ranks`` like any other row; this set is what tells the cost
-    math to charge those ranks at the specialized rate.
-    """
-
-    return {
-        f"{skill}::spec::{name}" for skill, names in char.specializations.items() for name in names
-    }
-
-
 def skill_points_spent(char: Character, game_data: GameData) -> int:
     """Power points spent on skills, pooled across every skill (``docs/mm-skills-design.md`` §4/§7).
 
     All skill ranks share one purchase pool that rounds *once*, so 1 rank in four
-    skills costs 2 PP, not 4. Ordinary ranks (most focused skills included) cost
-    ``skill_ranks_per_pp`` ranks per point; ranks in a specialized narrow pool — or in a
-    skill flagged ``specialized_cost`` (Expertise, whose mandatory focus is inherently
-    priced that way) — cost the cheaper ``skill_specialized_ranks_per_pp``. The two
-    fractional costs are summed and the total ceiled, so mixed builds round together
-    rather than per row.
+    skills costs 2 PP, not 4. What a single row costs per rank is
+    :func:`~.trait_rates.skill_row_rate` — the same function that prices the rows an
+    Enhanced Trait grants, so a specialized pool cannot cost one thing bought and another
+    granted. The fractional costs are summed and the total ceiled, so mixed builds round
+    together rather than per row.
     """
 
-    costs = effective_trait_costs(char, game_data)
-    overrides = char.item_cost_overrides.get(SKILLS_CATEGORY, {})
-    specialized = _specialized_row_ids(char)
     total = Fraction(0)
     for row_id, ranks in char.skill_ranks.items():
         if ranks <= 0:
             continue
-        skill = _skill_for_row(game_data, row_id)
-        if skill is not None and skill.name in overrides:
-            # A per-skill homebrew rate prices every rank of that skill, spec pools included.
-            rate = int(overrides[skill.name])
-        elif row_id in specialized or (skill is not None and skill.specialized_cost):
-            rate = costs.skill_specialized_ranks_per_pp
-        else:
-            rate = costs.skill_ranks_per_pp
+        rate = skill_row_rate(char, game_data, row_id)
+        if rate <= 0:  # a homebrew rate of zero ranks per point: free, not a crash
+            continue
         total += Fraction(ranks, rate)
     return math.ceil(total)
 
@@ -202,7 +124,7 @@ def skill_points_spent(char: Character, game_data: GameData) -> int:
 def advantage_points_spent(char: Character, game_data: GameData) -> int:
     """Power points spent on advantages: the advantage rate per rank."""
 
-    rate = effective_trait_costs(char, game_data).advantage_per_rank
+    rate = advantage_cost_rate(char, game_data)
     return sum(adv.rank * rate for adv in char.advantages)
 
 

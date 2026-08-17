@@ -186,28 +186,114 @@ allocatable pool rather than a stat patch.
 
 ---
 
-## 6. Worked example: Enhanced Trait, exactly as you described
+## 6. Worked example: Enhanced Trait
 
-This is the case you called out — a power that should *conditionally* patch another stat.
+The case that shaped this whole layer — a power that *conditionally* patches other stats.
+Enhanced Trait raises **several traits at once** out of one rank pool, and its base cost is
+"As Trait": it costs whatever those traits cost to buy outright.
 
 ```json
 {
   "effect": "enhanced_trait",
-  "rank": 4,
-  "config": { "target": "combat.attack" },
+  "rank": 10,
+  "config": {
+    "traits": [
+      { "trait": "STR",                "ranks": 2 },
+      { "trait": "Treatment",          "ranks": 6 },
+      { "trait": "Expertise::Stealth", "ranks": 2 }
+    ]
+  },
   "extras": [],
-  "flaws": [
-    { "modifier": "removable", "value": "equipment" }
-  ],
-  "cost": 6
+  "flaws": [ { "modifier": "limited_enhanced_trait" } ],
+  "cost": 4
 }
 ```
-Reasoning:
-- Base rank 4, target = Attack (same per-rank cost as buying Attack ranks directly — 2
-  PP/rank, per `mm-core-mechanics.md` §7 — so 8 PP normally).
-- The `removable` flaw (equipment tier) discounts the cost based on the power's total cost
-  (see `modifiers.json`), dropping it to 6 PP here, but attaches a condition: **this bonus
-  only applies while the equipment is present and not disabled.**
+
+Reasoning — each row is priced at that trait's own rate from `costs.json`:
+
+| Row | Rate | Cost |
+| --- | --- | --- |
+| Strength 2 | `ability_per_rank` = 2 PP/rank | 4 |
+| Treatment 6 | `skill_ranks_per_pp` = 2 ranks/PP | 3 |
+| Expertise: Stealth 2 | `skill_ranks_per_pp` = 2 ranks/PP | 1 |
+| | | **8** |
+
+### Qualified trait keys
+
+`"Expertise::Stealth"` is a **qualified** trait key: a trait, then the row of it. The
+separator and the row-id shapes are the character sheet's own
+(`Character.skill_ranks`), so a granted row lands exactly where a bought one would and
+nothing new had to be invented:
+
+| Key | What it names |
+| --- | --- |
+| `STR`, `TOUGHNESS` | an ability or resistance — one row, nothing to qualify |
+| `Stealth` | a whole skill, *every* row of it |
+| `Expertise::Law` | one focus of a focused skill |
+| `Stealth::spec::Urban` | one specialized (narrow, half-cost) rank pool |
+| `Improved Critical::Sword` | an advantage bought for a subject |
+
+`split_trait_key` (`core/rules/appliers.py`) is the one place the two halves come apart.
+Every resolver over trait keys — `trait_category`, `trait_rate`, `trait_display_name` —
+tries the whole key first and its base second (`trait_key_candidates`), so which list a
+target lands in, what it is charged, and how it is printed can never be decided by
+different rules. Unqualified keys behave exactly as they always did.
+
+A qualified skill is priced by `skill_row_rate`, which is the **same** function
+`skill_points_spent` prices the bought ranks with: a specialized pool cannot cost one
+thing bought and another granted. An advantage's subject changes no price but does make
+the row distinct, so *Improved Critical* can be granted twice for two attacks.
+
+The eight skill ranks are summed as **fractions and rounded once**, exactly as
+`skill_points_spent` pools the bought skills — which is what makes 1 PP buy two skill ranks
+*split across two different skills* rather than one rank in each of two skills costing a
+point apiece. Six ranks of Treatment plus two of Expertise is 4 PP together, never 3 + 1
+rounded separately into 5.
+
+Then the `-1 point per rank` Limited flaw **halves** the 8 to **4**. Per-rank modifiers on
+an as-trait effect are read against the effect's *nominal* rate — its `baseCostValue`, the
+2 PP a trait ordinarily costs a rank — and the result applied to the real total as a ratio,
+because there is no single per-rank price to subtract from when Strength costs 2 a rank and
+Stealth costs half of one in the same effect. Below 1 PP/rank the ratio follows the same
+"1 point per `2 − net` ranks" rule the flat effects use, so a second flaw quarters the cost
+rather than zeroing it. Flat modifiers are added after, and the total is floored at 1 PP.
+
+The rank is not a budget here. Enhanced Trait declares `rankFollowsAllocation` in
+`effects.json`, so its rank **is** the ranks the rows spend (`synced_effect_rank`), shown
+read-only in the constructor and written back as the rows change; there is nothing to
+overspend, and `power_allocation_violations` skips it. Enhanced Senses, Enhanced Movement,
+Comprehend, Immunity and Feature keep the hand-set budget and the over-allocation warning
+— for them the rank is what was *bought*, and the allocation spends it. For Enhanced Trait
+the cost comes from the rows, so a second number would only be one more thing to keep level.
+
+The one per-trait ceiling the rules do impose is an advantage's: most are not ranked at
+all, a few cap at a fixed `maxRank`. `trait_rank_cap` states it once, the constructor's
+rank spin stops there, and `power_trait_allocation_violations` warns if a stored row went
+past it anyway. It warns rather than clamps: the row is on screen, and quietly charging for
+fewer ranks than it shows would leave the cost line disagreeing with the rows above it.
+
+**What the card shows.** The footer groups the priced rows by *kind* —
+`(Abilities 4 + Skills 4) × 1/2 = 4 PP` — because a run of raw `1/2 + 1/2 + 1/2` terms
+says nothing about why they came to a point. A subtotal that lands between points keeps its
+fraction (`Skills 2 1/2`), since that half is real and pays for the next rank.
+`effect_cost_breakdown` returns the per-row detail behind those subtotals, and the card
+hangs it off the same label as a tooltip, so the number and its workings come from one
+place.
+
+`baseCostMode: "as_trait"` in `effects.json` is what selects this rule, out of the
+`BASE_COST_KINDS` registry in `core/rules/powers_cost.py` — a mod registers another mode
+rather than editing that module. `Reduced Trait` uses the same machinery from the other
+side: it is a *flat* flaw with `costMode: "as_trait"` and its own trait rows, so it
+discounts by whatever the lowered ranks would have cost.
+
+**Backward compatibility.** An effect with no rows falls back to a single
+`config["target"]` at the effect's full rank — which is how Protection's baked-in
+`"TOUGHNESS"`, a shield's authored `{"target": "DEF"}` and every character saved before the
+allocation existed keep working, unmigrated. See `boost_allocations` in `core/rules/runtime.py`.
+
+A different flaw, a different consequence: the `removable` flaw (equipment tier) discounts
+on the power's total cost (see `modifiers.json`) and attaches a condition — **the bonus
+only applies while the equipment is present and not disabled.**
 
 At stat-computation time:
 ```
@@ -232,11 +318,25 @@ function isEffectCurrentlyActive(effect, character):
     return true   # permanent, unflagged effects are just always on
 ```
 
-Swap `target` to `"abilities.strength"`, `"skills.stealth"`, `"resistances.toughness"`, etc.
-and the same function covers Enhanced Ability, Enhanced Skill, Enhanced Defense, and Enhanced
-Resistance uniformly — they're all just **Enhanced Trait** configured differently, per the
-source material (`effects.json` keeps them as one effect entry with a `configurableTarget`
-field rather than four separate effects).
+Name an ability key, a skill name, a resistance key or an **advantage name** in a row and the
+same function covers Enhanced Ability, Enhanced Skill, Enhanced Defense, Enhanced Resistance
+and Enhanced Advantage uniformly — they are all just **Enhanced Trait** configured
+differently, per the source material (`effects.json` keeps them as one effect entry with a
+trait allocation rather than five separate effects). A row can raise all five in one power,
+which is what the rules' own *Berserker Rage* configuration needs: *Enhanced Advantage:
+Fearless 2; Enhanced Strength, Sustained; Reduced Defense 1*.
+
+An advantage is a trait here like any other, but it is not a *number*: it totals nothing, so
+`CATEGORY_ADVANTAGE` sits outside `NUMERIC_CATEGORIES` and the Advantages block reads it
+(`granted_advantages`) rather than any total adding it. A granted advantage is paid for by
+the power, so it never enters `advantage_points_spent` or the shared Heroic budget — the same
+rule the ability boosts follow, where the boosted ranks are the power's cost and not the
+ability's.
+
+A note on skills: a row names the **base skill**, and a power's boost reaches every row of
+that skill — each focus and specialized pool included. That is the documented behaviour of
+`skill_bonus`, not an accident of the picker, so "Expertise" raises every Expertise focus
+rather than asking which one.
 
 **Power Level note:** the *combined* total (base + all active Enhanced Trait bonuses) must
 still respect the Power Level caps from `mm-core-mechanics.md` §7. Validate that at
@@ -294,18 +394,32 @@ before any of this still loads all-active.
 ```
 Effect (from effects.json)
 ├── id, name, effectType, action, range, duration, check, resistance, baseCost
+├── baseCostValue: int                   // points per rank, or (as_trait) the NOMINAL rate
+│                                        // the per-rank modifiers are read against
+├── rankFollowsAllocation: bool          // the rank IS what the trait allocation spends,
+│                                        // not a budget; omitted means a hand-set rank
+├── baseCostMode: "flat" | "as_trait"    // how that is charged; omitted means flat. One
+│                                        // handler per mode in `BASE_COST_KINDS` (§6)
 ├── configurableTarget: null | "trait"   // true for Enhanced Trait-style effects
+├── config: []                           // the effect's configurable qualities (§9). A
+│                                        // `repeatable` field with a `trait` column and an
+│                                        // `int` column is a TRAIT ALLOCATION: each row
+│                                        // names a trait and the ranks put into it, spent
+│                                        // out of the effect's own rank
 ├── implicitModifiers: []                // modifier ids the effect carries by definition;
 │                                        // an attacking effect has ["attack"], which is what
 │                                        // supplies its check (so its own `check` is null)
 ├── rangeDistance: {}                    // optional; overrides how far this effect reaches
 │                                        // once its range is Ranged (see §10)
 └── statIntegration: { pattern: "passive_permanent"|"passive_toggle"|"instant_action"|"resource_pool",
-                        affects: "ability"|"skill"|"defense"|"resistance"|"movement"|"senses"|
-                                 "none"|"special" }
+                        affects: "ability"|"skill"|"advantage"|"defense"|"resistance"|
+                                 "movement"|"senses"|"none"|"special" }
 
 Modifier (from modifiers.json)
 ├── id, name, category ("extra"|"flaw"), costFormula, costValue, flat (bool), ranked (bool)
+├── costMode: "" | "as_trait"            // "" reads costValue; as_trait computes the
+│                                        // magnitude from the modifier's own trait
+│                                        // allocation (Reduced Trait, §6)
 ├── overrides: { range?, action?, duration?, check?, resistance?, effectType? }
 ├── grantsAttack (bool)                  // gives the effect its attack roll
 ├── dropsCheck (bool)                    // removes it again (Perception Range)
@@ -324,6 +438,9 @@ Modifier (from modifiers.json)
 
 PowerEffectInstance  (part of a character's Power)
 ├── effectId, rank, config{}, extras[]{modifierId, rank?}, flaws[]{modifierId, rank?}, descriptors[]
+│   // config holds a trait allocation as [{trait, ranks}, ...] where each trait is a
+│   // key, optionally qualified with "::" to narrow it to one row (see §6); the legacy single
+│   // {target: "STR"} shape is still read, at the effect's full rank (§6)
 ├── sizeScalesDamage (bool, default true) // whether the wielder's size raises this
 │                                          // effect's rank (the constructor's Extended
 │                                          // settings switch). Only ever reaches an effect

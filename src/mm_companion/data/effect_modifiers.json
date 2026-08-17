@@ -712,14 +712,18 @@
           "name": "Reduced Trait",
           "costFormula": "-1x the cost of the reduced trait, flat",
           "costValue": 0,
+          "costMode": "as_trait",
           "flat": true,
           "config": [
             {
-              "key": "reduced_target",
+              "key": "reduced",
               "label": "Reduces",
-              "type": "select",
-              "source": "traits",
-              "hint": "Which trait is lowered to pay for the boosted one."
+              "type": "repeatable",
+              "hint": "One row per trait lowered to pay for the ones raised, and by how many ranks. The discount is what those ranks would have cost to buy; the effect still costs at least 1 point.",
+              "columns": [
+                { "key": "trait", "label": "Trait", "type": "trait", "source": "boost_traits" },
+                { "key": "ranks", "label": "Ranks", "type": "int" }
+              ]
             }
           ],
           "description": "Boosts one trait at the cost of lowering another."

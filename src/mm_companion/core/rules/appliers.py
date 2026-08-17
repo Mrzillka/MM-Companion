@@ -36,7 +36,7 @@ from ..components import (
     APPLY_SPEED,
     TraitBoost,
 )
-from ..data_loader import GameData
+from ..data_loader import GameData, Skill
 from ..registry import Registry
 
 # --- vocabularies ---------------------------------------------------------------------
@@ -46,21 +46,28 @@ from ..registry import Registry
 # declared here so an applier has somewhere honest to put a non-numeric grant; the
 # movement readout still derives its own lines in :mod:`.movement`, and nothing reads
 # ``penalty`` yet (the equipment phases do).
+#
+# ``advantage`` is a trait a power can raise but *not* a number on a printed total:
+# an Enhanced Advantage grants the advantage itself at the ranks it names, so it is
+# deliberately outside :data:`NUMERIC_CATEGORIES` and read by the Advantages block
+# rather than added to anything.
 CATEGORY_ABILITY = "ability"
 CATEGORY_RESISTANCE = "resistance"
 CATEGORY_SKILL = "skill"
+CATEGORY_ADVANTAGE = "advantage"
 CATEGORY_MOVEMENT = "movement"
 CATEGORY_SENSE = "sense"
 CATEGORY_PENALTY = "penalty"
 
 NUMERIC_CATEGORIES = (CATEGORY_ABILITY, CATEGORY_RESISTANCE, CATEGORY_SKILL)
 
-# The ``affects`` categories a record may declare that mean "this raises a number on
+# The ``affects`` categories a record may declare that mean "this raises a trait on
 # the sheet" — the author's own statement of intent, which is why the :data:`APPLY_BONUS`
 # applier honours it rather than inferring everything from the target key. (``defense``
-# is here because the defence resistances live in the resistances list.) A record
-# declaring no ``affects`` at all states nothing, and is taken at its target.
-BOOST_TRAIT_CATEGORIES = frozenset({"ability", "resistance", "defense", "skill"})
+# is here because the defence resistances live in the resistances list; ``advantage``
+# because Enhanced Trait can raise one, even though an advantage totals nothing.) A
+# record declaring no ``affects`` at all states nothing, and is taken at its target.
+BOOST_TRAIT_CATEGORIES = frozenset({"ability", "resistance", "defense", "skill", "advantage"})
 
 # How one contribution combines with the others on the same trait.
 STACK_SUM = "sum"  # adds on top of everything else in its group
@@ -202,21 +209,99 @@ def apply_stat_effect(kind: str, context: ApplyContext) -> tuple[TraitContributi
     return applier(context) if applier is not None else ()
 
 
+#: Separates a trait key from the *qualifier* narrowing it — the same separator the
+#: character's own skill rows are keyed by (``"Expertise::Law"`` for a focus,
+#: ``"Stealth::spec::Urban"`` for a specialized pool; see
+#: :attr:`~mm_companion.core.character.Character.skill_ranks`). An advantage bought for a
+#: subject reuses it (``"Improved Critical::Sword"``), so one convention covers every
+#: trait a power can name and a qualified key *is* the row id the sheet already knows.
+TRAIT_QUALIFIER_SEP = "::"
+
+#: Marks a *specialized* (narrow, half-cost) rank pool inside a skill row id's qualifier
+#: — the ``"Stealth::spec::Urban"`` shape :attr:`Character.specializations` produces.
+#: Beside the separator because it is the other half of one key format, and three
+#: modules (display, pricing, the picker) have to read it the same way.
+SPECIALIZED_ROW_MARKER = "spec::"
+
+
+def split_trait_key(target: str) -> tuple[str, str]:
+    """A trait key as ``(base, qualifier)`` — ``"Expertise::Law"`` → ``("Expertise", "Law")``.
+
+    The qualifier is ``""`` for an unqualified key, which is every ability, resistance,
+    plain skill and plain advantage. A specialized pool keeps its ``"spec::"`` marker
+    inside the qualifier (``("Stealth", "spec::Urban")``) rather than splitting twice:
+    the marker is part of *which row* is meant, and the cost rules read it.
+    """
+
+    base, _sep, qualifier = target.partition(TRAIT_QUALIFIER_SEP)
+    return base, qualifier
+
+
 def trait_category(game_data: GameData, target: str) -> str:
-    """Which trait list ``target`` belongs to — ``ability``/``resistance``/``skill``, or ``""``.
+    """Which trait list ``target`` belongs to — ability/resistance/skill/advantage, or ``""``.
 
     A target naming nothing the sheet tracks (a descriptor an Immunity names, a sense)
     resolves to ``""``, which is how the :data:`APPLY_BONUS` applier declines to
     contribute rather than inventing a row.
+
+    Advantages resolve **last**, after the three keyed lists, so a target that is both
+    a skill name and an advantage name reads as the skill it always did. The same order
+    is what :func:`~.trait_rates.trait_rate` prices in, so the list a target lands in and
+    the rate it is charged at can never disagree.
+
+    A *qualified* key (:func:`split_trait_key`) is tried whole first and then by its
+    base, so ``"Expertise::Law"`` lands in the skills and ``"Improved Critical::Sword"``
+    in the advantages. Whole-first matters: a trait whose own name happens to contain the
+    separator would otherwise be resolved as something else entirely.
     """
 
-    if any(a.key == target for a in game_data.abilities):
-        return CATEGORY_ABILITY
-    if any(r.key == target for r in game_data.resistances):
-        return CATEGORY_RESISTANCE
-    if any(s.name == target for s in game_data.skills):
-        return CATEGORY_SKILL
+    for key in trait_key_candidates(target):
+        if any(a.key == key for a in game_data.abilities):
+            return CATEGORY_ABILITY
+        if any(r.key == key for r in game_data.resistances):
+            return CATEGORY_RESISTANCE
+        if any(s.name == key for s in game_data.skills):
+            return CATEGORY_SKILL
+        if any(a.name == key for a in game_data.advantages):
+            return CATEGORY_ADVANTAGE
     return ""
+
+
+def skill_for_row(game_data: GameData, row_id: str) -> Skill | None:
+    """Resolve a skill *row id* to its :class:`Skill` record.
+
+    A row id is a skill name, ``"<Skill>::<focus>"`` for a focused instance, or
+    ``"<Skill>::spec::<name>"`` for a specialized pool; all three map back to the same
+    base skill. The whole id is tried before its base, so a skill whose name somehow
+    contained the separator would still resolve to itself.
+
+    A bare ``"<Skill>: <focus>"`` — one colon, the *display* form — resolves too. It is
+    not what the sheet writes, but it is what a hand-written or pre-``::`` save can hold,
+    and reading it as an unknown skill would silently drop that row's ability.
+
+    Down here rather than beside the cost rates because both sides of the sheet need it
+    and they sit on opposite sides of the dependency chain: the derived totals resolve a
+    row to know which ability it adds, and :func:`~.trait_rates.skill_row_rate` resolves
+    the same row to know what it costs.
+    """
+
+    by_name = {s.name: s for s in game_data.skills}
+    if row_id in by_name:
+        return by_name[row_id]
+    base = split_trait_key(row_id)[0]
+    return by_name.get(base) or by_name.get(base.split(":", 1)[0].strip())
+
+
+def trait_key_candidates(target: str) -> tuple[str, ...]:
+    """``target`` itself, then its base when it carries a qualifier.
+
+    The lookup order every resolver over trait keys walks — :func:`trait_category` here
+    and :func:`~.trait_rates.trait_rate` next door — so which list a target lands in and
+    what it is charged can never be decided by different rules.
+    """
+
+    base, qualifier = split_trait_key(target)
+    return (target, base) if qualifier else (target,)
 
 
 def _contribution(context: ApplyContext, category: str, kind: str) -> tuple[TraitContribution, ...]:

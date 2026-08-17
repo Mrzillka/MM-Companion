@@ -707,6 +707,26 @@ def test_a_fitted_accessorys_own_effects_reach_the_weapon(data, hero) -> None:
     assert len(gun.build.effects) == bare
 
 
+def test_a_shields_enhanced_trait_costs_and_boosts_as_it_always_did(data, hero) -> None:
+    """The authored ``config["target"]`` shape predates the trait allocation.
+
+    Enhanced Trait is priced "as trait" now, but Defence is a derived resistance bought
+    at the combat rate — the same 2 points a rank the flat base cost used to charge — so
+    a shield's price is unmoved, and its single authored target still reads back through
+    the fallback in :func:`~mm_companion.core.rules.boost_allocations`.
+    """
+    from mm_companion.core.rules import effect_total_cost
+
+    shield = _item(data, "medium_shield")
+    effect = next(e for e in shield.build.effects if e.effect_id == "enhanced_trait")
+    assert effect.config == {"target": "DEF"}
+    assert effect_total_cost(effect, data) == effect.rank * 2
+
+    hero.equipment = [shield]
+    shield.worn = True
+    assert resistance_total(hero, data, "DEF") == effect.rank
+
+
 def test_a_fitted_accessorys_trait_boost_reaches_the_sheet(data, hero) -> None:
     """A fitted accessory is off ``Character.equipment``, so the gatherer walked past it."""
     jacket = _item(data, "leather_armor")

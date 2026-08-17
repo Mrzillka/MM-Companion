@@ -13,7 +13,12 @@ from ..registry import Registry
 from .appliers import trait_category
 from .derived import effective_ability
 from .powers_cost import array_alternate_cost, array_base_index, effect_effective_rank
-from .runtime import _resolved_trait_target, _trait_name, effect_current_rank
+from .runtime import (
+    effect_current_rank,
+    resolved_trait_allocation,
+    trait_allocation_field,
+    trait_display_name,
+)
 from .size import base_size_rank
 
 
@@ -155,7 +160,7 @@ def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str
 def _config_trait_name(game_data: GameData | None, value: str) -> str:
     """A stored config value shown as a trait name — ``"AGL"`` → ``"Agility"``.
 
-    Falls through :func:`_trait_name` (abilities/resistances/skills) to the derived
+    Falls through :func:`trait_display_name` (abilities/resistances/skills) to the derived
     stats ``system.json`` names, so a checkable-but-unbuyable stat like Initiative
     still reads by its label. Anything else (a free-text value) passes through.
     """
@@ -165,7 +170,7 @@ def _config_trait_name(game_data: GameData | None, value: str) -> str:
     for trait in game_data.system.derived_traits:
         if trait.key == value:
             return trait.label
-    return _trait_name(game_data, value)
+    return trait_display_name(game_data, value)
 
 
 def _render_note(
@@ -804,18 +809,26 @@ def effect_stat_rows(
         value = _measure_value(base_effect.measure, effect.rank, game_data)
         if value:
             rows.append(EffectStat("measure", base_effect.measure.label, "", value, ""))
+    allocation_field = trait_allocation_field(base_effect)
+    allocation_key = allocation_field[0].key if allocation_field else ""
     for field in base_effect.config_fields:
         if field.overrides or field.type == "checkbox":
             continue  # a checkbox is a toggle or surfaced via a readout, not a value row
+        if field.key == allocation_key:
+            continue  # the Enhances row below already says it, and says it by name
         value = effect.config.get(field.key)
         if value:
             rows.append(EffectStat(field.key, field.label, "", _config_display(field, value), ""))
-    # A trait booster (Enhanced Trait, Protection) shows which trait it raises and by
-    # how much — green, since it's an improvement — so the summary isn't blank.
-    target = _resolved_trait_target(effect, base_effect)
-    if target and trait_category(game_data, target):
-        raised = f"{_trait_name(game_data, target)} +{effect.rank}"
-        rows.append(EffectStat("enhances", "Enhances", "", raised, "better"))
+    # A trait booster (Enhanced Trait, Protection) shows which traits it raises and by
+    # how much — green, since it's an improvement — so the summary isn't blank. An
+    # Enhanced Trait raises several at once, each at its own allocated rank.
+    raised = [
+        f"{trait_display_name(game_data, target)} +{ranks}"
+        for target, ranks in resolved_trait_allocation(effect, base_effect)
+        if trait_category(game_data, target)
+    ]
+    if raised:
+        rows.append(EffectStat("enhances", "Enhances", "", ", ".join(raised), "better"))
     # Tier-5 derived readouts (Growth's size mods, Insubstantial's state, ...) — purely
     # computed information, appended as untinted (or sign-tinted) rows.
     rows.extend(effect_readout_rows(effect, game_data, char))
@@ -1157,13 +1170,24 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
         line += f" (resisted by {stats['resistance']})"
 
     # Configured qualities that don't override a stat are appended (e.g. conditions).
+    # A trait allocation is appended too, but rendered from the traits themselves so it
+    # reads "Strength +2, Treatment +6" rather than echoing the raw keys it stores.
+    allocation_field = trait_allocation_field(base)
+    allocation_key = allocation_field[0].key if allocation_field else ""
     chosen = []
     for field in base.config_fields:
-        if field.overrides or field.type == "checkbox":
+        if field.overrides or field.type == "checkbox" or field.key == allocation_key:
             continue
         value = effect.config.get(field.key)
         if value:
             chosen.append(f"{field.label}: {_config_display(field, value)}")
+    raised = [
+        f"{trait_display_name(game_data, target)} +{ranks}"
+        for target, ranks in resolved_trait_allocation(effect, base)
+        if trait_category(game_data, target)
+    ]
+    if raised:
+        chosen.append("Enhances: " + ", ".join(raised))
     if chosen:
         line += "; " + ", ".join(chosen)
     return line

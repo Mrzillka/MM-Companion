@@ -109,6 +109,24 @@ Two things the blocks add on top:
   The inline `✕` is gone (a focus/spec name cell is a plain item again, so the
   condition overlay can strike it); the `＋` stays, being an *add* affordance with
   nowhere else discoverable to live.
+  Some rows are **granted, not bought**: an Enhanced Trait may raise
+  `Expertise::Stealth` on a hero with no Expertise row at all, and `granted_skill_rows`
+  finds the orphans so `_expand` can grow one indented row per orphan under its base
+  skill. Such a row is muted, carries a read-only `—` where its rank spin would be, and
+  is deliberately **not** in `_row_refs` — reordering or removing it would promise an
+  edit the block cannot make, since the power owns it. It keeps its `ROLL_ROLE` payload,
+  because a granted focus is a real skill and is rolled like one. `_split_blocks` and
+  `_name_labels` count these rows too: a row left out of either is a row the panel was
+  not sized for. `ENHANCEMENTS_CHANGED` routes to `refresh_granted`, not straight to
+  `refresh_totals` — a row that does not exist cannot have its total refreshed — and that
+  method rebuilds only when the granted *set* moved, falling through to `refresh_totals`
+  otherwise, so the common signal does not cost the block its selection.
+
+  "Add focus…" is a `getItem`, not a `getText`: a skill with an enumerable set of focuses
+  offers them, editably, and one whose focuses cannot be listed shows its `focus_note` as
+  the prompt instead. The Enhanced Trait picker reads the same two fields, so the two
+  places a focus is named offer the same thing.
+
   Three rules keep a long focus name from being clipped, and all three are easy to
   re-break. A focused skill's header spans from **`COL_NAME`**, not from
   `COL_ABILITY`: a `ResizeToContents` column measures a spanned cell widget as its

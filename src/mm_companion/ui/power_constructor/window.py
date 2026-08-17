@@ -41,6 +41,7 @@ from mm_companion.core.rules import (
     power_pl_violations,
     power_strength_amount_violations,
     power_total_cost,
+    power_trait_allocation_violations,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.attachment_dialog import AttachmentDialog
@@ -794,6 +795,17 @@ class PowerConstructorWindow(QMainWindow):
         """Tier-4 over-allocation breaches (an effect spending ranks it doesn't have)."""
         return power_allocation_violations(self.power, self._data)
 
+    def _trait_cap_violations(self) -> list[str]:
+        """Allocation rows holding more ranks of a trait than it can be taken at.
+
+        Only advantages have a ceiling of their own — most are not ranked, a few cap at a
+        fixed number — so in practice this is "three ranks put into a one-rank advantage".
+        A warning, not a clamp: the row is the player's and on screen, and quietly
+        charging for fewer ranks than it shows would leave the footer disagreeing with it.
+        """
+
+        return power_trait_allocation_violations(self.power, self._data, self._character)
+
     def _linked_violations(self) -> list[str]:
         """Linked effects that don't share a common Range (a build error)."""
         return power_linked_range_violations(self.power, self._data)
@@ -816,6 +828,7 @@ class PowerConstructorWindow(QMainWindow):
         """Show or hide the live warning from the current PL, allocation, and link breaches."""
         pl = self._pl_violations()
         alloc = self._alloc_violations()
+        caps = self._trait_cap_violations()
         linked = self._linked_violations()
         strength = self._strength_violations()
         requirement = self._requirement_violations()
@@ -824,6 +837,8 @@ class PowerConstructorWindow(QMainWindow):
             headlines.append("over Power Level")
         if alloc:
             headlines.append("over-allocated")
+        if caps:
+            headlines.append("trait over its rank cap")
         if linked:
             headlines.append("mismatched linked Range")
         if strength:
@@ -833,7 +848,9 @@ class PowerConstructorWindow(QMainWindow):
         headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
-            self._warning.setToolTip("\n".join((*pl, *alloc, *linked, *strength, *requirement)))
+            self._warning.setToolTip(
+                "\n".join((*pl, *alloc, *caps, *linked, *strength, *requirement))
+            )
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:

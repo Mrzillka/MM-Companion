@@ -26,17 +26,81 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   derived from a flaw's `gate` tag (`activation`, `removable`, `toggle`,
   `limited`). The *systems* reading these — `effect_is_active`,
   `power_trait_bonuses`, `effective_ability`, … — live in `rules`.
-- **Cost** (`rules`): `effect_total_cost` = `ceil` of net per-rank cost × rank
-  (with M&M's sub-1-PP/rank fraction rule) plus flat modifiers; `power_total_cost`
-  folds in the structure. `effect_cost_formula` renders the human-readable
-  breakdown. All numbers are data-driven (`base_cost_value`, modifier
-  `cost_value`, config `cost_value` overrides) — never hardcoded.
+- **Cost** (`rules`): *how* an effect is priced is data — its `baseCostMode`
+  picks a handler out of the `BASE_COST_KINDS` registry in `powers_cost`, and a
+  mod registers another rather than editing that module. The default `flat` is
+  `ceil` of net per-rank cost × rank (with M&M's sub-1-PP/rank fraction rule)
+  plus flat modifiers; `power_total_cost` folds in the structure.
+  `effect_cost_formula` renders the human-readable breakdown. All numbers are
+  data-driven (`base_cost_value`, modifier `cost_value`, config `cost_value`
+  overrides) — never hardcoded.
+- **`as_trait`**: Enhanced Trait's base cost is "as trait" — it costs whatever the
+  traits it raises cost to buy. Each allocated row is priced at its own
+  `trait_rate` and the fractions are summed **unrounded**, then rounded once, so a
+  rank of Stealth and a rank of Treatment cost 1 point *together* — the same
+  pooling `skill_points_spent` gives the bought skills, and the reason
+  `trait_rates` was split out of `costs` (which sits *above* `powers_cost` in the
+  DAG and so cannot be imported from it). Per-rank modifiers scale that total
+  against the effect's *nominal* rate, since there is no one per-rank price to
+  subtract from: the typical −1/rank Limited takes 2 to 1 and so halves it. The
+  total is floored at 1 PP. `Reduced Trait` is the same rule with a minus sign —
+  a flat flaw whose `costMode` is `as_trait` and whose own rows say what was
+  lowered. The card's footer groups the priced rows by *kind*
+  (`(Abilities 4 + Skills 4) × 1/2`), because a run of raw `1/2 + 1/2 + 1/2` terms says
+  nothing about why they came to a point; `effect_cost_breakdown` returns the per-row
+  detail behind those subtotals and the card hangs it off the same label as a tooltip,
+  so a number and its workings can never come from two places.
 - **Effective vs. bought**: `effect_effective_rank` adds an ability a modifier
   folds in (Strength-Based Damage → Strength) to the bought rank — this is the
   rank that sets save DCs and PL caps, while cost counts only the bought rank.
   A power's active `TraitBoost` feeds `effective_ability` / `resistance_total` /
   `skill_total`, so an Enhanced-Trait boost flows through the whole sheet; the
   power pays for it, so the boosted trait's own point cost is unchanged.
+- **One boost, many traits.** A `TraitBoost` yields one contribution *per allocated
+  trait*, not one per effect: `boost_allocations` reads the effect's trait-allocation
+  config field (a `repeatable` with a `trait` column and an `int` column) and returns
+  `(trait, ranks)` pairs. When there are no rows it falls back to a single
+  `config["target"]` at the effect's full rank — which is exactly how Protection's
+  baked-in target, a shield's authored `{"target": "DEF"}` and every character saved
+  before the allocation existed keep working. **Nothing is migrated on load**; the
+  fallback is the compatibility story, and deleting it would silently blank old sheets.
+- **Advantages are traits too.** `CATEGORY_ADVANTAGE` is a trait category an Enhanced
+  Trait can raise, but deliberately *not* one of `NUMERIC_CATEGORIES` — an advantage is
+  presence-and-rank, not a number on a printed total. `granted_advantages` is what reads
+  them, and the Advantages block shows them as muted, unselectable rows naming the
+  granting power. A granted advantage is paid for by that power, so it enters neither
+  `advantage_points_spent` nor the shared Heroic budget; both read the *bought*
+  `char.advantages` and nothing else. If the advantage itself carries a
+  `skill_bonus_per_rank`, `advantage_contributions` chains it through to the skill total,
+  so an Enhanced Advantage grants what buying the advantage would have granted.
+- **A trait key may be *qualified*** to name one row rather than a whole trait, with
+  `::` and the character sheet's own row-id shapes: `Expertise::Law` (a focus),
+  `Stealth::spec::Urban` (a specialized pool), `Improved Critical::Sword` (an advantage
+  bought for a subject). `split_trait_key` / `trait_key_candidates` (in `appliers`, the
+  bottom of the DAG, so everything can reach them) are the one place the halves come
+  apart, and *every* resolver walks the same whole-then-base order — `trait_category`,
+  `trait_rate`, `trait_display_name`. That order is the invariant: which list a target
+  lands in, what it costs and how it prints cannot be decided by three different rules.
+  Unqualified keys behave exactly as before, which is why nothing needed migrating.
+- **One skill rate, both sides.** `skill_row_rate` prices a skill *row* — homebrew
+  override, then the specialized rate for a `spec::` pool or a `specialized_cost` skill,
+  then the ordinary rate — and both `skill_points_spent` (bought ranks) and `trait_rate`
+  (granted ranks) go through it. They were two rules until a power could name a row, and
+  two rules would have priced the same pool differently depending on who paid for it.
+- **A granted row may not exist yet.** An Enhanced Trait can name a focus the character
+  never bought. `granted_skill_rows` finds those orphans and the Skills block grows a
+  muted, un-editable row for each (rollable, but with no rank spin and no entry in
+  `_row_refs`), the way the Advantages block already shows a granted advantage. Without
+  it the bonus is paid for and invisible, which reads as a power that does nothing.
+- **Rank as allocation, not budget.** An effect declaring `rankFollowsAllocation`
+  (Enhanced Trait alone, in the base data) has its rank *written from* its rows —
+  `synced_effect_rank` — and shown read-only; `power_allocation_violations` skips it,
+  since there is no budget to overspend. Every other allocation effect keeps the hand-set
+  rank and the warning. The one per-trait ceiling that does exist is an advantage's, via
+  `trait_rank_cap`: the constructor's rank spin stops there and
+  `power_trait_allocation_violations` warns about a stored row that went past it. It
+  warns rather than clamps — repricing a row the player can see would leave the cost line
+  disagreeing with the rows above it.
 - **Runtime state** (separate from the point build): `effect.toggled_on` /
   `effect.suppressed` and `power.activated` / `power.item_present` gate whether a
   passive bonus currently applies (`effect_is_active`). The UI drives all of a

@@ -237,6 +237,7 @@ _BASE_BLOCKS = [
             CONDITION_CHANGED: "refresh_conditions",
             FACTS_CHANGED: "refresh_power_options",
             COST_RATES_CHANGED: "refresh_cost",
+            ENHANCEMENTS_CHANGED: "refresh_granted",
         },
         {},
         {},
@@ -261,7 +262,11 @@ _BASE_BLOCKS = [
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
         {
             ABILITY_CHANGED: "refresh_totals",
-            ENHANCEMENTS_CHANGED: "refresh_totals",
+            # Not refresh_totals: a power can grant a skill *row* the character never
+            # bought (an Enhanced Trait naming a focus), and a row that does not exist
+            # cannot have its total refreshed. refresh_granted rebuilds when the granted
+            # set moves and falls through to refresh_totals when it hasn't.
+            ENHANCEMENTS_CHANGED: "refresh_granted",
             COST_RATES_CHANGED: "refresh_totals",
         },
         _ROLLS_AND_LOADS,

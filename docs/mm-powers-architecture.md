@@ -438,6 +438,9 @@ Modifier (from modifiers.json)
 
 PowerEffectInstance  (part of a character's Power)
 ├── effectId, rank, config{}, extras[]{modifierId, rank?}, flaws[]{modifierId, rank?}, descriptors[]
+│   // a selection also carries appliesFrom/appliesTo — the rank *band* it covers, 0/0
+│   // meaning every rank. Per-rank modifiers only: a flat charge costs the same over
+│   // four ranks as over twelve, so a band there would change no number (§2)
 │   // config holds a trait allocation as [{trait, ranks}, ...] where each trait is a
 │   // key, optionally qualified with "::" to narrow it to one row (see §6); the legacy single
 │   // {target: "STR"} shape is still read, at the effect's full rank (§6)
@@ -447,10 +450,18 @@ PowerEffectInstance  (part of a character's Power)
 │                                          // that forces a resistance.
 ├── currentRank (int|null, default null)  // runtime, per §7: the rank the effect is
 │                                          // *currently* held at, null meaning full.
-│                                          // Read by the size layer — Growth 3 is a
-│                                          // ladder of rungs the card offers as buttons
-│                                          // (`size_steps`), not one leap. Never read by
-│                                          // cost: dialling down refunds nothing.
+│                                          // Feeds `effect_effective_rank`, so the save
+│                                          // DC follows it; the card drives it from a
+│                                          // slider (`_RankDial`). Never read by cost or
+│                                          // by validation, which take the *bought*
+│                                          // rank (`effect_build_rank`): dialling down
+│                                          // refunds nothing and legalises nothing.
+├── rankDial (bool, default false)        // build: whether the card carries that slider
+│                                          // at all. A size effect gets one regardless.
+├── plCap ("" | "effect" | "attack")      // build: hold this effect hard to 2 x PL,
+│                                          // lowering the side not named
+│                                          // (`effect_pl_cap_shift`). Empty leaves the
+│                                          // cap the warning it has always been.
 └── computedCost
 
 Power

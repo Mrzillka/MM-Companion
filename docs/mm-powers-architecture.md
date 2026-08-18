@@ -286,6 +286,22 @@ rather than editing that module. `Reduced Trait` uses the same machinery from th
 side: it is a *flat* flaw with `costMode: "as_trait"` and its own trait rows, so it
 discounts by whatever the lowered ranks would have cost.
 
+**A mode that does not exist yet: `by_configuration`.** Five effects are priced by *how
+they are configured*, and all five are charged their floor instead — Illusion 1–5 per
+rank by how many sense types it fools, sight counting as two (PDF p131); Obscure 1–10 the
+same way (p139); Remote Sensing 5 for one sense type, +1 for each further one, 10 for all,
+sight again counting as two (p142); Transmute 2/3/4/5 by how broad its source and result
+are (p147); and Environment, whose eight sub-effects cost 1 or 2 points per rank *each*
+and add together (p124–125). This is the registry's reason for existing: the fix is a
+handler registered beside `flat` and `as_trait`, reading a new config field on each of
+those effects, and no change to the surrounding module.
+
+**Dynamic Alternate Effects are described above but not modelled.** `array_alternate_cost`
+reads a single `costValue` off the `alternate_effect` record, so every alternate costs 1;
+the book charges 2 for a Dynamic one and 1 more to make the array's *primary* Dynamic
+(p101), and Dynamic members share a point pool reallocated once per turn. There is no
+per-alternate flag and no runtime allocation state for that pool.
+
 **Backward compatibility.** An effect with no rows falls back to a single
 `config["target"]` at the effect's full rank — which is how Protection's baked-in
 `"TOUGHNESS"`, a shield's authored `{"target": "DEF"}` and every character saved before the

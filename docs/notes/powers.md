@@ -26,6 +26,19 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   derived from a flaw's `gate` tag (`activation`, `removable`, `toggle`,
   `limited`). The *systems* reading these — `effect_is_active`,
   `power_trait_bonuses`, `effective_ability`, … — live in `rules`.
+- **The data is checked against the book, by page.** The reference is the **4e Origin
+  Edition** core rulebook (`reference/core-book/`, gitignored; printed page = PDF page −
+  2). Every effect's type/action/range/duration/check/resistance/base cost, every generic
+  extra and flaw, and every per-effect extra and flaw has been diffed against it. Two
+  things follow. First, **do not "fix" a base cost by editing `baseCostValue`**: Illusion,
+  Obscure, Remote Sensing and Transmute cost *1–5*, *1–10*, *5–10* and *2–5* per rank
+  depending on how they are configured (PDF p131, p139, p142, p147), and Environment's
+  sub-effects are 1 or 2 per rank each and *add together* (p124). All five are charged
+  their floor today; the honest fix is a `by_configuration` handler in `BASE_COST_KINDS`,
+  not a bigger constant. Their `baseCost` label already says the range so the gap is
+  visible on the card. Second, **do not trust the summary grids** on PDF 108 and 234–235
+  — `pdftotext` reads them column-wise and every cell but the name lands on the wrong
+  row. Read the effect's own entry (they start at p109).
 - **Cost** (`rules`): *how* an effect is priced is data — its `baseCostMode`
   picks a handler out of the `BASE_COST_KINDS` registry in `powers_cost`, and a
   mod registers another rather than editing that module. The default `flat` is

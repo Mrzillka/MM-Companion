@@ -1169,13 +1169,15 @@ def test_modifier_chip_config_drives_cost(qapp: QApplication) -> None:
     card = window.canvas.add_effect("protection")
     card._rank.setValue(10)
     card.attach_modifier("removable")
-    assert window._cost.text() == "Total cost: 9 PP"  # -1 flat by default
+    # Removable is charged against the *power's* total, 10 here, at its value per 5
+    # points rounded up — so -1 x 2, and the footer shows that arithmetic.
+    assert window._cost.text() == "Total cost: 8 PP  (10 − 2 Removable)"
 
     chip = card._chips[0]
-    combo = chip.findChild(QComboBox)  # the tier selector
+    combo = chip.findChild(QComboBox)  # the tier selector, the first of the chip's two
     combo.setCurrentIndex(combo.findData("easily_removable"))
-    assert chip.selection.config == {"tier": "easily_removable"}
-    assert window._cost.text() == "Total cost: 8 PP"  # -2 flat
+    assert chip.selection.config == {"tier": "easily_removable", "loss": "long_term"}
+    assert window._cost.text() == "Total cost: 6 PP  (10 − 4 Removable)"  # -2 x 2
 
 
 def test_modifier_chip_text_field_writes_config(qapp: QApplication) -> None:

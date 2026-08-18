@@ -54,12 +54,14 @@ from mm_companion.core.rules import (
     power_display_name,
     power_from_configuration,
     power_game_terms,
+    power_gross_cost,
     power_has_custom_modifier,
     power_has_standing_effect,
     power_linked_range_violations,
     power_modifier_requirement_violations,
     power_pl_violations,
     power_runtime_gates,
+    power_scope_terms,
     power_strength_amount_violations,
     power_total_cost,
     power_trait_allocation_violations,
@@ -126,9 +128,10 @@ def test_standard_configurations_cost_what_the_book_prints() -> None:
     # the two is a real check that the recorded build is the right one.
     per_rank = re.compile(r"^(\d+) points? per rank$")
     fixed = re.compile(r"^(\d+) points?(?: \(rank \d+\))?$")
-    # Three configurations cannot reach their printed cost yet: Gadgets and the two
-    # mimicries. Both reasons are recorded in configurations.json's _meta.
-    known_gaps = {"gadgets", "material_mimicry", "power_mimicry"}
+    # Two configurations cannot reach their printed cost: the mimicries put a Close
+    # Range flaw on a Personal-range effect, where the book gives it no value. The
+    # reason is recorded in configurations.json's _meta.
+    known_gaps = {"material_mimicry", "power_mimicry"}
     checked = 0
     for configuration in data.configurations:
         power = power_from_configuration(configuration)
@@ -159,13 +162,22 @@ def test_configurations_are_grouped_by_the_effect_they_are_built_on() -> None:
 
 def test_a_flat_flaw_cannot_take_an_effect_below_one_point() -> None:
     data = load_game_data()
-    # Commlink is a 1-point-per-rank Communication with an Equipment-tier Removable
-    # worth a flat -4. Without the floor that prices at -3 and pays the character back.
-    power = power_from_configuration(configuration_by_id(data, "commlink"))
-    assert power_total_cost(power, data) == 1
+    # Damage 1 costs 1; Activation for a standard action is a flat -2. Without the floor
+    # (p150) that prices at -1 and pays the character back for taking a flaw.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=1,
+        flaws=[ModifierSelection("activation", config={"actions": "standard"})],
+    )
+    assert effect_total_cost(effect, data) == 1
     # An effect with nothing bought still costs nothing, though.
     empty = PowerEffectInstance("damage", rank=0)
     assert effect_total_cost(empty, data) == 0
+    # Commlink is the configuration that exposed this: 1-point-per-rank Communication
+    # under an Equipment-tier Removable, which discounts more than the whole power.
+    assert (
+        power_total_cost(power_from_configuration(configuration_by_id(data, "commlink")), data) == 1
+    )
 
 
 def test_a_configured_base_cost_is_priced_from_the_options_chosen() -> None:
@@ -420,17 +432,77 @@ def test_side_effect_toggle_changes_the_per_rank_discount() -> None:
     assert effect_total_cost(always, data) == 3
 
 
-def test_removable_tier_changes_the_flat_discount() -> None:
+def test_removable_is_priced_from_the_whole_power_not_one_effect() -> None:
     data = load_game_data()
-    # Protection 10: Removable is -1 flat by default, Easily Removable -2.
-    default = PowerEffectInstance("protection", rank=10, flaws=[ModifierSelection("removable")])
-    easily = PowerEffectInstance(
-        "protection",
-        rank=10,
-        flaws=[ModifierSelection("removable", config={"tier": "easily_removable"})],
+    # The rules' own worked example (PDF p161): a suit of armour whose effects come to
+    # 98 points is discounted 98 / 5 = 19.6, rounded up to 20 -> 78.
+    armour = Power(
+        name="Powered Armor",
+        effects=[
+            PowerEffectInstance("protection", rank=98, flaws=[ModifierSelection("removable")])
+        ],
     )
-    assert effect_total_cost(default, data) == 9
-    assert effect_total_cost(easily, data) == 8
+    # The effect itself is untouched: the flaw is charged against the power, not here.
+    assert effect_total_cost(armour.effects[0], data) == 98
+    assert power_gross_cost(armour, data) == 98
+    assert power_total_cost(armour, data) == 78
+    (term,) = power_scope_terms(armour, data, 98)
+    assert (term.magnitude, term.units, term.amount) == (1, 20, -20)
+
+
+def test_removable_tier_scales_the_per_five_points_discount() -> None:
+    data = load_game_data()
+    power = Power(effects=[PowerEffectInstance("protection", rank=98)])
+
+    def at(**config) -> int:
+        power.effects[0].flaws = [ModifierSelection("removable", config=config)]
+        return power_total_cost(power, data)
+
+    assert at(tier="removable") == 78  # -1 x 20
+    assert at(tier="easily_removable") == 58  # -2 x 20
+    assert at(tier="equipment") == 18  # -4 x 20
+    # Short-Term Only is worth 1 off the flaw's own value, and may take it to 0 (p160).
+    assert at(tier="equipment", loss="short_term_only") == 38  # -3 x 20
+    assert at(tier="removable", loss="short_term_only") == 98  # no discount at all
+
+
+def test_one_removable_discounts_a_power_however_many_effects_carry_it() -> None:
+    data = load_game_data()
+
+    # Removable "applies to the power as a whole and not to individual effects" (p161),
+    # but the constructor attaches modifiers to effects — so a suit of armour naturally
+    # ends up with a copy on each. Charging every one would quadruple the discount.
+    def suit(count: int) -> Power:
+        effects = [PowerEffectInstance("protection", rank=25) for _ in range(4)]
+        for effect in effects[:count]:
+            effect.flaws = [ModifierSelection("removable", config={"tier": "easily_removable"})]
+        return Power(effects=effects)
+
+    assert power_gross_cost(suit(0), data) == 100
+    assert power_total_cost(suit(1), data) == 60  # -2 x 20
+    assert power_total_cost(suit(4), data) == 60  # the same discount, not four of them
+    # The costliest tier attached wins when they disagree.
+    mixed = suit(1)
+    mixed.effects[1].flaws = [ModifierSelection("removable", config={"tier": "equipment"})]
+    assert power_total_cost(mixed, data) == 20  # -4 x 20
+
+
+def test_removable_cannot_discount_a_power_below_one_point() -> None:
+    data = load_game_data()
+    # Communication 4 costs 4; an Equipment-tier Removable is -4 per 5 points, which
+    # would zero it. The 1-point floor (p150) holds at the power level too.
+    power = Power(
+        effects=[
+            PowerEffectInstance(
+                "communication",
+                rank=4,
+                flaws=[ModifierSelection("removable", config={"tier": "equipment"})],
+            )
+        ]
+    )
+    assert power_total_cost(power, data) == 1
+    # A power with nothing bought still costs nothing, though.
+    assert power_total_cost(Power(effects=[PowerEffectInstance("damage", rank=0)]), data) == 0
 
 
 def test_subtle_points_config_sets_the_flat_cost() -> None:

@@ -38,18 +38,69 @@ def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
     the first config field whose selected option carries a ``cost_value`` (a Side Effect
     always/on-failure toggle, a Removable tier) wins. ``None`` when no such choice is
     set, leaving the modifier's own ``cost_value``.
+
+    :func:`_config_cost_delta` is then added on top of whichever number that is — so a
+    second field can shade the price the first one set, which is what Removable's
+    Short-Term Only does to its tier.
     """
 
+    override = None
     for cfg in modifier.config_fields:
         chosen = selection.config.get(cfg.key)
         if cfg.type == "points":
-            return int(chosen) if chosen is not None else cfg.default_value
+            override = int(chosen) if chosen is not None else cfg.default_value
+            break
         option = next(
             (o for o in cfg.options if o.value == chosen and o.cost_value is not None), None
         )
         if option is not None:
-            return option.cost_value
-    return None
+            override = option.cost_value
+            break
+    delta = _config_cost_delta(modifier, selection)
+    if delta == 0:
+        return override
+    base = modifier.cost_value if override is None else override
+    return max(0, base + delta)
+
+
+def _config_cost_delta(modifier: Modifier, selection) -> int:
+    """Total ``cost_delta`` of the options currently chosen, across **all** config fields.
+
+    Unlike the first-wins overrides beside it this one is a sum: the delta shades a
+    magnitude another field decided, so several of them have to be able to stack. Floored
+    at zero by the caller — a flaw's magnitude is unsigned (the sign comes from its
+    category), and the rules let Short-Term Only take Removable's value all the way down
+    to "no discount at all" (p160) rather than to a bonus.
+    """
+
+    total = 0
+    for cfg in modifier.config_fields:
+        chosen = selection.config.get(cfg.key)
+        values = chosen if isinstance(chosen, list) else [chosen]
+        for option in cfg.options:
+            if option.cost_delta and option.value in values:
+                total += option.cost_delta
+    return total
+
+
+#: Priced against the effect it is attached to — the default, and all but one modifier.
+COST_SCOPE_EFFECT = ""
+
+#: Priced against the whole assembled *power* instead. Removable "applies to the power as
+#: a whole and not to individual effects" (p161), so its discount cannot be worked out
+#: until every effect has been summed. A modifier marked this way is skipped by every
+#: effect-level bucket below and applied once by :func:`power_scope_adjustment`.
+COST_SCOPE_POWER = "power"
+
+
+def modifier_is_power_scope(modifier: Modifier) -> bool:
+    """Whether this modifier is priced from the power's total rather than the effect's.
+
+    Asked here rather than compared inline so the effect-level buckets, the formula
+    builders and the constructor all read the same one line.
+    """
+
+    return modifier.cost_scope == COST_SCOPE_POWER
 
 
 def _effective_flat(modifier: Modifier, selection) -> bool:
@@ -196,7 +247,9 @@ def _signed_modifier_cost(
     total = 0
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or _effective_flat(modifier, selection) != flat:
+        if modifier is None or modifier_is_power_scope(modifier):
+            continue
+        if _effective_flat(modifier, selection) != flat:
             continue
         if not flat and effect_rank and modifier_is_banded(modifier, selection, effect_rank):
             continue
@@ -377,7 +430,9 @@ def _banded_rank_terms(
     for selections, sign in ((effect.extras, +1), (effect.flaws, -1)):
         for selection in selections:
             modifier = catalog.get(selection.modifier_id)
-            if modifier is None or not modifier_is_banded(modifier, selection, effect.rank):
+            if modifier is None or modifier_is_power_scope(modifier):
+                continue
+            if not modifier_is_banded(modifier, selection, effect.rank):
                 continue
             magnitude = sign * _modifier_magnitude(modifier, selection, game_data, char)
             low, high = selection_band(selection, effect.rank)
@@ -795,7 +850,9 @@ def _modifier_terms(
     terms: list[int] = []
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or _effective_flat(modifier, selection) != flat:
+        if modifier is None or modifier_is_power_scope(modifier):
+            continue
+        if _effective_flat(modifier, selection) != flat:
             continue
         if not flat and effect_rank and modifier_is_banded(modifier, selection, effect_rank):
             continue
@@ -1061,6 +1118,90 @@ def array_base_index(power: Power, game_data: GameData, char: Character | None =
     return full.index(max(full))
 
 
+@dataclass(frozen=True)
+class PowerScopeTerm:
+    """One power-scope modifier's contribution to a power's total.
+
+    ``magnitude`` is what one unit of it is worth (Easily Removable's 2), ``units`` how
+    many units the power's own cost bought (``ceil(gross / cost_per_points)``, or 1 for a
+    modifier charged once), and ``amount`` the signed points it adds — negative for a
+    flaw. Kept as a record rather than a bare number because the constructor shows the
+    working: a −20 that appears from nowhere on a 98-point armour looks like a bug.
+    """
+
+    modifier: Modifier
+    magnitude: int
+    units: int
+    amount: int
+
+
+def power_scope_terms(
+    power: Power, game_data: GameData, gross: int, char: Character | None = None
+) -> tuple[PowerScopeTerm, ...]:
+    """The power-scope modifiers on a power, priced against its ``gross`` (pre-adjustment)
+    cost.
+
+    Every selection of a :data:`COST_SCOPE_POWER` modifier anywhere in the power is
+    collected, and **only the costliest selection of each modifier counts**. That is the
+    rule rather than a tidy-up: Removable "applies to the power as a whole and not to
+    individual effects" (p161), and the constructor attaches modifiers to effects, so a
+    five-effect suit of armour naturally ends up carrying five copies of the one flaw.
+    Summing them would quintuple a discount the book charges once.
+
+    Returns nothing for a power with no such modifier, which is all but the removable
+    ones — so the ordinary power pays exactly what it always did.
+    """
+
+    catalog = game_data.modifier_catalog()
+    best: dict[str, PowerScopeTerm] = {}
+    for effect in power.effects:
+        for selections, sign in ((effect.extras, +1), (effect.flaws, -1)):
+            for selection in selections:
+                modifier = catalog.get(selection.modifier_id)
+                if modifier is None or not modifier_is_power_scope(modifier):
+                    continue
+                magnitude = _modifier_magnitude(modifier, selection, game_data, char)
+                units = (
+                    math.ceil(gross / modifier.cost_per_points)
+                    if modifier.cost_per_points > 0
+                    else 1
+                )
+                term = PowerScopeTerm(
+                    modifier=modifier,
+                    magnitude=magnitude,
+                    units=units,
+                    amount=sign * magnitude * units,
+                )
+                previous = best.get(modifier.id)
+                if previous is None or abs(term.amount) > abs(previous.amount):
+                    best[modifier.id] = term
+    return tuple(term for term in best.values() if term.amount)
+
+
+def power_scope_adjustment(
+    power: Power, game_data: GameData, gross: int, char: Character | None = None
+) -> int:
+    """Net points the power-scope modifiers add to (or take off) a power's ``gross`` cost."""
+
+    return sum(term.amount for term in power_scope_terms(power, game_data, gross, char))
+
+
+def power_gross_cost(power: Power, game_data: GameData, char: Character | None = None) -> int:
+    """A power's cost from its effects alone, *before* any power-scope modifier.
+
+    This is the 98 in the rules' own worked example (p161) — the total of every effect
+    with the extras and flaws applied to those effects — and the number Removable's
+    per-5-points rate is charged against. Split out from :func:`power_total_cost` so the
+    constructor can show both halves of that arithmetic, and so a caller that wants the
+    undiscounted price (equipment does) need not rebuild the power to get it.
+    """
+
+    if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
+        full = [effect_total_cost(e, game_data, char) for e in power.effects]
+        return max(full) + (len(full) - 1) * array_alternate_cost(game_data)
+    return sum(effect_total_cost(e, game_data, char) for e in power.effects)
+
+
 def power_total_cost(power: Power, game_data: GameData, char: Character | None = None) -> int:
     """Total power-point cost of a power (``docs/mm-powers-architecture.md`` §4).
 
@@ -1068,7 +1209,14 @@ def power_total_cost(power: Power, game_data: GameData, char: Character | None =
     is a +0 bundle). An ``array`` instead pays the costliest effect in full and a
     flat :func:`array_alternate_cost` for each remaining effect, since only one is
     active at a time. ``char`` is threaded to :func:`effect_total_cost` so a
-    Strength-Based effect's folded-in ranks are priced against the wielder.
+    Strength-Based effect's folded-in ranks are priced against the wielder. That sum is
+    :func:`power_gross_cost`.
+
+    A **power-scope** modifier is then applied on top of it, once for the whole power
+    rather than once per effect — Removable's "value per 5 total Power Points of the
+    power's final cost, rounded up". The result is floored at 1 point for the same reason
+    a flat flaw is (p150): a discount may make a power cheap, never free and never a
+    refund. A power that costs nothing to begin with still costs nothing.
 
     A Dev-mode :attr:`~mm_companion.core.powers.Power.cost_override` replaces the
     whole computed total, so a homerule power spends exactly that many points; it
@@ -1077,10 +1225,37 @@ def power_total_cost(power: Power, game_data: GameData, char: Character | None =
 
     if power.cost_override is not None:
         return power.cost_override
-    if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
-        full = [effect_total_cost(e, game_data, char) for e in power.effects]
-        return max(full) + (len(full) - 1) * array_alternate_cost(game_data)
-    return sum(effect_total_cost(e, game_data, char) for e in power.effects)
+    gross = power_gross_cost(power, game_data, char)
+    if gross <= 0:
+        return gross
+    return max(1, gross + power_scope_adjustment(power, game_data, gross, char))
+
+
+def power_cost_formula(power: Power, game_data: GameData, char: Character | None = None) -> str:
+    """The working behind a power's total, or ``""`` when there is nothing to explain.
+
+    Only a power-scope modifier makes the total anything other than the sum of the effect
+    costs already shown on the cards, so this is empty for every ordinary power and the
+    constructor shows the bare number. When Removable is in play it reads
+    ``98 − 20 Removable``, which is the arithmetic the rules print (p161) and the thing a
+    player is most likely to think is a bug.
+    """
+
+    if power.cost_override is not None:
+        return ""
+    gross = power_gross_cost(power, game_data, char)
+    if gross <= 0:
+        return ""
+    terms = power_scope_terms(power, game_data, gross, char)
+    if not terms:
+        return ""
+    text = str(gross)
+    for term in terms:
+        sign = "−" if term.amount < 0 else "+"
+        text += f" {sign} {abs(term.amount)} {term.modifier.name}"
+    if gross + sum(term.amount for term in terms) < 1:
+        text += " (1 minimum)"
+    return text
 
 
 def node_cost(node: PowerNode, game_data: GameData, char: Character | None = None) -> int:

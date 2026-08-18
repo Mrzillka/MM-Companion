@@ -41,6 +41,7 @@ from mm_companion.core.rules import (
     modifier_label,
     pl_cap_note,
     power_allocation_violations,
+    power_cost_formula,
     power_linked_range_violations,
     power_modifier_requirement_violations,
     power_pl_violations,
@@ -1017,6 +1018,11 @@ class PowerConstructorWindow(QMainWindow):
         else:
             total = power_total_cost(self.power, self._data, self._character)
             suffix = " (homerule)" if self.power.cost_override is not None else ""
+            # A Removable power costs less than the sum of the cards above it, because
+            # its discount is charged against the power's total rather than any one
+            # effect. Show that arithmetic here — it is the only place it is visible.
+            if working := power_cost_formula(self.power, self._data, self._character):
+                suffix += f"  ({working})"
         self._cost.setText(f"Total cost: {total} {self._currency}{suffix}")
 
     def _refresh_game_terms(self) -> None:

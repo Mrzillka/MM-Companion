@@ -40,12 +40,20 @@ effect+modifier combination.
 ```
 effect_cost_per_rank = base_cost_per_rank + sum(extra costs per rank) - sum(flaw costs per rank)
 effect_total_cost    = (effect_cost_per_rank * rank) + sum(flat extra costs) - sum(flat flaw costs)
-power_total_cost      = sum(effect_total_cost for every effect in the power)
+power_gross_cost     = sum(effect_total_cost for every effect in the power)
+power_total_cost     = power_gross_cost + sum(power-scope modifiers, priced from that gross)
 ```
 
 Minimum cost per rank is 1 Power Point — flaws can't push a per-rank cost below that. This is
 the number that gets deducted from the character's Power Point pool (see
 `mm-core-mechanics.md` §7) when the power is added to the character.
+
+**A power-scope modifier** is one the rules price against the whole power rather than any one
+effect, marked `costScope: "power"` in `modifiers.json`. Removable is the only one: it is worth
+its value (1 / 2 / 4 by tier) **per 5 points of the power's final cost, rounded up**, so a
+98-point suit of armour is discounted 20 points to 78. Every effect-level bucket skips such a
+modifier, and only the costliest selection of it counts however many effects carry a copy —
+the flaw applies once to the power. The result is floored at 1 Power Point.
 
 ---
 

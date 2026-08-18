@@ -435,6 +435,12 @@ class ConfigOption:
     Custom modifier's *flat* mode is charged ``cost × rank`` while its *per-rank* mode
     ignores the rank (it already scales with the effect's rank). ``None`` leaves the
     modifier's own ``ranked`` in force.
+
+    ``cost_delta`` *adjusts* the magnitude the option arrives at rather than replacing
+    it, and unlike the three above it is summed across **every** config field rather
+    than first-wins — so a second choice can shade a price the first one set. Removable's
+    Short-Term Only is worth ``-1`` off whichever tier is chosen (Equipment 4 → 3), and
+    the rules let that reach 0, which is why the sum is floored there and not at 1.
     """
 
     value: str
@@ -442,6 +448,7 @@ class ConfigOption:
     cost_value: int | None = None
     flat: bool | None = None
     ranked: bool | None = None
+    cost_delta: int = 0
 
 
 @dataclass(frozen=True)
@@ -870,6 +877,15 @@ class Modifier:
     modifier field that reaches back into character stats, so cost/PL math must be
     given the character to resolve it.
 
+    ``cost_scope`` says *what* the modifier is priced against. The default (empty) is
+    the effect it is attached to, which is every modifier but one. ``"power"`` prices it
+    against the assembled power's total instead — Removable "applies to the power as a
+    whole and not to individual effects" (p161) — so the effect-level buckets skip it
+    and :func:`mm_companion.core.rules.power_total_cost` applies it once, after the
+    effects are summed. ``cost_per_points``, alongside it, makes the magnitude a *rate*:
+    Removable's 5 means "its value per 5 points of the power's final cost, rounded up".
+    Zero charges the magnitude once.
+
     ``gate`` marks a flaw that can switch an effect's standing bonus off at runtime
     (one of :mod:`mm_companion.core.components`'s ``GATE_*`` kinds): Activation
     (``"activation"``), Removable (``"removable"``), Limited (``"limited"``),
@@ -918,6 +934,8 @@ class Modifier:
     #: reach (Extended Range's ``1``). Zero for every modifier that doesn't reach further.
     distance_rank_bonus: int = 0
     adds_ability: str = ""
+    cost_scope: str = ""
+    cost_per_points: int = 0
     gate: str = ""
     requires_effect_id: str = ""
     hidden: bool = False
@@ -2189,6 +2207,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 cost_value=o.get("costValue"),
                 flat=o.get("flat"),
                 ranked=o.get("ranked"),
+                cost_delta=int(o.get("costDelta", 0)),
             )
             for o in c.get("options", [])
         ),
@@ -2377,6 +2396,8 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_by=int(m.get("stepBy", 0)),
         distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
         adds_ability=m.get("addsAbility", ""),
+        cost_scope=m.get("costScope", ""),
+        cost_per_points=int(m.get("costPerPoints", 0)),
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
         hidden=bool(m.get("hidden", False)),

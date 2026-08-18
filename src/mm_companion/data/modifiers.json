@@ -814,24 +814,36 @@
       "id": "removable",
       "name": "Removable",
       "category": "flaw",
-      "costFormula": "-1, -2, or -4 points per 5 total points (by tier)",
+      "costFormula": "-1, -2, or -4 points per 5 points of the power's total (by tier)",
       "costValue": 1,
       "flat": true,
+      "costScope": "power",
+      "costPerPoints": 5,
       "gate": "removable",
       "config": [
         {
           "key": "tier",
           "label": "Tier",
           "type": "select",
-          "hint": "How readily the item is taken away (a simplified flat discount, not the full per-5-points formula).",
+          "hint": "How readily the item is taken away. Worth its value per 5 points of the whole power's cost, rounded up — a 98-point suit of Removable armour is discounted 20, to 78.",
           "options": [
-            { "value": "removable", "label": "Removable", "costValue": 1 },
-            { "value": "easily_removable", "label": "Easily Removable", "costValue": 2 },
-            { "value": "equipment", "label": "Equipment", "costValue": 4 }
+            { "value": "removable", "label": "Removable (only while Stunned and Defenseless)", "costValue": 1 },
+            { "value": "easily_removable", "label": "Easily Removable (a Disarm or Grab in action time)", "costValue": 2 },
+            { "value": "equipment", "label": "Equipment (ordinary gear, and all of the above)", "costValue": 4 }
+          ]
+        },
+        {
+          "key": "loss",
+          "label": "Long-term loss",
+          "type": "select",
+          "hint": "Short-Term Only takes 1 off the flaw's value: the power can still be taken away, but is never lost for longer than a scene. It can reduce the value to 0, leaving no discount at all.",
+          "options": [
+            { "value": "long_term", "label": "Can be lost long-term" },
+            { "value": "short_term_only", "label": "Short-term only", "costDelta": -1 }
           ]
         }
       ],
-      "description": "The power can be taken away from you under the right circumstances."
+      "description": "The power can be taken away from you under the right circumstances. It applies to the power as a whole, not to one of its effects."
     },
     {
       "id": "resistible",

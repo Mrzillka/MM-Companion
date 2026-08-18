@@ -68,6 +68,25 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `effect_cost_formula` renders the human-readable breakdown. All numbers are
   data-driven (`base_cost_value`, modifier `cost_value`, config `cost_value`
   overrides) — never hardcoded.
+- **One modifier is priced against the power, not the effect.** Removable "applies to
+  the power as a whole and not to individual effects" and is worth its value **per 5
+  points of the power's final cost, rounded up** (PDF p161: a 98-point suit of armour is
+  98 ÷ 5 = 19.6 → 20, so −20, down to 78). That number cannot exist until every effect
+  has been priced, so the record carries `costScope: "power"` (with `costPerPoints: 5`)
+  and every effect-level bucket — `_signed_modifier_cost`, `_modifier_terms`,
+  `_banded_rank_terms` — skips it. `power_total_cost` then sums the effects
+  (`power_gross_cost`), applies `power_scope_adjustment` once, and floors the result at
+  1 PP the way a flat flaw is floored. **Only the costliest selection of each such
+  modifier counts**: the constructor attaches modifiers to *effects*, so a five-effect
+  device naturally ends up carrying five copies of the one flaw, and summing them would
+  quintuple a discount the book charges once. Because the discount belongs to no card,
+  `power_cost_formula` renders the working (`98 − 20 Removable`) into the constructor's
+  total line — otherwise a power costs visibly less than the cards above it for no
+  stated reason. Its *Short-Term Only* option takes 1 off the flaw's own value through
+  a new `costDelta` on a config option, which unlike the `costValue`/`flat`/`ranked`
+  overrides beside it is **summed across every field** rather than first-wins; the sum
+  is floored at 0, because the rules say Short-Term Only may leave no discount at all
+  rather than turning a flaw into a bonus.
 - **`as_trait`**: Enhanced Trait's base cost is "as trait" — it costs whatever the
   traits it raises cost to buy. Each allocated row is priced at its own
   `trait_rate` and the fractions are summed **unrounded**, then rounded once, so a

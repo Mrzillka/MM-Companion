@@ -17,8 +17,8 @@ file alone. Delete it when §6 is empty.
 | §5C | The 90 standard power configurations | **done** — pass 3 |
 | §5D | 18 effect-specific modifiers that could not be dialled | **done** — pass 3 |
 | §5E | Flat flaws floored at 1 point | **done** — pass 3 |
+| §5F | Removable's real per-5-points formula (was §6B) | **done** — pass 4 |
 | §6A | Dynamic Alternate Effects | outstanding |
-| §6B | Removable's real per-5-points formula | outstanding |
 | §6C | Nested trait budgets (Summon / Metamorph / Variable / Empowering) | outstanding |
 | §6D | Affliction's imposed-effect budget check | outstanding |
 | §6E | Concealment's sense bookkeeping | outstanding |
@@ -35,6 +35,7 @@ b0b713d  Correct the powers data against the core rulebook
 1594b5b  Record the remaining powers gaps in a working audit
 734a45d  Price the configured effects from their configuration
 ebac2c9  Add the rulebook's standard power configurations
+b880efb  Turn the powers audit into a handover brief
 ```
 
 ---
@@ -49,7 +50,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2766 tests as of pass 3
+python -m pytest -q                 # ~9 min, 2769 tests as of pass 4
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -241,7 +242,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2 and 3 — what was built
+## 5. Passes 2, 3 and 4 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -306,6 +307,47 @@ with an Equipment-tier Removable worth a flat −4 — priced at **−3 PP** and
 character back. Now floored at 1, except for an effect with no ranks bought, which still
 costs nothing.
 
+### F. Removable priced from the power's total (pass 4)
+
+**The rules (p161).** Removable is worth **−1 (Removable) / −2 (Easily Removable) / −4
+(Equipment) per 5 points of the power's final cost, rounded up**, and it "applies to the
+power as a whole and not to individual effects". The book's worked example: a 98-point
+suit of armour is 98 ÷ 5 = 19.6 → 20, so −20, down to 78. **Short-Term Only** takes a
+further 1 off the flaw's own value and may take it to 0, leaving no discount at all
+(p160).
+
+It was a flat −1 / −2 / −4 on one effect, which is why Commlink needed the §5E floor and
+why **Gadgets** could not reach its printed 5 per rank.
+
+**What was built.** A modifier can now declare *what it is priced against*:
+
+- `costScope: "power"` (+ `costPerPoints: 5`) on the record. Every effect-level bucket —
+  `_signed_modifier_cost`, `_modifier_terms`, `_banded_rank_terms` — skips such a
+  modifier, so the effect cards' arithmetic is untouched and a Removable chip changes no
+  card footer.
+- `power_gross_cost` was split out of `power_total_cost` (the 98 in the book's example),
+  and `power_total_cost` now applies `power_scope_adjustment` on top of it, floored at 1
+  point the way a flat flaw is.
+- **Only the costliest selection of each power-scope modifier counts.** This is the rule,
+  not a tidy-up: the constructor attaches modifiers to *effects*, so a five-effect device
+  naturally carries five copies of the one flaw, and summing them would quintuple a
+  discount the book charges once.
+- `power_cost_formula` renders the working — `98 − 20 Removable` — into the constructor's
+  total line. Without it a power costs visibly less than the cards above it for no stated
+  reason, which reads as a bug.
+- **Short-Term Only** arrives as a second config field through a new **`costDelta`** on a
+  config option: unlike the `costValue` / `flat` / `ranked` overrides beside it, `costDelta`
+  is **summed across every field** rather than first-wins, and floored at 0 rather than 1,
+  because the rules say it may leave no discount at all rather than turn a flaw into a bonus.
+- The tier labels now name the **removal circumstances** the book distinguishes them by
+  (Stunned *and* Defenseless; a Disarm or Grab in action time), the other half of §6B that
+  was unmodelled.
+
+**Gadgets now prices at the book's 5 per rank**, closing one of the three configuration
+gaps in §7. Equipment is unaffected: `item_own_ep_cost` already strips a removable-gated
+flaw (`_undiscounted`) before pricing, precisely so an item's price is what its effects
+cost *undiscounted* — that guard matters more now that the discount is larger.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -319,7 +361,10 @@ A later pass should reach for these rather than inventing a parallel one.
 | `points` and `select` config field types | `common.py` `CONFIG_WIDGET_BUILDERS` | a dialable cost with **no UI code** — this is why §4 and §5D needed no Python |
 | `configurations.json` + `core/rules/configurations.py` | `power_from_configuration`, `configuration_by_id`, `configurations_for_effect` | a named build turned into an ordinary `Power` |
 | `CONFIGURATION_MIME` + `PowerCanvas.add_configuration` | `common.py:234`, `canvas.py:199` | dropping a prebuilt assembly onto the canvas |
-| The 1-PP floor | `_flat_base_cost` (`powers_cost.py:482`) | flat flaws can no longer produce a negative cost |
+| The 1-PP floor | `_flat_base_cost`, and again in `power_total_cost` | neither a flat flaw nor a power-scope one can produce a negative cost |
+| `costScope: "power"` + `costPerPoints` | `power_scope_terms` / `power_scope_adjustment` / `power_gross_cost` | a modifier priced from the **power's** total rather than one effect's, at a rate per N points of it, deduplicated across the effects that carry it |
+| `costDelta` on a config option | `_config_cost_delta` (`powers_cost.py`) | a second config choice that *shades* a magnitude another field set, summed across fields and floored at 0 |
+| `power_cost_formula` | shown by `PowerConstructorWindow._refresh_cost` | the working behind a total the effect cards cannot explain |
 
 ---
 
@@ -350,25 +395,7 @@ unchanged — see `docs/notes/powers.md`).
 primary is Dynamic too); allocating points across the Dynamic members changes each one's
 effective rank and nothing else; an old saved array still loads and costs the same.
 
-### B. Removable's real formula
-
-**Rules (p161–162).** −1 (Removable) / −2 (Easily Removable) / −4 (Equipment) **per 5
-points of the whole power's final cost, rounded up**, applied to the **power**, not one
-effect. The book's worked example: a 98-point armour is 98 ÷ 5 = 19.6 → 20, so −20, down to
-78. Also unmodelled: **Short-Term Only** (−1 flat off the flaw's own value, and it may
-reduce that value to 0, p161), and the removal circumstances that distinguish the tiers
-(Removable needs you Stunned *and* Defenseless; Easily Removable can be taken with a Disarm
-or Grab during action time).
-
-**Now.** A flat −1 / −2 / −4 on a single effect; the field's own hint admits it.
-
-**Change.** Structural: every flat modifier today is priced inside `effect_total_cost`, and
-this one needs the power's total first — a second pass in `power_total_cost` / `node_cost`.
-Watch the interaction with the §5E floor (the discount must not drive the power below 1) and
-with equipment, which has its own currency.
-
-**Acceptance.** The book's 98 → 78 example; **Gadgets** then prices at the printed 5 per
-rank, closing one of the three gaps in §7.
+### B. Removable's real formula — **done in pass 4, see §5F**
 
 ### C. Nested trait budgets
 
@@ -483,30 +510,40 @@ example, having been moved off `ranged` when Ranged gained config.
 
 Things a later pass will trip over if it does not know them.
 
-1. **Three configurations cannot reach their printed cost.** Recorded in
+1. **Two configurations cannot reach their printed cost.** Recorded in
    `configurations.json`'s own `_meta.costNote` and excluded by name from
-   `test_standard_configurations_cost_what_the_book_prints`:
-   - **Gadgets** (book 5/rank, built 6) — waits on §6B.
-   - **Material Mimicry** and **Power Mimicry** (book 5/rank, built 6) — the book puts the
-     Close Range flaw on **Variable**, a *Personal*-range effect, where p159 gives that flaw
-     no value (it is priced only from Ranged and from Perception). The book is loose here,
-     not the app. Each was built as the book literally names it rather than gaining an
-     invented second modifier to force the number. **If §6B lands, re-check whether these
-     two should change** — they probably should not.
-2. **Saved characters were repriced** by the Enhanced Senses tier corrections (§4). No
-   migration, no warning.
+   `test_standard_configurations_cost_what_the_book_prints`: **Material Mimicry** and
+   **Power Mimicry** (book 5/rank, built 6) — the book puts the Close Range flaw on
+   **Variable**, a *Personal*-range effect, where p159 gives that flaw no value (it is
+   priced only from Ranged and from Perception). The book is loose here, not the app. Each
+   was built as the book literally names it rather than gaining an invented second modifier
+   to force the number. Re-checked when §5F landed and left alone — Removable is not what
+   that gap was about. (**Gadgets** was the third; §5F closed it.)
+2. **Saved characters were repriced**, twice, with no migration and no warning: by the
+   Enhanced Senses tier corrections (§4), and by Removable moving to the per-5-points
+   formula (§5F). The direction is one-way there: the discount now scales with the power
+   instead of being a flat 1/2/4, so a Removable power **above** 5 points got cheaper
+   (proportionally so — a 98-point armour by 20 rather than by 1), and one at or below 5
+   points did not move at all. Applied deliberately; a "your build changed" notice is still
+   the thing that does not exist.
 3. **Nothing enforces mutual exclusion in a multiselect.** A player can tick both "one sight
    sense" and "all sight senses" on Obscure, or both intensities of the same Environment
    condition, and pay for both. Visible on the card, but a warning would be fair.
 4. **A Variable Environment's redistribution is unchecked** — nothing verifies that what the
    player redistributes at use time stays inside the per-rank total they paid for.
-5. **The equipment-currency configurations build as powers, not gear.** Commlink is "1
+5. **A power-scope modifier stops at the `Power`.** Removable is charged once per
+   `Power`, which is what the rules mean by "the power as a whole". A device modelled as a
+   `PowerGroup` of several powers therefore gets one discount *per child power*, each
+   priced from that child's own total — the same arithmetic only when every split lands on
+   a multiple of 5. Nothing checks for it; the honest build is one power with many effects,
+   which is how the book's own armour example is written.
+6. **The equipment-currency configurations build as powers, not gear.** Commlink is "1
    Equipment Point per rank" but drops onto the power canvas like anything else.
-6. **Four configurations arrive as skeletons** the player must finish — Absorption,
+7. **Four configurations arrive as skeletons** the player must finish — Absorption,
    Berserker Rage, Poltergeist, Power Theft. The book leaves them blank too (which trait is
    boosted, which descriptor is absorbed), so this is faithful rather than incomplete, but
    it is worth knowing before someone "fixes" them.
-7. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
+8. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
    each pass. Update them in the same commit as the code, not afterwards — the notes are the
    thing a future session reads first.
 
@@ -514,10 +551,10 @@ Things a later pass will trip over if it does not know them.
 
 ## 8. Suggested order for the remaining passes
 
-1. **§6B Removable** — closes a real cost bug, closes one of the three configuration gaps,
-   and is self-contained.
+1. ~~**§6B Removable**~~ — done in pass 4 (§5F).
 2. **§6J the repeatable flag** and **§6I Dimensional** — both small, both close loose ends
-   this job opened.
+   this job opened. Note §5F gave Removable a *second* config field, so it is now doubly
+   the wrong example of a "repeatable because it has config" modifier.
 3. **§6E Concealment senses** — small, and completes the sense-bookkeeping story §5A began.
 4. **§6A Dynamic Alternate Effects** — medium, touches cost and runtime state.
 5. **§6D Affliction's imposed effect**, then **§6C nested trait budgets** — §6D is a

@@ -47,6 +47,19 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   explain another. It is deliberately *not* a `BASE_COST_KINDS` mode: these effects are
   still charged flat per rank, and only the number varies. `baseCostValue` stays as the
   unconfigured floor — **raising it is not how you fix a price here.**
+- **The book's ~90 named powers are data, not a catalog.** `configurations.json` holds
+  the standard power configurations (Blast, Dazzle, Snare, Force Field, Invisibility, …)
+  as ready-made assemblies of records that already exist elsewhere, and
+  `power_from_configuration` turns one into an **ordinary, fully editable `Power`**.
+  There is deliberately no back-reference: the moment the player changes a rank it is no
+  longer that configuration, and a stale label would be worse than none. A configuration's
+  `costNote` is the cost the *book* prints — reference text shown on the palette brick,
+  never used in the arithmetic, so comparing it against what the built power costs is a
+  real check on the recorded build (`test_standard_configurations_cost_what_the_book_prints`
+  does exactly that; 77 of the 80 machine-checkable ones match to the point, and the three
+  that do not are recorded in the file's own `_meta`). Dropping one **appends** to the
+  canvas rather than replacing it, and takes its `structure` only when the canvas was
+  empty — a Linked configuration must not silently relink a build the player set up.
 - **Cost** (`rules`): *how* an effect is priced is data — its `baseCostMode`
   picks a handler out of the `BASE_COST_KINDS` registry in `powers_cost`, and a
   mod registers another rather than editing that module. The default `flat` is

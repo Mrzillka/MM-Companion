@@ -1,0 +1,2054 @@
+{
+  "_meta": {
+    "description": "The standard power configurations of Mutants & Masterminds — the named, pre-built powers the rulebook lists in its appendix (Blast, Dazzle, Force Field, Invisibility, …) and in each effect's own CONFIGURATIONS section. They are shorthand, not new rules: every one is an ordinary assembly of effects, extras and flaws that already exist in effects.json / modifiers.json / effect_modifiers.json, so dropping one on the constructor's canvas builds a power the player can then edit like any other. All 'description' fields are original short paraphrases written for this project, not rulebook prose; the builds and costs are game facts.",
+    "schema": "Each entry is { id, name, baseEffect, costNote, cite, description, structure?, effects[] }. 'baseEffect' is the effect id the configuration is filed under in the palette. 'costNote' is the cost the book prints for it, and 'cite' the PDF page — both are reference text, never used in the arithmetic: what a built power costs is always derived by core.rules from the effects and modifiers below. 'structure' is only meaningful for a multi-effect configuration (independent | linked | array; omitted means independent). Each effects[] entry is { effectId, rank?, config?, extras?, flaws? }, where 'rank' is a fixed rank the configuration nails down (Invisibility is Concealment 2) and 0 or absent leaves the player to set it, 'config' seeds the effect's own configurable qualities, and 'extras'/'flaws' are { id, rank?, config? } modifier selections.",
+    "costNote": "'costNote' always reports what the book prints, and a built power is priced independently from its parts — so the two agreeing is a real check on the recorded build. Three of the ninety do not agree, and both reasons are known. GADGETS (book 5 per rank, built 6): anything carrying Removable is charged our simplified flat discount rather than the book's -1/-2/-4 per 5 points of the power's total. MATERIAL MIMICRY and POWER MIMICRY (book 5, built 6): the book puts the Close Range flaw on Variable, which is a Personal-range effect, where that flaw has no defined value - it is priced only from Ranged and from Perception. Each is built as the book literally names it rather than gaining an invented modifier to force the printed number.",
+    "provenance": "Open Game Content derived from the Mutants & Masterminds SRD; see LICENSE-CONTENT.md and docs/open_game_license.md. No Product Identity."
+  },
+  "configurations": [
+    {
+      "id": "absorption",
+      "name": "Absorption",
+      "baseEffect": "immunity",
+      "costNote": "see description",
+      "cite": "PDF p132",
+      "description": "You are not only immune to a Damage descriptor — attacks of it make you stronger, feeding a Trait Boost.",
+      "structure": "linked",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "rank": 5,
+          "config": {
+            "scopes": [
+              {
+                "name": "One Damage descriptor",
+                "rank": 5
+              }
+            ]
+          }
+        },
+        {
+          "effectId": "enhanced_trait",
+          "flaws": [
+            {
+              "id": "fades"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "affliction_aura",
+      "name": "Affliction Aura",
+      "baseEffect": "affliction",
+      "costNote": "4 points per rank",
+      "cite": "PDF p111",
+      "description": "Anyone who touches you, or whom you touch, is subject to your Affliction.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "extras": [
+            {
+              "id": "aura"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ageless",
+      "name": "Ageless",
+      "baseEffect": "immunity",
+      "costNote": "1 point (rank 1)",
+      "cite": "PDF p132",
+      "description": "You do not age and cannot be aged. You can still die of other causes, and cannot come back from Dead without Regeneration.",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "rank": 1,
+          "config": {
+            "scopes": [
+              {
+                "name": "Aging",
+                "rank": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "animal_harmony",
+      "name": "Animal Harmony",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Natural animals start Favorable towards you; predators do not read you as prey, prey animals do not read you as a threat.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Animal Harmony",
+                "description": "Natural animals start Favorable towards you; predators do not read you as prey, prey animals do not read you as a threat."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "animal_mimicry",
+      "name": "Animal Mimicry",
+      "baseEffect": "variable",
+      "costNote": "6 points per rank",
+      "cite": "PDF p149",
+      "description": "Mimic the traits of animals, allocating your Variable points to them. Often narrowed further to one class of animal.",
+      "effects": [
+        {
+          "effectId": "variable",
+          "flaws": [
+            {
+              "id": "limited",
+              "config": {
+                "condition": "Animal traits only"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "armored_skin",
+      "name": "Armored Skin",
+      "baseEffect": "protection",
+      "costNote": "1 point for 2 ranks, then 1 per rank",
+      "cite": "PDF p140",
+      "description": "Ordinary Protection, but noticeably so — armoured scales, metallic skin, or the like.",
+      "effects": [
+        {
+          "effectId": "protection",
+          "flaws": [
+            {
+              "id": "noticeable_protection"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "astral_projection",
+      "name": "Astral Projection",
+      "baseEffect": "remote_sensing",
+      "costNote": "7 points per rank",
+      "cite": "PDF p143",
+      "description": "Send your astral body — your mind or spirit — out to observe, leaving your physical body defenceless and immobile behind you.",
+      "effects": [
+        {
+          "effectId": "remote_sensing",
+          "config": {
+            "senseTypes": [
+              "Sight",
+              "Hearing",
+              "Mental"
+            ]
+          },
+          "flaws": [
+            {
+              "id": "side_effect",
+              "config": {
+                "detail": "Your physical body is defenceless and immobile"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "battery",
+      "name": "Battery",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Power or recharge small electrical devices by touch, as if you were an outlet.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Battery",
+                "description": "Power or recharge small electrical devices by touch, as if you were an outlet."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "berserker_rage",
+      "name": "Berserker Rage",
+      "baseEffect": "enhanced_trait",
+      "costNote": "2 points per rank of Strength",
+      "cite": "PDF p124",
+      "description": "You fly into a rage as a free action, gaining Strength and immunity to fear at the cost of some of your willingness to defend yourself.",
+      "structure": "linked",
+      "effects": [
+        {
+          "effectId": "enhanced_trait",
+          "config": {
+            "traits": [
+              {
+                "trait": "Fearless",
+                "ranks": 2
+              }
+            ]
+          }
+        },
+        {
+          "effectId": "enhanced_trait",
+          "config": {
+            "traits": [
+              {
+                "trait": "STR",
+                "ranks": 2
+              }
+            ]
+          },
+          "extras": [
+            {
+              "id": "sustained_enhanced_trait"
+            }
+          ],
+          "flaws": [
+            {
+              "id": "reduced_trait",
+              "config": {
+                "traits": [
+                  {
+                    "trait": "DEF",
+                    "ranks": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "blast",
+      "name": "Blast",
+      "baseEffect": "damage",
+      "costNote": "2 points per rank",
+      "cite": "PDF p118",
+      "description": "Damage at a distance, using a ranged attack check against Defense.",
+      "effects": [
+        {
+          "effectId": "damage",
+          "extras": [
+            {
+              "id": "ranged",
+              "config": {
+                "from": "close"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "built_in_equipment",
+      "name": "Built-in Equipment",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "A built-in or implanted equivalent of a 1-point piece of equipment — a phone, a calculator, a stopwatch.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Built-in Equipment",
+                "description": "A built-in or implanted equivalent of a 1-point piece of equipment — a phone, a calculator, a stopwatch."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "charmed_life",
+      "name": "Charmed Life",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Routine bad luck passes you by; the GM may not trouble you with minor-misfortune complications, and you get no Hero Points from them either.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Charmed Life",
+                "description": "Routine bad luck passes you by; the GM may not trouble you with minor-misfortune complications, and you get no Hero Points from them either."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "chill",
+      "name": "Chill",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Generate a small, immediate drop in temperature — enough to raise gooseflesh and fog breath for a round.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Chill",
+                "description": "Generate a small, immediate drop in temperature — enough to raise gooseflesh and fog breath for a round."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "commlink",
+      "name": "Commlink",
+      "baseEffect": "communication",
+      "costNote": "1 Equipment Point per rank",
+      "cite": "PDF p114",
+      "description": "A concealable radio earpiece for team chatter, usually over short ranges.",
+      "effects": [
+        {
+          "effectId": "communication",
+          "config": {
+            "medium": "Radio"
+          },
+          "flaws": [
+            {
+              "id": "one_way"
+            },
+            {
+              "id": "removable",
+              "config": {
+                "tier": "equipment"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cyclone",
+      "name": "Cyclone",
+      "baseEffect": "move_object",
+      "costNote": "2 points per rank",
+      "cite": "PDF p137",
+      "description": "A wave of force in a cone extending out from you, pushing things away or dragging them towards you with a Trip action.",
+      "effects": [
+        {
+          "effectId": "move_object",
+          "extras": [
+            {
+              "id": "area_effect"
+            }
+          ],
+          "flaws": [
+            {
+              "id": "limited_direction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "damage_aura",
+      "name": "Damage Aura",
+      "baseEffect": "damage",
+      "costNote": "4 points per rank",
+      "cite": "PDF p118",
+      "description": "A field around your body that damages anyone touching you — acid, electricity, fire, spikes.",
+      "effects": [
+        {
+          "effectId": "damage",
+          "extras": [
+            {
+              "id": "aura"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "darkness",
+      "name": "Darkness",
+      "baseEffect": "obscure",
+      "costNote": "2 points per rank",
+      "cite": "PDF p139",
+      "description": "A sphere of complete darkness, fully concealing sight within it. Mist, smoke and dust work the same way.",
+      "effects": [
+        {
+          "effectId": "obscure",
+          "config": {
+            "senses": [
+              "sight"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dazzle",
+      "name": "Dazzle",
+      "baseEffect": "affliction",
+      "costNote": "2 points per rank",
+      "cite": "PDF p111",
+      "description": "Overwhelms one of the target's senses, chosen when the effect is configured. At three degrees the target only gets a check to shake it off once a minute.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "degree1": "disabled",
+            "degree2": "unaware"
+          },
+          "extras": [
+            {
+              "id": "ranged",
+              "config": {
+                "from": "close"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dimensional_pocket",
+      "name": "Dimensional Pocket",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "An extra-dimensional space holding up to mass rank −1, +1 mass rank per further rank. Creatures cannot be put in it.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Dimensional Pocket",
+                "description": "An extra-dimensional space holding up to mass rank −1, +1 mass rank per further rank. Creatures cannot be put in it."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "display",
+      "name": "Display",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "A harmless but showy display — flashing lights, minor obvious illusions — good for showing off and the odd Performance bonus.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Display",
+                "description": "A harmless but showy display — flashing lights, minor obvious illusions — good for showing off and the odd Performance bonus."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "duplication",
+      "name": "Duplication",
+      "baseEffect": "summon",
+      "costNote": "2 points per rank",
+      "cite": "PDF p146",
+      "description": "Summon an exact duplicate of yourself, with any traits you have up to your own ranks but without this power. Heroic and Multiple Minions are common.",
+      "effects": [
+        {
+          "effectId": "summon"
+        }
+      ]
+    },
+    {
+      "id": "effect_resistance",
+      "name": "[Effect] Resistance",
+      "baseEffect": "immunity",
+      "costNote": "1 point per 2 ranks",
+      "cite": "PDF p132",
+      "description": "Resistance to a particular effect rather than immunity: you halve its rank before resisting. Halves the cost of Environmental, Fortitude and Will Immunity.",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "flaws": [
+            {
+              "id": "resistance_immunity"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "energy_tendrils",
+      "name": "Energy Tendrils",
+      "baseEffect": "move_object",
+      "costNote": "2 points per rank",
+      "cite": "PDF p137",
+      "description": "Tendrils or constructs of energy reaching out to grab and manipulate objects — a visible descriptor for a plain Move Object.",
+      "effects": [
+        {
+          "effectId": "move_object"
+        }
+      ]
+    },
+    {
+      "id": "environmental_immunity",
+      "name": "Environmental Immunity",
+      "baseEffect": "immunity",
+      "costNote": "10 points (rank 10)",
+      "cite": "PDF p132",
+      "description": "Immune to every environmental hazard, as if you always wore a protective suit. Also called Life Support.",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "rank": 10,
+          "config": {
+            "scopes": [
+              {
+                "name": "All environmental hazards",
+                "rank": 10
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "flashlight",
+      "name": "Flashlight",
+      "baseEffect": "environment",
+      "costNote": "1 point (rank 1)",
+      "cite": "PDF p125",
+      "description": "A basic light source throwing a cone-shaped area of illumination.",
+      "effects": [
+        {
+          "effectId": "environment",
+          "rank": 1,
+          "config": {
+            "conditions": [
+              "light_partial"
+            ]
+          },
+          "extras": [
+            {
+              "id": "shape_environment"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "force_constructs",
+      "name": "Force Constructs",
+      "baseEffect": "create",
+      "costNote": "3 points per rank",
+      "cite": "PDF p117",
+      "description": "Objects formed out of solidified energy. Selective and Variable Opacity are common; Subtle 2 suits constructs of invisible force.",
+      "effects": [
+        {
+          "effectId": "create",
+          "extras": [
+            {
+              "id": "movable_create"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "force_field",
+      "name": "Force Field",
+      "baseEffect": "protection",
+      "costNote": "1 point per rank",
+      "cite": "PDF p140",
+      "description": "A protective field you switch on and off at will as a free action. Noticeable by default unless you add Subtle.",
+      "effects": [
+        {
+          "effectId": "protection",
+          "extras": [
+            {
+              "id": "sustained_protection"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fortitude_immunity",
+      "name": "Fortitude Immunity",
+      "baseEffect": "immunity",
+      "costNote": "30 points (rank 30)",
+      "cite": "PDF p132",
+      "description": "Immune to everything calling for a Fortitude check, environmental hazards included. Common for characters who are not living beings.",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "rank": 30,
+          "config": {
+            "scopes": [
+              {
+                "name": "All effects resisted by Fortitude",
+                "rank": 30
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "gadgets",
+      "name": "Gadgets",
+      "baseEffect": "variable",
+      "costNote": "5 points per rank",
+      "cite": "PDF p149",
+      "description": "(rank × 5) Variable points of devices — technological or magical — that you reconfigure between scenes rather than in action time.",
+      "effects": [
+        {
+          "effectId": "variable",
+          "flaws": [
+            {
+              "id": "removable",
+              "config": {
+                "tier": "removable"
+              }
+            },
+            {
+              "id": "slow_variable"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gravity_field",
+      "name": "Gravity Field",
+      "baseEffect": "move_object",
+      "costNote": "2 points per rank",
+      "cite": "PDF p137",
+      "description": "A field pulling down across an area, grabbing and holding everyone in it. Add Damaging and it can crush them under the weight.",
+      "effects": [
+        {
+          "effectId": "move_object",
+          "extras": [
+            {
+              "id": "area_effect"
+            }
+          ],
+          "flaws": [
+            {
+              "id": "limited_direction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hallucination",
+      "name": "Hallucination",
+      "baseEffect": "affliction",
+      "costNote": "3 points per rank",
+      "cite": "PDF p111",
+      "description": "Influences what the target perceives, from a passing figment to a full delusion. Usually a mental projection; a biochemical version is Close or Ranged and resisted by Fortitude instead.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "resistance": "Will",
+            "degree1": "figment",
+            "degree2": "phantasm",
+            "degree3": "delusion"
+          },
+          "extras": [
+            {
+              "id": "perception_range",
+              "config": {
+                "from": "close"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "higher_guidance",
+      "name": "Higher Guidance",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Occasional visions or messages from a higher power. An Enhanced Advantage version of Guidance, and it counts against your heroic-advantage limit.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Higher Guidance",
+                "description": "Occasional visions or messages from a higher power. An Enhanced Advantage version of Guidance, and it counts against your heroic-advantage limit."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "inaudibility",
+      "name": "Inaudibility",
+      "baseEffect": "concealment",
+      "costNote": "2 points (rank 1)",
+      "cite": "PDF p115",
+      "description": "You emit no sound and are fully concealed from normal hearing. A second rank hides you from every hearing sense, sonar and ultra-hearing included.",
+      "effects": [
+        {
+          "effectId": "concealment",
+          "rank": 1
+        }
+      ]
+    },
+    {
+      "id": "insulating_fur",
+      "name": "Insulating Fur",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "A layer of fur giving you Resistance to intense heat and cold.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Insulating Fur",
+                "description": "A layer of fur giving you Resistance to intense heat and cold."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "interface",
+      "name": "Interface",
+      "baseEffect": "communication",
+      "costNote": "2 points per rank",
+      "cite": "PDF p114",
+      "description": "Talk to electronic devices in range, usually to extend Comprehend: Computers across a whole network.",
+      "effects": [
+        {
+          "effectId": "communication",
+          "config": {
+            "medium": "Radio"
+          }
+        }
+      ]
+    },
+    {
+      "id": "internal_compartment",
+      "name": "Internal Compartment",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "A pouch or compartment inside your body, holding objects of size rank −3 relative to you and up to your Strength rank −2 in mass.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Internal Compartment",
+                "description": "A pouch or compartment inside your body, holding objects of size rank −3 relative to you and up to your Strength rank −2 in mass."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invisibility",
+      "name": "Invisibility",
+      "baseEffect": "concealment",
+      "costNote": "4 points (rank 2)",
+      "cite": "PDF p115",
+      "description": "Invisible to normal sight at will. Often extended to rank 4 (8 points) to cover every sight sense; the Blending flaw suits a “chameleon cloak”.",
+      "effects": [
+        {
+          "effectId": "concealment",
+          "rank": 2
+        }
+      ]
+    },
+    {
+      "id": "iron_stomach",
+      "name": "Iron Stomach",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Eat anything non-toxic without ill effect, however unpleasant.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Iron Stomach",
+                "description": "Eat anything non-toxic without ill effect, however unpleasant."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "light_sleeper",
+      "name": "Light Sleeper",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "One degree of success on a Perception check wakes you from Asleep, rather than three.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Light Sleeper",
+                "description": "One degree of success on a Perception check wakes you from Asleep, rather than three."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "lucid_dreamer",
+      "name": "Lucid Dreamer",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Control what you dream and stay aware that you are dreaming. Each rank also grants one use of Edit Scene, while dreaming.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Lucid Dreamer",
+                "description": "Control what you dream and stay aware that you are dreaming. Each rank also grants one use of Edit Scene, while dreaming."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "massive",
+      "name": "Massive",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "+1 mass rank per rank with no change to Strength or carrying capacity, and +1 per rank to resist being moved against your will.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Massive",
+                "description": "+1 mass rank per rank with no change to Strength or carrying capacity, and +1 per rank to resist being moved against your will."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "material_mimicry",
+      "name": "Material Mimicry",
+      "baseEffect": "variable",
+      "costNote": "5 points per rank",
+      "cite": "PDF p149",
+      "description": "Mimic the properties of substances you touch — usually Protection at the material's Toughness, often Hardened or Impervious, plus Strength or Insubstantial.",
+      "effects": [
+        {
+          "effectId": "variable",
+          "flaws": [
+            {
+              "id": "close_flaw",
+              "config": {
+                "from": "ranged"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "matter_shaping",
+      "name": "Matter Shaping",
+      "baseEffect": "create",
+      "costNote": "2 points per rank",
+      "cite": "PDF p117",
+      "description": "Shapes a material — earth, ice, metal, stone, wood — into new forms that stay put once made.",
+      "effects": [
+        {
+          "effectId": "create",
+          "extras": [
+            {
+              "id": "permanent_create"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "matter_moving",
+      "name": "[Matter] Moving",
+      "baseEffect": "move_object",
+      "costNote": "1 point per rank",
+      "cite": "PDF p137",
+      "description": "Control one type of material — metal, plant, rock, water. Name it in place of [Matter], or use the fancier “-kinesis” suffix.",
+      "effects": [
+        {
+          "effectId": "move_object",
+          "flaws": [
+            {
+              "id": "limited_material"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "megaphone",
+      "name": "Megaphone",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Amplify your voice like a living megaphone, negating up to a −20 distance penalty to be heard.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Megaphone",
+                "description": "Amplify your voice like a living megaphone, negating up to a −20 distance penalty to be heard."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "mental_blast",
+      "name": "Mental Blast",
+      "baseEffect": "damage",
+      "costNote": "3 points per rank",
+      "cite": "PDF p118",
+      "description": "Damage with no attack check, affecting anyone you can accurately perceive and resisted by Will — so it cannot hurt anyone immune to Will effects.",
+      "effects": [
+        {
+          "effectId": "damage",
+          "extras": [
+            {
+              "id": "perception_range",
+              "config": {
+                "from": "close"
+              }
+            },
+            {
+              "id": "alternate_resistance",
+              "config": {
+                "against": "even"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mental_immunity",
+      "name": "Mental Immunity",
+      "baseEffect": "immunity",
+      "costNote": "10 points (rank 10)",
+      "cite": "PDF p132",
+      "description": "Immune to mental powers acting directly on your mind — a narrower thing than Will Immunity, which covers every Will-resisted effect.",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "rank": 10,
+          "config": {
+            "scopes": [
+              {
+                "name": "Mental powers",
+                "rank": 10
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "mimicry",
+      "name": "Mimicry",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Imitate almost any sound you have heard, with a +10 bonus to Deception checks to sell it as real.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Mimicry",
+                "description": "Imitate almost any sound you have heard, with a +10 bonus to Deception checks to sell it as real."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "mind_control",
+      "name": "Mind Control",
+      "baseEffect": "affliction",
+      "costNote": "3 points per rank",
+      "cite": "PDF p111",
+      "description": "Controls a target's mind and actions. You issue a command as part of using it, and changing the command later takes a Command action. Not a particularly heroic power — the GM may bar it for player characters.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "resistance": "Will",
+            "degree1": "dazed",
+            "degree2": "compelled",
+            "degree3": "controlled"
+          },
+          "extras": [
+            {
+              "id": "perception_range",
+              "config": {
+                "from": "close"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mist",
+      "name": "Mist",
+      "baseEffect": "environment",
+      "costNote": "1 point per rank",
+      "cite": "PDF p125",
+      "description": "An area around you fills with light, obscuring mist. Take the −5 visibility condition instead for a thicker fog; for sight blocked outright, see Obscure.",
+      "effects": [
+        {
+          "effectId": "environment",
+          "config": {
+            "conditions": [
+              "visibility_2"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "paralyze",
+      "name": "Paralyze",
+      "baseEffect": "affliction",
+      "costNote": "1 point per rank",
+      "cite": "PDF p111",
+      "description": "Slows a target and can stop them moving at all — a numbing field, nerve strikes, or paralysing venom. Add Ranged for a paralysing ray or mist.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "degree1": "hindered",
+            "degree2": "immobile",
+            "degree3": "paralyzed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "poltergeist",
+      "name": "Poltergeist",
+      "baseEffect": "move_object",
+      "costNote": "12 points plus 3 points per rank",
+      "cite": "PDF p138",
+      "description": "An unseen helper moving things around you, easily mistaken for accidents, bad luck or a haunting. Add Triggered (+3 per rank) and it acts on its own.",
+      "structure": "linked",
+      "effects": [
+        {
+          "effectId": "move_object",
+          "extras": [
+            {
+              "id": "perception_move_object"
+            },
+            {
+              "id": "indirect",
+              "config": {
+                "points": 4
+              }
+            },
+            {
+              "id": "precise_move_object"
+            },
+            {
+              "id": "subtle_move_object",
+              "config": {
+                "points": 2
+              }
+            }
+          ]
+        },
+        {
+          "effectId": "enhanced_senses",
+          "rank": 10,
+          "config": {
+            "senses": [
+              {
+                "id": "radius",
+                "tier": 1
+              },
+              {
+                "id": "counters_concealment",
+                "tier": 2
+              },
+              {
+                "id": "penetrates_concealment",
+                "tier": 2
+              }
+            ]
+          },
+          "flaws": [
+            {
+              "id": "limited_enhanced_senses",
+              "config": {
+                "condition": "Only for targeting the Move Object"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "portal",
+      "name": "Portal",
+      "baseEffect": "teleport",
+      "costNote": "4 points per rank",
+      "cite": "PDF p147",
+      "description": "Open a gateway between two points as a free action instead of teleporting yourself. Anyone stepping through is teleported to its far end.",
+      "effects": [
+        {
+          "effectId": "teleport",
+          "extras": [
+            {
+              "id": "area_effect"
+            },
+            {
+              "id": "increased_duration"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "power_mimicry",
+      "name": "Power Mimicry",
+      "baseEffect": "variable",
+      "costNote": "5 points per rank",
+      "cite": "PDF p149",
+      "description": "Mimic others' powers by touching them, matching their ranks up to their total or your Power Level limit, whichever is lower. An unwilling subject needs a close attack.",
+      "effects": [
+        {
+          "effectId": "variable",
+          "flaws": [
+            {
+              "id": "close_flaw",
+              "config": {
+                "from": "ranged"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "power_theft",
+      "name": "Power Theft",
+      "baseEffect": "variable",
+      "costNote": "6 points per rank, plus 2 per rank Linked",
+      "cite": "PDF p149",
+      "description": "Touch a target and, if they fail to resist your Nullify, copy the powers they lost — then lose them yourself at a rank a round.",
+      "structure": "linked",
+      "effects": [
+        {
+          "effectId": "variable",
+          "flaws": [
+            {
+              "id": "fades"
+            },
+            {
+              "id": "limited",
+              "config": {
+                "condition": "Only powers lost by the target"
+              }
+            }
+          ]
+        },
+        {
+          "effectId": "nullify",
+          "extras": [
+            {
+              "id": "simultaneous_nullify"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "psychic_connection",
+      "name": "Psychic Connection",
+      "baseEffect": "communication",
+      "costNote": "1 point per 2 ranks",
+      "cite": "PDF p114",
+      "description": "A psychic link with one other person — a loved one, a twin. Sometimes One-Way, so the other person needs their own link to answer.",
+      "effects": [
+        {
+          "effectId": "communication",
+          "config": {
+            "medium": "Mental"
+          },
+          "flaws": [
+            {
+              "id": "limited",
+              "config": {
+                "condition": "One specific person"
+              }
+            },
+            {
+              "id": "limited",
+              "config": {
+                "condition": "That person only, no one else ever"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "psychokinesis",
+      "name": "Psychokinesis",
+      "baseEffect": "move_object",
+      "costNote": "3 points per rank",
+      "cite": "PDF p138",
+      "description": "Move objects with your mind, needing only to perceive the subject accurately. Ranks of Subtle are common when nothing shows but the result.",
+      "effects": [
+        {
+          "effectId": "move_object",
+          "extras": [
+            {
+              "id": "perception_move_object"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quick_change",
+      "name": "Quick Change",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Change into or out of one particular outfit instantly as a free action. With 2 ranks, into any outfit at will.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Quick Change",
+                "description": "Change into or out of one particular outfit instantly as a free action. With 2 ranks, into any outfit at will."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "radar",
+      "name": "Radar",
+      "baseEffect": "enhanced_senses",
+      "costNote": "3 points",
+      "cite": "PDF p123",
+      "description": "Perceive your surroundings accurately by bouncing radio waves off solid objects.",
+      "effects": [
+        {
+          "effectId": "enhanced_senses",
+          "rank": 3,
+          "config": {
+            "senses": [
+              {
+                "id": "accurate",
+                "tier": 1
+              },
+              {
+                "id": "radio",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "name": "Remote",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p127",
+      "description": "Act as a universal remote for machines and equipment that accept one.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Remote",
+                "description": "Act as a universal remote for machines and equipment that accept one."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "scrying",
+      "name": "Scrying",
+      "baseEffect": "remote_sensing",
+      "costNote": "7 points per rank",
+      "cite": "PDF p143",
+      "description": "Cast your senses out to perceive at a distance. Sometimes relies on a Removable focus — a crystal ball, a mirror — or on a Medium.",
+      "effects": [
+        {
+          "effectId": "remote_sensing",
+          "config": {
+            "senseTypes": [
+              "Sight",
+              "Hearing"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "shade",
+      "name": "Shade",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p128",
+      "description": "Inherent protection from intense light: you never sunburn or squint at glare. No protection from light-based effects.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Shade",
+                "description": "Inherent protection from intense light: you never sunburn or squint at glare. No protection from light-based effects."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "shapeshift",
+      "name": "Shapeshift",
+      "baseEffect": "variable",
+      "costNote": "7 points per rank",
+      "cite": "PDF p149",
+      "description": "Assume different forms, allocating your Variable points to their traits. The Action extra is common for shapeshifters who change quickly.",
+      "effects": [
+        {
+          "effectId": "variable"
+        }
+      ]
+    },
+    {
+      "id": "silence",
+      "name": "Silence",
+      "baseEffect": "obscure",
+      "costNote": "1 point per rank",
+      "cite": "PDF p139",
+      "description": "A sphere where no sound can be heard, nor enter or leave — good for stealth and for blocking anything that needs speech.",
+      "effects": [
+        {
+          "effectId": "obscure",
+          "config": {
+            "senses": [
+              "hearing"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "skill_mimicry",
+      "name": "Skill Mimicry",
+      "baseEffect": "variable",
+      "costNote": "6 points per rank",
+      "cite": "PDF p149",
+      "description": "Mimic the skills and advantages of anyone you can accurately perceive, up to their ranks or your Power Level limit. The Action extra is common.",
+      "effects": [
+        {
+          "effectId": "variable",
+          "flaws": [
+            {
+              "id": "limited",
+              "config": {
+                "condition": "Skills and advantages only"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "snare",
+      "name": "Snare",
+      "baseEffect": "affliction",
+      "costNote": "2 points per rank",
+      "cite": "PDF p112",
+      "description": "Restrains a target in bonds of energy, ice, webbing or rope. Escaping is Sleight of Hand or Damage against the effect DC. Often Cumulative, so snares can be layered.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "resistance": "Dodge",
+            "degree1": [
+              "hindered",
+              "vulnerable"
+            ],
+            "degree2": [
+              "defenseless",
+              "immobile"
+            ]
+          },
+          "extras": [
+            {
+              "id": "extra_condition"
+            },
+            {
+              "id": "ranged",
+              "config": {
+                "from": "close"
+              }
+            }
+          ],
+          "flaws": [
+            {
+              "id": "limited_degree",
+              "config": {
+                "degree": "degree3"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sonar",
+      "name": "Sonar",
+      "baseEffect": "enhanced_senses",
+      "costNote": "3 points",
+      "cite": "PDF p123",
+      "description": "Perceive your surroundings accurately by echolocation.",
+      "effects": [
+        {
+          "effectId": "enhanced_senses",
+          "rank": 3,
+          "config": {
+            "senses": [
+              {
+                "id": "accurate",
+                "tier": 1
+              },
+              {
+                "id": "ultra_hearing",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "spatial_sense",
+      "name": "Spatial Sense",
+      "baseEffect": "enhanced_senses",
+      "costNote": "3 points",
+      "cite": "PDF p124",
+      "description": "Feel your surroundings at a distance as if you could touch them, without actually doing so.",
+      "effects": [
+        {
+          "effectId": "enhanced_senses",
+          "rank": 1,
+          "config": {
+            "senses": [
+              {
+                "id": "ranged",
+                "tier": 1
+              }
+            ]
+          },
+          "extras": [
+            {
+              "id": "subtle",
+              "config": {
+                "points": 2
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "special_effect",
+      "name": "Special Effect",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p128",
+      "description": "A signature flourish — a gust of wind, ideal spotlighting, personal theme music — worth a bonus when it would impress.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Special Effect",
+                "description": "A signature flourish — a gust of wind, ideal spotlighting, personal theme music — worth a bonus when it would impress."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "static",
+      "name": "Static",
+      "baseEffect": "obscure",
+      "costNote": "1 point per rank",
+      "cite": "PDF p139",
+      "description": "A sphere that blocks radio signals inside it or crossing it. The mental version is “psychic static”.",
+      "effects": [
+        {
+          "effectId": "obscure",
+          "config": {
+            "senses": [
+              "radio"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "strike",
+      "name": "Strike",
+      "baseEffect": "damage",
+      "costNote": "1 point per rank",
+      "cite": "PDF p118",
+      "description": "Damage added to your Strength — enhanced punches, claws, horns, teeth, or a damaging field around your unarmed strikes. Often Linked to an Affliction.",
+      "effects": [
+        {
+          "effectId": "damage",
+          "extras": [
+            {
+              "id": "strength_based"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stun",
+      "name": "Stun",
+      "baseEffect": "affliction",
+      "costNote": "1 point per rank",
+      "cite": "PDF p112",
+      "description": "Temporarily stuns a target — non-lethal energy, a weapon, or a targeted strike. Often Cumulative or Ranged; a “Sleep” version swaps Asleep for Incapacitated.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "degree1": "dazed",
+            "degree2": "stunned",
+            "degree3": "incapacitated"
+          }
+        }
+      ]
+    },
+    {
+      "id": "suffocation",
+      "name": "Suffocation",
+      "baseEffect": "affliction",
+      "costNote": "3 points per rank",
+      "cite": "PDF p112",
+      "description": "Renders a target unable to breathe. Concentrate each turn and they check again at the start of your turn with no further attack roll.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "resistance": "Fortitude",
+            "degree1": "dazed",
+            "degree2": "stunned",
+            "degree3": "incapacitated"
+          },
+          "extras": [
+            {
+              "id": "ranged",
+              "config": {
+                "from": "close"
+              }
+            },
+            {
+              "id": "concentration_affliction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "telepathic_link",
+      "name": "Telepathic Link",
+      "baseEffect": "communication",
+      "costNote": "2 points per rank",
+      "cite": "PDF p114",
+      "description": "Mind-to-mind contact with willing characters in range. Often paired with Comprehend Languages 3 to get past language barriers.",
+      "effects": [
+        {
+          "effectId": "communication",
+          "config": {
+            "medium": "Mental"
+          }
+        }
+      ]
+    },
+    {
+      "id": "telepresence",
+      "name": "Telepresence",
+      "baseEffect": "remote_sensing",
+      "costNote": "6 points per rank",
+      "cite": "PDF p143",
+      "description": "See and hear through cameras, screens, microphones and other technology within range.",
+      "effects": [
+        {
+          "effectId": "remote_sensing",
+          "config": {
+            "senseTypes": [
+              "Sight",
+              "Hearing"
+            ]
+          },
+          "flaws": [
+            {
+              "id": "medium_remote_sensing"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "temporal_inertia",
+      "name": "Temporal Inertia",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p128",
+      "description": "You are anchored in the space-time continuum and immune to changes in history, recalling the true version of events when they change.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Temporal Inertia",
+                "description": "You are anchored in the space-time continuum and immune to changes in history, recalling the true version of events when they change."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "tether",
+      "name": "Tether",
+      "baseEffect": "move_object",
+      "costNote": "1 point per rank",
+      "cite": "PDF p138",
+      "description": "Grab, pull and swing objects on a line — rope, cable, or a projection of energy. The tether has Toughness equal to its rank and drops what it holds if it breaks.",
+      "effects": [
+        {
+          "effectId": "move_object",
+          "flaws": [
+            {
+              "id": "limited_direction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "toxin",
+      "name": "Toxin",
+      "baseEffect": "affliction",
+      "costNote": "1 point per rank",
+      "cite": "PDF p112",
+      "description": "A debilitating toxin or drug. Often Progressive or Prolonged and sometimes with Onset; injected toxins add Resistible for a Toughness check first.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "resistance": "Fortitude",
+            "degree1": "impaired",
+            "degree2": "disabled",
+            "degree3": "incapacitated"
+          }
+        }
+      ]
+    },
+    {
+      "id": "trait_boost",
+      "name": "Trait Boost",
+      "baseEffect": "enhanced_trait",
+      "costNote": "the trait's cost −1 point per rank",
+      "cite": "PDF p124",
+      "description": "An Enhanced Trait activated as a free action that then loses a rank of effect every round until it is gone. Common as an “absorption” power, where resisting an effect feeds the boost.",
+      "effects": [
+        {
+          "effectId": "enhanced_trait",
+          "flaws": [
+            {
+              "id": "fades"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "transform",
+      "name": "Transform",
+      "baseEffect": "affliction",
+      "costNote": "1 point per rank",
+      "cite": "PDF p112",
+      "description": "Transforms the target into another form, chosen when the power is configured. The first two degrees only add to the total; the change lands at three. Often Ranged, and may take Empowering or Variable Conditions.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "degree3": "transformed"
+          },
+          "extras": [
+            {
+              "id": "progressive"
+            }
+          ],
+          "flaws": [
+            {
+              "id": "limited_degree",
+              "config": {
+                "degree": "degree1"
+              }
+            },
+            {
+              "id": "limited_degree",
+              "config": {
+                "degree": "degree2"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "true_sight",
+      "name": "True Sight",
+      "baseEffect": "enhanced_senses",
+      "costNote": "7 points",
+      "cite": "PDF p124",
+      "description": "See through every form of concealment and every illusion.",
+      "effects": [
+        {
+          "effectId": "enhanced_senses",
+          "rank": 7,
+          "config": {
+            "senses": [
+              {
+                "id": "counters_concealment",
+                "tier": 2
+              },
+              {
+                "id": "counters_illusion",
+                "tier": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "wards",
+      "name": "Wards",
+      "baseEffect": "obscure",
+      "costNote": "1 point per rank",
+      "cite": "PDF p139",
+      "description": "A magical or psychic ward blocking Detect and Remote Sensing effects of a similar descriptor, so nobody can spy or eavesdrop through them.",
+      "effects": [
+        {
+          "effectId": "obscure",
+          "config": {
+            "senses": [
+              "special"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "water_breathing",
+      "name": "Water Breathing",
+      "baseEffect": "immunity",
+      "costNote": "1 point (rank 1)",
+      "cite": "PDF p132",
+      "description": "Breathe normally under water and never drown. Often taken with Environmental Adaptation: Aquatic and ranks of Swimming.",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "rank": 1,
+          "config": {
+            "scopes": [
+              {
+                "name": "Suffocation (water)",
+                "rank": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "weaken",
+      "name": "Weaken",
+      "baseEffect": "affliction",
+      "costNote": "1 point per rank",
+      "cite": "PDF p112",
+      "description": "Saps one of the target's traits, chosen when the effect is configured. Without the Limited flaw it hits every trait; with Affects Objects it can weaken gear.",
+      "effects": [
+        {
+          "effectId": "affliction",
+          "config": {
+            "degree1": "impaired",
+            "degree2": "disabled",
+            "degree3": "debilitated"
+          },
+          "extras": [
+            {
+              "id": "cumulative"
+            }
+          ],
+          "flaws": [
+            {
+              "id": "limited",
+              "config": {
+                "condition": "One trait, chosen when configured"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "weapon",
+      "name": "Weapon",
+      "baseEffect": "damage",
+      "costNote": "1 point per rank, −1 point per 5 points",
+      "cite": "PDF p118",
+      "description": "A hand-held weapon — knuckles, knife, sword, hammer, staff. Throwing weapons add Thrown; ranged ones add Ranged, like Blast.",
+      "effects": [
+        {
+          "effectId": "damage",
+          "extras": [
+            {
+              "id": "strength_based"
+            }
+          ],
+          "flaws": [
+            {
+              "id": "removable",
+              "config": {
+                "tier": "removable"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "weather_control",
+      "name": "Weather Control",
+      "baseEffect": "environment",
+      "costNote": "5 points per rank",
+      "cite": "PDF p125",
+      "description": "Control the weather in an area, mixing cold, heat, hindered and hazardous movement and visibility in whatever amounts the conditions call for, up to 4 points per rank.",
+      "effects": [
+        {
+          "effectId": "environment",
+          "config": {
+            "conditions": [
+              "cold_extreme",
+              "heat_extreme"
+            ]
+          },
+          "extras": [
+            {
+              "id": "variable_environment"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "weatherproof",
+      "name": "Weatherproof",
+      "baseEffect": "feature",
+      "costNote": "Feature 1",
+      "cite": "PDF p128",
+      "description": "Whatever the weather, you stay dry and unmussed. No resistance to weather hazards.",
+      "effects": [
+        {
+          "effectId": "feature",
+          "rank": 1,
+          "config": {
+            "features": [
+              {
+                "name": "Weatherproof",
+                "description": "Whatever the weather, you stay dry and unmussed. No resistance to weather hazards."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "will_immunity",
+      "name": "Will Immunity",
+      "baseEffect": "immunity",
+      "costNote": "30 points (rank 30)",
+      "cite": "PDF p132",
+      "description": "Immune to everything calling for a Will check. Common for characters who lack minds or have especially impenetrable ones.",
+      "effects": [
+        {
+          "effectId": "immunity",
+          "rank": 30,
+          "config": {
+            "scopes": [
+              {
+                "name": "All effects resisted by Will",
+                "rank": 30
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "wings",
+      "name": "Wings",
+      "baseEffect": "flight",
+      "costNote": "1 point per rank",
+      "cite": "PDF p129",
+      "description": "Wings — bird-like, bat-like, or bug-like — that let you fly, but only while you are free to flap them.",
+      "effects": [
+        {
+          "effectId": "flight",
+          "flaws": [
+            {
+              "id": "restrainable"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "x_ray_vision",
+      "name": "X-Ray Vision",
+      "baseEffect": "enhanced_senses",
+      "costNote": "4 points",
+      "cite": "PDF p124",
+      "description": "See through opaque objects as if they were transparent.",
+      "effects": [
+        {
+          "effectId": "enhanced_senses",
+          "rank": 4,
+          "config": {
+            "senses": [
+              {
+                "id": "penetrates_concealment",
+                "tier": 2
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

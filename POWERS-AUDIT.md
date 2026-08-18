@@ -180,12 +180,12 @@ for the underlying issue that swap exposes.
 
 ## 4. Needs code — ranked by impact
 
-> §4A and §4B are **built** (2026-08-18) and kept below as a record of what was done
-> and why the shape changed; everything from §4C down is still outstanding.
+> §4A, §4B and §4E are **built** (2026-08-18) and kept below as a record of what was
+> done and why; §4C, §4D and §4F–§4M are still outstanding.
 
 ### A. Base cost by configuration — **DONE**
 
-*Built. Kept here because §4E and §4H refer back to it.*
+*Built. Kept here because §4H still refers back to it.*
 
 Five effects are priced by *how they are configured*, and every one was charged its floor
 — an all-senses Illusion cost a fifth of what it should:
@@ -280,37 +280,62 @@ may reduce that value to 0, p161), and the removal circumstances that distinguis
 (Removable needs you Stunned *and* Defenseless; Easily Removable can be taken with a Disarm
 or Grab during action time).
 
-### E. Standard power configurations — the largest missing feature
+### E. Standard power configurations — **DONE**
 
-The book's two appendix tables (p236 by effect, p237 by name) list **~90 named
-configurations**, and they are how M&M character write-ups are actually written: nobody says
-"Damage, Ranged", they say **Blast**. The app has **no catalog of them at all** — grepping
-`data/` for "Blast" hits only `equipment.json`.
+The book's two appendix tables (PDF p236 by effect, p237 by name) name about ninety
+ready-made powers, and they are how M&M write-ups are actually written: nobody says
+"Damage, Ranged", they say **Blast**. The app had no catalog of them at all.
 
-Representative entries, all with exact builds in the tables: Blast · Strike · Weapon ·
-Damage Aura · Mental Blast · Dazzle · Snare · Stun · Toxin · Paralyze · Suffocation ·
-Mind Control · Hallucination · Transform · Weaken · Affliction Aura · Invisibility ·
-Inaudibility · Darkness · Silence · Static · Wards · Force Field · Armored Skin ·
-Force Constructs · Matter Shaping · Wings · Radar · Sonar · Spatial Sense · True Sight ·
-X-Ray Vision · Psychokinesis · Cyclone · Gravity Field · Tether · Energy Tendrils ·
-[Matter] Moving · Poltergeist · Duplication · Portal · Scrying · Astral Projection ·
-Telepresence · Commlink · Interface · Telepathic Link · Psychic Connection · Gadgets ·
-Shapeshift · Animal Mimicry · Power Mimicry · Material Mimicry · Skill Mimicry ·
-Power Theft · Trait Boost · Absorption · Berserker Rage · Ageless · Water Breathing ·
-Environmental Immunity · Mental Immunity · Fortitude Immunity · Will Immunity ·
-[Effect] Resistance · Flashlight · Mist · Weather Control.
+**All 90 are now in `src/mm_companion/data/configurations.json`** — every Affliction
+configuration (Dazzle, Snare, Stun, Toxin, Paralyze, Suffocation, Mind Control,
+Hallucination, Transform, Weaken, Affliction Aura), the Damage ones (Blast, Strike,
+Weapon, Damage Aura, Mental Blast), the sensory ones (Radar, Sonar, Spatial Sense, True
+Sight, X-Ray Vision), Obscure's (Darkness, Silence, Static, Wards), Move Object's seven,
+Variable's seven, Immunity's eight, the 22 `Feature 1` entries, and the rest.
 
-Wants a new data file plus a "start from a configuration" entry point in the Power
-Constructor — prefilled effect, modifiers and config, then editable like anything else.
+**They are data, not a catalog.** Each is an assembly of effects, extras, flaws and config
+that already exist in the other files; `power_from_configuration`
+(`core/rules/configurations.py`) turns one into an **ordinary, editable `Power`** with no
+back-reference to where it came from — the moment a rank changes it is no longer that
+configuration, and a stale label would be worse than none.
 
-Two shortcuts worth knowing. About **25 of them are simply `Feature 1`** (Animal Harmony,
-Battery, Built-in Equipment, Charmed Life, Chill, Dimensional Pocket, Display, Higher
-Guidance, Insulating Fur, Internal Compartment, Iron Stomach, Light Sleeper, Lucid Dreamer,
-Massive, Megaphone, Mimicry, Quick Change, Remote, Shade, Special Effect, Temporal Inertia,
-Weatherproof — p127–128) and would slot straight into Feature's existing `repeatable` config
-as a picklist. And the Obscure-based ones (Darkness, Silence, Static, Wards) are now
-expressible, since §4A gave Obscure its sense lists; Invisibility and Inaudibility still
-wait on Concealment getting the same treatment (§4H).
+**The palette grew a fourth tab**, grouped by base effect the way the book's own p236 table
+is, searchable and A–Z-sortable like the Effects tab. Dropping one **appends** to the
+canvas rather than replacing it, titles an *untitled* power after itself, and takes its
+`structure` only when the canvas was empty — a Linked configuration must not silently
+relink a build the player already set up.
+
+**The printed cost is a test oracle.** Each entry carries the cost the *book* prints
+(`costNote`) and its page. It is never used in the arithmetic — a built power costs
+whatever its pieces cost — so comparing the two actually checks the recorded build.
+**77 of the 80 machine-checkable configurations match to the point.** The three that do
+not, and why, are recorded in the file's own `_meta`:
+
+- **Gadgets** (book 5/rank, built 6) — needs Removable's per-5-points formula, §4D.
+- **Material Mimicry** and **Power Mimicry** (book 5/rank, built 6) — the book puts the
+  Close Range flaw on Variable, which is a *Personal* effect, where that flaw has no
+  defined value (p159 only prices it from Ranged and from Perception). The book is loose
+  here, not the app. Building what the book literally names was preferred over inventing a
+  second flaw to force the number.
+
+Two fixes fell out of building this, both kept:
+
+- **18 effect-specific modifiers stated a cost range but had no way to dial it** — the
+  same gap §3 closed for the *generic* modifiers, one level down: every per-effect Subtle,
+  Ranged (Burrowing), Weakness (Create), Limited (Deflect), Action and Side Effect (Fortune
+  Control), Affects Others (Immunity, Insubstantial, Enhanced Senses), Dimensional (Remote
+  Sensing), Attitude (Summon), Limited Material (Move Object) and Not Against Descriptor
+  (Regeneration). Poltergeist is what exposed it: its Subtle 2 was silently charging 1.
+- **A flat flaw could take an effect's cost below zero.** The rules are explicit that a
+  flat-value flaw cannot reduce a cost below **1 point** (p150) and `_flat_base_cost` did
+  not enforce it, so Commlink — a 1-point-per-rank Communication with an Equipment-tier
+  Removable worth a flat −4 — priced at **−3 PP** and paid the character back. Now floored
+  at 1, except for an effect with no ranks bought, which still costs nothing.
+
+**Not built:** the equipment-currency configurations (Commlink is "1 Equipment Point per
+rank") build as ordinary powers rather than as gear; and Absorption, Berserker Rage,
+Poltergeist and Power Theft arrive as multi-effect skeletons the player still has to fill
+in (which trait is boosted, which descriptor is absorbed) — the book leaves those blank too.
 
 ### F. Nested trait budgets
 
@@ -342,9 +367,10 @@ for its own cost, so Darkness, Silence, Static and Wards can now be expressed.
 type, **sight costs double** (2 for one sight sense, 4 for all), and Concealment from touch
 senses is impossible short of Insubstantial (p115). Unlike Obscure the *cost* is a flat 2
 per rank, so nothing forced the issue; but with no config recording which senses, nothing
-can check that a Concealment 5 spent its ranks legally, and the Invisibility and
-Inaudibility configurations cannot be expressed. The shape is an allocation field metered
-against rank (as Enhanced Senses already is), not a `baseCostBy`.
+can check that a Concealment 5 spent its ranks legally. The Invisibility and Inaudibility
+configurations (§4E) therefore ship as Concealment at the right *rank* with the sense named
+only in their description — right cost, incomplete record. The shape is an allocation field
+metered against rank (as Enhanced Senses already is), not a `baseCostBy`.
 
 ### I. Countering effects
 

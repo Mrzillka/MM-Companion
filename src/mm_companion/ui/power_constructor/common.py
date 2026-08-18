@@ -231,6 +231,7 @@ def combat_focus_options(character: Character | None, game_data: GameData) -> li
 # Custom drag payload formats: the record id travels as the mime data.
 EFFECT_MIME = "application/x-mm-effect"
 MODIFIER_MIME = "application/x-mm-modifier"
+CONFIGURATION_MIME = "application/x-mm-configuration"
 # A chip carries its own index when dragged to reorder within its group.
 CHIP_MIME = "application/x-mm-chip"
 

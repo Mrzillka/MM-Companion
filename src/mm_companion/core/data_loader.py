@@ -653,6 +653,66 @@ class ResistanceOutcome:
 
 
 @dataclass(frozen=True)
+class ConfiguredModifier:
+    """One extra or flaw a standard power configuration already has attached.
+
+    ``id`` names a record in the merged modifier catalog (general or effect-specific);
+    ``rank`` is how many ranks of it a ranked modifier starts at (``0`` leaves the
+    selection's own default), and ``config`` seeds the modifier's config choices — the
+    Ranged extra's "from Close", a Limited Degree's chosen degree.
+    """
+
+    id: str
+    rank: int = 0
+    config: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ConfiguredEffect:
+    """One effect of a standard power configuration, already set up.
+
+    ``rank`` is a rank the configuration *nails down* — Invisibility is Concealment 2,
+    X-Ray Vision is Enhanced Senses 4 — and ``0`` leaves the player to choose, which is
+    the usual case for the per-rank configurations. ``config`` seeds the effect's own
+    configurable qualities (an Affliction's conditions by degree, Remote Sensing's sense
+    types).
+    """
+
+    effect_id: str
+    rank: int = 0
+    config: dict = field(default_factory=dict)
+    extras: tuple[ConfiguredModifier, ...] = ()
+    flaws: tuple[ConfiguredModifier, ...] = ()
+
+
+@dataclass(frozen=True)
+class PowerConfiguration:
+    """A named, pre-built power from the rulebook's standard configurations.
+
+    These are the game's own shorthand — *Blast* rather than "Damage, Ranged" — and
+    they are **not** new rules: each is an ordinary assembly of effects, extras and flaws
+    that already exist in the other data files, which is why building one produces a
+    :class:`~mm_companion.core.powers.Power` the player can then edit like any other.
+
+    ``base_effect`` is the effect id the configuration files under in the palette.
+    ``cost_note`` is the cost the *book* prints for it and ``cite`` the page — both are
+    reference text and neither is ever used in the arithmetic: what a built power costs
+    is derived from its effects and modifiers like anything else. Where the two disagree
+    the reason is a rule the app does not model yet (see ``configurations.json``'s
+    ``_meta.costNote``). ``structure`` matters only for a multi-effect configuration.
+    """
+
+    id: str
+    name: str
+    base_effect: str = ""
+    cost_note: str = ""
+    cite: str = ""
+    description: str = ""
+    structure: str = "independent"
+    effects: tuple[ConfiguredEffect, ...] = ()
+
+
+@dataclass(frozen=True)
 class BaseCostBy:
     """How an effect whose base cost depends on its *configuration* works that cost out.
 
@@ -1702,6 +1762,10 @@ class GameData:
     effects: list[Effect]
     modifiers: list[Modifier]
     effect_modifiers: dict[str, list[Modifier]]
+    #: The rulebook's named standard power configurations (Blast, Dazzle, Force Field,
+    #: …), each a ready-made assembly of the records above. Empty for a ruleset that
+    #: ships none.
+    configurations: tuple[PowerConfiguration, ...]
     costs: Costs
     measurements: Measurements
     game_term_ladders: dict[str, tuple[str, ...]]
@@ -2341,6 +2405,35 @@ def _parse_duration_action_floor(raw: dict) -> dict[str, str]:
     """Read ``durationActionFloor`` (duration -> minimum action) from ``modifiers.json``."""
 
     return {str(k): str(v) for k, v in raw.get("durationActionFloor", {}).items()}
+
+
+def _parse_configured_modifier(raw: dict) -> ConfiguredModifier:
+    return ConfiguredModifier(
+        id=raw["id"], rank=int(raw.get("rank", 0)), config=dict(raw.get("config", {}))
+    )
+
+
+def _parse_configured_effect(raw: dict) -> ConfiguredEffect:
+    return ConfiguredEffect(
+        effect_id=raw["effectId"],
+        rank=int(raw.get("rank", 0)),
+        config=dict(raw.get("config", {})),
+        extras=tuple(_parse_configured_modifier(m) for m in raw.get("extras", [])),
+        flaws=tuple(_parse_configured_modifier(m) for m in raw.get("flaws", [])),
+    )
+
+
+def _parse_configuration(raw: dict) -> PowerConfiguration:
+    return PowerConfiguration(
+        id=raw["id"],
+        name=raw["name"],
+        base_effect=raw.get("baseEffect", ""),
+        cost_note=raw.get("costNote", ""),
+        cite=raw.get("cite", ""),
+        description=raw.get("description", ""),
+        structure=raw.get("structure", "independent"),
+        effects=tuple(_parse_configured_effect(e) for e in raw.get("effects", [])),
+    )
 
 
 def _parse_effect_modifiers(raw: dict) -> dict[str, list[Modifier]]:
@@ -3150,6 +3243,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     effects_raw = content.get("effects.json", {})
     modifiers_raw = content.get("modifiers.json", {})
     effect_modifiers_raw = content.get("effect_modifiers.json", {})
+    configurations_raw = content.get("configurations.json", {})
     effect_readouts_raw = content.get("effect_readouts.json", {})
     costs_raw = content.get("costs.json", {})
     system_raw = content.get("system.json", {})
@@ -3185,6 +3279,9 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         effects=[_parse_effect(e, system.ranged_distance) for e in effects_raw.get("effects", [])],
         modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
+        configurations=tuple(
+            _parse_configuration(c) for c in configurations_raw.get("configurations", [])
+        ),
         costs=_parse_costs(costs_raw),
         measurements=_parse_measurements(measurements_raw),
         game_term_ladders=_parse_ladders(modifiers_raw),

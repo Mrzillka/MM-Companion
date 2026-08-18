@@ -53,6 +53,7 @@ from mm_companion.ui.attachment_dialog import AttachmentDialog
 from mm_companion.ui.power_constructor.bricks import BrickList, BrickWidget, PaletteDropZone
 from mm_companion.ui.power_constructor.canvas import PowerCanvas
 from mm_companion.ui.power_constructor.common import (
+    CONFIGURATION_MIME,
     EFFECT_MIME,
     MODIFIER_MIME,
     combat_focus_options,
@@ -282,6 +283,16 @@ class PowerConstructorWindow(QMainWindow):
         )
         tabs.addTab(self._build_search_tab("extras", "Search extras", bricks=extras), "Extras")
         tabs.addTab(self._build_search_tab("flaws", "Search flaws", bricks=flaws), "Flaws")
+        # The rulebook's named ready-made powers. Only offered when the ruleset ships
+        # any, so a mod that strips them loses the tab rather than showing an empty one.
+        groups = self._configuration_groups()
+        if groups:
+            tabs.addTab(
+                self._build_search_tab(
+                    "configurations", "Search configurations", groups=groups, sortable=True
+                ),
+                "Configurations",
+            )
         tabs.setMinimumWidth(300)
         # The palette is also where an attached chip is dragged to detach it.
         self.palette_zone = PaletteDropZone(tabs)
@@ -302,6 +313,29 @@ class PowerConstructorWindow(QMainWindow):
         ordered = [t for t in self._EFFECT_TYPE_ORDER if t in by_type]
         ordered += [t for t in by_type if t not in self._EFFECT_TYPE_ORDER]  # any stragglers
         return [(t, by_type[t]) for t in ordered]
+
+    def _configuration_groups(self) -> list[tuple[str, list[BrickWidget]]]:
+        """The standard-configuration bricks bucketed under the effect they are built on.
+
+        Grouped the way the book's own table is (PDF p236, "by effect"), because that is
+        how they are looked up: someone after Stun is looking under Affliction. The
+        brick's subtitle is the cost the *book* prints, which is why it can differ by a
+        point from what the built power costs — see ``configurations.json``.
+        """
+
+        effect_names = {e.id: e.name for e in self._data.effects}
+        by_effect: dict[str, list[BrickWidget]] = {}
+        for configuration in self._data.configurations:
+            brick = BrickWidget(
+                configuration.name,
+                configuration.cost_note,
+                CONFIGURATION_MIME,
+                configuration.id,
+                description=configuration.description,
+            )
+            group = effect_names.get(configuration.base_effect, "Other")
+            by_effect.setdefault(group, []).append(brick)
+        return [(name, by_effect[name]) for name in sorted(by_effect)]
 
     def _build_search_tab(
         self,
@@ -410,6 +444,7 @@ class PowerConstructorWindow(QMainWindow):
             self._character,
             unit=self._currency,
         )
+        self.canvas.configurationDropped.connect(self._on_configuration_dropped)
         self.canvas.changed.connect(self._refresh_cost)
         self.canvas.changed.connect(self._refresh_game_terms)
         self.canvas.changed.connect(self._refresh_pl_warning)
@@ -953,6 +988,16 @@ class PowerConstructorWindow(QMainWindow):
 
     def _on_name_changed(self, text: str) -> None:
         self.power.name = text
+
+    def _on_configuration_dropped(self, name: str) -> None:
+        """Title an *untitled* power after the configuration just dropped into it.
+
+        Only when the name box is empty: a player who has already named their power has
+        said what it is called, and "Blast" is not an improvement on "Sunfire Lance".
+        """
+
+        if not self._name.text().strip():
+            self._name.setText(name)
 
     def _on_description_changed(self) -> None:
         self.power.description = self._description.toPlainText()

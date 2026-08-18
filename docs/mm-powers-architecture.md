@@ -286,6 +286,15 @@ rather than editing that module. `Reduced Trait` uses the same machinery from th
 side: it is a *flat* flaw with `costMode: "as_trait"` and its own trait rows, so it
 discounts by whatever the lowered ranks would have cost.
 
+**Standard configurations.** The rulebook also names about ninety ready-made powers and
+lists what each is made of (PDF p236 by effect, p237 by name). They are shorthand, not new
+rules — nobody says "Damage, Ranged", they say *Blast* — so `configurations.json` records
+each as an assembly of the records above and `core/rules/configurations.py` turns one into
+an ordinary `Power`. Two consequences worth stating: a built configuration is editable like
+anything else and carries no marker of where it came from, and it costs whatever its pieces
+cost. The `costNote` beside each is the *book's* printed price, kept as reference and as a
+test oracle, never as an input to the arithmetic.
+
 **Base cost from configuration.** Five effects have no single points-per-rank: Illusion
 costs 1 per sense type it fools, sight counting as two, capped at 5 (PDF p131); Obscure
 1 per sense or 2 per whole sense type, sight double, capped at 10 (p139); Remote Sensing

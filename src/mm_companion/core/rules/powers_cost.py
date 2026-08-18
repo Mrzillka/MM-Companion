@@ -490,6 +490,13 @@ def _flat_base_cost(context: BaseCostContext) -> int:
 
     The runs are summed **unrounded** and rounded once, so two bands that each come to
     half a point come to one point together rather than two.
+
+    Flat flaws are then floored: the rules are explicit that a flat-value flaw cannot take
+    an effect below **1 point** (``docs/mm-powers-architecture.md`` §2, and the book's own
+    "flat-value modifiers" note), and without that a heavily-discounted cheap effect —
+    an Equipment-tier Removable on a 1-point Commlink — comes out *negative* and pays the
+    character back. An effect with no ranks bought is left at zero: nothing has been
+    bought yet, and charging a point for an empty card would read as a bug.
     """
 
     net = context.base_value + context.net_per_rank
@@ -503,7 +510,8 @@ def _flat_base_cost(context: BaseCostContext) -> int:
         )
     )
     ranked += context.folded_ranks * context.net_per_rank
-    return ranked + context.flat
+    total = ranked + context.flat
+    return max(1, total) if ranked > 0 else total
 
 
 def _modifier_scale(nominal: int, net_per_rank: int) -> Fraction:

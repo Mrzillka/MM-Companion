@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import re
 from fractions import Fraction
 
 from mm_companion.core.character import Character
@@ -24,6 +25,8 @@ from mm_companion.core.rules import (
     advantage_points_spent,
     array_alternate_cost,
     array_base_index,
+    configuration_by_id,
+    configurations_for_effect,
     effect_allocation_used,
     effect_attack_skill_bonus,
     effect_cost_breakdown,
@@ -49,6 +52,7 @@ from mm_companion.core.rules import (
     node_display_cost,
     power_allocation_violations,
     power_display_name,
+    power_from_configuration,
     power_game_terms,
     power_has_custom_modifier,
     power_has_standing_effect,
@@ -77,6 +81,91 @@ def test_base_effect_cost_is_per_rank() -> None:
     # Damage is 1 PP/rank; rank 8 with no modifiers costs 8.
     effect = PowerEffectInstance("damage", rank=8)
     assert effect_total_cost(effect, data) == 8
+
+
+def test_every_standard_configuration_names_records_that_exist() -> None:
+    data = load_game_data()
+    effects = {e.id for e in data.effects}
+    modifiers = set(data.modifier_catalog())
+    assert data.configurations, "the base ruleset ships the book's standard configurations"
+    for configuration in data.configurations:
+        assert configuration.base_effect in effects, configuration.id
+        assert configuration.effects, configuration.id
+        for configured in configuration.effects:
+            assert configured.effect_id in effects, (configuration.id, configured.effect_id)
+            for modifier in (*configured.extras, *configured.flaws):
+                assert modifier.id in modifiers, (configuration.id, modifier.id)
+
+
+def test_building_a_configuration_gives_an_ordinary_editable_power() -> None:
+    data = load_game_data()
+    blast = configuration_by_id(data, "blast")
+    power = power_from_configuration(blast)
+    # Named after itself, one Damage effect carrying the Ranged extra, and nothing about
+    # it remembers being a configuration — it is a plain Power from here on.
+    assert power.name == "Blast"
+    assert [e.effect_id for e in power.effects] == ["damage"]
+    assert [m.modifier_id for m in power.effects[0].extras] == ["ranged"]
+    power.effects[0].rank = 8
+    assert power_total_cost(power, data) == 16  # 8 × (1 damage + 1 ranged)
+
+
+def test_a_built_configuration_shares_nothing_with_the_catalog_record() -> None:
+    data = load_game_data()
+    stun = configuration_by_id(data, "stun")
+    first, second = power_from_configuration(stun), power_from_configuration(stun)
+    first.effects[0].config["degree1"] = "impaired"
+    # Editing one build must not reach the catalog record or any other build of it.
+    assert second.effects[0].config["degree1"] == "dazed"
+    assert stun.effects[0].config["degree1"] == "dazed"
+
+
+def test_standard_configurations_cost_what_the_book_prints() -> None:
+    data = load_game_data()
+    # The printed cost is reference text, never used in the arithmetic — so comparing
+    # the two is a real check that the recorded build is the right one.
+    per_rank = re.compile(r"^(\d+) points? per rank$")
+    fixed = re.compile(r"^(\d+) points?(?: \(rank \d+\))?$")
+    # Three configurations cannot reach their printed cost yet: Gadgets and the two
+    # mimicries. Both reasons are recorded in configurations.json's _meta.
+    known_gaps = {"gadgets", "material_mimicry", "power_mimicry"}
+    checked = 0
+    for configuration in data.configurations:
+        power = power_from_configuration(configuration)
+        note = configuration.cost_note
+        if match := per_rank.match(note):
+            one = power_total_cost(power, data)
+            for effect in power.effects:
+                effect.rank = 4
+            rate = (power_total_cost(power, data) - one) / 3
+            if configuration.id in known_gaps:
+                continue
+            assert rate == int(match.group(1)), (configuration.id, rate, note)
+        elif (match := fixed.match(note)) or note == "Feature 1":
+            want = int(match.group(1)) if match else 1
+            assert power_total_cost(power, data) == want, (configuration.id, note)
+        else:
+            continue  # a descriptive cost ("see description"), checked by hand
+        checked += 1
+    assert checked > 70, "most configurations should be machine-checkable"
+
+
+def test_configurations_are_grouped_by_the_effect_they_are_built_on() -> None:
+    data = load_game_data()
+    names = {c.name for c in configurations_for_effect(data, "affliction")}
+    assert {"Dazzle", "Snare", "Stun", "Toxin", "Mind Control"} <= names
+    assert configurations_for_effect(data, "burrowing") == []
+
+
+def test_a_flat_flaw_cannot_take_an_effect_below_one_point() -> None:
+    data = load_game_data()
+    # Commlink is a 1-point-per-rank Communication with an Equipment-tier Removable
+    # worth a flat -4. Without the floor that prices at -3 and pays the character back.
+    power = power_from_configuration(configuration_by_id(data, "commlink"))
+    assert power_total_cost(power, data) == 1
+    # An effect with nothing bought still costs nothing, though.
+    empty = PowerEffectInstance("damage", rank=0)
+    assert effect_total_cost(empty, data) == 0
 
 
 def test_a_configured_base_cost_is_priced_from_the_options_chosen() -> None:

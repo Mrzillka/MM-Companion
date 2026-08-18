@@ -249,6 +249,18 @@
           "overrides": {
             "range": "Ranged"
           },
+          "config": [
+            {
+              "key": "scope",
+              "label": "Buys",
+              "type": "select",
+              "hint": "Digging at a distance, or bestowing Burrowing on someone else, is one application; doing both is two.",
+              "options": [
+                { "value": "one", "label": "One of the two", "costValue": 1 },
+                { "value": "both", "label": "Both", "costValue": 2 }
+              ]
+            }
+          ],
           "description": "Dig tunnels remotely, or grant Burrowing to someone else at a distance."
         }
       ],
@@ -321,6 +333,17 @@
           "costFormula": "+1 or +2 points flat",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "hint": "1 point: noticeable only with an effort (a check). 2 points: undetectable."
+            }
+          ],
           "description": "Encrypts or hides your transmission from eavesdroppers."
         }
       ],
@@ -522,6 +545,17 @@
           "costFormula": "+1 or +2 points flat",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "hint": "1 point: noticeable only with an effort (a check). 2 points: undetectable."
+            }
+          ],
           "description": "Creations look completely real, or are undetectable as constructs."
         },
         {
@@ -574,6 +608,18 @@
           "costFormula": "-1 or -2 points per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "scope",
+              "label": "Applies to",
+              "type": "select",
+              "hint": "A blanket weakness is worth -2; one limited to a specific, reasonably common type of Damage only -1.",
+              "options": [
+                { "value": "all", "label": "All Damage", "costValue": 2 },
+                { "value": "specific", "label": "One specific type of Damage", "costValue": 1 }
+              ]
+            }
+          ],
           "description": "Your creations automatically fail their Damage resistance checks."
         }
       ]
@@ -672,6 +718,19 @@
           "costFormula": "-1 point per rank or by category",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "scope",
+              "label": "Limited to",
+              "type": "select",
+              "hint": "A broad category of ranged attack is worth -1 per rank; a narrower one is a flat reduction instead.",
+              "options": [
+                { "value": "category", "label": "One category of attack (per rank)", "costValue": 1, "flat": false },
+                { "value": "narrow", "label": "A narrow category (flat)", "costValue": 1, "flat": true },
+                { "value": "very_narrow", "label": "A very narrow category (flat)", "costValue": 2, "flat": true }
+              ]
+            }
+          ],
           "description": "Only deflects a specific category of ranged attack."
         }
       ]
@@ -875,6 +934,17 @@
           "costFormula": "+1 or +2 points flat",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "hint": "1 point: noticeable only with an effort (a check). 2 points: undetectable."
+            }
+          ],
           "description": "Removes the noise, wind, or visible trail your Flight normally leaves."
         }
       ],
@@ -968,6 +1038,18 @@
           "flat": false,
           "stepField": "action",
           "stepBy": 1,
+          "config": [
+            {
+              "key": "action",
+              "label": "Now requires",
+              "type": "select",
+              "hint": "A free action is worth -1; a standard action or a reaction -2.",
+              "options": [
+                { "value": "free", "label": "A free action", "costValue": 1 },
+                { "value": "standard", "label": "A standard action or reaction", "costValue": 2 }
+              ]
+            }
+          ],
           "description": "Requires a slower action to use, limiting when you can respond to others."
         },
         {
@@ -998,6 +1080,18 @@
           "costFormula": "-1 or -2 points per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "when",
+              "label": "Backfires",
+              "type": "select",
+              "hint": "Only when the attempt fails is worth -1; every time you use it, -2.",
+              "options": [
+                { "value": "on_failure", "label": "Only on failure", "costValue": 1 },
+                { "value": "always", "label": "Always", "costValue": 2 }
+              ]
+            }
+          ],
           "description": "A failed use backfires as a complication, with no Hero Point awarded."
         }
       ]
@@ -1198,6 +1292,18 @@
           "costFormula": "+0 or +1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "scope",
+              "label": "Works on",
+              "type": "select",
+              "hint": "Granting the Immunity while keeping it yourself costs 1; an Immunity that works only on others is a net +0.",
+              "options": [
+                { "value": "as_well", "label": "You and others", "costValue": 1 },
+                { "value": "only", "label": "Others only", "costValue": 0 }
+              ]
+            }
+          ],
           "description": "Grants your Immunity to someone else by touch."
         },
         {
@@ -1277,6 +1383,18 @@
           "costFormula": "+0 or +1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "scope",
+              "label": "Works on",
+              "type": "select",
+              "hint": "Taking someone with you while staying insubstantial yourself costs 1; an effect that only works on others is a net +0.",
+              "options": [
+                { "value": "as_well", "label": "You and others", "costValue": 1 },
+                { "value": "only", "label": "Others only", "costValue": 0 }
+              ]
+            }
+          ],
           "description": "Extends your Insubstantial state to another willing character by touch."
         },
         {
@@ -1339,6 +1457,17 @@
           "costFormula": "+1 or +2 points flat",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "hint": "1 point: noticeable only with an effort (a check). 2 points: undetectable."
+            }
+          ],
           "description": "Makes your insubstantial state hard or impossible to notice."
         }
       ],
@@ -1425,6 +1554,17 @@
           "costFormula": "+1 or +2 points flat",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "hint": "1 point: noticeable only with an effort (a check). 2 points: undetectable."
+            }
+          ],
           "description": "Makes the mental intrusion hard or impossible to detect."
         }
       ],
@@ -1787,6 +1927,17 @@
           "costFormula": "+1/+2/+3 points flat",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 3,
+              "default": 1,
+              "hint": "1: one other dimension. 2: any of a related group. 3: any dimension in the setting."
+            }
+          ],
           "description": "Extends Remote Sensing into other dimensions (one, a related group, or any)."
         },
         {
@@ -1964,6 +2115,18 @@
           "costFormula": "-1 or -2 points per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "attitude",
+              "label": "Minions are",
+              "type": "select",
+              "hint": "Indifferent minions are worth -1 per rank; Unfavorable ones -2.",
+              "options": [
+                { "value": "indifferent", "label": "Indifferent", "costValue": 1 },
+                { "value": "unfavorable", "label": "Unfavorable", "costValue": 2 }
+              ]
+            }
+          ],
           "description": "Summoned minions start out uncooperative rather than loyal."
         },
         {
@@ -2165,6 +2328,17 @@
           "costFormula": "+1 or +2 points flat",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "hint": "1 point: noticeable only with an effort (a check). 2 points: undetectable."
+            }
+          ],
           "description": "Removes the normally-visible manifestation (glow, tractor beam, etc.)."
         }
       ],
@@ -2205,6 +2379,18 @@
           "costFormula": "-1 or -2 points per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "scope",
+              "label": "Limited to",
+              "type": "select",
+              "hint": "A broad material (metal, water, rock) is worth -1 per rank; a narrow one (precious metals, sand, petroleum) -2.",
+              "options": [
+                { "value": "broad", "label": "A broad material", "costValue": 1 },
+                { "value": "narrow", "label": "A particularly limited material", "costValue": 2 }
+              ]
+            }
+          ],
           "description": "Only works on a specific type of material, like metal, plants, or water."
         }
       ]
@@ -2246,6 +2432,19 @@
           "costFormula": "-1 point per rank, or -1/-2 points flat for rare descriptors",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "scope",
+              "label": "Descriptor is",
+              "type": "select",
+              "hint": "A descriptor that comes up regularly is worth -1 per rank; a rare one only a flat reduction.",
+              "options": [
+                { "value": "common", "label": "One you meet regularly (per rank)", "costValue": 1, "flat": false },
+                { "value": "rare", "label": "Rare (flat)", "costValue": 1, "flat": true },
+                { "value": "very_rare", "label": "Very rare (flat)", "costValue": 2, "flat": true }
+              ]
+            }
+          ],
           "description": "Can't heal damage from one specific descriptor (fire, holy weapons, etc.)."
         },
         {
@@ -2282,6 +2481,18 @@
           "costFormula": "+0 or +1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "scope",
+              "label": "Works on",
+              "type": "select",
+              "hint": "Granting the senses while keeping them yourself costs 1; senses granted only to others are a net +0.",
+              "options": [
+                { "value": "as_well", "label": "You and others", "costValue": 1 },
+                { "value": "only", "label": "Others only", "costValue": 0 }
+              ]
+            }
+          ],
           "description": "Grants the benefit of one or more of your Enhanced Senses to another character."
         },
         {

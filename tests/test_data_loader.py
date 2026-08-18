@@ -235,6 +235,17 @@ def test_modifiers_are_categorised_with_numeric_cost() -> None:
     assert categories == {"extra", "flaw"}
 
 
+def test_standard_configurations_are_loaded() -> None:
+    data = load_game_data()
+    assert len(data.configurations) == 90  # the book's named ready-made powers
+    blast = next(c for c in data.configurations if c.id == "blast")
+    assert blast.name == "Blast"
+    assert blast.base_effect == "damage"
+    assert blast.cost_note == "2 points per rank"  # reference text, never the arithmetic
+    assert [e.effect_id for e in blast.effects] == ["damage"]
+    assert [m.id for m in blast.effects[0].extras] == ["ranged"]
+
+
 def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
     data = load_game_data()
     assert len(data.effect_modifiers) == 37  # effects with their own extras/flaws

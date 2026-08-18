@@ -23,10 +23,16 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
+    configuration_by_id,
+    power_from_configuration,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
-from mm_companion.ui.power_constructor.common import EFFECT_MIME, _mime_id
+from mm_companion.ui.power_constructor.common import (
+    CONFIGURATION_MIME,
+    EFFECT_MIME,
+    _mime_id,
+)
 from mm_companion.ui.power_constructor.effect_card import EffectCard
 
 
@@ -99,14 +105,20 @@ class PowerModeBar(QWidget):
 class PowerCanvas(QFrame):
     """The drop area that holds the power's effect cards and the structure switch.
 
-    Accepts **effect** drops (each makes a new card). Owns no state itself beyond
-    the shared :class:`Power`; emits :attr:`changed` on every add/remove/edit. Once
-    a second card lands it reveals the :class:`PowerModeBar`, writes the chosen
-    structure to the power, and keeps every card's role badge in step (the array
-    base tracks the costliest effect as ranks change).
+    Accepts **effect** drops (each makes a new card) and **configuration** drops (a
+    named standard power like Blast or Force Field, which lands as one or more
+    already-built cards). Owns no state itself beyond the shared :class:`Power`; emits
+    :attr:`changed` on every add/remove/edit. Once a second card lands it reveals the
+    :class:`PowerModeBar`, writes the chosen structure to the power, and keeps every
+    card's role badge in step (the array base tracks the costliest effect as ranks
+    change).
     """
 
     changed = Signal()
+    #: A standard configuration was dropped; carries its name so the window can title an
+    #: untitled power after it. Separate from :attr:`changed` because naming is the
+    #: window's business and the canvas holds no name field.
+    configurationDropped = Signal(str)
 
     def __init__(
         self,
@@ -151,12 +163,14 @@ class PowerCanvas(QFrame):
         self._drops.set_idle(_idle_canvas_rules(bool(self._cards)))
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if event.mimeData().hasFormat(EFFECT_MIME):
+        if event.mimeData().hasFormat(EFFECT_MIME) or event.mimeData().hasFormat(
+            CONFIGURATION_MIME
+        ):
             self._drops.show_accept()
             event.acceptProposedAction()
         else:
-            # Only effect bricks build a power; a modifier dragged onto the bare
-            # canvas (rather than onto a card) now says so instead of nothing.
+            # Only effect and configuration bricks build a power; a modifier dragged onto
+            # the bare canvas (rather than onto a card) now says so instead of nothing.
             self._drops.show_reject()
             event.ignore()
 
@@ -166,7 +180,10 @@ class PowerCanvas(QFrame):
 
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._drops.clear()
-        self.add_effect(_mime_id(event.mimeData(), EFFECT_MIME))
+        if event.mimeData().hasFormat(CONFIGURATION_MIME):
+            self.add_configuration(_mime_id(event.mimeData(), CONFIGURATION_MIME))
+        else:
+            self.add_effect(_mime_id(event.mimeData(), EFFECT_MIME))
         self._update_canvas_style()
         event.acceptProposedAction()
 
@@ -178,6 +195,40 @@ class PowerCanvas(QFrame):
         self._sync_structure_ui()
         self.changed.emit()
         return card
+
+    def add_configuration(self, configuration_id: str) -> list[EffectCard]:
+        """Drop a named standard configuration onto the canvas as ready-built cards.
+
+        The configuration is turned into an ordinary :class:`Power` and its effects are
+        *appended* to whatever is already here — a configuration is a starting point, not
+        a replacement, and a player who has built half a power and then reaches for Blast
+        means to add it.
+
+        Its ``structure`` is taken only when the canvas was **empty**. A multi-effect
+        configuration (Berserker Rage is Linked) has to arrive linked to make sense, but
+        stamping that over a structure the player already chose would silently rewrite
+        their build.
+
+        Returns the new cards, and emits :attr:`configurationDropped` with the name so
+        the window can title an untitled power. An unknown id adds nothing.
+        """
+
+        configuration = configuration_by_id(self._data, configuration_id)
+        if configuration is None:
+            return []
+        was_empty = not self._power.effects
+        built = power_from_configuration(configuration)
+        cards = []
+        for instance in built.effects:
+            self._power.effects.append(instance)
+            cards.append(self._build_card(instance))
+        if was_empty and len(built.effects) > 1:
+            self._power.structure = built.structure
+            self._mode_bar.set_structure(built.structure)
+        self._sync_structure_ui()
+        self.configurationDropped.emit(configuration.name)
+        self.changed.emit()
+        return cards
 
     def _build_card(self, instance: PowerEffectInstance) -> EffectCard:
         """Render a card for an effect instance already on the power."""

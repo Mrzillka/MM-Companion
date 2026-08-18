@@ -12,8 +12,13 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.powers import Power, PowerEffectInstance
-from mm_companion.core.rules import effect_total_cost
+from mm_companion.core.powers import (
+    STRUCTURE_INDEPENDENT,
+    STRUCTURE_LINKED,
+    Power,
+    PowerEffectInstance,
+)
+from mm_companion.core.rules import effect_total_cost, power_total_cost
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 
@@ -114,6 +119,58 @@ def test_attaching_an_already_implicit_modifier_is_a_no_op(qapp: QApplication) -
     assert card._chips == []
     assert card.instance.extras == []
     assert effect_total_cost(card.instance, data) == before
+
+
+def test_the_palette_offers_the_standard_configurations(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    _search, bricks = window._search_tabs["configurations"]
+    assert len(bricks) == len(data.configurations)
+    assert "blast" in {b._payload for b in bricks}
+
+
+def test_dropping_a_configuration_builds_it_and_titles_the_power(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+
+    cards = window.canvas.add_configuration("blast")
+
+    assert len(cards) == 1
+    assert [m.modifier_id for m in cards[0].instance.extras] == ["ranged"]
+    assert window._name.text() == "Blast"
+    cards[0].instance.rank = 8
+    assert power_total_cost(window.power, data) == 16
+
+
+def test_a_multi_effect_configuration_arrives_with_its_structure(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+
+    cards = window.canvas.add_configuration("berserker_rage")
+
+    assert len(cards) == 2
+    assert window.power.structure == STRUCTURE_LINKED
+
+
+def test_a_configuration_drop_leaves_an_existing_build_alone(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window._name.setText("Sunfire Lance")
+    window.canvas.add_effect("damage")
+
+    window.canvas.add_configuration("berserker_rage")
+
+    # Appended, not substituted: the player's own name and structure survive, and a
+    # Linked configuration does not silently relink a power they set up themselves.
+    assert window._name.text() == "Sunfire Lance"
+    assert window.power.structure == STRUCTURE_INDEPENDENT
+    assert len(window.power.effects) == 3
+
+
+def test_an_unknown_configuration_id_adds_nothing(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    assert window.canvas.add_configuration("no-such-configuration") == []
+    assert window.power.effects == []
 
 
 def test_duplicate_attach_is_a_no_op_only_when_the_copies_are_indistinguishable(
@@ -1344,13 +1401,16 @@ def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
     from mm_companion.ui.power_constructor import _GROUP_HEADER
 
     window = PowerConstructorWindow(load_game_data())
+    # Scoped to the Effects tab: Configurations is grouped and sortable too, and a
+    # window-wide search would toggle one tab and assert about both.
+    tab = window._search_tabs["effects"][0].parentWidget()
     # Select headers by their object name, not their text — a brick can share a group's
     # name (the Attack extra vs. the Attack effect group).
-    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.objectName() == _GROUP_HEADER]
+    headers = [lbl for lbl in tab.findChildren(QLabel) if lbl.objectName() == _GROUP_HEADER]
     assert headers  # grouped by effect type by default
     assert all(not h.isHidden() for h in headers)
 
-    check = next(c for c in window.findChildren(QCheckBox) if "Sort A" in c.text())
+    check = next(c for c in tab.findChildren(QCheckBox) if "Sort A" in c.text())
     check.setChecked(True)  # flat alphabetical view drops the headers
     assert all(h.isHidden() for h in headers)
 

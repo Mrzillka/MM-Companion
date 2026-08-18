@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -81,7 +82,10 @@ from mm_companion.core.rules import (
     PinRef,
     active_array_child,
     debilitated_traits,
+    effect_current_rank,
+    effect_stands,
     leaf_powers,
+    live_powers,
     node_display_cost,
     power_display_name,
     power_has_custom_modifier,
@@ -104,10 +108,10 @@ from mm_companion.ui.cards import (
     effect_title,
     effects_block,
 )
-from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
     hline_separator,
@@ -171,10 +175,10 @@ def _mode_toggle_style(locked: bool) -> str:
     sideways as it lights up, which is the lesson the theme's tool-button rules and
     ``QuickRollStar`` already carry. No ``font-size`` here: weight only.
 
-    Shared with :class:`_SizeLadder`, which is the same widget-level bargain over the
-    same tokens — a strip of checkable push buttons, exactly one lit. Keeping one
-    stylesheet for both is what stops a card carrying two segmented strips that agree
-    about nothing.
+    Used by the group card's mode switch alone now that the size ladder has become a
+    slider; it stays a shared helper because a segmented strip is the shape any future
+    one-of-N card control wants, and two of them agreeing about nothing is the bug this
+    docstring exists to prevent.
     """
     accent = theme.color("accent")
     rest = (
@@ -298,94 +302,103 @@ class _ModeToggle(QWidget):
             )
 
 
-class _SizeLadder(QWidget):
-    """A size effect's rungs, as one button per size the wielder can hold themselves at.
+class _RankDial(QWidget):
+    """A slider for the rank an effect is currently *held at*, and what that means.
 
-    Growth 3 is not one leap to Gargantuan — it is Large, then Huge, then Gargantuan,
-    and which of the three you are standing at is a mid-fight decision. So the card
-    carries a button per rung (:func:`~mm_companion.core.rules.size_steps`), labelled
-    with the **size the character becomes** rather than the rank it costs: a rank is an
-    accounting fact the card already prints, while "Huge" is the thing being chosen.
-    The labels are read against the wielder, so a Small character's ladder starts at
-    Medium.
+    Two kinds of power want one and they want the same control. A Growth 3 is not one
+    leap to Gargantuan — it is Large, then Huge, then Gargantuan, and which of the three
+    you are standing at is a mid-fight decision. A Damage 10 is not all-or-nothing
+    either: a hero pulling their punches fires it at 5. So the card carries one slider
+    from ``0`` to the effect's bought rank, with a label beside it saying what the
+    current notch *is*: the **size the character becomes** for a size effect (read
+    against the wielder, so a Small character's dial starts at Medium) and the plain
+    rank otherwise. A rank is an accounting fact the card already prints; "Huge" is the
+    thing being chosen.
 
-    Three things the strip does that a plain segmented control does not. Nothing is lit
-    while the power is switched off — the ladder reports where the power *is*, and off
-    is nowhere — and clicking a rung from there switches the power on at that rung, so
-    going from dormant to Huge is one click rather than two. Clicking the rung that is
-    already lit switches the power **off**, exactly as clicking the card would, so the
-    strip is a whole control rather than one that can only turn a power on. And the
-    buttons stay live in the locked sheet, like every other runtime control on a card:
-    how big you are standing there is a play action, not a build edit — though it is
-    saved with the build, so picking a rung does mark the sheet unwritten.
+    Ranks the Size Table clamps together simply repeat their category, which is honest —
+    a Growth 8 really does spend several of its ranks at Gargantuan.
 
-    It wraps (:class:`~mm_companion.ui.flow_layout.FlowContainer`), because a Growth 10
-    is ten buttons and a card in a pinned strip is narrow.
+    Four behaviours carried over from the strip of buttons this replaces:
+
+    * **Zero is off.** Nothing is held while the power is switched off — the dial
+      reports where the power *is*, and off is nowhere — and sliding back to 0 switches
+      it off, exactly as clicking the card would, so the dial is a whole control rather
+      than one that can only turn a power on. Sliding up from 0 wakes the power at the
+      notch asked for, so going from dormant to Huge is one gesture.
+    * **It commits on release.** Every runtime setter ends in a rebuild, so a slider
+      that wrote on each tick would delete itself under the player's thumb. The label
+      tracks the drag; only ``sliderReleased`` (and a keyboard or groove step, which
+      leaves the handle up) reaches the section.
+    * **NoFocus**, because committing destroys the whole card: focus would land on
+      whatever the tab order offers next — a table in some other block — and a
+      ``QScrollArea`` scrolls to show a child that has just taken focus. That was the
+      page jumping away from the card under the cursor.
+    * **Live in the locked sheet**, like every other runtime control on a card: how far
+      a power is turned up is a play action, not a build edit. Inside a switched-off
+      Linked group it goes transparent to the mouse instead, so a click falls through to
+      the card exactly as it does off the group's own chrome — never
+      ``setEnabled(False)``, which nothing in this app does.
     """
 
-    stepPicked = Signal(int)  #: the effect rank the player picked
+    rankPicked = Signal(int)  #: the effect rank the player settled on (0 = switch off)
 
     def __init__(
         self,
         caption: str,
-        steps,
+        maximum: int,
+        current: int,
+        labels: dict[int, str],
         interactive: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._labels = labels
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(int(theme.metric("space.sm")))
 
-        label = QLabel(caption)
-        label.setStyleSheet(muted_style())
-        row.addWidget(label)
+        caption_label = QLabel(caption)
+        caption_label.setStyleSheet(muted_style())
+        row.addWidget(caption_label)
 
-        host = FlowContainer()
-        flow = FlowLayout(host, spacing=int(theme.metric("space.xs")))
-        # Exclusive, so lighting a rung puts the previous one out; but a strip with
-        # nothing lit is a legal state here (the power is off), which an exclusive
-        # QButtonGroup will not enter on its own — hence setChecked below rather than
-        # leaving it to the group.
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-        for step in steps:
-            button = QPushButton(step.category)
-            button.setCheckable(True)
-            button.setChecked(step.current)
-            button.setFixedHeight(22)
-            button.setMinimumWidth(_lit_width(button))
-            button.setCursor(
-                Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
-            )
-            # Inside a switched-off Linked group the strip is a read-out: left visible
-            # (it still says where the power is set) but transparent to the mouse, so a
-            # click falls through to the card exactly as it does off the group's own
-            # chrome. Never setEnabled(False) — nothing in this app greys a control out.
-            button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
-            # NoFocus even when live, unlike the group's mode toggle: clicking a rung
-            # destroys the whole card, so focus lands on whatever the tab order offers
-            # next — a table in some other block — and a QScrollArea scrolls to show a
-            # child that has just taken focus. That was the page jumping away from the
-            # card under the cursor. Nothing here is reachable by keyboard anyway; the
-            # card body this strip sits on is not focusable either.
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            span = (
-                f"rank {step.rank}"
-                if step.rank == step.last_rank
-                else f"rank {step.rank} and above ({step.category} is as far as the "
-                "Size Table goes)"
-            )
-            button.setToolTip(
-                f"Switch this power off — it is already held at {span}, {step.category}."
-                if step.current
-                else f"Hold this power at {span} — {step.category}."
-            )
-            button.clicked.connect(lambda _checked=False, r=step.rank: self.stepPicked.emit(r))
-            self._group.addButton(button)
-            flow.addWidget(button)
-        row.addWidget(host, 1)
-        self.setStyleSheet(_mode_toggle_style(False))
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setRange(0, max(0, maximum))
+        self._slider.setSingleStep(1)
+        self._slider.setPageStep(1)
+        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._slider.setTickInterval(1)
+        self._slider.setValue(max(0, min(maximum, current)))
+        self._slider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
+        self._slider.setCursor(
+            Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
+        )
+        guard_wheel(self._slider)  # don't let a card's slider steal the page wheel
+        # *After* the wheel guard, which asks for StrongFocus so a focused widget keeps
+        # its own wheel. Focus is the one thing this slider must never take: committing
+        # destroys the card, and a QScrollArea chases whatever takes focus next.
+        self._slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        row.addWidget(self._slider, 1)
+
+        self._value = QLabel(self._label_for(self._slider.value()))
+        row.addWidget(self._value)
+
+        # Connected *after* the initial value, so seeding the dial never reads as the
+        # player having moved it.
+        self._slider.valueChanged.connect(self._on_value_changed)
+        self._slider.sliderReleased.connect(self._commit)
+
+    def _label_for(self, rank: int) -> str:
+        return self._labels.get(rank, f"Rank {rank}")
+
+    def _on_value_changed(self, value: int) -> None:
+        self._value.setText(self._label_for(value))
+        # A drag reports every notch it passes; only the one it stops on is a decision.
+        # A keyboard or groove step leaves the handle up, and *is* one.
+        if not self._slider.isSliderDown():
+            self._commit()
+
+    def _commit(self) -> None:
+        self.rankPicked.emit(self._slider.value())
 
 
 class PowersSection(TitledSection):
@@ -972,11 +985,11 @@ class PowersSection(TitledSection):
         if effects is not None:
             layout.addWidget(effects)
 
-        # A size effect is a ladder, not a switch: one rung per size the wielder can
-        # hold themselves at, under the effect breakdown that explains what each rung
-        # is worth and above the dice, with the rest of the mid-play controls.
-        for ladder in self._size_ladders(power, parent, interactive):
-            layout.addWidget(ladder)
+        # A dialled effect is a range, not a switch: a slider over the ranks the wielder
+        # can hold it at, under the effect breakdown that explains what each notch is
+        # worth and above the dice, with the rest of the mid-play controls.
+        for dial in self._rank_dials(power, parent, interactive):
+            layout.addWidget(dial)
 
         # A dedicated footer for the numbers that come up mid-play — one line per roll.
         # A power that rolls nothing gets neither the footer nor its rule.
@@ -1070,70 +1083,100 @@ class PowersSection(TitledSection):
         remove.setVisible(not self._locked)
         return host
 
-    # -- the size ladder --------------------------------------------------
-    def _size_ladders(
+    # -- the rank dial ----------------------------------------------------
+    def _rank_dials(
         self, power: Power, parent: PowerGroup | None, interactive: bool
     ) -> list[QWidget]:
-        """One :class:`_SizeLadder` per size effect the power carries; usually none.
+        """One :class:`_RankDial` per effect that has ranks worth choosing between.
 
-        Which effects qualify is :func:`~mm_companion.core.rules.size_steps`' answer,
-        so this block names neither Growth nor Shrinking — an effect has rungs because
-        the ruleset gave it a size readout, and a mod's own size effect gets the strip
-        without touching this file.
+        Two ways in, and the block names neither Growth nor Damage. A **size** effect
+        earns one because the ruleset gave it a size readout
+        (:func:`~mm_companion.core.rules.size_steps`), so a mod's own size effect gets a
+        dial without touching this file; any other effect earns one because the player
+        ticked *Add a rank slider* in the constructor's Extended settings.
+
+        A single-rank effect gets nothing either way: dialling a Growth 1 is exactly the
+        card's own on/off switch, and a second way to press it is not a choice.
 
         The caption names the *effect* only when the power has more than one, which is
         the same bargain the dice footer's labels strike: on the ordinary single-effect
-        Growth card "Size" is the whole story, while a Growth linked to a Shrinking
-        needs to say which strip is which.
+        Growth card "Size" is the whole story, while a Growth linked to a Shrinking needs
+        to say which dial is which.
         """
-        ladders: list[QWidget] = []
+        dials: list[QWidget] = []
         for effect in power.effects:
             steps = size_steps(power, effect, self._character, self._data)
-            if len(steps) < 2:
-                # A single rung is not a choice — a Growth 1 is exactly the card's own
-                # on/off switch, and a strip of one button would be a second way to
-                # press it.
+            sized = len(steps) >= 2
+            if not sized and not (effect.rank_dial and effect.rank > 1):
                 continue
-            caption = "Size"
+            caption = "Size" if sized else "Rank"
             if len(power.effects) > 1:
                 caption = effect_title(effect, self._character, self._data)
-            ladder = _SizeLadder(caption, steps, interactive)
-            ladder.stepPicked.connect(
-                lambda rank, p=power, e=effect, g=parent: self._on_size_step(p, e, g, rank)
+            # Where the handle sits. A *size* effect is positioned by whether it is
+            # standing on the sheet — a Growth that is switched off is nowhere, not at
+            # rank 1. An instant effect (a Damage) never "stands" at all, so asking the
+            # same question would peg every blast card at Off; what matters there is
+            # simply whether the card is switched on.
+            standing = (
+                effect_stands(power, effect, self._data, self._character)
+                if sized
+                else self._power_is_active(power)
+                and self._character is not None
+                and any(p is power for p in live_powers(self._character.powers))
             )
-            ladders.append(ladder)
-        return ladders
+            dial = _RankDial(
+                caption,
+                effect.rank,
+                effect_current_rank(effect) if standing else 0,
+                self._dial_labels(steps),
+                interactive,
+            )
+            dial.rankPicked.connect(
+                lambda rank, p=power, e=effect, g=parent: self._on_rank_dialled(p, e, g, rank)
+            )
+            dials.append(dial)
+        return dials
 
-    def _on_size_step(
+    @staticmethod
+    def _dial_labels(steps) -> dict[int, str]:
+        """What each notch of the dial *is*, where a plain rank number won't do.
+
+        A size effect's notches are named by the size the wielder becomes, one entry per
+        rank rather than per rung: the Size Table clamps several ranks into one category
+        near its ends, and a dial that skipped them would refuse to stop where the
+        player put it. Zero always reads "Off"; anything the map doesn't cover falls back
+        to its bare rank.
+        """
+        labels = {0: "Off"}
+        for step in steps:
+            for rank in range(step.rank, step.last_rank + 1):
+                labels[rank] = step.category
+        return labels
+
+    def _on_rank_dialled(
         self, power: Power, effect: PowerEffectInstance, parent: PowerGroup | None, rank: int
     ) -> None:
-        """Hold a size effect at *rank* — or, on the rung already lit, switch it off.
+        """Hold an effect at *rank* — or, at zero, switch the power off.
 
-        A rung does exactly what a click on the card would have done, and then lands on
-        the rung asked for. So picking one on a dormant power is a request to *be* that
-        size: it wakes the power (flipping its switches, or becoming its array's live
-        alternate) at the chosen rung rather than at full rank. And picking the rung
-        already in force is the card's own click again — off it goes, which is what
-        makes the strip a complete control rather than one that can only ever turn a
-        power on. The one exception is an array's live member, where clicking the card
-        is deliberately a no-op: an array always keeps exactly one member live, and
-        pressing its rung must not switch the whole array off.
+        The dial does exactly what a click on the card would have done, and then lands on
+        the notch asked for. So moving it on a dormant power is a request to *be* that
+        rank: it wakes the power (flipping its switches, or becoming its array's live
+        alternate) at the chosen notch rather than at full rank. And sliding back to zero
+        is the card's own click again — off it goes, which is what makes the dial a whole
+        control rather than one that can only ever turn a power on. The one exception is
+        an array's live member, where clicking the card is deliberately a no-op: an array
+        always keeps exactly one member live, and dialling one to zero must not switch
+        the whole array off.
 
-        The rung is compared through :func:`~mm_companion.core.rules.size_steps` rather
-        than against ``current_rank`` directly, because a rung the Size Table clamped
-        spans several ranks and the button only ever carries the lowest of them.
-
-        The rank is written after that test and before any activation path, so whichever
-        one runs rebuilds the cards with it already in place.
+        The rank is written before any activation path, so whichever one runs rebuilds
+        the cards with it already in place.
         """
         role = self._activation_role(power, parent)
-        lit = next(
-            (s for s in size_steps(power, effect, self._character, self._data) if s.current),
-            None,
-        )
-        if lit is not None and lit.rank == rank:
+        if rank <= 0:
             if role != "select":
                 self._set_power_active(power, False)  # rebuilds and emits
+            else:
+                self._rebuild_list()  # put the handle back where the array left it
             return
         effect.current_rank = rank
         if role == "select" and isinstance(parent, PowerGroup):

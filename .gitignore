@@ -45,3 +45,8 @@ _driver_shots/
 # (each ~80 MB build would otherwise be stored forever). The build scripts and
 # spec under installer/ stay tracked; only the generated output/ is ignored.
 installer/output/
+
+# The core rulebook and the plain text extracted from it — a private reading
+# reference for rules lookups (see the `rulebook` skill). Copyrighted material,
+# never committed; each developer supplies their own copy.
+reference/

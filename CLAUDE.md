@@ -137,6 +137,14 @@ notes file that owns it.
 - **Extend an engine registry rather than editing a list** — readout kinds,
   condition mechanisms, stat appliers, config-field types and widgets, and sheet
   blocks all have a `register_*` hook a mod's Python module can call.
+- **The core rulebook is a gitignored local reference, read by grep.**
+  `reference/core-book.pdf` and the per-page text extracted from it under
+  `reference/core-book/` are ignored by git. Answer rules questions from `docs/`
+  and `docs/notes/` first; when the answer genuinely is not there, grep the
+  extracted text — see the `rulebook` skill. Never `Read` the PDF itself without
+  asking: it renders pages as images at ~2k tokens each. The book informs what a
+  mechanic does and is never transcribed into `data/` or `docs/` (see Licensing
+  boundary).
 
 ## Licensing boundary (matters when adding game data)
 

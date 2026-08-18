@@ -22,23 +22,31 @@ reason to want it is a scanned PDF with no text layer (see Troubleshooting).
 
 ## One-time setup
 
-1. Put your own copy of the book at **`reference/core-book.pdf`** (that exact
-   name). Everything under `reference/` is gitignored.
+1. Put your own copy of the book anywhere in **`reference/`**, under whatever
+   filename it came with. Everything in there is gitignored.
 2. Extract it:
 
 ```bash
 python .claude/skills/rulebook/extract.py
 ```
 
-That writes `reference/core-book/p0001.txt … pNNNN.txt` plus an `INDEX.md`, and
-prints the first line of the opening 15 pages so the **printed-page offset**
-(cover, credits, contents) can be read off by eye and recorded in `INDEX.md`.
-Re-running rebuilds the output from scratch. Needs `pdftotext` on PATH — Git for
+Whatever the PDF is called, the text always lands in `reference/core-book/` as
+`p0001.txt … pNNNN.txt`, alongside an `INDEX.md`. The script prints the first
+line of the opening 15 pages, which is how the **printed-page offset** (cover,
+credits, contents) gets established. Re-running rebuilds the pages from scratch
+but **keeps** a hand-filled `INDEX.md`. Needs `pdftotext` on PATH — Git for
 Windows already ships it at `/mingw64/bin/pdftotext`.
 
 If `reference/core-book/` is missing, the book has not been set up: say so and
 answer from `docs/` instead. Do not run the extraction on a PDF the user has not
 put there.
+
+## Read INDEX.md first
+
+`reference/core-book/INDEX.md` carries the **printed-page offset**, a chapter
+map with real page ranges, and known landmark pages. Reading it costs almost
+nothing and usually narrows a search to a single chapter. Add landmarks to it as
+they are found — that is what keeps later lookups cheap.
 
 ## Looking a rule up
 
@@ -70,8 +78,9 @@ Then, three steps:
    Give both numbers if the offset in `INDEX.md` is filled in: "PDF p142
    (printed p136)".
 
-Fill in the chapter map in `INDEX.md` as chapters turn up. It lets a later
-lookup narrow to a page range before grepping.
+Narrow with the chapter map before grepping. When the question is "what rank,
+what cost, what does that table say", try the **Appendix: Reference Tables**
+(PDF 229–238) before the chapter prose — it collects the tables in one place.
 
 ## Caveats of extracted text
 

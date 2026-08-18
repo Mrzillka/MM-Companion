@@ -653,6 +653,36 @@ class ResistanceOutcome:
 
 
 @dataclass(frozen=True)
+class BaseCostBy:
+    """How an effect whose base cost depends on its *configuration* works that cost out.
+
+    A handful of effects are not a fixed number of points per rank: Illusion costs 1 per
+    sense type it fools and Obscure 1 per sense it blocks (sight counting double for
+    both), Remote Sensing 5 for the first sense type and 1 for each after, Transmute 2 to
+    5 by how broad its source and result are, and Environment adds up the sub-effects it
+    imposes. All of them are still charged *flat, per rank* — only which number differs,
+    which is why this is a field on the effect rather than another
+    :data:`mm_companion.core.rules.BASE_COST_KINDS` mode.
+
+    The cost is ``base + Σ (cost_value of every option currently chosen across
+    ``fields``)``, clamped to ``[minimum, maximum]``. ``minimum`` is therefore also what
+    an unconfigured effect costs, which is what keeps a freshly dropped card priced at
+    its floor rather than at zero. ``maximum`` of ``None`` means the rules name no
+    ceiling (Environment, where sub-effects simply keep adding).
+
+    The per-option numbers live on the config options themselves
+    (:attr:`ConfigOption.cost_value`), the same place a modifier's config already keeps
+    them — so adding a sense type or a new Environment condition is a data edit with no
+    Python behind it.
+    """
+
+    fields: tuple[str, ...] = ()
+    base: int = 0
+    minimum: int = 1
+    maximum: int | None = None
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``docs/mm-powers-architecture.md``).
 
@@ -663,7 +693,11 @@ class Effect:
     one of :data:`mm_companion.core.rules.BASE_COST_KINDS`. Effects are priced flat
     (points per rank) unless they say otherwise; Enhanced Trait is priced ``as_trait``,
     where the cost comes from the traits it raises and ``base_cost_value`` is only the
-    nominal rate its per-rank modifiers are read against. ``integration`` is the parsed
+    nominal rate its per-rank modifiers are read against. ``base_cost_by``, when set,
+    makes the points-per-rank a function of the effect's own configuration instead of a
+    constant (see :class:`BaseCostBy`); ``base_cost_value`` is then the unconfigured
+    floor, and :func:`mm_companion.core.rules.effect_base_cost_value` is what resolves
+    the two cases for every caller. ``integration`` is the parsed
     ``statIntegration`` component (see :class:`mm_companion.core.components.Integration`)
     describing how the effect patches stats — its activation ``pattern`` and, for the passive
     trait-boosting effects (Enhanced Trait, Protection), a ``trait_boost`` naming the
@@ -702,6 +736,10 @@ class Effect:
     base_cost: str = ""
     base_cost_value: int = 1
     base_cost_mode: str = "flat"
+    #: Set when the effect's points-per-rank is worked out from its configuration
+    #: rather than being a constant (Illusion, Obscure, Remote Sensing, Transmute,
+    #: Environment). ``None`` for every effect priced at a flat rate.
+    base_cost_by: BaseCostBy | None = None
     #: Whether the effect's rank *is* the ranks its config allocates, rather than a
     #: budget the player sets by hand. True for Enhanced Trait, whose cost comes from
     #: the traits it raises and whose rank has no other meaning — so the constructor
@@ -2199,6 +2237,24 @@ def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
     return _parse_outcome_rung(raw.get("success"))
 
 
+def _parse_base_cost_by(raw: dict | None) -> BaseCostBy | None:
+    """Parse an effect's ``baseCostBy`` block, or ``None`` when it has none.
+
+    ``max`` is optional and absent means uncapped, so it cannot be read with a numeric
+    default the way ``base``/``min`` can.
+    """
+
+    if not raw:
+        return None
+    maximum = raw.get("max")
+    return BaseCostBy(
+        fields=tuple(raw.get("fields", ())),
+        base=int(raw.get("base", 0)),
+        minimum=int(raw.get("min", 1)),
+        maximum=None if maximum is None else int(maximum),
+    )
+
+
 def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
     default_distance = ranged_distance or RangeDistance()
     return Effect(
@@ -2213,6 +2269,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         base_cost=e.get("baseCost", ""),
         base_cost_value=int(e.get("baseCostValue", 1)),
         base_cost_mode=e.get("baseCostMode", "flat"),
+        base_cost_by=_parse_base_cost_by(e.get("baseCostBy")),
         rank_follows_allocation=bool(e.get("rankFollowsAllocation", False)),
         integration=_parse_integration(
             e.get("statIntegration", {}), bool(e.get("configurableTarget", False))

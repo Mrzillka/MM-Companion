@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from ..character import Character
-from ..data_loader import Effect, GameData, Modifier
+from ..data_loader import Effect, EffectConfigField, GameData, Modifier
 from ..powers import (
     STRUCTURE_ARRAY,
     Power,
@@ -239,6 +239,11 @@ def effect_per_rank_cost(effect: PowerEffectInstance, game_data: GameData) -> in
     """The effect's net cost **per rank**: base cost plus per-rank extras minus per-rank
     flaws.
 
+    The base is :func:`effect_base_cost_value`, not the raw constant — for the handful of
+    effects priced from their configuration (Illusion, Obscure, …) what a rank costs moves
+    with the choices the player made, and this is the figure the Strength-Based divisor
+    below reads.
+
     Flat modifiers are deliberately excluded — they are charged once, so they do not
     change what a rank costs. That is exactly the distinction the Strength-Based
     divisor turns on (:func:`ability_rank_contribution`), and it is the same figure
@@ -248,7 +253,56 @@ def effect_per_rank_cost(effect: PowerEffectInstance, game_data: GameData) -> in
     base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base is None:
         return 0
-    return base.base_cost_value + _net_per_rank_modifiers(effect, game_data)
+    return effect_base_cost_value(effect, base) + _net_per_rank_modifiers(effect, game_data)
+
+
+def _chosen_values(config: dict, field: EffectConfigField) -> tuple[str, ...]:
+    """The option values currently selected in one config field.
+
+    A ``multiselect`` stores a list and a ``select`` a bare string; both are normalised
+    to a tuple here so a caller need not know which kind of field it is looking at. An
+    unset field yields nothing.
+    """
+
+    stored = config.get(field.key)
+    if not stored:
+        return ()
+    return tuple(stored) if isinstance(stored, (list, tuple)) else (str(stored),)
+
+
+def effect_base_cost_value(effect: PowerEffectInstance, base: Effect) -> int:
+    """The effect's points **per rank** before any modifier — a constant, or configured.
+
+    Almost every effect is priced at its ``base_cost_value`` flat. Five are not: what
+    Illusion, Obscure, Remote Sensing, Transmute and Environment cost per rank depends on
+    how the player configured them (see :class:`~mm_companion.core.data_loader.BaseCostBy`
+    for the arithmetic and why it lives on the effect rather than in
+    :data:`BASE_COST_KINDS`). Those effects declare a ``baseCostBy`` block naming the
+    config fields that drive the price, and every option in them carries its own
+    ``cost_value``.
+
+    This is the single place the two cases are told apart. Everything that used to read
+    ``base.base_cost_value`` for pricing goes through here instead — the per-rank cost,
+    the flat total, and the formula the card prints — so a configured Illusion cannot end
+    up costing one thing and explaining another.
+
+    An option carrying no ``cost_value`` contributes nothing, which is what lets a
+    cost-driving field also hold ordinary descriptive choices.
+    """
+
+    by = base.base_cost_by
+    if by is None:
+        return base.base_cost_value
+    fields = {f.key: f for f in base.config_fields if f.key in by.fields}
+    total = by.base
+    for key in by.fields:
+        field = fields.get(key)
+        if field is None:
+            continue
+        prices = {o.value: o.cost_value for o in field.options if o.cost_value is not None}
+        total += sum(prices.get(value, 0) for value in _chosen_values(effect.config, field))
+    total = max(by.minimum, total)
+    return total if by.maximum is None else min(total, by.maximum)
 
 
 def ability_rank_contribution(ability: int, per_rank_cost: int) -> int:
@@ -349,9 +403,12 @@ class BaseCostContext:
 
     ``net_per_rank`` and ``flat`` are the modifier sums already bucketed by
     :func:`_net_per_rank_modifiers` / :func:`_net_flat_modifiers`, so a kind decides only
-    how the *base* is charged and how the modifiers land on it. ``folded_ranks`` is the
-    ranks an ability-folding modifier contributes (Strength-Based Damage) — free of base
-    cost, but still paying every per-rank modifier.
+    how the *base* is charged and how the modifiers land on it. ``base_value`` is that
+    base already resolved by :func:`effect_base_cost_value` — a constant for most effects,
+    and the configured price for the few whose cost depends on how they are set up — so a
+    kind never has to ask which sort it is holding. ``folded_ranks`` is the ranks an
+    ability-folding modifier contributes (Strength-Based Damage) — free of base cost, but
+    still paying every per-rank modifier.
 
     ``char`` may be ``None``: a power is priced with or without a character in hand, and
     what it costs must not depend on having one.
@@ -361,6 +418,7 @@ class BaseCostContext:
     base: Effect
     game_data: GameData
     char: Character | None
+    base_value: int
     net_per_rank: int
     flat: int
     folded_ranks: int
@@ -434,7 +492,7 @@ def _flat_base_cost(context: BaseCostContext) -> int:
     half a point come to one point together rather than two.
     """
 
-    net = context.base.base_cost_value + context.net_per_rank
+    net = context.base_value + context.net_per_rank
     ranked = math.ceil(
         sum(
             (
@@ -535,6 +593,7 @@ def _base_cost_context(
         base=base,
         game_data=game_data,
         char=char,
+        base_value=effect_base_cost_value(effect, base),
         net_per_rank=_net_per_rank_modifiers(effect, game_data, char),
         flat=_net_flat_modifiers(effect, game_data, char),
         folded_ranks=effect_rank_trait_bonus_cost(effect, game_data, char),
@@ -777,7 +836,7 @@ def _flat_cost_formula(context: BaseCostContext) -> str:
     )
 
     def run_str(count: int, banded: tuple[int, ...]) -> str:
-        terms = [context.base.base_cost_value, *mod_terms, *banded]
+        terms = [context.base_value, *mod_terms, *banded]
         net = sum(terms)
         rate = _join_terms(terms)
         if net < 1:  # sub-1 PP/rank: 1 point per (2 − net) ranks

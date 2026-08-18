@@ -514,11 +514,39 @@
       "resistance": null,
       "baseCost": "1 or more per rank",
       "baseCostValue": 1,
+      "baseCostBy": { "fields": ["conditions"], "min": 1 },
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_toggle",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "conditions",
+          "label": "Imposes",
+          "type": "multiselect",
+          "hint": "Each condition costs its own points per rank and they add together — the lesser version of each is 1, the greater 2. Take the Variable extra to redistribute that total at will instead.",
+          "options": [
+            { "value": "cold_intense", "label": "Intense cold", "costValue": 1 },
+            { "value": "cold_extreme", "label": "Extreme cold", "costValue": 2 },
+            { "value": "heat_intense", "label": "Intense heat", "costValue": 1 },
+            { "value": "heat_extreme", "label": "Extreme heat", "costValue": 2 },
+            { "value": "hazardous_1", "label": "Hazardous movement (DC 10)", "costValue": 1 },
+            { "value": "hazardous_2", "label": "Hazardous movement (DC 15)", "costValue": 2 },
+            { "value": "hindered_1", "label": "Hindered movement (−1 speed rank)", "costValue": 1 },
+            { "value": "hindered_2", "label": "Hindered movement (−2 speed ranks)", "costValue": 2 },
+            { "value": "gravity_high_1", "label": "High gravity (mass rank 1)", "costValue": 1 },
+            { "value": "gravity_high_2", "label": "High gravity (mass rank 2)", "costValue": 2 },
+            { "value": "gravity_low", "label": "Low gravity", "costValue": 1 },
+            { "value": "gravity_micro", "label": "Microgravity", "costValue": 2 },
+            { "value": "light_partial", "label": "Illumination (full concealment down to partial)", "costValue": 1 },
+            { "value": "light_daylight", "label": "Illumination (bright as daylight)", "costValue": 2 },
+            { "value": "visibility_2", "label": "Reduced visibility (−2 to sight Perception)", "costValue": 1 },
+            { "value": "visibility_5", "label": "Reduced visibility (−5 to sight Perception)", "costValue": 2 }
+          ]
+        }
+      ],
+
       "description": "Alters conditions in an area — temperature, light, footing, and similar hazards."
     },
     {
@@ -666,12 +694,29 @@
       "resistance": "Insight or Perception vs. Effect",
       "baseCost": "1–5 per rank",
       "baseCostValue": 1,
+      "baseCostBy": { "fields": ["senseTypes"], "min": 1, "max": 5 },
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "instant_action",
         "affects": "none"
       },
       "config": [
+        {
+          "key": "senseTypes",
+          "label": "Fools",
+          "type": "multiselect",
+          "hint": "One point per rank per sense type, up to 5 for all of them. Sight counts as two sense types, so any sight illusion costs at least 2 per rank.",
+          "options": [
+            { "value": "Sight", "label": "Sight", "costValue": 2 },
+            { "value": "Hearing", "label": "Hearing", "costValue": 1 },
+            { "value": "Smell", "label": "Smell", "costValue": 1 },
+            { "value": "Taste", "label": "Taste", "costValue": 1 },
+            { "value": "Touch", "label": "Touch", "costValue": 1 },
+            { "value": "Radio", "label": "Radio", "costValue": 1 },
+            { "value": "Mental", "label": "Mental", "costValue": 1 },
+            { "value": "Special", "label": "Special", "costValue": 1 }
+          ]
+        },
         {
           "key": "moving",
           "label": "Moves / interacts",
@@ -862,11 +907,46 @@
       "resistance": null,
       "baseCost": "1–10 per rank",
       "baseCostValue": 1,
+      "baseCostBy": { "fields": ["senses", "senseTypes"], "min": 1, "max": 10 },
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_toggle",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "senses",
+          "label": "Blocks one sense in",
+          "type": "multiselect",
+          "hint": "One point per rank for a single sense (normal sight, normal hearing). Sight costs double.",
+          "options": [
+            { "value": "sight", "label": "Sight", "costValue": 2 },
+            { "value": "hearing", "label": "Hearing", "costValue": 1 },
+            { "value": "smell", "label": "Smell", "costValue": 1 },
+            { "value": "taste", "label": "Taste", "costValue": 1 },
+            { "value": "touch", "label": "Touch", "costValue": 1 },
+            { "value": "radio", "label": "Radio", "costValue": 1 },
+            { "value": "mental", "label": "Mental", "costValue": 1 },
+            { "value": "special", "label": "Special", "costValue": 1 }
+          ]
+        },
+        {
+          "key": "senseTypes",
+          "label": "Blocks the whole sense type",
+          "type": "multiselect",
+          "hint": "Two points per rank for every sense of that type at once — four for all sight senses. Ten per rank blocks everything.",
+          "options": [
+            { "value": "Sight", "label": "Sight", "costValue": 4 },
+            { "value": "Hearing", "label": "Hearing", "costValue": 2 },
+            { "value": "Smell", "label": "Smell", "costValue": 2 },
+            { "value": "Taste", "label": "Taste", "costValue": 2 },
+            { "value": "Touch", "label": "Touch", "costValue": 2 },
+            { "value": "Radio", "label": "Radio", "costValue": 2 },
+            { "value": "Mental", "label": "Mental", "costValue": 2 },
+            { "value": "Special", "label": "Special", "costValue": 2 }
+          ]
+        }
+      ],
       "description": "Blankets an area in fog, darkness, or static that blocks a chosen sense."
     },
     {
@@ -972,11 +1052,30 @@
       "resistance": null,
       "baseCost": "5–10 per rank",
       "baseCostValue": 5,
+      "baseCostBy": { "fields": ["senseTypes"], "base": 4, "min": 5, "max": 10 },
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_toggle",
         "affects": "senses"
       },
+      "config": [
+        {
+          "key": "senseTypes",
+          "label": "Displaces",
+          "type": "multiselect",
+          "hint": "Five points per rank for the first sense type and one for each after, up to 10 per rank for all of them. Sight counts as two sense types, so sight Remote Sensing is 6.",
+          "options": [
+            { "value": "Sight", "label": "Sight", "costValue": 2 },
+            { "value": "Hearing", "label": "Hearing", "costValue": 1 },
+            { "value": "Smell", "label": "Smell", "costValue": 1 },
+            { "value": "Taste", "label": "Taste", "costValue": 1 },
+            { "value": "Touch", "label": "Touch", "costValue": 1 },
+            { "value": "Radio", "label": "Radio", "costValue": 1 },
+            { "value": "Mental", "label": "Mental", "costValue": 1 },
+            { "value": "Special", "label": "Special", "costValue": 1 }
+          ]
+        }
+      ],
       "description": "Projects your senses to a remote location instead of your body."
     },
     {
@@ -1083,11 +1182,26 @@
       "resistance": null,
       "baseCost": "2–5 per rank",
       "baseCostValue": 2,
+      "baseCostBy": { "fields": ["scope"], "min": 2, "max": 5 },
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "instant_action",
         "affects": "none"
       },
+      "config": [
+        {
+          "key": "scope",
+          "label": "Can change",
+          "type": "select",
+          "hint": "How broad the source and the result are decides the cost per rank.",
+          "options": [
+            { "value": "one_to_one", "label": "One thing into one other thing", "costValue": 2 },
+            { "value": "group_to_one", "label": "A broad group into one result, or one thing into any of a broad group", "costValue": 3 },
+            { "value": "group_to_group", "label": "A broad group into any of a broad group", "costValue": 4 },
+            { "value": "anything", "label": "Anything into anything else", "costValue": 5 }
+          ]
+        }
+      ],
       "description": "Changes the material or substance of an object you touch."
     },
     {

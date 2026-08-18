@@ -30,15 +30,23 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   Edition** core rulebook (`reference/core-book/`, gitignored; printed page = PDF page −
   2). Every effect's type/action/range/duration/check/resistance/base cost, every generic
   extra and flaw, and every per-effect extra and flaw has been diffed against it. Two
-  things follow. First, **do not "fix" a base cost by editing `baseCostValue`**: Illusion,
-  Obscure, Remote Sensing and Transmute cost *1–5*, *1–10*, *5–10* and *2–5* per rank
-  depending on how they are configured (PDF p131, p139, p142, p147), and Environment's
-  sub-effects are 1 or 2 per rank each and *add together* (p124). All five are charged
-  their floor today; the honest fix is a `by_configuration` handler in `BASE_COST_KINDS`,
-  not a bigger constant. Their `baseCost` label already says the range so the gap is
-  visible on the card. Second, **do not trust the summary grids** on PDF 108 and 234–235
-  — `pdftotext` reads them column-wise and every cell but the name lands on the wrong
-  row. Read the effect's own entry (they start at p109).
+  things follow. First, **a base cost is not always a constant** — see the next bullet.
+  Second, **do not trust the summary grids** on PDF 108 and 234–235: `pdftotext` reads
+  them column-wise and every cell but the name lands on the wrong row. Read the effect's
+  own entry (they start at p109).
+- **Five effects are priced from their configuration, not from a constant.** Illusion
+  costs 1 per rank per sense type it fools (sight counts as two, cap 5); Obscure 1 per
+  sense or 2 per sense type (sight double, cap 10); Remote Sensing 5 for the first sense
+  type and 1 per further one (cap 10, so sight Remote Sensing is 6); Transmute 2–5 by how
+  broad its source and result are; Environment adds up its conditions at 1 or 2 each, with
+  no ceiling. Each declares a `baseCostBy` block in `effects.json` and puts a `costValue`
+  on the options that drive it, so **the numbers are data** — adding a sense type or an
+  Environment condition needs no Python. `effect_base_cost_value` is the one place a
+  constant base and a configured one are told apart, and the per-rank cost, the flat total
+  and the printed formula all go through it, so the card cannot show one number and
+  explain another. It is deliberately *not* a `BASE_COST_KINDS` mode: these effects are
+  still charged flat per rank, and only the number varies. `baseCostValue` stays as the
+  unconfigured floor — **raising it is not how you fix a price here.**
 - **Cost** (`rules`): *how* an effect is priced is data — its `baseCostMode`
   picks a handler out of the `BASE_COST_KINDS` registry in `powers_cost`, and a
   mod registers another rather than editing that module. The default `flat` is

@@ -73,9 +73,9 @@ Stated explicitly so nobody re-audits it.
 
 ### Base-cost labels — `effects.json`
 
-Label text only. `baseCostValue` and the cost engine are **unchanged**; these effects are
-still charged their floor. The point of the label is to stop the gap being silent on the
-card until §4A is built.
+Label text only at the time — the effects were still charged their floor. §4A has since
+made the cost real, and `baseCostValue` is now the *unconfigured* floor rather than the
+whole story. The labels stand as written.
 
 | Effect | Was | Now | Cite |
 | --- | --- | --- | --- |
@@ -162,11 +162,11 @@ the existing simplified flat discount. See §4D.
   (effect entries begin p109; extras p150–158; flaws p159–163; the two configurations
   tables p236/p237; Enhanced Senses p121–123; Environment p124–125; …).
 - `docs/notes/powers.md` — a bullet recording that the data is now verified against the
-  book by page, that the base-cost gap in §4A must **not** be "fixed" by editing
-  `baseCostValue`, and the scrambled-grid trap.
-- `docs/mm-powers-architecture.md` — names the missing `by_configuration` base-cost mode as
-  the `BASE_COST_KINDS` registry's reason for existing, and records that Dynamic Alternate
-  Effects are described in that document but not modelled.
+  book by page, plus the scrambled-grid trap; and, since §4A landed, how a configured base
+  cost works and why raising `baseCostValue` is **not** how you fix a price there.
+- `docs/mm-powers-architecture.md` — describes `baseCostBy` and why it is a field on the
+  effect rather than a `BASE_COST_KINDS` mode, and records that Dynamic Alternate Effects
+  are described in that document but not modelled.
 
 ### Tests touched
 
@@ -180,41 +180,74 @@ for the underlying issue that swap exposes.
 
 ## 4. Needs code — ranked by impact
 
-### A. Base cost by configuration — the biggest correctness gap
+> §4A and §4B are **built** (2026-08-18) and kept below as a record of what was done
+> and why the shape changed; everything from §4C down is still outstanding.
 
-Five effects are priced by *how they are configured*, and every one is charged its floor:
+### A. Base cost by configuration — **DONE**
+
+*Built. Kept here because §4E and §4H refer back to it.*
+
+Five effects are priced by *how they are configured*, and every one was charged its floor
+— an all-senses Illusion cost a fifth of what it should:
 
 | Effect | Real cost | Cite |
 | --- | --- | --- |
-| Illusion | 1 per rank per sense type, **sight counts as two**, up to 5 (all types) | p131 |
-| Obscure | 1 per sense, 2 per sense type, sight double, up to 10 | p139 |
-| Remote Sensing | 5 for one sense type, +1 per further type, 10 for all; sight counts as two (so sight Remote Sensing is 6) | p142 |
+| Illusion | 1 per rank per sense type, **sight counts as two**, cap 5 (all types) | p131 |
+| Obscure | 1 per sense, 2 per whole sense type, sight double, cap 10 | p139 |
+| Remote Sensing | 5 for the first sense type, +1 each after, cap 10; sight counts as two (so sight Remote Sensing is 6) | p142 |
 | Transmute | 2 / 3 / 4 / 5 by how broad the source and the result are | p147 |
-| Environment | each sub-effect 1 or 2 per rank, **added together** | p124–125 |
+| Environment | each condition 1 or 2 per rank, **added together**, no ceiling | p124–125 |
 
-An all-senses Illusion currently costs a fifth of what it should.
+**How it was built — and why not as a `BASE_COST_KINDS` mode.** The audit originally
+guessed at a `by_configuration` handler registered beside `flat` and `as_trait`. That
+turned out to be the wrong shape: these effects are still charged *flat, per rank* like
+everything else, and only *which number* differs. A second pricing kind would have
+duplicated `_flat_base_cost` and, worse, left `effect_per_rank_cost` — which the
+Strength-Based divisor reads — still looking at the constant.
 
-**Shape of the fix.** A new `baseCostMode` — `by_configuration` — registered into
-`BASE_COST_KINDS` (`core/rules/powers_cost.py:387`), reading a new config field on each
-effect and summing the chosen entries' per-rank costs. The registry seam already exists and
-is designed for exactly this; nothing in `powers_cost.py` needs restructuring, and
-`register_base_cost_kind` means a mod could add another. Each of the five effects also
-needs the config field itself — a multiselect of sense types for Illusion / Obscure /
-Remote Sensing, a select for Transmute, an allocation for Environment.
+So the number is what varies. An effect declares a `baseCostBy` block naming the config
+fields that drive its price:
 
-### B. Environment has no configuration at all
+```json
+"baseCostBy": { "fields": ["senseTypes"], "base": 4, "min": 5, "max": 10 }
+```
 
-`effects.json` gives Environment no `config` and a flat `baseCostValue: 1`. The book
-(p124–125) has eight sub-effects, each 1 or 2 points per rank:
+Each option in those fields carries its own `costValue` (the same place a modifier's
+config already keeps one), and the cost is `base + Σ chosen costValues`, clamped into
+`[min, max]`. `min` doubles as the unconfigured price, so a freshly dropped card sits at
+its floor rather than at zero. `effect_base_cost_value` (`core/rules/powers_cost.py`) is
+the single place the constant and configured cases are told apart, and all three pricing
+readers go through it — the per-rank cost, the flat total, and the printed formula — so a
+configured effect cannot cost one thing and explain another.
 
-Cold · Hazardous Movement · Heat · High Gravity · Hindered Movement · Illumination ·
-Low Gravity · Visibility
+**No UI code was needed.** `multiselect` and `select` config fields already render, and
+the card already recomputes its cost on a config change.
 
-Multiple sub-effects are combined by *adding* their per-rank costs (or taken as alternate
-effects). The **Variable** extra (+1 per rank, already in the data) then lets the player
-redistribute up to that per-rank total at will, which is what the *Weather Control*
-configuration is built on (Environment, Variable up to 4 per rank, 5 per rank total). Same
-handler as A, plus the budget check.
+**Verified against the book's own worked configurations**, all of which now reproduce
+exactly: Scrying 7/rank, Telepresence 6/rank, Astral Projection 7/rank (p143); Darkness
+2/rank, Silence 1/rank, Static 1/rank (p139); Mist 1/rank, Weather Control 5/rank (p125).
+
+**One nicety not built:** nothing stops a player ticking both "one sight sense" and "all
+sight senses" on Obscure, or both intensities of the same Environment condition, and
+paying for both. Ordinary multiselect behaviour, and visible — but a mutual-exclusion
+warning would be a fair follow-up.
+
+### B. Environment's configuration — **DONE**
+
+Environment had no `config` at all and a flat `baseCostValue: 1`. It now carries a
+16-option multiselect covering the book's eight sub-effects at both intensities
+(p124–125) — Cold, Heat, Hazardous Movement, Hindered Movement, High Gravity, Low
+Gravity, Illumination, Visibility — each lesser version worth 1 point per rank and each
+greater worth 2, summed with no ceiling, via the §4A mechanism.
+
+The **Variable** extra (+1 per rank, already in the data) then lets the player
+redistribute that per-rank total at will, which is exactly what the book's *Weather
+Control* configuration is: 4 points of conditions plus Variable = 5 per rank (p125).
+That now falls out of the arithmetic rather than needing a special case.
+
+**Not built:** nothing checks that a Variable Environment's at-use redistribution stays
+inside the per-rank total it paid for. That is a play-time constraint with no UI to
+enforce it against yet.
 
 ### C. Dynamic Alternate Effects
 
@@ -275,8 +308,9 @@ Battery, Built-in Equipment, Charmed Life, Chill, Dimensional Pocket, Display, H
 Guidance, Insulating Fur, Internal Compartment, Iron Stomach, Light Sleeper, Lucid Dreamer,
 Massive, Megaphone, Mimicry, Quick Change, Remote, Shade, Special Effect, Temporal Inertia,
 Weatherproof — p127–128) and would slot straight into Feature's existing `repeatable` config
-as a picklist. And several depend on §4A being built first: Darkness / Silence / Static are
-Obscure configurations, Invisibility / Inaudibility are Concealment ones.
+as a picklist. And the Obscure-based ones (Darkness, Silence, Static, Wards) are now
+expressible, since §4A gave Obscure its sense lists; Invisibility and Inaudibility still
+wait on Concealment getting the same treatment (§4H).
 
 ### F. Nested trait budgets
 
@@ -299,14 +333,18 @@ impose (Morph them, Shrink them, Teleport them away). That effect **must cost no
 the Affliction's total cost** and must take a standard action or less (p110). The app
 records the condition but not the imposed effect, and checks neither.
 
-### H. Concealment and Obscure sense bookkeeping
+### H. Concealment's sense bookkeeping
 
-Both effects buy **senses** with their ranks — 1 per sense, 2 per sense type, **sight costs
-double** (2 for one sight sense, 4 for all), and Concealment from touch senses is impossible
-short of Insubstantial (p115, p139). Neither has a config recording *which* senses, so
-nothing can check that a Concealment 5 spent its ranks legally, and the Invisibility /
-Inaudibility / Darkness / Silence / Static configurations cannot be expressed. Pairs
-naturally with §4A — Obscure needs the sense list for its cost anyway.
+**Obscure's half of this is done** — §4A gave it the sense and sense-type lists it needed
+for its own cost, so Darkness, Silence, Static and Wards can now be expressed.
+
+**Concealment's is not.** Its ranks buy senses the same way — 1 rank per sense, 2 per sense
+type, **sight costs double** (2 for one sight sense, 4 for all), and Concealment from touch
+senses is impossible short of Insubstantial (p115). Unlike Obscure the *cost* is a flat 2
+per rank, so nothing forced the issue; but with no config recording which senses, nothing
+can check that a Concealment 5 spent its ranks legally, and the Invisibility and
+Inaudibility configurations cannot be expressed. The shape is an allocation field metered
+against rank (as Enhanced Senses already is), not a `baseCostBy`.
 
 ### I. Countering effects
 

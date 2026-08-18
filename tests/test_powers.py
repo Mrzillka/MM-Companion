@@ -79,6 +79,73 @@ def test_base_effect_cost_is_per_rank() -> None:
     assert effect_total_cost(effect, data) == 8
 
 
+def test_a_configured_base_cost_is_priced_from_the_options_chosen() -> None:
+    data = load_game_data()
+    # Illusion is 1 PP/rank per sense type it fools, and sight counts as two
+    # (PDF p131). Rank 4 fooling sight and hearing is 3 PP/rank, so 12.
+    effect = PowerEffectInstance("illusion", rank=4, config={"senseTypes": ["Sight", "Hearing"]})
+    assert effect_per_rank_cost(effect, data) == 3
+    assert effect_total_cost(effect, data) == 12
+
+
+def test_a_configured_base_cost_falls_back_to_its_floor_while_unset() -> None:
+    data = load_game_data()
+    # A freshly dropped card has configured nothing, and must still price at the
+    # effect's minimum rather than at zero: Illusion 1, Remote Sensing 5, Transmute 2.
+    for effect_id, floor in (("illusion", 1), ("remote_sensing", 5), ("transmute", 2)):
+        effect = PowerEffectInstance(effect_id, rank=3)
+        assert effect_total_cost(effect, data) == floor * 3, effect_id
+
+
+def test_a_configured_base_cost_is_capped() -> None:
+    data = load_game_data()
+    # Every sense type is 9 points by the sum (sight counting double) but Illusion
+    # caps at 5 per rank, which is what "all sense types" costs (PDF p131).
+    everything = ["Sight", "Hearing", "Smell", "Taste", "Touch", "Radio", "Mental", "Special"]
+    effect = PowerEffectInstance("illusion", rank=2, config={"senseTypes": everything})
+    assert effect_total_cost(effect, data) == 10
+
+
+def test_environment_adds_its_conditions_together_and_has_no_ceiling() -> None:
+    data = load_game_data()
+    # Each Environment condition costs its own 1 or 2 per rank and they sum, with no
+    # cap in the rules (PDF p124-125): extreme cold (2) plus -5 visibility (2) is 4.
+    effect = PowerEffectInstance(
+        "environment", rank=5, config={"conditions": ["cold_extreme", "visibility_5"]}
+    )
+    assert effect_per_rank_cost(effect, data) == 4
+    assert effect_total_cost(effect, data) == 20
+
+
+def test_the_books_own_configurations_price_as_printed() -> None:
+    data = load_game_data()
+    # Worked examples from the book, at rank 10 so the total reads as the per-rank cost.
+    # Scrying (p143), Darkness and Silence (p139), Mist (p125).
+    cases = (
+        ("remote_sensing", {"senseTypes": ["Sight", "Hearing"]}, 7),
+        ("obscure", {"senses": ["sight"]}, 2),
+        ("obscure", {"senses": ["hearing"]}, 1),
+        ("obscure", {"senseTypes": ["Sight"]}, 4),
+        ("environment", {"conditions": ["visibility_2"]}, 1),
+        ("transmute", {"scope": "anything"}, 5),
+    )
+    for effect_id, config, per_rank in cases:
+        effect = PowerEffectInstance(effect_id, rank=10, config=dict(config))
+        assert effect_total_cost(effect, data) == per_rank * 10, (effect_id, config)
+
+
+def test_a_configured_base_cost_still_takes_modifiers_normally() -> None:
+    data = load_game_data()
+    # Telepresence: Remote Sensing (sight + hearing) at 7, Medium at -1, so 6 per rank
+    # (p143) — a per-rank flaw discounts the configured base like any other.
+    effect = PowerEffectInstance(
+        "remote_sensing", rank=4, config={"senseTypes": ["Sight", "Hearing"]}
+    )
+    effect.flaws.append(ModifierSelection(modifier_id="medium_remote_sensing"))
+    assert effect_total_cost(effect, data) == 24
+    assert effect_cost_formula(effect, data) == "4 × (7 − 1)"
+
+
 def test_allocation_used_sums_selected_tier_costs() -> None:
     data = load_game_data()
     # Enhanced Senses: Accurate at tier 1 (2 ranks) + Acute at tier 2 (2 ranks) = 4.

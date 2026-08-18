@@ -286,15 +286,27 @@ rather than editing that module. `Reduced Trait` uses the same machinery from th
 side: it is a *flat* flaw with `costMode: "as_trait"` and its own trait rows, so it
 discounts by whatever the lowered ranks would have cost.
 
-**A mode that does not exist yet: `by_configuration`.** Five effects are priced by *how
-they are configured*, and all five are charged their floor instead — Illusion 1–5 per
-rank by how many sense types it fools, sight counting as two (PDF p131); Obscure 1–10 the
-same way (p139); Remote Sensing 5 for one sense type, +1 for each further one, 10 for all,
-sight again counting as two (p142); Transmute 2/3/4/5 by how broad its source and result
-are (p147); and Environment, whose eight sub-effects cost 1 or 2 points per rank *each*
-and add together (p124–125). This is the registry's reason for existing: the fix is a
-handler registered beside `flat` and `as_trait`, reading a new config field on each of
-those effects, and no change to the surrounding module.
+**Base cost from configuration.** Five effects have no single points-per-rank: Illusion
+costs 1 per sense type it fools, sight counting as two, capped at 5 (PDF p131); Obscure
+1 per sense or 2 per whole sense type, sight double, capped at 10 (p139); Remote Sensing
+5 for the first sense type and 1 for each after, capped at 10 — sight again counting as
+two, which is why sight Remote Sensing is 6 (p142); Transmute 2/3/4/5 by how broad its
+source and result are (p147); and Environment, whose sub-effects cost 1 or 2 per rank
+*each* and simply add up, with no ceiling (p124–125).
+
+They are **not** a `BASE_COST_KINDS` mode, and the distinction is the point: they are
+still charged flat, per rank, exactly like everything else — only *which number* differs.
+So the number is what varies. An effect declares a `baseCostBy` block naming the config
+fields that drive its price (`{ "fields": [...], "base": 0, "min": 1, "max": 5 }`), each
+option in those fields carries its own `costValue`, and the cost is the sum of the chosen
+options plus `base`, clamped into `[min, max]` — with `min` doubling as what an
+unconfigured effect costs, so a freshly dropped card prices at its floor rather than at
+zero. `effect_base_cost_value` in `powers_cost.py` is the single place the constant and
+the configured cases are told apart; the per-rank cost, the flat total and the printed
+formula all read it, so a configured Illusion cannot cost one thing and explain another.
+
+Adding a sense type, an Environment condition or a whole new configured effect is
+therefore a data edit with no Python behind it.
 
 **Dynamic Alternate Effects are described above but not modelled.** `array_alternate_cost`
 reads a single `costValue` off the `alternate_effect` record, so every alternate costs 1;

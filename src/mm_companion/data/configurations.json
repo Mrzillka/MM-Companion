@@ -735,7 +735,15 @@
       "effects": [
         {
           "effectId": "concealment",
-          "rank": 1
+          "rank": 1,
+          "config": {
+            "senses": [
+              {
+                "id": "hearing",
+                "tier": 1
+              }
+            ]
+          }
         }
       ]
     },
@@ -809,7 +817,15 @@
       "effects": [
         {
           "effectId": "concealment",
-          "rank": 2
+          "rank": 2,
+          "config": {
+            "senses": [
+              {
+                "id": "sight",
+                "tier": 1
+              }
+            ]
+          }
         }
       ]
     },

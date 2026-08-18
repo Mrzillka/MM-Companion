@@ -297,6 +297,48 @@ def test_the_ruleset_marks_exactly_the_repeatable_modifiers() -> None:
     ]
 
 
+def test_concealment_spends_its_ranks_on_the_senses_it_hides_from() -> None:
+    data = load_game_data()
+    # The book's own example (p115): "with Concealment 5, you can have Full Concealment
+    # from all sight senses (4 ranks) as well as normal hearing (1 rank)". Sight is the
+    # double-cost type; the cost stays a flat 2 per rank whatever the ranks are spent on.
+    effect = PowerEffectInstance(
+        "concealment",
+        rank=5,
+        config={"senses": [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 1}]},
+    )
+    assert effect_allocation_used(effect, data) == 5
+    assert effect_total_cost(effect, data) == 10
+    assert power_allocation_violations(Power(effects=[effect]), data) == []
+
+    # Every sight sense costs 4, so a Concealment 2 cannot afford it.
+    over = PowerEffectInstance(
+        "concealment", rank=2, config={"senses": [{"id": "sight", "tier": 2}]}
+    )
+    assert len(power_allocation_violations(Power(effects=[over]), data)) == 1
+
+    # Touch is absent on purpose: hiding from touch means being incorporeal, which is
+    # the Insubstantial effect (p115).
+    base = next(e for e in data.effects if e.id == "concealment")
+    senses = next(f for f in base.config_fields if f.type == "allocation")
+    assert "touch" not in {o.id for o in senses.alloc_options}
+
+
+def test_the_two_concealment_configurations_record_which_sense() -> None:
+    data = load_game_data()
+    # Both used to ship at the right rank with the sense named only in their prose.
+    for name, sense, rank, cost in (
+        ("inaudibility", "hearing", 1, 2),
+        ("invisibility", "sight", 2, 4),
+    ):
+        power = power_from_configuration(configuration_by_id(data, name))
+        effect = power.effects[0]
+        assert effect.config["senses"] == [{"id": sense, "tier": 1}]
+        assert effect.rank == rank
+        assert effect_allocation_used(effect, data) == rank
+        assert power_total_cost(power, data) == cost
+
+
 def test_over_allocation_is_flagged() -> None:
     data = load_game_data()
     effect = PowerEffectInstance(

@@ -47,6 +47,16 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   explain another. It is deliberately *not* a `BASE_COST_KINDS` mode: these effects are
   still charged flat per rank, and only the number varies. `baseCostValue` stays as the
   unconfigured floor — **raising it is not how you fix a price here.**
+- **Concealment spends ranks instead, and its senses are metered not priced.** It looks
+  like the effects above and is not one of them: its cost is a flat 2 per rank whatever it
+  hides you from, and the senses are *bought with the ranks* — 1 rank a sense, 2 a whole
+  sense type, and sight double (2 for normal sight, 4 for every sight sense, p115). So it
+  carries an `allocation` field like Enhanced Senses, not a `baseCostBy` like Obscure, and
+  `power_allocation_violations` is what checks a Concealment 5 spent its five ranks
+  legally. **Touch is deliberately absent from the option list**: hiding from touch means
+  being incorporeal, which is the Insubstantial effect, and the rules say so outright. The
+  *Invisibility* and *Inaudibility* configurations seed the field, so they record which
+  sense they hide rather than only naming it in their prose.
 - **The book's ~90 named powers are data, not a catalog.** `configurations.json` holds
   the standard power configurations (Blast, Dazzle, Snare, Force Field, Invisibility, …)
   as ready-made assemblies of records that already exist elsewhere, and

@@ -271,6 +271,23 @@
         "pattern": "passive_toggle",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "senses",
+          "label": "Concealed from",
+          "type": "allocation",
+          "hint": "Spend the effect's ranks on the senses you are hidden from: one rank buys one sense, two ranks the whole sense type. Sight costs double (2 for normal sight, 4 for every sight sense). Touch senses are missing on purpose — hiding from touch means being incorporeal, which is the Insubstantial effect.",
+          "allocOptions": [
+            { "id": "sight", "label": "Sight", "tiers": [2, 4], "description": "Normal sight first, then every sight sense — infravision, ultravision and the rest included. Sight is the double-cost type." },
+            { "id": "hearing", "label": "Hearing", "tiers": [1, 2], "description": "Normal hearing first, then every hearing sense, so sonar and ultra-hearing find nothing either." },
+            { "id": "smell", "label": "Smell", "tiers": [1, 2], "description": "Normal scent first, then every olfactory sense." },
+            { "id": "taste", "label": "Taste", "tiers": [1, 2], "description": "Normal taste first, then every taste sense." },
+            { "id": "radio", "label": "Radio", "tiers": [1, 2], "description": "Normal radio sense first, then every radio sense." },
+            { "id": "mental", "label": "Mental", "tiers": [1, 2], "description": "Normal mental sense first, then every mental sense." },
+            { "id": "special", "label": "Special", "tiers": [1, 2], "description": "One sense that fits no other type, then every sense of that type." }
+          ]
+        }
+      ],
       "description": "Hides you from a chosen sense type, from a shadow-blend to full invisibility."
     },
     {

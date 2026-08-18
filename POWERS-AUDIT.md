@@ -20,10 +20,10 @@ file alone. Delete it when §6 is empty.
 | §5F | Removable's real per-5-points formula (was §6B) | **done** — pass 4 |
 | §5G | Enhanced Senses' Dimensional option (was §6I) | **done** — pass 5 |
 | §5H | A `repeatable` flag replaces "has config" (was §6J) | **done** — pass 5 |
+| §5I | Concealment's sense bookkeeping (was §6E) | **done** — pass 6 |
 | §6A | Dynamic Alternate Effects | outstanding |
 | §6C | Nested trait budgets (Summon / Metamorph / Variable / Empowering) | outstanding |
 | §6D | Affliction's imposed-effect budget check | outstanding |
-| §6E | Concealment's sense bookkeeping | outstanding |
 | §6F | Countering effects | outstanding |
 | §6G | Improvised Effects arithmetic | outstanding |
 | §6H | Extra Effort and power stunts | outstanding |
@@ -37,6 +37,7 @@ b0b713d  Correct the powers data against the core rulebook
 ebac2c9  Add the rulebook's standard power configurations
 b880efb  Turn the powers audit into a handover brief
 9a10545  Price Removable from the whole power, per 5 points
+6ceb01b  Make repeatability data, and add the Dimensional sense
 ```
 
 ---
@@ -51,7 +52,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2771 tests as of pass 5
+python -m pytest -q                 # ~9 min, 2773 tests as of pass 6
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -243,7 +244,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2–5 — what was built
+## 5. Passes 2–6 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -396,6 +397,28 @@ grey out the degree the first one took. Two copies on the same degree are now po
 merely wasteful.
 
 
+### I. Concealment's sense bookkeeping (pass 6)
+
+**§5A gave Obscure its half of this.** Concealment's ranks buy senses the same way — 1 rank
+a sense, 2 a whole sense type, sight double (2 for normal sight, 4 for all of them) — but
+its *cost* is a flat 2 per rank however they are spent, so nothing forced the issue and the
+effect carried no config at all. A Concealment 5 could claim anything.
+
+It is therefore an **`allocation` field**, like Enhanced Senses, and **not** a `baseCostBy`
+like Obscure — the distinction is worth keeping straight, since the two look alike from the
+outside. `power_allocation_violations` now checks the spend, and the book's own example
+(all sight senses at 4 ranks plus normal hearing at 1, from a Concealment 5) comes out
+exactly full.
+
+**Touch is deliberately absent from the option list.** "You cannot have Concealment from
+touch senses, since that requires being incorporeal" (p115) — so the rule is enforced by
+there being nothing to tick, rather than by a warning after the fact.
+
+*Invisibility* (sight, rank 2, 4 points) and *Inaudibility* (hearing, rank 1, 2 points) now
+seed the field, so they record which sense they hide instead of naming it only in prose.
+Both still price at the number the book prints.
+
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -474,20 +497,7 @@ less.
 `power_*_violations` function beside the others in `core/rules/validation.py`. Depends on
 §6C if the imposed effect is to be a real nested build rather than a name.
 
-### E. Concealment's sense bookkeeping
-
-**Obscure's half is done** — §5A gave it the sense and sense-type lists its own cost needed.
-
-**Concealment's is not.** Its ranks buy senses the same way — 1 rank per sense, 2 per sense
-type, **sight costs double** (2 for one sight sense, 4 for all), and Concealment from touch
-senses is impossible short of Insubstantial (p115). The *cost* is a flat 2 per rank so
-nothing forced the issue, but with no config recording which senses, nothing can check that
-a Concealment 5 spent its ranks legally. The **Invisibility** and **Inaudibility**
-configurations therefore ship as Concealment at the right *rank* with the sense named only
-in their description — right cost, incomplete record.
-
-**Change.** An `allocation` field metered against rank (as Enhanced Senses already is), not
-a `baseCostBy`. Then update those two configurations to seed it.
+### E. Concealment's sense bookkeeping — **done in pass 6, see §5I**
 
 ### F. Countering effects
 
@@ -554,24 +564,31 @@ Things a later pass will trip over if it does not know them.
    (proportionally so — a 98-point armour by 20 rather than by 1), and one at or below 5
    points did not move at all. Applied deliberately; a "your build changed" notice is still
    the thing that does not exist.
-3. **Nothing enforces mutual exclusion in a multiselect.** A player can tick both "one sight
+3. **An allocation readout prints the tier *index*, not what it cost.** A Concealment
+   hiding from every sight sense reads "Sight 2" in the game-terms panel — tier 2, which
+   costs 4 ranks — while the card's own combo beside it says "4 ranks". The same is true of
+   Enhanced Senses' Accurate (tiers 2 and 4). It predates this job and is shared by every
+   `allocation` field, so it was left alone rather than changed underneath four effects at
+   once; `tier_notes` already exists in the schema (Enhanced Movement uses it for
+   Wall-Crawling's caveat) and is the obvious place to hang a per-tier name.
+4. **Nothing enforces mutual exclusion in a multiselect.** A player can tick both "one sight
    sense" and "all sight senses" on Obscure, or both intensities of the same Environment
    condition, and pay for both. Visible on the card, but a warning would be fair.
-4. **A Variable Environment's redistribution is unchecked** — nothing verifies that what the
+5. **A Variable Environment's redistribution is unchecked** — nothing verifies that what the
    player redistributes at use time stays inside the per-rank total they paid for.
-5. **A power-scope modifier stops at the `Power`.** Removable is charged once per
+6. **A power-scope modifier stops at the `Power`.** Removable is charged once per
    `Power`, which is what the rules mean by "the power as a whole". A device modelled as a
    `PowerGroup` of several powers therefore gets one discount *per child power*, each
    priced from that child's own total — the same arithmetic only when every split lands on
    a multiple of 5. Nothing checks for it; the honest build is one power with many effects,
    which is how the book's own armour example is written.
-6. **The equipment-currency configurations build as powers, not gear.** Commlink is "1
+7. **The equipment-currency configurations build as powers, not gear.** Commlink is "1
    Equipment Point per rank" but drops onto the power canvas like anything else.
-7. **Four configurations arrive as skeletons** the player must finish — Absorption,
+8. **Four configurations arrive as skeletons** the player must finish — Absorption,
    Berserker Rage, Poltergeist, Power Theft. The book leaves them blank too (which trait is
    boosted, which descriptor is absorbed), so this is faithful rather than incomplete, but
    it is worth knowing before someone "fixes" them.
-8. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
+9. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
    each pass. Update them in the same commit as the code, not afterwards — the notes are the
    thing a future session reads first.
 
@@ -581,7 +598,7 @@ Things a later pass will trip over if it does not know them.
 
 1. ~~**§6B Removable**~~ — done in pass 4 (§5F).
 2. ~~**§6J the repeatable flag** and **§6I Dimensional**~~ — done in pass 5 (§5H, §5G).
-3. **§6E Concealment senses** — small, and completes the sense-bookkeeping story §5A began.
+3. ~~**§6E Concealment senses**~~ — done in pass 6 (§5I).
 4. **§6A Dynamic Alternate Effects** — medium, touches cost and runtime state.
 5. **§6D Affliction's imposed effect**, then **§6C nested trait budgets** — §6D is a
    thin version of the same problem and will inform the bigger one.

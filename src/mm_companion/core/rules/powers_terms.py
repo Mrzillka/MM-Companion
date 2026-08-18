@@ -8,11 +8,24 @@ from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import GameData, Modifier
-from ..powers import STRUCTURE_ARRAY, STRUCTURE_LINKED, Power, PowerEffectInstance
+from ..powers import (
+    PL_CAP_ATTACK,
+    PL_CAPS,
+    STRUCTURE_ARRAY,
+    STRUCTURE_LINKED,
+    Power,
+    PowerEffectInstance,
+)
 from ..registry import Registry
 from .appliers import trait_category
-from .derived import effective_ability
-from .powers_cost import array_alternate_cost, array_base_index, effect_effective_rank
+from .derived import effective_ability, skill_total
+from .powers_cost import (
+    array_alternate_cost,
+    array_base_index,
+    effect_effective_rank,
+    modifier_is_banded,
+    selection_band,
+)
 from .runtime import (
     effect_current_rank,
     resolved_trait_allocation,
@@ -135,12 +148,20 @@ def modifier_detail(modifier: Modifier, selection) -> str:
     return ""
 
 
-def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str:
-    """A modifier's display name, qualified with its rank and free-text detail.
+def modifier_label(
+    modifier: Modifier, selection, *, rank_sep: str = " ", effect_rank: int = 0
+) -> str:
+    """A modifier's display name, qualified with its rank, band and free-text detail.
 
     A ranked modifier above rank 1 gains its rank (``"Penetrating 3"``); a modifier
     with a typed text detail gains it in parentheses (``"Limited (only at night)"``).
     ``rank_sep`` separates the name from the rank (the card uses ``" ×"``).
+
+    A modifier applied to only part of its effect gains the band it covers
+    (``"Tiring (ranks 9–12)"``), which needs ``effect_rank`` to resolve — a band is
+    stored as bare numbers and a caller with no effect in hand simply gets the plain
+    name. This is the one place a modifier's display name is built, so the sheet card,
+    the constructor's chips and the game-terms notes all say the same thing.
 
     A blank Custom modifier leads with the player's typed name instead of the generic
     record name (``"Custom Extra"``), so the homebrew shows up under the name the player
@@ -152,6 +173,10 @@ def modifier_label(modifier: Modifier, selection, *, rank_sep: str = " ") -> str
     label = base
     if modifier.ranked and selection.rank > 1:
         label = f"{base}{rank_sep}{selection.rank}"
+    if effect_rank and modifier_is_banded(modifier, selection, effect_rank):
+        low, high = selection_band(selection, effect_rank)
+        span = f"rank {low}" if low == high else f"ranks {low}–{high}"
+        label = f"{label} ({span})"
     if detail and not (modifier.custom and detail):
         label = f"{label} ({detail})"
     return label
@@ -232,7 +257,9 @@ def required_checks(
             continue
         rendered = _render_note(modifier, effect.rank, selection, game_data)
         dc = game_data.system.defense_dc_base + selection.rank
-        checks.append((rendered or modifier_label(modifier, selection), dc))
+        checks.append(
+            (rendered or modifier_label(modifier, selection, effect_rank=effect.rank), dc)
+        )
     return tuple(checks)
 
 
@@ -256,6 +283,7 @@ def _modifier_notes(
     """
 
     notes: list[str] = []
+    effect_rank = effect.rank
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or selection.modifier_id in impactful:
@@ -263,7 +291,7 @@ def _modifier_notes(
         if modifier.note_template:
             notes.append(_render_note(modifier, effect.rank))
         else:
-            notes.append(modifier_label(modifier, selection))
+            notes.append(modifier_label(modifier, selection, effect_rank=effect_rank))
     return tuple(notes)
 
 
@@ -518,9 +546,13 @@ def resolve_stat_display(
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base_effect is None:
         return raw_value
+    own_rank = effect_current_rank(effect)
     if field_key == "range" and raw_value == "Rank":
-        return game_data.measurements.label("distance", effect.rank) or "Rank"
-    effective_rank = effect_effective_rank(effect, game_data, char)
+        return game_data.measurements.label("distance", own_rank) or "Rank"
+    # The dialled, hard-capped rank — the same one the roll numbers are built from, so
+    # a dropdown never offers a DC the dice footer disagrees with.
+    _rank_cut, attack_cut = effect_pl_cap_shift(effect, game_data, char)
+    effective_rank = effect_live_rank(effect, game_data, char)
     dc = (
         None
         if base_effect.resistance_dc_base is None
@@ -532,11 +564,12 @@ def resolve_stat_display(
         elif char is not None:
             attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
         else:
-            attack = effect.rank
-        actor = attack if raw_value.startswith("Attack") else effect.rank
+            attack = own_rank
+        attack -= attack_cut
+        actor = attack if raw_value.startswith("Attack") else own_rank
         return _numeric_roll(raw_value, actor, dc, resistance=False)
     if field_key == "resistance":
-        return _numeric_roll(raw_value, effect.rank, dc, resistance=True)
+        return _numeric_roll(raw_value, own_rank, dc, resistance=True)
     return raw_value
 
 
@@ -630,6 +663,160 @@ def _ranged_distance_rows(
     return rows
 
 
+# --- the attack side, and the hard Power Level cap ------------------------------------
+
+
+def effect_attack_skill_bonus(
+    effect: PowerEffectInstance, char: Character | None, game_data: GameData
+) -> int | None:
+    """The attack-roll bonus an effect's linked Close/Ranged Combat focus supplies.
+
+    ``None`` when the effect has no ``attack_skill`` link (or there is no character),
+    so callers fall back to the wielder's Attack ability. Otherwise the linked focus
+    row's :func:`skill_total` — which already folds in the Attack ability, since these
+    combat skills derive from ``ATK`` — so it *replaces* the bare Attack rather than
+    stacking with it. A dangling row id degrades to that ability value (its ranks read
+    as 0).
+
+    Lives here rather than in ``validation`` because the hard Power Level cap below has
+    to reach it, and validation sits above this module in the dependency DAG.
+    """
+
+    if not effect.attack_skill or char is None:
+        return None
+    return skill_total(char, game_data, effect.attack_skill)
+
+
+def effect_makes_attack(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether the effect resolves with an **attack roll** (vs. auto-hit / no check).
+
+    True when a modifier grants the attack roll — an attacking effect's implicit
+    ``attack`` extra, or one taken explicitly on any other effect — and none drops it
+    (a Perception-Range extra removes the roll, making the effect auto-hit). Reads the
+    resolved :class:`EffectImpact` rather than the base effect's check prose, so
+    Deflect's "Deflect vs. Attack" is correctly *not* an attack roll and an effect given
+    the Attack extra correctly is one. This is the same condition
+    :func:`~.validation.power_pl_violations` uses to pick the attack-plus-rank cap, and
+    what gates the constructor's attack-skill picker.
+    """
+
+    impact = _effective_stats(effect, game_data)[3]
+    return impact.grants_attack and not impact.drops_check
+
+
+def effect_base_attack_bonus(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> int:
+    """The wielder's d20 bonus with this effect, before any hard Power Level cap.
+
+    The linked combat focus's total when the effect names one
+    (:func:`effect_attack_skill_bonus`), otherwise the wielder's effective Attack, plus
+    the effect's own Accurate/Inaccurate. Falls back to the effect's rank without a
+    character, so a context-free summary still reads — the same fallback
+    :func:`_roll_numbers` has always made.
+    """
+
+    linked = effect_attack_skill_bonus(effect, char, game_data)
+    if linked is not None:
+        base = linked
+    elif char is not None:
+        base = effective_ability(char, game_data, game_data.system.trait_keys.attack)
+    else:
+        return effect_current_rank(effect)
+    return base + _effective_stats(effect, game_data)[3].check_bonus
+
+
+def effect_pl_cap_shift(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> tuple[int, int]:
+    """``(rank_cut, attack_cut)`` the **hard** Power Level cap shaves off this effect.
+
+    ``(0, 0)`` — the answer for every effect that has not opted in — unless
+    :attr:`~mm_companion.core.powers.PowerEffectInstance.pl_cap` is set, there is a
+    wielder to read a Power Level off, and the effect forces a resistance (the same
+    ``resistance_dc_base`` gate :func:`~.validation.power_pl_violations` uses).
+
+    Where the soft warning raises its limit by :func:`~.powers_cost.effect_size_rank_shift`
+    so being large is never paid for twice, the hard cap deliberately does **not**: it
+    measures against a flat ``2 × PL``, which is what a player asking for a hard cap is
+    asking for — a power that cannot exceed the table's limit however large its wielder
+    grows. That is the whole difference between this and the ⚠ beside it.
+
+    Which side gives way is the player's: ``"effect"`` keeps the rank and lowers the
+    attack bonus, ``"attack"`` keeps the attack bonus and lowers the rank. Neither side
+    can be cut past its floor (rank 1, attack +0), and whatever a floor refuses spills
+    onto the other, so the cap always actually holds.
+
+    An **auto-hit** effect has no attack bonus to trade, so it is always the rank that
+    falls — against ``PL`` alone, the cap that applies to it.
+    """
+
+    if effect.pl_cap not in PL_CAPS or char is None:
+        return 0, 0
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or base.resistance_dc_base is None:
+        return 0, 0
+    cap = game_data.costs.power_level.caps.get("attack_effect")
+    if cap is None:
+        return 0, 0
+
+    rank = effect_effective_rank(effect, game_data, char)
+    if not effect_makes_attack(effect, game_data):
+        return max(0, rank - char.power_level), 0
+
+    attack = effect_base_attack_bonus(effect, game_data, char)
+    over = attack + rank - cap.limit(char.power_level)
+    if over <= 0:
+        return 0, 0
+    if effect.pl_cap == PL_CAP_ATTACK:  # keep the attack, lower the rank
+        rank_cut = min(over, max(0, rank - 1))
+        return rank_cut, over - rank_cut
+    attack_cut = min(over, max(0, attack))  # keep the effect, lower the attack
+    return over - attack_cut, attack_cut
+
+
+def pl_cap_note(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> str:
+    """What a **biting** hard Power Level cap has taken off this effect, in words.
+
+    ``""`` when there is no cap, or there is one and nothing is over it — the ordinary
+    case, and the reason a capped power that is comfortably inside its limit reads
+    exactly like an uncapped one.
+
+    Both halves of the trade are named when both moved, which happens only when the side
+    the player chose to give up hit its floor and the remainder spilled onto the other.
+    """
+
+    rank_cut, attack_cut = effect_pl_cap_shift(effect, game_data, char)
+    if not rank_cut and not attack_cut:
+        return ""
+    parts = []
+    if attack_cut:
+        attack = effect_base_attack_bonus(effect, game_data, char)
+        parts.append(f"attack +{attack - attack_cut} (capped from +{attack})")
+    if rank_cut:
+        rank = effect_effective_rank(effect, game_data, char)
+        parts.append(f"rank {rank - rank_cut} (capped from {rank})")
+    limit = f"PL {char.power_level}" if char is not None else "the Power Level cap"
+    return f"held to {limit}: " + ", ".join(parts)
+
+
+def effect_live_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
+    """The rank an effect actually resolves at: dialled down, then hard-capped.
+
+    :func:`~.powers_cost.effect_effective_rank` less whatever
+    :func:`effect_pl_cap_shift` takes off it. This is the number the save DC, the dice
+    footer and the card's rank readout are all built from, so a capped power says the
+    same thing in all three places.
+    """
+
+    rank = effect_effective_rank(effect, game_data, char)
+    return max(0, rank - effect_pl_cap_shift(effect, game_data, char)[0])
+
+
 @dataclass(frozen=True)
 class EffectRollNumbers:
     """The raw d20 numbers behind an effect's check and resistance phrases.
@@ -685,7 +872,10 @@ def _roll_numbers(
 ) -> EffectRollNumbers:
     """:func:`effect_roll_numbers` once the stat dicts are already in hand."""
 
-    effective_rank = effect_effective_rank(effect, game_data, char)
+    # What a hard Power Level cap shaves off, if the player asked for one. Zero on both
+    # sides for every effect that did not, so nothing below changes for them.
+    rank_cut, attack_cut = effect_pl_cap_shift(effect, game_data, char)
+    effective_rank = effect_effective_rank(effect, game_data, char) - rank_cut
     dc = (
         None
         if base_effect.resistance_dc_base is None
@@ -696,17 +886,19 @@ def _roll_numbers(
     # vs. …" phrase instead uses the effect's own rank. A linked combat focus
     # overrides the Attack via ``attack_bonus``. Without either we fall back to the
     # effect rank so a context-free summary still reads.
+    own_rank = effect_current_rank(effect)
     if attack_bonus is not None:
         attack = attack_bonus
     elif char is not None:
         attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
     else:
-        attack = effect.rank
+        attack = own_rank
+    attack -= attack_cut
     # Which of the two the check row uses is decided by the phrase, and an "after"
     # override replaces the phrase wholesale — read the base in that case, since the
     # override is verbatim text with no actor to substitute.
     phrase = stats.get("check") or base.get("check") or ""
-    actor = attack if phrase.startswith("Attack") else effect.rank
+    actor = attack if phrase.startswith("Attack") else own_rank
     return EffectRollNumbers(
         attack=attack,
         check_actor=actor + impact.check_bonus,
@@ -836,6 +1028,12 @@ def effect_stat_rows(
     # what carries it into the power card's dice footer.
     for note in required_check_notes(effect, game_data):
         rows.append(EffectStat("required_check", "Required check", "", note, "worse"))
+    # A hard Power Level cap that is actually biting says so, and says what it took. The
+    # card shows no ⚠ for a capped power — it is legal by construction — so without this
+    # row the shaved numbers would simply appear, with nothing to explain them.
+    cap_note = pl_cap_note(effect, game_data, char)
+    if cap_note:
+        rows.append(EffectStat("pl_cap", "PL cap", "", cap_note, "worse"))
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
     return _apply_row_overrides(rows, effect)

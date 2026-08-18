@@ -163,7 +163,9 @@ def config_trait_allocation(config: dict, record) -> tuple[tuple[str, int], ...]
     return tuple(rows)
 
 
-def boost_allocations(effect: PowerEffectInstance, base, boost) -> tuple[tuple[str, int], ...]:
+def boost_allocations(
+    effect: PowerEffectInstance, base, boost, *, live: bool = False
+) -> tuple[tuple[str, int], ...]:
     """Which traits one effect raises, and by how many ranks each.
 
     An Enhanced Trait spreads its rank across several traits at once (the book's own
@@ -176,12 +178,22 @@ def boost_allocations(effect: PowerEffectInstance, base, boost) -> tuple[tuple[s
     ``"TOUGHNESS"``, a shield's authored ``config["target"]``, and every character
     saved before this existed. Nothing is migrated on load — an instance with no rows
     simply reads as the one target it always had.
+
+    ``live`` asks for the boost *as it currently stands* rather than as it was bought,
+    so a dialled-down effect grants less (:func:`effect_current_rank`). It reaches only
+    the single-target fallback, and deliberately: an allocation's rows each carry a rank
+    the player wrote down, and there is no honest way to turn "3 ranks of Stealth and 1
+    of Treatment" half off. The effects that carry rows are the ones whose rank *is*
+    their allocation, which is exactly where the constructor declines to offer a dial.
+
+    Cost never passes ``live``. What a power is worth is what it was bought at.
     """
 
     rows = config_trait_allocation(effect.config, base)
     if rows:
         return rows
-    return ((_boost_target(effect, boost), effect.rank),)
+    rank = effect_current_rank(effect) if live else effect.rank
+    return ((_boost_target(effect, boost), rank),)
 
 
 def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
@@ -205,12 +217,16 @@ def resolved_trait_allocation(effect: PowerEffectInstance, base) -> tuple[tuple[
     trait category — what the game-terms summary renders its "Trait +N" line from. An
     Enhanced Trait returns one pair per allocated row; Protection returns its single
     fixed target, and an effect with no target chosen returns nothing at all.
+
+    Read **live**, like the contributions it describes: a Protection dialled down to 2
+    says "Toughness +2", because a row claiming +4 beside a sheet showing +2 would be
+    the summary disagreeing with the numbers it summarises.
     """
 
     boost = base.integration.trait_boost if base.integration else None
     if boost is None or not (boost.affects & TRAIT_CATEGORIES):
         return ()
-    allocation = boost_allocations(effect, base, boost)
+    allocation = boost_allocations(effect, base, boost, live=True)
     return tuple((target, ranks) for target, ranks in allocation if target)
 
 
@@ -511,7 +527,7 @@ def build_contributions(
 
         boost = base.integration.trait_boost
         if boost is not None:
-            for target, ranks in boost_allocations(effect, base, boost):
+            for target, ranks in boost_allocations(effect, base, boost, live=True):
                 contributions.extend(
                     apply_stat_effect(
                         boost.apply,
@@ -540,7 +556,7 @@ def build_contributions(
                     granted.apply,
                     ApplyContext(
                         record=granted,
-                        rank=selection.rank if modifier.ranked else effect.rank,
+                        rank=selection.rank if modifier.ranked else effect_current_rank(effect),
                         target=_boost_target(effect, granted),
                         # Named for the pair, since neither half explains it alone: the
                         # power is what the sheet lists, the modifier is what granted it.
@@ -619,6 +635,32 @@ def equipment_contributions(char: Character, game_data: GameData) -> tuple[Trait
             )
         )
     return tuple(contributions)
+
+
+def effect_stands(
+    power: Power, effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> bool:
+    """Whether this effect is currently *standing on the sheet* — contributing at all.
+
+    Two questions, and it has to be both. An array member that is not the live
+    alternate answers :func:`effect_is_active` perfectly happily (``array_active`` is a
+    flag nothing maintains — the array group's own ``active_child_id`` is the truth, and
+    only :func:`live_powers` reads it), so asking the effect alone reported a power that
+    contributes nothing as switched on.
+
+    What the card's rank dial is positioned from, and what
+    :func:`~.size.size_steps` lights a rung by: an effect that is standing nowhere is
+    *nowhere*, not at rank 1.
+    """
+
+    if char is None:
+        return False
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return False
+    if not any(p is power for p in live_powers(char.powers)):
+        return False
+    return effect_is_active(power, effect, base, game_data, char)
 
 
 def power_trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:

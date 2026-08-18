@@ -24,15 +24,21 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
     PowerGroup,
 )
-from mm_companion.core.rules import effect_readout_rows, effective_size, power_trait_bonuses
+from mm_companion.core.rules import (
+    effect_readout_rows,
+    effect_roll_numbers,
+    effect_total_cost,
+    effective_size,
+    power_trait_bonuses,
+)
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.powers import (
     PowersSection,
     _DraggableCard,
     _ModeToggle,
+    _RankDial,
     _RollLine,
-    _SizeLadder,
 )
 
 
@@ -725,58 +731,70 @@ def _size_sheet(rank: int = 3, *, effect: str = "growth", size: str = "Medium"):
     return CharacterSheet(data, char), char, power
 
 
-def _ladder(sec: PowersSection) -> _SizeLadder:
-    ladder = sec.findChild(_SizeLadder)
-    assert ladder is not None
-    return ladder
+def _dial(sec: PowersSection) -> _RankDial:
+    dial = sec.findChild(_RankDial)
+    assert dial is not None
+    return dial
 
 
-def _rungs(sec: PowersSection) -> list[tuple[str, bool]]:
-    return [(b.text(), b.isChecked()) for b in _ladder(sec).findChildren(QPushButton)]
+def _dial_state(sec: PowersSection) -> tuple[int, int, str]:
+    """``(value, maximum, label)`` — where the dial is, how far it goes, what that is."""
+    dial = _dial(sec)
+    return dial._slider.value(), dial._slider.maximum(), dial._value.text()
 
 
-def test_a_growth_card_carries_one_rung_per_rank(qapp: QApplication) -> None:
-    """Labelled with the size reached, not the rank paid — and the top one lit."""
+def _dial_labels(sec: PowersSection) -> list[str]:
+    """What every notch of the dial reads, from Off upwards."""
+    dial = _dial(sec)
+    return [dial._label_for(rank) for rank in range(dial._slider.maximum() + 1)]
+
+
+def _turn(sec: PowersSection, rank: int) -> None:
+    """Move the dial the way a keyboard or groove step does — handle up, so it commits."""
+    _dial(sec)._slider.setValue(rank)
+
+
+def test_a_growth_card_carries_a_dial_named_by_size(qapp: QApplication) -> None:
+    """Notched by the size reached, not the rank paid — and standing at the top."""
     sheet, _char, _power = _size_sheet(3)
 
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", True)]
+    assert _dial_state(sheet.powers) == (3, 3, "Gargantuan")
+    assert _dial_labels(sheet.powers) == ["Off", "Large", "Huge", "Gargantuan"]
 
 
-def test_picking_a_rung_moves_the_sheet_and_the_card(qapp: QApplication) -> None:
+def test_turning_the_dial_moves_the_sheet_and_the_card(qapp: QApplication) -> None:
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
 
-    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
-    huge.click()
+    _turn(sheet.powers, 2)
 
     assert power.effects[0].current_rank == 2
     assert effective_size(char, data) == "Huge"
-    # The card is rebuilt from the model, so the new strip agrees with it.
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", True), ("Gargantuan", False)]
+    # The card is rebuilt from the model, so the new dial agrees with it.
+    assert _dial_state(sheet.powers) == (2, 3, "Huge")
 
 
-def test_a_rung_wakes_a_dormant_power_at_that_rung(qapp: QApplication) -> None:
-    """One click from off to Huge, rather than on-at-full then down to Huge."""
+def test_the_dial_wakes_a_dormant_power_at_that_notch(qapp: QApplication) -> None:
+    """One gesture from off to Huge, rather than on-at-full then down to Huge."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
     sheet.powers._set_power_active(power, False)
 
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+    assert _dial_state(sheet.powers) == (0, 3, "Off")
 
-    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
-    huge.click()
+    _turn(sheet.powers, 2)
     assert power.activated and power.effects[0].toggled_on
     assert effective_size(char, data) == "Huge"
 
 
-def test_a_rung_is_a_runtime_change_that_still_marks_the_sheet_dirty(
+def test_the_dial_is_a_runtime_change_that_still_marks_the_sheet_dirty(
     qapp: QApplication,
 ) -> None:
     """Like every other card switch — and, like them, saved with the build.
 
-    It stays a *runtime* signal (``changed`` is for build edits, and a rung re-derives
-    rather than re-costing), but the rung is in the save now, so the sheet has to know
-    it has something unwritten or closing the window would drop it.
+    It stays a *runtime* signal (``changed`` is for build edits, and the dial re-derives
+    rather than re-costing), but where it stands is in the save now, so the sheet has to
+    know it has something unwritten or closing the window would drop it.
     """
     sheet, _char, _power = _size_sheet(3)
     edits: list[int] = []
@@ -786,72 +804,104 @@ def test_a_rung_is_a_runtime_change_that_still_marks_the_sheet_dirty(
     sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
     sheet.edited.connect(lambda: dirtied.append(1))
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
 
     assert edits == []
     assert runtime == [1]
     assert dirtied
 
 
-def test_a_rung_picked_on_the_card_survives_a_save_and_a_reopen(
+def test_a_notch_picked_on_the_card_survives_a_save_and_a_reopen(
     qapp: QApplication, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The reported bug, end to end: click Large, save, open the file again.
+    """The reported bug, end to end: dial to Large, save, open the file again.
 
     The two halves are tested apart (the flag round-trips in ``tests/test_powers.py``,
-    the click is above), and this is the one that says the user's actual sequence
+    the gesture is above), and this is the one that says the user's actual sequence
     works — the sheet writes what the card is showing.
     """
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
     sheet, char, _power = _size_sheet(3)
     char.profile["hero_name"] = "Colossus"
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
     reopened = library.load_character(library.save_character(char))
 
     assert reopened.powers[0].effects[0].current_rank == 1
     assert effective_size(reopened, load_game_data()) == "Large"
 
 
-def test_the_rungs_stay_live_in_the_locked_sheet(qapp: QApplication) -> None:
+def test_the_dial_stays_live_in_the_locked_sheet(qapp: QApplication) -> None:
     """How big you are standing there is a play action, not a build edit."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
     sheet.set_locked(True)
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
     assert effective_size(char, data) == "Large"
 
 
-def test_a_single_rung_power_gets_no_strip(qapp: QApplication) -> None:
-    """A Growth 1's one rung *is* the card's own switch; a strip would be a second one."""
+def test_a_single_rank_size_power_gets_no_dial(qapp: QApplication) -> None:
+    """A Growth 1's one notch *is* the card's own switch; a dial would be a second one."""
     sheet, _char, _power = _size_sheet(1)
 
-    assert sheet.powers.findChild(_SizeLadder) is None
+    assert sheet.powers.findChild(_RankDial) is None
 
 
-def test_a_power_that_changes_no_size_gets_no_strip(qapp: QApplication) -> None:
+def test_a_power_that_changes_no_size_gets_no_dial_unless_it_asks(
+    qapp: QApplication,
+) -> None:
     sheet, _char = _sheet_with("Blast")
 
-    assert sheet.powers.findChild(_SizeLadder) is None
+    assert sheet.powers.findChild(_RankDial) is None
 
 
-def test_the_card_readout_follows_the_rung_that_is_lit(qapp: QApplication) -> None:
+def test_an_effect_that_asks_for_a_dial_gets_one_named_by_rank(qapp: QApplication) -> None:
+    """The constructor's *Add a rank slider*: a Damage 10 can be fired at 5."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=10, rank_dial=True)])
+    char.powers.append(power)
+    sec = _sheet_for(char).powers
+
+    assert _dial_state(sec) == (10, 10, "Rank 10")
+    _turn(sec, 5)
+    assert power.effects[0].current_rank == 5
+    assert _dial_state(sec) == (5, 10, "Rank 5")
+
+
+def test_a_dialled_effect_forces_a_smaller_save(qapp: QApplication) -> None:
+    """The point of the dial: pulling a punch really does land softer."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=10, rank_dial=True)])
+    char.powers.append(power)
+    sec = _sheet_for(char).powers
+    effect = power.effects[0]
+
+    assert effect_roll_numbers(effect, data, char).dc == 20
+    _turn(sec, 5)
+    assert effect_roll_numbers(effect, data, char).dc == 15
+    # And it is still worth what it was bought at — dialling down refunds nothing.
+    assert effect_total_cost(effect, data, char) == 10
+
+
+def test_the_card_readout_follows_the_dial(qapp: QApplication) -> None:
     """The card's Size row and the sheet's Size line must never name two sizes."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
 
     row = next(r for r in effect_readout_rows(power.effects[0], data, char) if r.key == "size")
     assert row.value == "Large" == effective_size(char, data)
 
 
-def test_a_rung_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplication) -> None:
+def test_a_dial_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplication) -> None:
     """Visible — it still says where the power is set — but not a control.
 
-    Never ``setEnabled(False)``: nothing in this app greys a control out, so the
-    buttons go transparent to the mouse and the click falls through to the card.
+    Never ``setEnabled(False)``: nothing in this app greys a control out, so the slider
+    goes transparent to the mouse and the click falls through to the card.
     """
     data = load_game_data()
     char = Character.new_default(data)
@@ -861,14 +911,14 @@ def test_a_rung_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplicat
     sec = _sheet_for(char).powers
     sec._set_group_active(char.powers[0], False)
 
-    buttons = _ladder(sec).findChildren(QPushButton)
-    assert [b.text() for b in buttons] == ["Large", "Huge", "Gargantuan"]
-    assert all(b.isEnabled() for b in buttons)
-    assert all(b.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) for b in buttons)
+    slider = _dial(sec)._slider
+    assert _dial_labels(sec) == ["Off", "Large", "Huge", "Gargantuan"]
+    assert slider.isEnabled()
+    assert slider.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
-def test_a_rung_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
-    """Picking a rung does whatever clicking the card would, then lands on that rung."""
+def test_the_dial_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
+    """Turning the dial does whatever clicking the card would, then lands on that notch."""
     data = load_game_data()
     char = Character.new_default(data)
     growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
@@ -877,44 +927,33 @@ def test_a_rung_makes_an_array_member_the_live_alternate(qapp: QApplication) -> 
     char.powers.append(group)
     sec = _sheet_for(char).powers
 
-    assert _rungs(sec) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
-    next(b for b in _ladder(sec).findChildren(QPushButton) if b.text() == "Huge").click()
+    assert _dial_state(sec) == (0, 3, "Off")
+    _turn(sec, 2)
 
     assert group.active_child_id == growth.id
     assert effective_size(char, data) == "Huge"
 
 
-@pytest.mark.parametrize("preset", ["classic", "slate-dark", "parchment-light", "crimson-gold"])
-def test_the_lit_rung_states_its_own_look(qapp: QApplication, preset: str) -> None:
-    """The same trap the group's mode toggle fell into, on the same tokens."""
-    theme.set_active_theme(preset)
-    sheet, _char, _power = _size_sheet(3)
-
-    lit = _ladder(sheet.powers).styleSheet().split("QPushButton:checked")
-    assert len(lit) == 2, "the strip must state its own checked look"
-    assert "background:" in lit[1]
-
-
-def test_the_rung_already_lit_switches_the_power_off(qapp: QApplication) -> None:
-    """A click on the lit rung is the card's own click — the strip is a whole control."""
+def test_dialling_back_to_zero_switches_the_power_off(qapp: QApplication) -> None:
+    """Zero is the card's own click — the dial is a whole control, not a one-way one."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    _turn(sheet.powers, 2)
     assert effective_size(char, data) == "Huge"
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    _turn(sheet.powers, 0)
     assert effective_size(char, data) == "Medium"
     assert not power.activated
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+    assert _dial_state(sheet.powers) == (0, 3, "Off")
 
-    # And the rung is remembered, so pressing it again comes back to Huge.
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    # And the notch is remembered, so turning it up again comes back to Huge.
+    _turn(sheet.powers, 2)
     assert effective_size(char, data) == "Huge"
 
 
-def test_the_lit_rung_of_an_array_alternate_is_a_no_op(qapp: QApplication) -> None:
-    """An array always keeps exactly one live member, so its rung must not switch off."""
+def test_zeroing_an_array_alternate_is_a_no_op(qapp: QApplication) -> None:
+    """An array always keeps exactly one live member, so its dial must not switch off."""
     data = load_game_data()
     char = Character.new_default(data)
     growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
@@ -923,33 +962,35 @@ def test_the_lit_rung_of_an_array_alternate_is_a_no_op(qapp: QApplication) -> No
     char.powers.append(group)
     sec = _sheet_for(char).powers
 
-    next(b for b in _ladder(sec).findChildren(QPushButton) if b.text() == "Gargantuan").click()
+    _turn(sec, 0)
 
     assert group.active_child_id == growth.id
     assert effective_size(char, data) == "Gargantuan"
 
 
-def test_a_clamped_rung_spans_the_ranks_that_fold_into_it(qapp: QApplication) -> None:
-    """The button carries the span's lowest rank, so 'is this the lit one' must too."""
+def test_ranks_the_size_table_clamps_repeat_their_category(qapp: QApplication) -> None:
+    """A Growth 6 on a Gargantuan hero really does spend five ranks at Awesome.
+
+    The dial has a notch per rank rather than per rung, so it can stop wherever the
+    player puts it; the label simply repeats where the table ran out.
+    """
     sheet, char, power = _size_sheet(6, size="Gargantuan")
     data = load_game_data()
 
-    assert _rungs(sheet.powers) == [("Colossal", False), ("Awesome", True)]
-    assert power.effects[0].current_rank is None  # lit at full rank, inside the span
+    assert _dial_labels(sheet.powers) == ["Off", "Colossal"] + ["Awesome"] * 5
+    assert power.effects[0].current_rank is None  # standing at full rank
 
-    next(
-        b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Awesome"
-    ).click()
-    assert effective_size(char, data) == "Gargantuan"  # the span's rung switched it off
+    _turn(sheet.powers, 0)
+    assert effective_size(char, data) == "Gargantuan"  # switched off, back to its own size
 
 
-def test_picking_a_rung_leaves_the_page_where_it_was(qapp: QApplication) -> None:
-    """The regression: the sheet jumped away from the card that was just clicked.
+def test_turning_the_dial_leaves_the_page_where_it_was(qapp: QApplication) -> None:
+    """The regression: the sheet jumped away from the card that was just used.
 
     Every runtime setter rebuilds the whole card tree, so the block is briefly empty —
     and whatever held focus inside it is destroyed, handing focus to a widget in some
     other block, which a ``QScrollArea`` then scrolls into view. Forced here, because
-    the rungs themselves are ``NoFocus`` precisely so it cannot happen by hand.
+    the slider itself is ``NoFocus`` precisely so it cannot happen by hand.
     """
     from mm_companion.ui.main_window import MainWindow
 
@@ -972,26 +1013,43 @@ def test_picking_a_rung_leaves_the_page_where_it_was(qapp: QApplication) -> None
     before = bar.value()
     assert before > 0, "the page has to be scrollable for this to mean anything"
 
-    button = next(
-        b
-        for b in win._sheet.powers.findChildren(_SizeLadder)[-1].findChildren(QPushButton)
-        if b.text() == "Huge"
-    )
-    button.setFocus()
+    slider = win._sheet.powers.findChildren(_RankDial)[-1]._slider
+    slider.setFocus()
     for _ in range(4):
         qapp.processEvents()
-    button.click()
+    slider.setValue(2)
     for _ in range(10):
         qapp.processEvents()
 
     assert bar.value() == before
-    assert char.powers[-1].effects[0].current_rank == 2  # and the click still landed
+    assert char.powers[-1].effects[0].current_rank == 2  # and the gesture still landed
 
 
-def test_a_rung_never_takes_focus(qapp: QApplication) -> None:
-    """The cause-level half: the button is destroyed by its own click, so focus on it
+def test_the_dial_never_takes_focus(qapp: QApplication) -> None:
+    """The cause-level half: the slider is destroyed by its own commit, so focus on it
     could only ever be handed to another block — which is what moved the page."""
     sheet, _char, _power = _size_sheet(3)
 
-    for button in _ladder(sheet.powers).findChildren(QPushButton):
-        assert button.focusPolicy() == Qt.FocusPolicy.NoFocus
+    assert _dial(sheet.powers)._slider.focusPolicy() == Qt.FocusPolicy.NoFocus
+
+
+def test_a_drag_commits_once_on_release(qapp: QApplication) -> None:
+    """A slider that wrote on every tick would delete itself under the player's thumb.
+
+    The label tracks the drag so the notch under the handle is readable; only letting go
+    reaches the section — which is what makes a rebuild-per-commit survivable at all.
+    """
+    sheet, _char, power = _size_sheet(3)
+    dial = _dial(sheet.powers)
+    committed: list[int] = []
+    dial.rankPicked.connect(committed.append)
+
+    dial._slider.setSliderDown(True)
+    dial._slider.setValue(2)
+    dial._slider.setValue(1)
+    assert committed == []
+    assert dial._value.text() == "Large"  # but the label followed the handle
+    assert power.effects[0].current_rank is None  # nothing written yet
+
+    dial._slider.setSliderDown(False)  # QAbstractSlider emits sliderReleased itself
+    assert committed == [1]

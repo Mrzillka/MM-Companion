@@ -23,7 +23,7 @@ from .appliers import (
     STACK_SUM,
     TraitContribution,
 )
-from .runtime import effect_current_rank, effect_is_active, live_powers
+from .runtime import effect_current_rank, effect_is_active, effect_stands, live_powers
 
 #: The ``effect_readouts.json`` readout kind that marks an effect as a size shift.
 #: Nothing here names Growth or Shrinking: an effect is a size effect because the
@@ -270,13 +270,11 @@ def size_steps(
             continue
         steps.append(SizeStep(rank=rank, last_rank=rank, category=row.size_category))
 
-    # The same pair :func:`size_shift` asks, and it has to be both: an array member
-    # that is not the live alternate answers ``effect_is_active`` perfectly happily
-    # (``array_active`` is a flag nothing maintains — the array's own
-    # ``active_child_id`` is the truth, and only ``live_powers`` reads it), so asking
-    # the effect alone lit a rung on a card contributing nothing to the sheet.
-    live = any(p is power for p in live_powers(char.powers))
-    if not live or not effect_is_active(power, effect, base, game_data, char):
+    # A rung is lit only where the power is actually standing — see ``effect_stands``,
+    # which is the same pair ``size_shift`` asks and which the card's rank dial reads to
+    # position itself, so the strip and the slider can never disagree about where a
+    # power is.
+    if not effect_stands(power, effect, game_data, char):
         return tuple(steps)
     now = effect_current_rank(effect)
     return tuple(replace(s, current=s.rank <= now <= s.last_rank) for s in steps)

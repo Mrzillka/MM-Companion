@@ -50,6 +50,58 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   nothing about why they came to a point; `effect_cost_breakdown` returns the per-row
   detail behind those subtotals and the card hangs it off the same label as a tooltip,
   so a number and its workings can never come from two places.
+- **A modifier may cover only part of an effect.** The rules allow it — a Blast 12
+  whose top four ranks alone are Tiring, routinely fired at eight — and a
+  `ModifierSelection` carries `applies_from`/`applies_to` for it. `0`/`0` means every
+  rank, which is what every selection ever saved says, so nothing migrated; and
+  `selection_band` **clamps on read** rather than trusting the stored pair, since the
+  effect's rank can be edited down long after the band was set. Cost stops being one
+  rate times one rank: `_rank_runs` groups the ranks into runs of equal net per-rank
+  cost and `_flat_base_cost` prices each, summing them **unrounded** and rounding once —
+  two half-point bands come to a point together, the same rule the "as trait" rows
+  follow. A build with no band has exactly one run and the arithmetic is unchanged,
+  which is the regression guarantee. Only a **per-rank** modifier gets a band
+  (`modifier_is_per_rank`): a flat one is charged once whatever it covers, so a band
+  there would be a control that changes no number, and one stored by any other route is
+  ignored rather than quietly repricing. Folded Strength ranks sit above the bought ones
+  and are in nobody's band, so `_net_per_rank_modifiers` — which is also the divisor
+  `ability_rank_contribution` reads — counts only the unbanded selections. `modifier_label`
+  is where the band becomes words (`Tiring (ranks 9–12)`), so card, chip and notes agree.
+- **A power can be held *hard* to Power Level.** A breach was only ever a ⚠. An effect's
+  `pl_cap` (`""` / `"effect"` / `"attack"`) makes it bite: `effect_pl_cap_shift` returns
+  the `(rank_cut, attack_cut)` that brings `attack + rank` back inside the cap, keeping
+  whichever side the player nominated and spilling onto the other whatever a floor
+  (rank 1, attack +0) refuses — so the cap always actually holds. It deliberately
+  measures against a **flat** `2 × PL` where `power_pl_violations` raises its limit by
+  `effect_size_rank_shift`; that difference *is* the feature, since the soft rule lets a
+  giant past and a player asking for a hard cap is asking for one that does not.
+  `effect_live_rank` is the rank after both the dial and the cut, and `_roll_numbers` is
+  the single funnel the DC, the terms table and the dice footer all take it from.
+  Validation **skips** a capped effect outright — it is legal by construction, and a ⚠
+  about a number the sheet never shows is noise — so the card states what was shaved in
+  a `PL cap` row (`pl_cap_note`) instead. The clamp needs an effect's attack bonus, which
+  is why `effect_attack_skill_bonus` and `effect_makes_attack` moved down from
+  `validation` into `powers_terms`: it is the one layer that reaches both the effective
+  rank below it and the modifier impacts it computes itself.
+- **Rank as a dial.** `effect_effective_rank` reads `effect_current_rank`, so an effect
+  turned down is turned down everywhere its rank resolves — the save DC, the measures,
+  the trait boost. `effect_build_rank` is the bought rank beside it, and validation reads
+  *that*: a Power Level cap is a statement about the build, and a sheet that passed its
+  check by turning a dial down would be checking nothing. Cost asks neither. A boost
+  follows the dial only down the single-target fallback (`boost_allocations(..., live=True)`)
+  — an allocation's rows each carry a rank the player wrote down, and there is no honest
+  way to turn "3 ranks of Stealth and 1 of Treatment" half off; the effects that carry
+  rows are the ones whose rank *is* their allocation, which is exactly where the
+  constructor declines to offer a dial. Which effects get one is `rank_dial` on the
+  build, plus every size effect for free (see [Size and movement](size-and-movement.md)).
+- **Extended settings is a *power*-level panel over *effect*-level flags.** All three of
+  the above, plus `size_scales_damage`, are stored per effect — that is the level they
+  apply at, and it is what lets `core` read them without a `Power` in hand — while the
+  constructor drives every effect in the power from one checkbox each. Each row hides
+  itself when the build has nothing it could apply to (`_resisted_effects`,
+  `_dialable_effects`) and the section hides when every row has. An effect dropped on the
+  canvas **inherits** the switches rather than its own defaults, or turning one off and
+  then adding an effect would quietly turn it back on.
 - **Effective vs. bought**: `effect_effective_rank` adds an ability a modifier
   folds in (Strength-Based Damage → Strength) to the bought rank — this is the
   rank that sets save DCs and PL caps, while cost counts only the bought rank.
@@ -111,8 +163,10 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   disagreeing with the rows above it.
 - **Runtime state** (separate from the point build): `effect.toggled_on` /
   `effect.suppressed` and `power.activated` / `power.item_present` gate whether a
-  passive bonus currently applies (`effect_is_active`). The UI drives all of a
-  power's gates from one "Active" switch.
+  passive bonus currently applies (`effect_is_active`); `effect_stands` adds the second
+  half that question needs on a card — whether the power is **live on the character** at
+  all, which an unpicked array alternate is not. The UI drives all of a power's gates
+  from one "Active" switch, and `current_rank` from the card's rank dial.
 - **Runtime is saved.** It used to be the other way round — every runtime flag was
   left out of `to_dict()` on the argument that what is switched on is not part of the
   build — and the size ladder is what broke it: a Growth 3 *held* at Large is a
@@ -138,8 +192,9 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   improved (better) or a flaw limited (worse), resolving check/DC phrases to real
   numbers, and appending measures, configured qualities, trait-boost lines, and
   the Tier-5 `effect_readout_rows`.
-- **Validation** (warnings for now): `power_pl_violations` (per-power attack +
-  effect-rank / auto-hit rank caps, read against the wielder),
+- **Validation** (warnings, unless a power opted into the hard cap above):
+  `power_pl_violations` (per-power attack + effect-rank / auto-hit rank caps, read
+  against the wielder's *build* rank),
   `power_allocation_violations` (a Tier-4 effect over-spending its rank pool),
   and `power_linked_range_violations`. Whether a PL breach merely warns or blocks
   the save is the single app-wide seam `core.storage.pl_enforcement()`

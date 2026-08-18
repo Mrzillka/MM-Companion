@@ -232,7 +232,11 @@ def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None
     card = window.canvas.add_effect("damage")
     card.attach_modifier("ranged")  # per-rank, not ranked
 
-    assert card._chips[0].findChild(QSpinBox) is None
+    # The rank spin is the one wearing the "×" prefix. A per-rank modifier does carry
+    # the rank-band pair, but those are hidden until the band is asked for.
+    spins = card._chips[0].findChildren(QSpinBox)
+    assert [s for s in spins if s.prefix() == "×"] == []
+    assert all(not s.isVisibleTo(card._chips[0]) for s in spins)
 
 
 def test_extras_and_flaws_groups_reveal_and_hide_with_their_chips(qapp: QApplication) -> None:

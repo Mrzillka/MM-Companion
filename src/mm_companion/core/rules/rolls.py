@@ -43,8 +43,12 @@ from .derived import (
     skill_modifiers,
     skill_total,
 )
-from .powers_terms import effect_roll_numbers, effect_stat_rows, required_checks
-from .validation import effect_attack_skill_bonus
+from .powers_terms import (
+    effect_attack_skill_bonus,
+    effect_roll_numbers,
+    effect_stat_rows,
+    required_checks,
+)
 
 #: Spec ``kind`` values. The UI reads these only for grouping/telemetry — the roll
 #: itself is fully described by the label, modifier and DC.

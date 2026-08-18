@@ -117,8 +117,8 @@ def effect_summary(
 
 def modifiers_column(effect: PowerEffectInstance, data: GameData) -> QWidget | None:
     """The effect's extras (green) over its flaws (red); ``None`` when it has neither."""
-    extras = modifier_names(effect.extras, data)
-    flaws = modifier_names(effect.flaws, data)
+    extras = modifier_names(effect.extras, data, effect.rank)
+    flaws = modifier_names(effect.flaws, data, effect.rank)
     if not extras and not flaws:
         return None
     column = QWidget()
@@ -164,17 +164,22 @@ def effect_title(effect: PowerEffectInstance, character: Character, data: GameDa
     return f"{base.name if base else effect.effect_id} {rank}"
 
 
-def modifier_names(selections: list[ModifierSelection], data: GameData) -> list[str]:
+def modifier_names(
+    selections: list[ModifierSelection], data: GameData, effect_rank: int = 0
+) -> list[str]:
     """Resolve each selection to its modifier name, tagging a ranked one taken
     above rank 1 with its rank (e.g. ``"Accurate ×2"``) and a modifier with a
-    typed free-text detail with it (e.g. ``"Limited (only at night)"``)."""
+    typed free-text detail with it (e.g. ``"Limited (only at night)"``).
+
+    ``effect_rank`` lets a modifier applied to only part of its effect name the band it
+    covers; without one it is simply left off."""
     catalog = data.modifier_catalog()
     names: list[str] = []
     for selection in selections:
         modifier = catalog.get(selection.modifier_id)
         if modifier is None:
             continue
-        names.append(modifier_label(modifier, selection, rank_sep=" ×"))
+        names.append(modifier_label(modifier, selection, rank_sep=" ×", effect_rank=effect_rank))
     return names
 
 

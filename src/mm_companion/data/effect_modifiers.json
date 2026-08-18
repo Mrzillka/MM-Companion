@@ -351,6 +351,29 @@
         }
       ]
     },
+    "comprehend": {
+      "flaws": [
+        {
+          "id": "limited_type_comprehend",
+          "name": "Limited Type",
+          "costFormula": "-1 or -2 points flat",
+          "costValue": 1,
+          "flat": true,
+          "config": [
+            {
+              "key": "points",
+              "label": "Points",
+              "type": "points",
+              "min": 1,
+              "max": 2,
+              "default": 1,
+              "hint": "1 point: a broad category (avians, canines, sea creatures). 2 points: a narrow one (dogs, falcons, dolphins)."
+            }
+          ],
+          "description": "You only comprehend one category of subject rather than all of them."
+        }
+      ]
+    },
     "concealment": {
       "extras": [
         {
@@ -1297,10 +1320,18 @@
         {
           "id": "precise_insubstantial",
           "name": "Precise",
-          "costFormula": "included in configuration",
-          "costValue": 0,
+          "costFormula": "+1 point flat",
+          "costValue": 1,
           "flat": true,
           "description": "Lets part of your body stay solid while the rest remains insubstantial."
+        },
+        {
+          "id": "reaction_insubstantial",
+          "name": "Reaction",
+          "costFormula": "+1 point flat",
+          "costValue": 1,
+          "flat": true,
+          "description": "Go insubstantial (or solid again) on your reaction, so you can phase out of an attack — and change state twice a round rather than once."
         },
         {
           "id": "subtle_insubstantial",

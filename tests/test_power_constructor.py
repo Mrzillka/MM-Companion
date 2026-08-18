@@ -123,12 +123,12 @@ def test_duplicate_attach_is_a_no_op_only_when_the_copies_are_indistinguishable(
     window = PowerConstructorWindow(data, character=_char_with_focus())
     card = window.canvas.add_effect("damage")
 
-    # Ranged carries no config, so a second copy would change no game term and only
+    # Penetrating carries no config, so a second copy would change no game term and only
     # double-charge the power.
-    card.attach_modifier("ranged")
+    card.attach_modifier("penetrating")
     cost = effect_total_cost(card.instance, data)
-    card.attach_modifier("ranged")
-    assert [s.modifier_id for s in card.instance.extras] == ["ranged"]
+    card.attach_modifier("penetrating")
+    assert [s.modifier_id for s in card.instance.extras] == ["penetrating"]
     assert effect_total_cost(card.instance, data) == cost
 
     # Limited carries a free-text circumstance, so each copy means something different

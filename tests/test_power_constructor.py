@@ -180,16 +180,21 @@ def test_duplicate_attach_is_a_no_op_only_when_the_copies_are_indistinguishable(
     window = PowerConstructorWindow(data, character=_char_with_focus())
     card = window.canvas.add_effect("damage")
 
-    # Penetrating carries no config, so a second copy would change no game term and only
-    # double-charge the power.
+    # A second Penetrating would change no game term and only double-charge the power.
     card.attach_modifier("penetrating")
     cost = effect_total_cost(card.instance, data)
     card.attach_modifier("penetrating")
     assert [s.modifier_id for s in card.instance.extras] == ["penetrating"]
     assert effect_total_cost(card.instance, data) == cost
 
-    # Limited carries a free-text circumstance, so each copy means something different
-    # and taking it twice is legitimate.
+    # Nor does carrying config make a modifier repeatable: Ranged dials which range it
+    # upgrades from, and a second copy would charge that twice while overriding nothing.
+    card.attach_modifier("ranged")
+    card.attach_modifier("ranged")
+    assert [s.modifier_id for s in card.instance.extras] == ["penetrating", "ranged"]
+
+    # Limited is marked `repeatable` in the ruleset because its meaning lives in its
+    # free-text circumstance, so each copy is a different restriction.
     card.attach_modifier("limited")
     card.attach_modifier("limited")
     assert [s.modifier_id for s in card.instance.flaws] == ["limited", "limited"]

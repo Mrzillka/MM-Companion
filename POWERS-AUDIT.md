@@ -18,6 +18,8 @@ file alone. Delete it when §6 is empty.
 | §5D | 18 effect-specific modifiers that could not be dialled | **done** — pass 3 |
 | §5E | Flat flaws floored at 1 point | **done** — pass 3 |
 | §5F | Removable's real per-5-points formula (was §6B) | **done** — pass 4 |
+| §5G | Enhanced Senses' Dimensional option (was §6I) | **done** — pass 5 |
+| §5H | A `repeatable` flag replaces "has config" (was §6J) | **done** — pass 5 |
 | §6A | Dynamic Alternate Effects | outstanding |
 | §6C | Nested trait budgets (Summon / Metamorph / Variable / Empowering) | outstanding |
 | §6D | Affliction's imposed-effect budget check | outstanding |
@@ -25,8 +27,6 @@ file alone. Delete it when §6 is empty.
 | §6F | Countering effects | outstanding |
 | §6G | Improvised Effects arithmetic | outstanding |
 | §6H | Extra Effort and power stunts | outstanding |
-| §6I | Enhanced Senses' Dimensional option | outstanding |
-| §6J | "Has config" is a poor proxy for "may be taken twice" | outstanding |
 
 Commits so far, all on `docs/powers-rules-audit` off `develop`, **not yet merged**:
 
@@ -36,6 +36,7 @@ b0b713d  Correct the powers data against the core rulebook
 734a45d  Price the configured effects from their configuration
 ebac2c9  Add the rulebook's standard power configurations
 b880efb  Turn the powers audit into a handover brief
+9a10545  Price Removable from the whole power, per 5 points
 ```
 
 ---
@@ -50,7 +51,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2769 tests as of pass 4
+python -m pytest -q                 # ~9 min, 2771 tests as of pass 5
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -242,7 +243,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2, 3 and 4 — what was built
+## 5. Passes 2–5 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -348,6 +349,53 @@ gaps in §7. Equipment is unaffected: `item_own_ep_cost` already strips a remova
 flaw (`_undiscounted`) before pricing, precisely so an item's price is what its effects
 cost *undiscounted* — that guard matters more now that the discount is larger.
 
+### G. Enhanced Senses' Dimensional option (pass 5)
+
+The book lists **Dimensional** among the Enhanced Senses options and then prices it "+1
+point flat for a single other dimension, +2 for a group of related dimensions, +3 for any"
+(p122) — which is why §4 left it out, the allocation UI metering *ranks* rather than points.
+Reading the whole entry settles it: the prose beside that line says "1 rank of Dimensional
+allows you to sense into a single other dimension, 2 ranks for a group … 3 ranks for any",
+and Enhanced Senses costs **1 point per rank**, so for this effect a rank *is* a point. It
+went in as an ordinary `allocOption` with `tiers: [1, 2, 3]`, alphabetically between Detect
+and Direction Sense, and needed no engine change at all.
+
+The generic `dimensional` extra still exists and still attaches to anything, so the same
+thing is now buyable by two routes for the same price. The option's own description says to
+take it here or there and not both; nothing enforces it (§7.3 again).
+
+### H. `repeatable` replaces "has config" (pass 5)
+
+`EffectCard.attach_modifier` refused a second copy of a modifier **only when it had no
+config fields**, on the reasoning that config tells two copies apart. That was always loose
+— Removable and Check Required carry config and neither is meaningfully repeatable — and
+§4/§5D widened it to Ranged, Perception Range, Close, Activation, Affects Others and
+Affects Objects, where a second copy double-charges while overriding nothing.
+
+Repeatability is a *rules* fact, so it is now data: `repeatable: true` in `modifiers.json`
+and `effect_modifiers.json`, one line in `_parse_modifier`, one clause in
+`attach_modifier`. Six records carry it and the book was read for each:
+
+| Repeatable | Why |
+| --- | --- |
+| Limited | "only at night" beside "only vs. robots" |
+| Quirk | p159 — "many are simply 1-point flaws", and a power may have several |
+| Feature (as extra) | one minor feature each |
+| Custom Extra / Custom Flaw | whatever the player named it |
+| Affliction → Limited Degree | p111 — "with two applications of this flaw, the Affliction does not impose a condition for **two** of its degrees" |
+
+That last one is load-bearing rather than decorative: the **Transform** configuration is
+built on two Limited Degrees, and `test_the_ruleset_marks_exactly_the_repeatable_modifiers`
+pins the whole list so a seventh cannot be added without a reason. A grep of the powers
+chapter for the book's repeatability phrasing ("applications of this", "taken twice") turned
+up nothing else — every other "each additional …" is a *ranked* modifier, which the engine
+already handles.
+
+**Still not done:** `docs/mm-modifiers-ui-design.md` §183 wants a second Limited Degree to
+grey out the degree the first one took. Two copies on the same degree are now possible and
+merely wasteful.
+
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -365,6 +413,7 @@ A later pass should reach for these rather than inventing a parallel one.
 | `costScope: "power"` + `costPerPoints` | `power_scope_terms` / `power_scope_adjustment` / `power_gross_cost` | a modifier priced from the **power's** total rather than one effect's, at a rate per N points of it, deduplicated across the effects that carry it |
 | `costDelta` on a config option | `_config_cost_delta` (`powers_cost.py`) | a second config choice that *shades* a magnitude another field set, summed across fields and floored at 0 |
 | `power_cost_formula` | shown by `PowerConstructorWindow._refresh_cost` | the working behind a total the effect cards cannot explain |
+| `repeatable` on a modifier | `EffectCard.attach_modifier` | whether a second copy may be attached — a rules fact, kept in data |
 
 ---
 
@@ -479,30 +528,9 @@ p106); Regeneration's Sustained extra exists precisely so Extra Effort can reach
 Several flaws — Tiring, Fades, Short-Term — are written in terms of it. Wide enough that it
 should probably be its own branch after this one merges.
 
-### I. Enhanced Senses' Dimensional option
+### I. Enhanced Senses' Dimensional option — **done in pass 5, see §5G**
 
-The book lists Dimensional among the Enhanced Senses options but prices it at **+1/+2/+3
-points flat** (p122), not in ranks, so it does not fit the allocation UI's rank-based
-`tiers` and was left out of §4. Either allocation options grow a flat-point cost, or
-Dimensional becomes an extra on the effect rather than an allocation entry. Small, and the
-last known gap in the Enhanced Senses list.
-
-### J. "Has config" is a poor proxy for "may be taken twice"
-
-`EffectCard.attach_modifier` (`ui/power_constructor/effect_card.py:812`) refuses a second
-copy of a modifier **only when it has no config fields**, on the reasoning that config tells
-two copies apart (Limited "only at night" beside Limited "only vs. robots").
-
-That was already loose — Removable, Side Effect and Check Required all carry config and none
-is meaningfully repeatable — and §4 widened the exposure to Ranged, Perception Range, Close,
-Activation, Affects Others and Affects Objects, where a second copy would double-charge
-while overriding nothing new. It is visible rather than silent (both chips show and either
-can be deleted), which is why it was not treated as a blocker.
-
-**Change.** A `repeatable` (or `unique`) flag in `modifiers.json`, one line in
-`_parse_modifier`, one clause in `attach_modifier`. Note `test_duplicate_attach_is_a_no_op…`
-in `tests/test_power_constructor.py` currently uses `penetrating` as its config-less
-example, having been moved off `ranged` when Ranged gained config.
+### J. "Has config" is a poor proxy for "may be taken twice" — **done in pass 5, see §5H**
 
 ---
 
@@ -552,9 +580,7 @@ Things a later pass will trip over if it does not know them.
 ## 8. Suggested order for the remaining passes
 
 1. ~~**§6B Removable**~~ — done in pass 4 (§5F).
-2. **§6J the repeatable flag** and **§6I Dimensional** — both small, both close loose ends
-   this job opened. Note §5F gave Removable a *second* config field, so it is now doubly
-   the wrong example of a "repeatable because it has config" modifier.
+2. ~~**§6J the repeatable flag** and **§6I Dimensional**~~ — done in pass 5 (§5H, §5G).
 3. **§6E Concealment senses** — small, and completes the sense-bookkeeping story §5A began.
 4. **§6A Dynamic Alternate Effects** — medium, touches cost and runtime state.
 5. **§6D Affliction's imposed effect**, then **§6C nested trait budgets** — §6D is a

@@ -259,6 +259,44 @@ def test_allocation_used_sums_selected_tier_costs() -> None:
     assert power_allocation_violations(Power(effects=[effect]), data) == []
 
 
+def test_enhanced_senses_can_buy_the_dimensional_sense() -> None:
+    data = load_game_data()
+    # The book lists Dimensional among the Enhanced Senses options at "+1 point flat for
+    # a single other dimension, +2 for a group of related dimensions, +3 for any" (p122).
+    # Enhanced Senses costs 1 point per rank, so those points *are* ranks and it meters
+    # against the effect's budget like every other option beside it.
+    for tier in (1, 2, 3):
+        effect = PowerEffectInstance(
+            "enhanced_senses", rank=tier, config={"senses": [{"id": "dimensional", "tier": tier}]}
+        )
+        assert effect_allocation_used(effect, data) == tier
+        assert effect_total_cost(effect, data) == tier
+        assert power_allocation_violations(Power(effects=[effect]), data) == []
+
+
+def test_the_ruleset_marks_exactly_the_repeatable_modifiers() -> None:
+    data = load_game_data()
+    # A second copy of a modifier almost always double-charges while overriding nothing,
+    # so repeatability is opt-in data rather than "does it carry config" — which was the
+    # old proxy and let Removable, Check Required, Ranged and the rest be taken twice.
+    repeatable = {m.id for m in data.modifier_catalog().values() if m.repeatable}
+    assert repeatable == {
+        "custom_extra",  # whatever the player named it
+        "custom_flaw",
+        "feature_extra",  # one minor feature each
+        "limited",  # "only at night" beside "only vs. robots"
+        "limited_degree",  # the book: two applications blank two of the three degrees
+        "quirk",
+    }
+    # The Transform configuration is built on two Limited Degrees, so the flag is load-
+    # bearing rather than decorative.
+    transform = power_from_configuration(configuration_by_id(data, "transform"))
+    assert [f.modifier_id for f in transform.effects[0].flaws] == [
+        "limited_degree",
+        "limited_degree",
+    ]
+
+
 def test_over_allocation_is_flagged() -> None:
     data = load_game_data()
     effect = PowerEffectInstance(

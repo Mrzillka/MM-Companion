@@ -245,6 +245,17 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   improved (better) or a flaw limited (worse), resolving check/DC phrases to real
   numbers, and appending measures, configured qualities, trait-boost lines, and
   the Tier-5 `effect_readout_rows`.
+- **A modifier is taken once unless the ruleset says otherwise.** `repeatable` in
+  `modifiers.json` / `effect_modifiers.json` is what `EffectCard.attach_modifier` reads,
+  and only six records carry it: **Limited**, **Quirk**, **Feature**, the **Custom** pair,
+  and Affliction's **Limited Degree** (the book: "with two applications of this flaw, the
+  Affliction does not impose a condition for two of its degrees" — which is how the
+  *Transform* configuration is built). Everything else is refused a second copy, because a
+  duplicate double-charges the power while overriding nothing. The old test was "does it
+  have config fields", on the reasoning that config tells two copies apart; that was always
+  too loose — Removable and Check Required both carry config and neither is repeatable —
+  and it got looser as the rules audit gave Ranged, Close, Activation, Affects Others and
+  the rest their own dials. Repeatability is a *rules* fact, so it belongs in the data.
 - **Validation** (warnings, unless a power opted into the hard cap above):
   `power_pl_violations` (per-power attack + effect-rank / auto-hit rank caps, read
   against the wielder's *build* rank),

@@ -814,10 +814,14 @@ class EffectCard(QFrame):
 
         Ignores an attach that could not change anything: one the effect already
         carries implicitly as part of its own definition (Damage's ``attack``), or a
-        second copy of a modifier with no config to tell the copies apart — that would
-        only double-charge the power. A modifier that *does* carry config can be taken
-        more than once, since each selection means something different (Limited "only
-        at night" alongside Limited "only vs. robots").
+        second copy of a modifier the ruleset does not mark ``repeatable`` — that would
+        only double-charge the power. Repeatability is **data**, not "does it have
+        config": having a config field was the old proxy for it and was always too loose
+        (Removable and Check Required both carry one and neither is meaningfully taken
+        twice), and it grew looser as the audit gave Ranged, Close, Activation and the
+        rest their own dials. The genuinely repeatable modifiers are the ones whose
+        meaning lives in their config text — Limited "only at night" alongside Limited
+        "only vs. robots", Quirk, Feature, and the Custom pair.
         """
         modifier = self._modifier(modifier_id)
         if modifier is None:
@@ -826,7 +830,7 @@ class EffectCard(QFrame):
         if base is not None and modifier_id in base.implicit_modifiers:
             return
         attached = {sel.modifier_id for sel in (*self.instance.extras, *self.instance.flaws)}
-        if modifier_id in attached and not modifier.config_fields:
+        if modifier_id in attached and not modifier.repeatable:
             return
         selection = ModifierSelection(modifier_id=modifier_id)
         is_flaw = modifier.category == "flaw"

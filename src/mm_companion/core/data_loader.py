@@ -895,6 +895,15 @@ class Modifier:
     effect id that must be currently active on the wielder for this effect's bonus to
     apply (e.g. ``"insubstantial"`` for the *Limited to While Insubstantial* flaw).
 
+    ``repeatable`` allows a *second* copy of the modifier on the same effect. The default
+    is one only: a duplicate almost always double-charges the power while overriding
+    nothing, since the later copy's game-term and cost effects are the same as the first's.
+    The exceptions are the modifiers whose meaning lives in their config text — two Limited
+    flaws ("only at night", "only vs. robots") are two different restrictions, and a Custom
+    modifier is whatever the player named it. Read by the constructor
+    (``EffectCard.attach_modifier``), not by the cost math, which prices whatever is
+    attached.
+
     ``hidden`` keeps a record out of the constructor's palette while leaving it in the
     modifier catalog for cost/lookup use — the structural ``linked`` / ``alternate_effect``
     modifiers are applied automatically from a power's structure (and the array flat cost
@@ -938,6 +947,7 @@ class Modifier:
     cost_per_points: int = 0
     gate: str = ""
     requires_effect_id: str = ""
+    repeatable: bool = False
     hidden: bool = False
     note_template: str = ""
     note_per_rank: int = 0
@@ -2400,6 +2410,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         cost_per_points=int(m.get("costPerPoints", 0)),
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
+        repeatable=bool(m.get("repeatable", False)),
         hidden=bool(m.get("hidden", False)),
         note_template=m.get("noteTemplate", ""),
         note_per_rank=int(m.get("notePerRank", 0)),

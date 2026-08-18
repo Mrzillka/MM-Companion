@@ -450,6 +450,7 @@
             { "id": "danger_sense", "label": "Danger Sense", "tiers": [2], "description": "Never be caught fully unaware — you get a notice check against surprise through this sense." },
             { "id": "dark_vision", "label": "Dark-Vision", "tiers": [2], "description": "See normally in total darkness; darkness does not conceal from this sense at all." },
             { "id": "detect", "label": "Detect", "tiers": [1], "description": "A new sense for one thing, quality or effect. It says only that the thing is there — add Accurate, Acute, Radius or Ranged for more." },
+            { "id": "dimensional", "label": "Dimensional", "tiers": [1, 2, 3], "description": "Extend every one of your senses into another dimension near where you stand in it — one named dimension, then a related group of them, then any dimension the setting has. The same 1 / 2 / 3 points as the Dimensional extra; take it here or there, not both." },
             { "id": "direction_sense", "label": "Direction Sense", "tiers": [1], "description": "Always know which way is north and which way you are facing." },
             { "id": "distance_sense", "label": "Distance Sense", "tiers": [1], "description": "Judge distances exactly by sense alone." },
             { "id": "extended", "label": "Extended", "tiers": [1, 2], "perNote": "per sense", "description": "The sense reaches ten times as far before distance penalties start — one sense, then the whole sense type." },

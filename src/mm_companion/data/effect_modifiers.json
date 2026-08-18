@@ -180,6 +180,7 @@
         {
           "id": "limited_degree",
           "name": "Limited Degree",
+          "repeatable": true,
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,

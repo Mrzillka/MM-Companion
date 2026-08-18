@@ -25,7 +25,7 @@ from .appliers import (
     trait_category,
 )
 from .derived import effective_ability
-from .runtime import boost_allocations, config_trait_allocation
+from .runtime import boost_allocations, config_trait_allocation, effect_current_rank
 from .size import effective_size_rank
 from .trait_rates import trait_allocation_cost, trait_rate
 
@@ -128,8 +128,57 @@ def _modifier_magnitude(
     return magnitude * (selection.rank if _effective_ranked(modifier, selection) else 1)
 
 
+def selection_band(selection, effect_rank: int) -> tuple[int, int]:
+    """The ranks of its host effect a modifier selection covers — ``(lo, hi)``, inclusive.
+
+    ``(1, effect_rank)`` for the ordinary selection, which stores no band at all. A
+    stored band is **clamped** here rather than trusted, the way
+    :func:`~.runtime.effect_current_rank` clamps a dialled rank: the effect's rank can be
+    edited down long after the band was set, and a band hanging off the end of it would
+    otherwise price ranks that no longer exist.
+    """
+
+    lo = selection.applies_from or 1
+    hi = selection.applies_to or effect_rank
+    lo = max(1, min(lo, max(1, effect_rank)))
+    hi = max(lo, min(hi, max(1, effect_rank)))
+    return lo, hi
+
+
+def modifier_is_per_rank(modifier: Modifier, selection) -> bool:
+    """Whether this selection is charged once *per effect rank* rather than once.
+
+    The modifier's own ``flat``, with a chosen config option's override applied
+    (:func:`_effective_flat`). Public because it is also the question the constructor
+    asks before offering a rank band: only a per-rank charge can cost differently over
+    part of an effect, so only a per-rank modifier gets the control.
+    """
+
+    return not _effective_flat(modifier, selection)
+
+
+def modifier_is_banded(modifier: Modifier, selection, effect_rank: int) -> bool:
+    """Whether this selection is priced over only *part* of its effect's ranks.
+
+    False for a **flat** modifier however its band reads: a one-time charge costs the
+    same over four ranks as over twelve, so a band there would change no number. The
+    constructor offers none for that reason, and this is what makes a band stored by
+    some other route harmless.
+    """
+
+    if _effective_flat(modifier, selection):
+        return False
+    return selection_band(selection, effect_rank) != (1, effect_rank)
+
+
 def _signed_modifier_cost(
-    mods: list, sign: int, game_data: GameData, *, flat: bool, char: Character | None = None
+    mods: list,
+    sign: int,
+    game_data: GameData,
+    *,
+    flat: bool,
+    char: Character | None = None,
+    effect_rank: int = 0,
 ) -> int:
     """Sum the ``cost_value`` of the given modifier selections in one bucket.
 
@@ -137,6 +186,10 @@ def _signed_modifier_cost(
     per-rank bucket (``flat=False``) or the one-time bucket (``flat=True``). A
     ``ranked`` modifier contributes ``cost_value × its rank`` (see
     :func:`_modifier_magnitude`).
+
+    A **banded** per-rank selection is left out: it does not have one price for the whole
+    effect, so it is priced rank by rank in :func:`_rank_runs` instead. Nothing changes
+    for a selection with no band, which is every one saved before bands existed.
     """
 
     catalog = game_data.modifier_catalog()
@@ -144,6 +197,8 @@ def _signed_modifier_cost(
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or _effective_flat(modifier, selection) != flat:
+            continue
+        if not flat and effect_rank and modifier_is_banded(modifier, selection, effect_rank):
             continue
         total += sign * _modifier_magnitude(modifier, selection, game_data, char)
     return total
@@ -153,11 +208,21 @@ def _net_per_rank_modifiers(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> int:
     """Net per-rank extra/flaw cost of an effect (base cost excluded):
-    ``Σ per-rank extras − Σ per-rank flaws``."""
+    ``Σ per-rank extras − Σ per-rank flaws``.
+
+    Counts only the selections that cover the **whole** effect. A banded one is charged
+    per rank by :func:`_rank_runs`, and its absence here is deliberate in two further
+    places: this is the figure a Strength-Based fold-in pays per folded rank, and the
+    divisor :func:`ability_rank_contribution` reads. Folded ranks sit above the bought
+    ones and are in nobody's band, so a flaw restricted to ranks 9–12 must not discount
+    them.
+    """
 
     return _signed_modifier_cost(
-        effect.extras, +1, game_data, flat=False, char=char
-    ) + _signed_modifier_cost(effect.flaws, -1, game_data, flat=False, char=char)
+        effect.extras, +1, game_data, flat=False, char=char, effect_rank=effect.rank
+    ) + _signed_modifier_cost(
+        effect.flaws, -1, game_data, flat=False, char=char, effect_rank=effect.rank
+    )
 
 
 def _net_flat_modifiers(
@@ -216,17 +281,55 @@ def ability_rank_contribution(ability: int, per_rank_cost: int) -> int:
     return ability // per_rank_cost
 
 
-def _ranked_cost(net_per_rank: int, rank: int) -> int:
-    """Points for ``rank`` ranks at ``net_per_rank`` PP/rank.
+def _ranked_cost_fraction(net_per_rank: int, rank: int) -> Fraction:
+    """Points for ``rank`` ranks at ``net_per_rank`` PP/rank, **unrounded**.
 
     Above 1 PP/rank it is simply ``net × rank``. When flaws push the per-rank cost
     below 1, M&M switches to *1 point per N ranks* (``N = 2 − net``: net 0 → 1/2,
-    net −1 → 1/3, …), so the cost is ``ceil(rank / (2 − net))``.
+    net −1 → 1/3, …), so the cost is ``rank / (2 − net)``.
+
+    Kept as a :class:`~fractions.Fraction` because an effect can now be priced in
+    several bands at once (a modifier applied to only some of its ranks), and rounding
+    each band would charge for a part-point several times over. The bands are summed
+    here and rounded **once** — the same rule
+    :func:`~mm_companion.core.rules.effect_cost_breakdown`'s "as trait" rows follow.
     """
 
     if net_per_rank >= 1:
-        return net_per_rank * rank
-    return math.ceil(rank / (2 - net_per_rank))
+        return Fraction(net_per_rank * rank)
+    return Fraction(rank, 2 - net_per_rank)
+
+
+def _ranked_cost(net_per_rank: int, rank: int) -> int:
+    """Points for ``rank`` ranks at ``net_per_rank`` PP/rank, rounded up."""
+
+    return math.ceil(_ranked_cost_fraction(net_per_rank, rank))
+
+
+def _banded_rank_terms(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> tuple[tuple[int, ...], ...]:
+    """The signed banded-modifier terms in force at each rank ``1..effect.rank``.
+
+    One tuple per rank, empty where no banded modifier reaches it. Every entry is
+    empty for a power whose modifiers all cover the whole effect, which is what lets
+    :func:`_rank_runs` fall straight back to the single un-banded term.
+    """
+
+    catalog = game_data.modifier_catalog()
+    per_rank: list[list[int]] = [[] for _ in range(max(0, effect.rank))]
+    if not per_rank:
+        return ()
+    for selections, sign in ((effect.extras, +1), (effect.flaws, -1)):
+        for selection in selections:
+            modifier = catalog.get(selection.modifier_id)
+            if modifier is None or not modifier_is_banded(modifier, selection, effect.rank):
+                continue
+            magnitude = sign * _modifier_magnitude(modifier, selection, game_data, char)
+            low, high = selection_band(selection, effect.rank)
+            for index in range(low - 1, high):
+                per_rank[index].append(magnitude)
+    return tuple(tuple(terms) for terms in per_rank)
 
 
 # --- the base-cost registry -----------------------------------------------------------
@@ -296,14 +399,51 @@ def _base_cost_kind(base: Effect) -> BaseCostKind:
     return BASE_COST_KINDS.get(base.base_cost_mode) or BASE_COST_KINDS.get(BASE_COST_FLAT)
 
 
+def _rank_runs(context: BaseCostContext) -> tuple[tuple[int, tuple[int, ...]], ...]:
+    """The effect's ranks grouped into ``(how many, the banded terms they pay)`` runs.
+
+    A power whose modifiers all cover the whole effect comes back as a single run
+    carrying no banded terms — the shape the cost and the formula have always had, which
+    is why neither changes for a build nobody has banded. A Blast 12 whose top four ranks
+    are Tiring comes back as two: eight ranks at the plain rate, then four at the
+    discounted one.
+    """
+
+    banded = _banded_rank_terms(context.effect, context.game_data, context.char)
+    if not any(banded):
+        return ((context.effect.rank, ()),)
+    runs: list[tuple[int, tuple[int, ...]]] = []
+    for terms in banded:
+        if runs and runs[-1][1] == terms:
+            runs[-1] = (runs[-1][0] + 1, terms)
+        else:
+            runs.append((1, terms))
+    return tuple(runs)
+
+
 def _flat_base_cost(context: BaseCostContext) -> int:
     """The ordinary rule: ``rank × (base + net mods) + folded × net mods + flat``.
 
-    The historical arithmetic, unchanged — see :func:`_ranked_cost` for what happens
-    when flaws push the per-rank cost below 1 PP.
+    The historical arithmetic — see :func:`_ranked_cost_fraction` for what happens when
+    flaws push the per-rank cost below 1 PP — except that the ranks are priced in
+    :func:`_rank_runs` bands rather than as one block, so a modifier applied to only some
+    of them charges only those. A build with no band has exactly one run and the answer
+    is the one it always was.
+
+    The runs are summed **unrounded** and rounded once, so two bands that each come to
+    half a point come to one point together rather than two.
     """
 
-    ranked = _ranked_cost(context.base.base_cost_value + context.net_per_rank, context.effect.rank)
+    net = context.base.base_cost_value + context.net_per_rank
+    ranked = math.ceil(
+        sum(
+            (
+                _ranked_cost_fraction(net + sum(terms), count)
+                for count, terms in _rank_runs(context)
+            ),
+            Fraction(0),
+        )
+    )
     ranked += context.folded_ranks * context.net_per_rank
     return ranked + context.flat
 
@@ -517,19 +657,22 @@ def effect_rank_trait_bonus_cost(
     return bonus
 
 
-def effect_effective_rank(
+def effect_build_rank(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> int:
-    """The effect's rank as it resolves in play.
+    """The effect's rank as **bought** — what the build says it can do.
 
     The bought rank, plus any ability a modifier folds in
     (:func:`effect_rank_trait_bonus`), plus what the wielder's size is worth
-    (:func:`effect_size_rank_shift`).
+    (:func:`effect_size_rank_shift`). Both additions are free at the till for the same
+    reason: the character already paid for their Strength, and nobody pays for being
+    large.
 
-    This is the rank that sets the resistance DC and counts against the Power Level
-    attack/effect cap — not the point-cost rank, which stays the bought value. Both
-    additions are free at the till for the same reason: the character already paid for
-    their Strength, and nobody pays for being large.
+    This — not :func:`effect_effective_rank` — is what Power Level validation reads. A
+    cap is a statement about the build, and a player who has dialled a power down for
+    this round has not rebuilt it: a sheet that passed validation by turning the dial
+    would be validating nothing, which is the same bargain
+    :func:`~.validation.offensive_builds` strikes over a sheathed sword.
     """
 
     return (
@@ -539,13 +682,46 @@ def effect_effective_rank(
     )
 
 
+def effect_effective_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
+    """The effect's rank as it resolves in play.
+
+    :func:`effect_build_rank` with the **runtime dial** applied
+    (:func:`~.runtime.effect_current_rank`), so a Damage 10 a player has turned down to
+    5 forces a save against 5. An effect nobody has dialled reads its bought rank, which
+    is every effect until someone touches a slider.
+
+    This is the rank that sets the resistance DC. It stops short of the *hard* Power
+    Level cap, which needs an effect's attack bonus in hand and so lives one layer up as
+    :func:`~.powers_terms.effect_live_rank`.
+
+    Cost never asks either of them: what a power is worth is what it was bought at, and
+    dialling one down mid-fight refunds nothing.
+    """
+
+    return (
+        effect_current_rank(effect)
+        + effect_rank_trait_bonus(effect, game_data, char)
+        + effect_size_rank_shift(effect, game_data, char)
+    )
+
+
 def _modifier_terms(
-    mods: list, sign: int, game_data: GameData, *, flat: bool, char: Character | None = None
+    mods: list,
+    sign: int,
+    game_data: GameData,
+    *,
+    flat: bool,
+    char: Character | None = None,
+    effect_rank: int = 0,
 ) -> list[int]:
     """Signed ``cost_value`` of each modifier in one bucket, for formula display.
 
-    Same selection as :func:`_signed_modifier_cost` but keeps the terms apart so a
-    breakdown can list them individually rather than as a single sum.
+    Same selection as :func:`_signed_modifier_cost` — banded selections excluded, since
+    they belong to one run of ranks rather than to the rate the whole effect pays — but
+    keeps the terms apart so a breakdown can list them individually rather than as a
+    single sum.
     """
 
     catalog = game_data.modifier_catalog()
@@ -553,6 +729,8 @@ def _modifier_terms(
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or _effective_flat(modifier, selection) != flat:
+            continue
+        if not flat and effect_rank and modifier_is_banded(modifier, selection, effect_rank):
             continue
         terms.append(sign * _modifier_magnitude(modifier, selection, game_data, char))
     return terms
@@ -591,19 +769,26 @@ def _flat_cost_formula(context: BaseCostContext) -> str:
     """
 
     effect, game_data = context.effect, context.game_data
-    per_rank_terms = [context.base.base_cost_value]
-    mod_terms = _modifier_terms(effect.extras, +1, game_data, flat=False, char=context.char)
-    mod_terms += _modifier_terms(effect.flaws, -1, game_data, flat=False, char=context.char)
-    per_rank_terms += mod_terms
-    net = sum(per_rank_terms)
+    mod_terms = _modifier_terms(
+        effect.extras, +1, game_data, flat=False, char=context.char, effect_rank=effect.rank
+    )
+    mod_terms += _modifier_terms(
+        effect.flaws, -1, game_data, flat=False, char=context.char, effect_rank=effect.rank
+    )
 
-    per_rank_str = _join_terms(per_rank_terms)
-    if net < 1:  # sub-1 PP/rank: 1 point per (2 − net) ranks
-        per_rank_str = f"({per_rank_str} = 1/{2 - net})"
-    elif len(per_rank_terms) > 1:
-        per_rank_str = f"({per_rank_str})"
+    def run_str(count: int, banded: tuple[int, ...]) -> str:
+        terms = [context.base.base_cost_value, *mod_terms, *banded]
+        net = sum(terms)
+        rate = _join_terms(terms)
+        if net < 1:  # sub-1 PP/rank: 1 point per (2 − net) ranks
+            rate = f"({rate} = 1/{2 - net})"
+        elif len(terms) > 1:
+            rate = f"({rate})"
+        return f"{count} × {rate}"
 
-    formula = f"{effect.rank} × {per_rank_str}"
+    # One term per band of ranks. A build nobody has banded has a single run holding no
+    # banded terms, so this is the string it has always been.
+    formula = " + ".join(run_str(count, banded) for count, banded in _rank_runs(context))
 
     # Ranks folded in from an ability (Strength-Based Damage) pay the per-rank
     # modifiers, but not the base cost — a separate ``strength × (mods)`` term. This

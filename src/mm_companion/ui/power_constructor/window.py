@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSplitter,
     QTextEdit,
@@ -27,6 +29,8 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.equipment import EquipmentItem
 from mm_companion.core.powers import (
+    PL_CAP_ATTACK,
+    PL_CAP_EFFECT,
     Power,
     power_is_homerule,
 )
@@ -35,6 +39,7 @@ from mm_companion.core.rules import (
     effective_size_rank,
     item_ep_cost,
     modifier_label,
+    pl_cap_note,
     power_allocation_violations,
     power_linked_range_violations,
     power_modifier_requirement_violations,
@@ -437,16 +442,17 @@ class PowerConstructorWindow(QMainWindow):
     def _build_extended_row(self) -> QWidget:
         """The build's optional rules switches, folded away until they are wanted.
 
-        One setting today — whether the wielder's size raises this power's damage — and
-        it sits up here with the name rather than on an effect card because it reads as a
-        decision about the *power*: a giant's fists scale, a giant's laser does not, and
-        that is one answer however many effects carry it. (The flag itself lives on each
-        effect, which is the level it applies at and the journey ``attack_skill`` already
-        made; this checkbox drives them together.)
+        Three settings, each a decision about the *power* rather than about one of its
+        effects — whether the wielder's size raises its damage, whether it is held hard
+        to the Power Level cap, and whether the sheet card carries a rank slider. A
+        giant's fists scale and a giant's laser does not, and that is one answer however
+        many effects carry it. (The flags themselves live on each effect, which is the
+        level they apply at and the journey ``attack_skill`` already made; these
+        checkboxes drive them together.)
 
-        The section hides itself whenever the power has nothing it could apply to — the
-        way the structure bar appears only once there are two effects to structure. When
-        a second setting joins it, that becomes hiding the *row* rather than the section.
+        Each **row** hides itself whenever the power has nothing it could apply to, and
+        the section hides when every row has — the way the structure bar appears only
+        once there are two effects to structure.
         """
 
         host = QWidget()
@@ -465,29 +471,117 @@ class PowerConstructorWindow(QMainWindow):
         self._extended_body = QWidget()
         body = QVBoxLayout(self._extended_body)
         body.setContentsMargins(16, 0, 0, 0)
+        self._size_damage_row = self._build_size_damage_row()
+        body.addWidget(self._size_damage_row)
+        self._pl_cap_row = self._build_pl_cap_row()
+        body.addWidget(self._pl_cap_row)
+        self._rank_dial_row = self._build_rank_dial_row()
+        body.addWidget(self._rank_dial_row)
+        outer.addWidget(self._extended_body)
+
+        self._extended_row = host
+        host.setVisible(False)  # until an effect turns up that a row could apply to
+        return host
+
+    def _build_size_damage_row(self) -> QWidget:
+        """Size-scales-damage, with a note saying what it is worth to this wielder."""
+
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
         self._size_damage = QCheckBox("Size modifies this power's damage")
         # Checked *before* connecting: the handler recomputes the cost bar, which the
         # panel has not built yet at this point in the constructor.
         self._size_damage.setChecked(True)
         self._size_damage.toggled.connect(self._on_size_damage_toggled)
-        body.addWidget(self._size_damage)
+        layout.addWidget(self._size_damage)
         self._size_damage_note = QLabel()
         self._size_damage_note.setStyleSheet(muted_style())
         self._size_damage_note.setWordWrap(True)
-        body.addWidget(self._size_damage_note)
-        outer.addWidget(self._extended_body)
+        layout.addWidget(self._size_damage_note)
+        return row
 
-        self._extended_row = host
-        host.setVisible(False)  # until an effect turns up that it could apply to
-        return host
+    def _build_pl_cap_row(self) -> QWidget:
+        """The hard Power Level cap, and which side of the trade-off survives it.
 
-    def _size_scaled_effects(self) -> list:
-        """The effects in this build the Size Table's damage column could reach.
+        The priority buttons are built once and shown with the checkbox rather than
+        created on demand, so a choice the player has made is never destroyed by
+        un-ticking and re-ticking the box.
+        """
 
-        Exactly those that force a resistance — the same question
-        :func:`~mm_companion.core.rules.effect_size_rank_shift` asks, and the same one
-        the Power Level caps ask, so the section can never offer a switch that does
-        nothing.
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        self._pl_cap = QCheckBox("Hold this power to the wielder's Power Level")
+        self._pl_cap.setToolTip(
+            "Never let this power resolve above the PL cap. Where the warning marker "
+            "merely warns — and lets a large wielder past it, since the book raises the "
+            "limit along with the size — a hard cap holds to a flat 2 x PL and lowers "
+            "whichever side you choose to give up."
+        )
+        self._pl_cap.toggled.connect(self._on_pl_cap_toggled)
+        layout.addWidget(self._pl_cap)
+
+        self._pl_cap_priority = QWidget()
+        priority = QHBoxLayout(self._pl_cap_priority)
+        priority.setContentsMargins(16, 0, 0, 0)
+        priority.setSpacing(8)
+        priority.addWidget(QLabel("Keep the"))
+        self._pl_cap_group = QButtonGroup(self)
+        self._pl_cap_group.setExclusive(True)
+        for value, text, hint in (
+            (PL_CAP_EFFECT, "effect", "Hold the effect rank; the attack bonus falls instead."),
+            (PL_CAP_ATTACK, "attack", "Hold the attack bonus; the effect rank falls instead."),
+        ):
+            button = QRadioButton(text)
+            button.setToolTip(hint)
+            button.setProperty("plCap", value)
+            self._pl_cap_group.addButton(button)
+            priority.addWidget(button)
+        self._pl_cap_group.buttons()[0].setChecked(True)
+        self._pl_cap_group.buttonToggled.connect(self._on_pl_cap_priority)
+        priority.addStretch()
+        self._pl_cap_priority.setVisible(False)
+        layout.addWidget(self._pl_cap_priority)
+
+        self._pl_cap_note = QLabel()
+        self._pl_cap_note.setStyleSheet(muted_style())
+        self._pl_cap_note.setWordWrap(True)
+        layout.addWidget(self._pl_cap_note)
+        return row
+
+    def _build_rank_dial_row(self) -> QWidget:
+        """The build half of the runtime rank dial: whether the card carries a slider."""
+
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        self._rank_dial = QCheckBox("Add a rank slider to the card")
+        self._rank_dial.setToolTip(
+            "Let this power be used below its bought rank in play — a Damage 10 fired "
+            "at 5. It costs the same either way: what a power is worth is what it was "
+            "bought at, and dialling one down refunds nothing."
+        )
+        self._rank_dial.toggled.connect(self._on_rank_dial_toggled)
+        layout.addWidget(self._rank_dial)
+        return row
+
+    def _chosen_pl_cap(self) -> str:
+        """Which side of the Power Level trade-off the priority buttons protect."""
+
+        button = self._pl_cap_group.checkedButton()
+        return str(button.property("plCap")) if button is not None else PL_CAP_EFFECT
+
+    def _resisted_effects(self) -> list:
+        """The effects in this build that force a resistance.
+
+        The set both the size switch and the hard Power Level cap apply to — the same
+        question :func:`~mm_companion.core.rules.effect_size_rank_shift` and
+        :func:`~mm_companion.core.rules.power_pl_violations` each ask, so neither row can
+        offer a switch that does nothing.
         """
 
         by_id = {e.id: e for e in self._data.effects}
@@ -498,46 +592,115 @@ class PowerConstructorWindow(QMainWindow):
             and base.resistance_dc_base is not None
         ]
 
+    def _dialable_effects(self) -> list:
+        """The effects a rank slider could usefully be offered for.
+
+        An effect bought at rank 1 has nothing to dial between, and one whose rank *is*
+        its allocation (Enhanced Trait) has no rank of its own to turn down — its rows
+        would say one thing and the slider another.
+        """
+
+        by_id = {e.id: e for e in self._data.effects}
+        return [
+            effect
+            for effect in self.power.effects
+            if effect.rank > 1
+            and (base := by_id.get(effect.effect_id)) is not None
+            and not base.rank_follows_allocation
+        ]
+
     def _on_extended_toggled(self, expanded: bool) -> None:
         glyph = self._EXPANDED_GLYPH if expanded else self._COLLAPSED_GLYPH
         self._extended_toggle.setText(f"{glyph} Extended settings")
         self._extended_body.setVisible(expanded)
 
     def _on_size_damage_toggled(self, on: bool) -> None:
-        for effect in self._size_scaled_effects():
+        for effect in self._resisted_effects():
             effect.size_scales_damage = on
+        self._refresh_extended()
+
+    def _on_pl_cap_toggled(self, on: bool) -> None:
+        self._pl_cap_priority.setVisible(on)
+        cap = self._chosen_pl_cap() if on else ""
+        for effect in self._resisted_effects():
+            effect.pl_cap = cap
+        self._refresh_extended()
+
+    def _on_pl_cap_priority(self, _button, checked: bool) -> None:
+        if not checked:  # the group fires for the button losing the check too
+            return
+        if self._pl_cap.isChecked():
+            self._on_pl_cap_toggled(True)
+
+    def _on_rank_dial_toggled(self, on: bool) -> None:
+        for effect in self._dialable_effects():
+            effect.rank_dial = on
+
+    def _refresh_extended(self) -> None:
+        """Restate everything a switch here can move, plus the notes under them."""
+
         self._refresh_cost()
         self._refresh_game_terms()
         self._refresh_pl_warning()
         self._refresh_size_damage_note()
+        self._refresh_pl_cap_note()
 
     def _apply_extended_settings(self) -> None:
         """Re-assert the section against a build whose effects have just changed.
 
-        The checkbox is authoritative once the window is open, so an effect dropped onto
-        the canvas **inherits it** rather than its own default. Without that, adding an
-        effect to a power whose switch is off would quietly turn the switch back on.
+        The checkboxes are authoritative once the window is open, so an effect dropped
+        onto the canvas **inherits them** rather than its own defaults. Without that,
+        adding an effect to a power whose switch is off would quietly turn it back on.
         """
 
-        scaled = self._size_scaled_effects()
-        self._extended_row.setVisible(bool(scaled))
-        if not scaled:
-            return
-        on = self._size_damage.isChecked()
-        for effect in scaled:
-            effect.size_scales_damage = on
+        resisted = self._resisted_effects()
+        dialable = self._dialable_effects()
+        self._show_extended_rows(resisted, dialable)
+        cap = self._chosen_pl_cap() if self._pl_cap.isChecked() else ""
+        for effect in resisted:
+            effect.size_scales_damage = self._size_damage.isChecked()
+            effect.pl_cap = cap
+        for effect in dialable:
+            effect.rank_dial = self._rank_dial.isChecked()
         self._refresh_size_damage_note()
+        self._refresh_pl_cap_note()
 
     def _seed_extended_settings(self) -> None:
         """Read the section back off a power being edited, without rewriting it."""
 
-        scaled = self._size_scaled_effects()
-        self._extended_row.setVisible(bool(scaled))
-        if scaled:
-            self._size_damage.blockSignals(True)
-            self._size_damage.setChecked(all(e.size_scales_damage for e in scaled))
-            self._size_damage.blockSignals(False)
+        resisted = self._resisted_effects()
+        dialable = self._dialable_effects()
+        self._show_extended_rows(resisted, dialable)
+        if resisted:
+            caps = {e.pl_cap for e in resisted}
+            cap = caps.pop() if len(caps) == 1 else ""
+            for widget, value in (
+                (self._size_damage, all(e.size_scales_damage for e in resisted)),
+                (self._pl_cap, bool(cap)),
+            ):
+                widget.blockSignals(True)
+                widget.setChecked(value)
+                widget.blockSignals(False)
+            self._pl_cap_priority.setVisible(bool(cap))
+            for button in self._pl_cap_group.buttons():
+                if button.property("plCap") == (cap or PL_CAP_EFFECT):
+                    button.blockSignals(True)
+                    button.setChecked(True)
+                    button.blockSignals(False)
+        if dialable:
+            self._rank_dial.blockSignals(True)
+            self._rank_dial.setChecked(all(e.rank_dial for e in dialable))
+            self._rank_dial.blockSignals(False)
         self._refresh_size_damage_note()
+        self._refresh_pl_cap_note()
+
+    def _show_extended_rows(self, resisted: list, dialable: list) -> None:
+        """Show each row only where it applies, and the section only if a row does."""
+
+        self._size_damage_row.setVisible(bool(resisted))
+        self._pl_cap_row.setVisible(bool(resisted))
+        self._rank_dial_row.setVisible(bool(dialable))
+        self._extended_row.setVisible(bool(resisted or dialable))
 
     def _refresh_size_damage_note(self) -> None:
         """Say what the switch is worth *to this character*, right now."""
@@ -560,6 +723,35 @@ class PowerConstructorWindow(QMainWindow):
         self._size_damage_note.setText(
             f"{size} size is worth {amount:+d} rank to every effect here that forces a "
             "resistance, and shifts its Power Level cap by the same amount."
+        )
+
+    def _refresh_pl_cap_note(self) -> None:
+        """Name what the cap is *actually* shaving right now, effect by effect.
+
+        A cap that is not biting says so rather than going quiet: "within PL 10" is the
+        reassurance a player ticking this box is after, and it is the only way to tell it
+        apart from a cap that is switched off.
+        """
+
+        if not self._pl_cap.isChecked():
+            self._pl_cap_note.setText("")
+            return
+        if self._character is None:
+            self._pl_cap_note.setText(
+                "Attack bonus plus effect rank will never exceed twice the wielder's "
+                "Power Level; the side you did not keep gives way."
+            )
+            return
+        by_id = {e.id: e for e in self._data.effects}
+        notes = [
+            f"{effect.label or by_id[effect.effect_id].name}: {note}"
+            for effect in self._resisted_effects()
+            if (note := pl_cap_note(effect, self._data, self._character))
+        ]
+        self._pl_cap_note.setText(
+            "; ".join(notes)
+            if notes
+            else f"Within PL {self._character.power_level} — nothing is being held back."
         )
 
     # -- gear mode's extra build fields ------------------------------------

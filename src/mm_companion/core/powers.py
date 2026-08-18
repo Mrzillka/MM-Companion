@@ -36,6 +36,13 @@ STRUCTURES = (STRUCTURE_INDEPENDENT, STRUCTURE_LINKED, STRUCTURE_ARRAY)
 ALTERNATE_EFFECT_MODIFIER = "alternate_effect"
 LINKED_MODIFIER = "linked"
 
+# Which side of the Power Level trade-off a hard-capped effect protects (see
+# :attr:`PowerEffectInstance.pl_cap`). ``PL_CAP_EFFECT`` keeps the effect rank and lets
+# the attack bonus fall; ``PL_CAP_ATTACK`` keeps the attack bonus and lets the rank fall.
+PL_CAP_EFFECT = "effect"
+PL_CAP_ATTACK = "attack"
+PL_CAPS = (PL_CAP_EFFECT, PL_CAP_ATTACK)
+
 
 @dataclass
 class ModifierSelection:
@@ -50,16 +57,34 @@ class ModifierSelection:
     toggle, a Triggered/Limited condition — see ``docs/mm-powers-ui-design.md`` §4). It
     is empty for the plain modifiers, and a modifier that discounts by tier
     (Removable, Side Effect) reads its value here rather than from a fixed cost.
+
+    ``applies_from`` / ``applies_to`` are the **rank band** the modifier covers: the
+    rules let one apply to part of an effect rather than all of it, so a hero can carry
+    a Blast 12 whose top four ranks alone are Tiring and routinely fire the other eight
+    for free. ``0``/``0`` — the default — means *every* rank, which is what every
+    modifier ever saved before this says, so nothing is migrated and an untouched
+    selection serializes byte-for-byte as it did.
+
+    A band only ever changes what a **per-rank** modifier costs. A flat one is charged
+    once whatever it covers, so the constructor offers no band for it and the cost math
+    ignores one that somehow got stored (see
+    :func:`mm_companion.core.rules.effect_total_cost`).
     """
 
     modifier_id: str
     rank: int = 1
     config: dict = field(default_factory=dict)
+    applies_from: int = 0
+    applies_to: int = 0
 
     def to_dict(self) -> dict:
         data = {"modifier_id": self.modifier_id, "rank": self.rank}
         if self.config:
             data["config"] = dict(self.config)
+        # Written only when the band says something — see the class docstring.
+        if self.applies_from or self.applies_to:
+            data["applies_from"] = self.applies_from
+            data["applies_to"] = self.applies_to
         return data
 
     @classmethod
@@ -68,6 +93,8 @@ class ModifierSelection:
             modifier_id=raw["modifier_id"],
             rank=int(raw.get("rank", 1)),
             config=dict(raw.get("config", {})),
+            applies_from=int(raw.get("applies_from", 0)),
+            applies_to=int(raw.get("applies_to", 0)),
         )
 
 
@@ -121,6 +148,24 @@ class PowerEffectInstance:
     the character, and reopening the sheet at Gargantuan silently changed four of its
     numbers.
 
+    ``pl_cap`` is the *Extended settings* **hard Power Level cap**: empty (the default)
+    leaves the cap a warning, as it has always been, while ``"effect"`` and ``"attack"``
+    make it bite. A capped effect can never resolve above ``attack + rank = 2 × PL``:
+    when a boost pushes it over, ``"effect"`` keeps the rank and lowers the attack bonus
+    and ``"attack"`` keeps the attack bonus and lowers the rank
+    (:func:`mm_companion.core.rules.effect_pl_cap_shift`). Unlike the soft warning the
+    hard cap measures against the *unshifted* ``2 × PL``, which is what a player asking
+    for a hard cap is asking for: a power that cannot exceed the table's limit however
+    large its wielder grows. It changes no point cost — a capped power is worth what it
+    was bought at — and it lives on the effect rather than the power for the reason
+    ``attack_skill`` and ``size_scales_damage`` do, though the constructor drives every
+    effect in a power from one checkbox.
+
+    ``rank_dial`` puts a **rank slider** on the sheet card, so an effect bought at 10 can
+    be used at 5 in play. It is a build decision (whether the control exists); how far
+    the dial is turned is ``current_rank`` below. The size effects get a dial without
+    asking, since a Growth is a ladder whether or not anyone ticked a box.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -142,6 +187,8 @@ class PowerEffectInstance:
     suppressed: bool = False
     attack_skill: str = ""
     size_scales_damage: bool = True
+    pl_cap: str = ""
+    rank_dial: bool = False
     current_rank: int | None = None
     overrides: dict = field(default_factory=dict)
 
@@ -163,6 +210,10 @@ class PowerEffectInstance:
             data["label"] = self.label
         if not self.size_scales_damage:
             data["size_scales_damage"] = False
+        if self.pl_cap:
+            data["pl_cap"] = self.pl_cap
+        if self.rank_dial:
+            data["rank_dial"] = True
         if not self.toggled_on:
             data["toggled_on"] = False
         if self.suppressed:
@@ -186,6 +237,8 @@ class PowerEffectInstance:
             descriptors=list(raw.get("descriptors", [])),
             attack_skill=raw.get("attack_skill", ""),
             size_scales_damage=bool(raw.get("size_scales_damage", True)),
+            pl_cap=str(raw.get("pl_cap", "")) if raw.get("pl_cap") in PL_CAPS else "",
+            rank_dial=bool(raw.get("rank_dial", False)),
             toggled_on=bool(raw.get("toggled_on", True)),
             suppressed=bool(raw.get("suppressed", False)),
             current_rank=None if current is None else int(current),

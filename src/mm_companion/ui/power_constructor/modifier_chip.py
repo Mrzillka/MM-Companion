@@ -4,6 +4,7 @@ from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -21,7 +22,10 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     effective_ability,
+    modifier_is_banded,
+    modifier_is_per_rank,
     modifier_rank_cap,
+    selection_band,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
@@ -55,6 +59,12 @@ class ModifierChip(QFrame):
     :data:`STRENGTH_AMOUNT_MAX`, independent of the wielder's current ability, so the
     cost stays stable when that ability changes; buying more than the wielder actually
     has is flagged as a warning, not repriced.
+
+    A **per-rank** modifier also carries an "Only some ranks" checkbox revealing a
+    from/to pair — the rules let one apply to part of an effect (a Blast 12 whose top
+    four ranks alone are Tiring). It is offered only there: a flat modifier is charged
+    once whatever it covers, so a band on one would be a control that changes no number.
+    The spin ceilings track the host effect's rank through :meth:`sync_effect_rank`.
     """
 
     removeRequested = Signal(object)
@@ -66,12 +76,14 @@ class ModifierChip(QFrame):
         selection: ModifierSelection,
         game_data=None,
         character: Character | None = None,
+        effect_rank: int = 1,
     ) -> None:
         super().__init__()
         self.selection = selection
         self._modifier = modifier
         self._data = game_data
         self._character = character
+        self._effect_rank = max(1, effect_rank)
         self._press_pos = None
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
@@ -121,6 +133,99 @@ class ModifierChip(QFrame):
         # modifier (Strength-Based). Fixed ceiling, independent of the wielder's ability.
         if modifier.adds_ability:
             outer.addLayout(self._build_amount(modifier.adds_ability))
+
+        # The rank band, for a per-rank modifier only — see the class docstring.
+        self._band_check = None
+        self._band_from = None
+        self._band_to = None
+        if modifier_is_per_rank(modifier, selection):
+            outer.addLayout(self._build_band())
+
+    # -- the rank band -----------------------------------------------------
+    def _build_band(self) -> QHBoxLayout:
+        """An "Only some ranks" checkbox revealing the from/to pair it gates.
+
+        The same shape the effect card's "Use attack skill" row strikes: the control is
+        built once and shown or hidden, never rebuilt, so nothing the player is halfway
+        through editing is destroyed under them.
+        """
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        low, high = selection_band(self.selection, self._effect_rank)
+        banded = modifier_is_banded(self._modifier, self.selection, self._effect_rank)
+
+        self._band_check = QCheckBox("Only some ranks")
+        self._band_check.setToolTip(
+            "Apply this modifier to part of the effect rather than all of it — a Blast "
+            "12 whose top four ranks alone are Tiring pays for eight plain ranks and "
+            "four discounted ones."
+        )
+        self._band_check.setChecked(banded)
+        self._band_check.toggled.connect(self._on_band_toggled)
+        row.addWidget(self._band_check)
+
+        self._band_from = make_spin_box(
+            1, self._effect_rank, value=low, buttons=False, max_width=44
+        )
+        self._band_to = make_spin_box(1, self._effect_rank, value=high, buttons=False, max_width=44)
+        for spin in (self._band_from, self._band_to):
+            spin.valueChanged.connect(self._on_band_changed)
+            spin.setVisible(banded)
+            row.addWidget(spin)
+        self._band_dash = QLabel("–")
+        self._band_dash.setVisible(banded)
+        row.insertWidget(row.indexOf(self._band_to), self._band_dash)
+        row.addStretch()
+        return row
+
+    def sync_effect_rank(self, rank: int) -> None:
+        """Restate the band against a host effect whose rank has just changed.
+
+        The band's ceiling is the effect's rank, so lowering the rank has to bring the
+        spins down with it — the same restatement the effect card already makes to its
+        allocation widgets. The stored band is left alone when the checkbox is off:
+        :func:`~mm_companion.core.rules.selection_band` clamps on read, so a band the
+        player has not asked for cannot leak into the cost.
+        """
+
+        self._effect_rank = max(1, rank)
+        if self._band_from is None or self._band_to is None:
+            return
+        for spin in (self._band_from, self._band_to):
+            spin.blockSignals(True)
+            spin.setMaximum(self._effect_rank)
+            spin.blockSignals(False)
+        if self._band_check is not None and self._band_check.isChecked():
+            self._commit_band()
+
+    def _on_band_toggled(self, on: bool) -> None:
+        for widget in (self._band_from, self._band_dash, self._band_to):
+            if widget is not None:
+                widget.setVisible(on)
+        if on:
+            self._commit_band()
+        else:
+            self.selection.applies_from = 0
+            self.selection.applies_to = 0
+            self.changed.emit()
+
+    def _on_band_changed(self, _value: int) -> None:
+        self._commit_band()
+
+    def _commit_band(self) -> None:
+        """Write the band down, keeping ``from`` at or below ``to``."""
+
+        low = self._band_from.value()
+        high = max(low, self._band_to.value())
+        if high != self._band_to.value():
+            self._band_to.blockSignals(True)
+            self._band_to.setValue(high)
+            self._band_to.blockSignals(False)
+        self.selection.applies_from = low
+        self.selection.applies_to = high
+        self.changed.emit()
 
     def _current_ability(self, ability_key: str) -> int:
         """The wielder's current effective ability rank (0 without a character)."""

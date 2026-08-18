@@ -62,6 +62,7 @@ from mm_companion.core.rules import (
     power_trait_bonuses,
     powers_points_spent,
     resistance_total,
+    selection_band,
     skill_bonus,
     skill_points_spent,
     skill_total,
@@ -1083,6 +1084,21 @@ def test_a_power_at_its_defaults_writes_no_runtime_keys() -> None:
     assert legacy.activated is True and legacy.item_present is True
     assert legacy.effects[0].toggled_on is True and legacy.effects[0].suppressed is False
     assert legacy.effects[0].current_rank is None
+
+
+def test_a_modifier_at_its_defaults_writes_no_band_keys() -> None:
+    """A selection nobody has banded serializes exactly as it did before bands existed."""
+    raw = ModifierSelection("tiring").to_dict()
+    assert "applies_from" not in raw and "applies_to" not in raw
+
+    legacy = ModifierSelection.from_dict({"modifier_id": "tiring"})
+    assert legacy.applies_from == 0 and legacy.applies_to == 0
+
+
+def test_a_rank_band_round_trips_through_json() -> None:
+    selection = ModifierSelection("tiring", applies_from=9, applies_to=12)
+    restored = ModifierSelection.from_dict(json.loads(json.dumps(selection.to_dict())))
+    assert (restored.applies_from, restored.applies_to) == (9, 12)
 
 
 def test_structure_defaults_to_independent_and_rejects_junk() -> None:
@@ -2416,3 +2432,132 @@ def test_a_qualified_key_reads_as_a_name_everywhere_it_is_shown() -> None:
     row = next(r for r in effect_stat_rows(effect, data) if r.key == "enhances")
     assert row.value == "Expertise: Law +2, Improved Critical (Sword) +1"
     assert trait_display_name(data, "Stealth::spec::Urban") == "Stealth: Urban (specialized)"
+
+
+# --- rank bands: a modifier applied to only some of an effect's ranks ------------------
+
+
+def _banded(rank: int, modifier_id: str, low: int, high: int, extras: list | None = None):
+    """A Damage effect at ``rank`` carrying ``modifier_id`` over ranks ``low..high``."""
+    return PowerEffectInstance(
+        effect_id="damage",
+        rank=rank,
+        extras=extras or [ModifierSelection("ranged")],
+        flaws=[ModifierSelection(modifier_id, applies_from=low, applies_to=high)],
+    )
+
+
+def test_a_banded_flaw_discounts_only_the_ranks_it_covers() -> None:
+    """The book's own example: a Blast 12 whose top four ranks alone are Tiring.
+
+    Eight ranks at the plain 2 PP and four at the discounted 1 PP, so the effect lands
+    between the undiscounted 24 and the wholly-Tiring 12.
+    """
+    data = load_game_data()
+    ranged = [ModifierSelection("ranged")]
+
+    plain = PowerEffectInstance(effect_id="damage", rank=12, extras=ranged)
+    whole = PowerEffectInstance(
+        effect_id="damage", rank=12, extras=ranged, flaws=[ModifierSelection("tiring")]
+    )
+    assert effect_total_cost(plain, data) == 24
+    assert effect_total_cost(whole, data) == 12
+    assert effect_total_cost(_banded(12, "tiring", 9, 12), data) == 20
+
+
+def test_a_band_shows_the_ranks_it_covers_in_the_formula_and_the_label() -> None:
+    data = load_game_data()
+    effect = _banded(12, "tiring", 9, 12)
+    formula = effect_cost_formula(effect, data)
+    assert "8 ×" in formula and "4 ×" in formula
+
+    label = modifier_label(data.modifier_catalog()["tiring"], effect.flaws[0], effect_rank=12)
+    assert label == "Tiring (ranks 9–12)"
+    # A single-rank band reads as one rank, and an unbanded selection says nothing.
+    tiring = data.modifier_catalog()["tiring"]
+    one = ModifierSelection("tiring", applies_from=3, applies_to=3)
+    assert modifier_label(tiring, one, effect_rank=12) == "Tiring (rank 3)"
+    assert modifier_label(tiring, ModifierSelection("tiring"), effect_rank=12) == "Tiring"
+
+
+def test_a_band_on_a_flat_modifier_changes_nothing() -> None:
+    """A one-time charge costs the same over four ranks as over twelve.
+
+    So the constructor never offers a band there, and one stored by any other route is
+    ignored rather than quietly repricing the effect.
+    """
+    data = load_game_data()
+    ranged = [ModifierSelection("ranged")]
+    plain = PowerEffectInstance(
+        effect_id="damage", rank=12, extras=ranged, flaws=[ModifierSelection("quirk")]
+    )
+    assert effect_total_cost(_banded(12, "quirk", 9, 12), data) == effect_total_cost(plain, data)
+
+
+def test_overlapping_bands_price_each_rank_once() -> None:
+    """Two flaws over different spans stack only where they actually overlap."""
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        effect_id="damage",
+        rank=12,
+        extras=[ModifierSelection("ranged")],
+        flaws=[
+            ModifierSelection("tiring", applies_from=5, applies_to=12),
+            ModifierSelection("limited", applies_from=9, applies_to=12),
+        ],
+    )
+    # 4 ranks at 2 + 4 at 1 + 4 at 1/2 (the sub-1 PP rule) = 8 + 4 + 2.
+    assert effect_total_cost(effect, data) == 14
+
+
+def test_bands_are_summed_unrounded_and_rounded_once() -> None:
+    """Two half-point bands come to one point together, not two.
+
+    Rounding each band on its own would charge for a part of a point twice — the same
+    trap the "as trait" rows already avoid by summing before they round.
+    """
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        effect_id="damage",
+        rank=2,
+        flaws=[
+            ModifierSelection("tiring", applies_from=1, applies_to=1),
+            ModifierSelection("limited", applies_from=2, applies_to=2),
+        ],
+    )
+    assert effect_total_cost(effect, data) == 1
+
+
+def test_a_band_is_clamped_to_a_rank_that_has_since_been_lowered() -> None:
+    """Lowering the effect's rank must not leave a band pricing ranks that are gone."""
+    data = load_game_data()
+    effect = _banded(6, "tiring", 9, 12)
+    assert selection_band(effect.flaws[0], effect.rank) == (6, 6)
+    # 5 plain ranks at 2 PP plus the one discounted rank at 1.
+    assert effect_total_cost(effect, data) == 11
+
+
+def test_a_banded_flaw_does_not_discount_a_strength_based_fold_in() -> None:
+    """Folded ranks sit above the bought ones and are in nobody's band.
+
+    A flaw restricted to ranks 9-12 says nothing about the ranks the wielder's Strength
+    brings, so they keep paying the undiscounted per-rank extras.
+    """
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STR"] = 4
+    folded = [
+        ModifierSelection("ranged"),
+        ModifierSelection("strength_based", config={"amount": 4}),
+    ]
+
+    plain = PowerEffectInstance(effect_id="damage", rank=12, extras=folded)
+    banded = PowerEffectInstance(
+        effect_id="damage",
+        rank=12,
+        extras=folded,
+        flaws=[ModifierSelection("tiring", applies_from=9, applies_to=12)],
+    )
+    # Both fold in the same 4 ranks at the same undiscounted rate; only the bought
+    # ranks 9-12 differ, so the gap is exactly the 4 points the band saves.
+    assert effect_total_cost(plain, data, char) - effect_total_cost(banded, data, char) == 4

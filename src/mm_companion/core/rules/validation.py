@@ -10,46 +10,17 @@ from ..data_loader import GameData
 from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
 from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
-from .powers_cost import effect_effective_rank, effect_size_rank_shift
-from .powers_terms import _effect_name, _effective_stats
+from .powers_cost import effect_build_rank, effect_size_rank_shift
+from .powers_terms import (
+    _effect_name,
+    _effective_stats,
+    effect_attack_skill_bonus,
+    effect_base_attack_bonus,
+    effect_makes_attack,
+)
 from .runtime import config_trait_allocation, trait_display_name
 from .size import size_resistance_shift, size_skill_shift
 from .trait_rates import trait_rank_cap
-
-
-def effect_attack_skill_bonus(
-    effect: PowerEffectInstance, char: Character | None, game_data: GameData
-) -> int | None:
-    """The attack-roll bonus an effect's linked Close/Ranged Combat focus supplies.
-
-    ``None`` when the effect has no ``attack_skill`` link (or there is no character),
-    so callers fall back to the wielder's Attack ability. Otherwise the linked focus
-    row's :func:`skill_total` — which already folds in the Attack ability, since these
-    combat skills derive from ``ATK`` — so it *replaces* the bare Attack rather than
-    stacking with it. A dangling row id degrades to that ability value (its ranks read
-    as 0).
-    """
-
-    if not effect.attack_skill or char is None:
-        return None
-    return skill_total(char, game_data, effect.attack_skill)
-
-
-def effect_makes_attack(effect: PowerEffectInstance, game_data: GameData) -> bool:
-    """Whether the effect resolves with an **attack roll** (vs. auto-hit / no check).
-
-    True when a modifier grants the attack roll — an attacking effect's implicit
-    ``attack`` extra, or one taken explicitly on any other effect — and none drops it
-    (a Perception-Range extra removes the roll, making the effect auto-hit). Reads the
-    resolved :class:`~mm_companion.core.rules.EffectImpact` rather than the base
-    effect's check prose, so Deflect's "Deflect vs. Attack" is correctly *not* an
-    attack roll and an effect given the Attack extra correctly is one. This is the same
-    condition :func:`power_pl_violations` uses to pick the attack-plus-rank cap, and
-    what gates the constructor's attack-skill picker.
-    """
-
-    impact = _effective_stats(effect, game_data)[3]
-    return impact.grants_attack and not impact.drops_check
 
 
 def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
@@ -91,15 +62,15 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None or base.resistance_dc_base is None:
             continue  # not an attack/resisted effect — these caps don't apply
+        if effect.pl_cap:
+            # A hard-capped effect cannot breach: whichever side the player nominated
+            # gives way first (:func:`~.powers_terms.effect_pl_cap_shift`), so it is
+            # legal by construction and a ⚠ here would be warning about a number the
+            # sheet never shows.
+            continue
         # An effect linked to a Close/Ranged Combat focus uses that focus's total as
         # its attack bonus (replacing the bare Attack ability); otherwise the Attack.
-        linked = effect_attack_skill_bonus(effect, char, game_data)
-        attack_key = game_data.system.trait_keys.attack
-        attack_ability = (
-            linked if linked is not None else effective_ability(char, game_data, attack_key)
-        )
-        impact = _effective_stats(effect, game_data)[3]
-        rank = effect_effective_rank(effect, game_data, char)
+        rank = effect_build_rank(effect, game_data, char)
         # Size raises the Damage limit by as much as it raised the Strength folded into
         # it, so a big creature is not charged twice for being big. Zero for an effect
         # that folds no ability in, which is why a Blast gains nothing here.
@@ -107,7 +78,7 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         limit = base_limit + size_shift
         rank_limit = power_level + size_shift
         if effect_makes_attack(effect, game_data):
-            attack = attack_ability + impact.check_bonus
+            attack = effect_base_attack_bonus(effect, game_data, char)
             if attack + rank > limit:
                 violations.append(
                     f"{base.name}: attack +{attack} plus rank {rank} = {attack + rank} "
@@ -211,7 +182,7 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
                 # power_pl_violations makes by adding size_shift to its limits, and
                 # the two functions have to agree or the card claims a PL the
                 # validator says is legal several ranks lower.
-                rank = effect_effective_rank(effect, game_data, char)
+                rank = effect_build_rank(effect, game_data, char)
                 rank -= effect_size_rank_shift(effect, game_data, char)
                 if effect_makes_attack(effect, game_data):
                     linked = effect_attack_skill_bonus(effect, char, game_data)

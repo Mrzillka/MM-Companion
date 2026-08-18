@@ -853,7 +853,7 @@ class EffectCard(QFrame):
         Shared by :meth:`attach_modifier` (which first appends the selection) and
         :meth:`_seed_modifier_chips` (which renders ones already present on load).
         """
-        chip = ModifierChip(modifier, selection, self._data, self._character)
+        chip = ModifierChip(modifier, selection, self._data, self._character, self.instance.rank)
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(lambda m=modifier: self._on_chip_changed(m))
         self._chips.append(chip)
@@ -907,6 +907,10 @@ class EffectCard(QFrame):
         self.instance.rank = value
         for update_total in self._alloc_updaters:  # the rank is the allocation budget
             update_total()
+        # The rank is also the ceiling of a chip's rank band, so a rank lowered under a
+        # band has to bring it down rather than leave it naming ranks that are gone.
+        for chip in self._chips:
+            chip.sync_effect_rank(value)
         self._refresh_cost()
         self.changed.emit()
 

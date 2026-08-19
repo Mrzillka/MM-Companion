@@ -42,7 +42,7 @@ b880efb  Turn the powers audit into a handover brief
 4c98850  Record which senses a Concealment hides from
 96677f1  Charge a Dynamic Alternate Effect what it costs
 6ed3d6b  Record pass 7's commit hash in the audit
-<pending>  Let an Affliction name the effect its Transformed condition imposes
+4799e9b  Let an Affliction name the effect its Transformed condition imposes
 ```
 
 ---

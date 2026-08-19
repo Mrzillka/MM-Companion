@@ -45,7 +45,7 @@ b880efb  Turn the powers audit into a handover brief
 6ed3d6b  Record pass 7's commit hash in the audit
 4799e9b  Let an Affliction name the effect its Transformed condition imposes
 db18f2e  Record pass 8's commit hash in the audit
-<pending>  State what a Summon, a Metamorph and a Variable are built on
+49a81d2  State what a Summon, a Metamorph and a Variable are built on
 ```
 
 ---

@@ -23,6 +23,7 @@ from .powers_cost import (
     array_alternate_cost,
     array_base_index,
     effect_effective_rank,
+    imposable_effects,
     modifier_is_banded,
     selection_band,
 )
@@ -416,7 +417,7 @@ def _effective_stats(
         if field.overrides and field.overrides in stats:
             value = effect.config.get(field.key)
             if value:
-                stats[field.overrides] = _config_display(field, value)
+                stats[field.overrides] = _config_display(field, value, game_data)
                 change[field.overrides] = ""
 
     # A Sustained effect must be toggled on and maintained with at least a free
@@ -1010,7 +1011,9 @@ def effect_stat_rows(
             continue  # the Enhances row below already says it, and says it by name
         value = effect.config.get(field.key)
         if value:
-            rows.append(EffectStat(field.key, field.label, "", _config_display(field, value), ""))
+            rows.append(
+                EffectStat(field.key, field.label, "", _config_display(field, value, game_data), "")
+            )
     # A trait booster (Enhanced Trait, Protection) shows which traits it raises and by
     # how much — green, since it's an improvement — so the summary isn't blank. An
     # Enhanced Trait raises several at once, each at its own allocated rank.
@@ -1321,7 +1324,54 @@ def _config_display_repeatable(field, value) -> str:
     return ", ".join(parts)
 
 
-def _config_display(field, value) -> str:
+@CONFIG_DISPLAY_KINDS.handler("points")
+def _config_display_points(field, value) -> str:
+    """A numeric config field reads as its number (an imposed effect's rank).
+
+    It needs a handler of its own only because the generic renderer joins option
+    *labels* and an int has none — without this, an Affliction naming the effect it
+    imposes crashed the whole game-terms line rather than printing a 4.
+    """
+
+    return str(value)
+
+
+# One source per data-driven ``select`` option list: a callable taking the
+# :class:`GameData` and returning ``(label, value)`` pairs in display order. A field
+# naming a ``source`` takes its options from the game data rather than listing them —
+# the effects an Affliction may impose is a *query* over ``effects.json``, and a list
+# written out by hand would go stale the moment a mod added one.
+#
+# It lives here, in core, rather than beside the constructor's widget builders, because
+# both the picker and this module's display text have to agree on what an id is called.
+# A mod's Python module can register another source and then name it from a data file.
+OptionSource = Callable[[GameData], tuple[tuple[str, str], ...]]
+CONFIG_OPTION_SOURCES: Registry[OptionSource] = Registry("config_field.source")
+
+#: The effects an Affliction's Transformed condition may impose (p110). Named in
+#: ``effects.json`` as ``"source": "personal_effects"``.
+OPTION_SOURCE_PERSONAL_EFFECTS = "personal_effects"
+
+
+@CONFIG_OPTION_SOURCES.handler(OPTION_SOURCE_PERSONAL_EFFECTS)
+def _personal_effect_options(game_data: GameData) -> tuple[tuple[str, str], ...]:
+    return tuple((effect.name, effect.id) for effect in imposable_effects(game_data))
+
+
+def config_source_options(field, game_data: GameData | None) -> tuple[tuple[str, str], ...]:
+    """A config field's ``(label, value)`` options, from its ``source`` or its own list.
+
+    The one place the two are reconciled, so a picker and a readout cannot end up
+    offering and naming different things.
+    """
+
+    source = CONFIG_OPTION_SOURCES.get(field.source or "")
+    if source is not None and game_data is not None:
+        return source(game_data)
+    return tuple((option.label, option.value) for option in field.options)
+
+
+def _config_display(field, value, game_data: GameData | None = None) -> str:
     """Display text for a stored config ``value``: an option's label, or, for a
     multiselect list, its labels joined with ``+`` (falls back to the raw value).
 
@@ -1329,15 +1379,19 @@ def _config_display(field, value) -> str:
     labels (tiered ones carry the chosen tier number); ``repeatable`` values (a list
     of row dicts) render as their named rows, an Immunity scope carrying its rank.
     Dispatches on the field's ``type`` through :data:`CONFIG_DISPLAY_KINDS`; an
-    unregistered type falls back to the generic option-label rendering."""
+    unregistered type falls back to the generic option-label rendering.
+
+    ``game_data`` is needed only by a field whose options come from a ``source``
+    (:func:`config_source_options`) — without it such a value renders as the raw id it
+    stores, which is a readable fallback rather than a wrong one."""
 
     handler = CONFIG_DISPLAY_KINDS.get(field.type)
     if handler is not None:
         return handler(field, value)
 
+    by_value = {v: label for label, v in config_source_options(field, game_data)}
     values = value if isinstance(value, list) else [value]
-    labels = (next((o.label for o in field.options if o.value == v), v) for v in values)
-    return " + ".join(labels)
+    return " + ".join(by_value.get(v, str(v)) for v in values)
 
 
 def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -1378,7 +1432,7 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
             continue
         value = effect.config.get(field.key)
         if value:
-            chosen.append(f"{field.label}: {_config_display(field, value)}")
+            chosen.append(f"{field.label}: {_config_display(field, value, game_data)}")
     raised = [
         f"{trait_display_name(game_data, target)} +{ranks}"
         for target, ranks in resolved_trait_allocation(effect, base)

@@ -1091,6 +1091,92 @@ def _join_terms(terms: list[int]) -> str:
     return " ".join(parts)
 
 
+def effect_is_personal(effect: Effect) -> bool:
+    """Whether an effect works on **its user alone** — the rules' "Personal Range effect".
+
+    Reads the record's :attr:`~mm_companion.core.data_loader.Effect.personal` when it
+    states one and falls back to ``range_ == "Personal"`` otherwise, so only the
+    exceptions have to be written down. The exceptions exist because a few self-only
+    effects spend their Range parameter on a *distance* instead — Teleport's Range is
+    "Rank", meaning how far you go — and the book settles those by naming Teleport
+    alongside Morph and Shrinking as effects an Affliction may impose (p110).
+    """
+
+    if effect.personal is not None:
+        return effect.personal
+    return effect.range_ == "Personal"
+
+
+def effect_action_at_most(effect: Effect, limit: str, game_data: GameData) -> bool:
+    """Whether an effect's Action is ``limit`` or faster, along the ``action`` ladder.
+
+    The ladder is data (``modifiers.json``'s ``gameTermLadders``), running from ``None``
+    up to ``Full round``, so "a standard action or less" is a position on it rather than
+    a list of action names spelled here. An effect whose action is not on the ladder at
+    all is treated as *not* within the limit, which is the cautious direction: a rule
+    that says "standard action or less" should not silently admit something it cannot
+    place.
+    """
+
+    ladder = game_data.game_term_ladders.get("action", ())
+    if limit not in ladder or effect.action not in ladder:
+        return False
+    return ladder.index(effect.action) <= ladder.index(limit)
+
+
+#: The action ceiling the rules put on an Affliction's imposed effect (p110).
+IMPOSED_EFFECT_ACTION_LIMIT = "Standard"
+
+
+def imposable_effects(game_data: GameData) -> tuple[Effect, ...]:
+    """The effects an Affliction's Transformed condition may impose (p110), in name order.
+
+    "The Transformed condition can be configured to impose a particular Personal Range
+    effect on the target ... The imposed effect must have a Power Point cost equal to or
+    less than the total cost of the Affliction and require a standard action or less to
+    activate."
+
+    Two of those three conditions are answered here, by *offering nothing that breaks
+    them* — the same bargain Concealment's missing Touch option strikes, and a better one
+    than a warning after the fact. The cost condition is the one that cannot be: it moves
+    as the Affliction is edited, so it is checked by
+    :func:`~.validation.power_imposed_effect_violations` instead.
+    """
+
+    return tuple(
+        sorted(
+            (
+                effect
+                for effect in game_data.effects
+                if effect_is_personal(effect)
+                and effect_action_at_most(effect, IMPOSED_EFFECT_ACTION_LIMIT, game_data)
+            ),
+            key=lambda e: e.name,
+        )
+    )
+
+
+def imposed_effect_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
+    """What the effect an Affliction imposes costs, from its ``config``; 0 when none is set.
+
+    The imposed effect is named (``imposedEffect``) and ranked (``imposedRank``) in the
+    Affliction's own config rather than built as a power of its own, so it is priced by
+    costing a bare instance of it — the ordinary :func:`effect_total_cost`, not a second
+    pricing path that could disagree with the first.
+
+    Bare is the point and also the limit: an effect whose rank *is* an allocation
+    (Enhanced Trait) has nothing to price from a rank alone and reads 0. That leaves the
+    budget check unable to bite there, which is the permissive direction for a warning
+    and the honest one for a build the player has not actually assembled.
+    """
+
+    effect_id = str(effect.config.get("imposedEffect", "") or "")
+    if not effect_id or not any(e.id == effect_id for e in game_data.effects):
+        return 0
+    rank = max(1, int(effect.config.get("imposedRank", 1) or 1))
+    return effect_total_cost(PowerEffectInstance(effect_id, rank=rank), game_data)
+
+
 def array_alternate_cost(game_data: GameData, *, dynamic: bool = False) -> int:
     """The flat point cost of one array alternate, read from the ``Alternate Effect`` extra.
 

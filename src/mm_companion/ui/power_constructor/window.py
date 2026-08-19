@@ -42,6 +42,7 @@ from mm_companion.core.rules import (
     pl_cap_note,
     power_allocation_violations,
     power_cost_formula,
+    power_imposed_effect_violations,
     power_linked_range_violations,
     power_modifier_requirement_violations,
     power_pl_violations,
@@ -1067,6 +1068,16 @@ class PowerConstructorWindow(QMainWindow):
         Difficulty without Cumulative/Progressive) — a house-rule warning."""
         return power_modifier_requirement_violations(self.power, self._data)
 
+    def _imposed_violations(self) -> list[str]:
+        """An Affliction's Transformed condition imposing an effect it cannot afford.
+
+        The imposed effect may cost no more than the Affliction imposing it (p110), and
+        that budget moves every time the Affliction's rank or modifiers do — which is
+        why it is a live warning rather than something the picker could have prevented,
+        the way the picker does prevent a too-slow or non-Personal effect.
+        """
+        return power_imposed_effect_violations(self.power, self._data, self._character)
+
     def _refresh_pl_warning(self) -> None:
         """Show or hide the live warning from the current PL, allocation, and link breaches."""
         pl = self._pl_violations()
@@ -1075,6 +1086,7 @@ class PowerConstructorWindow(QMainWindow):
         linked = self._linked_violations()
         strength = self._strength_violations()
         requirement = self._requirement_violations()
+        imposed = self._imposed_violations()
         headlines = []
         if pl:
             headlines.append("over Power Level")
@@ -1088,11 +1100,13 @@ class PowerConstructorWindow(QMainWindow):
             headlines.append("Strength shortfall")
         if requirement:
             headlines.append("missing required modifier")
+        if imposed:
+            headlines.append("imposed effect over budget")
         headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
             self._warning.setToolTip(
-                "\n".join((*pl, *alloc, *caps, *linked, *strength, *requirement))
+                "\n".join((*pl, *alloc, *caps, *linked, *strength, *requirement, *imposed))
             )
         self._warning.setVisible(bool(headline))
 

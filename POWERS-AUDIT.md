@@ -22,9 +22,9 @@ file alone. Delete it when §6 is empty.
 | §5H | A `repeatable` flag replaces "has config" (was §6J) | **done** — pass 5 |
 | §5I | Concealment's sense bookkeeping (was §6E) | **done** — pass 6 |
 | §5J | Dynamic Alternate Effects — the price (was §6A) | **done** — pass 7 |
+| §5K | Affliction's imposed-effect budget check (was §6D) | **done** — pass 8 |
 | §6K | Dynamic Alternate Effects — the point pool (split from §6A) | outstanding |
 | §6C | Nested trait budgets (Summon / Metamorph / Variable / Empowering) | outstanding |
-| §6D | Affliction's imposed-effect budget check | outstanding |
 | §6F | Countering effects | outstanding |
 | §6G | Improvised Effects arithmetic | outstanding |
 | §6H | Extra Effort and power stunts | outstanding |
@@ -41,6 +41,8 @@ b880efb  Turn the powers audit into a handover brief
 6ceb01b  Make repeatability data, and add the Dimensional sense
 4c98850  Record which senses a Concealment hides from
 96677f1  Charge a Dynamic Alternate Effect what it costs
+6ed3d6b  Record pass 7's commit hash in the audit
+<pending>  Let an Affliction name the effect its Transformed condition imposes
 ```
 
 ---
@@ -55,7 +57,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2783 tests as of pass 7
+python -m pytest -q                 # ~9 min, 2791 tests as of pass 8
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -108,6 +110,7 @@ What was read in full and diffed:
 | Arrays and Dynamic Alternate Effects, p100–101 and p151 | `array_members_cost`, `alternate_effect` in `modifiers.json` |
 | Standard power configurations, p236 (by effect) and p237 (by name) | `src/mm_companion/data/configurations.json` |
 | Sense types, p63 | — used by Illusion / Obscure / Remote Sensing |
+| Affliction's Imposed Effects, p110 | Affliction's `config`, `imposable_effects` |
 
 ### A trap worth recording
 
@@ -255,7 +258,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2–7 — what was built
+## 5. Passes 2–8 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -477,6 +480,59 @@ every alternate cost 1 and a Dynamic array was priced as an ordinary one.
 **The runtime half was split out as §6K** rather than half-built — see there for why, and
 for the two designs already weighed.
 
+### K. Affliction's imposed effect (pass 8)
+
+**The rules (p110).** "The Transformed condition can be configured to impose a particular
+Personal Range effect on the target, such as Morphing them, Shrinking them, or having them
+Teleport elsewhere ... The imposed effect must have a Power Point cost equal to or less
+than the total cost of the Affliction and require a standard action or less to activate."
+
+**Now.** The condition was recorded; the imposed effect was not, and none of the three
+constraints was checked.
+
+**It is a configuration, not a build and not a cost.** The imposed effect is *named* and
+*ranked* in the Affliction's own config (`imposedEffect` / `imposedRank`) and adds nothing
+to the price — the book charges for a point-budget form through the separate **Empowering**
+extra, not here. That is what kept this out of §6C's orbit: nothing nested has to exist for
+the rule to be modelled and checked.
+
+**Two of the three constraints are enforced by the picker, not by a warning.**
+`imposable_effects` offers only Personal-Range effects that take a standard action or less,
+so there is nothing to tick that breaks either rule — the same bargain §5I struck by leaving Touch
+off Concealment's list. The **cost** constraint is the one that cannot work that way: the
+budget moves every time the Affliction's rank or modifiers do, so
+`power_imposed_effect_violations` warns live, in the constructor, beside the other checks.
+The action limit is *also* checked there, because a stored value outlives the picker that
+produced it.
+
+**"Personal Range effect" is not the Range parameter, and that is the whole trap.**
+Teleport's Range reads `Rank` — the rank is how far you go — yet the book names Teleport as
+an example. Environment's Range is `Rank` too and it is emphatically not personal. So the
+fact is data: an effect carries `personal` only where its Range parameter disagrees (three
+of them do), read through `effect_is_personal`, which defaults to `range == "Personal"`.
+A Python rule about the string would have been wrong in both directions at once.
+
+**Two generic mechanisms fell out of it**, both listed below and both usable from a data
+file with no Python:
+
+- **`showWhenField` / `showWhenValue`** — a config field revealed only while a *sibling*
+  field holds a value. The gated widget is **built and hidden**, never omitted: rebuilding
+  the form from inside the signal of the very combo that changed is how Qt teardown bugs
+  start, and the existing `showWhenPoints` gate one level down already works this way.
+  Closing a gate drops the stored value; opening one re-seeds the field's default.
+- **`CONFIG_OPTION_SOURCES`** — a `select` field naming a `source` instead of listing
+  options. It went in **core**, not beside the constructor's widget builders, and that
+  placement is the point: the picker and the game-terms readout both have to turn
+  `"morph"` into `"Morph"`, and `config_source_options` is the one call they share.
+
+**Three bugs the screenshot found that the tests had not asked about.** A `points` field on
+an *effect* (as opposed to a modifier) had no widget builder at all and no display handler,
+so the picker rendered as an empty combo and the game-terms line **crashed** on the int;
+the field's numeric bounds were spelled `minValue`/`maxValue`/`defaultValue` where the
+loader reads `min`/`max`/`default`, so the rank silently defaulted to 0; and the readout
+printed the raw id (`morph`) because two of the three `_config_display` call sites had no
+`game_data` to resolve a source with. Running it is still worth more than reading it.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -497,6 +553,10 @@ A later pass should reach for these rather than inventing a parallel one.
 | `repeatable` on a modifier | `EffectCard.attach_modifier` | whether a second copy may be attached — a rules fact, kept in data |
 | `array_members_cost` | `powers_cost.py` | the whole array-pooling rule from `(cost, dynamic)` pairs — the one place `power_gross_cost` and `node_cost` both go, so the two levels an array exists at cannot drift |
 | `dynamic` on a member | `PowerEffectInstance` / `Power` / `PowerGroup` | a per-member array flag; a mod pricing its own array variant reads it beside `structure`/`mode` |
+| `showWhenField` / `showWhenValue` | `EffectCard._field_gate_open` / `_refresh_config_gates` | reveal a config field only while a sibling field holds a value — built and hidden, with the default re-seeded when the gate reopens |
+| `CONFIG_OPTION_SOURCES` + `source` | `powers_terms.py`, via `config_source_options` | a `select` whose options are a query over the game data; the picker and the readout share one resolver so an id cannot be named two ways |
+| `points` as an *effect* config field | `EffectCard._points_widget`, `_config_display_points` | a bounded number on an effect (not just a modifier), seeding and storing its own default |
+| `effect_is_personal` / `effect_action_at_most` | `powers_cost.py` | "works on its user alone" and "takes this action or less" — both data-driven, both wanted by any rule that restricts *which* effects something may name |
 
 ---
 
@@ -524,18 +584,16 @@ Only the last has even a note (`notePerRank: 15` renders a Notes line). Probably
 feature: a nested point-budget editor reusing the character model. Note `core/npc.py` and
 the Quick NPC window already build a reduced character — worth looking at before starting.
 
-### D. Affliction's imposed-effect budget check
+**§5K is the thin version of this and settles one question for it.** An Affliction's
+imposed effect turned out *not* to need a nested build: the rules only ask for a name, a
+rank and a budget check, so it is config plus a `power_*_violations` function and nothing
+more. Ask the same question of each of the four above before building an editor — Variable
+and Summon genuinely buy a whole trait set, but check whether Metamorph and Empowering do
+too, or whether a budget and a note carry them. The pattern §5K leaves behind (a live
+budget warned against rather than clamped, and the picker enforcing what it can) is the
+one to reuse either way.
 
-**Rules (p110).** An Affliction imposing the **Transformed** condition may name a
-Personal-range effect to impose (Morph them, Shrink them, Teleport them away). That effect
-**must cost no more than the Affliction's total cost** and must take a standard action or
-less.
-
-**Now.** The condition is recorded; the imposed effect is not, and neither rule is checked.
-
-**Change.** A config field on Affliction naming the imposed effect, then a
-`power_*_violations` function beside the others in `core/rules/validation.py`. Depends on
-§6C if the imposed effect is to be a real nested build rather than a name.
+### D. Affliction's imposed-effect budget check — **done in pass 8, see §5K**
 
 ### E. Concealment's sense bookkeeping — **done in pass 6, see §5I**
 
@@ -673,13 +731,24 @@ Things a later pass will trip over if it does not know them.
    Berserker Rage, Poltergeist, Power Theft. The book leaves them blank too (which trait is
    boosted, which descriptor is absorbed), so this is faithful rather than incomplete, but
    it is worth knowing before someone "fixes" them.
-9. **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
+9. **The imposed-effect warning is constructor-only**, like the allocation, linked-range,
+   Strength and requirement warnings beside it — the sheet card shows Power Level breaches
+   alone. That is the existing convention rather than an oversight (see
+   `_strength_violations`, which says so), but it does mean a character loaded from a file
+   built under a different ruleset carries an over-budget imposed effect with no marker on
+   the sheet until someone opens the constructor.
+10. **`docs/mm-powers-architecture.md` had a dangling §9.** The schema block referenced a
+   section on effect configuration fields that had never been written, and the numbering
+   skipped from 8 to 10. Pass 8 wrote it, since the pass was about exactly that. Worth
+   knowing that the doc's cross-references are not all load-bearing — check before trusting
+   one.
+11. **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
    under three cards reading 20, 8 and 10 — the pooling explains it, and each card's badge
    names its own share, but the total line itself does not. §5F built `power_cost_formula`
    for precisely this complaint about Removable and it fires only for a power-scope
    modifier; extending it to render the array working would close the same gap for every
    array, Dynamic or not. Left alone as beyond §5J's scope, not because it is fine.
-10. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
+12. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
    each pass. Update them in the same commit as the code, not afterwards — the notes are the
    thing a future session reads first.
 
@@ -692,8 +761,9 @@ Things a later pass will trip over if it does not know them.
 3. ~~**§6E Concealment senses**~~ — done in pass 6 (§5I).
 4. ~~**§6A Dynamic Alternate Effects**~~ — the price is done in pass 7 (§5J); the pool
    became **§6K**.
-5. **§6D Affliction's imposed effect**, then **§6C nested trait budgets** — §6D is a
-   thin version of the same problem and will inform the bigger one.
+5. ~~**§6D Affliction's imposed effect**~~ — done in pass 8 (§5K), and it settled that a
+   nested build was not needed for it. Next is **§6C nested trait budgets**, which §5K's
+   shape should be read against before an editor is designed for it.
 6. **§6K the Dynamic point pool** — do it after §6C. Both want the same thing (a live
    budget spent across sub-builds), and §6C is the one that settles what that editor looks
    like. §6K is the only remaining item that changes an existing read path rather than

@@ -154,6 +154,26 @@
             { "value": "unaware", "label": "Unaware (all senses)" },
             { "value": "unconscious", "label": "Unconscious" }
           ]
+        },
+        {
+          "key": "imposedEffect",
+          "label": "Transformed into",
+          "type": "select",
+          "source": "personal_effects",
+          "showWhenField": "degree3",
+          "showWhenValue": "transformed",
+          "hint": "The Personal Range effect the Transformed condition imposes - Morphing them, Shrinking them, Teleporting them elsewhere. Only effects that take a standard action or less are offered, since the rules allow no others."
+        },
+        {
+          "key": "imposedRank",
+          "label": "at rank",
+          "type": "points",
+          "min": 1,
+          "max": 30,
+          "default": 1,
+          "showWhenField": "degree3",
+          "showWhenValue": "transformed",
+          "hint": "The rank the imposed effect runs at. Its cost must not exceed this Affliction's own total cost."
         }
       ],
       "description": "Inflicts an escalating condition on a target instead of damage.",
@@ -188,6 +208,7 @@
     },
     {
       "id": "communication",
+      "personal": true,
       "name": "Communication",
       "effectType": "Sensory",
       "action": "Free",
@@ -1061,6 +1082,7 @@
     },
     {
       "id": "remote_sensing",
+      "personal": true,
       "name": "Remote Sensing",
       "effectType": "Sensory",
       "action": "Free",
@@ -1172,6 +1194,7 @@
     },
     {
       "id": "teleport",
+      "personal": true,
       "name": "Teleport",
       "effectType": "Movement",
       "action": "Simple",

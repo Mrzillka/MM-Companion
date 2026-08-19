@@ -48,6 +48,7 @@ from mm_companion.ui.power_constructor.common import (
     CellContext,
     _mime_id,
     _move_item,
+    config_source_options,
     fill_trait_combo,
     is_trait_allocation,
     link_trait_row,
@@ -106,6 +107,12 @@ class EffectCard(QFrame):
         # Callables that refresh each Tier-4 allocation field's "used / rank" readout;
         # rebuilt with the config form and fired when the effect's rank changes.
         self._alloc_updaters: list = []
+        # Config rows whose visibility a *sibling* field's value drives, as
+        # (field, widget, form) — and, per key, how to put a hidden field's default back
+        # when its gate reopens. Declared here rather than only in the form builder: the
+        # target picker is wired before the form exists and can reach the gates.
+        self._gated_rows: list = []
+        self._config_seeders: dict = {}
         self.setObjectName("EffectCard")
         self._drops = DropFeedback(self, "EffectCard", radius="radius.canvas")
         self._drops.set_idle(_idle_card_rules())
@@ -363,6 +370,23 @@ class EffectCard(QFrame):
             for f in effect.config_fields
         )
 
+    def _field_gate_open(self, field) -> bool:
+        """Whether a field gated on a sibling's value is currently showing.
+
+        ``showWhenField`` / ``showWhenValue`` let one config choice reveal another —
+        Affliction's imposed-effect picker appears only once a degree reads Transformed.
+        The sibling may be single- or multi-select (Extra Condition upgrades the degree
+        pickers), so a list counts when it *contains* the value and a scalar when it
+        equals it. A field naming no gate is always open.
+        """
+
+        if not field.show_when_field:
+            return True
+        held = self.instance.config.get(field.show_when_field)
+        if isinstance(held, list):
+            return field.show_when_value in held
+        return held == field.show_when_value
+
     def _hidden_config_keys(self) -> set[str]:
         """Effect config-field keys suppressed by an attached modifier whose own config
         declares ``hides_field`` — the modifier's chosen value names the effect field to
@@ -391,6 +415,8 @@ class EffectCard(QFrame):
                 widget.setParent(None)
                 widget.deleteLater()
         self._alloc_updaters = []  # rebuilt below alongside the fresh widgets
+        self._gated_rows = []
+        self._config_seeders = {}
 
         effect = self._effect()
         if effect is None or not effect.config_fields:
@@ -423,7 +449,36 @@ class EffectCard(QFrame):
             if field.hint:
                 widget.setToolTip(field.hint)
             form.addRow(field.label, widget)
+            if field.show_when_field:
+                # Built whatever the gate says and shown or hidden below, rather than
+                # rebuilt as the sibling moves: the sibling's own combo is what emits
+                # the change, and tearing the form down from inside its signal would
+                # delete the widget mid-emit.
+                self._gated_rows.append((field, widget, form))
         self._config_layout.addWidget(form_host)
+        self._refresh_config_gates()
+
+    def _refresh_config_gates(self) -> None:
+        """Show or hide each sibling-gated config row for the current choices.
+
+        Hiding also **drops the stored value**, so an Affliction whose third degree is
+        moved off Transformed stops carrying an imposed effect that nothing can see —
+        and stops being warned about one. That mirrors what the modifier gates above
+        already do to a choice they take away.
+        """
+
+        for field, widget, form in self._gated_rows:
+            open_ = self._field_gate_open(field)
+            widget.setVisible(open_)
+            label = form.labelForField(widget)
+            if label is not None:
+                label.setVisible(open_)
+            if not open_:
+                self.instance.config.pop(field.key, None)
+            elif field.key not in self.instance.config:
+                seed = self._config_seeders.get(field.key)
+                if seed is not None:
+                    seed()
 
     # Config field types whose stored value is a list rather than a scalar.
     _LIST_TYPES = ("multiselect", "allocation", "repeatable")
@@ -451,17 +506,63 @@ class EffectCard(QFrame):
         # ``select`` and any mod type without a builder render as the generic combo.
         return self._select_widget(field)
 
+    def _points_widget(self, field) -> QWidget:
+        """A bounded spin box for a numeric effect-config field (an imposed effect's rank).
+
+        The modifier chips have carried a ``points`` field for a while — a Subtle worth 1
+        or 2 — but an *effect's* config had no numeric input at all, so a field of this
+        type fell through to the option combo and showed an empty list. Seeds and stores
+        the default, so the value the closed spin already displays is the one everything
+        downstream prices against.
+        """
+
+        stored = self.instance.config.get(field.key)
+        value = field.default_value if stored is None else int(stored)
+        self.instance.config[field.key] = value
+        spin = make_spin_box(
+            field.min_value,
+            field.max_value or RANK_MAX,
+            value=value,
+            buttons=False,
+            max_width=48,
+        )
+        spin.valueChanged.connect(lambda v, k=field.key: self._on_config_changed(k, v))
+        # A gate that closes drops the stored value; one that opens again has to put it
+        # back, or the spin goes on showing a number nothing downstream can read. The
+        # widget is the only thing that knows what its own default is, so it says so
+        # here rather than the gate guessing.
+        self._config_seeders[field.key] = lambda: self._store_config(field.key, spin.value())
+        return spin
+
+    def _store_config(self, key: str, value) -> None:
+        """Write a config value without the redraw :meth:`_on_config_changed` does.
+
+        Used where the value is being *restored* rather than chosen — re-seeding a gated
+        field's default from inside the gate refresh, which is itself already inside a
+        redraw.
+        """
+
+        self.instance.config[key] = value
+
     def _text_widget(self, field) -> QWidget:
         edit = QLineEdit(self.instance.config.get(field.key, ""))
         edit.textChanged.connect(lambda text, k=field.key: self._on_config_changed(k, text))
         return edit
 
     def _select_widget(self, field) -> QWidget:
-        """The single-choice option combo (the default renderer for ``select``)."""
+        """The single-choice option combo (the default renderer for ``select``).
+
+        A field naming a ``source`` takes its options from the game data rather than
+        listing them itself — Affliction's imposed effect is "whichever effects the
+        rules allow", which is a query over ``effects.json`` that would go stale the
+        moment a mod added one. :func:`config_source_options` is the same call the
+        game-terms readout makes, so the picker and the readout cannot disagree about
+        what an id is called.
+        """
         combo = QComboBox()
         combo.addItem("—", "")  # the unset choice
-        for option in field.options:
-            combo.addItem(option.label, option.value)
+        for label, value in config_source_options(field, self._data):
+            combo.addItem(label, value)
         index = combo.findData(self.instance.config.get(field.key, ""))
         combo.setCurrentIndex(index if index >= 0 else 0)
         guard_wheel(combo)
@@ -724,6 +825,10 @@ class EffectCard(QFrame):
         # priced entirely from the traits it raises — so the card's own footer has to
         # be redrawn here, exactly as a rank or a modifier change redraws it. The
         # window's total tracks ``changed`` on its own; this label does not.
+        # A choice can also *reveal* another (Affliction's Transformed condition brings
+        # out the imposed-effect picker), so the gates are restated first: closing one
+        # drops its stored value, and that is a value the cost may have read.
+        self._refresh_config_gates()
         self._refresh_cost()
         self.changed.emit()
 

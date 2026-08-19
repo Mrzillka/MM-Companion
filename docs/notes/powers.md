@@ -73,6 +73,32 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   being incorporeal, which is the Insubstantial effect, and the rules say so outright. The
   *Invisibility* and *Inaudibility* configurations seed the field, so they record which
   sense they hide rather than only naming it in their prose.
+- **An Affliction's Transformed condition can name the effect it imposes.** The rules let
+  it impose "a particular Personal Range effect" — Morphing them, Shrinking them,
+  Teleporting them away — which "must have a Power Point cost equal to or less than the
+  total cost of the Affliction and require a standard action or less to activate" (p110).
+  It is a *configuration*, not a nested build and not a cost: the imposed effect is named
+  and ranked in the Affliction's own `config` (`imposedEffect` / `imposedRank`) and adds
+  nothing to the price. Two of the three conditions are enforced by the picker **offering
+  nothing that breaks them** (`imposable_effects`), the same bargain Concealment's missing
+  Touch option strikes; the budget is the one that cannot be, since it moves whenever the
+  Affliction is edited, so `power_imposed_effect_violations` warns instead.
+  **"Personal Range effect" is not the Range parameter.** Teleport's Range reads `Rank`
+  because the rank is how far you go, and the book names Teleport as an example anyway —
+  so an effect carries `personal` in the data when its Range parameter disagrees, read
+  through `effect_is_personal`. Environment's Range is `Rank` too and it is *not* personal
+  (it shapes an area around you), which is exactly why this is data and not a rule about
+  the string.
+- **Two config-field mechanisms came out of that**, both generic and both usable by a mod
+  with no Python. `showWhenField` / `showWhenValue` reveal a field only while a *sibling*
+  field holds a given value — the imposed-effect picker appears once a degree reads
+  Transformed. The gated widget is **built and hidden**, never omitted, because rebuilding
+  the form from inside the very combo whose change triggered it is how Qt teardown bugs
+  start; closing a gate drops the stored value and opening it re-seeds the field's default
+  (`_config_seeders`), so the spin box and the model never disagree. Separately, a `select`
+  field may name a `source` instead of listing options: `CONFIG_OPTION_SOURCES` lives in
+  **core**, not beside the constructor's widgets, so the picker and the game-terms readout
+  resolve an id to a name through the one call (`config_source_options`) and cannot drift.
 - **The book's ~90 named powers are data, not a catalog.** `configurations.json` holds
   the standard power configurations (Blast, Dazzle, Snare, Force Field, Invisibility, …)
   as ready-made assemblies of records that already exist elsewhere, and

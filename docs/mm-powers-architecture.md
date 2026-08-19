@@ -457,6 +457,11 @@ Effect (from effects.json)
 ├── baseCostMode: "flat" | "as_trait"    // how that is charged; omitted means flat. One
 │                                        // handler per mode in `BASE_COST_KINDS` (§6)
 ├── configurableTarget: null | "trait"   // true for Enhanced Trait-style effects
+├── personal: bool                       // works on its user alone - the rules' "Personal
+│                                        // Range effect". Omitted means `range == "Personal"`;
+│                                        // stated only where the Range parameter disagrees
+│                                        // (Teleport's Range is "Rank"). Read through
+│                                        // `effect_is_personal`
 ├── config: []                           // the effect's configurable qualities (§9). A
 │                                        // `repeatable` field with a `trait` column and an
 │                                        // `int` column is a TRAIT ALLOCATION: each row
@@ -514,6 +519,11 @@ PowerEffectInstance  (part of a character's Power)
 │                                          // refunds nothing and legalises nothing.
 ├── rankDial (bool, default false)        // build: whether the card carries that slider
 │                                          // at all. A size effect gets one regardless.
+├── dynamic (bool, default false)         // build: a Dynamic member of this power's array
+│                                          // (§4) - shares the pool and runs alongside the
+│                                          // other Dynamic members, for 2 points instead
+│                                          // of 1. `Power`/`PowerGroup` carry the same
+│                                          // flag for a group-level array
 ├── plCap ("" | "effect" | "attack")      // build: hold this effect hard to 2 x PL,
 │                                          // lowering the side not named
 │                                          // (`effect_pl_cap_shift`). Empty leaves the
@@ -526,6 +536,35 @@ Power
 ├── alternates: PowerEffectInstance[][]   // array members, if any
 └── activated / itemPresent / toggledOn   // runtime state flags per §7
 ```
+
+---
+
+## 9. Effect configuration fields
+
+An effect's `config` array declares the choices a player makes when building it — which
+resistance an Affliction targets, which condition each degree imposes. Each field stores
+its value under its `key` in the instance's `config` dict, and the field's `type` picks
+both the input widget (`CONFIG_WIDGET_BUILDERS`) and how a stored value reads back
+(`CONFIG_DISPLAY_KINDS`). Both are registries, so a mod adds a field type without editing
+either module.
+
+Three things a field can do beyond holding a value:
+
+- **`overrides`** names a game-term field the choice replaces, so an Affliction resisted by
+  Fortitude says so in its Resistance row rather than in a note beneath it.
+- **A `source`** replaces the field's own `options` with a list the *game data* decides.
+  `CONFIG_OPTION_SOURCES` lives in `core/rules`, not beside the constructor, because the
+  picker and the readout both have to turn an id into the same name;
+  `config_source_options` is the single call they share. `personal_effects` is the first
+  one: the effects an Affliction's Transformed condition may impose, which is a query over
+  `effects.json` and would go stale the moment a mod added an effect.
+- **A gate** hides the field until it is relevant. `hiddenWith` hides it while a modifier is
+  attached (Variable Conditions defers the degree choices to use-time); `multiselectWith`
+  upgrades it to multi-select instead; and `showWhenField` / `showWhenValue` reveal it only
+  while a *sibling* field holds a value (the imposed-effect picker, once a degree reads
+  Transformed). A gated field is **built and hidden**, not omitted — tearing the form down
+  from inside the signal of the combo that changed is how Qt teardown bugs start. Closing a
+  gate drops the stored value; opening one re-seeds the field's own default.
 
 ---
 

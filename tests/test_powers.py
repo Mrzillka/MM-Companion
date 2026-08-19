@@ -28,6 +28,7 @@ from mm_companion.core.rules import (
     array_dynamic_primary_cost,
     configuration_by_id,
     configurations_for_effect,
+    effect_action_at_most,
     effect_allocation_used,
     effect_attack_skill_bonus,
     effect_cost_breakdown,
@@ -35,6 +36,7 @@ from mm_companion.core.rules import (
     effect_effective_rank,
     effect_game_terms,
     effect_is_active,
+    effect_is_personal,
     effect_makes_attack,
     effect_per_rank_cost,
     effect_readout_rows,
@@ -47,6 +49,8 @@ from mm_companion.core.rules import (
     granted_advantages,
     granted_skill_rows,
     group_array_base_index,
+    imposable_effects,
+    imposed_effect_cost,
     live_powers,
     modifier_label,
     node_cost,
@@ -58,6 +62,7 @@ from mm_companion.core.rules import (
     power_gross_cost,
     power_has_custom_modifier,
     power_has_standing_effect,
+    power_imposed_effect_violations,
     power_linked_range_violations,
     power_modifier_requirement_violations,
     power_pl_violations,
@@ -1288,6 +1293,85 @@ def test_effect_stat_rows_effect_specific_narrative_modifier_lands_in_notes() ->
     assert notes.value == "Cumulative"
 
 
+def test_personal_range_is_the_effect_not_the_range_parameter() -> None:
+    data = load_game_data()
+    by_id = {e.id: e for e in data.effects}
+    # Most self-only effects simply say so in their Range parameter.
+    assert effect_is_personal(by_id["morph"]) and by_id["morph"].range_ == "Personal"
+    # Teleport does not: its Range is "Rank" because the rank is how far you go. The
+    # book settles it by naming Teleport as an effect an Affliction may impose (p110).
+    assert by_id["teleport"].range_ == "Rank"
+    assert effect_is_personal(by_id["teleport"])
+    # Environment's Range is "Rank" too, but it shapes an area around you rather than
+    # working on you, so it is not personal and is not imposable.
+    assert by_id["environment"].range_ == "Rank"
+    assert not effect_is_personal(by_id["environment"])
+    assert not effect_is_personal(by_id["damage"])
+
+
+def test_imposable_effects_are_personal_and_quick_enough() -> None:
+    data = load_game_data()
+    offered = imposable_effects(data)
+    ids = {e.id for e in offered}
+    # The book's own three examples are all there (p110).
+    assert {"morph", "shrinking", "teleport"} <= ids
+    # Nothing targeted is: an Affliction cannot impose a Damage on someone.
+    assert not ids & {"damage", "affliction", "environment", "healing", "illusion"}
+    # Every one of them is personal and takes a standard action or less, which is what
+    # makes the picker the enforcement rather than a warning after the fact.
+    assert all(effect_is_personal(e) for e in offered)
+    assert all(effect_action_at_most(e, "Standard", data) for e in offered)
+    assert [e.name for e in offered] == sorted(e.name for e in offered)
+
+
+def test_an_imposed_effect_may_not_cost_more_than_the_affliction() -> None:
+    data = load_game_data()
+    # Affliction 10 = 10 PP. Morph is 5 per rank, so rank 2 exactly spends the budget.
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=10,
+        config={"degree3": "transformed", "imposedEffect": "morph", "imposedRank": 2},
+    )
+    power = Power(name="Petrify", effects=[effect])
+    assert imposed_effect_cost(effect, data) == 10
+    assert power_imposed_effect_violations(power, data) == []  # equal to is allowed
+
+    effect.config["imposedRank"] = 3  # 15 PP against a 10 PP Affliction
+    violations = power_imposed_effect_violations(power, data)
+    assert len(violations) == 1
+    assert "15 PP" in violations[0] and "10 PP" in violations[0]
+
+    # The budget is the Affliction's *own* total, so its extras move it. Extra Condition
+    # is +1 per rank, taking a rank-10 Affliction to 20 and the 15 back inside it.
+    effect.extras.append(ModifierSelection("extra_condition"))
+    assert power_imposed_effect_violations(power, data) == []
+
+
+def test_no_imposed_effect_is_never_a_violation() -> None:
+    data = load_game_data()
+    bare = PowerEffectInstance("affliction", rank=1, config={"degree3": "transformed"})
+    assert imposed_effect_cost(bare, data) == 0
+    assert power_imposed_effect_violations(Power(effects=[bare]), data) == []
+    # An id no ruleset knows is ignored rather than crashing or costing something.
+    bare.config["imposedEffect"] = "not_an_effect"
+    assert imposed_effect_cost(bare, data) == 0
+    assert power_imposed_effect_violations(Power(effects=[bare]), data) == []
+
+
+def test_the_imposed_effect_reads_by_name_in_the_game_terms() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=10,
+        config={"degree3": "transformed", "imposedEffect": "shrinking", "imposedRank": 4},
+    )
+    line = power_game_terms(Power(name="Diminish", effects=[effect]), data)
+    # Named, not spelled as the id it stores - and the rank renders as its number
+    # rather than blowing the whole line up looking for an option label for a 4.
+    assert "Transformed into: Shrinking" in line
+    assert "at rank: 4" in line
+
+
 def test_affliction_exposes_config_fields() -> None:
     data = load_game_data()
     affliction = next(e for e in data.effects if e.id == "affliction")
@@ -1297,6 +1381,10 @@ def test_affliction_exposes_config_fields() -> None:
         "degree1",
         "degree2",
         "degree3",
+        # The Transformed condition may impose a Personal Range effect (p110); both
+        # fields are gated shut until a degree actually reads Transformed.
+        "imposedEffect",
+        "imposedRank",
     ]
 
 

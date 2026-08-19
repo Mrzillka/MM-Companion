@@ -581,7 +581,12 @@ class EffectConfigField:
     config field, gates its visibility on a sibling ``points`` field's value — the
     field appears only when that spin box reads exactly this number (Affliction's
     Variable Conditions reveals its "which degree" picker only at the 1-point tier).
-    Zero (the default) means always shown.
+    Zero (the default) means always shown. ``show_when_field`` / ``show_when_value``
+    are the same idea one level out, on an *effect's* own config: the field appears
+    only while the sibling field named by ``show_when_field`` holds
+    ``show_when_value`` — Affliction reveals its imposed-effect picker only once a
+    degree is set to Transformed. The sibling may be single- or multi-select, so
+    "holds" means equals *or* contains. Both empty (the default) means always shown.
     """
 
     key: str
@@ -598,6 +603,8 @@ class EffectConfigField:
     max_value: int = 0
     default_value: int = 0
     show_when_points: int = 0
+    show_when_field: str = ""
+    show_when_value: str = ""
     options: tuple[ConfigOption, ...] = ()
     alloc_options: tuple[AllocationOption, ...] = ()
     columns: tuple[RepeatableColumn, ...] = ()
@@ -790,6 +797,16 @@ class Effect:
     Type of an instance (the ``attack`` extra sets it to ``"Attack"``), so a Control
     effect that implicitly attacks reads as Type "Attack" on its card while still
     filing under Control in the palette.
+
+    ``personal`` is whether the effect works on **its user alone** — which is what the
+    rules mean by "a Personal Range effect" (p110). It defaults to ``range_ ==
+    "Personal"`` and only the exceptions state it in the data, because a handful of
+    self-only effects spend their Range parameter on a *distance* instead: Teleport's
+    Range is "Rank" (the rank is how far you go), and so is Communication's and Remote
+    Sensing's. The book settles it by naming Teleport as an example of an effect an
+    Affliction may impose, alongside Morph and Shrinking. Read it through
+    :func:`mm_companion.core.rules.effect_is_personal`, not off the record, so the
+    default lives in one place.
     """
 
     id: str
@@ -797,6 +814,9 @@ class Effect:
     effect_type: str
     action: str = ""
     range_: str = ""
+    #: ``None`` means "not stated" and defers to ``range_``; see the class docstring
+    #: and :func:`mm_companion.core.rules.effect_is_personal`.
+    personal: bool | None = None
     duration: str = ""
     check: str | None = None
     resistance: str | None = None
@@ -2220,6 +2240,8 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         max_value=int(c.get("max", 0)),
         default_value=int(c.get("default", 0)),
         show_when_points=int(c.get("showWhenPoints", 0)),
+        show_when_field=c.get("showWhenField", ""),
+        show_when_value=c.get("showWhenValue", ""),
         options=tuple(
             ConfigOption(
                 value=o["value"],
@@ -2366,6 +2388,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         effect_type=e["effectType"],
         action=e.get("action", ""),
         range_=e.get("range", ""),
+        personal=None if e.get("personal") is None else bool(e["personal"]),
         duration=e.get("duration", ""),
         check=e.get("check"),
         resistance=e.get("resistance"),

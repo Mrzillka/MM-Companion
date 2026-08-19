@@ -24,6 +24,7 @@ file alone. Delete it when §6 is empty.
 | §5J | Dynamic Alternate Effects — the price (was §6A) | **done** — pass 7 |
 | §5K | Affliction's imposed-effect budget check (was §6D) | **done** — pass 8 |
 | §5L | Sub-build budgets, and the Summon / Variable data (was §6C) | **done** — pass 9 |
+| §5N | Improvised Effects arithmetic (was §6G) | **done** — pass 10 |
 | §6K | Dynamic Alternate Effects — the point pool (split from §6A) | outstanding |
 | §6M | The sub-builds themselves (split from §6C) | outstanding |
 | §6F | Countering effects | outstanding |
@@ -46,6 +47,8 @@ b880efb  Turn the powers audit into a handover brief
 4799e9b  Let an Affliction name the effect its Transformed condition imposes
 db18f2e  Record pass 8's commit hash in the audit
 49a81d2  State what a Summon, a Metamorph and a Variable are built on
+773dd2a  Record pass 9's commit hash in the audit
+<pending>  Work out what improvising an unbought effect would take
 ```
 
 ---
@@ -60,7 +63,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2799 tests as of pass 9
+python -m pytest -q                 # ~9 min, 2810 tests as of pass 10
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -115,6 +118,7 @@ What was read in full and diffed:
 | Sense types, p63 | — used by Illusion / Obscure / Remote Sensing |
 | Affliction's Imposed Effects, p110 | Affliction's `config`, `imposable_effects` |
 | Summon p145–146, Variable p148–149, Metamorph p136 | `effect_readouts.json`, `effect_modifiers.json`, `NOTE_VALUE_KINDS` |
+| Improvised Effects, p101–102 | `core/rules/improvised.py`, `system.json` |
 
 ### A trap worth recording
 
@@ -262,7 +266,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2–9 — what was built
+## 5. Passes 2–10 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -605,6 +609,55 @@ Metamorph 2 reads "2 alternate trait set(s), each built on your own 65 power poi
 
 **§6M is what is left**: the sub-builds themselves.
 
+### N. Improvised Effects (pass 10)
+
+**The rules (p101–102).** A character with the **Improvised Effect** advantage rigs up a
+power they have not bought and reaches it with a skill check. Every number comes off one:
+*the effect's Power Point cost*.
+
+- preparation takes a **time rank equal to the cost**, never below **3** (one minute);
+- **−1 time rank per +5** on the preparation DC, down to that minimum;
+- **+2 on the check per +1 time rank** spent instead;
+- preparation DC = **10 + cost + 5 per rank shaved**, rolled *in secret by the GM*;
+- use DC = **10 + cost**, retryable until it lands or the scene ends.
+
+**Now.** The two advantages existed in `advantages.json` and none of the arithmetic did.
+
+**What was built.** `core/rules/improvised.py` — pure functions over a cost — with every
+dial in `system.json` (`minTimeRank`, `dcPerTimeRankSaved`, `checkBonusPerTimeRankSpent`)
+rather than spelled in Python, and the time rendered off the measurements table that
+already existed. Two `RollSpec`s come out of it, both against DCs the plan already knows,
+both on the character's **own** skill — because Improvised Effect is a *focused* advantage
+and its `parameter` already names the skill it was taken for. That was a nice surprise:
+the data needed nothing added to it.
+
+**The cost is `power_gross_cost`, not the total.** "The Removable modifier does not apply
+to Improvised Effects, as they are one-use by nature" (p101) — and the gross is exactly the
+price before any power-scope discount, which Removable is the only one of. §5F's split paid
+off again.
+
+**The panel is in the Power Constructor, and that placement is the point.** An improvised
+effect is one the character has *not bought*, and the constructor is the only place in the
+app an unbought power is ever held — the sheet only ever shows powers already paid for. It
+is collapsed by default and hidden until the power costs something.
+
+**Two things the wiring taught us, both recorded in the notes:**
+
+- The constructor is a **window, not a block**, so it is not on the sheet's roll bus. It
+  emits `rollRequested` and the `PowersSection` that opened it hands the request on exactly
+  as its own cards do.
+- Its roll buttons are **plain buttons rather than the sheet's `RollsFooter`**, because
+  `ui.cards` reaches back into `ui.power_constructor` for the terms grid *and* sideways into
+  `ui.sections`. Importing it here closes that loop: at module scope it fails outright, and
+  deferred it fails for anyone who opens the constructor without the sheet — which the
+  driver script did, so this is a tested claim rather than a guess. Two buttons need none
+  of what that widget adds, so they are the honest answer and not a fallback.
+
+**Checked in the app**, and the arithmetic is vivid: a Ranged Affliction 8 costs 16 PP, so
+improvising it takes **8 hours** by default. Shaving 9 time ranks brings it to 15 minutes
+and takes the preparation check to **DC 71** — which is the book working as intended, and
+the reason improvisation is for modest effects.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -632,6 +685,8 @@ A later pass should reach for these rather than inventing a parallel one.
 | `noteValues` + `NOTE_VALUE_KINDS` | `powers_terms.py` | a number a note needs that the effect's rank cannot give — the modifier's own rank compounded, the wielder's point total; returns `None` to drop the placeholder rather than print a zero |
 | `points_per_rank` readout | `effect_readouts.json` | a per-rank budget stated on the card, in data with no Python (Summon's minion, Variable's pool) |
 | A priced `select` in a modifier's name | `modifier_detail` | any option carrying its own `costValue` qualifies the modifier wherever it is listed, so two differently-priced cards never read alike |
+| `improvised_plan` | `core/rules/improvised.py` | preparation time and both DCs from a cost, with the trade between them; every dial in `system.json` |
+| `PowerConstructorWindow.rollRequested` | wired by `PowersSection` | how a *window* reaches the roller — it asks, and the block that opened it forwards |
 
 ---
 
@@ -660,24 +715,25 @@ counters any effect of a chosen descriptor. The `Instant Counter` advantage skip
 **Now.** No roll spec, so the roller cannot offer it and a Nullify's opposed check is done
 by hand.
 
-**Change.** A roll spec in `core/rules/rolls.py` and an entry point on the power card. Look
-at how the existing opposed rolls are specified before designing a new shape.
+**Pass 10 found the concrete half of this while reading p138 for something else.**
+Nullify's second roll is *not* a resistance check: the book says "make an opposed check of
+your **Nullify rank** and the targeted effect rank or the target's Will". The app records it
+in the effect's ``resistance`` slot, which builds a spec marked ``rolled_by_target=True``
+with ``modifier=0`` — so the roll is attributed to the wrong side of the table and carries
+no bonus at all. It is unrollable as written. **That is the same shape countering needs**,
+so the two are one job: model an **opposed effect check** (``d20 + effect rank``, made by
+the wielder, the opponent's number in the DC box), give Nullify its own, and use it as the
+counter roll.
 
-### G. Improvised Effects
+**Change.** A roll spec in `core/rules/rolls.py` and an entry point on the power card.
+Nullify's is easy — it is the effect's own rule, so it belongs on the footer like any other
+roll the power calls for. The **general** counter is the open question: by RAW *any* effect
+used as a standard action or less can counter one with opposed descriptors, so putting a
+line on every card is faithful but adds a die button to powers that will never use it, and
+a power with no rolls has no footer to hang a menu on. Decide that deliberately rather than
+by default; `effect_action_at_most` (§5K) already answers "can this be readied".
 
-**Rules (p101–102).** `Improvised Effect` and `Prepared Effect` exist in `advantages.json`,
-but none of the arithmetic does:
-
-- preparation takes **time rank = the effect's PP cost**, minimum time rank 3 (one minute);
-- **−1 time rank per +5** added to the check DC, down to that minimum;
-- **+2 check bonus per +1 time rank** of extra preparation;
-- preparation DC = **10 + PP cost + 5 per time-rank reduction**;
-- use DC = **10 + PP cost**; a prepared effect lasts one scene;
-- fast-prep for a Hero Point skips preparation entirely.
-
-**Change.** A calculator over an assembled-but-unbought power. The constructor already knows
-the cost and `measurements.json` already has the time-rank table, so this is a small feature
-sitting on numbers that exist.
+### G. Improvised Effects — **done in pass 10, see §5N**
 
 ### H. Extra Effort and power stunts
 
@@ -855,8 +911,9 @@ Things a later pass will trip over if it does not know them.
 5. ~~**§6D Affliction's imposed effect**~~ — done in pass 8 (§5K).
 6. ~~**§6C nested trait budgets**~~ — the budgets are done in pass 9 (§5L); the builds
    became **§6M**.
-7. **§6F countering** and **§6G Improvised Effects** — feature work on a settled base, and
-   the two smallest things left. Do these next.
+7. ~~**§6G Improvised Effects**~~ — done in pass 10 (§5N). **§6F countering** is next, and
+   pass 10 sharpened it: Nullify's own opposed check is currently attributed to the wrong
+   side of the table, which is the same roll countering needs.
 8. **§6M the sub-builds** and then **§6K the Dynamic point pool** — the two big ones, and
    they want the same thing (a live budget spent across sub-builds). §6M is the one that
    settles what such an editor looks like, and §6K is the only remaining item that changes

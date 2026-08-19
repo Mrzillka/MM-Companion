@@ -1155,6 +1155,23 @@ class DerivedTrait:
 
 
 @dataclass(frozen=True)
+class ImprovisedEffectRules:
+    """The dials behind an Improvised Effect's preparation (``system.json``, p101–102).
+
+    Preparing one takes a **time rank equal to its Power Point cost**, floored at
+    ``min_time_rank`` (3 — one minute). From there the two trades: each time rank shaved
+    off costs ``dc_per_time_rank_saved`` on the preparation DC, and each one spent beyond
+    the base grants ``check_bonus_per_time_rank_spent`` on the check. Both DCs start from
+    the system's ``defense_dc_base``, so a ruleset with a different base DC moves them
+    together.
+    """
+
+    min_time_rank: int = 3
+    dc_per_time_rank_saved: int = 5
+    check_bonus_per_time_rank_spent: int = 2
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -1174,6 +1191,7 @@ class SystemRules:
     unscoped_scope_values: tuple[str, ...] = ("All checks",)
     alternate_effect_modifier: str = "alternate_effect"
     linked_modifier: str = "linked"
+    improvised_effect: ImprovisedEffectRules = field(default_factory=ImprovisedEffectRules)
     ranged_distance: RangeDistance = field(default_factory=RangeDistance)
     derived_traits: tuple[DerivedTrait, ...] = ()
     #: Which effect's resistance ladder is *the* damage ladder — the rungs the GM's
@@ -3122,6 +3140,20 @@ def _parse_costs(raw: dict) -> Costs:
     )
 
 
+def _parse_improvised_effect(raw: object, default: ImprovisedEffectRules) -> ImprovisedEffectRules:
+    """The Improvised Effect dials, each falling back to the built-in value."""
+
+    if not isinstance(raw, dict):
+        return default
+    return ImprovisedEffectRules(
+        min_time_rank=int(raw.get("minTimeRank", default.min_time_rank)),
+        dc_per_time_rank_saved=int(raw.get("dcPerTimeRankSaved", default.dc_per_time_rank_saved)),
+        check_bonus_per_time_rank_spent=int(
+            raw.get("checkBonusPerTimeRankSpent", default.check_bonus_per_time_rank_spent)
+        ),
+    )
+
+
 def _parse_range_distance(raw: dict | None, base: RangeDistance) -> RangeDistance | None:
     """A ``rangeDistance`` block laid over ``base``, or ``None`` when there is none.
 
@@ -3182,6 +3214,9 @@ def _parse_system(raw: dict) -> SystemRules:
             "alternate_effect_modifier", defaults.alternate_effect_modifier
         ),
         linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+        improvised_effect=_parse_improvised_effect(
+            sys.get("improvised_effect"), defaults.improvised_effect
+        ),
         damage_effect=sys.get("damage_effect", defaults.damage_effect),
         ranged_distance=_parse_range_distance(sys.get("ranged_distance"), defaults.ranged_distance)
         or defaults.ranged_distance,

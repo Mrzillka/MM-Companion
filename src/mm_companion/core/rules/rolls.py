@@ -43,6 +43,7 @@ from .derived import (
     skill_modifiers,
     skill_total,
 )
+from .improvised import ImprovisedPlan
 from .powers_terms import (
     effect_attack_skill_bonus,
     effect_roll_numbers,
@@ -568,6 +569,48 @@ def power_rolls(power: Power, char: Character | None, game_data: GameData) -> li
             prefix = base.name if base else effect.effect_id
         specs.extend(_effect_rolls(effect, game_data, char, prefix))
     return specs
+
+
+def improvised_rolls(
+    char: Character, game_data: GameData, plan: ImprovisedPlan, skill_row: str
+) -> list[RollSpec]:
+    """The two checks improvising an effect calls for, in the order they happen (p102).
+
+    The **preparation** check is made once the preparation time is up — by the GM, in
+    secret, which is why the hint says so rather than the spec quietly hiding it. Extra
+    time spent is a bonus on this one and only this one. The **use** check is the player's,
+    rolled the first time they actually reach for the effect, and may be retried until it
+    lands or the scene ends.
+
+    Both are the character's own skill total (:func:`skill_roll`) against a DC the plan
+    already knows, so neither needs anything typed into the DC box. ``skill_row`` is one of
+    :func:`~.improvised.improvised_skills` — the skill their Improvised Effect advantage
+    was taken for.
+    """
+
+    base = skill_roll(char, game_data, skill_row)
+    name = skill_row_label(skill_row)
+    return [
+        replace(
+            base,
+            label=f"Improvise: prepare ({name})",
+            modifier=base.modifier + plan.check_bonus,
+            dc=plan.prep_dc,
+            hint=(
+                f"Rolled in secret by the GM after {plan.time_text} of preparation. "
+                "Failure means the effect simply does not work."
+            ),
+        ),
+        replace(
+            base,
+            label=f"Improvise: use ({name})",
+            dc=plan.use_dc,
+            hint=(
+                "Rolled the first time the prepared effect is used. A failure still "
+                "spends the action, and may be retried until the end of the scene."
+            ),
+        ),
+    ]
 
 
 def power_roll_lines(power: Power, char: Character | None, game_data: GameData) -> list[str]:

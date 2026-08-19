@@ -478,6 +478,10 @@ class PowersSection(TitledSection):
     def _open_constructor(self) -> None:
         window = PowerConstructorWindow(self._data, character=self._character)
         window.powerSaved.connect(self._on_power_saved)
+        # The constructor is a window, not a block, so it cannot reach the roller
+        # itself; its Improvise panel asks and this section hands the request on the
+        # same way its own cards do.
+        window.rollRequested.connect(self.rollRequested)
         window.closed.connect(lambda w=window: self._on_window_closed(w))
         self._windows.append(window)
         window.show()
@@ -495,6 +499,7 @@ class PowersSection(TitledSection):
         no-op and a save swaps in exactly the power that was opened.
         """
         window = PowerConstructorWindow(self._data, character=self._character, power=power)
+        window.rollRequested.connect(self.rollRequested)
         window.powerSaved.connect(
             lambda edited, original=power: self._on_power_edited(original, edited)
         )

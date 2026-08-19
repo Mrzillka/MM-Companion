@@ -73,6 +73,23 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   being incorporeal, which is the Insubstantial effect, and the rules say so outright. The
   *Invisibility* and *Inaudibility* configurations seed the field, so they record which
   sense they hide rather than only naming it in their prose.
+- **An Improvised Effect is a calculator, not a build.** A character with the advantage can
+  rig up a power they have not bought and reach it with a skill check, and the whole thing
+  hangs off one number: the effect's Power Point cost sets the preparation time (a *time
+  rank* equal to the cost, floored at 3 — one minute), the preparation DC and the use DC
+  (p101–102). `core/rules/improvised.py` is that arithmetic, `system.json` holds the dials,
+  and the panel lives in the **Power Constructor** rather than on a sheet card for the
+  reason improvising exists: an improvised effect is one nobody has bought, and the
+  constructor is the only place an unbought power is ever held. The cost it reckons from is
+  `power_gross_cost`, because the rules put Removable out of bounds here.
+- **The constructor forwards rolls; it does not make them.** It is a window, not a sheet
+  block, so it is not on the block bus — `PowerConstructorWindow.rollRequested` is
+  connected by the `PowersSection` that opened it, which hands the request on exactly as
+  its own cards do. Its roll buttons are plain buttons rather than the sheet's
+  `RollsFooter`: `ui.cards` reaches back into `ui.power_constructor` for the terms grid
+  *and* sideways into `ui.sections`, so importing it here closes a loop — at module scope
+  it fails outright, and deferred it fails for anyone who opens the constructor without
+  the sheet.
 - **Four things buy a whole sub-build, and each states its budget as a number.** Summon's
   minion is built on `rank x 15` PP (p145), Variable gives `rank x 5` Variable Power
   Points (p148), Affliction's Empowering remakes the target on `rank x 15` (p110), and

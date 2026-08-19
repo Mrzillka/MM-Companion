@@ -37,6 +37,10 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     effective_size,
     effective_size_rank,
+    improvised_effect_cost,
+    improvised_plan,
+    improvised_rolls,
+    improvised_skills,
     item_ep_cost,
     modifier_label,
     pl_cap_note,
@@ -62,7 +66,7 @@ from mm_companion.ui.power_constructor.common import (
 )
 from mm_companion.ui.power_constructor.terms_view import CostOverrideTarget, PowerTermsView
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import BOLD_STYLE, muted_style, tinted_style
+from mm_companion.ui.widgets import BOLD_STYLE, make_spin_box, muted_style, tinted_style
 
 
 class PowerConstructorWindow(QMainWindow):
@@ -93,6 +97,10 @@ class PowerConstructorWindow(QMainWindow):
     closed = Signal()
     powerSaved = Signal(object)  # carries the finished Power to the host section
     itemSaved = Signal(object)  # gear mode's counterpart: the finished EquipmentItem
+    #: A roll the Improvise panel offers. This window is not on the sheet's block bus —
+    #: it is a window, not a block — so it forwards rather than rolls, and the section
+    #: that opened it hands the request on to the roller the way its own cards do.
+    rollRequested = Signal(object)  # RollSpec
 
     def __init__(
         self,
@@ -175,6 +183,7 @@ class PowerConstructorWindow(QMainWindow):
         self._seed_extended_settings()
 
         self._refresh_cost()
+        self._refresh_improvised()
         self._refresh_game_terms()
         self._refresh_pl_warning()
 
@@ -414,6 +423,7 @@ class PowerConstructorWindow(QMainWindow):
             layout.addWidget(self._build_gear_row())
 
         layout.addWidget(self._build_extended_row())
+        layout.addWidget(self._build_improvised_row())
 
         # Cross-power relationships (Independent / Array / Linked *between* whole powers)
         # are no longer set here — they're built on the character sheet by dragging one
@@ -451,6 +461,7 @@ class PowerConstructorWindow(QMainWindow):
         self.canvas.changed.connect(self._refresh_game_terms)
         self.canvas.changed.connect(self._refresh_pl_warning)
         self.canvas.changed.connect(self._apply_extended_settings)
+        self.canvas.changed.connect(self._refresh_improvised)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.canvas)
@@ -519,6 +530,155 @@ class PowerConstructorWindow(QMainWindow):
         self._extended_row = host
         host.setVisible(False)  # until an effect turns up that a row could apply to
         return host
+
+    def _build_improvised_row(self) -> QWidget:
+        """The Improvised Effect calculator: what rigging this up on the spot would take.
+
+        Collapsed by default and hidden until the power actually costs something, because
+        it answers a question most builds never ask. It belongs *here* rather than on the
+        sheet card for the reason improvising exists at all: an improvised effect is one
+        the character has **not bought**, and this window is the only place an unbought
+        power is ever held (p101).
+
+        The arithmetic is :func:`~mm_companion.core.rules.improvised_plan`; the two spin
+        boxes are the trade the rules offer — shave time ranks off the preparation and pay
+        for it on the DC, or spend extra ranks and gain a bonus on the check.
+        """
+
+        host = QWidget()
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        self._improvised_toggle = QToolButton()
+        self._improvised_toggle.setAutoRaise(True)
+        self._improvised_toggle.setCheckable(True)
+        self._improvised_toggle.setChecked(False)
+        self._improvised_toggle.setText(f"{self._COLLAPSED_GLYPH} Improvise this effect")
+        self._improvised_toggle.setToolTip(
+            "What it would take to rig this power up with a skill check instead of "
+            "buying it, for a character with the Improvised Effect advantage."
+        )
+        self._improvised_toggle.toggled.connect(self._on_improvised_toggled)
+        outer.addWidget(self._improvised_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        self._improvised_body = QWidget()
+        body = QVBoxLayout(self._improvised_body)
+        body.setContentsMargins(16, 0, 0, 0)
+        body.setSpacing(2)
+
+        trades = QHBoxLayout()
+        trades.setContentsMargins(0, 0, 0, 0)
+        trades.addWidget(QLabel("Prepare faster by"))
+        self._improvised_saved = make_spin_box(0, 30, value=0, buttons=False, max_width=44)
+        self._improvised_saved.setToolTip(
+            "Time ranks shaved off the preparation. Each one adds to the preparation DC, "
+            "and the preparation can never drop below the ruleset's minimum."
+        )
+        self._improvised_saved.valueChanged.connect(lambda _v: self._refresh_improvised())
+        trades.addWidget(self._improvised_saved)
+        trades.addWidget(QLabel("ranks, or slower by"))
+        self._improvised_spent = make_spin_box(0, 30, value=0, buttons=False, max_width=44)
+        self._improvised_spent.setToolTip(
+            "Extra time ranks spent preparing. Each one is a bonus on the preparation check."
+        )
+        self._improvised_spent.valueChanged.connect(lambda _v: self._refresh_improvised())
+        trades.addWidget(self._improvised_spent)
+        trades.addWidget(QLabel("ranks"))
+        trades.addStretch()
+        body.addLayout(trades)
+
+        self._improvised_note = QLabel()
+        self._improvised_note.setWordWrap(True)
+        body.addWidget(self._improvised_note)
+
+        # The two checks, as real rollable lines when the wielder can actually improvise.
+        self._improvised_rolls_host = QWidget()
+        rolls_layout = QVBoxLayout(self._improvised_rolls_host)
+        rolls_layout.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(self._improvised_rolls_host)
+
+        self._improvised_body.setVisible(False)
+        outer.addWidget(self._improvised_body)
+
+        self._improvised_row = host
+        host.setVisible(False)  # until the power costs something to improvise
+        return host
+
+    def _on_improvised_toggled(self, expanded: bool) -> None:
+        glyph = self._EXPANDED_GLYPH if expanded else self._COLLAPSED_GLYPH
+        self._improvised_toggle.setText(f"{glyph} Improvise this effect")
+        self._improvised_body.setVisible(expanded)
+        if expanded:
+            self._refresh_improvised()
+
+    def _refresh_improvised(self) -> None:
+        """Restate the plan for the power as it currently stands.
+
+        Cheap enough to run on every edit, but it only runs while the section is open —
+        the numbers are read, not acted on, so nobody is served by keeping a collapsed
+        panel current.
+        """
+
+        cost = improvised_effect_cost(self.power, self._data, self._character)
+        self._improvised_row.setVisible(bool(cost))
+        if not cost or not self._improvised_toggle.isChecked():
+            return
+        plan = improvised_plan(
+            cost,
+            self._data,
+            ranks_saved=self._improvised_saved.value(),
+            ranks_spent=self._improvised_spent.value(),
+        )
+        # The spin is not clamped in place — a player winding it up should see it stop
+        # mattering rather than have the control fight them — so the sentence says what
+        # was actually applied.
+        asked = self._improvised_saved.value()
+        capped = " (as far as it goes)" if asked > plan.ranks_saved else ""
+        bonus = f", +{plan.check_bonus} on the check" if plan.check_bonus else ""
+        self._improvised_note.setText(
+            f"Reckoned from {plan.cost} PP (a Removable discount does not apply). "
+            f"Preparing it takes <b>{plan.time_text}</b>{capped} and a "
+            f"<b>DC {plan.prep_dc}</b> check{bonus}, made in secret by the GM. "
+            f"Using it the first time is a <b>DC {plan.use_dc}</b> check, "
+            "and it lasts one scene."
+        )
+        self._rebuild_improvised_rolls(plan)
+
+    def _rebuild_improvised_rolls(self, plan) -> None:
+        """A button per check, or a note saying what the character is missing.
+
+        Deliberately **not** the sheet's :class:`~mm_companion.ui.cards.rolls.RollsFooter`:
+        ``ui.cards`` reaches back into this package for the terms grid *and* sideways into
+        ``ui.sections``, so importing it here closes an import loop — at module scope it
+        fails outright, and deferred it fails for anyone who opens this window without the
+        sheet. Two buttons need none of what that widget adds (pinning, hover chaining,
+        target-rolled lines), so they are the honest answer rather than the fallback.
+        """
+
+        layout = self._improvised_rolls_host.layout()
+        while layout.count():
+            widget = layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        skills = improvised_skills(self._character, self._data) if self._character else ()
+        if not skills:
+            note = QLabel(
+                "Improvising needs the Improvised Effect advantage, taken for the skill "
+                "the character improvises with."
+            )
+            note.setStyleSheet(muted_style())
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            return
+        for spec in improvised_rolls(self._character, self._data, plan, skills[0]):
+            sign = "+" if spec.modifier >= 0 else ""
+            button = QPushButton(f"🎲  {spec.label}  {sign}{spec.modifier} vs DC {spec.dc}")
+            button.setToolTip(spec.hint)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked=False, s=spec: self.rollRequested.emit(s))
+            layout.addWidget(button)
 
     def _build_size_damage_row(self) -> QWidget:
         """Size-scales-damage, with a note saying what it is worth to this wielder."""

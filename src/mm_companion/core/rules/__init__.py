@@ -39,6 +39,7 @@ from .costs import *  # noqa: F401,F403
 from .damage import *  # noqa: F401,F403
 from .derived import *  # noqa: F401,F403
 from .equipment import *  # noqa: F401,F403
+from .improvised import *  # noqa: F401,F403
 from .movement import *  # noqa: F401,F403
 from .pins import *  # noqa: F401,F403
 from .platforms import *  # noqa: F401,F403

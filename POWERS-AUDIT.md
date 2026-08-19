@@ -52,7 +52,7 @@ db18f2e  Record pass 8's commit hash in the audit
 773dd2a  Record pass 9's commit hash in the audit
 7583ee4  Work out what improvising an unbought effect would take
 cac4e72  Record pass 10's commit hash in the audit
-<pending>  Give an opposed effect check to the side that makes it
+d350325  Give an opposed effect check to the side that makes it
 ```
 
 ---

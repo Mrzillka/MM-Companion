@@ -798,6 +798,15 @@ class Effect:
     effect that implicitly attacks reads as Type "Attack" on its card while still
     filing under Control in the palette.
 
+    ``opposed_check`` names what an effect's own **opposed effect check** is rolled
+    against — Nullify's ``"targeted rank or Will"``. An effect check is ``d20 + effect
+    rank`` (p107) and the *wielder* makes it, which is the whole reason this is its own
+    field: Nullify's second roll reads like a resistance in the book's stat block, but the
+    procedure is "make an opposed check of your Nullify rank and the targeted effect rank
+    or the target's Will" — put in the ``resistance`` slot it becomes a roll attributed to
+    the target and carrying no bonus at all. Empty for every effect that makes no such
+    check of its own.
+
     ``personal`` is whether the effect works on **its user alone** — which is what the
     rules mean by "a Personal Range effect" (p110). It defaults to ``range_ ==
     "Personal"`` and only the exceptions state it in the data, because a handful of
@@ -820,6 +829,9 @@ class Effect:
     duration: str = ""
     check: str | None = None
     resistance: str | None = None
+    #: What this effect's own opposed effect check is rolled against; see the class
+    #: docstring. Empty for effects that make none.
+    opposed_check: str = ""
     base_cost: str = ""
     base_cost_value: int = 1
     base_cost_mode: str = "flat"
@@ -2420,6 +2432,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         duration=e.get("duration", ""),
         check=e.get("check"),
         resistance=e.get("resistance"),
+        opposed_check=e.get("opposedCheck", ""),
         base_cost=e.get("baseCost", ""),
         base_cost_value=int(e.get("baseCostValue", 1)),
         base_cost_mode=e.get("baseCostMode", "flat"),

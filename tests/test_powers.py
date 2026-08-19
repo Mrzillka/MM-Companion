@@ -29,6 +29,7 @@ from mm_companion.core.rules import (
     array_dynamic_primary_cost,
     configuration_by_id,
     configurations_for_effect,
+    counter_rolls,
     effect_action_at_most,
     effect_allocation_used,
     effect_attack_skill_bonus,
@@ -39,6 +40,7 @@ from mm_companion.core.rules import (
     effect_is_active,
     effect_is_personal,
     effect_makes_attack,
+    effect_opposed_check,
     effect_per_rank_cost,
     effect_readout_rows,
     effect_size_rank_shift,
@@ -68,6 +70,7 @@ from mm_companion.core.rules import (
     power_modifier_requirement_violations,
     power_pl_violations,
     power_points_spent,
+    power_rolls,
     power_runtime_gates,
     power_scope_terms,
     power_strength_amount_violations,
@@ -1021,14 +1024,75 @@ def test_attack_roll_adds_accurate_over_the_characters_attack() -> None:
     assert check.change == "better"
 
 
+def test_nullify_makes_its_own_opposed_check_rather_than_forcing_a_save() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Quench", effects=[PowerEffectInstance("nullify", rank=8)])
+    specs = {spec.label: spec for spec in power_rolls(power, char, data)}
+
+    # p138: "make an opposed check of your Nullify rank and the targeted effect rank or
+    # the target's Will". The *wielder* rolls it, at their rank - it used to sit in the
+    # resistance slot, which made it a target's roll carrying no bonus at all.
+    opposed = next(spec for spec in specs.values() if spec.kind == "effect-check")
+    assert opposed.modifier == 8
+    assert not opposed.rolled_by_target
+    assert opposed.dc is None  # the opposing check is the number to beat
+    assert not any(spec.rolled_by_target for spec in specs.values())
+
+
+def test_an_opposed_check_follows_the_effective_rank() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # An effect check is "d20 + effect rank" (p107), and the rank it opposes with is the
+    # one it actually resolves at.
+    effect = PowerEffectInstance("nullify", rank=8)
+    assert effect_opposed_check(effect, data, char)[0] == 8
+    effect.current_rank = 3  # dialled down mid-fight
+    assert effect_opposed_check(effect, data, char)[0] == 3
+    # An effect that makes no opposed check of its own says so by having none.
+    assert effect_opposed_check(PowerEffectInstance("damage", rank=8), data, char) is None
+
+
+def test_countering_is_offered_for_effects_that_are_actually_used() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+
+    def counters(effect_id: str) -> list[str]:
+        power = Power(name="X", effects=[PowerEffectInstance(effect_id, rank=8)])
+        return [spec.label for spec in counter_rolls(power, char, data)]
+
+    # The book's own two examples: a Blast countered with Move Object, Mind Control
+    # broken with Nullify (p107).
+    assert counters("move_object") and counters("nullify") and counters("damage")
+    # An always-on effect is not something you Ready and use, so it offers nothing.
+    assert counters("protection") == [] and counters("feature") == []
+    assert counters("flight") == []
+
+
+def test_a_counter_roll_is_the_wielders_at_their_effective_rank() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Water Control", effects=[PowerEffectInstance("move_object", rank=8)])
+    (spec,) = counter_rolls(power, char, data)
+    assert spec.modifier == 8 and spec.dc is None and not spec.rolled_by_target
+    assert "Move Object" in spec.label
+
+    # It is a tactic, not something the power calls for, so it stays out of the footer -
+    # otherwise every attack card and every weapon grows a die button for it.
+    assert all(spec.kind != "effect-check" for spec in power_rolls(power, char, data))
+
+
 def test_non_attack_roll_still_uses_the_effect_rank() -> None:
     data = load_game_data()
     char = Character.new_default(data)
     char.abilities["ATK"] = 6
 
-    # Nullify resolves "Effect vs. Will" — its own rank, never the character's Attack.
+    # Nullify's second roll is its own rank, never the character's Attack. It is an
+    # *opposed effect check* rather than a resistance: "make an opposed check of your
+    # Nullify rank and the targeted effect rank or the target's Will" (p138).
     rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("nullify", rank=7), data, char)}
-    assert rows["resistance"].value == "7 vs. Will or rank"
+    assert "resistance" not in rows
+    assert rows["opposed"].value.startswith("7 vs. ")
 
 
 def test_effect_stat_rows_opposed_effect_uses_rank_as_the_threshold() -> None:
@@ -1047,9 +1111,11 @@ def test_effect_stat_rows_append_dc_to_a_config_chosen_resistance() -> None:
 
 def test_effect_stat_rows_leave_dc_less_effects_as_prose() -> None:
     data = load_game_data()
-    # Nullify is opposed (no static DC); the actor roll still resolves to its rank.
+    # Nullify sets no static DC, so its row is a rank against whatever it is opposing
+    # rather than a number to beat.
     rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("nullify", rank=7), data)}
-    assert rows["resistance"].value == "7 vs. Will or rank"
+    assert rows["opposed"].value.startswith("7 vs. ")
+    assert "DC" not in rows["opposed"].value
 
 
 def test_effect_stat_rows_accurate_raises_and_tints_the_attack_roll() -> None:

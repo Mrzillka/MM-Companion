@@ -25,11 +25,13 @@ file alone. Delete it when §6 is empty.
 | §5K | Affliction's imposed-effect budget check (was §6D) | **done** — pass 8 |
 | §5L | Sub-build budgets, and the Summon / Variable data (was §6C) | **done** — pass 9 |
 | §5N | Improvised Effects arithmetic (was §6G) | **done** — pass 10 |
+| §5O | Countering, and Nullify's opposed check (was §6F) | **done** — pass 11 |
 | §6K | Dynamic Alternate Effects — the point pool (split from §6A) | outstanding |
 | §6M | The sub-builds themselves (split from §6C) | outstanding |
-| §6F | Countering effects | outstanding |
-| §6G | Improvised Effects arithmetic | outstanding |
 | §6H | Extra Effort and power stunts | outstanding |
+
+**Three items are left**, and all three are large enough to deserve their own pass. Every
+cost, every game-term and every roll the audit set out to check is now done.
 
 Commits so far, all on `docs/powers-rules-audit` off `develop`, **not yet merged**:
 
@@ -49,6 +51,8 @@ db18f2e  Record pass 8's commit hash in the audit
 49a81d2  State what a Summon, a Metamorph and a Variable are built on
 773dd2a  Record pass 9's commit hash in the audit
 7583ee4  Work out what improvising an unbought effect would take
+cac4e72  Record pass 10's commit hash in the audit
+<pending>  Give an opposed effect check to the side that makes it
 ```
 
 ---
@@ -63,7 +67,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2810 tests as of pass 10
+python -m pytest -q                 # ~9 min, 2816 tests as of pass 11
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -119,6 +123,7 @@ What was read in full and diffed:
 | Affliction's Imposed Effects, p110 | Affliction's `config`, `imposable_effects` |
 | Summon p145–146, Variable p148–149, Metamorph p136 | `effect_readouts.json`, `effect_modifiers.json`, `NOTE_VALUE_KINDS` |
 | Improvised Effects, p101–102 | `core/rules/improvised.py`, `system.json` |
+| Effect checks and countering, p107; Nullify, p138 | `opposedCheck`, `counter_rolls` |
 
 ### A trap worth recording
 
@@ -266,7 +271,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2–10 — what was built
+## 5. Passes 2–11 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -658,6 +663,46 @@ improvising it takes **8 hours** by default. Shaving 9 time ranks brings it to 1
 and takes the preparation check to **DC 71** — which is the book working as intended, and
 the reason improvisation is for modest effects.
 
+### O. Countering, and Nullify's opposed check (pass 11)
+
+**The rules (p107).** "An effect check is just like any other check: d20, plus the effect's
+rank." To counter, take the **Ready** action; when the opponent uses an effect with an
+opposing descriptor, spend your reaction and both of you make effect checks. Winning
+cancels both powers. The GM is the final arbiter on whether two descriptors oppose.
+
+**The bug this uncovered is the bigger half.** Nullify's second roll is an opposed effect
+check the *wielder* makes — "make an opposed check of your Nullify rank and the targeted
+effect rank or the target's Will" (p138) — and the app had it in the effect's
+``resistance`` slot. That slot builds a spec marked ``rolled_by_target=True`` with
+``modifier=0``, so the roll was attributed to the **wrong side of the table** and carried
+no bonus at all. It was unrollable as written, and it had been that way since Nullify was
+added. Countering needs exactly the same roll, so the two were one job.
+
+**What was built.** ``opposedCheck`` on an effect names what its own effect check is rolled
+against; it produces a game-term row (next to the save it is so easily mistaken for) and a
+wielder-rolled spec at the effect's **effective** rank with no DC — the opponent's result
+is the number to beat, which is what the DC box is for. Nullify declares one and its
+``resistance`` is now ``null``, which is the honest reading of the book's own stat block.
+
+**Where the generic counter lives, and why it moved.** ``counter_rolls`` offers one roll
+per effect that could actually be readied: something the character *uses* (it attacks or
+forces a resistance — an always-on Protection is not readied, it simply is) and usable as a
+standard action or less, which is the rules' own condition. Both of the book's examples
+pass — a Blast countered with Move Object, Mind Control broken with Nullify.
+
+It is deliberately **not** part of ``power_rolls``. That was tried first, and the test suite
+said no in three places at once: every attack power grew a die button, **every weapon in
+the Equipment block** grew one, and the GM pin picker started offering "Axe" three times.
+The footer is what a power *calls for*; countering is a tactic it can be turned to on a GM's
+ruling. So it is on the **power card's right-click menu**, which costs no space and is where
+the app already puts a card-adjacent action (the footer's own Pin menu). ``counter_menu``
+is split out from the handler that shows it, because a modal ``exec`` headless is a test
+that hangs rather than one that passes.
+
+**Checked in the app.** Nullify's card now reads "Opposed: 8 vs. targeted rank or Will" and
+offers it as a **rollable** footer line; Move Object and Nullify carry a counter entry on
+their menus; a Protection card has neither, and no card gained a line.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -687,6 +732,8 @@ A later pass should reach for these rather than inventing a parallel one.
 | A priced `select` in a modifier's name | `modifier_detail` | any option carrying its own `costValue` qualifies the modifier wherever it is listed, so two differently-priced cards never read alike |
 | `improvised_plan` | `core/rules/improvised.py` | preparation time and both DCs from a cost, with the trade between them; every dial in `system.json` |
 | `PowerConstructorWindow.rollRequested` | wired by `PowersSection` | how a *window* reaches the roller — it asks, and the block that opened it forwards |
+| `opposedCheck` on an effect | `effect_opposed_check`, `KIND_EFFECT_CHECK` | a `d20 + rank` roll the **wielder** makes against another effect, with no DC of its own |
+| `counter_rolls` + the card menu | `PowersSection.counter_menu` | a per-power action that costs no card space — the place to put anything a power *can be used for* rather than what it calls for |
 
 ---
 
@@ -705,33 +752,7 @@ it worked.
 
 ### E. Concealment's sense bookkeeping — **done in pass 6, see §5I**
 
-### F. Countering effects
-
-**Rules (p107).** Take the **Ready** action; when the opponent acts, spend your reaction and
-make an **opposed effect check** (d20 + rank each) between opposed descriptors. Winning
-cancels both. Ongoing effects can be countered the same way with a normal use. Nullify
-counters any effect of a chosen descriptor. The `Instant Counter` advantage skips the Ready.
-
-**Now.** No roll spec, so the roller cannot offer it and a Nullify's opposed check is done
-by hand.
-
-**Pass 10 found the concrete half of this while reading p138 for something else.**
-Nullify's second roll is *not* a resistance check: the book says "make an opposed check of
-your **Nullify rank** and the targeted effect rank or the target's Will". The app records it
-in the effect's ``resistance`` slot, which builds a spec marked ``rolled_by_target=True``
-with ``modifier=0`` — so the roll is attributed to the wrong side of the table and carries
-no bonus at all. It is unrollable as written. **That is the same shape countering needs**,
-so the two are one job: model an **opposed effect check** (``d20 + effect rank``, made by
-the wielder, the opponent's number in the DC box), give Nullify its own, and use it as the
-counter roll.
-
-**Change.** A roll spec in `core/rules/rolls.py` and an entry point on the power card.
-Nullify's is easy — it is the effect's own rule, so it belongs on the footer like any other
-roll the power calls for. The **general** counter is the open question: by RAW *any* effect
-used as a standard action or less can counter one with opposed descriptors, so putting a
-line on every card is faithful but adds a die button to powers that will never use it, and
-a power with no rolls has no footer to hang a menu on. Decide that deliberately rather than
-by default; `effect_action_at_most` (§5K) already answers "can this be readied".
+### F. Countering effects — **done in pass 11, see §5O**
 
 ### G. Improvised Effects — **done in pass 10, see §5N**
 
@@ -878,24 +899,30 @@ Things a later pass will trip over if it does not know them.
    modifier files — see §5L for the query and the four records it caught. It is clean as
    of pass 9; rerun it after adding modifier records, since a `costFormula` naming two
    prices with no `config` beneath it is silently the cheaper one.
-10. **The imposed-effect warning is constructor-only**, like the allocation, linked-range,
+10. **Nullify's readout changed shape**, and a saved character will notice. Its
+   ``resistance`` game-term row is gone and an ``opposed`` row stands in its place, so a
+   card that read "Resistance: 8 vs. Will or rank" now reads "Opposed: 8 vs. targeted rank
+   or Will" and gains a rollable footer line where it had an unrollable one. No point cost
+   moved and nothing needs migrating — the row is derived — but it is a visible change to
+   an existing character's card, and the third such change this branch has made (see 2).
+11. **The imposed-effect warning is constructor-only**, like the allocation, linked-range,
    Strength and requirement warnings beside it — the sheet card shows Power Level breaches
    alone. That is the existing convention rather than an oversight (see
    `_strength_violations`, which says so), but it does mean a character loaded from a file
    built under a different ruleset carries an over-budget imposed effect with no marker on
    the sheet until someone opens the constructor.
-11. **`docs/mm-powers-architecture.md` had a dangling §9.** The schema block referenced a
+12. **`docs/mm-powers-architecture.md` had a dangling §9.** The schema block referenced a
    section on effect configuration fields that had never been written, and the numbering
    skipped from 8 to 10. Pass 8 wrote it, since the pass was about exactly that. Worth
    knowing that the doc's cross-references are not all load-bearing — check before trusting
    one.
-12. **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
+13. **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
    under three cards reading 20, 8 and 10 — the pooling explains it, and each card's badge
    names its own share, but the total line itself does not. §5F built `power_cost_formula`
    for precisely this complaint about Removable and it fires only for a power-scope
    modifier; extending it to render the array working would close the same gap for every
    array, Dynamic or not. Left alone as beyond §5J's scope, not because it is fine.
-13. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
+14. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
    each pass. Update them in the same commit as the code, not afterwards — the notes are the
    thing a future session reads first.
 
@@ -911,9 +938,8 @@ Things a later pass will trip over if it does not know them.
 5. ~~**§6D Affliction's imposed effect**~~ — done in pass 8 (§5K).
 6. ~~**§6C nested trait budgets**~~ — the budgets are done in pass 9 (§5L); the builds
    became **§6M**.
-7. ~~**§6G Improvised Effects**~~ — done in pass 10 (§5N). **§6F countering** is next, and
-   pass 10 sharpened it: Nullify's own opposed check is currently attributed to the wrong
-   side of the table, which is the same roll countering needs.
+7. ~~**§6G Improvised Effects**~~ and ~~**§6F countering**~~ — done in passes 10 and 11
+   (§5N, §5O).
 8. **§6M the sub-builds** and then **§6K the Dynamic point pool** — the two big ones, and
    they want the same thing (a live budget spent across sub-builds). §6M is the one that
    settles what such an editor looks like, and §6K is the only remaining item that changes

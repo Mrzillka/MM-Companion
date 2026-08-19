@@ -1098,6 +1098,14 @@ def effect_stat_rows(
             rows.append(EffectStat(key, label, base[key], stats[key], change[key]))
         if key == "range":
             rows.extend(_ranged_distance_rows(effect, game_data, char, base_effect))
+        if key == "resistance":
+            # An effect that makes an opposed check of its own says so here, next to the
+            # save it is so easily mistaken for. It is the *wielder's* roll, and it is
+            # rank against rank rather than against a fixed DC.
+            opposed = effect_opposed_check(effect, game_data, char)
+            if opposed is not None:
+                bonus, against = opposed
+                rows.append(EffectStat("opposed", "Opposed", "", f"{bonus} vs. {against}", ""))
     # An effect can impose a save DC without either a (shown) check or resistance
     # phrase to carry it — surface it in its own row so the number is never lost.
     check_shown = "" if impact.drops_check else stats["check"]
@@ -1548,6 +1556,26 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
     if chosen:
         line += "; " + ", ".join(chosen)
     return line
+
+
+def effect_opposed_check(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> tuple[int, str] | None:
+    """This effect's own opposed effect check as ``(bonus, what it is rolled against)``.
+
+    An effect check is ``d20 + effect rank`` (p107) and the **wielder** makes it, so the
+    bonus is the effect's *effective* rank — a Strength-Based or size-shifted effect
+    opposes with what it actually resolves at, the same rank its save DC is built from.
+
+    ``None`` for the effects that make no such check, which is all but Nullify in the base
+    ruleset. Nullify is the one the rules build on it: "make an opposed check of your
+    Nullify rank and the targeted effect rank or the target's Will" (p138).
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or not base.opposed_check:
+        return None
+    return effect_effective_rank(effect, game_data, char), base.opposed_check
 
 
 def array_member_note(dynamic: bool, game_data: GameData) -> str:

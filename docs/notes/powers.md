@@ -73,6 +73,23 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   being incorporeal, which is the Insubstantial effect, and the rules say so outright. The
   *Invisibility* and *Inaudibility* configurations seed the field, so they record which
   sense they hide rather than only naming it in their prose.
+- **An opposed effect check is its own kind of roll.** "An effect check is just like any
+  other check: d20, plus the effect's rank" (p107), and when one effect is used against
+  another both sides make one. It is the **wielder's** roll with no DC of its own — the
+  opponent's result is the number to beat — which is why it is a game-term field
+  (`opposedCheck`) rather than something squeezed into `resistance`. Nullify is the effect
+  the rules build on it, and it had been in the resistance slot: that produced a spec
+  marked `rolled_by_target` carrying `modifier=0`, so the roll was attributed to the wrong
+  side of the table and had no bonus at all.
+- **Countering is a tactic, so it lives on the card's context menu, not its dice footer.**
+  Ready an effect, spend your reaction when an opponent uses one with an opposing
+  descriptor, and make opposed effect checks; winning cancels both (p107). `counter_rolls`
+  offers one per effect that could actually be readied — something the character *uses*
+  (it attacks or forces a resistance) and usable as a standard action or less. It is
+  deliberately **not** in `power_rolls`: putting it there was tried, and it put a die
+  button on every attack card *and* every weapon in the Equipment block, and tripled the
+  GM pin picker's Equipment list. The footer is what a power *calls for*; a right-click
+  menu costs nothing and is where the app already puts a card-adjacent action.
 - **An Improvised Effect is a calculator, not a build.** A character with the advantage can
   rig up a power they have not bought and reach it with a skill check, and the whole thing
   hangs off one number: the effect's Power Point cost sets the preparation time (a *time

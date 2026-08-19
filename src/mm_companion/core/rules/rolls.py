@@ -44,12 +44,19 @@ from .derived import (
     skill_total,
 )
 from .improvised import ImprovisedPlan
+from .powers_cost import effect_action_at_most, effect_effective_rank
 from .powers_terms import (
     effect_attack_skill_bonus,
+    effect_makes_attack,
+    effect_opposed_check,
     effect_roll_numbers,
     effect_stat_rows,
     required_checks,
 )
+
+#: The slowest action an effect may take and still be readied to counter in action time:
+#: "You must be able to use the readied effect as a standard action or less" (p107).
+COUNTER_ACTION_LIMIT = "Standard"
 
 #: Spec ``kind`` values. The UI reads these only for grouping/telemetry — the roll
 #: itself is fully described by the label, modifier and DC.
@@ -59,6 +66,9 @@ KIND_SKILL = "skill"
 KIND_INITIATIVE = "initiative"
 KIND_POWER_CHECK = "power-check"
 KIND_POWER_SAVE = "power-save"
+#: An opposed effect check — ``d20 + effect rank`` against another effect's own check
+#: (p107). Countering is the usual reason for one; Nullify's second roll *is* one.
+KIND_EFFECT_CHECK = "effect-check"
 
 
 def _as_int(value: object) -> int | None:
@@ -544,6 +554,19 @@ def _effect_rolls(
         )
     if save is not None:
         specs.append(save)
+    if base_effect is not None and base_effect.opposed_check:
+        # The effect's *own* opposed check (Nullify's), which the wielder makes at their
+        # effective rank. Distinct from the counter roll below: this one is what the
+        # effect does, not a tactic it can be turned to.
+        bonus, against = effect_opposed_check(effect, game_data, char)
+        specs.append(
+            RollSpec(
+                label=named(f"opposed vs. {against}"),
+                modifier=bonus,
+                kind=KIND_EFFECT_CHECK,
+                hint="The opposed number goes in the DC box.",
+            )
+        )
     return specs
 
 
@@ -611,6 +634,54 @@ def improvised_rolls(
             ),
         ),
     ]
+
+
+def counter_rolls(power: Power, char: Character | None, game_data: GameData) -> list[RollSpec]:
+    """The opposed effect checks this power offers for **countering** another (p107).
+
+    "You and the opposing character make effect checks (d20 + rank). If you win, your two
+    powers cancel each other out." So each is the wielder's roll at that effect's effective
+    rank, and the *opponent's* result is the number to beat — which is what the DC box is
+    for, so the specs deliberately carry no DC.
+
+    One per effect that could actually be readied for it: something the character *uses*
+    (it makes an attack or forces a resistance — an always-on Protection is not readied,
+    it simply is) and usable as a standard action or less, which is the rules' own
+    condition. Both of the book's examples pass — a Blast countered with Move Object,
+    Mind Control broken with Nullify — and a Feature or a Flight yields nothing.
+
+    Deliberately **not** part of :func:`power_rolls`. Countering is a tactic a power can be
+    turned to on a GM's ruling about descriptors, not something the power calls for, and
+    putting it in the footer put a die on every attack card and every weapon in the
+    Equipment block. The card's own context menu is where it belongs.
+    """
+
+    multi = len(power.effects) > 1
+    specs: list[RollSpec] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        if not effect_makes_attack(effect, game_data) and base.resistance_dc_base is None:
+            continue
+        if not effect_action_at_most(base, COUNTER_ACTION_LIMIT, game_data):
+            continue
+        prefix = effect.label or (base.name if multi else "")
+        rank = effect_effective_rank(effect, game_data, char)
+        specs.append(
+            RollSpec(
+                label=f"Counter with {prefix or base.name} (effect check)",
+                modifier=rank,
+                kind=KIND_EFFECT_CHECK,
+                hint=(
+                    "Opposed effect check: Ready this effect, then spend your reaction "
+                    "when the opponent acts. Their effect check goes in the DC box, and "
+                    "winning cancels both powers. The descriptors have to oppose, which "
+                    "is the GM's call."
+                ),
+            )
+        )
+    return specs
 
 
 def power_roll_lines(power: Power, char: Character | None, game_data: GameData) -> list[str]:

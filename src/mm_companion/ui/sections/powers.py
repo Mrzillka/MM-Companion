@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -84,6 +85,7 @@ from mm_companion.core.rules import (
     active_array_child,
     array_alternate_cost,
     array_dynamic_primary_cost,
+    counter_rolls,
     debilitated_traits,
     effect_current_rank,
     effect_stands,
@@ -790,6 +792,46 @@ class PowersSection(TitledSection):
         ungroup.setVisible(not self._locked)
         return header
 
+    def _arm_counter_menu(self, card: DraggableCard, power: Power) -> None:
+        """Offer this power's counter rolls on the card's right-click menu (p107).
+
+        Countering is a **tactic**, not something a power calls for: you Ready an effect,
+        and when your opponent uses one with an opposing descriptor you spend a reaction on
+        an opposed effect check. So it does not belong in the dice footer beside the rolls
+        the power actually makes — putting it there gave every attack card and every weapon
+        in the Equipment block a die button for a case the GM has to approve first.
+
+        A right-click menu costs no space at all and is where the app already puts a
+        card-adjacent action (the footer's own Pin menu). A power with nothing that could
+        be readied gets no menu rather than an empty one.
+        """
+
+        specs = counter_rolls(power, self._character, self._data)
+        if not specs:
+            return
+        card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        card.customContextMenuRequested.connect(
+            lambda pos, c=card, ss=specs: self._show_counter_menu(c, ss, pos)
+        )
+
+    def counter_menu(self, card: DraggableCard, specs: list) -> QMenu:
+        """The counter menu itself, built but not shown.
+
+        Split from :meth:`_show_counter_menu` so the wiring can be checked without
+        ``exec`` — a modal menu headless is a test that hangs rather than a test that
+        passes.
+        """
+
+        menu = QMenu(card)
+        for spec in specs:
+            action = menu.addAction(f"{spec.label}  +{spec.modifier}")
+            action.setToolTip(spec.hint)
+            action.triggered.connect(lambda _checked=False, s=spec: self.rollRequested.emit(s))
+        return menu
+
+    def _show_counter_menu(self, card: DraggableCard, specs: list, pos) -> None:
+        self.counter_menu(card, specs).exec(card.mapToGlobal(pos))
+
     def _dynamic_toggle(self, node: PowerNode, parent: PowerGroup | None) -> QWidget | None:
         """A Dynamic switch for a member of an ``array`` group, or ``None``.
 
@@ -1027,6 +1069,7 @@ class PowersSection(TitledSection):
         """
         card = DraggableCard(power.id)
         self._arm_activation(card, power, parent, interactive)
+        self._arm_counter_menu(card, power)
         layout = QVBoxLayout(card)
         layout.addWidget(self._header_row(power, card, parent))
 

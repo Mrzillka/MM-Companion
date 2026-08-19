@@ -25,6 +25,7 @@ from mm_companion.core.powers import (
     PowerGroup,
 )
 from mm_companion.core.rules import (
+    counter_rolls,
     effect_readout_rows,
     effect_roll_numbers,
     effect_total_cost,
@@ -188,6 +189,52 @@ def test_the_dynamic_switch_reprices_the_array(qapp: QApplication) -> None:
         for box in sheet.powers._list_host.findChildren(QCheckBox)
         if box.text() == "Dynamic"
     ] == [False, True]
+
+
+def test_the_counter_menu_is_offered_only_where_something_could_be_readied(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)])
+    armor = Power(name="Armor", effects=[PowerEffectInstance("protection", rank=6)])
+    char.powers.extend([blast, armor])
+    sec = _sheet_for(char).powers
+    cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
+
+    # Countering costs no space on the card: it is a right-click menu, not a footer line.
+    assert cards[blast.id].contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    # An always-on Protection is never readied, so its card gets no menu rather than an
+    # empty one.
+    assert cards[armor.id].contextMenuPolicy() != Qt.ContextMenuPolicy.CustomContextMenu
+
+
+def test_the_counter_menu_asks_the_roller_rather_than_rolling(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(
+        name="Blast",
+        effects=[
+            PowerEffectInstance("damage", rank=6),
+            PowerEffectInstance("affliction", rank=4),
+        ],
+    )
+    char.powers.append(blast)
+    sec = _sheet_for(char).powers
+    card = next(c for c in sec.findChildren(_DraggableCard) if c.node_id == blast.id)
+
+    menu = sec.counter_menu(card, counter_rolls(blast, char, data))
+    # One entry per effect that could be readied, each naming which one it is.
+    labels = [action.text() for action in menu.actions()]
+    assert len(labels) == 2
+    assert "Damage" in labels[0] and "+6" in labels[0]
+    assert "Affliction" in labels[1] and "+4" in labels[1]
+
+    seen: list = []
+    sec.rollRequested.connect(seen.append)
+    menu.actions()[0].trigger()
+    # The section asks the roller, exactly as its footer lines do; it never rolls.
+    assert len(seen) == 1 and seen[0].modifier == 6 and seen[0].dc is None
 
 
 def _sheet_for(char: Character) -> CharacterSheet:

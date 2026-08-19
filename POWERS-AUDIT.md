@@ -40,7 +40,7 @@ b880efb  Turn the powers audit into a handover brief
 9a10545  Price Removable from the whole power, per 5 points
 6ceb01b  Make repeatability data, and add the Dimensional sense
 4c98850  Record which senses a Concealment hides from
-<pending>  Charge a Dynamic Alternate Effect what it costs
+96677f1  Charge a Dynamic Alternate Effect what it costs
 ```
 
 ---

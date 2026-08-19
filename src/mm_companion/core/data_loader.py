@@ -886,6 +886,12 @@ class Modifier:
     Removable's 5 means "its value per 5 points of the power's final cost, rounded up".
     Zero charges the magnitude once.
 
+    ``dynamic_cost_value`` belongs to the array's ``alternate_effect`` record alone: an
+    Alternate Effect is "1 or 2 points flat" (p151), 1 for an ordinary alternate and 2
+    for a **Dynamic** one that shares the array's point pool. Making the array's *base*
+    Dynamic instead "requires 1 Alternate Effect rank" (p101) — that is ``cost_value``,
+    not a third number. Zero everywhere else.
+
     ``gate`` marks a flaw that can switch an effect's standing bonus off at runtime
     (one of :mod:`mm_companion.core.components`'s ``GATE_*`` kinds): Activation
     (``"activation"``), Removable (``"removable"``), Limited (``"limited"``),
@@ -945,6 +951,10 @@ class Modifier:
     adds_ability: str = ""
     cost_scope: str = ""
     cost_per_points: int = 0
+    #: What one *Dynamic* alternate costs, for the array modifier only (p151's "1 or 2
+    #: points flat"). Zero on every other record, and read through
+    #: :func:`mm_companion.core.rules.array_alternate_cost`.
+    dynamic_cost_value: int = 0
     gate: str = ""
     requires_effect_id: str = ""
     repeatable: bool = False
@@ -2408,6 +2418,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         adds_ability=m.get("addsAbility", ""),
         cost_scope=m.get("costScope", ""),
         cost_per_points=int(m.get("costPerPoints", 0)),
+        dynamic_cost_value=int(m.get("dynamicCostValue", 0)),
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
         repeatable=bool(m.get("repeatable", False)),

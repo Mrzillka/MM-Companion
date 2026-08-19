@@ -21,7 +21,8 @@ file alone. Delete it when §6 is empty.
 | §5G | Enhanced Senses' Dimensional option (was §6I) | **done** — pass 5 |
 | §5H | A `repeatable` flag replaces "has config" (was §6J) | **done** — pass 5 |
 | §5I | Concealment's sense bookkeeping (was §6E) | **done** — pass 6 |
-| §6A | Dynamic Alternate Effects | outstanding |
+| §5J | Dynamic Alternate Effects — the price (was §6A) | **done** — pass 7 |
+| §6K | Dynamic Alternate Effects — the point pool (split from §6A) | outstanding |
 | §6C | Nested trait budgets (Summon / Metamorph / Variable / Empowering) | outstanding |
 | §6D | Affliction's imposed-effect budget check | outstanding |
 | §6F | Countering effects | outstanding |
@@ -38,6 +39,8 @@ ebac2c9  Add the rulebook's standard power configurations
 b880efb  Turn the powers audit into a handover brief
 9a10545  Price Removable from the whole power, per 5 points
 6ceb01b  Make repeatability data, and add the Dimensional sense
+4c98850  Record which senses a Concealment hides from
+<pending>  Charge a Dynamic Alternate Effect what it costs
 ```
 
 ---
@@ -52,7 +55,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2773 tests as of pass 6
+python -m pytest -q                 # ~9 min, 2783 tests as of pass 7
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -79,6 +82,13 @@ replacement in a short Python script, then `json.loads` the result to prove it s
 parses. `configurations.json` is the one file written by a generator at indent-2
 throughout; see §3.
 
+**A patch script piped into `python` through the Bash tool loses one level of backslash**,
+even from a quoted heredoc — so an anchor containing `"
+"` silently becomes a real newline
+and the match fails with no clue why. It cost a confused ten minutes in pass 7. Either keep
+backslashes out of the anchor, write the script to a file first, or use the `Edit` tool for
+those. Non-ASCII (`—`, `•`) survives fine; only backslashes are eaten.
+
 ---
 
 ## 2. Method and source
@@ -95,6 +105,7 @@ What was read in full and diffed:
 | Generic extras p150–158; generic flaws p159–163 | `src/mm_companion/data/modifiers.json` |
 | Per-effect extras/flaws, throughout p109–149 | `src/mm_companion/data/effect_modifiers.json` |
 | Cost rules, p100 and p150 | `src/mm_companion/core/rules/powers_cost.py` |
+| Arrays and Dynamic Alternate Effects, p100–101 and p151 | `array_members_cost`, `alternate_effect` in `modifiers.json` |
 | Standard power configurations, p236 (by effect) and p237 (by name) | `src/mm_companion/data/configurations.json` |
 | Sense types, p63 | — used by Illusion / Obscure / Remote Sensing |
 
@@ -244,7 +255,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2–6 — what was built
+## 5. Passes 2–7 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -419,6 +430,53 @@ seed the field, so they record which sense they hide instead of naming it only i
 Both still price at the number the book prints.
 
 
+### J. Dynamic Alternate Effects — the price (pass 7)
+
+**The rules.** "An Alternate Effect costs 1 Power Point, while a Dynamic Alternate Effect
+costs 2" (p151). What the second point buys is that a Dynamic member is *not* mutually
+exclusive with its siblings: it "can share Power Points with other Dynamic Alternate
+Effects, allowing them to operate at the same time, but at reduced effectiveness", split
+once per turn as a free action (p101). Making the array's **primary** Dynamic instead
+"requires 1 Alternate Effect rank" — 1 point, and the book's own Empyrean example is
+explicit that it is charged *on top of* the base's cost, not instead of it.
+
+**Now.** `array_alternate_cost` read one `costValue` off the `alternate_effect` record, so
+every alternate cost 1 and a Dynamic array was priced as an ordinary one.
+
+**What was built.**
+
+- **`dynamic` is a per-member flag, not an array-wide mode.** That is the shape the rules
+  have — an array can mix ordinary and Dynamic members, and Empyrean's does. It therefore
+  exists at **both levels an array does**: `PowerEffectInstance.dynamic` for a power's own
+  effects, `Power.dynamic` / `PowerGroup.dynamic` for a group of whole cards (a nested
+  group can be a member too, so it carries one as well). Build state, written only when
+  set, so an array saved before this loads ordinary and costs exactly what it did.
+- **`array_members_cost`** is the one place the pooling arithmetic now lives — it takes
+  `(full cost, dynamic)` pairs, picks the costliest as base, and charges each other member
+  its own alternate price. `power_gross_cost` and `node_cost` both call it, which is what
+  stops the two levels drifting; before, each spelled `max(...) + (n - 1) * flat` itself.
+- **Both numbers are data.** `dynamicCostValue: 2` joined `costValue: 1` on the
+  `alternate_effect` record. The *primary's* price deliberately did **not** become a third
+  number: the book says "1 Alternate Effect rank", so `array_dynamic_primary_cost` returns
+  `array_alternate_cost(game_data)` and says why.
+- **The switch is per card at both levels**, since the flag is. In the constructor it rides
+  on `EffectCard.set_role`, which the canvas already calls whenever the structure changes —
+  so it appears for a base or alternate and hides otherwise, *without* clearing the flag
+  (flip a power to Linked and back and the members you marked are still marked). On the
+  sheet `_dynamic_toggle` puts the same box on a leaf card and a nested group header alike,
+  and follows `_ModeToggle` when locked: still readable, no longer a control, click falls
+  through to the card that selects the array member.
+- The badges and both game-term readouts name it and print the price they were charged
+  (`array_member_note`), so `Base · +1 PP Dynamic` and `Alternate · 2 PP` sit on the cards
+  and `Flight 5 — Dynamic Alternate Effect, 2 pt` in the summary.
+
+**Checked in the app**, and the book's own worked example comes out right: a Dynamic Create
+10 base (20) with a Dynamic Flight 5 and an ordinary Damage 8 beside it is 20 + 1 + 2 + 1 =
+**24 PP**, and the sheet splits the same 24 across the cards as 21 / 2 / 1.
+
+**The runtime half was split out as §6K** rather than half-built — see there for why, and
+for the two designs already weighed.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -437,6 +495,8 @@ A later pass should reach for these rather than inventing a parallel one.
 | `costDelta` on a config option | `_config_cost_delta` (`powers_cost.py`) | a second config choice that *shades* a magnitude another field set, summed across fields and floored at 0 |
 | `power_cost_formula` | shown by `PowerConstructorWindow._refresh_cost` | the working behind a total the effect cards cannot explain |
 | `repeatable` on a modifier | `EffectCard.attach_modifier` | whether a second copy may be attached — a rules fact, kept in data |
+| `array_members_cost` | `powers_cost.py` | the whole array-pooling rule from `(cost, dynamic)` pairs — the one place `power_gross_cost` and `node_cost` both go, so the two levels an array exists at cannot drift |
+| `dynamic` on a member | `PowerEffectInstance` / `Power` / `PowerGroup` | a per-member array flag; a mod pricing its own array variant reads it beside `structure`/`mode` |
 
 ---
 
@@ -445,27 +505,7 @@ A later pass should reach for these rather than inventing a parallel one.
 Each item below states what the rules say, what exists now, what to change, and how to know
 it worked.
 
-### A. Dynamic Alternate Effects
-
-**Rules (p101).** An alternate that is **Dynamic** costs **2**, not 1; making the array's
-**primary** power Dynamic costs **1**. Dynamic members **share the array's point pool and
-run simultaneously** at reduced rank, reallocated once per turn as a free action. A member
-needs a minimum allocation to function at all (2 points of Flight = Flight 1).
-
-**Now.** `array_alternate_cost()` (`powers_cost.py:1037`) reads one `costValue` off the
-`alternate_effect` record, so every alternate costs 1. There is no per-alternate flag and no
-runtime allocation state.
-
-**Change.** A `dynamic` flag on `Power` / `PowerGroup` (build state, persisted the way
-`structure` is); `array_alternate_cost` becomes per-member; `power_total_cost` and
-`node_cost` (`powers_cost.py:1064`, `1086`) fold in the primary's +1; runtime allocation
-state alongside the existing `array_active` / `active_child_id`, persisted the way the other
-runtime flags are (**written only when it differs from the default**, so old saves load
-unchanged — see `docs/notes/powers.md`).
-
-**Acceptance.** A three-member array where two are Dynamic costs base + 2 + 2 (+1 if the
-primary is Dynamic too); allocating points across the Dynamic members changes each one's
-effective rank and nothing else; an old saved array still loads and costs the same.
+### A. Dynamic Alternate Effects — the price — **done in pass 7, see §5J**
 
 ### B. Removable's real formula — **done in pass 4, see §5F**
 
@@ -542,6 +582,51 @@ should probably be its own branch after this one merges.
 
 ### J. "Has config" is a poor proxy for "may be taken twice" — **done in pass 5, see §5H**
 
+### K. Dynamic Alternate Effects — the point pool
+
+The half of §6A that pass 7 deliberately did **not** build. The price is right; the pool is
+not modelled at all, so a Dynamic member still behaves at runtime exactly like an ordinary
+alternate — it is dimmed unless it is the one selected member, and its rank never drops.
+
+**Rules (p101).** Dynamic members share the array's point pool and **operate at the same
+time, at reduced effectiveness**. You decide the split **once per turn as a free action**. A
+member functions only while it holds a minimum: "a character can maintain the Dynamic
+Alternate Effect for their Flight so long as at least 2 Power Points are assigned to it, but
+their Flight speed is then limited to 1 rank of Flight."
+
+**Why it was split out rather than half-built.** The allocation has to reach an effect's
+*effective rank*, and `effect_current_rank(effect)` takes the effect alone — nothing about
+the power it sits in, let alone the parent group whose pool it draws on. Threading that
+through means a signature change across ~15 call sites in `powers_cost`, `powers_terms`,
+`movement`, `size`, `runtime` and the sheet. That is a bigger and riskier job than the
+pricing fix it was bundled with, and it deserves its own pass rather than being bolted on.
+
+**Two designs were weighed. Record them so the next pass need not re-derive them.**
+
+1. **Derive at read time.** Store points per member; thread the power (and its parent group)
+   into `effect_current_rank` so the reduced rank is computed wherever a rank is read.
+   Correct and single-sourced, but it is the wide signature change above.
+2. **Push into `current_rank` on edit.** The allocation editor *writes* each effect's
+   existing `current_rank` (and the member's live flag), the way `_normalize_arrays` already
+   fixes up array state. No read-path change at all — but it stomps a dial the player may
+   have set by hand, and derived state written into a stored field goes stale the moment a
+   rank is edited elsewhere. Cheap; the trade is real.
+
+**Arithmetic that will be wanted either way**, worked out and checked against the book's own
+example: with `pool` = the base member's full cost and a member allocated `n` of it,
+`rank' = floor(rank × n / full_cost_of_that_member)`. Flight 5 costs 10, so `n = 2` gives
+`floor(5 × 2/10) = 1` — the book's "2 Power Points … limited to 1 rank of Flight", exactly.
+A member whose every effect floors to 0 is below the minimum and is simply off, which needs
+no special case. Note `effect_current_rank`'s floor is 1, so this cannot reuse it unchanged.
+
+**Also outstanding here:** `live_powers` gives an array exactly one live child, so Dynamic
+members that should run *alongside* the selected one do not; and the sheet's click hint
+("its siblings switch off") stops being true once they do.
+
+**Acceptance.** Allocating points across an array's Dynamic members changes each one's
+effective rank and nothing else; a member below its minimum is off; the split may not exceed
+the pool; an old saved array loads with no allocation and behaves exactly as it does today.
+
 ---
 
 ## 7. Known debts and caveats
@@ -588,7 +673,13 @@ Things a later pass will trip over if it does not know them.
    Berserker Rage, Poltergeist, Power Theft. The book leaves them blank too (which trait is
    boosted, which descriptor is absorbed), so this is faithful rather than incomplete, but
    it is worth knowing before someone "fixes" them.
-9. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
+9. **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
+   under three cards reading 20, 8 and 10 — the pooling explains it, and each card's badge
+   names its own share, but the total line itself does not. §5F built `power_cost_formula`
+   for precisely this complaint about Removable and it fires only for a power-scope
+   modifier; extending it to render the array working would close the same gap for every
+   array, Dynamic or not. Left alone as beyond §5J's scope, not because it is fine.
+10. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
    each pass. Update them in the same commit as the code, not afterwards — the notes are the
    thing a future session reads first.
 
@@ -599,8 +690,13 @@ Things a later pass will trip over if it does not know them.
 1. ~~**§6B Removable**~~ — done in pass 4 (§5F).
 2. ~~**§6J the repeatable flag** and **§6I Dimensional**~~ — done in pass 5 (§5H, §5G).
 3. ~~**§6E Concealment senses**~~ — done in pass 6 (§5I).
-4. **§6A Dynamic Alternate Effects** — medium, touches cost and runtime state.
+4. ~~**§6A Dynamic Alternate Effects**~~ — the price is done in pass 7 (§5J); the pool
+   became **§6K**.
 5. **§6D Affliction's imposed effect**, then **§6C nested trait budgets** — §6D is a
    thin version of the same problem and will inform the bigger one.
-6. **§6F countering** and **§6G Improvised Effects** — feature work on top of a settled base.
-7. **§6H Extra Effort and power stunts** — its own branch, after this one merges.
+6. **§6K the Dynamic point pool** — do it after §6C. Both want the same thing (a live
+   budget spent across sub-builds), and §6C is the one that settles what that editor looks
+   like. §6K is the only remaining item that changes an existing read path rather than
+   adding one, so it is the one worth having a settled base under.
+7. **§6F countering** and **§6G Improvised Effects** — feature work on top of a settled base.
+8. **§6H Extra Effort and power stunts** — its own branch, after this one merges.

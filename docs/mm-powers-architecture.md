@@ -116,9 +116,15 @@ resisted rank to cap, so a Flight + Attack stays out of PL scope.
   Each alternate effect costs a flat 1-2 points (from `modifiers.json`) regardless of its own
   rank, as long as its own total cost doesn't exceed the base power's cost. Permanent-duration
   effects can't be array members (they can't be switched off).
-- **Dynamic Alternate Effects**: a variant array where 2+ ranks of the Alternate Effect extra
-  let multiple array members split the pool of points and run **simultaneously** at reduced
-  rank, reconfigured freely each turn.
+- **Dynamic Alternate Effects**: an array member that is *not* mutually exclusive with its
+  siblings. It shares the array's point pool with the array's other Dynamic members and runs
+  **simultaneously** with them at reduced rank, reallocated once per turn as a free action.
+  That is what its dearer price buys: a Dynamic alternate costs 2 points rather than 1, and
+  making the array's *base* Dynamic costs one Alternate Effect rank on top of its own cost
+  (p101, p151). Dynamic is therefore a per-**member** flag, not an array-wide mode:
+  `PowerEffectInstance.dynamic` within a power, `Power.dynamic` / `PowerGroup.dynamic` within
+  a group, both read by `array_members_cost`. Two Dynamic members are needed before the
+  option does anything, which the book says outright and the app leaves to the player.
 
 ```
 Power (array example: "elemental control")
@@ -325,11 +331,16 @@ formula all read it, so a configured Illusion cannot cost one thing and explain 
 Adding a sense type, an Environment condition or a whole new configured effect is
 therefore a data edit with no Python behind it.
 
-**Dynamic Alternate Effects are described above but not modelled.** `array_alternate_cost`
-reads a single `costValue` off the `alternate_effect` record, so every alternate costs 1;
-the book charges 2 for a Dynamic one and 1 more to make the array's *primary* Dynamic
-(p101), and Dynamic members share a point pool reallocated once per turn. There is no
-per-alternate flag and no runtime allocation state for that pool.
+**Dynamic Alternate Effects are priced but the pool is not modelled.** Each member carries
+its own `dynamic` flag, and `array_members_cost` charges `dynamicCostValue` (2) for a Dynamic
+alternate and one Alternate Effect rank for a Dynamic base, at both levels an array exists
+at — so a Dynamic array costs what the book prints. What does not exist is the **runtime
+allocation**: how many of the array's points each Dynamic member currently holds, and the
+reduced rank that buys ("2 Power Points assigned to it, but their Flight speed is then
+limited to 1 rank", p101). Every Dynamic member still behaves at runtime exactly as an
+ordinary alternate does. The blocker is that `effect_current_rank` takes only the effect, so
+an allocation cannot reach the rank without threading the power (and its parent group) into
+it; `POWERS-AUDIT.md` §6K records the two candidate designs.
 
 **Backward compatibility.** An effect with no rows falls back to a single
 `config["target"]` at the effect's full rank — which is how Protection's baked-in

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
+    STRUCTURE_ARRAY,
     STRUCTURE_INDEPENDENT,
     STRUCTURE_LINKED,
     Power,
@@ -376,10 +377,10 @@ def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> 
 
     # By default the degrees are single-select combos and there are no check boxes.
     assert len(card.findChildren(QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
-    assert card.findChildren(QCheckBox) == []
+    assert card._config_host.findChildren(QCheckBox) == []
 
     card.attach_modifier("extra_condition")  # the Affliction-only gating extra
-    assert card.findChildren(QCheckBox)  # all three degrees are now multiselect
+    assert card._config_host.findChildren(QCheckBox)  # all three degrees are now multiselect
     # only resistance and overcomeBy stay single-select combos
     assert len(card.findChildren(QComboBox)) == 2
 
@@ -391,7 +392,7 @@ def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -
     card = window.canvas.add_effect("affliction")
     card.attach_modifier("extra_condition")
 
-    boxes = {b.text(): b for b in card.findChildren(QCheckBox)}
+    boxes = {b.text(): b for b in card._config_host.findChildren(QCheckBox)}
     boxes["Dazed"].setChecked(True)
     boxes["Vulnerable"].setChecked(True)
 
@@ -1124,12 +1125,48 @@ def test_damage_strength_based_checkbox_toggles_the_extra(qapp: QApplication) ->
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")
-    box = next(b for b in card.findChildren(QCheckBox))  # the Strength-Based config
+    box = next(b for b in card._config_host.findChildren(QCheckBox))  # Strength-Based
 
     box.setChecked(True)
     assert [s.modifier_id for s in card.instance.extras] == ["strength_based"]
     box.setChecked(False)
     assert card.instance.extras == []
+
+
+def test_the_dynamic_switch_shows_only_for_an_array_member(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+
+    def switch(card) -> QCheckBox:
+        return next(b for b in card.findChildren(QCheckBox) if b.text() == "Dynamic")
+
+    # A single effect has no array to be an alternate of.
+    assert not switch(first).isVisibleTo(first)
+
+    second = window.canvas.add_effect("affliction")
+    window.canvas._on_structure_changed(STRUCTURE_LINKED)
+    assert not switch(first).isVisibleTo(first)
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    assert switch(first).isVisibleTo(first) and switch(second).isVisibleTo(second)
+
+
+def test_marking_an_alternate_dynamic_raises_the_powers_total(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window.canvas.add_effect("damage")._rank.setValue(8)
+    alternate = window.canvas.add_effect("affliction")
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    before = power_total_cost(window.power, data)
+
+    box = next(b for b in alternate.findChildren(QCheckBox) if b.text() == "Dynamic")
+    box.setChecked(True)
+    assert alternate.instance.dynamic is True
+    # 2 points for the Dynamic alternate rather than 1 - one more than it was.
+    assert power_total_cost(window.power, data) == before + 1
 
 
 def test_allocation_checklist_spends_ranks_and_warns_when_over(qapp: QApplication) -> None:
@@ -1139,7 +1176,7 @@ def test_allocation_checklist_spends_ranks_and_warns_when_over(qapp: QApplicatio
     card = window.canvas.add_effect("enhanced_senses")
     card._rank.setValue(2)
 
-    boxes = {b.text().split(" (")[0]: b for b in card.findChildren(QCheckBox)}
+    boxes = {b.text().split(" (")[0]: b for b in card._config_host.findChildren(QCheckBox)}
     boxes["Accurate"].setChecked(True)  # tiered 2/4 → default tier 1 = 2 ranks
     assert card.instance.config["senses"] == [{"id": "accurate", "tier": 1}]
     assert not window._warning.isVisibleTo(window)  # 2 of 2 ranks — exactly on budget
@@ -1621,7 +1658,7 @@ def test_allocation_options_hint_what_each_mode_does(qapp: QApplication) -> None
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_movement")
 
-    boxes = card.findChildren(QCheckBox)
+    boxes = card._config_host.findChildren(QCheckBox)
     wall_crawling = next(b for b in boxes if b.text().startswith("Wall-Crawling"))
     assert "walls" in wall_crawling.toolTip()
 

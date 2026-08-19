@@ -29,6 +29,7 @@ from mm_companion.core.rules import (
     effect_roll_numbers,
     effect_total_cost,
     effective_size,
+    node_cost,
     power_trait_bonuses,
 )
 from mm_companion.ui import theme
@@ -140,6 +141,53 @@ def test_array_group_active_member_normalizes(qapp: QApplication) -> None:
     assert group.active_child_id in {a.id, b.id}
     sheet.powers._set_array_active(group, b.id)
     assert group.active_child_id == b.id
+
+
+def test_the_dynamic_switch_appears_only_for_a_real_array_member(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    sheet, char = _sheet_with("A", "B")
+    a, b = char.powers
+    sheet.powers._on_combine(b.id, a.id)
+    group = char.powers[0]
+
+    def boxes() -> list[QCheckBox]:
+        return [
+            box
+            for box in sheet.powers._list_host.findChildren(QCheckBox)
+            if box.text() == "Dynamic"
+        ]
+
+    # An Independent or Linked group has no alternates, so nothing to be Dynamic about.
+    sheet.powers._set_group_mode(group, STRUCTURE_INDEPENDENT)
+    assert boxes() == []
+    sheet.powers._set_group_mode(group, STRUCTURE_LINKED)
+    assert boxes() == []
+    # An array offers one per member.
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    assert len(boxes()) == 2
+
+
+def test_the_dynamic_switch_reprices_the_array(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    sheet, char = _sheet_with("Base", "Alt")
+    base, alt = char.powers
+    sheet.powers._on_combine(alt.id, base.id)
+    group = char.powers[0]
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    data = load_game_data()
+    before = node_cost(group, data)
+
+    # Ticking the box on the alternate takes it from a 1-point alternate to a 2-point one.
+    sheet.powers._set_dynamic(group.children[1], True)
+    assert group.children[1].dynamic is True
+    assert node_cost(group, data) == before + 1
+    assert [
+        box.isChecked()
+        for box in sheet.powers._list_host.findChildren(QCheckBox)
+        if box.text() == "Dynamic"
+    ] == [False, True]
 
 
 def _sheet_for(char: Character) -> CharacterSheet:

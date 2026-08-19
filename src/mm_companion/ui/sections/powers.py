@@ -55,6 +55,7 @@ from PySide6.QtCore import QAbstractAnimation, QEasingCurve, Qt, QVariantAnimati
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -81,9 +82,12 @@ from mm_companion.core.rules import (
     PIN_POWER,
     PinRef,
     active_array_child,
+    array_alternate_cost,
+    array_dynamic_primary_cost,
     debilitated_traits,
     effect_current_rank,
     effect_stands,
+    group_array_base_index,
     leaf_powers,
     live_powers,
     node_display_cost,
@@ -765,6 +769,10 @@ class PowersSection(TitledSection):
 
         row.addStretch()
 
+        dynamic = self._dynamic_toggle(group, parent)
+        if dynamic is not None:
+            row.addWidget(dynamic)
+
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
         row.addWidget(cost)
@@ -776,6 +784,48 @@ class PowersSection(TitledSection):
         row.addWidget(ungroup)
         ungroup.setVisible(not self._locked)
         return header
+
+    def _dynamic_toggle(self, node: PowerNode, parent: PowerGroup | None) -> QWidget | None:
+        """A Dynamic switch for a member of an ``array`` group, or ``None``.
+
+        The whole-card twin of the Power Constructor's per-effect switch, and the same
+        question at the other level an array exists at: a Dynamic member shares the
+        array's point pool and runs alongside the array's other Dynamic members instead
+        of switching them off, and pays a dearer Alternate Effect for it (p101).
+
+        Offered only inside a real array — a group of one has nothing to be an alternate
+        *of* — and to leaf powers and nested groups alike, since either can be a member.
+        Locked, it follows :class:`_ModeToggle` rather than the buttons around it: the
+        flag stays readable and stops being a control, and the click falls through to
+        the card, which is the array's member selector.
+        """
+
+        if parent is None or parent.mode != STRUCTURE_ARRAY or len(parent.children) < 2:
+            return None
+        box = QCheckBox("Dynamic")
+        box.setChecked(node.dynamic)
+        base = group_array_base_index(parent, self._data, self._character)
+        if parent.children[base] is node:
+            price = f"one Alternate Effect ({array_dynamic_primary_cost(self._data)} PP)"
+        else:
+            dear = array_alternate_cost(self._data, dynamic=True)
+            price = f"{dear} PP instead of {array_alternate_cost(self._data)}"
+        box.setToolTip(
+            "Share this array's point pool with its other Dynamic members and run "
+            f"alongside them at reduced effectiveness, rather than switching them off. "
+            f"Costs {price}."
+        )
+        box.toggled.connect(lambda on, n=node: self._set_dynamic(n, on))
+        if self._locked:
+            box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        return box
+
+    def _set_dynamic(self, node: PowerNode, on: bool) -> None:
+        """Mark an array member Dynamic (or not) and reprice the tree."""
+        node.dynamic = on
+        self._rebuild_list()
+        self.changed.emit()
 
     def _rename_group(self, group: PowerGroup) -> None:
         """Prompt for a new group name; blank clears it back to the mode label."""
@@ -1059,6 +1109,10 @@ class PowersSection(TitledSection):
             )
             layout.addWidget(homerule)
         layout.addStretch()
+
+        dynamic = self._dynamic_toggle(power, parent)
+        if dynamic is not None:
+            layout.addWidget(dynamic)
 
         # Inside an array group a non-base member contributes only its flat pooled cost;
         # every other card shows its full assembled cost (node_display_cost decides).

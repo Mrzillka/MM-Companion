@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -1091,17 +1091,68 @@ def _join_terms(terms: list[int]) -> str:
     return " ".join(parts)
 
 
-def array_alternate_cost(game_data: GameData) -> int:
+def array_alternate_cost(game_data: GameData, *, dynamic: bool = False) -> int:
     """The flat point cost of one array alternate, read from the ``Alternate Effect`` extra.
 
-    Kept data-driven: the number lives on the ``alternate_effect`` modifier in
-    ``modifiers.json`` (``costValue``), and *which* modifier id counts as the array
-    alternate comes from ``system.json`` (``alternate_effect_modifier``), not hardcoded
-    here. Falls back to 1 if the record is missing.
+    "An Alternate Effect costs 1 Power Point, while a Dynamic Alternate Effect costs 2"
+    (p151), so ``dynamic`` picks the record's ``dynamicCostValue`` over its ``costValue``.
+    A Dynamic alternate is dearer because it is not mutually exclusive with its siblings:
+    it shares the array's point pool and runs alongside the array's other Dynamic members
+    at reduced effectiveness (p101).
+
+    Kept data-driven: both numbers live on the ``alternate_effect`` modifier in
+    ``modifiers.json``, and *which* modifier id counts as the array alternate comes from
+    ``system.json`` (``alternate_effect_modifier``), not hardcoded here. Falls back to
+    1 (2 when dynamic) if the record is missing.
     """
 
     modifier = game_data.modifier_catalog().get(game_data.system.alternate_effect_modifier)
-    return modifier.cost_value if modifier else 1
+    if modifier is None:
+        return 2 if dynamic else 1
+    if dynamic and modifier.dynamic_cost_value:
+        return modifier.dynamic_cost_value
+    return modifier.cost_value
+
+
+def array_dynamic_primary_cost(game_data: GameData) -> int:
+    """What making an array's *base* member Dynamic costs.
+
+    "Making the primary power of an array Dynamic requires 1 Alternate Effect rank"
+    (p101) — so it is the ordinary :func:`array_alternate_cost`, not a third number, and
+    it is charged *on top of* the base's own full cost rather than instead of it. The
+    book's own worked example: Empyrean's base Create takes "a 1-point modifier to make
+    it Dynamic", and each Dynamic alternate beside it costs 2.
+    """
+
+    return array_alternate_cost(game_data)
+
+
+def array_members_cost(members: Sequence[tuple[int, bool]], game_data: GameData) -> int:
+    """Total cost of one array from its members' ``(full cost, dynamic)`` pairs.
+
+    The costliest member is the base and is paid in full (ties break to the first, as
+    :func:`array_base_index` and :func:`group_array_base_index` report); every other
+    member costs only its flat :func:`array_alternate_cost`, since they share one pool.
+    A Dynamic member pays the dearer alternate price, or — when it *is* the base —
+    :func:`array_dynamic_primary_cost` on top of its full cost.
+
+    Shared by the two levels an array exists at: a power's own effects
+    (:func:`power_gross_cost`) and a group's whole child powers (:func:`node_cost`).
+    An empty sequence costs nothing.
+    """
+
+    if not members:
+        return 0
+    costs = [cost for cost, _ in members]
+    base = costs.index(max(costs))
+    total = costs[base]
+    for index, (_, dynamic) in enumerate(members):
+        if index == base:
+            if dynamic:
+                total += array_dynamic_primary_cost(game_data)
+        else:
+            total += array_alternate_cost(game_data, dynamic=dynamic)
+    return total
 
 
 def array_base_index(power: Power, game_data: GameData, char: Character | None = None) -> int:
@@ -1189,6 +1240,11 @@ def power_scope_adjustment(
 def power_gross_cost(power: Power, game_data: GameData, char: Character | None = None) -> int:
     """A power's cost from its effects alone, *before* any power-scope modifier.
 
+    An ``array`` power is pooled here rather than summed (:func:`array_members_cost`),
+    so the Alternate Effect points a Dynamic member costs are inside the gross a
+    power-scope modifier is then charged against — they are part of what the power cost
+    to build.
+
     This is the 98 in the rules' own worked example (p161) — the total of every effect
     with the extras and flaws applied to those effects — and the number Removable's
     per-5-points rate is charged against. Split out from :func:`power_total_cost` so the
@@ -1197,8 +1253,10 @@ def power_gross_cost(power: Power, game_data: GameData, char: Character | None =
     """
 
     if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
-        full = [effect_total_cost(e, game_data, char) for e in power.effects]
-        return max(full) + (len(full) - 1) * array_alternate_cost(game_data)
+        return array_members_cost(
+            [(effect_total_cost(e, game_data, char), e.dynamic) for e in power.effects],
+            game_data,
+        )
     return sum(effect_total_cost(e, game_data, char) for e in power.effects)
 
 
@@ -1208,9 +1266,10 @@ def power_total_cost(power: Power, game_data: GameData, char: Character | None =
     ``independent`` and ``linked`` powers cost the sum of their effects (linking
     is a +0 bundle). An ``array`` instead pays the costliest effect in full and a
     flat :func:`array_alternate_cost` for each remaining effect, since only one is
-    active at a time. ``char`` is threaded to :func:`effect_total_cost` so a
-    Strength-Based effect's folded-in ranks are priced against the wielder. That sum is
-    :func:`power_gross_cost`.
+    active at a time — dearer for a **Dynamic** member, which is not mutually exclusive
+    with its siblings (:func:`array_members_cost`). ``char`` is threaded to
+    :func:`effect_total_cost` so a Strength-Based effect's folded-in ranks are priced
+    against the wielder. That sum is :func:`power_gross_cost`.
 
     A **power-scope** modifier is then applied on top of it, once for the whole power
     rather than once per effect — Removable's "value per 5 total Power Points of the
@@ -1265,8 +1324,10 @@ def node_cost(node: PowerNode, game_data: GameData, char: Character | None = Non
     A :class:`~mm_companion.core.powers.PowerGroup` recurses: ``independent`` and
     ``linked`` groups sum their children (linking is a +0 bundle), while an ``array``
     group pays its costliest child in full plus a flat :func:`array_alternate_cost` for
-    each other child (only one is active at a time). Nesting is handled by the
-    recursion — a child that is itself a group is priced the same way.
+    each other child (only one is active at a time), or the dearer Dynamic price for a
+    child that shares the pool instead (:func:`array_members_cost`). Nesting is handled
+    by the recursion — a child that is itself a group is priced the same way, and
+    carries its own ``dynamic`` flag for the array it sits in.
     """
 
     if isinstance(node, PowerGroup):
@@ -1274,7 +1335,10 @@ def node_cost(node: PowerNode, game_data: GameData, char: Character | None = Non
         if not costs:
             return 0
         if node.mode == STRUCTURE_ARRAY and len(costs) > 1:
-            return max(costs) + (len(costs) - 1) * array_alternate_cost(game_data)
+            return array_members_cost(
+                list(zip(costs, (child.dynamic for child in node.children), strict=True)),
+                game_data,
+            )
         return sum(costs)
     return power_total_cost(node, game_data, char)
 
@@ -1304,13 +1368,18 @@ def node_display_cost(
     """The point cost a node contributes *within its parent group*.
 
     Inside an ``array`` parent every child except the costliest (the base) contributes
-    only the flat :func:`array_alternate_cost`, since they share one pool. A base child,
-    or any node under a non-array parent (or at top level, ``parent=None``), contributes
+    only the flat :func:`array_alternate_cost`, since they share one pool — the dearer
+    price when the child is **Dynamic**. A Dynamic *base* contributes its full
+    :func:`node_cost` plus :func:`array_dynamic_primary_cost`, since making the primary
+    Dynamic is bought on top of it rather than instead of it. Any other base child, or
+    any node under a non-array parent (or at top level, ``parent=None``), contributes
     its full :func:`node_cost`.
     """
 
     if parent is not None and parent.mode == STRUCTURE_ARRAY and len(parent.children) > 1:
         base = group_array_base_index(parent, game_data, char)
         if parent.children[base] is not node:
-            return array_alternate_cost(game_data)
+            return array_alternate_cost(game_data, dynamic=node.dynamic)
+        if node.dynamic:
+            return node_cost(node, game_data, char) + array_dynamic_primary_cost(game_data)
     return node_cost(node, game_data, char)

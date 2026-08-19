@@ -191,9 +191,11 @@ def role_note(power: Power, index: int, character: Character, data: GameData) ->
     if power.structure == STRUCTURE_LINKED:
         return "linked"
     if power.structure == STRUCTURE_ARRAY:
+        effect = power.effects[index]
         if index == array_base_index(power, data, character):
-            return "base"
-        return f"alternate ({array_alternate_cost(data)} pt)"
+            return "base, dynamic" if effect.dynamic else "base"
+        kind = "dynamic alternate" if effect.dynamic else "alternate"
+        return f"{kind} ({array_alternate_cost(data, dynamic=effect.dynamic)} pt)"
     return ""
 
 

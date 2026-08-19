@@ -171,9 +171,10 @@
       "category": "extra",
       "costFormula": "1 or 2 points flat (per alternate)",
       "costValue": 1,
+      "dynamicCostValue": 2,
       "flat": true,
       "hidden": true,
-      "description": "Adds another interchangeable configuration to a power array. Applied automatically by a power/group's Array structure, not dragged onto an effect."
+      "description": "Adds another interchangeable configuration to a power array. An ordinary alternate costs 1 point and is mutually exclusive with its siblings; a Dynamic one costs 2 and shares the array's point pool, running alongside the other Dynamic members at reduced effectiveness. Making the array's base Dynamic costs one Alternate Effect rank. Applied automatically by a power/group's Array structure, not dragged onto an effect."
     },
     {
       "id": "alternate_resistance",

@@ -18,6 +18,22 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   independent and linked sum their effects' costs (linked is a +0 bundle), an
   array pays the costliest effect in full plus a flat point per alternate. Cost
   math and the game-terms summary read `structure` to decide.
+- **A member of an array can be `dynamic`.** An ordinary alternate is mutually
+  exclusive with its siblings and costs 1 point; a **Dynamic** one shares the array's
+  point pool and runs *alongside* the array's other Dynamic members at reduced
+  effectiveness, and costs 2 for exactly that reason (p101, p151). Making the array's
+  **base** Dynamic instead "requires 1 Alternate Effect rank" — 1 point charged on top
+  of its own full cost, not instead of it. So the flag is per **member**, not per array,
+  and it exists at both levels an array does: `PowerEffectInstance.dynamic` for a
+  power's own effects, `Power.dynamic` / `PowerGroup.dynamic` for a group of whole
+  cards. `array_members_cost` is the one place the pooling arithmetic lives, shared by
+  `power_gross_cost` and `node_cost` so the two levels cannot drift. Both numbers are
+  data (`costValue` / `dynamicCostValue` on the `alternate_effect` record), never
+  spelled in Python. It is *build* state, written only when set, so an array saved
+  before it loads with every member ordinary and costs what it always did.
+  **What is not modelled yet is the pool itself** — how many of the array's points each
+  Dynamic member is currently assigned, and the reduced rank that buys. See
+  `POWERS-AUDIT.md` §6K for the two designs that were weighed and why it is its own job.
 - `core.components.py` is an ECS-style split: effect *instances* are entities;
   the frozen **components** describing behaviour are the base effect's parsed
   `Integration` (a `statIntegration` `pattern` — `passive_permanent`,

@@ -23,6 +23,7 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
+    array_dynamic_primary_cost,
     configuration_by_id,
     power_from_configuration,
 )
@@ -64,7 +65,8 @@ class PowerModeBar(QWidget):
             STRUCTURE_ARRAY,
             "Array",
             "One effect active at a time; the costliest is paid in full and each other "
-            "is a flat-cost alternate.",
+            "is a flat-cost alternate. Mark a member Dynamic to have it share the "
+            "pool and run alongside the other Dynamic members instead.",
         ),
     )
 
@@ -298,12 +300,17 @@ class PowerCanvas(QFrame):
         multi = len(self._cards) >= 2
         if multi and self._power.structure == STRUCTURE_ARRAY:
             base = array_base_index(self._power, self._data, self._character)
-            note = f"{array_alternate_cost(self._data)} PP"
-            for index, card in enumerate(self._cards):
+            for index, (card, effect) in enumerate(
+                zip(self._cards, self._power.effects, strict=True)
+            ):
                 if index == base:
-                    card.set_role("base")
+                    # The base pays its own cost in full; making it Dynamic is the one
+                    # thing that adds to it, so that is the only note it carries.
+                    primary = array_dynamic_primary_cost(self._data)
+                    card.set_role("base", f"+{primary} PP Dynamic" if effect.dynamic else "")
                 else:
-                    card.set_role("alternate", note)
+                    cost = array_alternate_cost(self._data, dynamic=effect.dynamic)
+                    card.set_role("alternate", f"{cost} PP")
         elif multi and self._power.structure == STRUCTURE_LINKED:
             for card in self._cards:
                 card.set_role("linked")

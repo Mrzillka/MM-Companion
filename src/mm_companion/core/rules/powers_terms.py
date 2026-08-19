@@ -1391,6 +1391,20 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
     return line
 
 
+def array_member_note(dynamic: bool, game_data: GameData) -> str:
+    """How an array's non-base member is badged: its kind, and the flat cost it pays.
+
+    Reads :func:`~.powers_cost.array_alternate_cost` rather than spelling the number,
+    so a Dynamic member's dearer price shows up wherever a member is badged. Shared with
+    the constructor's two readouts so a badge cannot drift from what was actually
+    charged.
+    """
+
+    cost = array_alternate_cost(game_data, dynamic=dynamic)
+    kind = "Dynamic Alternate Effect" if dynamic else "Alternate Effect"
+    return f"{kind}, {cost} pt"
+
+
 def power_game_terms(power: Power, game_data: GameData, char: Character | None = None) -> str:
     """The power's game-term summary: one :func:`effect_game_terms` line per effect.
 
@@ -1399,6 +1413,11 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
     of each alternate — so the composite structure reads at a glance. ``char`` is
     threaded to :func:`array_base_index` so the base badge tracks the same
     Strength-adjusted costs the cards show.
+
+    A **Dynamic** member is tagged as one, because it is the exception to the header's
+    "one effect active at a time": it shares the array's point pool and runs alongside
+    the array's other Dynamic members at reduced effectiveness (p101), which is what its
+    dearer price buys.
     """
 
     lines = [effect_game_terms(e, game_data) for e in power.effects]
@@ -1407,10 +1426,12 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
         return "Linked (all effects activate together):\n" + body
     if len(power.effects) > 1 and power.structure == STRUCTURE_ARRAY:
         base = array_base_index(power, game_data, char)
-        alt = array_alternate_cost(game_data)
-        tagged = [
-            f"• {line}" + (" [base]" if i == base else f" (Alternate Effect, {alt} pt)")
-            for i, line in enumerate(lines)
-        ]
+        tagged = []
+        for index, (line, effect) in enumerate(zip(lines, power.effects, strict=True)):
+            if index == base:
+                note = " [base, Dynamic]" if effect.dynamic else " [base]"
+            else:
+                note = f" ({array_member_note(effect.dynamic, game_data)})"
+            tagged.append(f"• {line}{note}")
         return "Array (one effect active at a time):\n" + "\n".join(tagged)
     return "\n".join(lines)

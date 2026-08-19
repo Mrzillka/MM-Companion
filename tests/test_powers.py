@@ -25,6 +25,7 @@ from mm_companion.core.rules import (
     advantage_points_spent,
     array_alternate_cost,
     array_base_index,
+    array_dynamic_primary_cost,
     configuration_by_id,
     configurations_for_effect,
     effect_allocation_used,
@@ -1383,15 +1384,35 @@ def test_a_power_at_its_defaults_writes_no_runtime_keys() -> None:
     written back then still loads all-active.
     """
     raw = Power(name="Plain", effects=[PowerEffectInstance("protection", rank=4)]).to_dict()
-    for key in ("activated", "item_present", "array_active"):
+    for key in ("activated", "item_present", "array_active", "dynamic"):
         assert key not in raw
-    for key in ("toggled_on", "suppressed", "current_rank"):
+    for key in ("toggled_on", "suppressed", "current_rank", "dynamic"):
         assert key not in raw["effects"][0]
+    assert "dynamic" not in PowerGroup(mode=STRUCTURE_ARRAY, children=[]).to_dict()
 
     legacy = Power.from_dict({"name": "Legacy", "effects": [{"effect_id": "protection"}]})
     assert legacy.activated is True and legacy.item_present is True
     assert legacy.effects[0].toggled_on is True and legacy.effects[0].suppressed is False
     assert legacy.effects[0].current_rank is None
+    # An array saved before Dynamic existed loads with every member ordinary, so it
+    # still costs the 1 point per alternate it was built and saved at.
+    assert legacy.dynamic is False
+
+
+def test_the_dynamic_flag_round_trips_at_both_array_levels() -> None:
+    effect = PowerEffectInstance("damage", rank=6, dynamic=True)
+    power = Power(name="Bolt", effects=[effect], structure=STRUCTURE_ARRAY, dynamic=True)
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[power], dynamic=True)
+
+    raw = group.to_dict()
+    assert raw["dynamic"] is True
+    assert raw["children"][0]["dynamic"] is True
+    assert raw["children"][0]["effects"][0]["dynamic"] is True
+
+    restored = PowerGroup.from_dict(raw)
+    assert restored.dynamic is True
+    assert restored.children[0].dynamic is True
+    assert restored.children[0].effects[0].dynamic is True
 
 
 def test_a_modifier_at_its_defaults_writes_no_band_keys() -> None:
@@ -1440,6 +1461,82 @@ def test_array_pays_base_in_full_plus_a_flat_point_per_alternate() -> None:
     )
     flat = array_alternate_cost(data)
     assert power_total_cost(power, data) == 16 + 2 * flat
+
+
+def test_a_dynamic_alternate_costs_two_points_instead_of_one() -> None:
+    data = load_game_data()
+    # p151: "An Alternate Effect costs 1 Power Point, while a Dynamic Alternate Effect
+    # costs 2" - it is not mutually exclusive with its siblings, so it is worth more.
+    assert array_alternate_cost(data) == 1
+    assert array_alternate_cost(data, dynamic=True) == 2
+    # p101: making the array's primary Dynamic "requires 1 Alternate Effect rank".
+    assert array_dynamic_primary_cost(data) == array_alternate_cost(data)
+
+
+def test_dynamic_members_are_priced_per_member_not_per_array() -> None:
+    data = load_game_data()
+    # Damage 8 + Ranged = 16 (the base); two alternates, only one of them Dynamic.
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),  # 16
+            PowerEffectInstance("affliction", rank=4),  # ordinary alternate
+            PowerEffectInstance("move_object", rank=8, dynamic=True),  # Dynamic alternate
+        ],
+    )
+    assert power_total_cost(power, data) == 16 + 1 + 2
+
+    # Making the base Dynamic too adds one Alternate Effect rank on top of its own cost.
+    power.effects[0].dynamic = True
+    assert power_total_cost(power, data) == 16 + 1 + 2 + 1
+
+
+def test_the_books_worked_dynamic_array_costs_what_it_prints() -> None:
+    data = load_game_data()
+    # p101's Empyrean: a Dynamic base "has a 1-point modifier to make it Dynamic, and
+    # each additional Dynamic Alternate added to the array costs 2 points".
+    base = Power(name="Constructs", effects=[PowerEffectInstance("create", rank=10)], dynamic=True)
+    bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=5)], dynamic=True)
+    field = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=4)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[base, bolt, field])
+
+    full = node_cost(base, data)
+    assert node_cost(group, data) == full + 1 + 2 + 1  # base + its Dynamic rank + 2 + 1
+    # The base card carries its own Dynamic point; each alternate carries only its own.
+    assert node_display_cost(base, group, data) == full + 1
+    assert node_display_cost(bolt, group, data) == 2
+    assert node_display_cost(field, group, data) == 1
+
+
+def test_a_dynamic_flag_outside_an_array_changes_nothing() -> None:
+    data = load_game_data()
+    # Dynamic is an Alternate Effect's price, so it is only ever charged by an array.
+    effects = [
+        PowerEffectInstance("damage", rank=8, dynamic=True),
+        PowerEffectInstance("protection", rank=4, dynamic=True),
+    ]
+    independent = Power(effects=list(effects))
+    linked = Power(effects=list(effects), structure=STRUCTURE_LINKED)
+    lone = Power(structure=STRUCTURE_ARRAY, effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_total_cost(independent, data) == 12
+    assert power_total_cost(linked, data) == 12
+    assert power_total_cost(lone, data) == 8
+
+
+def test_a_dynamic_member_is_tagged_in_the_game_terms() -> None:
+    data = load_game_data()
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),
+            PowerEffectInstance("affliction", rank=4, dynamic=True),
+        ],
+    )
+    summary = power_game_terms(power, data)
+    # The header still says "one effect active at a time"; the tag is the exception.
+    assert "Dynamic Alternate Effect, 2 pt" in summary
+    power.effects[0].dynamic = True
+    assert "[base, Dynamic]" in power_game_terms(power, data)
 
 
 def test_array_base_is_the_costliest_effect_regardless_of_order() -> None:

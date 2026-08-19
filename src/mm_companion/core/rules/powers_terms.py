@@ -223,10 +223,16 @@ class NoteValueContext:
     the modifier's *own* rank; ``effect_rank`` is the host effect's. ``char`` is the
     wielder and may be ``None`` — a power can be built with no character open, and a
     handler that needs one says so by returning ``None`` rather than guessing a zero.
+
+    ``modifier`` is ``None`` when the number is not a modifier's at all. The registry
+    answers "what number does this spec stand for", and a sub-build's budget asks the
+    very same question from an *effect* (:class:`~..data_loader.SubBuild`) — Summon's
+    minion is priced off the effect's rank with no chip in sight. A handler that needs
+    the modifier says so by returning ``None``, exactly as one needing a character does.
     """
 
     spec: dict
-    modifier: Modifier
+    modifier: Modifier | None
     selection: object | None
     effect_rank: int
     char: Character | None
@@ -271,6 +277,61 @@ def _note_value_character_points(ctx: NoteValueContext) -> int | None:
     return power_points_spent(ctx.char, ctx.game_data)
 
 
+@NOTE_VALUE_KINDS.handler("per_rank")
+def _note_value_per_rank(ctx: NoteValueContext) -> int | None:
+    """The host effect's rank times ``perRank`` — Summon's ``rank x 15`` minion (p145).
+
+    The same arithmetic a modifier's ``notePerRank`` already does for ``{n}``, said as a
+    spec instead, so a sub-build's budget can name it the way it names any other.
+    """
+
+    return ctx.effect_rank * int(ctx.spec.get("perRank", 1))
+
+
+@NOTE_VALUE_KINDS.handler("modifier_rank")
+def _note_value_modifier_rank(ctx: NoteValueContext) -> int | None:
+    """The *modifier's* own rank — how many alternate forms a Metamorph buys (p136).
+
+    ``None`` without a chip, since there is no such rank to read; a sub-build asking
+    this of an effect-owned slot therefore falls back to a single build.
+    """
+
+    if ctx.selection is None:
+        return None
+    return int(ctx.selection.rank)
+
+
+def note_value(
+    spec: dict,
+    *,
+    modifier: Modifier | None = None,
+    selection=None,
+    effect_rank: int = 0,
+    char: Character | None = None,
+    game_data: GameData | None = None,
+) -> int | None:
+    """Resolve one ``{"kind": ...}`` spec through :data:`NOTE_VALUE_KINDS`.
+
+    The one door onto the registry, so a note's placeholder and a sub-build's budget
+    ask the same question the same way. ``None`` when the spec names no kind, names one
+    nothing has registered, or the handler cannot answer from what it was given.
+    """
+
+    handler = NOTE_VALUE_KINDS.get(str(spec.get("kind", "")))
+    if handler is None:
+        return None
+    return handler(
+        NoteValueContext(
+            spec=spec,
+            modifier=modifier,
+            selection=selection,
+            effect_rank=effect_rank,
+            char=char,
+            game_data=game_data,
+        )
+    )
+
+
 def _render_note(
     modifier: Modifier,
     rank: int,
@@ -299,18 +360,13 @@ def _render_note(
     value = rank * modifier.note_per_rank if modifier.note_per_rank else rank
     text = modifier.note_template.replace("{n}", str(value))
     for key, spec in modifier.note_values.items():
-        handler = NOTE_VALUE_KINDS.get(str(spec.get("kind", "")))
-        if handler is None:
-            continue
-        resolved = handler(
-            NoteValueContext(
-                spec=spec,
-                modifier=modifier,
-                selection=selection,
-                effect_rank=rank,
-                char=char,
-                game_data=game_data,
-            )
+        resolved = note_value(
+            spec,
+            modifier=modifier,
+            selection=selection,
+            effect_rank=rank,
+            char=char,
+            game_data=game_data,
         )
         if resolved is not None:
             text = text.replace(f"{{{key}}}", str(resolved))

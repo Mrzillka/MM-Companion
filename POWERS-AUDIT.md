@@ -26,11 +26,11 @@ file alone. Delete it when §6 is empty.
 | §5L | Sub-build budgets, and the Summon / Variable data (was §6C) | **done** — pass 9 |
 | §5N | Improvised Effects arithmetic (was §6G) | **done** — pass 10 |
 | §5O | Countering, and Nullify's opposed check (was §6F) | **done** — pass 11 |
+| §5P | The sub-builds themselves (was §6M) | **done** — pass 12 |
 | §6K | Dynamic Alternate Effects — the point pool (split from §6A) | outstanding |
-| §6M | The sub-builds themselves (split from §6C) | outstanding |
 | §6H | Extra Effort and power stunts | outstanding |
 
-**Three items are left**, and all three are large enough to deserve their own pass. Every
+**Two items are left**, and both are large enough to deserve their own pass. Every
 cost, every game-term and every roll the audit set out to check is now done.
 
 Commits so far, all on `docs/powers-rules-audit` off `develop`, **not yet merged**:
@@ -53,6 +53,7 @@ db18f2e  Record pass 8's commit hash in the audit
 7583ee4  Work out what improvising an unbought effect would take
 cac4e72  Record pass 10's commit hash in the audit
 d350325  Give an opposed effect check to the side that makes it
+c53ab92  Record pass 11's commit hash in the audit
 ```
 
 ---
@@ -67,7 +68,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2816 tests as of pass 11
+python -m pytest -q                 # ~9 min, 2835 tests as of pass 12
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -703,6 +704,87 @@ that hangs rather than one that passes.
 offers it as a **rollable** footer line; Move Object and Nullify carry a counter entry on
 their menus; a Protection card has neither, and no card gained a line.
 
+### P. The sub-builds themselves (pass 12)
+
+**The rules.** Summon: "Create the summoned character with (effect rank x 15) Power
+Points. They are subject to the normal Power Level limits, have the minion
+characteristics, and cannot have minions of their own, either from this effect or the
+Minions advantage" (p145). Metamorph: "one set of traits per rank ... Your other form(s)
+must have the same point total as you and are subject to the same Power Level limits"
+(p136).
+
+**Now.** Pass 9 made both budgets real numbers on the card. Nothing held the build the
+budget was for, so nothing was ever checked against it.
+
+**The open question §6M recorded was where a sub-build lives, and the answer is
+"embedded", because all three objections to it turned out to be false.** A nested
+`Character` inside `PowerEffectInstance.config` was said to touch the save format, undo
+and the library. It touches none of them: `config` is already written verbatim as JSON,
+`snapshot_of` already serialises the whole model as JSON text — so editing a minion is an
+undoable step of the sheet for free — and the session layer already pushes the same
+`to_dict`. The library is not involved at all, because the minion is not a file. The
+alternative, a *reference* to a saved NPC, couples a player's power to the GM's directory
+and dangles when the file moves. So: a list of `Character.to_dict()` dicts under a key in
+the config dict that bought it — **the effect's** for Summon, **the chip's** for Metamorph.
+
+**The budget is stamped on read, never stored** (`sub_build_character`). It and the Power
+Level are both derived from the power and its wielder, so dialling a Summon from rank 4 to
+rank 6 moves the minion's pool from 60 to 90 by itself. That is the design's best trick:
+it makes the *sheet's own* spent-against-budget readout the check the rules ask for,
+rather than a warning bolted beside it.
+
+**Declared in data, and the registry it reuses is `NOTE_VALUE_KINDS`.** A `subBuild` block
+names a `key`, a `label`, a `budget` and a `count`, and the last two are ordinary
+`noteValues`-shaped specs resolved through one new door, `note_value(spec, ...)`. That was
+the right seam because *a sub-build's budget asks the registry exactly what a note's
+placeholder asks it*: `character_points` was already there for Metamorph's note and now
+prices Metamorph's forms. Two kinds joined it — `per_rank` (Summon's `rank x 15`) and
+`modifier_rank` (one form per rank of the extra) — and `NoteValueContext.modifier` became
+optional, since Summon's budget is priced off an *effect* with no chip in sight.
+
+**One data correction fell out of reading the entry.** Metamorph's description said each
+alternate form "must carry your full Morph effect" — a 3e requirement the Origin Edition
+does not state. p136 asks only for the same point total, the same Power Level limits and
+"traits suitable to the form you assume", so the sentence now says that instead. It was
+never enforced, but it would have been the moment someone built the check from it.
+
+**Summon buys one minion, not many, and that is the book's own reading.** "You always
+summon the same minion unless you apply the Variable Type modifier" (p145) — Multiple
+Minions doubles how many of the *same* creature appear, which the card has said since pass
+9 and which needs no second build.
+
+**Three checks, and each is one no picker could have prevented**
+(`power_sub_build_violations`, constructor-only like the imposed-effect and Strength
+warnings beside it): over budget; **more builds than the power buys**, warned rather than
+truncated, because a Metamorph dropped from rank 3 to rank 1 must not silently bin two
+characters a player wrote; and what a sub-character may not itself have — a minion
+"cannot have minions of their own, either from this effect or the Minions advantage",
+which is a fact about the *nested* build and therefore unreachable from any picker.
+`forbidsEffects` / `forbidsAdvantages` put it in data.
+
+**The editor is the ordinary character sheet, for the third time.** `SubBuildWindow` is a
+`MainWindow` — deliberately **not** NPC mode, which swaps the point pool for an estimated
+Power Level, when a minion is the one GM-side character the rules actually do budget. Two
+things differ, and both follow from the build being someone else's: it **saves into the
+power** rather than to a file (every edit writes through, so it never goes dirty and never
+asks on close), and its Power Level and Power Points rows are **read-only** through a new
+`SystemInfoSection.set_budget_fixed` — sticky against `set_locked`, because a derived
+field was never the player's to unlock.
+
+`SubBuildPanel` is the strip on the effect card that reaches it, showing **every slot the
+card owns** — the effect's own and its chips' alike — because the card is where both are
+edited and a second strip inside the chip would be a second place to look. It imports the
+window **inside the click handler**: at module scope the constructor → main window → sheet
+→ sections → constructor loop closes. That is pass 10's finding from the other side, and
+it is the second time this branch has paid for it.
+
+**Checked in the app.** A Summon 6 shows "Minion — 90 PP" and a button reading "Dire Wolf
+— 28 / 90 PP"; the minion's own sheet reads "Power Points: 28 / 90" with both budget rows
+uneditable; a Morph 2 with Metamorph 3 shows "Alternate forms (3) — 20 PP each" for a
+20-point wielder. All three are the numbers the book prints.
+
+**§6K is now the only item left inside this branch.**
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -734,6 +816,11 @@ A later pass should reach for these rather than inventing a parallel one.
 | `PowerConstructorWindow.rollRequested` | wired by `PowersSection` | how a *window* reaches the roller — it asks, and the block that opened it forwards |
 | `opposedCheck` on an effect | `effect_opposed_check`, `KIND_EFFECT_CHECK` | a `d20 + rank` roll the **wielder** makes against another effect, with no DC of its own |
 | `counter_rolls` + the card menu | `PowersSection.counter_menu` | a per-power action that costs no card space — the place to put anything a power *can be used for* rather than what it calls for |
+| `subBuild` on an effect *or* a modifier | `core/rules/subbuilds.py`, `SubBuildSlot` | a whole nested `Character` bought inside a power, with a budget and a count — both `NOTE_VALUE_KINDS` specs, so a mod prices one in data |
+| `note_value(spec, ...)` | `powers_terms.py` | the one door onto `NOTE_VALUE_KINDS`; reach for it whenever a feature needs "a number this record's rank cannot give" |
+| A nested `Character` in a `config` dict | `store_sub_build` / `sub_build_character` | persistence, undo and session sync for free — `config` is written verbatim and undo snapshots the whole model as JSON |
+| `SystemInfoSection.set_budget_fixed` | `sections/system_info.py` | show Power Level and the point pool read-only for a sheet whose budget is handed to it; sticky against `set_locked` |
+| `SubBuildWindow` | `ui/sub_build_window.py` | the ordinary sheet pointed at something that is not a file — it commits to its owner instead of saving |
 
 ---
 
@@ -746,7 +833,7 @@ it worked.
 
 ### B. Removable's real formula — **done in pass 4, see §5F**
 
-### C. Nested trait budgets — **the budgets are done in pass 9, see §5L; the builds are §6M**
+### C. Nested trait budgets — **done: the budgets in pass 9 (§5L), the builds in pass 12 (§5P)**
 
 ### D. Affliction's imposed-effect budget check — **done in pass 8, see §5K**
 
@@ -815,41 +902,7 @@ members that should run *alongside* the selected one do not; and the sheet's cli
 effective rank and nothing else; a member below its minimum is off; the split may not exceed
 the pool; an old saved array loads with no allocation and behaves exactly as it does today.
 
-### M. The sub-builds themselves
-
-Pass 9 (§5L) made every sub-build **budget** a real number on the card. What still does not
-exist is anything holding the build that budget is for, so nothing is ever checked against
-it.
-
-| Where | What is missing | Cite |
-| --- | --- | --- |
-| Summon | the minion: a whole NPC on `rank × 15` PP, under the wielder's PL, with minion characteristics and no minions of its own | p145 |
-| Morph → Metamorph | one complete alternate trait set per rank, each on the wielder's own total, each carrying the full Morph effect | p136 |
-| Variable | what the `rank × 5` Variable Power Points are currently configured as, reallocated on a Concentrate action | p148 |
-| Affliction → Empowering | the third-degree Transformed form, on `rank × 15` | p110 |
-
-**Read §5K's shape before designing an editor.** An Affliction's *imposed effect* looked
-like a nested build and turned out to need only a name, a rank and a budget check. Ask the
-same of these four. Summon and Metamorph genuinely buy a whole character. Variable is a
-*menu* the book itself suggests writing down in advance, which is closer to an array of
-saved configurations than to one build. Empowering's form is built by the GM for a target,
-not by the player for themselves — so it may want no editor at all, only the number it
-already prints.
-
-**`core/npc.py` and `NPCWindow` are the thing to look at first.** An NPC already *is* an
-ordinary `Character`, opened in the ordinary sheet with the point pool swapped for an
-estimated Power Level — so a minion is a solved problem *except* for where it lives and how
-it is reached from a power. That, not the editor, is the real design question: a nested
-`Character` inside `PowerEffectInstance.config` touches the save format, undo, and the
-library; a *reference* to a saved NPC couples a player's power to the GM's directory and
-dangles when the file moves. Neither is obviously right, which is why this is its own item.
-
-**Acceptance.** A Summon carries a minion whose point total is checked against `rank × 15`;
-a Metamorph carries one trait set per rank, each checked against the wielder's own total;
-both survive a save/load round trip; and a power with no sub-build behaves exactly as it
-does today.
-
----
+### M. The sub-builds themselves — **done in pass 12, see §5P**
 
 ## 7. Known debts and caveats
 
@@ -925,6 +978,28 @@ Things a later pass will trip over if it does not know them.
 14. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
    each pass. Update them in the same commit as the code, not afterwards — the notes are the
    thing a future session reads first.
+15. **A sub-build has no Power Level check of its own.** A minion is "subject to the
+   normal Power Level limits" and its sheet shows them the way any sheet does — but the
+   *constructor* only warns about the point budget. Opening the minion is the only way to
+   see a PL breach in it. Consistent with 11 (every constructor warning is
+   constructor-only) but one level deeper, and worth knowing.
+16. **A sub-build is not counted anywhere outside its power.** A minion's own gear,
+   conditions and hero points are all real fields on a real `Character` that nothing
+   plays with: the GM cannot pin it, damage cannot be applied to it, and a session does
+   not surface it as a combatant. It is a *build*, not a creature at the table. Turning
+   one into a playable NPC — "send this minion to the GM window" — is the obvious next
+   thing to want and is out of §6M's scope.
+17. **A Summon's minion is a single build even with Variable Type.** The book's own
+   reading (p145: "You always summon the same minion unless you apply the Variable Type
+   modifier") makes one build right for the ordinary case, and Multiple Minions doubles
+   how many of that *same* creature appear. A Variable Type Summon really does want a
+   menu of minions, which is §6M's Variable problem in miniature and was left with it.
+18. **A modifier's `subBuild` count reads the chip's rank, so a repeatable modifier would
+   need thought.** `modifier_rank` asks one `ModifierSelection`; two copies of a
+   sub-build-bearing modifier would produce two independent slots sharing one config key
+   and overwrite each other. Nothing is repeatable *and* sub-build-bearing today, and
+   `test_the_ruleset_marks_exactly_the_repeatable_modifiers` would catch a seventh
+   repeatable being added — but not this pairing specifically.
 
 ---
 
@@ -940,8 +1015,8 @@ Things a later pass will trip over if it does not know them.
    became **§6M**.
 7. ~~**§6G Improvised Effects**~~ and ~~**§6F countering**~~ — done in passes 10 and 11
    (§5N, §5O).
-8. **§6M the sub-builds** and then **§6K the Dynamic point pool** — the two big ones, and
-   they want the same thing (a live budget spent across sub-builds). §6M is the one that
-   settles what such an editor looks like, and §6K is the only remaining item that changes
-   an existing read path rather than adding one, so it wants the settled base.
-9. **§6H Extra Effort and power stunts** — its own branch, after this one merges.
+8. ~~**§6M the sub-builds**~~ — done in pass 12 (§5P).
+9. **§6K the Dynamic point pool** — the last item inside this branch, and the only one
+   left that changes an existing *read* path rather than adding one. §5P settled the
+   shape of a live budget spent across builds, which is what it wanted a base for.
+10. **§6H Extra Effort and power stunts** — its own branch, after this one merges.

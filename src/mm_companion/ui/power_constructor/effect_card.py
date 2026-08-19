@@ -55,6 +55,7 @@ from mm_companion.ui.power_constructor.common import (
     repeatable_cell_kind,
 )
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
+from mm_companion.ui.power_constructor.sub_build import SubBuildPanel
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
@@ -113,6 +114,12 @@ class EffectCard(QFrame):
         # target picker is wired before the form exists and can reach the gates.
         self._gated_rows: list = []
         self._config_seeders: dict = {}
+        # The whole characters this effect buys — a Summon's minion, one alternate form
+        # per rank of a Metamorph chip. Built here rather than where it is added to the
+        # layout below, because seeding the config form can already fire an edit, and
+        # `_refresh_cost` re-reads this strip.
+        self._sub_builds = SubBuildPanel(self.instance, self._data, self._character)
+        self._sub_builds.changed.connect(self.changed)
         self.setObjectName("EffectCard")
         self._drops = DropFeedback(self, "EffectCard", radius="radius.canvas")
         self._drops.set_idle(_idle_card_rules())
@@ -147,6 +154,11 @@ class EffectCard(QFrame):
 
         self._build_modifier_groups(layout)
         layout.addWidget(self._build_specific_button())
+
+        # Below the chips because a modifier can *add* a slot, so the strip reads in
+        # the order it is bought; hidden outright when there is none, which is every
+        # effect but two.
+        layout.addWidget(self._sub_builds)
 
         self._cost = QLabel()
         self._cost.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -1082,6 +1094,10 @@ class EffectCard(QFrame):
         self._rank.blockSignals(False)
 
     def _refresh_cost(self) -> None:
+        # Every edit reaches here, which is why the sub-build strip re-reads from it: a
+        # rank change moves a Summon's minion budget and a chip change adds or removes a
+        # Metamorph's slots outright.
+        self._sub_builds.refresh()
         formula = effect_cost_formula(self.instance, self._data, self._character)
         total = effect_total_cost(self.instance, self._data, self._character)
         unit = self._unit

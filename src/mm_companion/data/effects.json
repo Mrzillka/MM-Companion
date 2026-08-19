@@ -1172,6 +1172,14 @@
         "pattern": "instant_action",
         "affects": "none"
       },
+      "subBuild": {
+        "key": "minion",
+        "label": "Minion",
+        "budget": { "kind": "per_rank", "perRank": 15 },
+        "hint": "Build the summoned character on effect rank x 15 power points, under your own Power Level. They cannot have minions of their own.",
+        "forbidsEffects": ["summon"],
+        "forbidsAdvantages": ["minion"]
+      },
       "description": "Calls forth an ally or creature to fight and act on your behalf."
     },
     {

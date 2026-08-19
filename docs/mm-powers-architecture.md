@@ -472,6 +472,8 @@ Effect (from effects.json)
 │                                        // supplies its check (so its own `check` is null)
 ├── rangeDistance: {}                    // optional; overrides how far this effect reaches
 │                                        // once its range is Ranged (see §10)
+├── subBuild: {}                         // optional; a whole nested Character this effect
+│                                        // buys, with its budget (Summon's minion) — §9
 └── statIntegration: { pattern: "passive_permanent"|"passive_toggle"|"instant_action"|"resource_pool",
                         affects: "ability"|"skill"|"advantage"|"defense"|"resistance"|
                                  "movement"|"senses"|"none"|"special" }
@@ -490,6 +492,9 @@ Modifier (from modifiers.json)
 │                                        // gets its own row and a dice-footer line, with
 │                                        // noteTemplate rendering it ("{trait} check, DC {dc}")
 ├── checkBonus, checkNote, stepField/stepBy, addsAbility, gate, hidden
+├── subBuild: {}                        // optional; the same block an effect can carry,
+│                                        // for a modifier that buys a nested Character
+│                                        // (Morph's Metamorph forms) — §9
 ├── statIntegration: {}                 // optional, the same shape a base effect carries:
 │                                        // what *taking this modifier* grants, read by the
 │                                        // same appliers (Striding -> ranks of Speed).
@@ -593,10 +598,62 @@ total. A handler returns `None` when it cannot answer — `character_points` wit
 character in hand — and the placeholder is dropped from the sentence rather than shown as
 a zero.
 
-**None of the sub-builds themselves is modelled.** Nothing holds the minion, the alternate
-form, or the configured Variable points, so nothing checks a build against the budget it
-prints. The budgets are the number a player builds *to*, and the foundation any future
-editor needs.
+### The sub-builds themselves
+
+Two of the four hold a build as well as a budget, and both are declared in data by a
+`subBuild` block — on the **effect** record for Summon's minion, on the **modifier**
+record for Metamorph's forms:
+
+```json
+"subBuild": {
+  "key": "minion",
+  "label": "Minion",
+  "budget": { "kind": "per_rank", "perRank": 15 },
+  "count": { "kind": "modifier_rank" },
+  "forbidsEffects": ["summon"],
+  "forbidsAdvantages": ["minion"]
+}
+```
+
+`budget` and `count` are ordinary `NOTE_VALUE_KINDS` specs, resolved through the same
+`note_value()` door a `noteValues` placeholder goes through — a sub-build's budget is the
+same question a note asks, so `per_rank` and `modifier_rank` joined the registry and
+`NoteValueContext.modifier` became optional (Summon's is priced off the *effect's* rank,
+with no chip involved). `count` absent means one build.
+
+**A sub-build is an ordinary `Character`**, stored as a list of `to_dict()` dicts under
+`key` in the config dict that bought it — the effect's, or the chip's. That choice is what
+makes the feature small: `config` is already written verbatim to the save file, undo
+already snapshots the whole model as JSON, and the session layer already pushes the same
+dict, so a nested character needs no migration, no new key and no new code in any of the
+three. A *reference* to a saved NPC file was the alternative and was rejected: it couples a
+player's power to the GM's directory and dangles when the file moves.
+
+**The budget is stamped on read, not stored** (`sub_build_character`). Both it and the
+Power Level are derived from the power and its wielder, so dialling a Summon from rank 4 to
+rank 6 moves its minion's pool from 60 to 90 by itself — which is what lets the *sheet's
+own* spent-against-budget readout be the check, instead of a warning bolted beside it.
+
+`core/rules/subbuilds.py` sits below `validation` in the rules DAG (checking a minion means
+walking its powers tree, and `leaf_powers` is validation's). It exposes
+`power_sub_build_slots` / `effect_sub_build_slots`, the read/write pair
+(`sub_build_character`, `store_sub_build`, `remove_sub_build`, `new_sub_build`), and
+`power_sub_build_violations` — over budget, more builds than the power buys, or carrying
+what the slot forbids.
+
+The editor is `SubBuildWindow`, the ordinary sheet again (**not** NPC mode: an NPC swaps
+the point pool for an estimated PL, and a minion is the one GM-side character the rules do
+budget). It saves into the power rather than to a file, and shows Power Level and Power
+Points read-only via `SystemInfoSection.set_budget_fixed`. `SubBuildPanel` is the strip of
+buttons on the effect card that reaches it, showing every slot the card owns — the
+effect's own and its chips' alike — and importing the window **inside the handler**,
+because at module scope the constructor → main window → sheet → sections → constructor loop
+closes.
+
+**Variable's pool and Empowering's form still have no editor**, deliberately. Variable is a
+*menu* the book itself suggests writing out in advance — closer to an array of saved
+configurations than to one build — and Empowering's form is built by the GM for a target,
+not by the player for themselves. Both still print their budget.
 
 ---
 

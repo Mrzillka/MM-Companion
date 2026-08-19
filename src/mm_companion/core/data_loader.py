@@ -757,6 +757,40 @@ class BaseCostBy:
 
 
 @dataclass(frozen=True)
+class SubBuild:
+    """A whole nested *character* an effect or a modifier buys, and its budget.
+
+    Four places in the rules spend a sub-character's worth of points inside a power:
+    Summon's minion (``rank x 15`` PP, p145), Morph's Metamorph forms (one per rank of
+    the extra, each on the wielder's own point total, p136), Variable's pool and
+    Affliction's Empowering form. The first two genuinely buy a *character* — the other
+    two are a menu and a GM's build — so only those two declare one of these.
+
+    ``key`` is the config key the builds are stored under, on the effect's ``config``
+    for an effect-owned slot and on the chip's for a modifier-owned one. The value is a
+    list of :meth:`Character.to_dict` dicts, so it is ordinary JSON and rides along in
+    every save, every undo snapshot and every session push with no special handling.
+
+    ``budget`` and ``count`` are :data:`mm_companion.core.rules.NOTE_VALUE_KINDS` specs
+    — the same ``{"kind": ...}`` shape a modifier's ``noteValues`` uses, resolved by the
+    same registry, so a mod can price a sub-build off anything a note can say. ``count``
+    absent means one build.
+
+    ``forbids_effects`` / ``forbids_advantages`` are what the sub-character may not
+    itself have: a summoned minion "cannot have minions of their own, either from this
+    effect or the Minions advantage" (p145). Checked as a warning, not prevented.
+    """
+
+    key: str
+    label: str
+    budget: dict = field(default_factory=dict)
+    count: dict = field(default_factory=dict)
+    hint: str = ""
+    forbids_effects: tuple[str, ...] = ()
+    forbids_advantages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``docs/mm-powers-architecture.md``).
 
@@ -839,6 +873,9 @@ class Effect:
     #: rather than being a constant (Illusion, Obscure, Remote Sensing, Transmute,
     #: Environment). ``None`` for every effect priced at a flat rate.
     base_cost_by: BaseCostBy | None = None
+    #: A whole nested character this effect buys, with its budget (Summon's minion).
+    #: ``None`` for every effect that buys no such thing; see :class:`SubBuild`.
+    sub_build: SubBuild | None = None
     #: Whether the effect's rank *is* the ranks its config allocates, rather than a
     #: budget the player sets by hand. True for Enhanced Trait, whose cost comes from
     #: the traits it raises and whose rank has no other meaning — so the constructor
@@ -999,6 +1036,9 @@ class Modifier:
     gate: str = ""
     requires_effect_id: str = ""
     repeatable: bool = False
+    #: A whole nested character this *modifier* buys (Morph's Metamorph forms).
+    #: ``None`` for every modifier that buys none; see :class:`SubBuild`.
+    sub_build: SubBuild | None = None
     hidden: bool = False
     note_template: str = ""
     note_per_rank: int = 0
@@ -2420,6 +2460,22 @@ def _parse_base_cost_by(raw: dict | None) -> BaseCostBy | None:
     )
 
 
+def _parse_sub_build(raw: dict | None) -> SubBuild | None:
+    """Parse a ``subBuild`` block, or ``None`` for the records that declare none."""
+
+    if not raw:
+        return None
+    return SubBuild(
+        key=str(raw["key"]),
+        label=str(raw.get("label", "Build")),
+        budget=dict(raw.get("budget", {})),
+        count=dict(raw.get("count", {})),
+        hint=str(raw.get("hint", "")),
+        forbids_effects=tuple(raw.get("forbidsEffects", ())),
+        forbids_advantages=tuple(raw.get("forbidsAdvantages", ())),
+    )
+
+
 def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
     default_distance = ranged_distance or RangeDistance()
     return Effect(
@@ -2437,6 +2493,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         base_cost_value=int(e.get("baseCostValue", 1)),
         base_cost_mode=e.get("baseCostMode", "flat"),
         base_cost_by=_parse_base_cost_by(e.get("baseCostBy")),
+        sub_build=_parse_sub_build(e.get("subBuild")),
         rank_follows_allocation=bool(e.get("rankFollowsAllocation", False)),
         integration=_parse_integration(
             e.get("statIntegration", {}), bool(e.get("configurableTarget", False))
@@ -2486,6 +2543,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
         repeatable=bool(m.get("repeatable", False)),
+        sub_build=_parse_sub_build(m.get("subBuild")),
         hidden=bool(m.get("hidden", False)),
         note_template=m.get("noteTemplate", ""),
         note_per_rank=int(m.get("notePerRank", 0)),

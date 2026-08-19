@@ -404,6 +404,9 @@ class SystemInfoSection(QGroupBox):
         self._editable: list[QWidget] = []
         # A GM's NPC has no point budget (see :meth:`set_npc_mode`).
         self._npc = False
+        # A sheet whose budget is handed to it rather than chosen (see
+        # :meth:`set_budget_fixed`).
+        self._budget_fixed = False
 
         form = self._form = QFormLayout(self)
         form.addRow("Power Level:", self._build_power_level())
@@ -801,5 +804,27 @@ class SystemInfoSection(QGroupBox):
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back."""
         self._locked = locked
+        self._apply_lock()
+
+    def set_budget_fixed(self, fixed: bool) -> None:
+        """Show the Power Level and point budget read-only, for a *derived* budget.
+
+        A power's sub-build — a Summon's minion, a Metamorph form — is built on a
+        number the power hands it: ``rank x 15``, or its wielder's own total
+        (:mod:`mm_companion.core.rules.subbuilds`). Both are restamped every time the
+        build is opened, so leaving the spin boxes live would offer an edit that
+        silently does not stick. The rows stay *visible* — the budget is the whole
+        point of the window — they simply cannot be typed into.
+
+        Sticky, unlike :meth:`set_locked`: unlocking the sheet must not hand back a
+        field that was never the player's.
+        """
+        self._budget_fixed = fixed
+        self._apply_lock()
+
+    def _apply_lock(self) -> None:
+        """Re-apply the lock state to every editable field."""
+        derived = (self._power_level, self._power_points)
         for widget in self._editable:
-            set_widget_locked(widget, locked)
+            fixed = self._budget_fixed and widget in derived
+            set_widget_locked(widget, self._locked or fixed)

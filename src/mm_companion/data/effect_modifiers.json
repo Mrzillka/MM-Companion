@@ -1654,7 +1654,14 @@
           "ranked": true,
           "noteTemplate": "Metamorph: {rank} alternate trait set(s), each built on your own {points} power points",
           "noteValues": { "points": { "kind": "character_points" } },
-          "description": "Grants a fully separate set of traits per alternate form, not just a new look. Each form has the same point total as you and the same Power Level limits, must carry your full Morph effect, and must suit the shapes you can take."
+          "subBuild": {
+            "key": "forms",
+            "label": "Alternate form",
+            "count": { "kind": "modifier_rank" },
+            "budget": { "kind": "character_points" },
+            "hint": "Build each alternate form on your own point total, under the same Power Level limits, with traits suiting the shapes you can take."
+          },
+          "description": "Grants a fully separate set of traits per alternate form, not just a new look. Each form has the same point total as you and the same Power Level limits, and must have traits suiting the shapes you can take."
         }
       ],
       "flaws": [

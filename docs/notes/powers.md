@@ -115,16 +115,44 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `effect_readouts.json`; the last two are modifier `noteTemplate` lines. Metamorph is the
   odd one and the reason `noteValues` exists: its budget is not a multiple of any rank, so
   the number has to come from `power_points_spent` — which is why `costs` now sits above
-  `powers_terms` in the rules DAG. **What is still not modelled is the sub-build itself** —
-  nothing holds the minion, the alternate form or the configured Variable points, so
-  nothing checks a build against the budget it prints. See `POWERS-AUDIT.md` §6M.
+  `powers_terms` in the rules DAG. Two of the four now hold the build as well as the
+  budget — see the next bullet. Variable's pool is a *menu* the book itself suggests
+  writing down in advance and Empowering's form is built by the GM for a target, so
+  neither has an editor; see `POWERS-AUDIT.md` §6M.
+- **A sub-build is an ordinary `Character`, stored in the config dict that bought it.**
+  `core/rules/subbuilds.py` resolves a `subBuild` declaration — on the *effect* for
+  Summon's minion, on the *modifier* for Metamorph's forms — into a `SubBuildSlot`
+  carrying how many builds this instance buys and what each is built on. The builds live
+  in `effect.config[key]` (or the chip's) as a list of `Character.to_dict()` dicts, which
+  is why they need no migration, no new save key and no undo work: the sheet snapshots
+  the whole model as JSON already, so editing a minion is an undoable step for free. The
+  alternative — a reference to a saved NPC file — was rejected because it couples a
+  player's power to the GM's directory and dangles when the file moves.
+  **The budget is stamped on read, never stored**: dial the Summon from 4 to 6 and the
+  minion's point pool moves from 60 to 90 by itself, which is what makes the *sheet's own*
+  spent-against-budget readout the check the rules ask for. `SubBuildWindow` is therefore
+  the ordinary sheet, not NPC mode — an NPC swaps the pool for an estimated PL, and a
+  minion is the one GM-side character the rules do budget. It writes every edit straight
+  back into the power (there is no file for it to save to) and shows Power Level and Power
+  Points read-only through `SystemInfoSection.set_budget_fixed`, which is sticky against
+  `set_locked` because a derived field was never the player's to unlock.
+  `power_sub_build_violations` warns — constructor-only, like the imposed-effect and
+  Strength checks beside it — about a build over budget, more builds than the power buys
+  (a Metamorph dropped in rank keeps its forms rather than silently binning two
+  characters), and what a sub-character may not itself have: a minion "cannot have minions
+  of their own, either from this effect or the Minions advantage" (p145), which is
+  `forbidsEffects` / `forbidsAdvantages` in the data.
 - **`noteValues` answers what a rank cannot.** A modifier's `noteTemplate` could only ever
   interpolate `{n}` (the effect's rank times `notePerRank`); a `noteValues` entry names a
   `kind` from the `NOTE_VALUE_KINDS` registry instead. `doubling` is Multiple Minions,
   whose count doubles per rank *of the extra* rather than growing with the effect; and
   `character_points` is Metamorph's. A handler returning `None` — `character_points` with
   no character open — leaves the placeholder to be stripped, so the sentence reads without
-  the number rather than claiming a zero.
+  the number rather than claiming a zero. The registry is reached through one door,
+  `note_value(spec, ...)`, because a **sub-build's budget asks the registry the same
+  question a note's placeholder does** — which is why `per_rank` and `modifier_rank`
+  joined it, and why `NoteValueContext.modifier` is optional: Summon's minion is priced
+  off the effect's rank with no chip in sight.
 - **A modifier's name carries a priced choice.** `modifier_detail` already qualified a
   modifier with the free text a player typed ("Limited (only at night)"); it now also
   names a chosen `select` option **when that option carries its own `costValue`**. Those

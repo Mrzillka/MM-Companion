@@ -51,6 +51,7 @@ from mm_companion.core.rules import (
     power_modifier_requirement_violations,
     power_pl_violations,
     power_strength_amount_violations,
+    power_sub_build_violations,
     power_total_cost,
     power_trait_allocation_violations,
 )
@@ -1238,6 +1239,12 @@ class PowerConstructorWindow(QMainWindow):
         """
         return power_imposed_effect_violations(self.power, self._data, self._character)
 
+    def _sub_build_violations(self) -> list[str]:
+        """Nested characters over their budget, past their count, or carrying what they
+        may not — a Summon's minion, a Metamorph's alternate forms (see
+        :mod:`mm_companion.core.rules.subbuilds`)."""
+        return power_sub_build_violations(self.power, self._data, self._character)
+
     def _refresh_pl_warning(self) -> None:
         """Show or hide the live warning from the current PL, allocation, and link breaches."""
         pl = self._pl_violations()
@@ -1247,6 +1254,7 @@ class PowerConstructorWindow(QMainWindow):
         strength = self._strength_violations()
         requirement = self._requirement_violations()
         imposed = self._imposed_violations()
+        sub_builds = self._sub_build_violations()
         headlines = []
         if pl:
             headlines.append("over Power Level")
@@ -1262,11 +1270,24 @@ class PowerConstructorWindow(QMainWindow):
             headlines.append("missing required modifier")
         if imposed:
             headlines.append("imposed effect over budget")
+        if sub_builds:
+            headlines.append("sub-build over budget")
         headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
             self._warning.setToolTip(
-                "\n".join((*pl, *alloc, *caps, *linked, *strength, *requirement, *imposed))
+                "\n".join(
+                    (
+                        *pl,
+                        *alloc,
+                        *caps,
+                        *linked,
+                        *strength,
+                        *requirement,
+                        *imposed,
+                        *sub_builds,
+                    )
+                )
             )
         self._warning.setVisible(bool(headline))
 

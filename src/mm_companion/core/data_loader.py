@@ -941,6 +941,15 @@ class Modifier:
     so Affliction's Empowering reads "transformed form gains 60 power points" at rank 4.
     Empty leaves the modifier listed by name.
 
+    ``note_values`` supplies the placeholders a rank alone cannot answer, as
+    ``{name: {"kind": ..., ...}}``. ``kind`` picks a handler out of
+    :data:`mm_companion.core.rules.NOTE_VALUE_KINDS`, so the arithmetic is named in data
+    rather than spelled per modifier: Multiple Minions' count *doubles* with its rank
+    (p145) and Metamorph's alternate forms are each worth the **wielder's own** point
+    total (p136), and neither is a multiple of anything the note already had. A
+    placeholder whose value cannot be worked out — ``character_points`` with no
+    character in hand — is dropped from the sentence rather than shown as a zero.
+
     ``requires_any`` lists modifier ids of which at least one must also be attached to
     the same effect for this modifier to be valid — Affliction's Increasing Difficulty
     needs Cumulative or Progressive to have repeated checks to escalate. Empty imposes
@@ -981,6 +990,7 @@ class Modifier:
     hidden: bool = False
     note_template: str = ""
     note_per_rank: int = 0
+    note_values: dict[str, dict] = field(default_factory=dict)
     #: Using the effect first calls for an extra roll that can fail (Check Required).
     #: Such a modifier gets its own game-term row and a line in the card's dice footer
     #: rather than being buried in Notes — it is something someone has to roll.
@@ -2448,6 +2458,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         hidden=bool(m.get("hidden", False)),
         note_template=m.get("noteTemplate", ""),
         note_per_rank=int(m.get("notePerRank", 0)),
+        note_values={k: dict(v) for k, v in m.get("noteValues", {}).items()},
         requires_check=bool(m.get("requiresCheck", False)),
         requires_any=tuple(m.get("requiresAny", ())),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),

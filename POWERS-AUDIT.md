@@ -23,8 +23,9 @@ file alone. Delete it when §6 is empty.
 | §5I | Concealment's sense bookkeeping (was §6E) | **done** — pass 6 |
 | §5J | Dynamic Alternate Effects — the price (was §6A) | **done** — pass 7 |
 | §5K | Affliction's imposed-effect budget check (was §6D) | **done** — pass 8 |
+| §5L | Sub-build budgets, and the Summon / Variable data (was §6C) | **done** — pass 9 |
 | §6K | Dynamic Alternate Effects — the point pool (split from §6A) | outstanding |
-| §6C | Nested trait budgets (Summon / Metamorph / Variable / Empowering) | outstanding |
+| §6M | The sub-builds themselves (split from §6C) | outstanding |
 | §6F | Countering effects | outstanding |
 | §6G | Improvised Effects arithmetic | outstanding |
 | §6H | Extra Effort and power stunts | outstanding |
@@ -43,6 +44,8 @@ b880efb  Turn the powers audit into a handover brief
 96677f1  Charge a Dynamic Alternate Effect what it costs
 6ed3d6b  Record pass 7's commit hash in the audit
 4799e9b  Let an Affliction name the effect its Transformed condition imposes
+db18f2e  Record pass 8's commit hash in the audit
+<pending>  State what a Summon, a Metamorph and a Variable are built on
 ```
 
 ---
@@ -57,7 +60,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2791 tests as of pass 8
+python -m pytest -q                 # ~9 min, 2799 tests as of pass 9
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -111,6 +114,7 @@ What was read in full and diffed:
 | Standard power configurations, p236 (by effect) and p237 (by name) | `src/mm_companion/data/configurations.json` |
 | Sense types, p63 | — used by Illusion / Obscure / Remote Sensing |
 | Affliction's Imposed Effects, p110 | Affliction's `config`, `imposable_effects` |
+| Summon p145–146, Variable p148–149, Metamorph p136 | `effect_readouts.json`, `effect_modifiers.json`, `NOTE_VALUE_KINDS` |
 
 ### A trap worth recording
 
@@ -258,7 +262,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2–8 — what was built
+## 5. Passes 2–9 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -533,6 +537,74 @@ loader reads `min`/`max`/`default`, so the rank silently defaulted to 0; and the
 printed the raw id (`morph`) because two of the three `_config_display` call sites had no
 `game_data` to resolve a source with. Running it is still worth more than reading it.
 
+### L. Sub-build budgets, and the Summon / Variable data (pass 9)
+
+**§6C said "four places buy a whole sub-character's worth of points and none records it".
+Half of that was wrong** — worth knowing, since it is the sort of claim a later pass
+inherits without rechecking. Variable already carried a `points_per_rank` readout (rank ×
+5, "Power pool") and Empowering already carried `noteTemplate` + `notePerRank: 15`. What
+was actually missing was **Summon's** budget and **Metamorph's**, and Metamorph is the
+interesting one.
+
+| Where | Budget | Cite | Was |
+| --- | --- | --- | --- |
+| Summon | one minion on **rank × 15** PP | p145 | nothing |
+| Variable | **rank × 5** Variable Power Points | p148 | already right |
+| Affliction → Empowering | the Transformed form on **rank × 15** | p110 | already right |
+| Morph → Metamorph | one trait set **per rank**, each worth **your own point total** | p136 | nothing |
+
+**Metamorph is why `noteValues` exists.** Every note a modifier could render was
+"the effect's rank times a constant" (`{n}` and `notePerRank`), and Metamorph's budget is
+not a multiple of any rank — it is `power_points_spent`. So a modifier can now name a
+`kind` from the **`NOTE_VALUE_KINDS`** registry for a placeholder, and two kinds went in:
+`character_points` for Metamorph, and `doubling` for **Multiple Minions**, whose minion
+count doubles per rank *of the extra* rather than growing with the effect. A handler that
+cannot answer (`character_points` with no character open) returns `None` and the
+placeholder is stripped, so the sentence reads without the number rather than claiming a
+zero. This moved `costs` above `powers_terms` in the rules DAG — noted there, and the edge
+only goes one way.
+
+**A latent bug came with it.** `_modifier_notes` rendered every Notes-row template
+*without* the chip or the game data, so `{rank}`, `{dc}` and any config key silently
+vanished. Nothing had noticed because the only templates that used them went through the
+Check Required path instead. Both of pass 9's new notes need the chip, so it is fixed.
+
+**Four data corrections, all from p145/p148, and one is a free flaw:**
+
+| Record | Was | Now | Cite |
+| --- | --- | --- | --- |
+| Summon → **Hostile** | `costValue: 0`, "included with Attitude-style flaws" | **−2 per rank** | p145 |
+| Summon → **Multiple Minions** | not `ranked` — stuck at one application | `ranked: true` | p145 |
+| Summon → **Variable Type** | stuck at +1 | select: general type (+1) / broad (+2) | p145 |
+| Variable → **Action** | stuck at +1 | select: simple action (+1) / free (+2) | p148 |
+| Healing → **Repair** | stuck at +1 | select: people and objects (+1) / objects only (+0) | p130 |
+
+Hostile is the one that mattered: a Summon could take "your minions turn on you and you
+cannot end the effect" and pay nothing for it. The other three are the §5D gap one more
+time — a `costFormula` stating a range with no way to dial it — which suggested §5D's
+sweep had missed the *effect-specific* lists.
+
+**So the sweep was redone across both modifier files**, matching a stated range
+(`\d\s*(or|-)\s*\d`, or more than one signed term) against a record carrying no `config`.
+It turned up exactly one more, **Healing → Repair**, and it is in the table above. The only
+other hit is `alternate_effect`, whose "1 or 2 points flat" is pass 7's Dynamic flag rather
+than a config, and is right as it stands. That sweep is now clean, and the query is
+recorded here so a later pass can rerun it after adding records.
+
+**A modifier's name now carries a priced choice.** `modifier_detail` qualified a modifier
+with typed free text only, so a Variable Type (broad) and a Variable Type (general) — which
+cost twice and once per rank — read identically on the card. A chosen `select` option now
+qualifies the name **when the option carries its own `costValue`**; a select with no prices
+on it is a neutral choice and stays out. That was not §6C's subject, but pass 9 added two
+more silent selects and the gap was already ~15 records wide.
+
+**Checked in the app.** A Summon 6 with Multiple Minions 2 reads "Minion built on: 90
+points" and "up to 4 minions" — both figures the book prints on p145 — and a Morph 3 with
+Metamorph 2 reads "2 alternate trait set(s), each built on your own 65 power points" for a
+65-point character.
+
+**§6M is what is left**: the sub-builds themselves.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -557,6 +629,9 @@ A later pass should reach for these rather than inventing a parallel one.
 | `CONFIG_OPTION_SOURCES` + `source` | `powers_terms.py`, via `config_source_options` | a `select` whose options are a query over the game data; the picker and the readout share one resolver so an id cannot be named two ways |
 | `points` as an *effect* config field | `EffectCard._points_widget`, `_config_display_points` | a bounded number on an effect (not just a modifier), seeding and storing its own default |
 | `effect_is_personal` / `effect_action_at_most` | `powers_cost.py` | "works on its user alone" and "takes this action or less" — both data-driven, both wanted by any rule that restricts *which* effects something may name |
+| `noteValues` + `NOTE_VALUE_KINDS` | `powers_terms.py` | a number a note needs that the effect's rank cannot give — the modifier's own rank compounded, the wielder's point total; returns `None` to drop the placeholder rather than print a zero |
+| `points_per_rank` readout | `effect_readouts.json` | a per-rank budget stated on the card, in data with no Python (Summon's minion, Variable's pool) |
+| A priced `select` in a modifier's name | `modifier_detail` | any option carrying its own `costValue` qualifies the modifier wherever it is listed, so two differently-priced cards never read alike |
 
 ---
 
@@ -569,29 +644,7 @@ it worked.
 
 ### B. Removable's real formula — **done in pass 4, see §5F**
 
-### C. Nested trait budgets
-
-Four places buy a whole sub-character's worth of points and none records it:
-
-| Where | Budget | Cite |
-| --- | --- | --- |
-| Summon | minion built on **rank × 15** PP, minion characteristics, may not have minions of its own | p145 |
-| Morph → Metamorph extra | one complete alternate trait set **per rank**, same point total, same PL limits | p136 |
-| Variable | **rank × 5** Variable Power Points, reallocated on a Concentrate action | p148 |
-| Affliction → Empowering extra | the third-degree Transformed form is built on **rank × 15** PP | p110 |
-
-Only the last has even a note (`notePerRank: 15` renders a Notes line). Probably one
-feature: a nested point-budget editor reusing the character model. Note `core/npc.py` and
-the Quick NPC window already build a reduced character — worth looking at before starting.
-
-**§5K is the thin version of this and settles one question for it.** An Affliction's
-imposed effect turned out *not* to need a nested build: the rules only ask for a name, a
-rank and a budget check, so it is config plus a `power_*_violations` function and nothing
-more. Ask the same question of each of the four above before building an editor — Variable
-and Summon genuinely buy a whole trait set, but check whether Metamorph and Empowering do
-too, or whether a budget and a note carry them. The pattern §5K leaves behind (a live
-budget warned against rather than clamped, and the picker enforcing what it can) is the
-one to reuse either way.
+### C. Nested trait budgets — **the budgets are done in pass 9, see §5L; the builds are §6M**
 
 ### D. Affliction's imposed-effect budget check — **done in pass 8, see §5K**
 
@@ -685,6 +738,40 @@ members that should run *alongside* the selected one do not; and the sheet's cli
 effective rank and nothing else; a member below its minimum is off; the split may not exceed
 the pool; an old saved array loads with no allocation and behaves exactly as it does today.
 
+### M. The sub-builds themselves
+
+Pass 9 (§5L) made every sub-build **budget** a real number on the card. What still does not
+exist is anything holding the build that budget is for, so nothing is ever checked against
+it.
+
+| Where | What is missing | Cite |
+| --- | --- | --- |
+| Summon | the minion: a whole NPC on `rank × 15` PP, under the wielder's PL, with minion characteristics and no minions of its own | p145 |
+| Morph → Metamorph | one complete alternate trait set per rank, each on the wielder's own total, each carrying the full Morph effect | p136 |
+| Variable | what the `rank × 5` Variable Power Points are currently configured as, reallocated on a Concentrate action | p148 |
+| Affliction → Empowering | the third-degree Transformed form, on `rank × 15` | p110 |
+
+**Read §5K's shape before designing an editor.** An Affliction's *imposed effect* looked
+like a nested build and turned out to need only a name, a rank and a budget check. Ask the
+same of these four. Summon and Metamorph genuinely buy a whole character. Variable is a
+*menu* the book itself suggests writing down in advance, which is closer to an array of
+saved configurations than to one build. Empowering's form is built by the GM for a target,
+not by the player for themselves — so it may want no editor at all, only the number it
+already prints.
+
+**`core/npc.py` and `NPCWindow` are the thing to look at first.** An NPC already *is* an
+ordinary `Character`, opened in the ordinary sheet with the point pool swapped for an
+estimated Power Level — so a minion is a solved problem *except* for where it lives and how
+it is reached from a power. That, not the editor, is the real design question: a nested
+`Character` inside `PowerEffectInstance.config` touches the save format, undo, and the
+library; a *reference* to a saved NPC couples a player's power to the GM's directory and
+dangles when the file moves. Neither is obviously right, which is why this is its own item.
+
+**Acceptance.** A Summon carries a minion whose point total is checked against `rank × 15`;
+a Metamorph carries one trait set per rank, each checked against the wielder's own total;
+both survive a save/load round trip; and a power with no sub-build behaves exactly as it
+does today.
+
 ---
 
 ## 7. Known debts and caveats
@@ -731,24 +818,28 @@ Things a later pass will trip over if it does not know them.
    Berserker Rage, Poltergeist, Power Theft. The book leaves them blank too (which trait is
    boosted, which descriptor is absorbed), so this is faithful rather than incomplete, but
    it is worth knowing before someone "fixes" them.
-9. **The imposed-effect warning is constructor-only**, like the allocation, linked-range,
+9. **§5D's sweep had missed the effect-specific lists**, and pass 9 redid it across both
+   modifier files — see §5L for the query and the four records it caught. It is clean as
+   of pass 9; rerun it after adding modifier records, since a `costFormula` naming two
+   prices with no `config` beneath it is silently the cheaper one.
+10. **The imposed-effect warning is constructor-only**, like the allocation, linked-range,
    Strength and requirement warnings beside it — the sheet card shows Power Level breaches
    alone. That is the existing convention rather than an oversight (see
    `_strength_violations`, which says so), but it does mean a character loaded from a file
    built under a different ruleset carries an over-budget imposed effect with no marker on
    the sheet until someone opens the constructor.
-10. **`docs/mm-powers-architecture.md` had a dangling §9.** The schema block referenced a
+11. **`docs/mm-powers-architecture.md` had a dangling §9.** The schema block referenced a
    section on effect configuration fields that had never been written, and the numbering
    skipped from 8 to 10. Pass 8 wrote it, since the pass was about exactly that. Worth
    knowing that the doc's cross-references are not all load-bearing — check before trusting
    one.
-11. **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
+12. **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
    under three cards reading 20, 8 and 10 — the pooling explains it, and each card's badge
    names its own share, but the total line itself does not. §5F built `power_cost_formula`
    for precisely this complaint about Removable and it fires only for a power-scope
    modifier; extending it to render the array working would close the same gap for every
    array, Dynamic or not. Left alone as beyond §5J's scope, not because it is fine.
-12. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
+13. **`docs/notes/powers.md` and `docs/mm-powers-architecture.md` are kept current** with
    each pass. Update them in the same commit as the code, not afterwards — the notes are the
    thing a future session reads first.
 
@@ -761,12 +852,13 @@ Things a later pass will trip over if it does not know them.
 3. ~~**§6E Concealment senses**~~ — done in pass 6 (§5I).
 4. ~~**§6A Dynamic Alternate Effects**~~ — the price is done in pass 7 (§5J); the pool
    became **§6K**.
-5. ~~**§6D Affliction's imposed effect**~~ — done in pass 8 (§5K), and it settled that a
-   nested build was not needed for it. Next is **§6C nested trait budgets**, which §5K's
-   shape should be read against before an editor is designed for it.
-6. **§6K the Dynamic point pool** — do it after §6C. Both want the same thing (a live
-   budget spent across sub-builds), and §6C is the one that settles what that editor looks
-   like. §6K is the only remaining item that changes an existing read path rather than
-   adding one, so it is the one worth having a settled base under.
-7. **§6F countering** and **§6G Improvised Effects** — feature work on top of a settled base.
-8. **§6H Extra Effort and power stunts** — its own branch, after this one merges.
+5. ~~**§6D Affliction's imposed effect**~~ — done in pass 8 (§5K).
+6. ~~**§6C nested trait budgets**~~ — the budgets are done in pass 9 (§5L); the builds
+   became **§6M**.
+7. **§6F countering** and **§6G Improvised Effects** — feature work on a settled base, and
+   the two smallest things left. Do these next.
+8. **§6M the sub-builds** and then **§6K the Dynamic point pool** — the two big ones, and
+   they want the same thing (a live budget spent across sub-builds). §6M is the one that
+   settles what such an editor looks like, and §6K is the only remaining item that changes
+   an existing read path rather than adding one, so it wants the settled base.
+9. **§6H Extra Effort and power stunts** — its own branch, after this one merges.

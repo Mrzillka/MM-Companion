@@ -12,8 +12,13 @@ Split from a single module into subsystem submodules; every public name is
 re-exported here so ``from mm_companion.core.rules import X`` keeps working
 unchanged. Submodules form a dependency DAG: ``appliers`` → ``runtime``/``advantages``/
 ``conditions`` (base) → ``size`` → ``derived`` → ``trait_rates`` → ``powers_cost`` →
-``costs``/``movement``/``powers_terms``/``damage`` → ``platforms`` → ``equipment`` →
+``costs`` → ``movement``/``powers_terms``/``damage`` → ``platforms`` → ``equipment`` →
 ``validation`` → ``rolls`` → ``pins``.
+
+``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
+needed a note saying what its alternate forms cost: the rules put that budget at "the
+same point total as you" (p136), which is ``power_points_spent`` and lives in ``costs``.
+``costs`` reaches nothing in ``powers_terms``, so the edge only goes the one way.
 
 ``trait_rates`` sits between ``derived`` and ``powers_cost`` for the same reason
 ``size`` sits below ``derived``: an Enhanced Trait costs *as its trait*, so the

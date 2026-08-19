@@ -81,6 +81,9 @@
         "falseText": "Sustain action (static)"
       }
     ],
+    "summon": [
+      { "kind": "points_per_rank", "label": "Minion built on", "perRank": 15 }
+    ],
     "variable": [
       { "kind": "points_per_rank", "label": "Power pool", "perRank": 5 }
     ]

@@ -1174,7 +1174,19 @@
           "costFormula": "+1 point per rank (+0 if repair-only)",
           "costValue": 1,
           "flat": false,
-          "description": "Lets you mend damage conditions on objects, not just people."
+          "config": [
+            {
+              "key": "scope",
+              "label": "Heals",
+              "type": "select",
+              "hint": "Mending objects as well as people is worth +1 per rank; an effect that only ever repairs objects gains nothing and is +0.",
+              "options": [
+                { "value": "both", "label": "People and objects", "costValue": 1 },
+                { "value": "repair_only", "label": "Objects only", "costValue": 0 }
+              ]
+            }
+          ],
+          "description": "Lets you mend damage conditions on objects, one condition per degree of success, starting with the least severe."
         },
         {
           "id": "resurrection",
@@ -1640,7 +1652,9 @@
           "costValue": 1,
           "flat": true,
           "ranked": true,
-          "description": "Grants a fully separate set of traits per alternate form, not just a new look."
+          "noteTemplate": "Metamorph: {rank} alternate trait set(s), each built on your own {points} power points",
+          "noteValues": { "points": { "kind": "character_points" } },
+          "description": "Grants a fully separate set of traits per alternate form, not just a new look. Each form has the same point total as you and the same Power Level limits, must carry your full Morph effect, and must suit the shapes you can take."
         }
       ],
       "flaws": [
@@ -2090,7 +2104,10 @@
           "costFormula": "+2 points per rank",
           "costValue": 2,
           "flat": false,
-          "description": "Doubles your total minion count per rank taken."
+          "ranked": true,
+          "noteTemplate": "Multiple Minions: up to {minions} minions",
+          "noteValues": { "minions": { "kind": "doubling", "base": 1 } },
+          "description": "Each rank doubles your total number of minions - one rank for two, two ranks for four, and so on. Each still needs its own use of Summon unless you also have Horde."
         },
         {
           "id": "sacrifice",
@@ -2106,6 +2123,18 @@
           "costFormula": "+1 point per rank (general type), +2 (broad type)",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "breadth",
+              "label": "Minions vary by",
+              "type": "select",
+              "hint": "A general type (elementals, birds, fish) is worth +1 per rank; a broad one (animals, demons, humanoids) +2.",
+              "options": [
+                { "value": "general", "label": "General type", "costValue": 1 },
+                { "value": "broad", "label": "Broad type", "costValue": 2 }
+              ]
+            }
+          ],
           "description": "Lets you summon different kinds of minions instead of always an identical one."
         }
       ],
@@ -2133,10 +2162,10 @@
         {
           "id": "hostile",
           "name": "Hostile",
-          "costFormula": "included with Attitude-style flaws",
-          "costValue": 0,
-          "flat": true,
-          "description": "A failed summon check turns the minion against you instead."
+          "costFormula": "-2 points per rank",
+          "costValue": 2,
+          "flat": false,
+          "description": "Minions resisting the summons turn Hostile: you lose control of them and cannot end the effect, though you can still counter your own Summon to send them away."
         },
         {
           "id": "resistible_summon",
@@ -2271,6 +2300,18 @@
           "costFormula": "+1 point per rank (simple), +2 (free)",
           "costValue": 1,
           "flat": false,
+          "config": [
+            {
+              "key": "action",
+              "label": "Reconfigure as a",
+              "type": "select",
+              "hint": "A simple action is worth +1 per rank; a free action +2. Either way, still only once per turn.",
+              "options": [
+                { "value": "simple", "label": "Simple action", "costValue": 1 },
+                { "value": "free", "label": "Free action", "costValue": 2 }
+              ]
+            }
+          ],
           "description": "Lets you reconfigure your Variable pool faster than the default Concentrate action."
         },
         {

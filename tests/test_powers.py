@@ -6,6 +6,7 @@ import dataclasses
 import json
 import math
 import re
+from dataclasses import replace
 from fractions import Fraction
 
 from mm_companion.core.character import Character
@@ -66,6 +67,7 @@ from mm_companion.core.rules import (
     power_linked_range_violations,
     power_modifier_requirement_violations,
     power_pl_violations,
+    power_points_spent,
     power_runtime_gates,
     power_scope_terms,
     power_strength_amount_violations,
@@ -82,6 +84,7 @@ from mm_companion.core.rules import (
     trait_display_name,
     trait_rate,
 )
+from mm_companion.core.rules.powers_terms import _render_note
 
 
 def test_base_effect_cost_is_per_rank() -> None:
@@ -1370,6 +1373,171 @@ def test_the_imposed_effect_reads_by_name_in_the_game_terms() -> None:
     # rather than blowing the whole line up looking for an option label for a 4.
     assert "Transformed into: Shrinking" in line
     assert "at rank: 4" in line
+
+
+def test_summon_states_the_points_its_minion_is_built_on() -> None:
+    data = load_game_data()
+    # p145: "Create the summoned character with (effect rank x 15) Power Points", and the
+    # book's own worked figure - "with Summon 6, you summon a single 90-point minion".
+    effect = PowerEffectInstance("summon", rank=6)
+    rows = {r.label: r.value for r in effect_readout_rows(effect, data)}
+    assert rows["Minion built on"] == "90 points"
+
+
+def test_multiple_minions_is_bought_in_its_own_ranks_and_doubles() -> None:
+    data = load_game_data()
+    # p145: "Each application of this extra doubles your total number of minions ... with
+    # Multiple Minions 1, you can summon two 90-point minions, with Multiple Minions 2,
+    # four minions". So it is ranked in itself, not fixed at the effect's rank.
+    modifier = data.modifier_catalog()["multiple_minions"]
+    assert modifier.ranked and modifier.cost_value == 2
+
+    def note(rank: int) -> str:
+        effect = PowerEffectInstance(
+            "summon", rank=6, extras=[ModifierSelection("multiple_minions", rank=rank)]
+        )
+        rows = {r.label: r.value for r in effect_stat_rows(effect, data)}
+        return rows["Notes"]
+
+    assert "up to 2 minions" in note(1)
+    assert "up to 4 minions" in note(2)
+    assert "up to 8 minions" in note(3)
+
+    # And each rank is charged: Summon 2/rank + Multiple Minions 2 x its own rank.
+    effect = PowerEffectInstance(
+        "summon", rank=6, extras=[ModifierSelection("multiple_minions", rank=2)]
+    )
+    assert effect_total_cost(effect, data) == 6 * (2 + 2 * 2)
+
+
+def test_a_summons_hostile_flaw_is_worth_what_the_book_charges() -> None:
+    data = load_game_data()
+    # p145 prices Hostile at -2 per rank in its own right. It read as a free rider on
+    # Attitude and cost nothing, so a Summon took the drawback and paid for none of it.
+    hostile = data.modifier_catalog()["hostile"]
+    assert hostile.cost_value == 2 and not hostile.flat
+    plain = PowerEffectInstance("summon", rank=6)
+    with_flaw = PowerEffectInstance("summon", rank=6, flaws=[ModifierSelection("hostile")])
+    assert effect_total_cost(plain, data) == 12
+    # Summon is 2 per rank, so a -2 flaw takes it to net zero and the sub-1-per-rank
+    # ratio rule takes over (p150): 1 point per (2 - 0) ranks, so 3 for six ranks.
+    assert effect_total_cost(with_flaw, data) == 3
+
+
+def test_the_two_priced_summon_and_variable_options_can_be_dialled() -> None:
+    data = load_game_data()
+
+    # Variable Type: +1 per rank for a general type, +2 for a broad one (p145).
+    def summon_cost(breadth: str) -> int:
+        return effect_total_cost(
+            PowerEffectInstance(
+                "summon",
+                rank=5,
+                extras=[ModifierSelection("variable_type", config={"breadth": breadth})],
+            ),
+            data,
+        )
+
+    assert summon_cost("general") == 5 * (2 + 1)
+    assert summon_cost("broad") == 5 * (2 + 2)
+
+    # Variable's Action extra: simple +1 per rank, free +2 (p148).
+    def variable_cost(action: str) -> int:
+        return effect_total_cost(
+            PowerEffectInstance(
+                "variable",
+                rank=3,
+                extras=[ModifierSelection("action_variable", config={"action": action})],
+            ),
+            data,
+        )
+
+    assert variable_cost("simple") == 3 * (7 + 1)
+    assert variable_cost("free") == 3 * (7 + 2)
+
+    # Healing's Repair: +1 per rank, "+0 if the effect is Repair Only" (p130).
+    def healing_cost(scope: str) -> int:
+        return effect_total_cost(
+            PowerEffectInstance(
+                "healing", rank=5, extras=[ModifierSelection("repair", config={"scope": scope})]
+            ),
+            data,
+        )
+
+    assert healing_cost("both") == 5 * (2 + 1)
+    assert healing_cost("repair_only") == 5 * 2
+
+
+def test_no_modifier_states_a_price_range_it_cannot_be_dialled_to() -> None:
+    """A costFormula naming two prices with no config is silently the cheaper one.
+
+    That was the §5D gap, and pass 9 found four more of it hiding in the *effect-specific*
+    lists the original sweep had not covered. Pinned so a record added later cannot
+    reintroduce it without someone noticing.
+    """
+
+    import re
+
+    data = load_game_data()
+    ranged = re.compile(r"\d\s*(?:or|-|–)\s*\d")
+    offenders = [
+        modifier.id
+        for modifier in data.modifier_catalog().values()
+        if (ranged.search(modifier.cost_formula) or modifier.cost_formula.count("+") > 1)
+        and not modifier.config_fields
+    ]
+    # The array's Alternate Effect is the one exception: its "1 or 2 points flat" is the
+    # Dynamic flag on the member (§5J), not a choice made on a chip.
+    assert offenders == ["alternate_effect"]
+
+
+def test_a_priced_option_is_named_wherever_the_modifier_is() -> None:
+    data = load_game_data()
+    # Two cards costing different amounts must not read identically: a select whose
+    # options carry their own price qualifies the modifier's name.
+    modifier = data.modifier_catalog()["variable_type"]
+    broad = ModifierSelection("variable_type", config={"breadth": "broad"})
+    assert modifier_label(modifier, broad) == "Variable Type (broad type)"
+    # A choice that costs nothing extra stays out of the name.
+    plain = ModifierSelection("variable_type")
+    assert modifier_label(modifier, plain) == "Variable Type"
+
+
+def test_metamorph_budgets_its_forms_against_the_wielders_own_total() -> None:
+    data = load_game_data()
+    # p136: alternate forms "must have the same point total as you" - the one budget in
+    # the rules that is not a multiple of a rank, so it needs the character.
+    char = Character.new_default(data)
+    power = Power(
+        name="Beast Shape",
+        effects=[
+            PowerEffectInstance("morph", rank=3, extras=[ModifierSelection("metamorph", rank=2)])
+        ],
+    )
+    char.powers.append(power)
+    effect = power.effects[0]
+    total = power_points_spent(char, data)
+
+    note = {r.label: r.value for r in effect_stat_rows(effect, data, char)}["Notes"]
+    assert "2 alternate trait set(s)" in note  # one per rank of Metamorph
+    assert f"your own {total} power points" in note
+
+    # Built with no character open there is no total to state, so the number drops out
+    # of the sentence rather than being claimed as zero.
+    bare = {r.label: r.value for r in effect_stat_rows(effect, data)}["Notes"]
+    assert "power points" in bare and "0 power points" not in bare
+
+
+def test_an_unknown_note_value_kind_is_ignored() -> None:
+    data = load_game_data()
+    # A mod naming a kind this ruleset has never heard of leaves the placeholder to be
+    # stripped, rather than taking the whole Notes row down with it.
+    modifier = replace(
+        data.modifier_catalog()["metamorph"],
+        note_values={"points": {"kind": "not_a_registered_kind"}},
+    )
+    rendered = _render_note(modifier, 3, ModifierSelection("metamorph", rank=2), data)
+    assert "alternate trait set(s)" in rendered and "{points}" not in rendered
 
 
 def test_affliction_exposes_config_fields() -> None:

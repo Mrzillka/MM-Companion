@@ -568,6 +568,38 @@ Three things a field can do beyond holding a value:
 
 ---
 
+### Sub-build budgets
+
+Four things in the rules buy a whole sub-character's worth of points, and each states its
+budget as a derived number on the effect's card:
+
+| Where | Budget | Where it comes from | Cite |
+| --- | --- | --- | --- |
+| Summon | one minion on `rank x 15` PP | a `points_per_rank` readout | p145 |
+| Variable | `rank x 5` Variable Power Points | a `points_per_rank` readout | p148 |
+| Affliction → Empowering | the Transformed form on `rank x 15` PP | `noteTemplate` + `notePerRank` | p110 |
+| Morph → Metamorph | one trait set **per rank**, each worth *your own* point total | `noteTemplate` + `noteValues` | p136 |
+
+Summon's count moves too: **Multiple Minions** doubles it per rank of the extra (one rank
+for two minions, two for four), which is a `noteValues` entry rather than a multiple of
+anything the note already had.
+
+`noteValues` is `{placeholder: {"kind": ..., ...}}` on a modifier, each `kind` a handler in
+the `NOTE_VALUE_KINDS` registry taking a `NoteValueContext` (the spec, the modifier, the
+chip, the effect's rank, the wielder, the game data). It exists because `noteTemplate`'s
+`{n}` is always "the effect's rank times a constant", and two of these budgets are not:
+Multiple Minions counts in the *extra's* rank, and Metamorph's is the character's own
+total. A handler returns `None` when it cannot answer — `character_points` with no
+character in hand — and the placeholder is dropped from the sentence rather than shown as
+a zero.
+
+**None of the sub-builds themselves is modelled.** Nothing holds the minion, the alternate
+form, or the configured Variable points, so nothing checks a build against the budget it
+prints. The budgets are the number a player builds *to*, and the foundation any future
+editor needs.
+
+---
+
 ## 10. How far a Ranged effect reaches
 
 "Ranged" on its own says nothing about distance, so an effect whose *effective* range

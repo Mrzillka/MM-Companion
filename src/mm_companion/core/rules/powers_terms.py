@@ -18,6 +18,7 @@ from ..powers import (
 )
 from ..registry import Registry
 from .appliers import trait_category
+from .costs import power_points_spent
 from .derived import effective_ability, skill_total
 from .powers_cost import (
     array_alternate_cost,
@@ -132,13 +133,20 @@ def _step_along(ladder: tuple[str, ...], value: str, step: int) -> str:
 
 
 def modifier_detail(modifier: Modifier, selection) -> str:
-    """The free-text detail a player typed into a modifier's text config field.
+    """The detail that qualifies a modifier's name where the bare name would mislead.
 
-    A modifier like Limited or Quirk carries a single ``"text"`` config field for
-    the player to describe *how* it applies. Returns the first non-empty such value
-    (e.g. ``"only at night"``), or ``""`` if none was entered. Used to qualify a
-    modifier's displayed name as ``"Limited (only at night)"`` wherever it is
-    listed, so a bare ``"Limited"`` never hides the circumstance the player chose.
+    Two kinds, in that order of preference:
+
+    - the **free text** a player typed into a ``"text"`` config field. Limited and Quirk
+      carry one for describing *how* they apply, and a bare "Limited" hides the
+      circumstance the player chose.
+    - the label of a chosen **priced option** — a ``select`` whose options carry their own
+      ``cost_value``. Those are the modifiers the rules give two prices to (Summon's
+      Variable Type is +1 for a general type and +2 for a broad one, p145), and naming
+      only the modifier leaves two cards that cost different amounts reading identically.
+      A select with no prices attached is a neutral choice and stays out of the name.
+
+    Returns ``""`` when there is nothing to add.
     """
 
     for cfg in modifier.config_fields:
@@ -146,6 +154,13 @@ def modifier_detail(modifier: Modifier, selection) -> str:
             value = str(selection.config.get(cfg.key, "")).strip()
             if value:
                 return value
+    for cfg in modifier.config_fields:
+        if cfg.type != "select" or not any(o.cost_value is not None for o in cfg.options):
+            continue
+        chosen = str(selection.config.get(cfg.key, "")).strip()
+        option = next((o for o in cfg.options if o.value == chosen), None)
+        if option is not None:
+            return option.label.lower()
     return ""
 
 
@@ -199,11 +214,69 @@ def _config_trait_name(game_data: GameData | None, value: str) -> str:
     return trait_display_name(game_data, value)
 
 
+@dataclass(frozen=True)
+class NoteValueContext:
+    """What a :data:`NOTE_VALUE_KINDS` handler is given to work a placeholder out.
+
+    ``spec`` is the modifier's own ``noteValues`` entry (its ``kind`` plus whatever
+    parameters that kind reads); ``selection`` is the attached chip, so a handler can use
+    the modifier's *own* rank; ``effect_rank`` is the host effect's. ``char`` is the
+    wielder and may be ``None`` — a power can be built with no character open, and a
+    handler that needs one says so by returning ``None`` rather than guessing a zero.
+    """
+
+    spec: dict
+    modifier: Modifier
+    selection: object | None
+    effect_rank: int
+    char: Character | None
+    game_data: GameData | None
+
+
+#: One handler per ``noteValues`` ``kind``: it works out the number a note's placeholder
+#: stands for, given a :class:`NoteValueContext`, or ``None`` when it cannot (in which
+#: case the placeholder is dropped from the sentence). A mod's Python module can register
+#: another kind and then name it from a data file.
+NoteValue = Callable[["NoteValueContext"], int | None]
+NOTE_VALUE_KINDS: Registry[NoteValue] = Registry("noteValues.kind")
+
+
+@NOTE_VALUE_KINDS.handler("doubling")
+def _note_value_doubling(ctx: NoteValueContext) -> int | None:
+    """``base`` doubled once per rank of the modifier — Summon's Multiple Minions.
+
+    "Each application of this extra doubles your total number of minions ... with
+    Multiple Minions 1, you can summon two 90-point minions, with Multiple Minions 2,
+    four minions" (p145). Needs the chip, since it is the *modifier's* rank that doubles,
+    not the effect's.
+    """
+
+    if ctx.selection is None:
+        return None
+    return int(ctx.spec.get("base", 1)) * 2**ctx.selection.rank
+
+
+@NOTE_VALUE_KINDS.handler("character_points")
+def _note_value_character_points(ctx: NoteValueContext) -> int | None:
+    """What the wielder's own build costs — Morph's Metamorph budget.
+
+    Metamorph's alternate forms "must have the same point total as you" (p136), which is
+    the one budget in the rules that is not a multiple of a rank. ``None`` without a
+    character, so a power built outside a sheet simply omits the number instead of
+    claiming it is zero.
+    """
+
+    if ctx.char is None or ctx.game_data is None:
+        return None
+    return power_points_spent(ctx.char, ctx.game_data)
+
+
 def _render_note(
     modifier: Modifier,
     rank: int,
     selection=None,
     game_data: GameData | None = None,
+    char: Character | None = None,
 ) -> str:
     """A modifier's :attr:`note_template` with its placeholders resolved.
 
@@ -211,17 +284,40 @@ def _render_note(
     bare rank when that is zero) — Empowering's ``notePerRank`` of 15 turns a rank-4
     Affliction's note into "transformed form gains 60 power points".
 
-    With a ``selection``, three more placeholders resolve: ``{rank}`` is the modifier's
-    own rank, ``{dc}`` the difficulty it sets (the system's base DC plus that rank —
-    Check Required's "DC 10 + the flaw's rank"), and ``{<config key>}`` any value the
-    player chose on the chip, with a trait key rendered as its display name so a stored
+    Any placeholder the modifier names in :attr:`~...Modifier.note_values` is worked out
+    by its registered :data:`NOTE_VALUE_KINDS` handler, which is how a note says something
+    a rank alone cannot: how many minions Multiple Minions doubles you up to, or what a
+    Metamorph form's point budget is.
+
+    With a ``selection``, three more resolve: ``{rank}`` is the modifier's own rank,
+    ``{dc}`` the difficulty it sets (the system's base DC plus that rank — Check
+    Required's "DC 10 + the flaw's rank"), and ``{<config key>}`` any value the player
+    chose on the chip, with a trait key rendered as its display name so a stored
     ``"AGL"`` reads as "Agility".
     """
 
     value = rank * modifier.note_per_rank if modifier.note_per_rank else rank
     text = modifier.note_template.replace("{n}", str(value))
+    for key, spec in modifier.note_values.items():
+        handler = NOTE_VALUE_KINDS.get(str(spec.get("kind", "")))
+        if handler is None:
+            continue
+        resolved = handler(
+            NoteValueContext(
+                spec=spec,
+                modifier=modifier,
+                selection=selection,
+                effect_rank=rank,
+                char=char,
+                game_data=game_data,
+            )
+        )
+        if resolved is not None:
+            text = text.replace(f"{{{key}}}", str(resolved))
     if selection is None:
-        return text
+        # Strip whatever is left, so a note rendered without a chip still reads as a
+        # sentence rather than showing its own braces.
+        return re.sub(r"\s*\{[^{}]*\}", "", text).strip()
     dc_base = game_data.system.defense_dc_base if game_data else 10
     text = text.replace("{rank}", str(selection.rank))
     text = text.replace("{dc}", str(dc_base + selection.rank))
@@ -271,7 +367,11 @@ def required_check_notes(effect: PowerEffectInstance, game_data: GameData) -> tu
 
 
 def _modifier_notes(
-    effect: PowerEffectInstance, catalog: dict, impactful: set[str]
+    effect: PowerEffectInstance,
+    catalog: dict,
+    impactful: set[str],
+    game_data: GameData | None = None,
+    char: Character | None = None,
 ) -> tuple[str, ...]:
     """Notes for the effect's attached modifiers that produced no visible stat change.
 
@@ -281,6 +381,11 @@ def _modifier_notes(
     otherwise it is listed by name — a ranked modifier taken above rank 1 carries its
     rank (e.g. ``"Penetrating 3"``), and one with a typed detail carries it
     (``"Limited (only at night)"``).
+
+    The **chip** goes to :func:`_render_note` along with it, which it did not used to:
+    without it a note could only ever say ``{n}``, and ``{rank}`` or a config key
+    silently vanished from the sentence. Multiple Minions doubles with its own rank and
+    Metamorph counts in its own ranks, so both needed the thing that was being dropped.
     """
 
     notes: list[str] = []
@@ -290,14 +395,14 @@ def _modifier_notes(
         if modifier is None or selection.modifier_id in impactful:
             continue
         if modifier.note_template:
-            notes.append(_render_note(modifier, effect.rank))
+            notes.append(_render_note(modifier, effect.rank, selection, game_data, char))
         else:
             notes.append(modifier_label(modifier, selection, effect_rank=effect_rank))
     return tuple(notes)
 
 
 def _effective_stats(
-    effect: PowerEffectInstance, game_data: GameData
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> tuple[dict[str, str], dict[str, str], dict[str, str], EffectImpact]:
     """``(base, effective, change, impact)`` for an effect's game-term fields.
 
@@ -463,7 +568,7 @@ def _effective_stats(
         grants_attack=grants_attack,
         drops_check=drops_check,
         check_notes=tuple(check_notes),
-        notes=_modifier_notes(effect, catalog, impactful),
+        notes=_modifier_notes(effect, catalog, impactful, game_data, char),
     )
     return base, stats, change, impact
 
@@ -944,7 +1049,7 @@ def effect_stat_rows(
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base_effect is None:
         return []
-    base, stats, change, impact = _effective_stats(effect, game_data)
+    base, stats, change, impact = _effective_stats(effect, game_data, char)
 
     # A "Rank" range means "a distance equal to the effect's rank" — show the number
     # (in both base and current, so it isn't mistaken for a modifier change).

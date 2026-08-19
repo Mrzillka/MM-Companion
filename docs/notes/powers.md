@@ -73,6 +73,31 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   being incorporeal, which is the Insubstantial effect, and the rules say so outright. The
   *Invisibility* and *Inaudibility* configurations seed the field, so they record which
   sense they hide rather than only naming it in their prose.
+- **Four things buy a whole sub-build, and each states its budget as a number.** Summon's
+  minion is built on `rank x 15` PP (p145), Variable gives `rank x 5` Variable Power
+  Points (p148), Affliction's Empowering remakes the target on `rank x 15` (p110), and
+  Morph's Metamorph gives one alternate trait set **per rank**, each worth *the wielder's
+  own point total* (p136). The first two are `points_per_rank` readouts in
+  `effect_readouts.json`; the last two are modifier `noteTemplate` lines. Metamorph is the
+  odd one and the reason `noteValues` exists: its budget is not a multiple of any rank, so
+  the number has to come from `power_points_spent` — which is why `costs` now sits above
+  `powers_terms` in the rules DAG. **What is still not modelled is the sub-build itself** —
+  nothing holds the minion, the alternate form or the configured Variable points, so
+  nothing checks a build against the budget it prints. See `POWERS-AUDIT.md` §6M.
+- **`noteValues` answers what a rank cannot.** A modifier's `noteTemplate` could only ever
+  interpolate `{n}` (the effect's rank times `notePerRank`); a `noteValues` entry names a
+  `kind` from the `NOTE_VALUE_KINDS` registry instead. `doubling` is Multiple Minions,
+  whose count doubles per rank *of the extra* rather than growing with the effect; and
+  `character_points` is Metamorph's. A handler returning `None` — `character_points` with
+  no character open — leaves the placeholder to be stripped, so the sentence reads without
+  the number rather than claiming a zero.
+- **A modifier's name carries a priced choice.** `modifier_detail` already qualified a
+  modifier with the free text a player typed ("Limited (only at night)"); it now also
+  names a chosen `select` option **when that option carries its own `costValue`**. Those
+  are exactly the modifiers the rules give two prices to (Variable Type is +1 for a
+  general type and +2 for a broad one), and without it two cards costing different amounts
+  read identically. A select with no prices on it is a neutral choice and stays out of the
+  name.
 - **An Affliction's Transformed condition can name the effect it imposes.** The rules let
   it impose "a particular Personal Range effect" — Morphing them, Shrinking them,
   Teleporting them away — which "must have a Power Point cost equal to or less than the

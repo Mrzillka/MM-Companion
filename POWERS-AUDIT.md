@@ -54,6 +54,7 @@ db18f2e  Record pass 8's commit hash in the audit
 cac4e72  Record pass 10's commit hash in the audit
 d350325  Give an opposed effect check to the side that makes it
 c53ab92  Record pass 11's commit hash in the audit
+82d44dc  Let a power hold the character it buys
 ```
 
 ---
@@ -704,7 +705,7 @@ that hangs rather than one that passes.
 offers it as a **rollable** footer line; Move Object and Nullify carry a counter entry on
 their menus; a Protection card has neither, and no card gained a line.
 
-### P. The sub-builds themselves (pass 12)
+### P. The sub-builds themselves (`82d44dc`)
 
 **The rules.** Summon: "Create the summoned character with (effect rank x 15) Power
 Points. They are subject to the normal Power Level limits, have the minion

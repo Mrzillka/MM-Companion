@@ -48,7 +48,7 @@ b880efb  Turn the powers audit into a handover brief
 db18f2e  Record pass 8's commit hash in the audit
 49a81d2  State what a Summon, a Metamorph and a Variable are built on
 773dd2a  Record pass 9's commit hash in the audit
-<pending>  Work out what improvising an unbought effect would take
+7583ee4  Work out what improvising an unbought effect would take
 ```
 
 ---

@@ -257,7 +257,7 @@ def test_the_note_says_what_was_gained_and_what_it_cost() -> None:
     assert outcome.note == "pushed Fire Blast to rank 7 with Extra Effort — now Fatigued"
 
     plain = spend_extra_effort(char, data, extra_effort_use(data, "bonus"))
-    assert plain.note == "used Extra Effort for a bonus on a check — now Exhausted"
+    assert plain.note == "took +2 on a check with Extra Effort — now Exhausted"
 
 
 def test_a_push_is_saved_and_an_untouched_effect_writes_nothing() -> None:
@@ -460,6 +460,58 @@ def test_pushing_strength_and_a_movement_mode_moves_the_sheet(
     # limits" (p20).
     assert sheet.system_info.push_trait(use, strength)
     assert effective_ability(char, data, "STR") == 6
+
+
+def test_the_check_bonus_lands_in_the_roller(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "A +2 bonus on a single check" (p21) is the one benefit that is a number on the
+    next roll rather than on the build — so it goes where the player would have typed
+    it, instead of costing a rung of fatigue for something they must remember."""
+    data = load_game_data()
+    char, _ = _hero()
+    sheet = CharacterSheet(data, char)
+    monkeypatch.setattr("mm_companion.ui.sections.system_info.ExtraEffortDialog", _AcceptedDialog)
+    panel = sheet.dice.panel
+    assert panel._bonus_spin.value() == 0
+
+    assert sheet.system_info.use_extra_effort(extra_effort_use(data, "bonus"))
+    assert panel._bonus_spin.value() == 2
+    # Added, never replacing: a circumstance bonus the player already dialled in is
+    # theirs, and taking it away would charge fatigue to *lose* two points.
+    assert sheet.system_info.use_extra_effort(extra_effort_use(data, "bonus"))
+    assert panel._bonus_spin.value() == 4
+
+    # Every other use leaves the sliders alone.
+    assert sheet.system_info.use_extra_effort(extra_effort_use(data, "action"))
+    assert panel._bonus_spin.value() == 4
+
+
+def test_the_check_bonus_is_the_rulesets_number_and_doubles(qapp: QApplication) -> None:
+    data = load_game_data()
+    char, _ = _hero()
+    use = extra_effort_use(data, "bonus")
+
+    outcome = spend_extra_effort(char, data, use)
+    assert outcome.check_bonus == data.system.extra_effort.check_bonus == 2
+    assert outcome.note.startswith("took +2 on a check with Extra Effort")
+    # Extraordinary Effort is "two benefits" for two rungs, and twice a +2 is the honest
+    # reading of taking this one twice (p86).
+    assert spend_extra_effort(char, data, use, doubled=True).check_bonus == 4
+    # Nothing else reports one.
+    assert spend_extra_effort(char, data, extra_effort_use(data, "action")).check_bonus == 0
+
+
+def test_the_dice_block_ignores_a_bonus_payload_it_cannot_use(qapp: QApplication) -> None:
+    data = load_game_data()
+    char, _ = _hero()
+    sheet = CharacterSheet(data, char)
+    panel = sheet.dice.panel
+    # A mod block publishes on this topic too, so a bad payload costs a bonus, not the
+    # sheet. ``True`` is an int in Python and is not one here.
+    for payload in ("2", None, 0, -3, True, 1.5):
+        sheet.dice.add_bonus(payload)
+    assert panel._bonus_spin.value() == 0
 
 
 def test_the_system_block_says_what_extra_effort_is_holding_up(

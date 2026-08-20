@@ -393,6 +393,10 @@ class SystemInfoSection(QGroupBox):
     #: The same fan-out the Conditions block's own signal drives, because it is the same
     #: event: the model changed, and every view over a condition has to restate itself.
     conditionsChanged = Signal()
+    #: The +2 Extra Effort buys on a check (p21) — the one benefit that is a number on
+    #: the *next roll* rather than on the build. Nothing tracks which roll that will be,
+    #: so it is handed to the block that owns the sliders and the player rolls with it.
+    bonusRequested = Signal(int)
     #: The Initiative readout was right-clicked and pinned — carries a
     #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
     #: GM opened from a card (see :meth:`set_pin_target`).
@@ -688,6 +692,12 @@ class SystemInfoSection(QGroupBox):
         core's, so a rung gained this way bundles and supersedes exactly like one the
         Conditions block applied — and the blocks that show conditions restate themselves
         off the topics raised here.
+
+        The **Bonus** use is the one whose benefit is not on the build at all: "+2 on a
+        single check", which nothing here can apply because nothing tracks which check it
+        will be. It is raised on ``bonus-requested`` instead, and the Dice block drops it
+        into the bonus slider — so the player rolls with it rather than being charged a
+        rung of fatigue for a number they then have to remember to type in.
         """
 
         dialog = ExtraEffortDialog(self._character, self._data, use, parent=self)
@@ -702,6 +712,8 @@ class SystemInfoSection(QGroupBox):
         )
         if dialog.spend_hero_point:
             self.adjust_hero_points(-1)
+        if outcome.check_bonus:
+            self.bonusRequested.emit(outcome.check_bonus)
         self.noteRequested.emit(outcome.note)
         self.conditionsChanged.emit()
         self._emit_edited()

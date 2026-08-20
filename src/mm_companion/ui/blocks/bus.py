@@ -136,6 +136,7 @@ NOTE_REQUESTED = "note-requested"
 PIN_REQUESTED = "pin-requested"
 UNPIN_REQUESTED = "unpin-requested"
 HERO_POINT_REQUESTED = "hero-point-requested"
+BONUS_REQUESTED = "bonus-requested"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
@@ -155,6 +156,11 @@ HERO_POINT_REQUESTED = "hero-point-requested"
 #: Effort's fatigue is the *price* of something the user did in another block, and
 #: throwing the System block open over it is the app grabbing the screen unasked. The
 #: roll history says what moved either way.
+#:
+#: ``bonus-requested`` is deliberately **not** quiet, for ``load-requested``'s reason: a
+#: player who has just spent a rung of fatigue on "+2 on a single check" is about to
+#: roll, and dropping the bonus into a Dice block they cannot see would be the app
+#: charging them for something they never got.
 QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED, HERO_POINT_REQUESTED})
 
 Handler = Callable[[], None]

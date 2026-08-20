@@ -362,6 +362,14 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   see it loaded. (The other quiet topics are the two pin ones, which no block serves at
   all, and `hero-point-requested`, which is the price of something the user did in
   another block — see the powers notes on Extra Effort.)
+- A fourth, `bonus-requested` (an `int`), carries Extra Effort's "+2 bonus on a single
+  check" (p21) into the bonus slider through `DiceSection.add_bonus`. It is the one Extra
+  Effort benefit that lands on the *next roll* rather than on the build, and nothing
+  tracks which roll that will be — so it goes where the player would have typed it, on
+  top of whatever is already set, and dragging the slider back is how it is spent or
+  dropped. It is **not** quiet, for `load-requested`'s reason: a player who has just paid
+  a rung of fatigue for it is about to roll, and putting it into a Dice block they cannot
+  see would charge them for something they never got.
 - `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. The
   loaded trait is **sticky**: it shows as a chip above the sliders and survives the
   roll, so the sliders can be nudged and the die thrown again. The sliders always

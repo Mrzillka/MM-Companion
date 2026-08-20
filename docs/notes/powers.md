@@ -701,11 +701,13 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   and says beside the button what is currently held up. **Strength is applied as the
   ability**, which is broader than "for Damage or Lifting": the app has no separate lifting
   trait to aim at, which is the same simplification the shipped Lifting *effect* makes.
-- **Four of the six uses charge the fatigue and change no number.** An extra action, a +2 on
-  a check, a renewed attempt and a fresh resistance check are table business: the app records
-  them in the roll history and takes the rung. The +2 in particular does not reach the
-  roller's bonus slider — wiring it there would mean the roller knowing which roll the effort
-  was spent on, which nothing tracks.
+- **The +2 lands in the roller; three uses still change no number.** "A +2 bonus on a single
+  check" is raised on the `bonus-requested` topic and added to the Dice block's bonus
+  slider — added, never replacing, since a circumstance bonus the player already dialled in
+  is theirs. Nothing tracks *which* check it was meant for, so it is the player's to spend
+  or drag off, which is the same bargain the pushed ranks strike. An extra action, a
+  renewed attempt and a fresh resistance check remain table business: the app records them
+  in the roll history and takes the rung.
 - **Nothing expires.** Extra Effort lasts "until the end of your turn" and the fatigue
   arrives "at the start of your next turn"; there is no turn tracker, so the push is cleared
   by a button (per power on its card, per character in the System menu) and the fatigue lands

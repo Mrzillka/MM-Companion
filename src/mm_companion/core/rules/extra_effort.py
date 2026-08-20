@@ -55,6 +55,12 @@ USE_RANK_INCREASE = "rank_increase"
 #: Its sibling: the other effect-naming use, and the seam the stunt pass will build on.
 USE_POWER_STUNT = "power_stunt"
 
+#: The use whose benefit is a number on the *next roll* rather than on the build: "a +2
+#: bonus on a single check". Named for the same reason the two above are — a ruleset may
+#: retitle it — and read so the roller can be handed the bonus rather than the player
+#: having to remember to type it in.
+USE_CHECK_BONUS = "bonus"
+
 
 def extra_effort_rules(game_data: GameData) -> ExtraEffortRules:
     """The ruleset's Extra Effort block — the one door onto the dials below."""
@@ -213,6 +219,9 @@ class ExtraEffortOutcome:
     use: ExtraEffortUse
     ranks: int = 0
     rank: int = 0
+    #: The Bonus use's own: what the next check is worth extra. Nothing on the build
+    #: moves for it — it is a number for one roll — so it is reported rather than stored.
+    check_bonus: int = 0
     target: str = ""
     fatigue: str = ""
     determination: bool = False
@@ -272,6 +281,11 @@ def spend_extra_effort(
         char.extra_effort[trait.key] = max(0, char.extra_effort.get(trait.key, 0)) + ranks
         rank = _trait_rank(char, game_data, trait)
         effect_name = effect_name or trait.label
+    check_bonus = 0
+    if use.id == USE_CHECK_BONUS:
+        # Doubled by Extraordinary Effort like every other benefit: "two benefits"
+        # for two rungs, and twice a +2 is the honest reading of taking this one twice.
+        check_bonus = extra_effort_rules(game_data).check_bonus * (2 if doubled else 1)
     fatigue = ""
     if not determination:
         for _ in range(2 if doubled else 1):
@@ -282,6 +296,7 @@ def spend_extra_effort(
         use=use,
         ranks=ranks,
         rank=rank,
+        check_bonus=check_bonus,
         target=effect_name,
         fatigue=fatigue,
         determination=determination,
@@ -317,6 +332,10 @@ def extra_effort_note(outcome: ExtraEffortOutcome, game_data: GameData) -> str:
 
     if outcome.ranks and outcome.target:
         benefit = f"pushed {outcome.target} to rank {outcome.rank} with Extra Effort"
+    elif outcome.check_bonus:
+        # Names the number, because it is about to be sitting in the roller's bonus and
+        # the history is where a player checks what it was for.
+        benefit = f"took +{outcome.check_bonus} on a check with Extra Effort"
     else:
         # The article is a guess, and a cheap one: every use's label is a noun phrase the
         # ruleset wrote, so the alternative is either a grammar field in the data or a

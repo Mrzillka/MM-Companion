@@ -25,6 +25,7 @@ from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize, load_block_sizes
 from mm_companion.ui.blocks.base import BlockDescriptor, instance_template
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
+    BONUS_REQUESTED,
     BUILD_CHANGED,
     CAPS_CHANGED,
     CONDITION_CHANGED,
@@ -170,8 +171,14 @@ _BASE_BLOCKS = [
             ),
         },
         {DERIVED_CHANGED: "refresh_derived"},
-        # the Initiative readout, plus the note a hero-point change writes
-        {**_ROLLS_AND_LOADS, "noteRequested": (NOTE_REQUESTED,)},
+        # the Initiative readout, the note a hero-point change writes, and the +2 Extra
+        # Effort buys on a check — the one benefit that lands on the next roll rather
+        # than on the build, so it goes to the block that owns the sliders.
+        {
+            **_ROLLS_AND_LOADS,
+            "noteRequested": (NOTE_REQUESTED,),
+            "bonusRequested": (BONUS_REQUESTED,),
+        },
         # The pips are this block's, so it is the block that moves them — for the
         # Powers block's Extra Effort shrugged off with a Determination heroic feat.
         {HERO_POINT_REQUESTED: "adjust_hero_points"},
@@ -376,6 +383,7 @@ _BASE_BLOCKS = [
             ROLL_REQUESTED: "perform_roll",
             LOAD_REQUESTED: "load_roll",
             NOTE_REQUESTED: "post_note",
+            BONUS_REQUESTED: "add_bonus",
         },
     ),
 ]

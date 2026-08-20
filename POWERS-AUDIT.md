@@ -42,7 +42,7 @@ Pass 14 onwards is on **`feature/extra-effort-and-power-stunts`**, branched off 
 after that merge:
 
 ```
-(pass 14's hash — recorded in the follow-up commit, as every pass before it was)
+bc6020e  Charge Extra Effort, and let it push a rank past the build
 ```
 
 The passes that were merged, for reference:

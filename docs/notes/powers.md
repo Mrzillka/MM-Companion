@@ -198,7 +198,10 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
 - **Two config-field mechanisms came out of that**, both generic and both usable by a mod
   with no Python. `showWhenField` / `showWhenValue` reveal a field only while a *sibling*
   field holds a given value — the imposed-effect picker appears once a degree reads
-  Transformed. The gated widget is **built and hidden**, never omitted, because rebuilding
+  Transformed — and naming a field with no value means "while it holds anything", which
+  is how the imposed *rank* waits for an effect to actually be picked instead of printing
+  "At rank: 1" for a choice nobody had made. `config_field_gate_open` in **core** answers
+  it for the card and the game-terms rows alike. The gated widget is **built and hidden**, never omitted, because rebuilding
   the form from inside the very combo whose change triggered it is how Qt teardown bugs
   start; closing a gate drops the stored value and opening it re-seeds the field's default
   (`_config_seeders`), so the spin box and the model never disagree. Separately, a `select`
@@ -554,34 +557,40 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   child's own total. That is the same arithmetic only when every split lands on a multiple
   of 5. Nothing checks for it; the honest build is one power with many effects, which is how
   the book's own armour example is written.
-- **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
-  under three cards reading 20, 8 and 10 — the pooling explains it and each card's badge
-  names its own share, but the total line itself does not. `power_cost_formula` was built
-  for exactly this complaint about Removable and fires only for a power-scope modifier;
-  extending it to render the array working would close the same gap for every array.
+- **An array's total shows its working** (`array_cost_formula`) — `23 PP (20 base + 1
+  Dynamic base + 2 × 1 alternate)` — on the constructor's cost line and, since a card
+  header has no room for a second number, on the tooltip of a group's or a card's cost
+  (`_explain_cost`). With Removable in play too, the array's working sits in parentheses
+  behind the gross the discount is charged against rather than nested inside the
+  subtraction, so the number being read stays the one the −20 applies to.
 - **Re-run the two-price sweep after adding modifier records.** A `costFormula` naming two
   prices with no `config` beneath it is silently the cheaper one — the sweep that caught
   those covered both `modifiers.json` and `effect_modifiers.json`, and it is clean today.
 
 ### Readouts and warnings
 
-- **An allocation readout prints the tier *index*, not what it cost.** A Concealment hiding
-  from every sight sense reads "Sight 2" in the game-terms panel — tier 2, which costs 4
-  ranks — while the card's own combo beside it says "4 ranks". The same is true of Enhanced
-  Senses' Accurate. It is shared by every `allocation` field, which is why it was not
-  changed underneath four effects at once; `tier_notes` already exists in the schema
-  (Enhanced Movement uses it for Wall-Crawling's caveat) and is where a per-tier name goes.
+- **An allocation names what its tier bought.** It used to print the tier's *index* —
+  a Concealment hiding from every sight sense read "Sight 2" beside a card combo reading
+  "4 ranks", two numbers meaning different things. The names are game content
+  (`tierLabels` on an `allocOptions` entry, beside the `tierNotes` Enhanced Movement
+  already used), and Concealment and Enhanced Senses carry them. An option the ruleset
+  does not name falls back to the ranks the tier cost, which is still not an index — so
+  Comprehend and Enhanced Movement read "Languages (3 ranks)" untouched. The combo on the
+  card renders from the same labels, so the two can no longer disagree.
 - **Nothing enforces mutual exclusion in a multiselect.** A player can tick both "one sight
   sense" and "all sight senses" on Obscure, or both intensities of the same Environment
   condition, and pay for both. Visible on the card, but a warning would be fair.
 - **A Variable Environment's redistribution is unchecked** — nothing verifies that what the
   player redistributes at use time stays inside the per-rank total they paid for.
-- **Almost every warning is constructor-only.** The allocation, linked-range, Strength,
-  requirement, imposed-effect and sub-build checks all live in the Power Constructor; the
-  sheet card shows **Power Level** breaches (and a stunt's own ceiling) alone. That is the
-  convention rather than an oversight — `_strength_violations` says so — but it does mean a
-  character built under a different ruleset can carry an over-budget imposed effect with no
-  marker on the sheet until someone opens the constructor.
+- **Both surfaces walk one check list.** Every per-power check is registered in
+  `POWER_CHECKS` (`validation.py`), so the sheet card's ⚠ and the constructor's warning
+  band can never disagree about what is wrong: the card lists every sentence behind its
+  single glyph, the constructor groups the same ones under a headline naming which checks
+  failed. It is a registry rather than a list so a mod's rule reaches both, and because
+  `power_sub_build_violations` lives *above* validation in the import DAG and has to
+  register itself. The three checks that **block a save** are deliberately not part of it
+  — refusing to save is a different question from warning — and `_save_power` asks those
+  directly.
 - **Nullify's card reads differently than it used to.** Its `resistance` row was replaced by
   an `opposed` one, so a card that read "Resistance: 8 vs. Will or rank" now reads "Opposed:
   8 vs. targeted rank or Will" and gains a rollable footer line where it had an unrollable
@@ -642,16 +651,20 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   priority: once any Dynamic member holds a share, the array's *non*-Dynamic alternates are
   not running, since they cannot hold a share and the whole pool is spoken for. That is the
   rules-correct reading and the dialog says so, but it does mean the way back to an ordinary
-  alternate is "Clear the split" rather than clicking its card — and clicking one still moves
-  `active_child_id`, silently, until the split is cleared.
+  alternate is "Clear the split" rather than clicking its card. While the pool is split
+  `_activation_role` therefore returns `""` for every member — the click used to be armed
+  and moved `active_child_id` with nothing visible happening — and the card keeps the
+  tooltip saying why it has stopped being a control. The dimming outlives the role:
+  `_node_is_inactive` asks the array (`_selectable_array_member`), not the card.
 - **The split does not follow a rebuild.** A share is an absolute number of points, so
   editing the array moves the pool underneath a split already made. Nothing renormalises: the
   shares stay put and may now sum to less than the pool (legal, just wasteful) or, if the base
   got cheaper, to more than it. The dialog re-bounds every row the moment it is reopened, so
   the fix is one visit; a rebuild that quietly rescaled a player's split would be worse.
-- **`effect_current_rank` can return 0.** Only through the pool, and only for a member below
-  its minimum — but every reader of it should be checked against that before assuming a rank
-  is at least 1. The dial's own floor is unchanged.
+- **`effect_current_rank` can return 0** — only through the pool, and only for a member
+  below its minimum. Every reader has been checked against that: none divides by it, the
+  size readout returns early on it, and everywhere else it is a summand or a fallback
+  where 0 is the honest answer. A *new* reader still owes the same check.
 
 ### Extra Effort and power stunts
 
@@ -679,11 +692,13 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   The doubled rank increase and the doubled fatigue are exact; taking an extra action *and* a
   rank increase for one doubled cost means using the menu twice, which charges two rungs
   anyway. The arithmetic agrees; only the wording of the second use is missing.
-- **A stunt can be dragged into a group.** The powers tree is drag-and-drop and nothing
-  refuses a stunt card a group, so one can end up an array member — costing 0, which makes it
-  the array's cheapest alternate and changes the pooling arithmetic under it. `strip_stunts`
-  recurses for exactly that reason, so it still never reaches the file, and the ⚠ still names
-  the ceiling; the honest fix is a drop guard in `_on_combine`/`_on_move`.
+- **A stunt is refused a group.** It costs 0, so inside an array it would be the cheapest
+  member by definition — moving the base, the pool and every other member's flat price —
+  and it is never saved, so the group would come back a member short. `_groupable` is
+  asked by both mutation seams (`_on_combine`/`_on_move`) and by the group `NodeList`'s
+  admission rule, so the refusal is *shown* rather than the drop being accepted and
+  dropped on the floor. Reordering a stunt at the top level is untouched. `strip_stunts`
+  still recurses, since a file written before this can hold one.
 - **Nothing stops a stunt and its source power being live at once.** The rules make an
   alternate effect mutually exclusive with what it is an alternate of, and the array
   machinery enforces that for a bought alternate — but a stunt is a card of its own, so no

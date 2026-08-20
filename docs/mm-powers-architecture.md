@@ -463,6 +463,16 @@ that (p155), and the Permanent flaw imposes it on a Continuous effect (p159). It
 therefore asked of the effect's *resolved* duration (`effect_allows_extra_effort`), never of
 the base effect's own.
 
+A **power stunt** is the other effect-naming use, and it is a whole power rather than a
+number: a temporary alternate effect, bought with effort rather than points. It is modelled
+as an ordinary `Power` carrying `stuntOf` — the id of the power it came from — which makes
+it free (`node_cost` returns 0), unsaved (`strip_stunts`, on the way to the file only), and
+a card of its own rather than a member of the source power's array. The topology is
+deliberate: an array member would drag pooling, base selection and the Dynamic point split
+onto something that costs nothing and lasts a scene. The one rule it keeps from the
+alternate effect it is: it may cost no more than the power it hangs off (p98), which
+`power_stunt_violations` checks.
+
 What it costs is a rung of the fatigue ladder, and that is charged on the **character**:
 `spend_extra_effort` applies Fatigued / Exhausted / Incapacitated through the ordinary
 condition resolver, so a rung gained this way bundles and supersedes like any other
@@ -603,6 +613,11 @@ PowerEffectInstance  (part of a character's Power)
 └── computedCost
 
 Power
+├── stuntOf (str, default "")            // the id of the power this is a temporary
+│                                        // alternate - a POWER STUNT (p20). Costs 0,
+│                                        // is stripped on the way to the file, and is
+│                                        // held to the alternate-effect ceiling: no
+│                                        // dearer than the power it came from (p98)
 ├── id, name (player-chosen label), descriptors[]
 ├── effects: PowerEffectInstance[]        // Linked ones share a `linkGroup` id
 ├── alternates: PowerEffectInstance[][]   // array members, if any

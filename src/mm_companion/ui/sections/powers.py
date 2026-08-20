@@ -79,9 +79,11 @@ from mm_companion.core.powers import (
     PowerGroup,
     PowerNode,
     power_is_homerule,
+    power_is_stunt,
 )
 from mm_companion.core.rules import (
     PIN_POWER,
+    USE_POWER_STUNT,
     PinRef,
     active_array_child,
     array_alternate_cost,
@@ -104,10 +106,13 @@ from mm_companion.core.rules import (
     power_roll_lines,
     power_rolls,
     power_runtime_gates,
+    power_stunt_violations,
+    power_total_cost,
     powers_points_spent,
     pushable_effects,
     size_steps,
     spend_extra_effort,
+    stunt_source,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -887,7 +892,9 @@ class PowersSection(TitledSection):
     def _show_card_menu(self, card: DraggableCard, power: Power, pos) -> None:
         self.card_menu(card, power).exec(card.mapToGlobal(pos))
 
-    def use_extra_effort(self, use, effect: PowerEffectInstance, effect_name: str) -> bool:
+    def use_extra_effort(
+        self, use, power: Power, effect: PowerEffectInstance, effect_name: str
+    ) -> bool:
         """Confirm one use of Extra Effort against this effect, and charge it.
 
         The push itself is *runtime* state on the effect, so it rides the same signal a
@@ -895,6 +902,77 @@ class PowersSection(TitledSection):
         :func:`~mm_companion.core.rules.spend_extra_effort`, through the very condition
         resolver the Conditions block applies with. Returns ``False`` when the dialog was
         cancelled, so nothing was spent and nothing was gained.
+
+        A **power stunt** is the one use that cannot be confirmed in a single dialog: it
+        is a whole alternate effect the player has yet to build, so it opens the
+        constructor first and charges the effort when something comes back
+        (:meth:`_open_stunt`). ``True`` there means "the constructor is open", not "it
+        was spent" — nothing is until the build is confirmed.
+        """
+
+        if use.id == USE_POWER_STUNT:
+            self._open_stunt(use, power, effect, effect_name)
+            return True
+
+        dialog = ExtraEffortDialog(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.heroPointRequested.emit(-1)
+        self.noteRequested.emit(outcome.note)
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        self.conditionsChanged.emit()
+        return True
+
+    def _open_stunt(self, use, power: Power, effect: PowerEffectInstance, effect_name: str) -> None:
+        """Open the constructor to build a stunt of ``power``.
+
+        The build comes **first** and the effort is charged on the way back
+        (:meth:`_on_stunt_saved`): a player who closes the constructor without saving has
+        changed their mind, and charging them a rung of the fatigue ladder for a stunt
+        that does not exist would be the app inventing a rule.
+        """
+
+        window = PowerConstructorWindow(self._data, character=self._character)
+        window.rollRequested.connect(self.rollRequested)
+        window.powerSaved.connect(
+            lambda built, u=use, p=power, e=effect, n=effect_name: self._on_stunt_saved(
+                built, u, p, e, n
+            )
+        )
+        window.closed.connect(lambda w=window: self._on_window_closed(w))
+        self._windows.append(window)
+        window.show()
+
+    def _on_stunt_saved(
+        self, built: Power, use, power: Power, effect: PowerEffectInstance, effect_name: str
+    ) -> bool:
+        """Charge the Extra Effort, then put the finished stunt on the sheet as its own card.
+
+        Cancelling the cost dialog here drops the build rather than adding it free: the
+        dialog is the "yes, spend it" step, and a stunt nobody paid for is not a stunt.
+
+        The stunt is appended at the top level even when its source sits inside a group —
+        it is a card of its own, marked with what it came from, rather than a member of
+        anybody's array. It costs no points and is not saved (see ``Power.stunt_of``), so
+        this rides ``runtimeChanged`` rather than ``changed``.
         """
 
         dialog = ExtraEffortDialog(
@@ -907,6 +985,8 @@ class PowersSection(TitledSection):
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
+        built.stunt_of = power.id
+        self._character.powers.append(built)
         outcome = spend_extra_effort(
             self._character,
             self._data,
@@ -1290,9 +1370,27 @@ class PowersSection(TitledSection):
         name.setFont(font)
         layout.addWidget(name)
 
+        # A stunt says so, and says what it is a stunt *of*: it is a card of its own
+        # rather than a member of the source power's array, so the relationship is only
+        # ever visible here. Muted, because it is provenance rather than a number.
+        if power_is_stunt(power):
+            source = stunt_source(power, self._character)
+            of = power_display_name(source, self._data) if source else "a power now gone"
+            badge = QLabel(f"✦ stunt of {of}")
+            badge.setStyleSheet(muted_style(italic=True))
+            badge.setToolTip(
+                "A power stunt: a temporary alternate effect bought with Extra Effort "
+                "rather than with Power Points (p20). It costs nothing, it is not saved "
+                "with the character, and it lasts as long as the scene does."
+            )
+            layout.addWidget(badge)
+
         # A power that breaks a PL cap carries a warning marker naming the breach;
-        # enforcement is a warning for now (see storage.pl_enforcement).
-        violations = power_pl_violations(power, self._character, self._data)
+        # enforcement is a warning for now (see storage.pl_enforcement). A stunt adds the
+        # one rule that is its own: an alternate effect costs no more than its base.
+        violations = power_pl_violations(
+            power, self._character, self._data
+        ) + power_stunt_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))
@@ -1315,8 +1413,18 @@ class PowersSection(TitledSection):
             layout.addWidget(dynamic)
 
         # Inside an array group a non-base member contributes only its flat pooled cost;
-        # every other card shows its full assembled cost (node_display_cost decides).
-        cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
+        # every other card shows its full assembled cost (node_display_cost decides). A
+        # stunt contributes nothing, and "0 PP" beside a real build reads as a bug — so it
+        # says what it is instead, and keeps the number it *would* have cost in the
+        # tooltip, since that is the number its ceiling is measured against.
+        if power_is_stunt(power):
+            cost = QLabel("Stunt")
+            cost.setToolTip(
+                f"Bought with Extra Effort, not with points — it would cost "
+                f"{power_total_cost(power, self._data, self._character)} PP."
+            )
+        else:
+            cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
         layout.addWidget(cost)
 

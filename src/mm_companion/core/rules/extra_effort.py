@@ -35,7 +35,7 @@ from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import ExtraEffortRules, ExtraEffortUse, GameData
-from ..powers import Power, PowerEffectInstance
+from ..powers import Power, PowerEffectInstance, PowerGroup, PowerNode, power_is_stunt
 from .conditions import apply_condition
 from .powers_terms import effective_effect_stats
 from .runtime import effect_current_rank
@@ -324,6 +324,36 @@ def clear_extra_effort(char: Character) -> int:
         effect.extra_effort = 0
         cleared += 1
     return cleared
+
+
+def stunt_powers(char: Character) -> list[Power]:
+    """Every power stunt currently on the sheet, in the order they were invented."""
+
+    return [power for power in leaf_powers(char.powers) if power_is_stunt(power)]
+
+
+def clear_stunts(char: Character) -> int:
+    """Drop every power stunt from the character's powers tree; returns how many went.
+
+    A stunt is temporary by definition and the app tracks no scenes, so this is the same
+    kind of button :func:`clear_extra_effort` is — the difference between the two is the
+    clock they answer to, which is why they are two entries and not one: a push is over at
+    the end of your **turn**, a stunt at the end of the **scene**.
+
+    Recurses, because nothing stops a stunt card being dragged into a group.
+    """
+
+    def prune(nodes: list[PowerNode]) -> int:
+        dropped = 0
+        for node in list(nodes):
+            if power_is_stunt(node):
+                nodes.remove(node)
+                dropped += 1
+            elif isinstance(node, PowerGroup):
+                dropped += prune(node.children)
+        return dropped
+
+    return prune(char.powers)
 
 
 def pushed_effects(char: Character) -> list[PowerEffectInstance]:

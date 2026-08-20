@@ -397,6 +397,29 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `extra_effort` block; **power stunts are the deliberate gap** (`POWERS-AUDIT.md` §6H):
   a stunt is a temporary alternate effect, the app charges the effort and records which
   effect it was taken from, and building the alternate is its own pass.
+- **A power stunt is a card of its own, costs nothing, and is never saved.** The other
+  half of Extra Effort (p20, p101): "you can use a temporary Alternate Effect of a
+  non-permanent duration effect you have", bought with effort and a Hero Point instead of
+  with points, so a hero does not "fill up character sheets with long lists of minor
+  alternate effects". `Power.stunt_of` holds the id of the power it came from, and three
+  things follow from it. It **costs 0** — `node_cost` returns nothing for a stunt, so it
+  never enters `powers_points_spent`, while `power_total_cost` still says what it *would*
+  cost, because that is the number its ceiling is measured against: a stunt is an
+  alternate effect, and "an alternate effect can have a total cost no greater than the
+  base power" (p98). It is **not saved** — `strip_stunts` takes stunt cards out of the
+  serialized tree in `library.save_character` (recursively, since a card can be dragged
+  into a group) while `to_dict` still writes them, because undo snapshots the model as
+  JSON and a stunt that vanished on the next undo would be worse than one that outlived
+  its scene. And it is **its own card**, badged `✦ stunt of Fire Blast` with `Stunt` where
+  every other card prints its cost, rather than a member of the source power's array:
+  the array topology would drag pooling, base-selection and the point split onto a thing
+  that costs nothing and lives for a scene. `power_stunt_violations` is the ⚠ — over the
+  ceiling, or a source power that has since been deleted, which warns rather than binning
+  a build the player made. **The build comes first and the effort is charged on the way
+  back**: the constructor opens from the card menu, and only when something is handed back
+  does the cost dialog appear — a player who closes the constructor has changed their
+  mind, and charging a rung of fatigue for a stunt that does not exist would be the app
+  inventing a rule.
 - **Extra Effort is spent in two blocks, because it is paid for in two currencies.**
   `ui/extra_effort.py` is the shared menu and dialog (the way `build_condition_menu` is
   shared by the three "+" buttons): the **card's right-click menu** offers the two uses
@@ -408,7 +431,10 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   it publishes. The hero point cannot be written that way: the pips, the clamp and the
   sentence for the roll history are one funnel in `SystemInfoSection`, so a card that
   shrugs the fatigue off with a Determination heroic feat *asks* for the point through
-  the new `hero-point-requested` topic instead.
+  the new `hero-point-requested` topic instead. Both blocks also offer the way back, and
+  they are deliberately **two** entries rather than one: a push is over at the end of your
+  turn, a stunt at the end of the scene, and a single button for both would bin a stunt
+  every time a turn ended.
 - **Runtime is saved.** It used to be the other way round — every runtime flag was
   left out of `to_dict()` on the argument that what is switched on is not part of the
   build — and the size ladder is what broke it: a Growth 3 *held* at Large is a

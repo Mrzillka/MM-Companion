@@ -34,6 +34,7 @@ from mm_companion.core.rules import (
     PIN_INITIATIVE,
     PinRef,
     clear_extra_effort,
+    clear_stunts,
     condition_check_penalty,
     condition_speed_lines,
     condition_speed_rank_mod,
@@ -641,6 +642,7 @@ class SystemInfoSection(QGroupBox):
             self._data,
             self.use_extra_effort,
             self.clear_extra_effort,
+            self.drop_stunts,
         )
 
     def _show_extra_effort_menu(self) -> None:
@@ -684,6 +686,20 @@ class SystemInfoSection(QGroupBox):
         """
 
         if not clear_extra_effort(self._character):
+            return False
+        self.changed.emit()
+        self._emit_edited()
+        return True
+
+    def drop_stunts(self) -> bool:
+        """Drop every power stunt on the character — the scene ended.
+
+        Publishes a build change for the same reason :meth:`clear_extra_effort` does: the
+        cards belong to the Powers block, and the sheet restates itself off the model
+        rather than one block reaching into another.
+        """
+
+        if not clear_stunts(self._character):
             return False
         self.changed.emit()
         self._emit_edited()

@@ -29,13 +29,13 @@ file alone. Delete it when §6 is empty.
 | §5P | The sub-builds themselves (was §6M) | **done** — pass 12 |
 | §5Q | Dynamic Alternate Effects — the point pool (was §6K) | **done** — pass 13 |
 | §5R | Extra Effort — the uses, the ladder, the rank push (was §6H) | **done** — pass 14 |
-| §6H | Power stunts — the temporary alternate effect itself | outstanding |
+| §5S | Power stunts — the temporary alternate effect itself (was §6H) | **done** — pass 15 |
 
-**One item is left: the power stunt.** Everything §6H covered *except* building the
-temporary alternate effect is done — the six uses, the fatigue ladder, the rank push and
-the three advantages that bend them. A stunt is a whole alternate effect assembled at the
-table, which is a build problem rather than a mechanic, and it is the last thing this job
-owns.
+**§6 is empty.** Every item this job set out to check — every cost, every game-term, every
+roll, every runtime behaviour, and finally Extra Effort and the power stunt — is done. By
+this file's own opening instruction it can be deleted once the branch is merged; §7 below
+is the part worth keeping, and its debts should be read (and, where they still matter,
+moved into `docs/notes/`) before it goes.
 
 `docs/powers-rules-audit` was merged into `develop` at `bf75e44` with passes 1–13.
 Pass 14 onwards is on **`feature/extra-effort-and-power-stunts`**, branched off `develop`
@@ -43,6 +43,8 @@ after that merge:
 
 ```
 bc6020e  Charge Extra Effort, and let it push a rank past the build
+0933268  Record pass 14's commit hash in the audit
+(pass 15's hash — recorded in the follow-up commit, as every pass before it was)
 ```
 
 The passes that were merged, for reference:
@@ -84,7 +86,7 @@ feature, one branch (`CLAUDE.md`). Never commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # 2876 tests as of pass 14
+python -m pytest -q                 # 2886 tests as of pass 15
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py \
                 tests/test_extra_effort.py -q
@@ -937,6 +939,49 @@ already asks the Dice block for a line.
 *above* the sentence it changes, so the benefit line read as a consequence of nothing. The
 controls are now built in one order and laid out in another, on purpose.
 
+### S. Power stunts (pass 15)
+
+The last item. A stunt is "a temporary Alternate Effect of a non-permanent duration effect
+you have" (p20), bought with Extra Effort and usually a Hero Point — and the reason the
+rules give for it is worth quoting, because it is also the reason the app wanted it: "so
+you do not have to fill up character sheets with long lists of minor alternate effects a
+hero will rarely ever use" (p101).
+
+**The topology was the decision, and it was the user's.** Two were on the table (recorded
+in §6H before this pass): a member of the source power's array, which is what the rules
+literally call it, or a card of its own holding a back-reference. **The card won**, and the
+reasoning holds up in the code: an array member drags pooling, base selection, the Dynamic
+point split and the live-alternate machinery onto something that costs nothing and lasts a
+scene. `Power.stunt_of` is the back-reference, by id like every other cross-power
+relationship on a character.
+
+**Three things follow from that one field**, and nothing else does:
+
+* **It costs nothing.** `node_cost` returns 0 for a stunt, which is what keeps it out of
+  `powers_points_spent`; `power_total_cost` still says what it *would* cost, because that
+  is the number the ceiling is measured against.
+* **It is held to the alternate effect's ceiling.** "An alternate effect can have a total
+  cost in Power Points no greater than the base power" (p98) — `power_stunt_violations`,
+  which also catches the other thing that goes wrong: a source power deleted out from under
+  it. Both warn on the card's own ⚠ rather than deleting anything, since binning a build
+  the player made is the worse answer.
+* **It is not saved** — the second half of the user's call. `strip_stunts` takes stunt
+  cards out of the serialized tree in `library.save_character`, recursively, because
+  nothing stops one being dragged into a group. `to_dict` still writes them, and that is
+  deliberate: undo snapshots the model as JSON, and a stunt that vanished on the next undo
+  would be worse than one that outlived its scene.
+
+**The order of the flow is the interesting UI decision.** Choosing *Power stunt* from a
+card opens the Power Constructor, and the Extra Effort dialog appears only when a build
+comes back. Charging first would take a rung of fatigue for a stunt that may never exist;
+cancelling the cost dialog now drops the build instead, which is the honest way round —
+the dialog is the "yes, spend it" step.
+
+Small rules details that fell out: a stunt can be **pushed** (it is a non-permanent effect
+the character is using) but cannot be **stunted off** (a stunt is an alternate of a power
+you *have*), and the character-wide clear is two entries rather than one, because a push
+ends with your turn and a stunt with the scene.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -984,6 +1029,9 @@ A later pass should reach for these rather than inventing a parallel one.
 | `hero-point-requested` | `ui/blocks/bus.py`, served by `SystemInfoSection.adjust_hero_points` | one block spending another block's currency, without either naming the other — the twin of `note-requested` |
 | `ConditionsSection` subscribing to `condition-changed` | `blocks/registry.py` | any block may now write a condition to the shared model and have the chips follow; the resolver stays core's |
 | `effect_display_name` | `runtime.py` | "this effect's own label, else the base effect's name" — the idiom three call sites had each spelled out |
+| `stunt_of` + `strip_stunts` | `core/powers.py`, applied in `library.save_character` | a power that is **on the sheet but not in the file** — the shape of anything invented at the table: serialized for undo and the session, stripped on the way to disk |
+| `power_is_stunt` in `node_cost` | `powers_cost.py` | a card that costs nothing without lying about what it would cost — `power_total_cost` stays honest so a ceiling can be checked against it |
+| Build first, charge on the way back | `PowersSection._open_stunt` / `_on_stunt_saved` | the pattern for any cost paid for a thing the player has yet to make: the constructor opens, and the price is asked only when something comes back |
 
 ---
 
@@ -1006,7 +1054,12 @@ it worked.
 
 ### G. Improvised Effects — **done in pass 10, see §5N**
 
-### H. Power stunts — **the effort itself is done in pass 14, see §5R**
+### H. Extra Effort and power stunts — **done: the effort in pass 14 (§5R), the stunt in
+pass 15 (§5S)**
+
+*The brief is kept below as it was written, because the two questions it left open were
+answered by the user rather than by the code: a stunt is a **card of its own**, and it is
+**not saved**.*
 
 What is left of §6H is the stunt: "you can use a temporary Alternate Effect of a
 non-permanent duration effect you have" (p20), bought with Extra Effort and usually a Hero
@@ -1034,7 +1087,7 @@ with three stunts on it is a build nobody meant to keep.
 
 **Acceptance.** A stunt can be assembled from a card, costs 0 PP, shows as a stunt, rolls
 like the power it came from, and is cleared in one click; the point total and the Power
-Level checks are untouched by it.
+Level checks are untouched by it. — *All of it, and the ceiling check besides.*
 
 ### I. Enhanced Senses' Dimensional option — **done in pass 5, see §5G**
 
@@ -1237,7 +1290,26 @@ Things a later pass will trip over if it does not know them.
    the doubled rank increase and the doubled fatigue are exact; taking an extra action *and*
    a rank increase for one doubled cost means using the menu twice, which charges two rungs
    anyway. The arithmetic agrees; only the wording of the second use is missing.
-28. **The Conditions block re-renders twice for its own changes.** It now subscribes to
+28. **A stunt can be dragged into a group.** The powers tree is drag-and-drop and nothing
+   refuses a stunt card a group, so one can end up an array member — costing 0, which
+   makes it the array's cheapest alternate and changes the pooling arithmetic under it.
+   `strip_stunts` recurses for exactly that reason, so it still never reaches the file,
+   and the ⚠ still names the ceiling; but the honest fix is a drop guard in
+   `_on_combine`/`_on_move`, and it was not worth one this pass.
+29. **Nothing stops a stunt and its source power being live at once.** The rules make an
+   alternate effect mutually exclusive with what it is an alternate of, and the array
+   machinery enforces exactly that for a bought alternate — but a stunt is a card of its
+   own (the user's call, and the right one for a thing that costs nothing and lasts a
+   scene), so no live-selection rule reaches it. It matters only when both are
+   *standing* powers, since an instant one is used and gone; the card says what it is a
+   stunt of, and the table settles the rest. Wiring it into `live_powers` was weighed and
+   left: a stunt card defaults to active the moment it is created, so the source power
+   would go dark with no visible reason the moment a stunt was built.
+30. **Deleting a power leaves its stunts orphaned**, warning on their own cards rather
+   than going with it. Deliberate — a stunt is a build the player made, and binning it
+   silently because they removed something else is the failure the ⚠ exists to avoid —
+   but it does mean the sheet can carry a card whose only fault is what is missing.
+31. **The Conditions block re-renders twice for its own changes.** It now subscribes to
    `condition-changed` as well as publishing it (which is what lets Extra Effort's fatigue
    reach the chips), so its own edit renders once directly and once off the bus. Idempotent
    and cheap, and the alternative — a writer that is trusted not to be the block itself —
@@ -1263,5 +1335,6 @@ Things a later pass will trip over if it does not know them.
    `--no-ff` whenever the user says the job is done, and this file can go with it.
 10. ~~**§6H Extra Effort**~~ — done in pass 14 (§5R), on
     `feature/extra-effort-and-power-stunts` off `develop`.
-11. **§6H power stunts** — the last item this job owns, and the reason the branch is named
-    for both. Same branch, next pass.
+11. ~~**§6H power stunts**~~ — done in pass 15 (§5S). **§6 is empty**: the branch is
+    ready to merge into `develop` with `--no-ff` whenever the user says the job is done,
+    and this file goes with it (read §7 first — the debts are the part worth keeping).

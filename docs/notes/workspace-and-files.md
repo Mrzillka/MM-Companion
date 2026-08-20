@@ -43,6 +43,12 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   model**, so opening a character repopulates characteristics, conditions, the
   image, and the advantage table (abilities/resistances/skills/profile already
   seeded).
+- **One thing is deliberately left out of the file.** A *power stunt* — a temporary
+  alternate effect bought with Extra Effort (see [the powers notes](powers.md)) — is
+  scoped to the scene it was invented in, so `save_character` runs the serialized powers
+  through `strip_stunts` before writing. `Character.to_dict()` itself still emits them,
+  because it is also what undo snapshots and what a session pushes to the GM; the file is
+  the only place a stunt does not belong.
 - Character images are made self-contained: on save, `save_character` copies any
   external image into the workspace `images/` dir and rewrites `Character.image_path`
   to a bare filename; `core.library.resolve_image_path` turns that back into an

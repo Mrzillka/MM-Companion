@@ -42,6 +42,7 @@ from mm_companion.core.data_loader import ExtraEffortUse, GameData
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
     TARGET_EFFECT,
+    USE_POWER_STUNT,
     USE_RANK_INCREASE,
     determination_ranks,
     effect_current_rank,
@@ -51,8 +52,10 @@ from mm_companion.core.rules import (
     fatigue_label,
     has_extraordinary_effort,
     next_fatigue,
+    power_is_stunt,
     pushable_effects,
     pushed_effects,
+    stunt_powers,
 )
 from mm_companion.ui.widgets import BOLD_STYLE
 
@@ -81,6 +84,7 @@ def character_effort_menu(
     game_data: GameData,
     on_chosen: Callable[[ExtraEffortUse], None],
     on_clear: Callable[[], None] | None = None,
+    on_drop_stunts: Callable[[], None] | None = None,
 ) -> QMenu:
     """The whole list of uses, for the block that owns no effect in particular.
 
@@ -112,6 +116,17 @@ def character_effort_menu(
         clear = menu.addAction(f"Clear the ranks pushed into {len(pushed)} effect{plural}")
         clear.setToolTip("Your turn ended: every effect goes back to the rank it was bought at.")
         clear.triggered.connect(lambda _checked=False: on_clear())
+    # Stunts get their own entry rather than riding on that one, because they answer to a
+    # different clock: a push is over at the end of your turn, a stunt at the end of the
+    # scene, and one button for both would bin a stunt every time a turn ended.
+    stunts = stunt_powers(character)
+    if stunts and on_drop_stunts is not None:
+        if not pushed:
+            menu.addSeparator()
+        plural = "" if len(stunts) == 1 else "s"
+        drop = menu.addAction(f"Drop {len(stunts)} power stunt{plural}")
+        drop.setToolTip("The scene ended: a stunt is temporary, and its card goes with it.")
+        drop.triggered.connect(lambda _checked=False: on_drop_stunts())
     return menu
 
 
@@ -120,7 +135,7 @@ def add_power_effort_actions(
     power: Power,
     character: Character,
     game_data: GameData,
-    on_chosen: Callable[[ExtraEffortUse, PowerEffectInstance, str], None],
+    on_chosen: Callable[[ExtraEffortUse, Power, PowerEffectInstance, str], None],
 ) -> bool:
     """Add this power's Extra Effort entries to ``menu``; ``True`` when any were added.
 
@@ -130,12 +145,18 @@ def add_power_effort_actions(
 
     A power whose every effect is Permanent gets nothing at all, which is the rule rather
     than an omission: a Permanent effect cannot be improved with Extra Effort (p104).
+
+    A **stunt** may still be pushed — it is a non-permanent effect the character is using
+    — but it may not be stunted off: a stunt is an alternate of a power you *have*, and a
+    stunt is something you invented this scene.
     """
 
     effects = pushable_effects(power, game_data)
     if not effects:
         return False
     uses = [use for use in extra_effort_uses(game_data) if use.target == TARGET_EFFECT]
+    if power_is_stunt(power):
+        uses = [use for use in uses if use.id != USE_POWER_STUNT]
     if not uses:
         return False
     ranks = extra_effort_rank_increase(character, game_data)
@@ -148,7 +169,7 @@ def add_power_effort_actions(
             action.setToolTip(use.description)
             name = effect_display_name(effects[0], game_data)
             action.triggered.connect(
-                lambda _checked=False, u=use, e=effects[0], n=name: on_chosen(u, e, n)
+                lambda _checked=False, u=use, p=power, e=effects[0], n=name: on_chosen(u, p, e, n)
             )
             continue
         # addMenu(title) hands ownership back to the caller, so the submenu is parented
@@ -160,7 +181,7 @@ def add_power_effort_actions(
             entry = submenu.addAction(f"{name} {effect.rank}")
             entry.setToolTip(use.description)
             entry.triggered.connect(
-                lambda _checked=False, u=use, e=effect, n=name: on_chosen(u, e, n)
+                lambda _checked=False, u=use, p=power, e=effect, n=name: on_chosen(u, p, e, n)
             )
     return True
 

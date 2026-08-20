@@ -1,8 +1,9 @@
 """Extra Effort: what it buys, what it costs, and where it is spent from.
 
 Checked against the core rulebook p20-22 (the mechanic), p85-86 and p94 (the three
-advantages that change it) and p104/p159 (the Permanent duration that refuses it),
-rather than against the implementation.
+advantages that change it), p104/p159 (the Permanent duration that refuses it) and p98
+(the ceiling an alternate effect — and so a power stunt — is held to), rather than
+against the implementation.
 """
 
 from __future__ import annotations
@@ -10,12 +11,20 @@ from __future__ import annotations
 import pytest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
+from mm_companion.core import library
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+from mm_companion.core.powers import (
+    ModifierSelection,
+    Power,
+    PowerEffectInstance,
+    PowerGroup,
+    power_is_stunt,
+)
 from mm_companion.core.rules import (
     apply_condition,
     clear_extra_effort,
+    clear_stunts,
     determination_ranks,
     effect_allows_extra_effort,
     effect_current_rank,
@@ -27,10 +36,15 @@ from mm_companion.core.rules import (
     extra_effort_uses,
     has_extraordinary_effort,
     next_fatigue,
+    node_cost,
     power_pl_violations,
+    power_stunt_violations,
+    powers_points_spent,
     pushable_effects,
     pushed_effects,
     spend_extra_effort,
+    stunt_powers,
+    stunt_source,
 )
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.extra_effort import ExtraEffortDialog, character_effort_menu
@@ -314,7 +328,9 @@ def test_pushing_from_a_card_charges_the_fatigue_and_writes_it_down(
     sheet = CharacterSheet(data, char)
     monkeypatch.setattr(powers_module, "ExtraEffortDialog", _AcceptedDialog)
 
-    assert sheet.powers.use_extra_effort(_rank_increase(data), blast.effects[0], "Fire Blast")
+    assert sheet.powers.use_extra_effort(
+        _rank_increase(data), blast, blast.effects[0], "Fire Blast"
+    )
 
     assert blast.effects[0].extra_effort == 1
     # The condition went on through the core resolver, and the chips followed it there.
@@ -332,7 +348,10 @@ def test_a_cancelled_dialog_spends_nothing(
     sheet = CharacterSheet(data, char)
     monkeypatch.setattr(powers_module, "ExtraEffortDialog", _CancelledDialog)
 
-    assert sheet.powers.use_extra_effort(_rank_increase(data), blast.effects[0], "Blast") is False
+    assert (
+        sheet.powers.use_extra_effort(_rank_increase(data), blast, blast.effects[0], "Blast")
+        is False
+    )
     assert blast.effects[0].extra_effort == 0
     assert char.conditions == []
 
@@ -346,7 +365,7 @@ def test_the_hero_point_route_moves_the_pips_in_the_block_that_owns_them(
     sheet.system_info.set_hero_points(3)
     monkeypatch.setattr(powers_module, "ExtraEffortDialog", _HeroPointDialog)
 
-    sheet.powers.use_extra_effort(_rank_increase(data), blast.effects[0], "Fire Blast")
+    sheet.powers.use_extra_effort(_rank_increase(data), blast, blast.effects[0], "Fire Blast")
 
     # No fatigue — it was shrugged off — and the point came off the System block's pips
     # rather than being written to the model behind them.
@@ -362,7 +381,7 @@ def test_clearing_from_a_card_takes_the_ranks_back(
     char, blast = _hero()
     section = CharacterSheet(data, char).powers
     monkeypatch.setattr(powers_module, "ExtraEffortDialog", _AcceptedDialog)
-    section.use_extra_effort(_rank_increase(data), blast.effects[0], "Fire Blast")
+    section.use_extra_effort(_rank_increase(data), blast, blast.effects[0], "Fire Blast")
 
     assert "Clear Extra Effort" in _card_menu_labels(section, blast)
     assert section.clear_extra_effort(blast) is True
@@ -410,6 +429,172 @@ def test_the_system_block_charges_a_use_and_can_clear_the_pushes(
     assert "Clear the ranks pushed into 1 effect" in labels
     assert sheet.system_info.clear_extra_effort() is True
     assert blast.effects[0].extra_effort == 0
+
+
+# -- power stunts ------------------------------------------------------------
+
+
+def _stunt_of(source: Power, rank: int = 6) -> Power:
+    """A stunt built off ``source`` — an Obscure, the book's own example (p20)."""
+    return Power(
+        name="Smokescreen",
+        effects=[PowerEffectInstance("obscure", rank=rank)],
+        stunt_of=source.id,
+    )
+
+
+def test_a_stunt_is_a_card_of_its_own_and_costs_nothing() -> None:
+    # "A power stunt is a temporary Alternate Effect ... acquired through Extra Effort and
+    # the spending of Hero Points rather than the creation of a permanent set of alternate
+    # effects" (p20, p101) — so it is on the sheet, and not in the point total.
+    data = load_game_data()
+    char, blast = _hero()
+    stunt = _stunt_of(blast, rank=2)
+    char.powers.append(stunt)
+
+    assert power_is_stunt(stunt) and not power_is_stunt(blast)
+    assert stunt_source(stunt, char) is blast
+    assert node_cost(stunt, data, char) == 0
+    assert powers_points_spent(char, data) == node_cost(blast, data, char)
+
+
+def test_a_stunt_is_not_saved_but_does_survive_an_undo_snapshot(tmp_path) -> None:
+    char, blast = _hero()
+    char.powers.append(_stunt_of(blast))
+    # A stunt dragged into a group is still a stunt, and still must not reach the file.
+    char.powers.append(PowerGroup(children=[_stunt_of(blast), Power(name="Kept")]))
+
+    path = library.save_character(char, directory=tmp_path)
+    reloaded = library.load_character(path)
+    assert not stunt_powers(reloaded)
+    assert [n.name for n in reloaded.powers] == ["Fire Blast", ""]
+    assert [c.name for c in reloaded.powers[1].children] == ["Kept"]
+
+    # Undo snapshots the model as JSON, and a stunt that vanished on the next undo would
+    # be worse than one that outlived its scene — so the round trip keeps it.
+    assert len(stunt_powers(Character.from_dict(char.to_dict()))) == 2
+
+
+def test_a_stunt_may_not_cost_more_than_the_power_it_came_from() -> None:
+    # "An alternate effect can have a total cost in Power Points no greater than the base
+    # power the alternate effect extra is applied to" (p98).
+    data = load_game_data()
+    char, blast = _hero()  # Damage 6 — 6 PP
+    stunt = _stunt_of(blast, rank=2)  # Obscure 2, one sense type — 4 PP
+    char.powers.append(stunt)
+    assert power_stunt_violations(stunt, char, data) == []
+
+    stunt.effects[0].rank = 12  # 12 PP of Obscure off a 6 PP Blast
+    breach = power_stunt_violations(stunt, char, data)
+    assert len(breach) == 1
+    assert "12 PP" in breach[0] and "6 PP" in breach[0] and "Fire Blast" in breach[0]
+    # An ordinary power is not held to anything of the sort.
+    assert power_stunt_violations(blast, char, data) == []
+
+
+def test_a_stunt_whose_power_is_gone_says_so() -> None:
+    data = load_game_data()
+    char, blast = _hero()
+    stunt = _stunt_of(blast, rank=2)
+    char.powers.append(stunt)
+    char.powers.remove(blast)
+    assert stunt_source(stunt, char) is None
+    assert "no longer on the sheet" in power_stunt_violations(stunt, char, data)[0]
+
+
+def test_stunts_are_dropped_together_when_the_scene_ends() -> None:
+    char, blast = _hero()
+    char.powers.append(_stunt_of(blast))
+    char.powers.append(PowerGroup(children=[_stunt_of(blast)]))
+    assert len(stunt_powers(char)) == 2
+    assert clear_stunts(char) == 2
+    assert stunt_powers(char) == []
+    assert clear_stunts(char) == 0
+
+
+def test_a_stunt_is_built_first_and_charged_on_the_way_back(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = load_game_data()
+    char, blast = _hero()
+    sheet = CharacterSheet(data, char)
+    stunt_use = extra_effort_use(data, "power_stunt")
+
+    # Choosing the stunt opens the constructor and charges nothing: the player has yet to
+    # build anything, and a rung of fatigue for a stunt that does not exist is invented.
+    assert sheet.powers.use_extra_effort(stunt_use, blast, blast.effects[0], "Damage")
+    assert sheet.powers._windows and char.conditions == []
+
+    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _AcceptedDialog)
+    built = _stunt_of(blast, rank=2)
+    built.stunt_of = ""  # what the constructor hands back knows nothing about stunts
+    assert sheet.powers._on_stunt_saved(built, stunt_use, blast, blast.effects[0], "Damage")
+
+    assert built.stunt_of == blast.id
+    assert char.powers[-1] is built
+    assert "fatigued" in {c.condition_id for c in char.conditions}
+    assert [label.text() for label in _history_labels(sheet)] == [
+        "used Extra Effort for a power stunt on Damage — now Fatigued"
+    ]
+
+
+def test_cancelling_the_cost_drops_the_build_rather_than_giving_it_away(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = load_game_data()
+    char, blast = _hero()
+    sheet = CharacterSheet(data, char)
+    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _CancelledDialog)
+
+    saved = sheet.powers._on_stunt_saved(
+        _stunt_of(blast), extra_effort_use(data, "power_stunt"), blast, blast.effects[0], "Damage"
+    )
+    assert saved is False
+    assert stunt_powers(char) == [] and char.conditions == []
+
+
+def test_the_stunt_card_says_what_it_is_and_what_it_came_from(qapp: QApplication) -> None:
+    data = load_game_data()
+    char, blast = _hero()
+    char.powers.append(_stunt_of(blast, rank=2))
+    section = CharacterSheet(data, char).powers
+    texts = [label.text() for label in section.findChildren(QLabel)]
+
+    assert "✦ stunt of Fire Blast" in texts
+    # And it says "Stunt" where every other card says what it cost, since 0 PP beside a
+    # real build reads as a bug rather than as a rule.
+    assert "Stunt" in texts and "6 PP" in texts
+
+
+def test_a_stunt_can_be_pushed_but_not_stunted_off(qapp: QApplication) -> None:
+    data = load_game_data()
+    char, blast = _hero()
+    stunt = _stunt_of(blast, rank=2)
+    char.powers.append(stunt)
+    section = CharacterSheet(data, char).powers
+
+    labels = _card_menu_labels(section, stunt)
+    # A stunt is a non-permanent effect the character is using, so Extra Effort can push
+    # it; but a stunt is an alternate of a power you *have*, and this one was invented
+    # this scene, so there is no stunt of a stunt.
+    assert "Rank increase (+1)" in labels
+    assert "Power stunt" not in labels
+    assert "Power stunt" in _card_menu_labels(section, blast)
+
+
+def test_the_system_menu_drops_the_stunts_it_offers_to(qapp: QApplication) -> None:
+    data = load_game_data()
+    char, blast = _hero()
+    char.powers.append(_stunt_of(blast))
+    sheet = CharacterSheet(data, char)
+
+    labels = [action.text() for action in sheet.system_info.extra_effort_menu().actions()]
+    assert "Drop 1 power stunt" in labels
+    assert sheet.system_info.drop_stunts() is True
+    assert stunt_powers(char) == []
+    assert "Drop 1 power stunt" not in [
+        action.text() for action in sheet.system_info.extra_effort_menu().actions()
+    ]
 
 
 def test_the_dialog_states_the_benefit_and_the_price(qapp: QApplication) -> None:

@@ -7,7 +7,14 @@ from collections.abc import Iterator
 
 from ..character import Character
 from ..data_loader import GameData
-from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
+from ..powers import (
+    STRUCTURE_LINKED,
+    Power,
+    PowerEffectInstance,
+    PowerGroup,
+    PowerNode,
+    power_is_stunt,
+)
 from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
 from .powers_cost import (
@@ -17,6 +24,7 @@ from .powers_cost import (
     effect_size_rank_shift,
     effect_total_cost,
     imposed_effect_cost,
+    power_total_cost,
 )
 from .powers_terms import (
     _effect_name,
@@ -25,9 +33,53 @@ from .powers_terms import (
     effect_base_attack_bonus,
     effect_makes_attack,
 )
-from .runtime import config_trait_allocation, trait_display_name
+from .runtime import config_trait_allocation, power_display_name, trait_display_name
 from .size import size_resistance_shift, size_skill_shift
 from .trait_rates import trait_rank_cap
+
+
+def stunt_source(power: Power, char: Character) -> Power | None:
+    """The power a stunt was taken from, or ``None`` — including when it has been removed.
+
+    A stunt holds its source by id rather than by reference, like every other cross-power
+    relationship on a character (``linked_with``, the old ``alternate_of``): a name is
+    editable and a reference does not survive the save/load round trip its neighbours make.
+    """
+
+    if not power.stunt_of:
+        return None
+    return next((other for other in leaf_powers(char.powers) if other.id == power.stunt_of), None)
+
+
+def power_stunt_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
+    """What is wrong with this power *as a stunt*; empty for an ordinary power.
+
+    A stunt is a temporary **alternate effect** (p20), so the rule that bounds an alternate
+    bounds it: "an alternate effect can have a total cost in Power Points no greater than
+    the base power" (p98). It is checked against :func:`power_total_cost` rather than
+    against what the stunt contributes, which is 0 — the stunt is free at the till, not
+    free of the ceiling.
+
+    The other thing that can go wrong is that the power it came from is no longer on the
+    sheet: an alternate of nothing is not an alternate. It warns rather than deleting the
+    card, because a stunt costs nothing and quietly binning a build the player made is a
+    worse answer than telling them.
+    """
+
+    if not power_is_stunt(power):
+        return []
+    source = stunt_source(power, char)
+    if source is None:
+        return ["Power stunt: the power it was taken from is no longer on the sheet"]
+    cost = power_total_cost(power, game_data, char)
+    ceiling = power_total_cost(source, game_data, char)
+    if cost > ceiling:
+        name = power_display_name(source, game_data)
+        return [
+            f"Power stunt: {cost} PP is dearer than the {ceiling} PP power it comes from "
+            f"({name}) — an alternate effect may cost no more than its base"
+        ]
+    return []
 
 
 def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:

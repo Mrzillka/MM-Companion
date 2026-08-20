@@ -125,6 +125,9 @@ resisted rank to cap, so a Flight + Attack stays out of PL scope.
   `PowerEffectInstance.dynamic` within a power, `Power.dynamic` / `PowerGroup.dynamic` within
   a group, both read by `array_members_cost`. Two Dynamic members are needed before the
   option does anything, which the book says outright and the app leaves to the player.
+  The **split itself** is runtime state (`dynamic_points`, §7): the array's pool is its base
+  member's cost, each member is held to `rank x points / full cost` rounded down, and every
+  member holding a share is live at once.
 
 ```
 Power (array example: "elemental control")
@@ -153,9 +156,12 @@ Linked and Array exist at **two levels**, both supported side by side:
   folds in array pooling at any depth. `rules.node_display_cost` gives the per-card
   figure (a non-base array member shows only the flat point). Runtime: an `array` group's
   `active_child_id` names the one live member, and `rules.live_powers` walks the tree
-  descending only into the active array branch so an unselected member's bonuses drop off
+  descending only into the live array branch so an unselected member's bonuses drop off
   the sheet (feeding `power_trait_bonuses`); the per-power on/off switch still drives
-  `effect_is_active`, and a Linked group's members toggle together.
+  `effect_is_active`, and a Linked group's members toggle together. *Which* branch is live
+  is `rules.live_array_children`: the selected member, unless the array's points have been
+  split across its Dynamic members, in which case every member holding a share runs at
+  once at the rank its share buys (§4).
 
   This tree **supersedes** the older flat cross-power references (`Power.alternate_of` /
   `Power.linked_with`). Those fields remain only so a pre-tree save still loads:
@@ -331,16 +337,40 @@ formula all read it, so a configured Illusion cannot cost one thing and explain 
 Adding a sense type, an Environment condition or a whole new configured effect is
 therefore a data edit with no Python behind it.
 
-**Dynamic Alternate Effects are priced but the pool is not modelled.** Each member carries
-its own `dynamic` flag, and `array_members_cost` charges `dynamicCostValue` (2) for a Dynamic
-alternate and one Alternate Effect rank for a Dynamic base, at both levels an array exists
-at — so a Dynamic array costs what the book prints. What does not exist is the **runtime
-allocation**: how many of the array's points each Dynamic member currently holds, and the
-reduced rank that buys ("2 Power Points assigned to it, but their Flight speed is then
-limited to 1 rank", p101). Every Dynamic member still behaves at runtime exactly as an
-ordinary alternate does. The blocker is that `effect_current_rank` takes only the effect, so
-an allocation cannot reach the rank without threading the power (and its parent group) into
-it; `POWERS-AUDIT.md` §6K records the two candidate designs.
+**The Dynamic point pool.** Each member carries its own `dynamic` flag, and
+`array_members_cost` charges `dynamicCostValue` (2) for a Dynamic alternate and one Alternate
+Effect rank for a Dynamic base, at both levels an array exists at — so a Dynamic array costs
+what the book prints. The **runtime allocation** rides beside it as `dynamic_points` on
+`Power` / `PowerGroup`: how many of the array's points that member currently holds. Three
+functions turn it into behaviour, all in `core/rules`:
+
+- `array_pool_points(group, ...)` — the pool, which is the *base* member's full cost, since
+  every other member is bought for a flat point or two on top of it.
+- `dynamic_rank_share(rank, points, full_cost)` — `rank x points / full_cost`, rounded down
+  and clamped to the bought rank. The book's own example is the test: a Flight 5 costing 10
+  points given 2 of them is "limited to 1 rank of Flight" (p101). **Zero is a real answer**
+  here and nowhere else — a member below its minimum is simply not running.
+- `live_array_children(group)` — the selected alternate as before, *unless* any Dynamic
+  member holds a share, in which case every member holding one is live together. That is
+  what the dearer alternate price actually buys, and it is why `live_powers` no longer
+  descends into exactly one child of an array.
+
+The cap reaches an effect's rank through an **injected hook** rather than an import:
+`effect_current_rank(effect, game_data, char)` asks `runtime`'s installed resolver, and
+`powers_cost` installs `dynamic_rank_cap` at import (`set_dynamic_rank_cap`) because working
+a share out needs point costs and `powers_cost` is the module that imports `runtime`, not the
+reverse. Nothing installed means nothing changes, the same bargain the handler registries
+strike. Putting it *there* rather than at each caller is what makes one number reach the save
+DC, the Toughness a Dynamic Protection grants, the speed a Dynamic Flight flies at and the
+card's own title. The member is priced without the wielder deliberately, since passing one
+would let a legacy Strength-Based selection reach `effective_ability`, which asks what the
+character's powers contribute, which asks this.
+
+Two things it deliberately does not do. A member is found by walking the character's own
+powers tree, so a power **not on a character** (the Power Constructor) is never capped —
+which is right, since nothing is dialled there either. And the split lives only at the
+*group* level: an array of a single power's own effects has no runtime member selection at
+all today, so a pool there would be built on sand.
 
 **Backward compatibility.** An effect with no rows falls back to a single
 `config["target"]` at the effect's full rank — which is how Protection's baked-in
@@ -528,7 +558,12 @@ PowerEffectInstance  (part of a character's Power)
 │                                          // (§4) - shares the pool and runs alongside the
 │                                          // other Dynamic members, for 2 points instead
 │                                          // of 1. `Power`/`PowerGroup` carry the same
-│                                          // flag for a group-level array
+│                                          // flag for a group-level array, and there also
+│                                          // carry `dynamicPoints` (int|null): runtime,
+│                                          // how much of the array's pool this member
+│                                          // currently holds. Null - the default - is no
+│                                          // share, and the array behaves as an ordinary
+│                                          // set of alternates
 ├── plCap ("" | "effect" | "attack")      // build: hold this effect hard to 2 x PL,
 │                                          // lowering the side not named
 │                                          // (`effect_pl_cap_shift`). Empty leaves the

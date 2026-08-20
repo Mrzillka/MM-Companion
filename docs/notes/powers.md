@@ -31,9 +31,28 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   data (`costValue` / `dynamicCostValue` on the `alternate_effect` record), never
   spelled in Python. It is *build* state, written only when set, so an array saved
   before it loads with every member ordinary and costs what it always did.
-  **What is not modelled yet is the pool itself** — how many of the array's points each
-  Dynamic member is currently assigned, and the reduced rank that buys. See
-  `POWERS-AUDIT.md` §6K for the two designs that were weighed and why it is its own job.
+- **The pool a Dynamic member shares is `dynamic_points`** — *runtime* state beside the
+  build flag, on `Power` and `PowerGroup` (the two things an array's members can be).
+  It is the free action the rules give a character once per turn: the array's points are
+  its base member's cost (`array_pool_points`), the sheet's **Split points** dialog hands
+  them out, and each member is then held to what its share buys —
+  `rank x points / full cost`, rounded down (`dynamic_rank_share`). A Flight 5 costing 10
+  given 2 points runs at 1 rank, which is the book's own worked example. A share too
+  small for even one rank floors at **0** — the one place a rank may be zero — and the
+  member is simply off. `live_array_children` is the other half: once anything is split,
+  every member holding a share is live *at the same time* and the selected alternate
+  stops deciding, which is exactly what the second point of a Dynamic alternate buys.
+  With nothing split an array behaves as it always has, so a character saved before this
+  loads unchanged.
+- **The cap reaches rank through an injected hook, not an import.** Working a share out
+  needs point costs, and `powers_cost` imports `runtime` rather than the other way
+  about — so `powers_cost` *installs* `dynamic_rank_cap` into runtime
+  (`set_dynamic_rank_cap`) and `effect_current_rank(effect, game_data, char)` asks it.
+  Same bargain as the registries: nothing installed, nothing changes. Reading it there
+  rather than at each caller is what makes the whole sheet follow — the save DC, the
+  Toughness a Dynamic Protection grants, the speed a Dynamic Flight flies at and the
+  card's own title are all one number. Without a wielder (the Power Constructor) no cap
+  is asked for at all.
 - `core.components.py` is an ECS-style split: effect *instances* are entities;
   the frozen **components** describing behaviour are the base effect's parsed
   `Integration` (a `statIntegration` `pattern` — `passive_permanent`,
@@ -364,8 +383,9 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   build — and the size ladder is what broke it: a Growth 3 *held* at Large is a
   standing decision about the character that four of the sheet's numbers hang off,
   and reopening the file at Gargantuan silently changed them. So
-  `activated`/`item_present`/`array_active`, `PowerGroup.active_child_id` and each
-  effect's `toggled_on`/`suppressed`/`current_rank` all round-trip now. Four things
+  `activated`/`item_present`/`array_active`, `PowerGroup.active_child_id`, a Dynamic
+  member's `dynamic_points` and each effect's `toggled_on`/`suppressed`/`current_rank`
+  all round-trip now. Four things
   make that additive rather than a migration. Each is **written only when it differs
   from the all-active default**, so a power nobody has touched serializes
   byte-for-byte as before and a file saved earlier still loads all-active — there is

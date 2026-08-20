@@ -27,11 +27,12 @@ file alone. Delete it when §6 is empty.
 | §5N | Improvised Effects arithmetic (was §6G) | **done** — pass 10 |
 | §5O | Countering, and Nullify's opposed check (was §6F) | **done** — pass 11 |
 | §5P | The sub-builds themselves (was §6M) | **done** — pass 12 |
-| §6K | Dynamic Alternate Effects — the point pool (split from §6A) | outstanding |
+| §5Q | Dynamic Alternate Effects — the point pool (was §6K) | **done** — pass 13 |
 | §6H | Extra Effort and power stunts | outstanding |
 
-**Two items are left**, and both are large enough to deserve their own pass. Every
-cost, every game-term and every roll the audit set out to check is now done.
+**One item is left, and it belongs to another branch.** Every cost, every game-term,
+every roll and every runtime behaviour the audit set out to check is now done; §6H is
+Chapter 1 rather than Chapter 6 and was always meant to follow this branch's merge.
 
 Commits so far, all on `docs/powers-rules-audit` off `develop`, **not yet merged**:
 
@@ -55,6 +56,8 @@ cac4e72  Record pass 10's commit hash in the audit
 d350325  Give an opposed effect check to the side that makes it
 c53ab92  Record pass 11's commit hash in the audit
 82d44dc  Let a power hold the character it buys
+6d56b46  Record pass 12's commit hash in the audit
+PASS13   Split an array's points across its Dynamic members
 ```
 
 ---
@@ -69,7 +72,7 @@ commit on `develop` or `main`.
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~9 min, 2835 tests as of pass 12
+python -m pytest -q                 # ~10 min, 2853 tests as of pass 13
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
                 tests/test_data_loader.py tests/test_powers_section.py -q
 ```
@@ -273,7 +276,7 @@ cheapest value.
 
 ---
 
-## 5. Passes 2–11 — what was built
+## 5. Passes 2–13 — what was built
 
 ### A. Base cost by configuration (`734a45d`)
 
@@ -493,7 +496,7 @@ every alternate cost 1 and a Dynamic array was priced as an ordinary one.
 **24 PP**, and the sheet splits the same 24 across the cards as 21 / 2 / 1.
 
 **The runtime half was split out as §6K** rather than half-built — see there for why, and
-for the two designs already weighed.
+for the two designs already weighed. It landed in pass 13; see §5Q.
 
 ### K. Affliction's imposed effect (pass 8)
 
@@ -784,7 +787,76 @@ it is the second time this branch has paid for it.
 uneditable; a Morph 2 with Metamorph 3 shows "Alternate forms (3) — 20 PP each" for a
 20-point wielder. All three are the numbers the book prints.
 
-**§6K is now the only item left inside this branch.**
+**§6K was then the only item left inside this branch.**
+
+### Q. Dynamic Alternate Effects — the point pool (pass 13)
+
+**The rules (p101).** Dynamic members share the array's point pool and "operate at the
+same time, at reduced effectiveness"; the split is decided "once per turn as a free
+action". The worked example is the acceptance test: "a character can maintain the Dynamic
+Alternate Effect for their Flight so long as at least 2 Power Points are assigned to it,
+but their Flight speed is then limited to 1 rank of Flight."
+
+**Now.** Pass 7 charged the dearer price and stopped there. A Dynamic member behaved at
+runtime exactly like an ordinary alternate: dimmed unless it was the one selected member,
+and never at a reduced rank.
+
+**The design §6K said to weigh was "derive at read time" against "push into
+`current_rank` on edit", and the first won once the blocker turned out to be avoidable.**
+The blocker recorded was that `effect_current_rank(effect)` takes the effect alone, so
+threading the array in meant a signature change across ~15 call sites. What that missed is
+that the *allocation can live on the member itself*, and that the member can then be
+**found** rather than passed: `dynamic_rank_cap` walks the wielder's own powers tree by
+identity. So the signature grew by two optional arguments the callers already had in hand
+(`game_data`, `char`) and ten call sites gained them; nothing else moved.
+
+**The arithmetic is the audit's own, and the book's example is the test.** `pool` is the
+base member's full cost (`array_pool_points`), and a member allocated `n` runs at
+`floor(rank x n / its own full cost)` (`dynamic_rank_share`). Flight 5 costs 10, so `n = 2`
+gives 1 — exactly what p101 prints. **Zero is a real answer here and nowhere else**: a
+member below its minimum is simply off, which needed no special case, and
+`effect_current_rank`'s own floor of 1 is untouched for every other caller.
+
+**The layering problem was real and is solved by injection, not by an import.** Working a
+share out needs point costs; `powers_cost` imports `runtime`, so `runtime` cannot import it
+back. `runtime` therefore declares the hook and `powers_cost` *installs* it at import
+(`set_dynamic_rank_cap`). Uninstalled, every rank reads as it did before the pool existed —
+the same bargain `PATTERN_BEHAVIOURS` and `GATE_KINDS` already document, and the reason
+`effect_current_rank` could stay the single source. That is what makes the whole sheet
+follow from one number: the save DC, the Toughness a Dynamic Protection grants, the speed a
+Dynamic Flight flies at, the Movement block's own row and the card's title are all it.
+
+**`live_powers` was the other half.** `live_array_children` is new and is where the array's
+liveness question now lives: the selected member as before, *unless* any Dynamic member
+holds a share, in which case every member holding one runs together and the selection stops
+deciding. It reads only whether a share is present, never its size, so it needs no costs;
+a share too small to buy a rank leaves a member live at rank 0, which contributes nothing
+and reaches the same place. Clearing the split restores the old behaviour exactly, which is
+also what an array saved before this does on load.
+
+**The editor is a dialog on the group's own header**, `Split points (n/pool)`. It is a
+*free action at the table*, not a build decision, so unlike the Dynamic switch beside it the
+button **survives the lock** — the same class of control as the card click that selects an
+array's live alternate. Each row's maximum is what the other rows have left, which is how
+"the split may not exceed the pool" is enforced without a warning to read; each row names
+the rank its share buys ("Flight 1 of 5") rather than a fraction to convert; and a zero row
+is stored as *no share at all*, so clearing the split leaves the file byte-for-byte what it
+was.
+
+**Two things were deliberately left.** A member is found on the *character*, so a power in
+the Power Constructor is never capped — right, since nothing is dialled there either. And
+the split exists only at the **group** level: an array of one power's own effects has no
+runtime member selection at all today (every effect of an array-structured power is live at
+once), so a pool there would be built on sand. Both are recorded in §7.
+
+**Checked in the app, and it found the bug this pass would otherwise have shipped.** The
+book's own Empyrean array, split 16/2/2 out of 20: all three cards lit at once rather than
+one lit and two dimmed, reading Create 8, Flight 1 and Protection 2 (Toughness +2), with
+the header showing `Split points (20/20)`. The Flight card, though, still printed
+`Speed: 250 feet/round` — its rank-5 speed beside a title reading "Flight 1". The `measure`
+row and the `range: "Rank"` substitution in `effect_stat_rows` were the last two readouts
+built from `effect.rank` rather than the live one; both now read `effect_live_rank`, which
+also fixes them for an ordinary rank dial, where they had been wrong all along.
 
 ### Mechanisms now available — reuse these
 
@@ -822,6 +894,11 @@ A later pass should reach for these rather than inventing a parallel one.
 | A nested `Character` in a `config` dict | `store_sub_build` / `sub_build_character` | persistence, undo and session sync for free — `config` is written verbatim and undo snapshots the whole model as JSON |
 | `SystemInfoSection.set_budget_fixed` | `sections/system_info.py` | show Power Level and the point pool read-only for a sheet whose budget is handed to it; sticky against `set_locked` |
 | `SubBuildWindow` | `ui/sub_build_window.py` | the ordinary sheet pointed at something that is not a file — it commits to its owner instead of saving |
+| `set_dynamic_rank_cap` | `core/rules/runtime.py`, installed by `powers_cost` | an **injected** hook, for a rule the lowest layer must obey but cannot compute — declared where it is read, filled in from the layer that has the numbers, and a no-op until it is |
+| `dynamic_rank_share` / `array_pool_points` | `powers_cost.py` | a member's share of a pooled budget turned into a rank, and the pool it draws on — the shape of any "spend points at the table to buy effectiveness now" rule |
+| `live_array_children` | `runtime.py` | the one place an array decides *which* of its members are running; anything that changes that answer belongs here rather than in `live_powers` |
+| `effect_current_rank(effect, game_data, char)` | `runtime.py` | the single source for "what rank is this running at" — reading a new restriction *there* is what makes the DC, the trait boosts, the speeds, the readouts and the card title follow from one number |
+| `DynamicPoolDialog` | `ui/sections/dynamic_pool_dialog.py` | a runtime editor that survives the lock, with each row bounded by what the others left — the pattern for any "hand out a budget at the table" control |
 
 ---
 
@@ -858,7 +935,11 @@ should probably be its own branch after this one merges.
 
 ### J. "Has config" is a poor proxy for "may be taken twice" — **done in pass 5, see §5H**
 
-### K. Dynamic Alternate Effects — the point pool
+### K. Dynamic Alternate Effects — the point pool — **done in pass 13, see §5Q**
+
+*Kept below as it was written, because pass 13 answered its open question the other way:
+the blocker was avoidable, and the "wide signature change" turned out to be two optional
+arguments the callers already held.*
 
 The half of §6A that pass 7 deliberately did **not** build. The price is right; the pool is
 not modelled at all, so a Dynamic member still behaves at runtime exactly like an ordinary
@@ -1002,6 +1083,31 @@ Things a later pass will trip over if it does not know them.
    `test_the_ruleset_marks_exactly_the_repeatable_modifiers` would catch a seventh
    repeatable being added — but not this pairing specifically.
 
+19. **A pooled split lives only at the group level.** `dynamic_points` is on `Power` and
+   `PowerGroup`, not on `PowerEffectInstance`, so an array of a *single power's own
+   effects* is priced for Dynamic members but cannot split its pool. The reason is one
+   level down: an effect-level array has **no runtime member selection at all** — nothing
+   checks "is this the selected effect", so every effect of an array-structured power is
+   live simultaneously today, Dynamic or not. Building a pool on top of that would ration
+   ranks in an array that is already, wrongly, running everything. Fixing the selection
+   first is the honest order, and it is a gap that predates this whole job.
+20. **A split array's ordinary members go dark.** `live_array_children` gives the pool
+   priority: once any Dynamic member holds a share, the array's *non*-Dynamic alternates
+   are not running, since they cannot hold a share and the whole pool is spoken for. That
+   is the rules-correct reading and the dialog says so in as many words, but it does mean
+   the way back to an ordinary alternate is "Clear the split" rather than clicking its
+   card — and clicking one still moves `active_child_id`, silently, until the split is
+   cleared.
+21. **The split does not follow a rebuild.** A share is an absolute number of points, so
+   editing the array — changing the base's rank, adding a member — moves the pool
+   underneath a split that was already made. Nothing renormalises: the shares stay put and
+   may now sum to less than the pool (legal, just wasteful) or, if the base got *cheaper*,
+   to more than it. The dialog re-bounds every row the moment it is reopened, so the fix
+   is one visit; a rebuild that quietly rescaled a player's split would be worse.
+22. **`effect_current_rank` can now return 0.** Only through the pool, and only for a
+   member below its minimum — but every reader of it should be checked against that
+   before assuming a rank is at least 1. The dial's own floor is unchanged.
+
 ---
 
 ## 8. Suggested order for the remaining passes
@@ -1017,7 +1123,7 @@ Things a later pass will trip over if it does not know them.
 7. ~~**§6G Improvised Effects**~~ and ~~**§6F countering**~~ — done in passes 10 and 11
    (§5N, §5O).
 8. ~~**§6M the sub-builds**~~ — done in pass 12 (§5P).
-9. **§6K the Dynamic point pool** — the last item inside this branch, and the only one
-   left that changes an existing *read* path rather than adding one. §5P settled the
-   shape of a live budget spent across builds, which is what it wanted a base for.
+9. ~~**§6K the Dynamic point pool**~~ — done in pass 13 (§5Q). **§6 is now empty of
+   anything this branch owns**, so the branch is ready to merge into `develop` with
+   `--no-ff` whenever the user says the job is done, and this file can go with it.
 10. **§6H Extra Effort and power stunts** — its own branch, after this one merges.

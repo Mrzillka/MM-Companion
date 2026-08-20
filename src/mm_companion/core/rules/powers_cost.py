@@ -25,7 +25,12 @@ from .appliers import (
     trait_category,
 )
 from .derived import effective_ability
-from .runtime import boost_allocations, config_trait_allocation, effect_current_rank
+from .runtime import (
+    boost_allocations,
+    config_trait_allocation,
+    effect_current_rank,
+    set_dynamic_rank_cap,
+)
 from .size import effective_size_rank
 from .trait_rates import trait_allocation_cost, trait_rate
 
@@ -823,7 +828,7 @@ def effect_effective_rank(
     """
 
     return (
-        effect_current_rank(effect)
+        effect_current_rank(effect, game_data, char)
         + effect_rank_trait_bonus(effect, game_data, char)
         + effect_size_rank_shift(effect, game_data, char)
     )
@@ -1241,6 +1246,108 @@ def array_members_cost(members: Sequence[tuple[int, bool]], game_data: GameData)
     return total
 
 
+# --- the Dynamic point pool (p101) -----------------------------------------------------
+# Ordinary alternates are mutually exclusive; Dynamic ones instead "share the power
+# points of the array, allowing them to operate at the same time, but at reduced
+# effectiveness", split "once per turn as a free action". The split itself is runtime
+# state on the member (``dynamic_points``); everything below turns it into a rank.
+
+
+def array_pool_points(group: PowerGroup, game_data: GameData, char: Character | None = None) -> int:
+    """The point pool an ``array`` group's Dynamic members share out between them.
+
+    The array's points *are* its base member's full cost — every other member is bought
+    for a flat point or two on top (:func:`array_members_cost`), so the pool a Dynamic
+    split draws on is what the costliest child costs, which is the same number
+    :func:`group_array_base_index` picks the base by. Zero for anything that is not a
+    real array.
+    """
+
+    if group.mode != STRUCTURE_ARRAY or len(group.children) < 2:
+        return 0
+    return max(node_cost(child, game_data, char) for child in group.children)
+
+
+def dynamic_rank_share(rank: int, points: int, full_cost: int) -> int:
+    """What ``points`` of an array's pool buys of a member bought at ``rank``.
+
+    Proportional and rounded down: ``rank x points / full_cost``. The book's own worked
+    example is the check — a Flight 5 costs 10 points, so the 2 points assigned to it buy
+    ``5 x 2 / 10 = 1``, and it is "limited to 1 rank of Flight" (p101).
+
+    **Zero is a real answer**, unlike everywhere else a rank is computed: a member
+    holding less than one rank's worth is below the minimum the rules give it and is
+    simply not running, which needs no separate off switch. A member holding its whole
+    cost gets its whole rank, and one somehow holding more is capped there — a share
+    cannot buy ranks nobody bought.
+    """
+
+    if full_cost <= 0 or points <= 0 or rank <= 0:
+        return 0
+    return max(0, min(rank, rank * points // full_cost))
+
+
+def allocated_array_members(nodes: Sequence[PowerNode]) -> list[tuple[PowerNode, int]]:
+    """Every array member currently holding a share of its array's pool, with the share.
+
+    Walks the whole powers tree, so a nested array inside another array is found too.
+    Empty for every character nobody has split a pool on, which is what keeps
+    :func:`dynamic_rank_cap` free on the ordinary sheet: the walk is a list traversal and
+    no point cost is computed until a share is actually found.
+    """
+
+    found: list[tuple[PowerNode, int]] = []
+    for node in nodes:
+        if not isinstance(node, PowerGroup):
+            continue
+        if node.mode == STRUCTURE_ARRAY:
+            for child in node.children:
+                if child.dynamic and child.dynamic_points is not None:
+                    found.append((child, int(child.dynamic_points)))
+        found.extend(allocated_array_members(node.children))
+    return found
+
+
+def _member_effects(node: PowerNode) -> list[PowerEffectInstance]:
+    """Every effect under one array member — its own, or its whole subtree's."""
+
+    if isinstance(node, PowerGroup):
+        return [e for child in node.children for e in _member_effects(child)]
+    return list(node.effects)
+
+
+def dynamic_rank_cap(
+    effect: PowerEffectInstance, game_data: GameData, char: Character
+) -> int | None:
+    """The rank the Dynamic pool holds one effect to, or ``None`` when no pool reaches it.
+
+    The resolver :mod:`.runtime` asks through :func:`~.runtime.set_dynamic_rank_cap` —
+    installed from here because the answer needs point costs, and cost sits a layer above
+    runtime rather than beside it. Finding the effect is a walk over the character's own
+    powers tree by identity: a share is held by a *member* of an array (a whole card or a
+    whole sub-group), and it holds every effect beneath it down by the same proportion,
+    which is what "at reduced effectiveness" means for a member with several effects.
+
+    A member nested inside two allocated arrays is held to the **tighter** of the two
+    caps. That is the honest reading of two pools each rationing it, and it is the only
+    combination that cannot let an outer split hand back ranks an inner one withheld.
+
+    The member is priced **without the wielder** on purpose. Passing ``char`` would let a
+    legacy Strength-Based selection reach :func:`~.derived.effective_ability`, which asks
+    what the character's powers are contributing, which asks this — a loop. The pool is a
+    share of what the array was *bought* for, so the character-free price is also the
+    right one.
+    """
+
+    cap: int | None = None
+    for member, points in allocated_array_members(char.powers):
+        if not any(e is effect for e in _member_effects(member)):
+            continue
+        share = dynamic_rank_share(effect.rank, points, node_cost(member, game_data))
+        cap = share if cap is None else min(cap, share)
+    return cap
+
+
 def array_base_index(power: Power, game_data: GameData, char: Character | None = None) -> int:
     """Index of an array's *base* effect — the costliest one (ties break to the first).
 
@@ -1469,3 +1576,9 @@ def node_display_cost(
         if node.dynamic:
             return node_cost(node, game_data, char) + array_dynamic_primary_cost(game_data)
     return node_cost(node, game_data, char)
+
+
+# The pool's arithmetic needs point costs, so runtime cannot import it; it is handed over
+# here instead (see :func:`~.runtime.set_dynamic_rank_cap`). Importing this module is what
+# turns the pool on, and :mod:`mm_companion.core.rules` always does.
+set_dynamic_rank_cap(dynamic_rank_cap)

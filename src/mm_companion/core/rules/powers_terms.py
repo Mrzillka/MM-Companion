@@ -708,7 +708,7 @@ def resolve_stat_display(
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base_effect is None:
         return raw_value
-    own_rank = effect_current_rank(effect)
+    own_rank = effect_current_rank(effect, game_data, char)
     if field_key == "range" and raw_value == "Rank":
         return game_data.measurements.label("distance", own_rank) or "Rank"
     # The dialled, hard-capped rank — the same one the roll numbers are built from, so
@@ -884,7 +884,7 @@ def effect_base_attack_bonus(
     elif char is not None:
         base = effective_ability(char, game_data, game_data.system.trait_keys.attack)
     else:
-        return effect_current_rank(effect)
+        return effect_current_rank(effect, game_data, char)
     return base + _effective_stats(effect, game_data)[3].check_bonus
 
 
@@ -1048,7 +1048,7 @@ def _roll_numbers(
     # vs. …" phrase instead uses the effect's own rank. A linked combat focus
     # overrides the Attack via ``attack_bonus``. Without either we fall back to the
     # effect rank so a context-free summary still reads.
-    own_rank = effect_current_rank(effect)
+    own_rank = effect_current_rank(effect, game_data, char)
     if attack_bonus is not None:
         attack = attack_bonus
     elif char is not None:
@@ -1108,10 +1108,14 @@ def effect_stat_rows(
     base, stats, change, impact = _effective_stats(effect, game_data, char)
 
     # A "Rank" range means "a distance equal to the effect's rank" — show the number
-    # (in both base and current, so it isn't mistaken for a modifier change).
+    # (in both base and current, so it isn't mistaken for a modifier change). The rank
+    # read is the one the effect is **resolving** at, not the one it was bought at, for
+    # the reason the save DC beside it is: a power dialled down, or held down by its
+    # share of a Dynamic array's pool, does not still reach as far as it was built to.
+    live_rank = effect_live_rank(effect, game_data, char)
     for scope in (base, stats):
         if scope.get("range") == "Rank":
-            scope["range"] = game_data.measurements.label("distance", effect.rank) or "Rank"
+            scope["range"] = game_data.measurements.label("distance", live_rank) or "Rank"
 
     # Resolve the check/resistance phrases to concrete numbers: the save DC is
     # ``base + effective rank`` (effective rank folds in a Strength-Based bonus), and
@@ -1168,7 +1172,10 @@ def effect_stat_rows(
     if dc is not None and not check_shown and not stats["resistance"]:
         rows.append(EffectStat("effect_dc", "Effect DC", "", f"DC {dc}", ""))
     if base_effect.measure:
-        value = _measure_value(base_effect.measure, effect.rank, game_data)
+        # Live, like the range above: a Flight 5 held to 1 rank by its share of a
+        # Dynamic array's pool flies at 1 rank's speed, and a card printing the speed it
+        # was bought at beside a title reading "Flight 1" contradicts itself.
+        value = _measure_value(base_effect.measure, live_rank, game_data)
         if value:
             rows.append(EffectStat("measure", base_effect.measure.label, "", value, ""))
     allocation_field = trait_allocation_field(base_effect)
@@ -1188,7 +1195,7 @@ def effect_stat_rows(
     # Enhanced Trait raises several at once, each at its own allocated rank.
     raised = [
         f"{trait_display_name(game_data, target)} +{ranks}"
-        for target, ranks in resolved_trait_allocation(effect, base_effect)
+        for target, ranks in resolved_trait_allocation(effect, base_effect, game_data, char)
         if trait_category(game_data, target)
     ]
     if raised:
@@ -1300,7 +1307,7 @@ def _readout_size_table(
     this is the bought rank there and the build preview is unchanged.
     """
 
-    rank = effect_current_rank(effect)
+    rank = effect_current_rank(effect, game_data, char)
     data = readout.data
     sign = int(data.get("sign", 1))
     if rank <= 0:

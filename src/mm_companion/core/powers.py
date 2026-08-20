@@ -292,6 +292,16 @@ class Power:
     exchange for sharing the pool with the other Dynamic members instead of switching
     them off. Build state, and written only when set.
 
+    ``dynamic_points`` is how much of that shared pool this member currently holds —
+    *runtime* state, the free action the rules let a character take once per turn
+    (p101). ``None``, the default, means it holds no share at all and the array behaves
+    as it always has: exactly one selected member, running at full rank. A number
+    reduces the member's every rank in proportion to the share
+    (:func:`mm_companion.core.rules.dynamic_rank_cap`) and makes it live alongside its
+    fellow Dynamic members rather than instead of them
+    (:func:`mm_companion.core.rules.live_powers`). Written only when set, so an array
+    saved before the pool existed loads with no allocation and behaves identically.
+
     An attack-skill link is per-effect now (see
     :attr:`PowerEffectInstance.attack_skill`), not whole-power.
 
@@ -314,6 +324,7 @@ class Power:
     item_present: bool = True
     array_active: bool = True
     dynamic: bool = False
+    dynamic_points: int | None = None
     cost_override: int | None = None
 
     def to_dict(self) -> dict:
@@ -329,6 +340,8 @@ class Power:
         }
         if self.dynamic:
             data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
         if self.cost_override is not None:
             data["cost_override"] = self.cost_override
         # The runtime switches, written only when off — see the class docstring.
@@ -357,6 +370,7 @@ class Power:
         # dangles from the fresh id.
         power_id = raw.get("id") or uuid4().hex
         raw_cost = raw.get("cost_override")
+        raw_share = raw.get("dynamic_points")
         return cls(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
@@ -370,6 +384,7 @@ class Power:
             item_present=bool(raw.get("item_present", True)),
             array_active=bool(raw.get("array_active", True)),
             dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=None if raw_share is None else int(raw_share),
             cost_override=None if raw_cost is None else int(raw_cost),
         )
 
@@ -416,6 +431,9 @@ class PowerGroup:
     sub-group and still be priced as one. It says nothing about this group's own
     children; each of those carries its own.
 
+    ``dynamic_points`` is the same runtime share :attr:`Power.dynamic_points` is, for
+    when the member of an array is a whole sub-group rather than one card.
+
     ``name`` is an optional player-given title for the group; when empty the UI falls
     back to a label derived from the :attr:`mode`.
     """
@@ -426,6 +444,7 @@ class PowerGroup:
     active_child_id: str = ""
     name: str = ""
     dynamic: bool = False
+    dynamic_points: int | None = None
 
     def to_dict(self) -> dict:
         data = {
@@ -439,6 +458,8 @@ class PowerGroup:
             data["active_child_id"] = self.active_child_id
         if self.dynamic:
             data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
         return data
 
     @classmethod
@@ -451,6 +472,9 @@ class PowerGroup:
             active_child_id=str(raw.get("active_child_id", "")),
             name=raw.get("name", ""),
             dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=(
+                None if raw.get("dynamic_points") is None else int(raw["dynamic_points"])
+            ),
         )
 
 

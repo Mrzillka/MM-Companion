@@ -27,14 +27,18 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_base_index,
     array_dynamic_primary_cost,
+    array_pool_points,
     configuration_by_id,
     configurations_for_effect,
     counter_rolls,
+    dynamic_rank_cap,
+    dynamic_rank_share,
     effect_action_at_most,
     effect_allocation_used,
     effect_attack_skill_bonus,
     effect_cost_breakdown,
     effect_cost_formula,
+    effect_current_rank,
     effect_effective_rank,
     effect_game_terms,
     effect_is_active,
@@ -54,6 +58,7 @@ from mm_companion.core.rules import (
     group_array_base_index,
     imposable_effects,
     imposed_effect_cost,
+    live_array_children,
     live_powers,
     modifier_label,
     node_cost,
@@ -3288,3 +3293,172 @@ def test_a_banded_flaw_does_not_discount_a_strength_based_fold_in() -> None:
     # Both fold in the same 4 ranks at the same undiscounted rate; only the bought
     # ranks 9-12 differ, so the gap is exactly the 4 points the band saves.
     assert effect_total_cost(plain, data, char) - effect_total_cost(banded, data, char) == 4
+
+
+# --- the Dynamic point pool (p101) ----------------------------------------------------
+
+
+def _empyrean() -> tuple[Character, PowerGroup, Power, Power, Power]:
+    """p101's own array: a Dynamic Create base, a Dynamic Flight, an ordinary Protection."""
+
+    create = Power(
+        name="Constructs", effects=[PowerEffectInstance("create", rank=10)], dynamic=True
+    )
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=5)], dynamic=True)
+    field = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=8)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[create, flight, field])
+    char = Character()
+    char.powers = [group]
+    return char, group, create, flight, field
+
+
+def test_the_pool_is_what_the_arrays_base_member_costs() -> None:
+    data = load_game_data()
+    _char, group, create, _flight, _field = _empyrean()
+    # Every other member is bought for a flat point or two on top, so the points the
+    # array actually holds are its costliest member's.
+    assert array_pool_points(group, data) == node_cost(create, data) == 20
+    # Not an array, no pool.
+    assert array_pool_points(PowerGroup(children=list(group.children)), data) == 0
+
+
+def test_the_books_own_dynamic_flight_is_held_to_one_rank() -> None:
+    data = load_game_data()
+    char, _group, _create, flight, _field = _empyrean()
+    # p101: "a character can maintain the Dynamic Alternate Effect for their Flight so
+    # long as at least 2 Power Points are assigned to it, but their Flight speed is then
+    # limited to 1 rank of Flight."
+    assert node_cost(flight, data) == 10
+    assert dynamic_rank_share(5, 2, 10) == 1
+    flight.dynamic_points = 2
+    assert dynamic_rank_cap(flight.effects[0], data, char) == 1
+    assert effect_current_rank(flight.effects[0], data, char) == 1
+    # And with no share at all nothing is capped, which is every array saved before this.
+    flight.dynamic_points = None
+    assert dynamic_rank_cap(flight.effects[0], data, char) is None
+    assert effect_current_rank(flight.effects[0], data, char) == 5
+
+
+def test_a_share_too_small_for_a_rank_leaves_the_member_off() -> None:
+    data = load_game_data()
+    char, _group, create, flight, _field = _empyrean()
+    create.dynamic_points = 19
+    flight.dynamic_points = 1  # a tenth of Flight's 10 points buys half a rank
+    assert dynamic_rank_share(5, 1, 10) == 0
+    assert effect_current_rank(flight.effects[0], data, char) == 0
+    # Zero is only ever reachable through the pool - the dial's own floor is still 1.
+    flight.dynamic_points = None
+    flight.effects[0].current_rank = 0
+    assert effect_current_rank(flight.effects[0], data, char) == 1
+
+
+def test_dynamic_members_run_alongside_each_other_once_the_pool_is_split() -> None:
+    char, group, create, flight, field = _empyrean()
+    # Untouched, an array is what it always was: exactly one live member.
+    assert live_array_children(group) == [create]
+    assert [p.name for p in live_powers(char.powers)] == ["Constructs"]
+
+    create.dynamic_points = 18
+    flight.dynamic_points = 2
+    assert live_array_children(group) == [create, flight]
+    assert [p.name for p in live_powers(char.powers)] == ["Constructs", "Flight"]
+    # The ordinary alternate holds no share and cannot: it is not Dynamic.
+    assert all(child is not field for child in live_array_children(group))
+
+    # Handing the pool back returns the array to its selected alternate at full rank.
+    create.dynamic_points = None
+    flight.dynamic_points = None
+    assert live_array_children(group) == [create]
+
+
+def test_a_split_pool_scales_the_bonus_a_member_puts_on_the_sheet() -> None:
+    data = load_game_data()
+    char, _group, _create, _flight, field = _empyrean()
+    field.dynamic = True  # a Dynamic Protection 8, costing 8
+    assert power_trait_bonuses(char, data)["resistance"] == {}  # not the selected member
+
+    field.dynamic_points = 4
+    assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 4
+    field.dynamic_points = 8
+    assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 8
+
+
+def test_a_split_pool_lowers_the_rank_an_attack_resolves_at() -> None:
+    data = load_game_data()
+    bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    other = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[bolt, other])
+    char = Character()
+    char.powers = [group]
+    assert effect_effective_rank(bolt.effects[0], data, char) == 10
+    bolt.dynamic_points = 5
+    other.dynamic_points = 5
+    assert effect_effective_rank(bolt.effects[0], data, char) == 5
+    # Cost is untouched: dialling a power down mid-fight refunds nothing.
+    assert node_cost(group, data) == 10 + 1 + 2  # base + its Dynamic rank + a Dynamic alternate
+
+
+def test_a_share_never_buys_more_rank_than_was_bought() -> None:
+    data = load_game_data()
+    char, _group, create, _flight, _field = _empyrean()
+    create.dynamic_points = 20  # the whole pool, which is exactly its own cost
+    assert effect_current_rank(create.effects[0], data, char) == 10
+    assert dynamic_rank_share(10, 99, 20) == 10
+
+
+def test_a_member_inside_two_split_arrays_takes_the_tighter_cap() -> None:
+    data = load_game_data()
+    inner_a = Power(name="A", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    inner_b = Power(name="B", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    inner = PowerGroup(mode=STRUCTURE_ARRAY, children=[inner_a, inner_b], dynamic=True)
+    outer_other = Power(name="C", effects=[PowerEffectInstance("damage", rank=12)], dynamic=True)
+    outer = PowerGroup(mode=STRUCTURE_ARRAY, children=[outer_other, inner])
+    char = Character()
+    char.powers = [outer]
+
+    inner_a.dynamic_points = node_cost(inner_a, data) // 2  # half of A's own cost
+    inner.dynamic_points = node_cost(inner, data)  # the outer pool hands it everything
+    assert effect_current_rank(inner_a.effects[0], data, char) == 5
+
+
+def test_the_pool_is_ignored_without_a_wielder_to_find_the_member_in() -> None:
+    data = load_game_data()
+    _char, _group, _create, flight, _field = _empyrean()
+    flight.dynamic_points = 2
+    # The Power Constructor edits a power that is on no character; nothing is dialled
+    # there and nothing is pooled, so the bought rank is what it shows.
+    assert effect_current_rank(flight.effects[0]) == 5
+    assert effect_current_rank(flight.effects[0], data) == 5
+
+
+def test_a_held_down_member_prints_the_speed_it_is_actually_flying_at() -> None:
+    data = load_game_data()
+    char, _group, _create, flight, _field = _empyrean()
+    rows = {row.key: row.value for row in effect_stat_rows(flight.effects[0], data, char)}
+    full = rows["measure"]
+
+    flight.dynamic_points = 2
+    held = {row.key: row.value for row in effect_stat_rows(flight.effects[0], data, char)}
+    # A card titled "Flight 1" beside a speed bought at rank 5 contradicts itself.
+    assert held["measure"] != full
+    assert held["measure"] == _measure_at(data, 1)
+
+
+def _measure_at(data, rank: int) -> str:
+    """What the Flight speed row reads for a plain Flight bought at ``rank``."""
+
+    plain = PowerEffectInstance("flight", rank=rank)
+    return {row.key: row.value for row in effect_stat_rows(plain, data)}["measure"]
+
+
+def test_a_share_round_trips_and_is_written_only_when_set() -> None:
+    power = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=8)], dynamic=True)
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[power])
+    assert "dynamic_points" not in power.to_dict()
+    assert "dynamic_points" not in group.to_dict()
+
+    power.dynamic_points = 3
+    group.dynamic_points = 0
+    restored = PowerGroup.from_dict(group.to_dict())
+    assert restored.dynamic_points == 0
+    assert restored.children[0].dynamic_points == 3

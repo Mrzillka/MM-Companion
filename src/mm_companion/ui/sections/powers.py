@@ -56,6 +56,7 @@ from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -85,12 +86,14 @@ from mm_companion.core.rules import (
     active_array_child,
     array_alternate_cost,
     array_dynamic_primary_cost,
+    array_pool_points,
     counter_rolls,
     debilitated_traits,
     effect_current_rank,
     effect_stands,
     group_array_base_index,
     leaf_powers,
+    live_array_children,
     live_powers,
     node_display_cost,
     power_display_name,
@@ -115,6 +118,7 @@ from mm_companion.ui.cards import (
     effects_block,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -142,12 +146,33 @@ _CLICK_HINTS = {
     "select": "Click this card to make it the array's live alternate; its siblings switch off.",
 }
 
+# The same click while the array's points are split across its Dynamic members, when
+# "its siblings switch off" has stopped being true: the split decides who is running,
+# so selecting one member no longer switches anything off (see live_array_children).
+_SPLIT_SELECT_HINT = (
+    "This array's points are split across its Dynamic members, so they are all running "
+    "at once — selecting a member only matters once the split is cleared."
+)
+
 # What each group mode is called on its title bar.
 _MODE_LABELS = {
     STRUCTURE_INDEPENDENT: "Group of powers",
     STRUCTURE_ARRAY: "Group of alternate effects",
     STRUCTURE_LINKED: "Group of linked powers",
 }
+
+
+def _pool_is_split(group: PowerGroup) -> bool:
+    """Whether any of this array's Dynamic members is currently holding a share.
+
+    The one question that decides whether an array behaves as a set of mutually
+    exclusive alternates or as a pool running several at once, so the hint, the dimming
+    and the header button all ask it here rather than each spelling it out.
+    """
+
+    return group.mode == STRUCTURE_ARRAY and any(
+        child.dynamic and (child.dynamic_points or 0) > 0 for child in group.children
+    )
 
 
 def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
@@ -780,6 +805,10 @@ class PowersSection(TitledSection):
         if dynamic is not None:
             row.addWidget(dynamic)
 
+        split = self._pool_button(group)
+        if split is not None:
+            row.addWidget(split)
+
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
         row.addWidget(cost)
@@ -868,6 +897,39 @@ class PowersSection(TitledSection):
             box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return box
 
+    def _pool_button(self, group: PowerGroup) -> QWidget | None:
+        """The "Split points" button on an array that has a Dynamic member, else ``None``.
+
+        Deciding the split is a *free action* the character takes at the table (p101),
+        not a build decision, so — unlike the Dynamic switch beside it — the button
+        survives the lock: it is the same kind of control as the card click that selects
+        an array's live alternate.
+        """
+
+        if group.mode != STRUCTURE_ARRAY or not any(c.dynamic for c in group.children):
+            return None
+        button = QPushButton("Split points")
+        pool = array_pool_points(group, self._data, self._character)
+        assigned = sum(c.dynamic_points or 0 for c in group.children if c.dynamic)
+        if assigned:
+            button.setText(f"Split points ({assigned}/{pool})")
+        button.setToolTip(
+            "Share this array's points across its Dynamic members, which then run at "
+            "the same time at reduced effectiveness."
+        )
+        button.clicked.connect(lambda _checked=False, g=group: self._split_pool(g))
+        return button
+
+    def _split_pool(self, group: PowerGroup) -> None:
+        """Open the split editor, and rebuild on OK — every member's ranks just moved."""
+
+        dialog = DynamicPoolDialog(group, self._data, self._character, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply_to()
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+
     def _set_dynamic(self, node: PowerNode, on: bool) -> None:
         """Mark an array member Dynamic (or not) and reprice the tree."""
         node.dynamic = on
@@ -950,7 +1012,10 @@ class PowersSection(TitledSection):
     def _node_is_inactive(self, node: PowerNode, parent: PowerGroup | None, role: str) -> bool:
         """Whether the card should be drawn in its dimmed, switched-off state."""
         if role == "select":
-            return active_array_child(parent) is not node
+            # Which member is *running* rather than which is selected: once the pool is
+            # split every Dynamic member holding a share is live at once, so dimming all
+            # but the selected one would contradict the numbers on the sheet.
+            return not any(child is node for child in live_array_children(parent))
         if role == "toggle":
             if isinstance(node, PowerGroup):
                 return not self._group_is_active(node)
@@ -975,8 +1040,15 @@ class PowersSection(TitledSection):
         if not (role and interactive):
             return
         card.set_clickable(True)
-        card.setToolTip(_CLICK_HINTS[role])
+        card.setToolTip(self._click_hint(role, parent))
         card.clicked.connect(lambda n=node, p=parent, r=role: self._on_card_clicked(n, p, r))
+
+    def _click_hint(self, role: str, parent: PowerGroup | None) -> str:
+        """What to tell the player a click on this card will do."""
+
+        if role == "select" and parent is not None and _pool_is_split(parent):
+            return _SPLIT_SELECT_HINT
+        return _CLICK_HINTS[role]
 
     def _show_activation(
         self, card: DraggableCard, node: PowerNode, parent: PowerGroup | None
@@ -1229,7 +1301,7 @@ class PowersSection(TitledSection):
             dial = _RankDial(
                 caption,
                 effect.rank,
-                effect_current_rank(effect) if standing else 0,
+                effect_current_rank(effect, self._data, self._character) if standing else 0,
                 self._dial_labels(steps),
                 interactive,
             )

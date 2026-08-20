@@ -43,6 +43,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   model**, so opening a character repopulates characteristics, conditions, the
   image, and the advantage table (abilities/resistances/skills/profile already
   seeded).
+- **Two rules changes repriced saved characters, with no migration and no warning.** The
+  Enhanced Senses tier corrections and Removable moving to its real per-5-points formula
+  both moved what an existing build costs when the app was next opened on it. Removable's
+  direction is one-way — the discount scales with the power instead of being a flat 1/2/4,
+  so a Removable power *above* 5 points got cheaper (a 98-point armour by 20 rather than by
+  1) and one at or below 5 points did not move at all. Both were applied deliberately, since
+  the old numbers were wrong; a "your build changed" notice on load is still the thing that
+  does not exist, and is what a third such correction should build.
 - **One thing is deliberately left out of the file.** A *power stunt* — a temporary
   alternate effect bought with Extra Effort (see [the powers notes](powers.md)) — is
   scoped to the scene it was invented in, so `save_character` runs the serialized powers

@@ -21,9 +21,10 @@ Three things are modelled here, and nothing else is:
 
 The rest are table business — an extra action, a renewed attempt, another resistance
 check — and the app's honest contribution to those is to charge the fatigue and write the
-sentence down. **Power stunts are the deliberate gap**: a stunt is a temporary Alternate
-Effect, and building one is its own pass (``POWERS-AUDIT.md`` §6H); using this module for
-one charges the effort and names the effect, which is what the GM adjudicates from.
+sentence down. The **power stunt** is the exception among them: it is a whole temporary
+Alternate Effect, so this module charges the effort and names the effect it was taken from
+while the *build* is the Powers block's (:attr:`~mm_companion.core.powers.Power.stunt_of`,
+and :meth:`~mm_companion.ui.sections.powers.PowersSection._open_stunt`).
 
 Nothing here is a **cost**: Extra Effort is spent at the table, not bought, so no point
 total, no Power Level check and no validation warning ever sees it.

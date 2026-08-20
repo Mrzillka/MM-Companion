@@ -79,14 +79,17 @@ from mm_companion.core.powers import (
     PowerGroup,
     PowerNode,
     power_is_homerule,
+    power_is_stunt,
 )
 from mm_companion.core.rules import (
     PIN_POWER,
+    USE_POWER_STUNT,
     PinRef,
     active_array_child,
     array_alternate_cost,
     array_dynamic_primary_cost,
     array_pool_points,
+    clear_power_extra_effort,
     counter_rolls,
     debilitated_traits,
     effect_current_rank,
@@ -103,8 +106,13 @@ from mm_companion.core.rules import (
     power_roll_lines,
     power_rolls,
     power_runtime_gates,
+    power_stunt_violations,
+    power_total_cost,
     powers_points_spent,
+    pushable_effects,
     size_steps,
+    spend_extra_effort,
+    stunt_source,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -117,6 +125,7 @@ from mm_companion.ui.cards import (
     effect_title,
     effects_block,
 )
+from mm_companion.ui.extra_effort import ExtraEffortDialog, add_power_effort_actions
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
@@ -454,6 +463,17 @@ class PowersSection(TitledSection):
     #: :class:`~mm_companion.core.rules.RollSpec`. Neither a build change nor a
     #: runtime one: rolling a power changes nothing about the power.
     rollRequested = Signal(object)
+
+    #: A sentence for the roll history — what a use of Extra Effort bought and what it
+    #: cost. Carries the text, like the System block's own note.
+    noteRequested = Signal(str)
+    #: Extra Effort was shrugged off with a Determination heroic feat, which costs a Hero
+    #: Point (p22). Carries the delta; the System block owns the pips and moves them.
+    heroPointRequested = Signal(int)
+    #: Extra Effort's fatigue was applied to the character. The same fan-out the
+    #: Conditions block's own signal drives — the model changed, and every view over a
+    #: condition restates itself.
+    conditionsChanged = Signal()
 
     #: How long a card takes to ease between its live and switched-off looks. A class
     #: attribute so tests can zero it and assert on the resting state without waiting
@@ -821,45 +841,185 @@ class PowersSection(TitledSection):
         ungroup.setVisible(not self._locked)
         return header
 
-    def _arm_counter_menu(self, card: DraggableCard, power: Power) -> None:
-        """Offer this power's counter rolls on the card's right-click menu (p107).
+    def _arm_card_menu(self, card: DraggableCard, power: Power) -> None:
+        """Arm the card's right-click menu — Extra Effort, then this power's counters.
 
-        Countering is a **tactic**, not something a power calls for: you Ready an effect,
-        and when your opponent uses one with an opposing descriptor you spend a reaction on
-        an opposed effect check. So it does not belong in the dice footer beside the rolls
-        the power actually makes — putting it there gave every attack card and every weapon
-        in the Equipment block a die button for a case the GM has to approve first.
+        Both are things a power can be *used for* rather than things it calls for, which
+        is why neither is in the dice footer: putting the counter rolls there gave every
+        attack card and every weapon in the Equipment block a die button for a case the
+        GM has to approve first, and Extra Effort is a decision before it is a number.
+        A right-click menu costs no card space and is where the app already puts a
+        card-adjacent action (the footer's own Pin menu).
 
-        A right-click menu costs no space at all and is where the app already puts a
-        card-adjacent action (the footer's own Pin menu). A power with nothing that could
-        be readied gets no menu rather than an empty one.
+        A card with nothing to offer — an always-on Protection, which can neither be
+        readied nor pushed — gets no menu rather than an empty one.
         """
 
-        specs = counter_rolls(power, self._character, self._data)
-        if not specs:
+        if not counter_rolls(power, self._character, self._data) and not pushable_effects(
+            power, self._data
+        ):
             return
         card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         card.customContextMenuRequested.connect(
-            lambda pos, c=card, ss=specs: self._show_counter_menu(c, ss, pos)
+            lambda pos, c=card, p=power: self._show_card_menu(c, p, pos)
         )
 
-    def counter_menu(self, card: DraggableCard, specs: list) -> QMenu:
-        """The counter menu itself, built but not shown.
+    def card_menu(self, card: DraggableCard, power: Power) -> QMenu:
+        """The card's whole menu, built but not shown.
 
-        Split from :meth:`_show_counter_menu` so the wiring can be checked without
-        ``exec`` — a modal menu headless is a test that hangs rather than a test that
-        passes.
+        Split from :meth:`_show_card_menu` so the wiring can be checked without ``exec``
+        — a modal menu headless is a test that hangs rather than a test that passes.
         """
 
         menu = QMenu(card)
+        offered = add_power_effort_actions(
+            menu, power, self._character, self._data, self.use_extra_effort
+        )
+        if any(effect.extra_effort for effect in power.effects):
+            clear = menu.addAction("Clear Extra Effort")
+            clear.setToolTip(
+                "Extra Effort lasts until the end of your turn, and nothing here tracks "
+                "turns — take the ranks back when it is over."
+            )
+            clear.triggered.connect(lambda _checked=False, p=power: self.clear_extra_effort(p))
+            offered = True
+        specs = counter_rolls(power, self._character, self._data)
+        if specs and offered:
+            menu.addSeparator()
+        self.fill_counter_menu(menu, specs)
+        return menu
+
+    def _show_card_menu(self, card: DraggableCard, power: Power, pos) -> None:
+        self.card_menu(card, power).exec(card.mapToGlobal(pos))
+
+    def use_extra_effort(
+        self, use, power: Power, effect: PowerEffectInstance, effect_name: str
+    ) -> bool:
+        """Confirm one use of Extra Effort against this effect, and charge it.
+
+        The push itself is *runtime* state on the effect, so it rides the same signal a
+        card toggle does; the fatigue is applied to the shared model by
+        :func:`~mm_companion.core.rules.spend_extra_effort`, through the very condition
+        resolver the Conditions block applies with. Returns ``False`` when the dialog was
+        cancelled, so nothing was spent and nothing was gained.
+
+        A **power stunt** is the one use that cannot be confirmed in a single dialog: it
+        is a whole alternate effect the player has yet to build, so it opens the
+        constructor first and charges the effort when something comes back
+        (:meth:`_open_stunt`). ``True`` there means "the constructor is open", not "it
+        was spent" — nothing is until the build is confirmed.
+        """
+
+        if use.id == USE_POWER_STUNT:
+            self._open_stunt(use, power, effect, effect_name)
+            return True
+
+        dialog = ExtraEffortDialog(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.heroPointRequested.emit(-1)
+        self.noteRequested.emit(outcome.note)
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        self.conditionsChanged.emit()
+        return True
+
+    def _open_stunt(self, use, power: Power, effect: PowerEffectInstance, effect_name: str) -> None:
+        """Open the constructor to build a stunt of ``power``.
+
+        The build comes **first** and the effort is charged on the way back
+        (:meth:`_on_stunt_saved`): a player who closes the constructor without saving has
+        changed their mind, and charging them a rung of the fatigue ladder for a stunt
+        that does not exist would be the app inventing a rule.
+        """
+
+        window = PowerConstructorWindow(self._data, character=self._character)
+        window.rollRequested.connect(self.rollRequested)
+        window.powerSaved.connect(
+            lambda built, u=use, p=power, e=effect, n=effect_name: self._on_stunt_saved(
+                built, u, p, e, n
+            )
+        )
+        window.closed.connect(lambda w=window: self._on_window_closed(w))
+        self._windows.append(window)
+        window.show()
+
+    def _on_stunt_saved(
+        self, built: Power, use, power: Power, effect: PowerEffectInstance, effect_name: str
+    ) -> bool:
+        """Charge the Extra Effort, then put the finished stunt on the sheet as its own card.
+
+        Cancelling the cost dialog here drops the build rather than adding it free: the
+        dialog is the "yes, spend it" step, and a stunt nobody paid for is not a stunt.
+
+        The stunt is appended at the top level even when its source sits inside a group —
+        it is a card of its own, marked with what it came from, rather than a member of
+        anybody's array. It costs no points and is not saved (see ``Power.stunt_of``), so
+        this rides ``runtimeChanged`` rather than ``changed``.
+        """
+
+        dialog = ExtraEffortDialog(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        built.stunt_of = power.id
+        self._character.powers.append(built)
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.heroPointRequested.emit(-1)
+        self.noteRequested.emit(outcome.note)
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        self.conditionsChanged.emit()
+        return True
+
+    def clear_extra_effort(self, power: Power) -> bool:
+        """Take back every rank Extra Effort pushed into this power; ``False`` if none."""
+
+        if not clear_power_extra_effort(power):
+            return False
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        return True
+
+    def fill_counter_menu(self, menu: QMenu, specs: list) -> None:
+        """Add one entry per counter roll to ``menu``, each asking the roller for it."""
+
         for spec in specs:
             action = menu.addAction(f"{spec.label}  +{spec.modifier}")
             action.setToolTip(spec.hint)
             action.triggered.connect(lambda _checked=False, s=spec: self.rollRequested.emit(s))
-        return menu
-
-    def _show_counter_menu(self, card: DraggableCard, specs: list, pos) -> None:
-        self.counter_menu(card, specs).exec(card.mapToGlobal(pos))
 
     def _dynamic_toggle(self, node: PowerNode, parent: PowerGroup | None) -> QWidget | None:
         """A Dynamic switch for a member of an ``array`` group, or ``None``.
@@ -1141,7 +1301,7 @@ class PowersSection(TitledSection):
         """
         card = DraggableCard(power.id)
         self._arm_activation(card, power, parent, interactive)
-        self._arm_counter_menu(card, power)
+        self._arm_card_menu(card, power)
         layout = QVBoxLayout(card)
         layout.addWidget(self._header_row(power, card, parent))
 
@@ -1210,9 +1370,27 @@ class PowersSection(TitledSection):
         name.setFont(font)
         layout.addWidget(name)
 
+        # A stunt says so, and says what it is a stunt *of*: it is a card of its own
+        # rather than a member of the source power's array, so the relationship is only
+        # ever visible here. Muted, because it is provenance rather than a number.
+        if power_is_stunt(power):
+            source = stunt_source(power, self._character)
+            of = power_display_name(source, self._data) if source else "a power now gone"
+            badge = QLabel(f"✦ stunt of {of}")
+            badge.setStyleSheet(muted_style(italic=True))
+            badge.setToolTip(
+                "A power stunt: a temporary alternate effect bought with Extra Effort "
+                "rather than with Power Points (p20). It costs nothing, it is not saved "
+                "with the character, and it lasts as long as the scene does."
+            )
+            layout.addWidget(badge)
+
         # A power that breaks a PL cap carries a warning marker naming the breach;
-        # enforcement is a warning for now (see storage.pl_enforcement).
-        violations = power_pl_violations(power, self._character, self._data)
+        # enforcement is a warning for now (see storage.pl_enforcement). A stunt adds the
+        # one rule that is its own: an alternate effect costs no more than its base.
+        violations = power_pl_violations(
+            power, self._character, self._data
+        ) + power_stunt_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))
@@ -1235,8 +1413,18 @@ class PowersSection(TitledSection):
             layout.addWidget(dynamic)
 
         # Inside an array group a non-base member contributes only its flat pooled cost;
-        # every other card shows its full assembled cost (node_display_cost decides).
-        cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
+        # every other card shows its full assembled cost (node_display_cost decides). A
+        # stunt contributes nothing, and "0 PP" beside a real build reads as a bug — so it
+        # says what it is instead, and keeps the number it *would* have cost in the
+        # tooltip, since that is the number its ceiling is measured against.
+        if power_is_stunt(power):
+            cost = QLabel("Stunt")
+            cost.setToolTip(
+                f"Bought with Extra Effort, not with points — it would cost "
+                f"{power_total_cost(power, self._data, self._character)} PP."
+            )
+        else:
+            cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
         layout.addWidget(cost)
 

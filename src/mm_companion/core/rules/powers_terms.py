@@ -1213,6 +1213,21 @@ def effect_stat_rows(
     cap_note = pl_cap_note(effect, game_data, char)
     if cap_note:
         rows.append(EffectStat("pl_cap", "PL cap", "", cap_note, "worse"))
+    # Extra Effort is the same courtesy the other way up: the ranks it pushes in are the
+    # one thing that raises a card's numbers without appearing anywhere in the build, and
+    # a Blast that suddenly reads 13 needs to say why. The wording carries the expiry,
+    # since nothing in the app will take it back for the player (p20).
+    if effect.extra_effort:
+        ranks = "rank" if effect.extra_effort == 1 else "ranks"
+        rows.append(
+            EffectStat(
+                "extra_effort",
+                "Extra Effort",
+                "",
+                f"+{effect.extra_effort} {ranks}, until the end of your turn",
+                "better",
+            )
+        )
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
     return _apply_row_overrides(rows, effect)

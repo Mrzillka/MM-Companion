@@ -15,6 +15,7 @@ from ..powers import (
     PowerEffectInstance,
     PowerGroup,
     PowerNode,
+    power_is_stunt,
 )
 from ..registry import Registry
 from .appliers import (
@@ -1521,8 +1522,16 @@ def node_cost(node: PowerNode, game_data: GameData, char: Character | None = Non
     child that shares the pool instead (:func:`array_members_cost`). Nesting is handled
     by the recursion — a child that is itself a group is priced the same way, and
     carries its own ``dynamic`` flag for the array it sits in.
+
+    **A power stunt costs nothing.** It was bought with Extra Effort and a Hero Point
+    rather than with Power Points (p20, p101), so it contributes 0 here — which is what
+    keeps it out of ``powers_points_spent`` — while :func:`power_total_cost` still says
+    what it *would* cost, since that is the number its ceiling is checked against
+    (:func:`~.validation.power_stunt_violations`).
     """
 
+    if power_is_stunt(node):
+        return 0
     if isinstance(node, PowerGroup):
         costs = [node_cost(child, game_data, char) for child in node.children]
         if not costs:

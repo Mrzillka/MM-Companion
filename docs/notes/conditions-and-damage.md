@@ -36,6 +36,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `QMenu.addMenu(title)` hands ownership *back* to the caller, so each submenu is
   constructed with the menu as its parent or it is collected out from under the
   open menu. Recovery and turn economy are out of scope for now.
+- **The block is no longer the only writer.** Extra Effort charges a rung of the fatigue
+  ladder (`fatigued` -> `exhausted` -> `incapacitated`, named in `system.json` rather than
+  in Python) from wherever it was spent, straight onto the shared model through
+  `apply_condition` — so the ladder's supersession is the catalog's own doing rather than a
+  second rule: Exhausted supersedes Fatigued, and climbing removes the rung climbed from.
+  `ConditionsSection` therefore **subscribes** to `condition-changed` as well as publishing
+  it, and re-renders its chips off the model like any other subscriber. Its own changes come
+  back round the same way, one redundant re-render that costs nothing and keeps the rule
+  "the chips are a view over the model" true for every writer.
 - **The damage ladder is walked, not just rendered** (`core/rules/damage.py`). An
   effect's `resistanceOutcomes` was only ever *text* — the roll history said
   "Incapacitated!" and left the GM to find three conditions in a menu of 39.

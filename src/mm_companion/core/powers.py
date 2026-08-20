@@ -175,6 +175,15 @@ class PowerEffectInstance:
     :func:`mm_companion.core.rules.power_gross_cost`. Written only when set, so a power
     saved before this is byte-for-byte what it was and still costs what it did.
 
+    ``extra_effort`` is how many ranks of **Extra Effort** are currently pushed into
+    this effect (p20-21) — runtime state again, and the only one that reaches *above*
+    the bought rank: straining past your limits is exactly what Extra Effort is, and
+    "its benefits can even increase your ranks or bonuses beyond the normal Power Level
+    limits". 0 — the default — is an effect nobody is pushing, so an untouched effect
+    behaves and serializes as it always did. It costs nothing (the price is a rung of
+    the fatigue ladder, on the character) and validation never sees it, because a Power
+    Level cap is a statement about the build.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -200,6 +209,7 @@ class PowerEffectInstance:
     rank_dial: bool = False
     current_rank: int | None = None
     dynamic: bool = False
+    extra_effort: int = 0
     overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -232,6 +242,8 @@ class PowerEffectInstance:
             data["current_rank"] = self.current_rank
         if self.dynamic:
             data["dynamic"] = True
+        if self.extra_effort:
+            data["extra_effort"] = self.extra_effort
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
@@ -255,6 +267,7 @@ class PowerEffectInstance:
             suppressed=bool(raw.get("suppressed", False)),
             current_rank=None if current is None else int(current),
             dynamic=bool(raw.get("dynamic", False)),
+            extra_effort=max(0, int(raw.get("extra_effort", 0))),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 
@@ -305,6 +318,16 @@ class Power:
     An attack-skill link is per-effect now (see
     :attr:`PowerEffectInstance.attack_skill`), not whole-power.
 
+    ``stunt_of`` marks this power a **power stunt** of another, by that power's
+    :attr:`id`: a temporary alternate effect bought at the table with Extra Effort and
+    usually a Hero Point (p20, p101), rather than with Power Points. Three things follow
+    from it and nothing else does — the card is badged and says what it came from, the
+    power contributes **0** to the point total (:func:`mm_companion.core.rules.node_cost`),
+    and it is **not saved**: a stunt is scoped to the scene it was invented in, so
+    :func:`strip_stunts` takes them out on the way to the file. It is still serialized,
+    because undo snapshots the model as JSON and a stunt that vanished on the next undo
+    would be worse than one that outlived its scene.
+
     ``cost_override`` is a Dev-mode / homerule edit: when set it *replaces* the
     power's whole computed point total (see
     :func:`mm_companion.core.rules.power_total_cost`), so it flows into the
@@ -326,6 +349,7 @@ class Power:
     dynamic: bool = False
     dynamic_points: int | None = None
     cost_override: int | None = None
+    stunt_of: str = ""
 
     def to_dict(self) -> dict:
         data = {
@@ -344,6 +368,8 @@ class Power:
             data["dynamic_points"] = self.dynamic_points
         if self.cost_override is not None:
             data["cost_override"] = self.cost_override
+        if self.stunt_of:
+            data["stunt_of"] = self.stunt_of
         # The runtime switches, written only when off — see the class docstring.
         for key, value in (
             ("activated", self.activated),
@@ -386,7 +412,37 @@ class Power:
             dynamic=bool(raw.get("dynamic", False)),
             dynamic_points=None if raw_share is None else int(raw_share),
             cost_override=None if raw_cost is None else int(raw_cost),
+            stunt_of=raw.get("stunt_of", ""),
         )
+
+
+def power_is_stunt(node: PowerNode) -> bool:
+    """Whether this node is a power stunt — a temporary alternate bought with effort.
+
+    Takes any :data:`PowerNode`, since the question is asked while walking the tree and a
+    :class:`PowerGroup` can never be one: a stunt is a card of its own.
+    """
+
+    return bool(getattr(node, "stunt_of", ""))
+
+
+def strip_stunts(nodes: list[dict]) -> list[dict]:
+    """A serialized powers list with every stunt card removed, recursively.
+
+    What "a stunt is not saved" means in practice. It works on the *serialized* form
+    rather than on the model because that is where saving happens, and it recurses into
+    groups because nothing stops a player dragging a stunt card into one — a stunt in an
+    array would otherwise be the one that survived to the file.
+    """
+
+    kept = []
+    for node in nodes:
+        if node.get("stunt_of"):
+            continue
+        if "children" in node:
+            node = {**node, "children": strip_stunts(node["children"])}
+        kept.append(node)
+    return kept
 
 
 def power_is_homerule(power: Power) -> bool:

@@ -33,6 +33,7 @@ from mm_companion.ui.blocks.bus import (
     EDITED,
     ENHANCEMENTS_CHANGED,
     FACTS_CHANGED,
+    HERO_POINT_REQUESTED,
     LOAD_REQUESTED,
     NOTE_REQUESTED,
     PIN_REQUESTED,
@@ -159,11 +160,21 @@ _BASE_BLOCKS = [
             "changed": (BUILD_CHANGED, FACTS_CHANGED, CAPS_CHANGED),
             "costRatesChanged": (COST_RATES_CHANGED,),
             "edited": (EDITED,),
+            # Extra Effort is charged here, and its price is a condition: the same
+            # fan-out the Conditions block raises, because it is the same event.
+            "conditionsChanged": (
+                ENHANCEMENTS_CHANGED,
+                FACTS_CHANGED,
+                DERIVED_CHANGED,
+                CONDITION_CHANGED,
+            ),
         },
         {DERIVED_CHANGED: "refresh_derived"},
         # the Initiative readout, plus the note a hero-point change writes
         {**_ROLLS_AND_LOADS, "noteRequested": (NOTE_REQUESTED,)},
-        {},
+        # The pips are this block's, so it is the block that moves them — for the
+        # Powers block's Extra Effort shrugged off with a Determination heroic feat.
+        {HERO_POINT_REQUESTED: "adjust_hero_points"},
     ),
     (
         "character_image",
@@ -221,7 +232,11 @@ _BASE_BLOCKS = [
             "changed": (BUILD_CHANGED,),
             "edited": (EDITED,),
         },
-        {},
+        # The chips are a view over the model, and this is no longer the only block that
+        # writes to it: Extra Effort's fatigue is applied by the core resolver from
+        # wherever the effort was spent. Subscribing means the chips follow it there —
+        # including this block's own changes, which re-render idempotently.
+        {CONDITION_CHANGED: "reseed"},
         {},
         {},
     ),
@@ -286,9 +301,24 @@ _BASE_BLOCKS = [
             # edit would show no `*`, prompt nothing on close, and be lost. It still
             # omits FACTS_CHANGED, to avoid re-deriving itself.
             "runtimeChanged": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
+            # A card's Extra Effort costs a rung of the fatigue ladder, applied to the
+            # shared model — so it drives what any other condition change drives.
+            "conditionsChanged": (
+                ENHANCEMENTS_CHANGED,
+                FACTS_CHANGED,
+                DERIVED_CHANGED,
+                CONDITION_CHANGED,
+            ),
         },
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
-        _ROLLS,  # the 🎲 beside each of a power card's roll lines
+        # the 🎲 beside each of a power card's roll lines, plus the two prices a card's
+        # Extra Effort is paid in: a sentence for the history and a hero point spent
+        # through the block that owns the pips.
+        {
+            **_ROLLS,
+            "noteRequested": (NOTE_REQUESTED,),
+            "heroPointRequested": (HERO_POINT_REQUESTED,),
+        },
         {},
     ),
     (

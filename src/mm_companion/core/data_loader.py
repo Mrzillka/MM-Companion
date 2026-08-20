@@ -1224,6 +1224,48 @@ class ImprovisedEffectRules:
 
 
 @dataclass(frozen=True)
+class ExtraEffortUse:
+    """One of the benefits Extra Effort can buy (``system.json``, p20-21).
+
+    ``target`` is what the use has to be pointed at: ``""`` for the ones that need
+    nothing from the build (an extra action, a bonus on a check), ``"effect"`` for the
+    two that name one of the character's own effects — the rank increase and the power
+    stunt. It is what lets the menus be built from the list rather than from a hardcoded
+    split, so a ruleset adding a seventh use gets it offered in the right place.
+    """
+
+    id: str
+    label: str
+    description: str = ""
+    target: str = ""
+
+
+@dataclass(frozen=True)
+class ExtraEffortRules:
+    """What Extra Effort grants and what it costs (``system.json``, p20-21).
+
+    ``fatigue_ladder`` is the price, in order: the first rung a fresh character takes,
+    then where each further use pushes them. ``rank_increase`` is what the Rank Increase
+    use is worth before ``untapped_potential_advantage`` adds its own ranks, and
+    ``check_bonus`` what the Bonus use is worth. ``permanent_durations`` are the
+    durations that cannot be improved or stunted with at all (p104).
+
+    The three advantages are named rather than spelled in Python for the usual reason:
+    which advantage shrugs the fatigue off is a rules fact, and a ruleset that renames
+    or replaces one retunes it from data.
+    """
+
+    fatigue_ladder: tuple[str, ...] = ("fatigued", "exhausted", "incapacitated")
+    rank_increase: int = 1
+    check_bonus: int = 2
+    permanent_durations: tuple[str, ...] = ("Permanent",)
+    determination_advantage: str = "Determination"
+    untapped_potential_advantage: str = "Untapped Potential"
+    extraordinary_effort_advantage: str = "Extraordinary Effort"
+    uses: tuple[ExtraEffortUse, ...] = ()
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -1244,6 +1286,7 @@ class SystemRules:
     alternate_effect_modifier: str = "alternate_effect"
     linked_modifier: str = "linked"
     improvised_effect: ImprovisedEffectRules = field(default_factory=ImprovisedEffectRules)
+    extra_effort: ExtraEffortRules = field(default_factory=ExtraEffortRules)
     ranged_distance: RangeDistance = field(default_factory=RangeDistance)
     derived_traits: tuple[DerivedTrait, ...] = ()
     #: Which effect's resistance ladder is *the* damage ladder — the rungs the GM's
@@ -3225,6 +3268,46 @@ def _parse_improvised_effect(raw: object, default: ImprovisedEffectRules) -> Imp
     )
 
 
+def _parse_extra_effort(raw: object, default: ExtraEffortRules) -> ExtraEffortRules:
+    """The Extra Effort dials and its list of uses, each falling back to the built-in.
+
+    A ruleset that names no ``uses`` gets the empty tuple rather than an invented list:
+    the menus are built from it, and an empty one honestly offers nothing rather than
+    offering benefits the ruleset never described.
+    """
+
+    if not isinstance(raw, dict):
+        return default
+    uses = tuple(
+        ExtraEffortUse(
+            id=str(use["id"]),
+            label=str(use.get("label", use["id"])),
+            description=str(use.get("description", "")),
+            target=str(use.get("target", "")),
+        )
+        for use in raw.get("uses", [])
+        if isinstance(use, dict) and use.get("id")
+    )
+    return ExtraEffortRules(
+        fatigue_ladder=tuple(str(c) for c in raw.get("fatigueLadder", default.fatigue_ladder)),
+        rank_increase=int(raw.get("rankIncrease", default.rank_increase)),
+        check_bonus=int(raw.get("checkBonus", default.check_bonus)),
+        permanent_durations=tuple(
+            str(d) for d in raw.get("permanentDurations", default.permanent_durations)
+        ),
+        determination_advantage=str(
+            raw.get("determinationAdvantage", default.determination_advantage)
+        ),
+        untapped_potential_advantage=str(
+            raw.get("untappedPotentialAdvantage", default.untapped_potential_advantage)
+        ),
+        extraordinary_effort_advantage=str(
+            raw.get("extraordinaryEffortAdvantage", default.extraordinary_effort_advantage)
+        ),
+        uses=uses or default.uses,
+    )
+
+
 def _parse_range_distance(raw: dict | None, base: RangeDistance) -> RangeDistance | None:
     """A ``rangeDistance`` block laid over ``base``, or ``None`` when there is none.
 
@@ -3288,6 +3371,7 @@ def _parse_system(raw: dict) -> SystemRules:
         improvised_effect=_parse_improvised_effect(
             sys.get("improvised_effect"), defaults.improvised_effect
         ),
+        extra_effort=_parse_extra_effort(sys.get("extra_effort"), defaults.extra_effort),
         damage_effect=sys.get("damage_effect", defaults.damage_effect),
         ranged_distance=_parse_range_distance(sys.get("ranged_distance"), defaults.ranged_distance)
         or defaults.ranged_distance,

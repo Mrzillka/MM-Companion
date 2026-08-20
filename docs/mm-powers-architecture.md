@@ -447,6 +447,41 @@ because the character already paid for them elsewhere:
 
 ---
 
+### Extra Effort pushes past both
+
+The one thing that reaches *above* the bought rank. Extra Effort is a non-action a hero
+takes at the table to do more than they paid for, and "its benefits can even increase your
+ranks or bonuses beyond the normal Power Level limits" (p20) — so the ranks it pushes into
+an effect are added by `effect_current_rank` **after** every clamp, including a hard PL cap
+and a Dynamic member's share of its array's pool. Cost and validation never see them: what
+a power is worth is what it was bought at, and a Power Level check is a statement about the
+build.
+
+Which effects may be pushed is a duration question, not a rank one: a **Permanent** effect
+"cannot be improved using Extra Effort" (p104), the Sustained extra exists to lift exactly
+that (p155), and the Permanent flaw imposes it on a Continuous effect (p159). It is
+therefore asked of the effect's *resolved* duration (`effect_allows_extra_effort`), never of
+the base effect's own.
+
+A **power stunt** is the other effect-naming use, and it is a whole power rather than a
+number: a temporary alternate effect, bought with effort rather than points. It is modelled
+as an ordinary `Power` carrying `stuntOf` — the id of the power it came from — which makes
+it free (`node_cost` returns 0), unsaved (`strip_stunts`, on the way to the file only), and
+a card of its own rather than a member of the source power's array. The topology is
+deliberate: an array member would drag pooling, base selection and the Dynamic point split
+onto something that costs nothing and lasts a scene. The one rule it keeps from the
+alternate effect it is: it may cost no more than the power it hangs off (p98), which
+`power_stunt_violations` checks.
+
+What it costs is a rung of the fatigue ladder, and that is charged on the **character**:
+`spend_extra_effort` applies Fatigued / Exhausted / Incapacitated through the ordinary
+condition resolver, so a rung gained this way bundles and supersedes like any other
+condition. The ladder, the ranks, the uses and the three advantages that bend them
+(Determination, Untapped Potential, Extraordinary Effort) are all `system.json`'s
+`extra_effort` block — no rules content in Python. See `core/rules/extra_effort.py`.
+
+---
+
 ## 7. General suppression/interaction rules to model
 
 A handful of cross-cutting mechanics affect whether *any* effect's bonus should currently
@@ -564,6 +599,13 @@ PowerEffectInstance  (part of a character's Power)
 │                                          // currently holds. Null - the default - is no
 │                                          // share, and the array behaves as an ordinary
 │                                          // set of alternates
+├── extraEffort (int, default 0)          // runtime: ranks Extra Effort has pushed in
+│                                          // (p20). The only thing that reaches ABOVE
+│                                          // the bought rank, and it is added after
+│                                          // every clamp - the benefit explicitly
+│                                          // ignores the PL limits. Costs no points and
+│                                          // is invisible to validation; the price is a
+│                                          // rung of the fatigue ladder on the character
 ├── plCap ("" | "effect" | "attack")      // build: hold this effect hard to 2 x PL,
 │                                          // lowering the side not named
 │                                          // (`effect_pl_cap_shift`). Empty leaves the
@@ -571,6 +613,11 @@ PowerEffectInstance  (part of a character's Power)
 └── computedCost
 
 Power
+├── stuntOf (str, default "")            // the id of the power this is a temporary
+│                                        // alternate - a POWER STUNT (p20). Costs 0,
+│                                        // is stripped on the way to the file, and is
+│                                        // held to the alternate-effect ceiling: no
+│                                        // dearer than the power it came from (p98)
 ├── id, name (player-chosen label), descriptors[]
 ├── effects: PowerEffectInstance[]        // Linked ones share a `linkGroup` id
 ├── alternates: PowerEffectInstance[][]   // array members, if any

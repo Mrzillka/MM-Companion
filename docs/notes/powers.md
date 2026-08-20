@@ -137,7 +137,7 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `powers_terms` in the rules DAG. Two of the four now hold the build as well as the
   budget — see the next bullet. Variable's pool is a *menu* the book itself suggests
   writing down in advance and Empowering's form is built by the GM for a target, so
-  neither has an editor; see `POWERS-AUDIT.md` §6M.
+  neither has an editor — see the gaps at the end of this file.
 - **A sub-build is an ordinary `Character`, stored in the config dict that bought it.**
   `core/rules/subbuilds.py` resolves a `subBuild` declaration — on the *effect* for
   Summon's minion, on the *modifier* for Metamorph's forms — into a `SubBuildSlot`
@@ -378,6 +378,62 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   half that question needs on a card — whether the power is **live on the character** at
   all, which an unpicked array alternate is not. The UI drives all of a power's gates
   from one "Active" switch, and `current_rank` from the card's rank dial.
+- **Extra Effort is the one thing that pushes a rank *up*.** A hero can strain past what
+  they bought (p20-21), and `PowerEffectInstance.extra_effort` is how many ranks are
+  currently pushed into an effect — runtime state like `current_rank` beside it, saved,
+  and written only when non-zero. `effect_current_rank` adds it **after** every clamp,
+  because the benefit "can even increase your ranks or bonuses beyond the normal Power
+  Level limits": a hard PL cap and a Dynamic member's share both bound what was *bought*,
+  and Extra Effort is by definition not that. Cost never sees it and validation never
+  sees it, so a pushed Blast raises no ⚠ — the card carries an `Extra Effort` row saying
+  what was pushed and that it lasts until the end of your turn, which is the same
+  courtesy `pl_cap_note` does in the other direction. Which effects can be pushed is a
+  **duration** question asked of the *resolved* duration (`effect_allows_extra_effort`):
+  Permanent refuses it, which is why the Sustained extra and the Permanent flaw exist.
+  What it costs is a rung of the fatigue ladder — Fatigued, then Exhausted, then
+  Incapacitated — applied to the character through the ordinary condition resolver by
+  `spend_extra_effort`, so it bundles and supersedes like any other condition. The uses,
+  the ladder, the ranks and the three advantages that bend them are `system.json`'s
+  `extra_effort` block. The **power stunt** is the one use that is a whole power rather
+  than a number, and it has a bullet of its own below.
+- **A power stunt is a card of its own, costs nothing, and is never saved.** The other
+  half of Extra Effort (p20, p101): "you can use a temporary Alternate Effect of a
+  non-permanent duration effect you have", bought with effort and a Hero Point instead of
+  with points, so a hero does not "fill up character sheets with long lists of minor
+  alternate effects". `Power.stunt_of` holds the id of the power it came from, and three
+  things follow from it. It **costs 0** — `node_cost` returns nothing for a stunt, so it
+  never enters `powers_points_spent`, while `power_total_cost` still says what it *would*
+  cost, because that is the number its ceiling is measured against: a stunt is an
+  alternate effect, and "an alternate effect can have a total cost no greater than the
+  base power" (p98). It is **not saved** — `strip_stunts` takes stunt cards out of the
+  serialized tree in `library.save_character` (recursively, since a card can be dragged
+  into a group) while `to_dict` still writes them, because undo snapshots the model as
+  JSON and a stunt that vanished on the next undo would be worse than one that outlived
+  its scene. And it is **its own card**, badged `✦ stunt of Fire Blast` with `Stunt` where
+  every other card prints its cost, rather than a member of the source power's array:
+  the array topology would drag pooling, base-selection and the point split onto a thing
+  that costs nothing and lives for a scene. `power_stunt_violations` is the ⚠ — over the
+  ceiling, or a source power that has since been deleted, which warns rather than binning
+  a build the player made. **The build comes first and the effort is charged on the way
+  back**: the constructor opens from the card menu, and only when something is handed back
+  does the cost dialog appear — a player who closes the constructor has changed their
+  mind, and charging a rung of fatigue for a stunt that does not exist would be the app
+  inventing a rule.
+- **Extra Effort is spent in two blocks, because it is paid for in two currencies.**
+  `ui/extra_effort.py` is the shared menu and dialog (the way `build_condition_menu` is
+  shared by the three "+" buttons): the **card's right-click menu** offers the two uses
+  that name one of your own effects, since the effect is what you right-clicked, and the
+  **System block** offers the four that name nothing, beside the hero points. Both are
+  *play*, not build, so both survive the lock. The fatigue is written straight to the
+  shared model and the blocks that draw conditions restate themselves off
+  `condition-changed` — which is why the Conditions block now **subscribes** to the topic
+  it publishes. The hero point cannot be written that way: the pips, the clamp and the
+  sentence for the roll history are one funnel in `SystemInfoSection`, so a card that
+  shrugs the fatigue off with a Determination heroic feat *asks* for the point through
+  the new `hero-point-requested` topic instead. Both blocks also offer the way back, and
+  they are deliberately **two** entries rather than one: a push is over at the end of your
+  turn, a stunt at the end of the scene, and a single button for both would bin a stunt
+  every time a turn ended.
 - **Runtime is saved.** It used to be the other way round — every runtime flag was
   left out of `to_dict()` on the argument that what is switched on is not part of the
   build — and the size ladder is what broke it: a Growth 3 *held* at Large is a
@@ -464,3 +520,159 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   out. Runtime toggling stays available in the locked read-only view — it is a
   mid-play action, not a build edit, so it emits `runtimeChanged`, not `changed`
   (which still marks the sheet unwritten, since the state is saved).
+---
+
+## Known gaps and caveats
+
+The powers layer was diffed against the core rulebook over fifteen passes, and these are
+what that job deliberately **left**. Each is a decision rather than an oversight, and the
+reason is the useful half — a later session that does not know them will either trip over
+one or "fix" something that is right. (The working document that tracked the audit was
+deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-audit` and
+`feature/extra-effort-and-power-stunts` branch histories.)
+
+### Costs and configurations
+
+- **Two standard configurations cannot reach their printed cost.** **Material Mimicry** and
+  **Power Mimicry** (the book prints 5/rank, the build comes to 6). The book puts the Close
+  Range flaw on **Variable**, a *Personal*-range effect, where p159 gives that flaw no value
+  — it is priced only from Ranged and from Perception. The book is loose here, not the app.
+  Each is built as the book literally names it rather than gaining an invented second
+  modifier to force the number, and both are recorded in `configurations.json`'s own
+  `_meta.costNote` and excluded by name from
+  `test_standard_configurations_cost_what_the_book_prints`.
+- **Four configurations arrive as skeletons** the player must finish — Absorption, Berserker
+  Rage, Poltergeist, Power Theft. The book leaves them blank too (which trait is boosted,
+  which descriptor is absorbed), so this is faithful rather than incomplete. Worth knowing
+  before someone "fixes" them.
+- **The equipment-currency configurations build as powers, not gear.** Commlink is "1
+  Equipment Point per rank" and still drops onto the power canvas like anything else (see
+  [the equipment layer](equipment.md) for the currency it ought to be bought in).
+- **A power-scope modifier stops at the `Power`.** Removable is charged once per `Power`,
+  which is what the rules mean by "the power as a whole" — so a device modelled as a
+  `PowerGroup` of several powers gets one discount *per child power*, each priced from that
+  child's own total. That is the same arithmetic only when every split lands on a multiple
+  of 5. Nothing checks for it; the honest build is one power with many effects, which is how
+  the book's own armour example is written.
+- **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
+  under three cards reading 20, 8 and 10 — the pooling explains it and each card's badge
+  names its own share, but the total line itself does not. `power_cost_formula` was built
+  for exactly this complaint about Removable and fires only for a power-scope modifier;
+  extending it to render the array working would close the same gap for every array.
+- **Re-run the two-price sweep after adding modifier records.** A `costFormula` naming two
+  prices with no `config` beneath it is silently the cheaper one — the sweep that caught
+  those covered both `modifiers.json` and `effect_modifiers.json`, and it is clean today.
+
+### Readouts and warnings
+
+- **An allocation readout prints the tier *index*, not what it cost.** A Concealment hiding
+  from every sight sense reads "Sight 2" in the game-terms panel — tier 2, which costs 4
+  ranks — while the card's own combo beside it says "4 ranks". The same is true of Enhanced
+  Senses' Accurate. It is shared by every `allocation` field, which is why it was not
+  changed underneath four effects at once; `tier_notes` already exists in the schema
+  (Enhanced Movement uses it for Wall-Crawling's caveat) and is where a per-tier name goes.
+- **Nothing enforces mutual exclusion in a multiselect.** A player can tick both "one sight
+  sense" and "all sight senses" on Obscure, or both intensities of the same Environment
+  condition, and pay for both. Visible on the card, but a warning would be fair.
+- **A Variable Environment's redistribution is unchecked** — nothing verifies that what the
+  player redistributes at use time stays inside the per-rank total they paid for.
+- **Almost every warning is constructor-only.** The allocation, linked-range, Strength,
+  requirement, imposed-effect and sub-build checks all live in the Power Constructor; the
+  sheet card shows **Power Level** breaches (and a stunt's own ceiling) alone. That is the
+  convention rather than an oversight — `_strength_violations` says so — but it does mean a
+  character built under a different ruleset can carry an over-budget imposed effect with no
+  marker on the sheet until someone opens the constructor.
+- **Nullify's card reads differently than it used to.** Its `resistance` row was replaced by
+  an `opposed` one, so a card that read "Resistance: 8 vs. Will or rank" now reads "Opposed:
+  8 vs. targeted rank or Will" and gains a rollable footer line where it had an unrollable
+  one. Nothing needs migrating — the row is derived — but it is a visible change to an
+  existing character's card.
+
+### Sub-builds
+
+- **A sub-build has no Power Level check of its own.** A minion is "subject to the normal
+  Power Level limits" and its own sheet shows them the way any sheet does, but the
+  *constructor* only warns about the point budget. Opening the minion is the only way to see
+  a PL breach in it.
+- **A sub-build is not counted anywhere outside its power.** A minion's gear, conditions and
+  hero points are real fields on a real `Character` that nothing plays with: the GM cannot
+  pin it, damage cannot be applied to it, and a session does not surface it as a combatant.
+  It is a *build*, not a creature at the table. "Send this minion to the GM window" is the
+  obvious next thing to want.
+- **A Summon's minion is a single build even with Variable Type.** The book's own reading
+  (p145: "You always summon the same minion unless you apply the Variable Type modifier")
+  makes one build right for the ordinary case, and Multiple Minions doubles how many of that
+  *same* creature appear. A Variable Type Summon really does want a menu of minions — which
+  is Variable's own unbuilt problem in miniature, and was left with it.
+- **A modifier's `subBuild` count reads the chip's rank**, so a *repeatable* sub-build-bearing
+  modifier would need thought: two copies would produce two independent slots sharing one
+  config key and overwrite each other. Nothing is both today, and
+  `test_the_ruleset_marks_exactly_the_repeatable_modifiers` would catch a seventh repeatable
+  being added — but not this pairing specifically.
+
+### The Dynamic point pool
+
+- **A pooled split lives only at the group level.** `dynamic_points` is on `Power` and
+  `PowerGroup`, not on `PowerEffectInstance`, so an array of a *single power's own effects*
+  is priced for Dynamic members but cannot split its pool. The reason is one level down: an
+  effect-level array has **no runtime member selection at all** — nothing checks "is this the
+  selected effect", so every effect of an array-structured power is live simultaneously
+  today, Dynamic or not. Building a pool on top of that would ration ranks in an array that
+  is already, wrongly, running everything; fixing the selection first is the honest order.
+- **A split array's ordinary members go dark.** `live_array_children` gives the pool
+  priority: once any Dynamic member holds a share, the array's *non*-Dynamic alternates are
+  not running, since they cannot hold a share and the whole pool is spoken for. That is the
+  rules-correct reading and the dialog says so, but it does mean the way back to an ordinary
+  alternate is "Clear the split" rather than clicking its card — and clicking one still moves
+  `active_child_id`, silently, until the split is cleared.
+- **The split does not follow a rebuild.** A share is an absolute number of points, so
+  editing the array moves the pool underneath a split already made. Nothing renormalises: the
+  shares stay put and may now sum to less than the pool (legal, just wasteful) or, if the base
+  got cheaper, to more than it. The dialog re-bounds every row the moment it is reopened, so
+  the fix is one visit; a rebuild that quietly rescaled a player's split would be worse.
+- **`effect_current_rank` can return 0.** Only through the pool, and only for a member below
+  its minimum — but every reader of it should be checked against that before assuming a rank
+  is at least 1. The dial's own floor is unchanged.
+
+### Extra Effort and power stunts
+
+- **Only an *effect* can be pushed.** The rank increase "includes improving your Strength
+  rank for either Damage or Lifting, or your movement Speed rank in one mode of movement you
+  have" (p21), and neither of those is a `PowerEffectInstance`: they are an ability and a
+  derived readout. The seam exists — `trait_contributions` is where a temporary ability bonus
+  would join size, powers, advantages and gear — but it is a second feature with a second
+  control. A Flight or a Speed *effect* is pushable today; unaided ground speed and Strength
+  are not.
+- **Four of the six uses charge the fatigue and change no number.** An extra action, a +2 on
+  a check, a renewed attempt and a fresh resistance check are table business: the app records
+  them in the roll history and takes the rung. The +2 in particular does not reach the
+  roller's bonus slider — wiring it there would mean the roller knowing which roll the effort
+  was spent on, which nothing tracks.
+- **Nothing expires.** Extra Effort lasts "until the end of your turn" and the fatigue
+  arrives "at the start of your next turn"; there is no turn tracker, so the push is cleared
+  by a button (per power on its card, per character in the System menu) and the fatigue lands
+  immediately. The same bargain the Dynamic split strikes, and the same one the whole
+  condition tracker strikes — recovery is out of scope there too.
+- **Determination's per-adventure uses are not counted.** The dialog offers the advantage
+  route and says how many the sheet has; nothing decrements, because nothing knows when an
+  adventure ends. A counter with no reset would lie more confidently than no counter.
+- **Extraordinary Effort is modelled as the same benefit twice**, not as two different ones.
+  The doubled rank increase and the doubled fatigue are exact; taking an extra action *and* a
+  rank increase for one doubled cost means using the menu twice, which charges two rungs
+  anyway. The arithmetic agrees; only the wording of the second use is missing.
+- **A stunt can be dragged into a group.** The powers tree is drag-and-drop and nothing
+  refuses a stunt card a group, so one can end up an array member — costing 0, which makes it
+  the array's cheapest alternate and changes the pooling arithmetic under it. `strip_stunts`
+  recurses for exactly that reason, so it still never reaches the file, and the ⚠ still names
+  the ceiling; the honest fix is a drop guard in `_on_combine`/`_on_move`.
+- **Nothing stops a stunt and its source power being live at once.** The rules make an
+  alternate effect mutually exclusive with what it is an alternate of, and the array
+  machinery enforces that for a bought alternate — but a stunt is a card of its own, so no
+  live-selection rule reaches it. It matters only when both are *standing* powers, since an
+  instant one is used and gone. Wiring it into `live_powers` was weighed and left: a stunt
+  card defaults to active the moment it is created, so the source power would go dark with no
+  visible reason the moment a stunt was built.
+- **Deleting a power leaves its stunts orphaned**, warning on their own cards rather than
+  going with it. Deliberate — a stunt is a build the player made, and binning it silently
+  because they removed something else is the failure the ⚠ exists to avoid — but the sheet
+  can carry a card whose only fault is what is missing.

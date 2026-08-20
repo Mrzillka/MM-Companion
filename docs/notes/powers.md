@@ -378,6 +378,37 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   half that question needs on a card — whether the power is **live on the character** at
   all, which an unpicked array alternate is not. The UI drives all of a power's gates
   from one "Active" switch, and `current_rank` from the card's rank dial.
+- **Extra Effort is the one thing that pushes a rank *up*.** A hero can strain past what
+  they bought (p20-21), and `PowerEffectInstance.extra_effort` is how many ranks are
+  currently pushed into an effect — runtime state like `current_rank` beside it, saved,
+  and written only when non-zero. `effect_current_rank` adds it **after** every clamp,
+  because the benefit "can even increase your ranks or bonuses beyond the normal Power
+  Level limits": a hard PL cap and a Dynamic member's share both bound what was *bought*,
+  and Extra Effort is by definition not that. Cost never sees it and validation never
+  sees it, so a pushed Blast raises no ⚠ — the card carries an `Extra Effort` row saying
+  what was pushed and that it lasts until the end of your turn, which is the same
+  courtesy `pl_cap_note` does in the other direction. Which effects can be pushed is a
+  **duration** question asked of the *resolved* duration (`effect_allows_extra_effort`):
+  Permanent refuses it, which is why the Sustained extra and the Permanent flaw exist.
+  What it costs is a rung of the fatigue ladder — Fatigued, then Exhausted, then
+  Incapacitated — applied to the character through the ordinary condition resolver by
+  `spend_extra_effort`, so it bundles and supersedes like any other condition. The uses,
+  the ladder, the ranks and the three advantages that bend them are `system.json`'s
+  `extra_effort` block; **power stunts are the deliberate gap** (`POWERS-AUDIT.md` §6H):
+  a stunt is a temporary alternate effect, the app charges the effort and records which
+  effect it was taken from, and building the alternate is its own pass.
+- **Extra Effort is spent in two blocks, because it is paid for in two currencies.**
+  `ui/extra_effort.py` is the shared menu and dialog (the way `build_condition_menu` is
+  shared by the three "+" buttons): the **card's right-click menu** offers the two uses
+  that name one of your own effects, since the effect is what you right-clicked, and the
+  **System block** offers the four that name nothing, beside the hero points. Both are
+  *play*, not build, so both survive the lock. The fatigue is written straight to the
+  shared model and the blocks that draw conditions restate themselves off
+  `condition-changed` — which is why the Conditions block now **subscribes** to the topic
+  it publishes. The hero point cannot be written that way: the pips, the clamp and the
+  sentence for the roll history are one funnel in `SystemInfoSection`, so a card that
+  shrugs the fatigue off with a Determination heroic feat *asks* for the point through
+  the new `hero-point-requested` topic instead.
 - **Runtime is saved.** It used to be the other way round — every runtime flag was
   left out of `to_dict()` on the argument that what is switched on is not part of the
   build — and the size ladder is what broke it: a Growth 3 *held* at Large is a

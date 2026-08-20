@@ -347,6 +347,14 @@ def effect_current_rank(
     arguments — the Power Constructor, where nothing is dialled and nothing is wielded —
     the cap is not asked for and the bought rank comes back, exactly as it always did.
 
+    **Extra Effort is the one thing that pushes it up**, and it is added last, after
+    every clamp above: pushing an effect past what it was bought at is the whole of
+    "straining body and mind to do more when it really counts", and the benefit
+    explicitly ignores the Power Level limits (p20). A member held to 0 by its share of
+    a Dynamic pool can therefore still be pushed to 1, which is the same rule read from
+    the other end. What it costs is a rung of the fatigue ladder, and that is charged on
+    the *character* (:func:`~.extra_effort.spend_extra_effort`), never here.
+
     Cost never asks this. What a power is *worth* is what it was bought at, and dialling
     one down mid-fight refunds nothing.
     """
@@ -355,10 +363,11 @@ def effect_current_rank(
         rank = effect.rank
     else:
         rank = max(1, min(effect.rank, int(effect.current_rank)))
+    push = max(0, effect.extra_effort)
     if game_data is None or char is None or _dynamic_rank_cap is None:
-        return rank
+        return rank + push
     cap = _dynamic_rank_cap(effect, game_data, char)
-    return rank if cap is None else max(0, min(rank, cap))
+    return (rank if cap is None else max(0, min(rank, cap))) + push
 
 
 def effect_is_active(
@@ -473,6 +482,21 @@ def power_display_name(power: Power, game_data: GameData) -> str:
         if label and label not in names:
             names.append(label)
     return " / ".join(names) if names else "Unnamed Power"
+
+
+def effect_display_name(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """What one effect *inside* a power is called: its own label, else the base effect's.
+
+    The idiom the cards, the dice footer and the split dialog had each spelled for
+    themselves — a vehicle's "Cannon" is a Damage, and a list showing "Damage" twice
+    says nothing. Falls back to the raw id so an effect from a ruleset that is no longer
+    loaded is still nameable rather than blank.
+    """
+
+    if effect.label:
+        return effect.label
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    return base.name if base is not None else effect.effect_id
 
 
 def power_runtime_gates(power: Power, game_data: GameData) -> set[str]:

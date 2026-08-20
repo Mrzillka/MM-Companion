@@ -353,12 +353,15 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   serves the topic itself, to **reopen** a closed roller (named by what it serves,
   not by its key) rather than roll where nobody can see it.
 - The channel carries a third topic, `note-requested` (a `str`): the sentence for a
-  hero point spent or gained, answered by `DiceSection.post_note`. It is the *only*
-  entry in `bus.QUIET_REQUESTS`, which is the one thing that sets it apart from the
-  two roll topics — a note is a **side effect** of an edit the user was making
-  elsewhere on the sheet, so reopening a closed Dice block for one would be the app
-  grabbing the screen unasked. The note reaches the session either way. `load-requested`
-  is deliberately *not* quiet: someone who clicked a stat line asked to see it loaded.
+  hero point spent or gained, or for a use of Extra Effort, answered by
+  `DiceSection.post_note`. It is in `bus.QUIET_REQUESTS`, which is the one thing that
+  sets it apart from the two roll topics — a note is a **side effect** of an edit the
+  user was making elsewhere on the sheet, so reopening a closed Dice block for one would
+  be the app grabbing the screen unasked. The note reaches the session either way.
+  `load-requested` is deliberately *not* quiet: someone who clicked a stat line asked to
+  see it loaded. (The other quiet topics are the two pin ones, which no block serves at
+  all, and `hero-point-requested`, which is the price of something the user did in
+  another block — see the powers notes on Extra Effort.)
 - `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. The
   loaded trait is **sticky**: it shows as a chip above the sliders and survives the
   roll, so the sliders can be nudged and the die thrown again. The sliders always

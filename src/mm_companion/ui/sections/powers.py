@@ -87,6 +87,7 @@ from mm_companion.core.rules import (
     array_alternate_cost,
     array_dynamic_primary_cost,
     array_pool_points,
+    clear_power_extra_effort,
     counter_rolls,
     debilitated_traits,
     effect_current_rank,
@@ -104,7 +105,9 @@ from mm_companion.core.rules import (
     power_rolls,
     power_runtime_gates,
     powers_points_spent,
+    pushable_effects,
     size_steps,
+    spend_extra_effort,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -117,6 +120,7 @@ from mm_companion.ui.cards import (
     effect_title,
     effects_block,
 )
+from mm_companion.ui.extra_effort import ExtraEffortDialog, add_power_effort_actions
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
@@ -454,6 +458,17 @@ class PowersSection(TitledSection):
     #: :class:`~mm_companion.core.rules.RollSpec`. Neither a build change nor a
     #: runtime one: rolling a power changes nothing about the power.
     rollRequested = Signal(object)
+
+    #: A sentence for the roll history — what a use of Extra Effort bought and what it
+    #: cost. Carries the text, like the System block's own note.
+    noteRequested = Signal(str)
+    #: Extra Effort was shrugged off with a Determination heroic feat, which costs a Hero
+    #: Point (p22). Carries the delta; the System block owns the pips and moves them.
+    heroPointRequested = Signal(int)
+    #: Extra Effort's fatigue was applied to the character. The same fan-out the
+    #: Conditions block's own signal drives — the model changed, and every view over a
+    #: condition restates itself.
+    conditionsChanged = Signal()
 
     #: How long a card takes to ease between its live and switched-off looks. A class
     #: attribute so tests can zero it and assert on the resting state without waiting
@@ -821,45 +836,110 @@ class PowersSection(TitledSection):
         ungroup.setVisible(not self._locked)
         return header
 
-    def _arm_counter_menu(self, card: DraggableCard, power: Power) -> None:
-        """Offer this power's counter rolls on the card's right-click menu (p107).
+    def _arm_card_menu(self, card: DraggableCard, power: Power) -> None:
+        """Arm the card's right-click menu — Extra Effort, then this power's counters.
 
-        Countering is a **tactic**, not something a power calls for: you Ready an effect,
-        and when your opponent uses one with an opposing descriptor you spend a reaction on
-        an opposed effect check. So it does not belong in the dice footer beside the rolls
-        the power actually makes — putting it there gave every attack card and every weapon
-        in the Equipment block a die button for a case the GM has to approve first.
+        Both are things a power can be *used for* rather than things it calls for, which
+        is why neither is in the dice footer: putting the counter rolls there gave every
+        attack card and every weapon in the Equipment block a die button for a case the
+        GM has to approve first, and Extra Effort is a decision before it is a number.
+        A right-click menu costs no card space and is where the app already puts a
+        card-adjacent action (the footer's own Pin menu).
 
-        A right-click menu costs no space at all and is where the app already puts a
-        card-adjacent action (the footer's own Pin menu). A power with nothing that could
-        be readied gets no menu rather than an empty one.
+        A card with nothing to offer — an always-on Protection, which can neither be
+        readied nor pushed — gets no menu rather than an empty one.
         """
 
-        specs = counter_rolls(power, self._character, self._data)
-        if not specs:
+        if not counter_rolls(power, self._character, self._data) and not pushable_effects(
+            power, self._data
+        ):
             return
         card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         card.customContextMenuRequested.connect(
-            lambda pos, c=card, ss=specs: self._show_counter_menu(c, ss, pos)
+            lambda pos, c=card, p=power: self._show_card_menu(c, p, pos)
         )
 
-    def counter_menu(self, card: DraggableCard, specs: list) -> QMenu:
-        """The counter menu itself, built but not shown.
+    def card_menu(self, card: DraggableCard, power: Power) -> QMenu:
+        """The card's whole menu, built but not shown.
 
-        Split from :meth:`_show_counter_menu` so the wiring can be checked without
-        ``exec`` — a modal menu headless is a test that hangs rather than a test that
-        passes.
+        Split from :meth:`_show_card_menu` so the wiring can be checked without ``exec``
+        — a modal menu headless is a test that hangs rather than a test that passes.
         """
 
         menu = QMenu(card)
+        offered = add_power_effort_actions(
+            menu, power, self._character, self._data, self.use_extra_effort
+        )
+        if any(effect.extra_effort for effect in power.effects):
+            clear = menu.addAction("Clear Extra Effort")
+            clear.setToolTip(
+                "Extra Effort lasts until the end of your turn, and nothing here tracks "
+                "turns — take the ranks back when it is over."
+            )
+            clear.triggered.connect(lambda _checked=False, p=power: self.clear_extra_effort(p))
+            offered = True
+        specs = counter_rolls(power, self._character, self._data)
+        if specs and offered:
+            menu.addSeparator()
+        self.fill_counter_menu(menu, specs)
+        return menu
+
+    def _show_card_menu(self, card: DraggableCard, power: Power, pos) -> None:
+        self.card_menu(card, power).exec(card.mapToGlobal(pos))
+
+    def use_extra_effort(self, use, effect: PowerEffectInstance, effect_name: str) -> bool:
+        """Confirm one use of Extra Effort against this effect, and charge it.
+
+        The push itself is *runtime* state on the effect, so it rides the same signal a
+        card toggle does; the fatigue is applied to the shared model by
+        :func:`~mm_companion.core.rules.spend_extra_effort`, through the very condition
+        resolver the Conditions block applies with. Returns ``False`` when the dialog was
+        cancelled, so nothing was spent and nothing was gained.
+        """
+
+        dialog = ExtraEffortDialog(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.heroPointRequested.emit(-1)
+        self.noteRequested.emit(outcome.note)
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        self.conditionsChanged.emit()
+        return True
+
+    def clear_extra_effort(self, power: Power) -> bool:
+        """Take back every rank Extra Effort pushed into this power; ``False`` if none."""
+
+        if not clear_power_extra_effort(power):
+            return False
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        return True
+
+    def fill_counter_menu(self, menu: QMenu, specs: list) -> None:
+        """Add one entry per counter roll to ``menu``, each asking the roller for it."""
+
         for spec in specs:
             action = menu.addAction(f"{spec.label}  +{spec.modifier}")
             action.setToolTip(spec.hint)
             action.triggered.connect(lambda _checked=False, s=spec: self.rollRequested.emit(s))
-        return menu
-
-    def _show_counter_menu(self, card: DraggableCard, specs: list, pos) -> None:
-        self.counter_menu(card, specs).exec(card.mapToGlobal(pos))
 
     def _dynamic_toggle(self, node: PowerNode, parent: PowerGroup | None) -> QWidget | None:
         """A Dynamic switch for a member of an ``array`` group, or ``None``.
@@ -1141,7 +1221,7 @@ class PowersSection(TitledSection):
         """
         card = DraggableCard(power.id)
         self._arm_activation(card, power, parent, interactive)
-        self._arm_counter_menu(card, power)
+        self._arm_card_menu(card, power)
         layout = QVBoxLayout(card)
         layout.addWidget(self._header_row(power, card, parent))
 

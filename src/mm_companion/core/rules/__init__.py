@@ -13,7 +13,7 @@ re-exported here so ``from mm_companion.core.rules import X`` keeps working
 unchanged. Submodules form a dependency DAG: ``appliers`` → ``runtime``/``advantages``/
 ``conditions`` (base) → ``size`` → ``derived`` → ``trait_rates`` → ``powers_cost`` →
 ``costs`` → ``movement``/``powers_terms``/``damage`` → ``platforms`` → ``equipment`` →
-``validation`` → ``subbuilds`` → ``rolls`` → ``pins``.
+``validation`` → ``subbuilds``/``extra_effort`` → ``rolls`` → ``pins``.
 
 ``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
 needed a note saying what its alternate forms cost: the rules put that budget at "the
@@ -29,6 +29,10 @@ those rates therefore cannot live in ``costs`` above it.
 character is a whole build in its own right: checking a minion means walking its
 powers tree, and ``leaf_powers`` — where that walk stops — is validation's.
 
+``extra_effort`` sits beside ``subbuilds`` and for the same reason: it asks
+``leaf_powers`` which effects a character could push, and asks ``powers_terms`` what an
+effect's duration resolves to before deciding a Permanent one cannot be pushed at all.
+
 ``size`` sits below ``derived`` on purpose: the Size Table grants real trait
 modifiers, so ``derived`` imports it, and it must therefore reach nothing that
 reaches ``derived`` back.
@@ -43,6 +47,7 @@ from .costs import *  # noqa: F401,F403
 from .damage import *  # noqa: F401,F403
 from .derived import *  # noqa: F401,F403
 from .equipment import *  # noqa: F401,F403
+from .extra_effort import *  # noqa: F401,F403
 from .improvised import *  # noqa: F401,F403
 from .movement import *  # noqa: F401,F403
 from .pins import *  # noqa: F401,F403

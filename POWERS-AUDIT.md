@@ -28,13 +28,24 @@ file alone. Delete it when §6 is empty.
 | §5O | Countering, and Nullify's opposed check (was §6F) | **done** — pass 11 |
 | §5P | The sub-builds themselves (was §6M) | **done** — pass 12 |
 | §5Q | Dynamic Alternate Effects — the point pool (was §6K) | **done** — pass 13 |
-| §6H | Extra Effort and power stunts | outstanding |
+| §5R | Extra Effort — the uses, the ladder, the rank push (was §6H) | **done** — pass 14 |
+| §6H | Power stunts — the temporary alternate effect itself | outstanding |
 
-**One item is left, and it belongs to another branch.** Every cost, every game-term,
-every roll and every runtime behaviour the audit set out to check is now done; §6H is
-Chapter 1 rather than Chapter 6 and was always meant to follow this branch's merge.
+**One item is left: the power stunt.** Everything §6H covered *except* building the
+temporary alternate effect is done — the six uses, the fatigue ladder, the rank push and
+the three advantages that bend them. A stunt is a whole alternate effect assembled at the
+table, which is a build problem rather than a mechanic, and it is the last thing this job
+owns.
 
-Commits so far, all on `docs/powers-rules-audit` off `develop`, **not yet merged**:
+`docs/powers-rules-audit` was merged into `develop` at `bf75e44` with passes 1–13.
+Pass 14 onwards is on **`feature/extra-effort-and-power-stunts`**, branched off `develop`
+after that merge:
+
+```
+(pass 14's hash — recorded in the follow-up commit, as every pass before it was)
+```
+
+The passes that were merged, for reference:
 
 ```
 b0b713d  Correct the powers data against the core rulebook
@@ -64,21 +75,26 @@ a0ee2eb  Split an array's points across its Dynamic members
 
 ## 1. How to work on this
 
-**Branch.** Stay on `docs/powers-rules-audit` until the user says the whole job is done,
-then merge into `develop` with `--no-ff`. One feature, one branch (`CLAUDE.md`). Never
-commit on `develop` or `main`.
+**Branch.** Passes 1-13 were `docs/powers-rules-audit`, merged into `develop` at
+`bf75e44`. Pass 14 onwards is **`feature/extra-effort-and-power-stunts`**, off `develop`:
+stay on it until the user says the stunt half is done, then merge with `--no-ff`. One
+feature, one branch (`CLAUDE.md`). Never commit on `develop` or `main`.
 
 **Verify, every pass:**
 
 ```bash
 ruff check . && black --check .
-python -m pytest -q                 # ~10 min, 2853 tests as of pass 13
+python -m pytest -q                 # 2876 tests as of pass 14
 python -m pytest tests/test_powers.py tests/test_power_constructor.py \
-                tests/test_data_loader.py tests/test_powers_section.py -q
+                tests/test_data_loader.py tests/test_powers_section.py \
+                tests/test_extra_effort.py -q
 ```
 
 CI does **not** run on a work branch automatically — `gh workflow run CI --ref
-docs/powers-rules-audit` if a full matrix run is wanted before merging.
+feature/extra-effort-and-power-stunts` if a full matrix run is wanted before merging.
+`tests/test_gm_window.py::test_copy_puts_the_code_on_the_clipboard` fails locally on
+Windows whenever another process is holding the clipboard (`OpenClipboard Failed`); it is
+environmental, not yours.
 
 **See it in the app** rather than trusting the tests alone — the `run-mm-companion` skill,
 or a throwaway script in the scratchpad that imports `driver._pump` / `driver._shoot` from
@@ -129,6 +145,7 @@ What was read in full and diffed:
 | Summon p145–146, Variable p148–149, Metamorph p136 | `effect_readouts.json`, `effect_modifiers.json`, `NOTE_VALUE_KINDS` |
 | Improvised Effects, p101–102 | `core/rules/improvised.py`, `system.json` |
 | Effect checks and countering, p107; Nullify, p138 | `opposedCheck`, `counter_rolls` |
+| Extra Effort and hero points, p20-22; Determination p85, Extraordinary Effort p86, Untapped Potential p94 | `system.json`'s `extra_effort`, `core/rules/extra_effort.py` |
 
 ### A trap worth recording
 
@@ -858,6 +875,68 @@ row and the `range: "Rank"` substitution in `effect_stat_rows` were the last two
 built from `effect.rank` rather than the live one; both now read `effect_live_rank`, which
 also fixes them for an ordinary rank dial, where they had been wrong all along.
 
+### R. Extra Effort (pass 14)
+
+The **whole of §6H except the stunt**, and the first pass on this branch rather than the
+audit's own. Extra Effort is Chapter 1 (p20-21) and the Powers chapter leans on it
+constantly: a Sustained effect can be pushed and stunted with and a Permanent one cannot
+(p104, p155, p159), Regeneration's Sustained extra exists precisely so Extra Effort can
+reach it (p142), and three advantages do nothing else (Determination p85, Extraordinary
+Effort p86, Untapped Potential p94). None of it was modelled — `grep` found the phrase only
+in data descriptions.
+
+**The data.** `system.json` grew an `extra_effort` block: the six uses the book lists (each
+saying whether it has to name one of the character's own effects), the fatigue ladder as
+condition ids, what a rank increase and a check bonus are worth, which durations refuse it,
+and the three advantages by name. `ExtraEffortRules`/`ExtraEffortUse` parse it the way
+`ImprovisedEffectRules` does, so a ruleset retunes every one of those without Python — and
+a mod adding a seventh use is offered it in the menus for free.
+
+**The price.** `spend_extra_effort` walks the ladder from wherever the character already
+stands — nothing → Fatigued → Exhausted → Incapacitated — and applies each rung through the
+ordinary `apply_condition`. That is the whole reason it is a list of ids rather than a rule:
+Exhausted *supersedes* Fatigued in `conditions.json`, so climbing removes the rung climbed
+from without a second rule saying so, and the bundled Impaired/Hindered arrive as they do
+for any other condition. `next_fatigue(char, data, steps)` is the same walk as a lookahead,
+which is how the dialog promises exactly what taking it will do.
+
+**The benefit.** One of the six changes a number the sheet prints, and it is the interesting
+one: `PowerEffectInstance.extra_effort` is how many ranks are pushed in, and
+`effect_current_rank` adds them **after** every clamp. That placement is the rule —
+"its benefits can even increase your ranks or bonuses beyond the normal Power Level limits"
+— so a push goes past the bought rank, past a hard `pl_cap`, and past a Dynamic member's
+share of its array's pool. Reading it in that one funnel is what makes the save DC, the
+speeds, the trait boosts and the card title all follow, exactly as pass 13 found for the
+pool. Cost never asks and validation never asks: both take the *build* rank, and a Power
+Level check is a statement about the build. The card grows an `Extra Effort` row
+(`+2 ranks, until the end of your turn`) for the same reason `pl_cap_note` exists — a number
+that moved with nothing on the page to explain it is worse than no feature.
+
+**Who may be pushed** is a duration question, asked of the effect's *resolved* duration:
+`effect_allows_extra_effort` refuses a Permanent one, which means the Sustained extra lifts
+the refusal and the Permanent flaw imposes it, both for free and both correct.
+
+**The advantages.** Untapped Potential adds its ranks to the increase (2 at rank 1, "each
+additional rank adds 1"); Extraordinary Effort takes the benefit twice for two rungs of the
+ladder; Determination shrugs the fatigue off entirely, either as a use of the advantage or
+as the Heroic Feat a Hero Point buys (p22).
+
+**Where it is spent.** Two blocks, because it is paid for in two other blocks' currencies.
+`ui/extra_effort.py` holds the shared menu and dialog: the **card's right-click menu** (now
+`card_menu`, with the counter rolls below a separator) offers the two uses that name an
+effect, and the **System block** offers the four that name nothing, beside the hero points.
+Both survive the lock — spending Extra Effort is a mid-play action, like clicking a pip or
+selecting an array's live alternate. The fatigue is written to the shared model and the
+Conditions block **subscribes** to `condition-changed` to follow it, which it never did
+before (it only published it); the hero point cannot be written that way, because the pips,
+the clamp and the roll-history sentence are one funnel in `SystemInfoSection` — so a new
+`hero-point-requested` request topic asks that block for it, the way `note-requested`
+already asks the Dice block for a line.
+
+**What the screenshot found, as usual.** The dialog built the "take it twice" checkbox
+*above* the sentence it changes, so the benefit line read as a consequence of nothing. The
+controls are now built in one order and laid out in another, on purpose.
+
 ### Mechanisms now available — reuse these
 
 A later pass should reach for these rather than inventing a parallel one.
@@ -899,6 +978,12 @@ A later pass should reach for these rather than inventing a parallel one.
 | `live_array_children` | `runtime.py` | the one place an array decides *which* of its members are running; anything that changes that answer belongs here rather than in `live_powers` |
 | `effect_current_rank(effect, game_data, char)` | `runtime.py` | the single source for "what rank is this running at" — reading a new restriction *there* is what makes the DC, the trait boosts, the speeds, the readouts and the card title follow from one number |
 | `DynamicPoolDialog` | `ui/sections/dynamic_pool_dialog.py` | a runtime editor that survives the lock, with each row bounded by what the others left — the pattern for any "hand out a budget at the table" control |
+| `extra_effort` on an effect | `PowerEffectInstance`, added by `effect_current_rank` | the one runtime number that reaches **above** the bought rank, past every clamp — the shape of any "spend something at the table to exceed your build" rule |
+| `system.json`'s `extra_effort` block | `ExtraEffortRules`, `extra_effort_uses` | a list of *uses* each declaring what it must be pointed at (`target: "effect"`), so both menus are built from the ruleset and a seventh use needs no Python |
+| `spend_extra_effort` | `core/rules/extra_effort.py` | grant the benefit, then charge the ladder through `apply_condition` — the pattern for any cost paid in conditions, since supersession then comes from the catalog rather than from a second rule |
+| `hero-point-requested` | `ui/blocks/bus.py`, served by `SystemInfoSection.adjust_hero_points` | one block spending another block's currency, without either naming the other — the twin of `note-requested` |
+| `ConditionsSection` subscribing to `condition-changed` | `blocks/registry.py` | any block may now write a condition to the shared model and have the chips follow; the resolver stays core's |
+| `effect_display_name` | `runtime.py` | "this effect's own label, else the base effect's name" — the idiom three call sites had each spelled out |
 
 ---
 
@@ -921,15 +1006,35 @@ it worked.
 
 ### G. Improvised Effects — **done in pass 10, see §5N**
 
-### H. Extra Effort and power stunts
+### H. Power stunts — **the effort itself is done in pass 14, see §5R**
 
-Not modelled anywhere (`grep` finds the phrase only in data descriptions). Chapter 1 rather
-than Chapter 6, but the Powers chapter leans on it constantly: a **Sustained** effect can be
-pushed with Extra Effort and used for stunts, a **Permanent** one cannot (p106, p157); a
-power stunt is a temporary alternate effect bought with Extra Effort and a Hero Point (p101,
-p106); Regeneration's Sustained extra exists precisely so Extra Effort can reach it (p142).
-Several flaws — Tiring, Fades, Short-Term — are written in terms of it. Wide enough that it
-should probably be its own branch after this one merges.
+What is left of §6H is the stunt: "you can use a temporary Alternate Effect of a
+non-permanent duration effect you have" (p20), bought with Extra Effort and usually a Hero
+Point, and "that is what the power stunts guidelines are for, after all: so you do not have
+to fill up character sheets with long lists of minor alternate effects a hero will rarely
+ever use" (p101). Today the app charges the effort and records which effect the stunt was
+taken from, and the GM adjudicates the rest; the *alternate effect* is not built.
+
+**Rules.** A stunt is an alternate effect, so it is bounded like one — a build no dearer
+than the power it hangs off — but it is temporary, costs no Power Points, and is gone at
+the end of the scene. The GM has final say over which stunts make sense (p20), and changing
+only a *descriptor* is itself a stunt (p104).
+
+**What that needs.** A `Power` that costs nothing and knows it: the constructor opened from
+a card's Extra Effort menu, the result attached to the character as a stunt rather than a
+bought power, marked on its card, excluded from `power_points_spent` and from the array
+arithmetic, and thrown away by the same button that clears a push. `USE_POWER_STUNT` is
+where it starts.
+
+**Two things to settle first.** Whether a stunt is a member of the power's own array (which
+is what the rules call it, and which drags the array pooling in) or a card of its own with a
+back-reference (simpler, and honest about being temporary). And whether it is saved at all:
+runtime state is persisted now, but a stunt is scoped to a scene, and a build that reopens
+with three stunts on it is a build nobody meant to keep.
+
+**Acceptance.** A stunt can be assembled from a card, costs 0 PP, shows as a stunt, rolls
+like the power it came from, and is cleared in one click; the point total and the Power
+Level checks are untouched by it.
 
 ### I. Enhanced Senses' Dimensional option — **done in pass 5, see §5G**
 
@@ -1107,6 +1212,36 @@ Things a later pass will trip over if it does not know them.
 22. **`effect_current_rank` can now return 0.** Only through the pool, and only for a
    member below its minimum — but every reader of it should be checked against that
    before assuming a rank is at least 1. The dial's own floor is unchanged.
+23. **Only an *effect* can be pushed.** The rank increase "includes improving your
+   Strength rank for either Damage or Lifting, or your movement Speed rank in one mode of
+   movement you have" (p21), and neither of those is a `PowerEffectInstance`: they are an
+   ability and a derived readout. The seam for them exists — `trait_contributions` is where
+   a temporary ability bonus would join size, powers, advantages and gear — but it is a
+   second feature with a second control, and pass 14 did the half the Powers chapter needs.
+   A Flight or a Speed *effect* is pushable today; unaided ground speed and Strength are not.
+24. **Four of the six uses charge the fatigue and change no number.** An extra action, a
+   +2 on a check, a renewed attempt and a fresh resistance check are table business: the app
+   records them in the roll history and takes the rung. The +2 in particular does *not* reach
+   the roller's bonus slider — wiring it there would mean the roller knowing which roll the
+   effort was spent on, which nothing tracks.
+25. **Nothing expires.** Extra Effort lasts "until the end of your turn" and the fatigue
+   arrives "at the start of your next turn"; the app has no turn tracker, so the push is
+   cleared by a button (per power on its card, per character in the System menu) and the
+   fatigue lands immediately. The same bargain the Dynamic split strikes, and the same one
+   the *whole* condition tracker strikes — recovery is out of scope there too.
+26. **Determination's per-adventure uses are not counted.** The dialog offers the advantage
+   route and says how many the sheet has; nothing decrements, because nothing knows when an
+   adventure ends. A counter with no reset would lie more confidently than no counter.
+27. **Extraordinary Effort is modelled as the same benefit twice**, not as two different
+   ones. "You can gain two of the listed benefits, even stacking two of the same" (p86) —
+   the doubled rank increase and the doubled fatigue are exact; taking an extra action *and*
+   a rank increase for one doubled cost means using the menu twice, which charges two rungs
+   anyway. The arithmetic agrees; only the wording of the second use is missing.
+28. **The Conditions block re-renders twice for its own changes.** It now subscribes to
+   `condition-changed` as well as publishing it (which is what lets Extra Effort's fatigue
+   reach the chips), so its own edit renders once directly and once off the bus. Idempotent
+   and cheap, and the alternative — a writer that is trusted not to be the block itself —
+   is the kind of exception that rots.
 
 ---
 
@@ -1126,4 +1261,7 @@ Things a later pass will trip over if it does not know them.
 9. ~~**§6K the Dynamic point pool**~~ — done in pass 13 (§5Q). **§6 is now empty of
    anything this branch owns**, so the branch is ready to merge into `develop` with
    `--no-ff` whenever the user says the job is done, and this file can go with it.
-10. **§6H Extra Effort and power stunts** — its own branch, after this one merges.
+10. ~~**§6H Extra Effort**~~ — done in pass 14 (§5R), on
+    `feature/extra-effort-and-power-stunts` off `develop`.
+11. **§6H power stunts** — the last item this job owns, and the reason the branch is named
+    for both. Same branch, next pass.

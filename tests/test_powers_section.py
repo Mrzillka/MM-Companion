@@ -225,16 +225,19 @@ def test_the_counter_menu_asks_the_roller_rather_than_rolling(qapp: QApplication
     sec = _sheet_for(char).powers
     card = next(c for c in sec.findChildren(_DraggableCard) if c.node_id == blast.id)
 
-    menu = sec.counter_menu(card, counter_rolls(blast, char, data))
-    # One entry per effect that could be readied, each naming which one it is.
-    labels = [action.text() for action in menu.actions()]
-    assert len(labels) == 2
+    menu = sec.card_menu(card, blast)
+    # One entry per effect that could be readied, each naming which one it is — below
+    # the separator that divides them from the card's Extra Effort entries.
+    actions = menu.actions()
+    counters = actions[[a.isSeparator() for a in actions].index(True) + 1 :]
+    labels = [action.text() for action in counters]
+    assert len(labels) == len(counter_rolls(blast, char, data)) == 2
     assert "Damage" in labels[0] and "+6" in labels[0]
     assert "Affliction" in labels[1] and "+4" in labels[1]
 
     seen: list = []
     sec.rollRequested.connect(seen.append)
-    menu.actions()[0].trigger()
+    counters[0].trigger()
     # The section asks the roller, exactly as its footer lines do; it never rolls.
     assert len(seen) == 1 and seen[0].modifier == 6 and seen[0].dc is None
 

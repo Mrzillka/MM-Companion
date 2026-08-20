@@ -175,6 +175,15 @@ class PowerEffectInstance:
     :func:`mm_companion.core.rules.power_gross_cost`. Written only when set, so a power
     saved before this is byte-for-byte what it was and still costs what it did.
 
+    ``extra_effort`` is how many ranks of **Extra Effort** are currently pushed into
+    this effect (p20-21) — runtime state again, and the only one that reaches *above*
+    the bought rank: straining past your limits is exactly what Extra Effort is, and
+    "its benefits can even increase your ranks or bonuses beyond the normal Power Level
+    limits". 0 — the default — is an effect nobody is pushing, so an untouched effect
+    behaves and serializes as it always did. It costs nothing (the price is a rung of
+    the fatigue ladder, on the character) and validation never sees it, because a Power
+    Level cap is a statement about the build.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -200,6 +209,7 @@ class PowerEffectInstance:
     rank_dial: bool = False
     current_rank: int | None = None
     dynamic: bool = False
+    extra_effort: int = 0
     overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -232,6 +242,8 @@ class PowerEffectInstance:
             data["current_rank"] = self.current_rank
         if self.dynamic:
             data["dynamic"] = True
+        if self.extra_effort:
+            data["extra_effort"] = self.extra_effort
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
@@ -255,6 +267,7 @@ class PowerEffectInstance:
             suppressed=bool(raw.get("suppressed", False)),
             current_rank=None if current is None else int(current),
             dynamic=bool(raw.get("dynamic", False)),
+            extra_effort=max(0, int(raw.get("extra_effort", 0))),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 

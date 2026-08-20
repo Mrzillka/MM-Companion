@@ -688,13 +688,19 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 
 ### Extra Effort and power stunts
 
-- **Only an *effect* can be pushed.** The rank increase "includes improving your Strength
-  rank for either Damage or Lifting, or your movement Speed rank in one mode of movement you
-  have" (p21), and neither of those is a `PowerEffectInstance`: they are an ability and a
-  derived readout. The seam exists — `trait_contributions` is where a temporary ability bonus
-  would join size, powers, advantages and gear — but it is a second feature with a second
-  control. A Flight or a Speed *effect* is pushable today; unaided ground speed and Strength
-  are not.
+- **A trait can be pushed as well as an effect.** The rank increase names an effect, "your
+  Strength rank for either Damage or Lifting, or your movement Speed rank in one mode of
+  movement you have" (p21). The last two are not `PowerEffectInstance`s, so they are stored
+  on the character (`Character.extra_effort`, keyed `"category:stat"`) and reach the sheet
+  through `effort_contributions`, which joins `trait_contributions` and `_movement_grants`
+  in `GROUP_EFFORT` — a group that is *added* rather than weighed, since the benefit
+  explicitly goes "beyond the normal Power Level limits". What may be pushed is data
+  (`system.json`'s `pushableTraits`); a movement entry names no stat and is expanded into
+  the modes **this character has**, since that is a fact about the sheet. The System block
+  offers them as a submenu of the rank increase — neither has a card to be offered on —
+  and says beside the button what is currently held up. **Strength is applied as the
+  ability**, which is broader than "for Damage or Lifting": the app has no separate lifting
+  trait to aim at, which is the same simplification the shipped Lifting *effect* makes.
 - **Four of the six uses charge the fatigue and change no number.** An extra action, a +2 on
   a check, a renewed attempt and a fresh resistance check are table business: the app records
   them in the roll history and takes the rung. The +2 in particular does not reach the

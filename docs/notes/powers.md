@@ -563,12 +563,15 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 - **The equipment-currency configurations build as powers, not gear.** Commlink is "1
   Equipment Point per rank" and still drops onto the power canvas like anything else (see
   [the equipment layer](equipment.md) for the currency it ought to be bought in).
-- **A power-scope modifier stops at the `Power`.** Removable is charged once per `Power`,
-  which is what the rules mean by "the power as a whole" — so a device modelled as a
-  `PowerGroup` of several powers gets one discount *per child power*, each priced from that
-  child's own total. That is the same arithmetic only when every split lands on a multiple
-  of 5. Nothing checks for it; the honest build is one power with many effects, which is how
-  the book's own armour example is written.
+- **A power-scope modifier stops at the `Power`**, which is what the rules mean by "the
+  power as a whole" — so a device modelled as a `PowerGroup` of several powers gets one
+  discount *per child power*, each rounded up on its own. That is the same arithmetic only
+  when every split lands on a multiple of 5. `group_scope_note` **states** the difference
+  on the group's cost tooltip and never warns about it: three genuinely separate removable
+  devices really are charged three times, and nothing can tell that build from one device
+  split across three cards. It is silent unless the two numbers actually differ. The honest
+  single-device build is one power with many effects, which is how the book's own armour
+  example is written.
 - **An array's total shows its working** (`array_cost_formula`) — `23 PP (20 base + 1
   Dynamic base + 2 × 1 alternate)` — on the constructor's cost line and, since a card
   header has no room for a second number, on the tooltip of a group's or a card's cost

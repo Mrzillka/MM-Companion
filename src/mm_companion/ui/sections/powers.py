@@ -97,6 +97,7 @@ from mm_companion.core.rules import (
     effect_current_rank,
     effect_stands,
     group_array_base_index,
+    group_scope_note,
     leaf_powers,
     live_array_children,
     live_powers,
@@ -942,9 +943,15 @@ class PowersSection(TitledSection):
         this say 23 when the cards say 10, 16 and 20" is already pointing.
         """
 
-        working = node_cost_formula(node, self._data, self._character)
-        if working:
-            label.setToolTip(working)
+        parts = [node_cost_formula(node, self._data, self._character)]
+        if isinstance(node, PowerGroup):
+            # Not a warning: three genuinely separate removable devices really are
+            # charged three times, and nothing can tell that build from one device split
+            # across three cards. It states the arithmetic and lets the player decide.
+            parts.append(group_scope_note(node, self._data, self._character))
+        tooltip = "\n".join(part for part in parts if part)
+        if tooltip:
+            label.setToolTip(tooltip)
 
     def _arm_card_menu(self, card: DraggableCard, power: Power) -> None:
         """Arm the card's right-click menu — Extra Effort, then this power's counters.

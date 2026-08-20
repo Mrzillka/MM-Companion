@@ -1554,6 +1554,62 @@ def power_cost_formula(power: Power, game_data: GameData, char: Character | None
     return text
 
 
+def group_scope_note(group: PowerGroup, game_data: GameData, char: Character | None = None) -> str:
+    """What a **power-scope** modifier costs a group, when several children carry one.
+
+    Removable is charged "per 5 points of the power's final cost" and applies to "the
+    power as a whole" (p161) — and a `Power` is where that whole stops. So a device
+    modelled as a *group* of three removable powers is charged three separate discounts,
+    each rounded up on its own, which is not the same number as one power with the same
+    effects: three powers of 6 points are discounted 2 each, where an 18-point power is
+    discounted 4.
+
+    That is not a mistake to be corrected — three genuinely separate removable devices
+    really are charged three times, and nothing here can tell that build from the other
+    one. So this **states the arithmetic** rather than warning about it, and only when
+    the two numbers actually differ. The honest single-device build is one power with
+    many effects, which is how the book's own armour is written; a player who can see
+    what the split is worth can decide which they meant.
+
+    ``""`` when no modifier is doubled up, or when splitting changes nothing.
+    """
+
+    if group.mode == STRUCTURE_ARRAY:
+        # An array pays for one member, so a second child's discount is not a second
+        # discount on the same points — there is nothing to compare against.
+        return ""
+    children = [child for child in group.children if isinstance(child, Power)]
+    charged: dict[str, list[PowerScopeTerm]] = {}
+    for child in children:
+        for term in power_scope_terms(
+            child, game_data, power_gross_cost(child, game_data, char), char
+        ):
+            charged.setdefault(term.modifier.id, []).append(term)
+    notes = []
+    for terms in charged.values():
+        if len(terms) < 2:
+            continue
+        separate = sum(term.amount for term in terms)
+        # What one power holding every one of these effects would have been charged: the
+        # costliest tier taken, against the summed gross.
+        whole = sum(power_gross_cost(child, game_data, char) for child in children)
+        dearest = max(terms, key=lambda t: abs(t.amount))
+        units = (
+            math.ceil(whole / dearest.modifier.cost_per_points)
+            if dearest.modifier.cost_per_points > 0
+            else 1
+        )
+        combined = (-1 if dearest.amount < 0 else 1) * dearest.magnitude * units
+        if separate == combined:
+            continue
+        notes.append(
+            f"{dearest.modifier.name} is charged once per power, so this group takes it "
+            f"{len(terms)} times ({abs(separate)} points, where one power holding the "
+            f"same effects would be {abs(combined)})."
+        )
+    return " ".join(notes)
+
+
 def node_cost_formula(node: PowerNode, game_data: GameData, char: Character | None = None) -> str:
     """The working behind a *tree node's* total — the group-level twin of
     :func:`power_cost_formula`, and empty whenever there is nothing to explain.

@@ -59,6 +59,7 @@ from mm_companion.core.rules import (
     granted_advantages,
     granted_skill_rows,
     group_array_base_index,
+    group_scope_note,
     imposable_effects,
     imposed_effect_cost,
     live_array_children,
@@ -873,6 +874,48 @@ def test_a_removable_array_shows_both_halves_of_its_arithmetic() -> None:
     assert power_gross_cost(power, data) == 21
     assert power_total_cost(power, data) == 16
     assert power_cost_formula(power, data) == "21 (20 base + 1 alternate) − 5 Removable"
+
+
+def test_a_group_states_what_splitting_a_removable_device_is_worth() -> None:
+    data = load_game_data()
+
+    def plate(rank: int) -> Power:
+        effect = PowerEffectInstance("protection", rank=rank)
+        effect.flaws.append(ModifierSelection("removable", config={"tier": "removable"}))
+        return Power(name=f"Plate {rank}", effects=[effect])
+
+    # Removable is charged per 5 points of *a power's* final cost, and a Power is where
+    # "the power as a whole" stops — so three 6-point powers are discounted 2 each where
+    # one 18-point power would be discounted 4.
+    group = PowerGroup(mode=STRUCTURE_INDEPENDENT, children=[plate(6), plate(6), plate(6)])
+    assert node_cost(group, data) == 12
+    note = group_scope_note(group, data)
+    assert "charged once per power" in note
+    assert "3 times (6 points, where one power holding the same effects would be 4)" in note
+
+
+def test_a_group_says_nothing_when_the_split_changes_no_number() -> None:
+    data = load_game_data()
+
+    def plate(rank: int) -> Power:
+        effect = PowerEffectInstance("protection", rank=rank)
+        effect.flaws.append(ModifierSelection("removable", config={"tier": "removable"}))
+        return Power(name=f"Plate {rank}", effects=[effect])
+
+    # Two 10-point powers are discounted 2 each; one 20-point power is discounted 4. The
+    # same number, so there is nothing to say — the split only gains when a rounding does.
+    even = PowerGroup(mode=STRUCTURE_INDEPENDENT, children=[plate(10), plate(10)])
+    assert group_scope_note(even, data) == ""
+    # One removable child is not a split at all.
+    lone = PowerGroup(
+        mode=STRUCTURE_INDEPENDENT,
+        children=[plate(6), Power(effects=[PowerEffectInstance("damage", rank=4)])],
+    )
+    assert group_scope_note(lone, data) == ""
+    # An array pays for one member, so a second child's discount is not a second discount
+    # on the same points and there is nothing to compare.
+    array = PowerGroup(mode=STRUCTURE_ARRAY, children=[plate(6), plate(6)])
+    assert group_scope_note(array, data) == ""
 
 
 def test_only_a_pooling_array_owes_a_working() -> None:

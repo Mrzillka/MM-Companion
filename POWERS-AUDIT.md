@@ -44,7 +44,7 @@ after that merge:
 ```
 bc6020e  Charge Extra Effort, and let it push a rank past the build
 0933268  Record pass 14's commit hash in the audit
-(pass 15's hash — recorded in the follow-up commit, as every pass before it was)
+809a580  Let a hero invent a power stunt at the table
 ```
 
 The passes that were merged, for reference:

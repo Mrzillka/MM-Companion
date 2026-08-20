@@ -30,6 +30,7 @@ from .runtime import (
     boost_allocations,
     config_trait_allocation,
     effect_current_rank,
+    set_array_base_index,
     set_dynamic_rank_cap,
 )
 from .size import effective_size_rank
@@ -1656,3 +1657,8 @@ def node_display_cost(
 # here instead (see :func:`~.runtime.set_dynamic_rank_cap`). Importing this module is what
 # turns the pool on, and :mod:`mm_companion.core.rules` always does.
 set_dynamic_rank_cap(dynamic_rank_cap)
+
+# The same hand-over for the same reason: which effect of an array is its base is a
+# question about cost, and an unselected array runs its base
+# (:func:`~.runtime.active_array_effect_index`).
+set_array_base_index(array_base_index)

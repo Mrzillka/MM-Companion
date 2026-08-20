@@ -647,6 +647,79 @@ def test_inactive_linked_group_disables_nested_member_cards(qapp: QApplication) 
     assert not any(c.is_clickable() for c in nested_member_cards(off_card))
 
 
+def _effect_array_sheet(qapp: QApplication):
+    from mm_companion.ui.character_sheet import CharacterSheet as _Sheet
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(
+        name="Elemental Command",
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("protection", rank=10),
+            PowerEffectInstance("flight", rank=6),
+        ],
+    )
+    char.powers.append(power)
+    return _Sheet(data, char), char, power
+
+
+def test_an_array_power_gets_a_picker_for_the_effect_it_is_using(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    (selector,) = sheet.powers.findChildren(_EffectSelector)
+    # Seeded on the base — Flight 6 costs 12 to the Protection's 10 — not on the first
+    # effect that happens to have been dropped on the canvas.
+    assert selector._combo.currentText() == "Flight 6"
+    assert [selector._combo.itemText(i) for i in range(selector._combo.count())] == [
+        "Protection 10",
+        "Flight 6",
+    ]
+
+
+def test_picking_an_effect_is_runtime_not_a_build_change(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    runtime: list[int] = []
+    changed: list[int] = []
+    sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
+    sheet.powers.changed.connect(lambda: changed.append(1))
+
+    sheet.powers.findChildren(_EffectSelector)[0]._combo.setCurrentIndex(0)
+    assert power.active_effect == 0
+    # Which alternate you are using is a play action, so it never marks the *build* as
+    # having moved — the same bargain the rank dial and the array-member click strike.
+    assert runtime and not changed
+
+
+def test_only_an_array_power_gets_the_picker(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    power.structure = STRUCTURE_INDEPENDENT
+    sheet.powers.refresh()
+    assert not sheet.powers.findChildren(_EffectSelector)
+
+    # ...and neither does an array of one, which pools nothing.
+    power.structure = STRUCTURE_ARRAY
+    del power.effects[1]
+    sheet.powers.refresh()
+    assert not sheet.powers.findChildren(_EffectSelector)
+
+
+def test_the_effect_picker_survives_the_lock(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, _power = _effect_array_sheet(qapp)
+    sheet.set_locked(True)
+    (selector,) = sheet.powers.findChildren(_EffectSelector)
+    assert not selector._combo.testAttribute(
+        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+    ), "choosing an alternate mid-play is not a build edit"
+
+
 def test_a_power_stunt_is_refused_a_group(qapp: QApplication) -> None:
     data = load_game_data()
     char = Character.new_default(data)

@@ -18,6 +18,18 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   independent and linked sum their effects' costs (linked is a +0 bundle), an
   array pays the costliest effect in full plus a flat point per alternate. Cost
   math and the game-terms summary read `structure` to decide.
+- **Only one effect of an array runs at a time**, which is the reason it is cheaper than
+  the same effects bought independently — so the discount and the restriction are two
+  halves of one rule and have to be enforced together. `Power.active_effect` is the
+  runtime index of the effect in use (`None` = the base, the costliest, the one paid for
+  in full), `active_array_effect_index` clamps it the way `effect_current_rank` clamps a
+  dialled rank, and `effect_is_selected` gates `effect_is_active` on it — which is the
+  one door every standing contribution goes through, so trait bonuses, movement and size
+  are all covered by the single check. The card carries a **Using** picker
+  (`_EffectSelector`) and fades the effects that are not running. It is the whole-card
+  twin, one level down, of the click that selects an array *group's* live member; the
+  default differs on purpose (a group falls back to its first child, since a group's
+  children are cards the player ordered themselves).
 - **A member of an array can be `dynamic`.** An ordinary alternate is mutually
   exclusive with its siblings and costs 1 point; a **Dynamic** one shares the array's
   point pool and runs *alongside* the array's other Dynamic members at reduced
@@ -642,11 +654,12 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 
 - **A pooled split lives only at the group level.** `dynamic_points` is on `Power` and
   `PowerGroup`, not on `PowerEffectInstance`, so an array of a *single power's own effects*
-  is priced for Dynamic members but cannot split its pool. The reason is one level down: an
-  effect-level array has **no runtime member selection at all** — nothing checks "is this the
-  selected effect", so every effect of an array-structured power is live simultaneously
-  today, Dynamic or not. Building a pool on top of that would ration ranks in an array that
-  is already, wrongly, running everything; fixing the selection first is the honest order.
+  is priced for Dynamic members but cannot split its pool. The selection underneath it is
+  now there — `Power.active_effect` names the effect in use, `effect_is_selected` gates
+  `effect_is_active` on it, and the card carries a **Using** picker — so an effect-level
+  pool is buildable in the way it was not before: it wants `dynamic_points` on
+  `PowerEffectInstance`, a `live_array_effects` beside `live_array_children`, and a way to
+  reach the split dialog from a card rather than from a group header.
 - **A split array's ordinary members go dark.** `live_array_children` gives the pool
   priority: once any Dynamic member holds a share, the array's *non*-Dynamic alternates are
   not running, since they cannot hold a share and the whole pool is spoken for. That is the

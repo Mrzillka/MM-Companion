@@ -1049,6 +1049,36 @@ def build(target: str):
             if key not in ("powers", "system_info"):
                 sheet.hide_block(key)
         win.resize(900, 760)
+    elif target == "effect-array":
+        # A power whose *own effects* are an array: one card, three effects, and only
+        # one of them running. Before the selector existed all three contributed at
+        # once, so the array handed out an independent build's bonuses for an array's
+        # price. The System block stays, so the Toughness the live effect grants can be
+        # read against the card.
+        from mm_companion.core.powers import STRUCTURE_ARRAY, Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        power = Power(
+            name="Elemental Command",
+            structure=STRUCTURE_ARRAY,
+            effects=[
+                PowerEffectInstance("protection", rank=10),
+                PowerEffectInstance("flight", rank=6),
+                PowerEffectInstance(
+                    "enhanced_trait", rank=4, config={"traits": [{"trait": "STR", "ranks": 4}]}
+                ),
+            ],
+        )
+        power.description = "Stone skin, a gale at your back, or a giant's grip — one at a time."
+        sheet.character.powers.append(power)
+        sheet.powers.refresh()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(950, 900)
     else:  # pragma: no cover - guarded by argparse choices
         raise ValueError(target)
 
@@ -1110,6 +1140,7 @@ def main(argv: list[str] | None = None) -> int:
             "pool-dialog",
             "sheet-broken",
             "sheet-stunt",
+            "effect-array",
             "all",
         ],
         help="which UI surface to launch and screenshot",

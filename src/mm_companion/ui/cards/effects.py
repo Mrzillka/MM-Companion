@@ -9,7 +9,14 @@ power's effects, or an equipment item's — an item *is* a :class:`Power` under 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
@@ -25,6 +32,7 @@ from mm_companion.core.rules import (
     array_base_index,
     effect_attack_skill_bonus,
     effect_effective_rank,
+    effect_is_selected,
     effect_stat_rows,
     modifier_label,
 )
@@ -91,6 +99,10 @@ def effect_summary(
 
     header = QHBoxLayout()
     header.setContentsMargins(0, 0, 0, 0)
+    # Explicit, because a layout with zeroed margins can be given zero spacing too by
+    # the platform style — which ran the role note straight into the rank before it
+    # ("Protection 10alternate (1 pt)").
+    header.setSpacing(int(theme.metric("space.sm")))
     title = QLabel(effect_title(effect, character, data))
     title.setStyleSheet(BOLD_STYLE)
     header.addWidget(title)
@@ -112,6 +124,23 @@ def effect_summary(
     # terms take the whole width rather than leaving a third of the card blank.
     body.addLayout(terms_grid(effect, character, data), TERMS_STRETCH)
     layout.addLayout(body)
+
+    # An array's other effects are not running — only one is at a time, which is what
+    # the array paid for. Their numbers stay on the card (a player choosing between them
+    # needs to read them) but recede, so the summary never looks like a list of bonuses
+    # that all apply.
+    #
+    # Opacity, not ``setEnabled(False)``: every label here carries an explicit stylesheet
+    # colour (bold, muted, green/red tints), and a stylesheet colour outranks the
+    # disabled palette — so disabling the block greyed almost nothing. The card's own
+    # switched-off look reaches for the same effect and the same token
+    # (:meth:`~mm_companion.ui.cards.card.DraggableCard._apply_opacity`), and an effect
+    # is only attached while it is wanted, since one forces its whole subtree to paint
+    # through an offscreen buffer.
+    if not effect_is_selected(power, effect, data, character):
+        faded = QGraphicsOpacityEffect(box)
+        faded.setOpacity(theme.metric("opacity.inactive"))
+        box.setGraphicsEffect(faded)
     return box
 
 

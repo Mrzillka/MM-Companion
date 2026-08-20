@@ -23,6 +23,7 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     ability_rank_contribution,
+    active_array_effect_index,
     advantage_points_spent,
     array_alternate_cost,
     array_base_index,
@@ -44,6 +45,7 @@ from mm_companion.core.rules import (
     effect_game_terms,
     effect_is_active,
     effect_is_personal,
+    effect_is_selected,
     effect_makes_attack,
     effect_opposed_check,
     effect_per_rank_cost,
@@ -449,6 +451,103 @@ def test_a_gated_config_field_prints_no_readout_while_its_gate_is_shut() -> None
     effect.config["imposedEffect"] = "shrinking"
     (row,) = [r for r in effect_stat_rows(effect, data, None, 0) if r.key == "imposedRank"]
     assert (row.label, row.value) == ("At rank", "1")
+
+
+def _elemental_array() -> tuple[Character, Power, object]:
+    """A Protection 10 / Flight 6 / Enhanced Trait 4 array in **one** power.
+
+    Flight 6 is the costliest at 12 PP, so it is the base and the array pays 14 — the
+    same three effects bought independently cost 30.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(
+        name="Elemental Command",
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("protection", rank=10),
+            PowerEffectInstance("flight", rank=6),
+            PowerEffectInstance(
+                "enhanced_trait", rank=4, config={"traits": [{"trait": "STR", "ranks": 4}]}
+            ),
+        ],
+    )
+    char.powers.append(power)
+    return char, power, data
+
+
+def test_only_one_effect_of_an_array_power_runs_at_a_time() -> None:
+    char, power, data = _elemental_array()
+    # The whole point of an array: it is cheaper *because* only one member runs. Every
+    # effect used to contribute at once, so this build handed out the 30-point
+    # independent version's bonuses for 14.
+    assert power_total_cost(power, data, char) == 14
+    bonuses = power_trait_bonuses(char, data)
+    assert dict(bonuses["resistance"]) == {}
+    assert dict(bonuses["ability"]) == {}
+
+    power.active_effect = 0
+    assert set(power_trait_bonuses(char, data)["resistance"]) == {"TOUGHNESS"}
+    power.active_effect = 2
+    assert set(power_trait_bonuses(char, data)["ability"]) == {"STR"}
+    assert dict(power_trait_bonuses(char, data)["resistance"]) == {}
+
+
+def test_an_unselected_array_power_runs_its_base() -> None:
+    char, power, data = _elemental_array()
+    # The base is the costliest — the one the array pays for in full, and the one the
+    # card badges "base". (A *group* defaults to its first child instead; a group's
+    # children are cards the player ordered, a power's effects are drop order.)
+    assert power.active_effect is None
+    assert array_base_index(power, data, char) == 1
+    assert active_array_effect_index(power, data, char) == 1
+    assert effect_is_selected(power, power.effects[1], data, char)
+    assert not effect_is_selected(power, power.effects[0], data, char)
+
+
+def test_every_effect_runs_when_the_power_is_not_an_array() -> None:
+    char, power, data = _elemental_array()
+    for structure in (STRUCTURE_INDEPENDENT, STRUCTURE_LINKED):
+        power.structure = structure
+        assert all(effect_is_selected(power, e, data, char) for e in power.effects)
+    # An "array" of one pools nothing, so its single effect is not gated either.
+    power.structure = STRUCTURE_ARRAY
+    power.effects = power.effects[:1]
+    assert effect_is_selected(power, power.effects[0], data, char)
+
+
+def test_a_selection_is_clamped_to_the_effects_that_remain() -> None:
+    char, power, data = _elemental_array()
+    power.active_effect = 2
+    del power.effects[2]  # the build was edited down in the constructor
+    # The same bargain a dialled rank strikes: keep a selection that can still be
+    # honoured rather than pointing past the end.
+    assert active_array_effect_index(power, data, char) == 1
+    assert effect_is_selected(power, power.effects[1], data, char)
+
+
+def test_two_identical_effects_of_one_array_are_still_different_members() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A Damage array of two descriptors: same effect, same rank, different members.
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[PowerEffectInstance("damage", rank=8), PowerEffectInstance("damage", rank=8)],
+    )
+    char.powers.append(power)
+    power.active_effect = 1
+    assert not effect_is_selected(power, power.effects[0], data, char)
+    assert effect_is_selected(power, power.effects[1], data, char)
+
+
+def test_the_live_effect_survives_the_save_round_trip() -> None:
+    _char, power, _data = _elemental_array()
+    # Runtime state is persisted (a sheet reopens the way it was left), and written only
+    # when it says something — so a power nobody has switched adds nothing to the file.
+    assert "active_effect" not in power.to_dict()
+    power.active_effect = 2
+    assert Power.from_dict(power.to_dict()).active_effect == 2
 
 
 def test_growth_readout_maps_rank_to_size_table_modifiers() -> None:

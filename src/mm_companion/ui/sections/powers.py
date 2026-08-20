@@ -56,6 +56,7 @@ from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QInputDialog,
@@ -86,6 +87,7 @@ from mm_companion.core.rules import (
     USE_POWER_STUNT,
     PinRef,
     active_array_child,
+    active_array_effect_index,
     array_alternate_cost,
     array_dynamic_primary_cost,
     array_pool_points,
@@ -101,6 +103,7 @@ from mm_companion.core.rules import (
     node_cost_formula,
     node_display_cost,
     power_display_name,
+    power_effects_are_array,
     power_has_custom_modifier,
     power_has_standing_effect,
     power_roll_lines,
@@ -439,6 +442,60 @@ class _RankDial(QWidget):
 
     def _commit(self) -> None:
         self.rankPicked.emit(self._slider.value())
+
+
+class _EffectSelector(QWidget):
+    """Which effect of an array *power* is currently in use.
+
+    The whole-card twin of the click that selects an array **group's** live member, one
+    level down: a power whose own effects are an array runs exactly one of them at a
+    time, and that is what makes it cheaper than the same effects bought independently.
+    A card is one widget, though, so there is no card to click — hence a control.
+
+    A combo rather than the group header's segmented toggle: an effect reads as its name
+    and rank ("Enhanced Trait 4"), several of those do not fit across a card, and an
+    array may hold more than three. Like the rank dial it stays live in the locked
+    sheet — choosing which alternate you are using is a play action, not a build edit —
+    and takes no focus, because committing rebuilds the card out from under it.
+    """
+
+    effectPicked = Signal(int)
+
+    def __init__(
+        self,
+        titles: list[str],
+        current: int,
+        interactive: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(int(theme.metric("space.sm")))
+
+        caption = QLabel("Using")
+        caption.setStyleSheet(muted_style())
+        row.addWidget(caption)
+
+        self._combo = QComboBox()
+        self._combo.addItems(titles)
+        self._combo.setCurrentIndex(max(0, min(current, len(titles) - 1)))
+        self._combo.setToolTip(
+            "Only one effect of an array runs at a time — that is what makes an array "
+            "cheaper than the same effects bought separately. The others contribute "
+            "nothing to the sheet until you pick them."
+        )
+        self._combo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
+        self._combo.setCursor(
+            Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
+        )
+        guard_wheel(self._combo)
+        self._combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        row.addWidget(self._combo)
+        row.addStretch()
+
+        # Connected after the initial index, so seeding never reads as a choice.
+        self._combo.currentIndexChanged.connect(self.effectPicked)
 
 
 class PowersSection(TitledSection):
@@ -1384,6 +1441,12 @@ class PowersSection(TitledSection):
         if effects is not None:
             layout.addWidget(effects)
 
+        # Under the breakdown that names the effects, above the dials that turn one of
+        # them up: which of an array's effects is running is the choice you make first.
+        selector = self._effect_selector(power, interactive)
+        if selector is not None:
+            layout.addWidget(selector)
+
         # A dialled effect is a range, not a switch: a slider over the ranks the wielder
         # can hold it at, under the effect breakdown that explains what each notch is
         # worth and above the dice, with the rest of the mid-play controls.
@@ -1516,6 +1579,31 @@ class PowersSection(TitledSection):
         layout.addWidget(remove)
         remove.setVisible(not self._locked)
         return host
+
+    # -- the array's live effect ------------------------------------------
+    def _effect_selector(self, power: Power, interactive: bool) -> QWidget | None:
+        """The picker for which of an array power's own effects is in use; ``None``
+        for every power that is not one, which is nearly all of them."""
+
+        if not power_effects_are_array(power):
+            return None
+        titles = [effect_title(effect, self._character, self._data) for effect in power.effects]
+        current = active_array_effect_index(power, self._data, self._character)
+        selector = _EffectSelector(titles, current, interactive)
+        selector.effectPicked.connect(lambda index, p=power: self._on_effect_picked(p, index))
+        return selector
+
+    def _on_effect_picked(self, power: Power, index: int) -> None:
+        """Put an array power onto one of its own effects.
+
+        Runtime, so it emits ``runtimeChanged`` rather than ``changed`` — the same
+        bargain the rank dial and the array-member click strike. The rebuild is what
+        redraws every other effect's summary as no longer contributing.
+        """
+
+        power.active_effect = index
+        self._rebuild_list()
+        self.runtimeChanged.emit()
 
     # -- the rank dial ----------------------------------------------------
     def _rank_dials(

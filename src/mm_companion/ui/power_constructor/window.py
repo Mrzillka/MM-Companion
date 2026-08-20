@@ -45,15 +45,11 @@ from mm_companion.core.rules import (
     modifier_label,
     pl_cap_note,
     power_allocation_violations,
+    power_check_results,
     power_cost_formula,
-    power_imposed_effect_violations,
     power_linked_range_violations,
-    power_modifier_requirement_violations,
     power_pl_violations,
-    power_strength_amount_violations,
-    power_sub_build_violations,
     power_total_cost,
-    power_trait_allocation_violations,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.attachment_dialog import AttachmentDialog
@@ -1192,104 +1188,23 @@ class PowerConstructorWindow(QMainWindow):
     def _refresh_game_terms(self) -> None:
         self._terms.set_power(self.power, self._data, self._character)
 
-    def _pl_violations(self) -> list[str]:
-        """Power Level cap breaches for the current power (empty without a character)."""
-        if self._character is None:
-            return []
-        return power_pl_violations(self.power, self._character, self._data)
-
-    def _alloc_violations(self) -> list[str]:
-        """Tier-4 over-allocation breaches (an effect spending ranks it doesn't have)."""
-        return power_allocation_violations(self.power, self._data)
-
-    def _trait_cap_violations(self) -> list[str]:
-        """Allocation rows holding more ranks of a trait than it can be taken at.
-
-        Only advantages have a ceiling of their own — most are not ranked, a few cap at a
-        fixed number — so in practice this is "three ranks put into a one-rank advantage".
-        A warning, not a clamp: the row is the player's and on screen, and quietly
-        charging for fewer ranks than it shows would leave the footer disagreeing with it.
-        """
-
-        return power_trait_allocation_violations(self.power, self._data, self._character)
-
-    def _linked_violations(self) -> list[str]:
-        """Linked effects that don't share a common Range (a build error)."""
-        return power_linked_range_violations(self.power, self._data)
-
-    def _strength_violations(self) -> list[str]:
-        """Strength-Based amounts paying for more of an ability than the wielder has.
-
-        Constructor-only: the character-sheet card never shows this warning.
-        """
-        if self._character is None:
-            return []
-        return power_strength_amount_violations(self.power, self._character, self._data)
-
-    def _requirement_violations(self) -> list[str]:
-        """Modifiers attached without a prerequisite they depend on (Increasing
-        Difficulty without Cumulative/Progressive) — a house-rule warning."""
-        return power_modifier_requirement_violations(self.power, self._data)
-
-    def _imposed_violations(self) -> list[str]:
-        """An Affliction's Transformed condition imposing an effect it cannot afford.
-
-        The imposed effect may cost no more than the Affliction imposing it (p110), and
-        that budget moves every time the Affliction's rank or modifiers do — which is
-        why it is a live warning rather than something the picker could have prevented,
-        the way the picker does prevent a too-slow or non-Personal effect.
-        """
-        return power_imposed_effect_violations(self.power, self._data, self._character)
-
-    def _sub_build_violations(self) -> list[str]:
-        """Nested characters over their budget, past their count, or carrying what they
-        may not — a Summon's minion, a Metamorph's alternate forms (see
-        :mod:`mm_companion.core.rules.subbuilds`)."""
-        return power_sub_build_violations(self.power, self._data, self._character)
-
     def _refresh_pl_warning(self) -> None:
-        """Show or hide the live warning from the current PL, allocation, and link breaches."""
-        pl = self._pl_violations()
-        alloc = self._alloc_violations()
-        caps = self._trait_cap_violations()
-        linked = self._linked_violations()
-        strength = self._strength_violations()
-        requirement = self._requirement_violations()
-        imposed = self._imposed_violations()
-        sub_builds = self._sub_build_violations()
-        headlines = []
-        if pl:
-            headlines.append("over Power Level")
-        if alloc:
-            headlines.append("over-allocated")
-        if caps:
-            headlines.append("trait over its rank cap")
-        if linked:
-            headlines.append("mismatched linked Range")
-        if strength:
-            headlines.append("Strength shortfall")
-        if requirement:
-            headlines.append("missing required modifier")
-        if imposed:
-            headlines.append("imposed effect over budget")
-        if sub_builds:
-            headlines.append("sub-build over budget")
-        headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
+        """Show or hide the live warning band from every build check the power fails.
+
+        The checks themselves are :data:`~mm_companion.core.rules.POWER_CHECKS`, walked
+        once: the failing keys become the headline and their sentences the tooltip. The
+        sheet card's ⚠ walks the same registry (``power_violations``), so a warning
+        cannot exist here and be missing there — which it was for six of the nine checks
+        until the registry replaced two hand-kept lists. A mod that registers a rule gets
+        both surfaces without touching either.
+        """
+
+        results = power_check_results(self.power, self._character, self._data)
+        headline = ("⚠ " + " & ".join(key for key, _ in results).capitalize()) if results else ""
         if headline:
             self._warning.setText(headline)
             self._warning.setToolTip(
-                "\n".join(
-                    (
-                        *pl,
-                        *alloc,
-                        *caps,
-                        *linked,
-                        *strength,
-                        *requirement,
-                        *imposed,
-                        *sub_builds,
-                    )
-                )
+                "\n".join(message for _key, messages in results for message in messages)
             )
         self._warning.setVisible(bool(headline))
 
@@ -1323,7 +1238,7 @@ class PowerConstructorWindow(QMainWindow):
                 "Add at least one effect before saving this power.",
             )
             return
-        alloc = self._alloc_violations()
+        alloc = power_allocation_violations(self.power, self._data)
         if alloc:
             QMessageBox.warning(
                 self,
@@ -1332,7 +1247,7 @@ class PowerConstructorWindow(QMainWindow):
                 "than it has:\n\n• " + "\n• ".join(alloc),
             )
             return
-        linked = self._linked_violations()
+        linked = power_linked_range_violations(self.power, self._data)
         if linked:
             QMessageBox.warning(
                 self,
@@ -1341,7 +1256,9 @@ class PowerConstructorWindow(QMainWindow):
                 "the same Range:\n\n• " + "\n• ".join(linked),
             )
             return
-        violations = self._pl_violations()
+        violations = (
+            power_pl_violations(self.power, self._character, self._data) if self._character else []
+        )
         if violations and storage.pl_enforcement() == storage.PL_ENFORCE_BLOCK:
             QMessageBox.warning(
                 self,

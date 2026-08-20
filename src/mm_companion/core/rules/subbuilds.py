@@ -40,7 +40,7 @@ from ..data_loader import GameData, Modifier, SubBuild
 from ..powers import ModifierSelection, Power, PowerEffectInstance
 from .costs import power_points_spent
 from .powers_terms import note_value
-from .validation import leaf_powers
+from .validation import POWER_CHECKS, leaf_powers
 
 __all__ = [
     "SubBuildSlot",
@@ -331,3 +331,13 @@ def _forbidden(slot: SubBuildSlot, name: str, build: Character, game_data: GameD
                     f"{name}: has the {advantage.name} advantage, which a {kind} may not."
                 )
     return messages
+
+
+# A minion over its budget is a build error like any other, so it belongs on both
+# surfaces that list them. It is registered from here rather than listed in
+# ``validation`` because checking a nested character means walking its powers tree, and
+# ``leaf_powers`` is validation's — the import only goes one way.
+POWER_CHECKS.register(
+    "sub-build over budget",
+    lambda power, char, data: power_sub_build_violations(power, data, char),
+)

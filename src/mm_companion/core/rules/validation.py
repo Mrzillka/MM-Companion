@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from ..character import Character
 from ..data_loader import GameData
@@ -15,6 +15,7 @@ from ..powers import (
     PowerNode,
     power_is_stunt,
 )
+from ..registry import Registry
 from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
 from .powers_cost import (
@@ -565,3 +566,95 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
             violations.append(f"{pair.label} {value} exceeds PL cap {limit}.")
 
     return violations
+
+
+# --- the whole-power check list --------------------------------------------------------
+# Every check above asks one question of one power. Two surfaces ask all of them: the
+# Power Constructor's warning band while a power is being built, and the ⚠ on its card
+# once it is saved. They used to ask different subsets — the card asked two — so a
+# character built under a different ruleset carried an over-budget imposed effect, an
+# over-spent allocation or an over-budget minion with no marker on the sheet at all, and
+# nothing said so until someone reopened the constructor.
+#
+# A registry rather than a list, for two reasons. A mod that adds a rule wants its
+# warning on both surfaces without editing either. And ``power_sub_build_violations``
+# lives in ``subbuilds``, which is *above* this module in the import DAG (checking a
+# minion means walking its powers tree, which is validation's job) — so it registers
+# itself on import rather than being reached for from here.
+
+#: One build check: ``(power, char, game_data) -> list[str]``. ``char`` is optional
+#: because the constructor can be opened without one; a check that needs a wielder
+#: returns nothing rather than guessing at one.
+PowerCheck = Callable[[Power, Character | None, GameData], list[str]]
+
+#: Every check a single power is held to, keyed by the headline the constructor's
+#: warning band shows for it. Iterated in registration order, which is the order both
+#: surfaces read in — Power Level first, because it is the one the rules enforce.
+POWER_CHECKS: Registry[PowerCheck] = Registry("power_check")
+
+POWER_CHECKS.register(
+    "over Power Level",
+    lambda power, char, data: power_pl_violations(power, char, data) if char else [],
+)
+POWER_CHECKS.register(
+    "power stunt over its ceiling",
+    lambda power, char, data: power_stunt_violations(power, char, data) if char else [],
+)
+POWER_CHECKS.register(
+    "over-allocated",
+    lambda power, _char, data: power_allocation_violations(power, data),
+)
+POWER_CHECKS.register(
+    "trait over its rank cap",
+    lambda power, char, data: power_trait_allocation_violations(power, data, char),
+)
+POWER_CHECKS.register(
+    "mismatched linked Range",
+    lambda power, _char, data: power_linked_range_violations(power, data),
+)
+POWER_CHECKS.register(
+    "Strength shortfall",
+    lambda power, char, data: power_strength_amount_violations(power, char, data) if char else [],
+)
+POWER_CHECKS.register(
+    "missing required modifier",
+    lambda power, _char, data: power_modifier_requirement_violations(power, data),
+)
+POWER_CHECKS.register(
+    "imposed effect over budget",
+    lambda power, char, data: power_imposed_effect_violations(power, data, char),
+)
+
+
+def power_check_results(
+    power: Power, char: Character | None, game_data: GameData
+) -> list[tuple[str, list[str]]]:
+    """Every :data:`POWER_CHECKS` entry that found something, as ``(headline, messages)``.
+
+    In registration order, and only the checks that failed — so a caller can build a
+    headline out of the keys and a tooltip out of the values without asking twice.
+    """
+
+    results = []
+    for headline in POWER_CHECKS:
+        check = POWER_CHECKS.get(headline)
+        messages = check(power, char, game_data) if check else []
+        if messages:
+            results.append((headline, messages))
+    return results
+
+
+def power_violations(power: Power, char: Character | None, game_data: GameData) -> list[str]:
+    """Everything wrong with one power's build, flattened — the sheet card's ⚠ tooltip.
+
+    The card has room for one glyph, so it shows every breach on one marker rather than
+    a badge per rule. The constructor puts the same sentences behind a headline naming
+    which checks failed (:func:`power_check_results`); neither can drift from the other,
+    because both walk the same registry.
+    """
+
+    return [
+        message
+        for _headline, messages in power_check_results(power, char, game_data)
+        for message in messages
+    ]

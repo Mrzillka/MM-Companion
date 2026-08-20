@@ -1020,6 +1020,8 @@ def build(target: str):
                 "degree1": "dazed",
                 "degree2": "stunned",
                 "degree3": "transformed",
+                "imposedEffect": "flight",
+                "imposedRank": 20,
             }
         )
         for name, effect in (("Vanish", hidden), ("Hex", curse)):

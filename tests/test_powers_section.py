@@ -647,6 +647,71 @@ def test_inactive_linked_group_disables_nested_member_cards(qapp: QApplication) 
     assert not any(c.is_clickable() for c in nested_member_cards(off_card))
 
 
+def test_a_broken_build_warns_on_its_card_not_only_in_the_constructor(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A Concealment 2 that has spent six of its ranks on senses, and an Affliction whose
+    # Transformed condition imposes an effect four times dearer than the Affliction is.
+    # Both are constructor-only checks: before the shared POWER_CHECKS registry the card
+    # showed Power Level breaches and a stunt's ceiling and nothing else, so a character
+    # built under a different ruleset carried these with no marker on the sheet at all.
+    hidden = PowerEffectInstance(
+        "concealment",
+        rank=2,
+        config={"senses": [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 2}]},
+    )
+    curse = PowerEffectInstance(
+        "affliction",
+        rank=2,
+        config={
+            "resistance": "Will",
+            "degree3": "transformed",
+            "imposedEffect": "flight",
+            "imposedRank": 20,
+        },
+    )
+    char.powers.append(Power(name="Vanish", effects=[hidden]))
+    char.powers.append(Power(name="Hex", effects=[curse]))
+
+    sheet = CharacterSheet(data, char)
+    warnings = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⚠"]
+    assert len(warnings) == 2
+    tips = " ".join(w.toolTip() for w in warnings)
+    assert "allocated 6 of 2 ranks" in tips  # the over-spent Concealment
+    assert "imposed" in tips.lower()  # the unaffordable Transformed effect
+
+
+def test_the_card_and_the_constructor_read_the_same_checks(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    effect = PowerEffectInstance(
+        "concealment",
+        rank=1,
+        config={"senses": [{"id": "sight", "tier": 2}]},
+    )
+    power = Power(name="Vanish", effects=[effect])
+    char.powers.append(power)
+
+    sheet = CharacterSheet(data, char)
+    (warning,) = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⚠"]
+
+    window = PowerConstructorWindow(data, character=char, power=power)
+    # The card lists every sentence; the constructor puts the same ones behind a headline
+    # naming which checks failed. Neither can gain or lose one without the other.
+    assert window._warning.isVisible() or window._warning.toolTip()
+    assert window._warning.toolTip() == warning.toolTip()
+    assert "Over-allocated" in window._warning.text()
+    window.close()
+
+
 def test_homerule_power_shows_the_badge(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QLabel
 

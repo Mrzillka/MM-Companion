@@ -103,12 +103,11 @@ from mm_companion.core.rules import (
     power_display_name,
     power_has_custom_modifier,
     power_has_standing_effect,
-    power_pl_violations,
     power_roll_lines,
     power_rolls,
     power_runtime_gates,
-    power_stunt_violations,
     power_total_cost,
+    power_violations,
     powers_points_spent,
     pushable_effects,
     size_steps,
@@ -1402,12 +1401,14 @@ class PowersSection(TitledSection):
             )
             layout.addWidget(badge)
 
-        # A power that breaks a PL cap carries a warning marker naming the breach;
-        # enforcement is a warning for now (see storage.pl_enforcement). A stunt adds the
-        # one rule that is its own: an alternate effect costs no more than its base.
-        violations = power_pl_violations(
-            power, self._character, self._data
-        ) + power_stunt_violations(power, self._character, self._data)
+        # A power that breaks any build rule carries a warning marker naming every
+        # breach; enforcement is a warning for now (see storage.pl_enforcement). This is
+        # the same walk over the same POWER_CHECKS registry the Power Constructor's
+        # warning band makes, so the two cannot disagree — before it, the card showed
+        # Power Level and a stunt's ceiling alone, and a character built under a
+        # different ruleset could carry an over-spent allocation, an over-budget imposed
+        # effect or an over-budget minion with nothing on the sheet saying so.
+        violations = power_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))

@@ -898,16 +898,30 @@ def build(target: str):
         tabs.setCurrentIndex(tabs.count() - 1)
         win.resize(1500, 900)
     elif target == "sub-build":
-        # Summon's minion strip: the budget the rank buys, and the button that opens a
-        # whole character sheet for it.
+        # Summon's minion strip: the budget the rank buys, the button that opens a whole
+        # character sheet for it, and — with Variable Type attached — a menu of several
+        # rather than the one minion the effect otherwise buys.
         from mm_companion.core.character import Character
         from mm_companion.core.data_loader import load_game_data
-        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+        from mm_companion.core.rules import new_sub_build, power_sub_build_slots, store_sub_build
         from mm_companion.ui.power_constructor import PowerConstructorWindow
 
         data = load_game_data()
         char = Character.new_default(data)
-        power = Power(name="Call the Pack", effects=[PowerEffectInstance("summon", rank=6)])
+        effect = PowerEffectInstance("summon", rank=6)
+        # Variable Type turns the one minion into a menu: "you always summon the same
+        # minion unless you apply the Variable Type modifier" (p145).
+        effect.extras.append(ModifierSelection("variable_type"))
+        power = Power(name="Call the Pack", effects=[effect])
+        # Filled in before the window exists, so the card renders the strip it finds
+        # rather than being poked into refreshing afterwards.
+        slot = power_sub_build_slots(power, data, char)[0]
+        for index, name in enumerate(("Dire Wolf", "Raven", "Bear")):
+            minion = new_sub_build(slot, data)
+            minion.profile["hero_name"] = name
+            minion.abilities["STR"] = 6 + index
+            store_sub_build(slot, index, minion)
         win = PowerConstructorWindow(data, character=char, power=power)
         win.resize(1500, 900)
     elif target == "improvise":

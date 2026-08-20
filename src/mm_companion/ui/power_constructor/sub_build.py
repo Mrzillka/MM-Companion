@@ -102,8 +102,11 @@ class SubBuildPanel(QWidget):
             flow.addWidget(self._build_button(slot, index, build))
             flow.addWidget(self._remove_button(slot, index))
         next_index = len(builds)
-        if next_index < slot.count:
-            add = QPushButton(f"+ Build {slot.label.lower()}…")
+        # A menu slot is never full: a Variable Type Summon is entitled to as many
+        # minions as the player cares to build, since it still summons one at a time.
+        if slot.menu or next_index < slot.count:
+            first = "" if builds else f"+ Build {slot.label.lower()}…"
+            add = QPushButton(first or f"+ Another {slot.label.lower()}…")
             add.setToolTip(slot.spec.hint or f"Start a new {slot.label.lower()}.")
             add.clicked.connect(lambda _=False, s=slot, i=next_index: self._create(s, i))
             flow.addWidget(add)
@@ -115,8 +118,17 @@ class SubBuildPanel(QWidget):
 
         A power built with no character open cannot know a Metamorph's budget (it is the
         wielder's own point total), and saying so is better than printing a zero.
+
+        A **menu** slot counts what has been built rather than what is allowed, and says
+        the rule instead of a number — "Minions (3), one at a time" — because there is no
+        allowance to print: the player may make as many as they like and the power still
+        summons one.
         """
 
+        if slot.menu:
+            built = len(sub_build_characters(slot))
+            head = f"{slot.label}s ({built}), one at a time" if built else f"{slot.label}s"
+            return head if slot.budget is None else f"{head} — {slot.budget} PP each"
         plural = f"{slot.label}s" if slot.count > 1 else slot.label
         if slot.budget is None:
             return f"{plural} ({slot.count})" if slot.count > 1 else plural

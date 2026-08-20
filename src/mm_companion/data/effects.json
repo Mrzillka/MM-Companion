@@ -1174,6 +1174,7 @@
       "subBuild": {
         "key": "minion",
         "label": "Minion",
+        "menuWith": ["variable_type"],
         "budget": { "kind": "per_rank", "perRank": 15 },
         "hint": "Build the summoned character on effect rank x 15 power points, under your own Power Level. They cannot have minions of their own.",
         "forbidsEffects": ["summon"],

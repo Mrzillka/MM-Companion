@@ -815,6 +815,14 @@ class SubBuild:
     ``forbids_effects`` / ``forbids_advantages`` are what the sub-character may not
     itself have: a summoned minion "cannot have minions of their own, either from this
     effect or the Minions advantage" (p145). Checked as a warning, not prevented.
+
+    ``menu_with`` names modifiers that turn a counted slot into an **open menu** — as
+    many builds as the player cares to make, one of them summoned at a time. "You always
+    summon the same minion unless you apply the Variable Type modifier" (p145) is the one
+    case: a Variable Type Summon is not entitled to *more* minions at once, it is entitled
+    to have built several to choose between. It is a list of modifier ids rather than a
+    flag on the modifier because it is the *slot* that changes shape, and the slot is
+    where a reader looks to find out how many builds it holds.
     """
 
     key: str
@@ -824,6 +832,7 @@ class SubBuild:
     hint: str = ""
     forbids_effects: tuple[str, ...] = ()
     forbids_advantages: tuple[str, ...] = ()
+    menu_with: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2579,6 +2588,7 @@ def _parse_sub_build(raw: dict | None) -> SubBuild | None:
         hint=str(raw.get("hint", "")),
         forbids_effects=tuple(raw.get("forbidsEffects", ())),
         forbids_advantages=tuple(raw.get("forbidsAdvantages", ())),
+        menu_with=tuple(raw.get("menuWith", ())),
     )
 
 

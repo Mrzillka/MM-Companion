@@ -629,11 +629,16 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   pin it, damage cannot be applied to it, and a session does not surface it as a combatant.
   It is a *build*, not a creature at the table. "Send this minion to the GM window" is the
   obvious next thing to want.
-- **A Summon's minion is a single build even with Variable Type.** The book's own reading
-  (p145: "You always summon the same minion unless you apply the Variable Type modifier")
-  makes one build right for the ordinary case, and Multiple Minions doubles how many of that
-  *same* creature appear. A Variable Type Summon really does want a menu of minions — which
-  is Variable's own unbuilt problem in miniature, and was left with it.
+- **A Variable Type Summon holds a menu of minions.** One build is right for the ordinary
+  case — p145: "You always summon the same minion unless you apply the Variable Type
+  modifier" — and Multiple Minions doubles how many of that *same* creature appear. With
+  Variable Type attached the slot becomes a `menu`: as many builds as the player cares to
+  make, each on the same budget, none counted against an allowance (the power still
+  summons one at a time, so there is no allowance to raise). Which modifiers do that is
+  data — `menuWith` on the slot, because it is the *slot* that changes shape.
+  **Which one is summoned is not modelled**: a minion is a build, not a creature at the
+  table (see the bullet above), so a runtime selection would decide nothing until that
+  changes.
 - **A modifier's `subBuild` count reads the chip's rank**, so a *repeatable*
   sub-build-bearing modifier would need thought: two copies would produce two independent
   slots sharing one config key and overwrite each other. Nothing is both today, and

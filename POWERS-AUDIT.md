@@ -57,7 +57,7 @@ d350325  Give an opposed effect check to the side that makes it
 c53ab92  Record pass 11's commit hash in the audit
 82d44dc  Let a power hold the character it buys
 6d56b46  Record pass 12's commit hash in the audit
-PASS13   Split an array's points across its Dynamic members
+a0ee2eb  Split an array's points across its Dynamic members
 ```
 
 ---

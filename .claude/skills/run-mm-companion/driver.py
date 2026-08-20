@@ -484,17 +484,15 @@ def build(target: str):
         win.resize(820, 900)
     elif target == "size-ladder-reload":
         # The round trip a size power's rung has to survive: a Growth 3 dialled to
-        # Large through the real rung strip, written to the workspace with
+        # Large through the real rank dial, written to the workspace with
         # ``save_character``, and reopened from the file in a fresh window. The shot is
-        # of the *reopened* sheet, so the rung that is lit and the Size line in the
-        # System block are what came back off disk — before runtime was persisted this
-        # came up at Gargantuan with everything switched on.
-        from PySide6.QtWidgets import QPushButton
-
+        # of the *reopened* sheet, so the notch the dial rests on and the Size line in
+        # the System block are what came back off disk — before runtime was persisted
+        # this came up at Gargantuan with everything switched on.
         from mm_companion.core import library
         from mm_companion.core.powers import Power, PowerEffectInstance
         from mm_companion.ui.main_window import MainWindow
-        from mm_companion.ui.sections.powers import _SizeLadder
+        from mm_companion.ui.sections.powers import _RankDial
 
         first = MainWindow(locked=False)
         sheet = first._sheet
@@ -504,8 +502,9 @@ def build(target: str):
         )
         sheet.powers.refresh()
         _pump(_app())
-        ladder = sheet.powers.findChild(_SizeLadder)
-        next(b for b in ladder.findChildren(QPushButton) if b.text() == "Large").click()
+        # Large is the dial's first notch above Off for a Medium wielder. Setting the
+        # value is the keyboard/groove path, which commits without a slider release.
+        sheet.powers.findChild(_RankDial)._slider.setValue(1)
         path = library.save_character(sheet.character)
         # Left open rather than closed: the rung dirtied the sheet (which is the point
         # — a saved state that never marks the window unwritten is a state you lose),
@@ -835,6 +834,219 @@ def build(target: str):
         for key, value in {"STR": 9, "STA": 9, "AGL": 1, "FGT": 4}.items():
             if key in win.sheet.abilities._abilities:
                 win.sheet.abilities._abilities[key].setValue(value)
+    elif target == "array-cost":
+        # An array of three effects in one power. The cards read 20 / 8 / 10 and the
+        # total line reads a bare number with no working — the gap this branch closes.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import STRUCTURE_ARRAY, Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        power = Power(
+            name="Elemental Command",
+            structure=STRUCTURE_ARRAY,
+            effects=[
+                PowerEffectInstance("damage", rank=10),
+                PowerEffectInstance("move_object", rank=8),
+                PowerEffectInstance("flight", rank=10, dynamic=True),
+            ],
+        )
+        win = PowerConstructorWindow(data, character=char, power=power)
+        win.resize(1500, 900)
+    elif target == "allocation-terms":
+        # A Concealment hiding from every sight sense and every hearing sense. The
+        # card's own combo says "4 ranks"; the game-terms panel on the right says
+        # "Sight 2" — the tier *index*, not what it cost.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        effect = PowerEffectInstance("concealment", rank=6)
+        effect.config["senses"] = [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 2}]
+        power = Power(name="Unseen", effects=[effect])
+        win = PowerConstructorWindow(data, character=char, power=power)
+        win.resize(1500, 900)
+    elif target == "removable-total":
+        # The one place a total already shows its working: a suit of armour whose
+        # Removable discount is charged per 5 points of the whole power (p161).
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        effect = PowerEffectInstance("protection", rank=12)
+        effect.flaws.append(ModifierSelection("removable"))
+        power = Power(name="Powered Armour", effects=[effect])
+        win = PowerConstructorWindow(data, character=char, power=power)
+        win.resize(1500, 800)
+    elif target == "configurations":
+        # The fourth palette tab: the book's ready-made powers, grouped under the
+        # effect each is built on and searchable.
+        from PySide6.QtWidgets import QTabWidget
+
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        win = PowerConstructorWindow()
+        tabs = win.palette_zone.findChild(QTabWidget)
+        tabs.setCurrentIndex(tabs.count() - 1)
+        win.resize(1500, 900)
+    elif target == "sub-build":
+        # Summon's minion strip: the budget the rank buys, and the button that opens a
+        # whole character sheet for it.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        power = Power(name="Call the Pack", effects=[PowerEffectInstance("summon", rank=6)])
+        win = PowerConstructorWindow(data, character=char, power=power)
+        win.resize(1500, 900)
+    elif target == "improvise":
+        # The collapsible improvise panel, expanded: the two-way time/DC trade and the
+        # note it drives.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        power = Power(name="Jury-Rigged Blast", effects=[PowerEffectInstance("damage", rank=8)])
+        win = PowerConstructorWindow(data, character=char, power=power)
+        win._improvised_toggle.setChecked(True)
+        win.resize(1500, 900)
+    elif target == "imposed-effect":
+        # An Affliction whose third degree is Transformed: the sibling-gated picker for
+        # the Personal-range effect it imposes appears only once a degree reads that.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        effect = PowerEffectInstance("affliction", rank=8)
+        effect.config.update(
+            {
+                "resistance": "Fortitude",
+                "degree1": "dazed",
+                "degree2": "stunned",
+                "degree3": "transformed",
+            }
+        )
+        power = Power(name="Fleshcraft", effects=[effect])
+        win = PowerConstructorWindow(data, character=char, power=power)
+        win.resize(1500, 900)
+    elif target in ("array-split", "array-split-locked"):
+        # A sheet array group with its points split across two Dynamic members. The
+        # fourth member is *not* Dynamic, so it cannot hold a share and is switched off
+        # — but its card still looks exactly as clickable as the others.
+        from mm_companion.core.powers import (
+            STRUCTURE_ARRAY,
+            Power,
+            PowerEffectInstance,
+            PowerGroup,
+        )
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=target.endswith("locked"))
+        sheet = win._sheet
+        blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+        fly = Power(name="Flame Jets", effects=[PowerEffectInstance("flight", rank=5)])
+        fly.dynamic = True
+        fly.dynamic_points = 4
+        shield = Power(name="Heat Shield", effects=[PowerEffectInstance("protection", rank=8)])
+        shield.dynamic = True
+        shield.dynamic_points = 6
+        wall = Power(name="Flame Wall", effects=[PowerEffectInstance("move_object", rank=6)])
+        group = PowerGroup(
+            mode=STRUCTURE_ARRAY, name="Fire Control", children=[blast, fly, shield, wall]
+        )
+        sheet.character.powers.append(group)
+        sheet.powers.refresh()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(900, 950)
+    elif target == "pool-dialog":
+        # The split dialog itself, on an array with two Dynamic members — the spin-box
+        # grid the allocator is built beside.
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import (
+            STRUCTURE_ARRAY,
+            Power,
+            PowerEffectInstance,
+            PowerGroup,
+        )
+        from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
+
+        data = load_game_data()
+        char = Character.new_default(data)
+        blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+        fly = Power(name="Flame Jets", effects=[PowerEffectInstance("flight", rank=5)])
+        fly.dynamic = True
+        fly.dynamic_points = 4
+        shield = Power(name="Heat Shield", effects=[PowerEffectInstance("protection", rank=8)])
+        shield.dynamic = True
+        group = PowerGroup(mode=STRUCTURE_ARRAY, name="Fire Control", children=[blast, fly, shield])
+        char.powers.append(group)
+        win = DynamicPoolDialog(group, data, char)
+        win.resize(560, 340)
+    elif target == "sheet-broken":
+        # A build that breaks two constructor-only checks: an over-spent Concealment
+        # (6 ranks of senses bought with 2) and an Affliction imposing an effect it
+        # cannot afford. The sheet card shows neither.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        hidden = PowerEffectInstance("concealment", rank=2)
+        hidden.config["senses"] = [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 2}]
+        curse = PowerEffectInstance("affliction", rank=2)
+        curse.config.update(
+            {
+                "resistance": "Will",
+                "degree1": "dazed",
+                "degree2": "stunned",
+                "degree3": "transformed",
+            }
+        )
+        for name, effect in (("Vanish", hidden), ("Hex", curse)):
+            sheet.character.powers.append(Power(name=name, effects=[effect]))
+        sheet.powers.refresh()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(900, 700)
+    elif target == "sheet-stunt":
+        # A power stunt as its own card — the badge naming its source and the word
+        # "Stunt" where every other card prints a cost — beside the source power.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        source = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+        stunt = Power(name="Flame Shield", effects=[PowerEffectInstance("protection", rank=8)])
+        stunt.stunt_of = source.id
+        sheet.character.powers.extend([source, stunt])
+        sheet.powers.refresh()
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(900, 760)
     else:  # pragma: no cover - guarded by argparse choices
         raise ValueError(target)
 
@@ -884,6 +1096,18 @@ def main(argv: list[str] | None = None) -> int:
             "gm-collapsed",
             "gm-settings",
             "npc",
+            "array-cost",
+            "allocation-terms",
+            "removable-total",
+            "configurations",
+            "sub-build",
+            "improvise",
+            "imposed-effect",
+            "array-split",
+            "array-split-locked",
+            "pool-dialog",
+            "sheet-broken",
+            "sheet-stunt",
             "all",
         ],
         help="which UI surface to launch and screenshot",

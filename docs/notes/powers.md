@@ -612,6 +612,25 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 
 ### The Dynamic point pool
 
+- **Only a two-member split has a control of its own.** Deciding the split is a free
+  action taken once per turn at the table, so the dialog leads with a direct one — a
+  single slider handle between the two members, everything left of it one member's and
+  everything right the other's (`ui/sections/pool_allocator.py`). Three or more members
+  still get only the spin grid. The intended control is a **regular N-gon with a
+  draggable puck**: the puck's barycentric coordinates are the members' shares, so
+  dragging it to a vertex gives that member everything and holding it in the middle
+  spreads the pool evenly, rounded by largest-remainder so the shares still sum to the
+  pool exactly. `make_allocator` is the only place that needs to learn about it and
+  `sharesChanged` already carries a list, so nothing downstream changes. It wants custom
+  painting, which nothing in this app does but `connection_indicator._StatusDot` — copy
+  its colour handling, because a theme token is allowed to be a `palette(...)`
+  expression that `QColor` cannot parse.
+- **An allocator always spreads the whole pool; the spin boxes are still the state.**
+  Leaving part of a pool unassigned is legal and the slider cannot express it, so the
+  spins remain authoritative and remain the way to hold points back. Opening the dialog
+  on a spin-made split with slack puts the handle where the first member's share is and
+  says what is unspent underneath, rather than moving the numbers to suit the control.
+
 - **A pooled split lives only at the group level.** `dynamic_points` is on `Power` and
   `PowerGroup`, not on `PowerEffectInstance`, so an array of a *single power's own effects*
   is priced for Dynamic members but cannot split its pool. The reason is one level down: an

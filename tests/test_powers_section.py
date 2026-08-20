@@ -1331,11 +1331,38 @@ def test_a_split_array_dims_the_members_that_are_not_running(qapp: QApplication)
     assert sec._node_is_inactive(flight, group, "select") is False
 
 
-def test_the_click_hint_stops_promising_the_siblings_switch_off(qapp: QApplication) -> None:
+def test_a_split_array_stops_arming_a_click_that_would_do_nothing(qapp: QApplication) -> None:
     sheet, _char, group = _pool_array(qapp)
     sec = sheet.powers
-    assert "siblings switch off" in sec._click_hint("select", group)
+    armour = group.children[0]
 
-    group.children[0].dynamic_points = 4
-    assert "siblings switch off" not in sec._click_hint("select", group)
-    assert "all running at once" in sec._click_hint("select", group)
+    # Unsplit, a member is the array's selector and says so.
+    assert sec._activation_role(armour, group) == "select"
+    card = sec._render_node(armour, group)
+    assert card.is_clickable()
+    assert "siblings switch off" in card.toolTip()
+
+    # Split, the pool decides who is running: the click is not armed at all — it used to
+    # move active_child_id silently with nothing visible happening — but the card still
+    # explains why it has stopped being a control.
+    armour.dynamic_points = 4
+    assert sec._activation_role(armour, group) == ""
+    card = sec._render_node(armour, group)
+    assert not card.is_clickable()
+    assert "all running at once" in card.toolTip()
+    assert "siblings switch off" not in card.toolTip()
+
+
+def test_a_split_array_still_dims_by_what_is_running_with_no_role_left(
+    qapp: QApplication,
+) -> None:
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour, flight = group.children
+
+    # Taking the click away must not take the dimming with it: an ordinary member of a
+    # split array is off, and has to look it.
+    flight.dynamic_points = 4
+    assert sec._activation_role(armour, group) == ""
+    assert sec._node_is_inactive(armour, group, "") is True
+    assert sec._node_is_inactive(flight, group, "") is False

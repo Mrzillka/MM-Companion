@@ -1164,13 +1164,14 @@ class PowersSection(TitledSection):
         always makes an *Independent* group) that is itself inside the Linked group, and
         it still has to switch with its linked siblings rather than sprout its own switch.
         """
-        if (
-            isinstance(parent, PowerGroup)
-            and parent.mode == STRUCTURE_ARRAY
-            and len(parent.children) >= 2
-            and any(self._node_has_standing(child) for child in parent.children)
-        ):
-            return "select"
+        if self._selectable_array_member(parent):
+            # ...unless the array's points are split, when the pool decides who is
+            # running and selecting a member decides nothing. The click used to be armed
+            # anyway: the cursor promised something, `active_child_id` quietly moved, and
+            # nothing on screen changed. `_arm_activation` still tooltips *why*, because
+            # a card that has silently stopped being a control is worse than one that
+            # says it has.
+            return "" if _pool_is_split(parent) else "select"
         if self._linked_ancestor(node) is not None:
             return ""
         if isinstance(node, PowerGroup):
@@ -1185,12 +1186,31 @@ class PowersSection(TitledSection):
             return "toggle"
         return ""
 
+    def _selectable_array_member(self, parent: PowerGroup | None) -> bool:
+        """Whether a card in *parent* is one of a live array's mutually exclusive members.
+
+        An array only has something to select between if it has two of them and at least
+        one *stands* on the sheet — an all-instant array keeps nothing active, so its
+        members are not switches. Asked by :meth:`_activation_role` (does a click do
+        anything) and :meth:`_node_is_inactive` (is this one running), which have to
+        agree about what an array is even when the pool has taken the click away.
+        """
+
+        return (
+            isinstance(parent, PowerGroup)
+            and parent.mode == STRUCTURE_ARRAY
+            and len(parent.children) >= 2
+            and any(self._node_has_standing(child) for child in parent.children)
+        )
+
     def _node_is_inactive(self, node: PowerNode, parent: PowerGroup | None, role: str) -> bool:
         """Whether the card should be drawn in its dimmed, switched-off state."""
-        if role == "select":
+        if self._selectable_array_member(parent):
             # Which member is *running* rather than which is selected: once the pool is
             # split every Dynamic member holding a share is live at once, so dimming all
-            # but the selected one would contradict the numbers on the sheet.
+            # but the selected one would contradict the numbers on the sheet. Asked of
+            # the array rather than of the card's role, because a split takes the role
+            # away and the dimming has to outlive it.
             return not any(child is node for child in live_array_children(parent))
         if role == "toggle":
             if isinstance(node, PowerGroup):
@@ -1211,20 +1231,21 @@ class PowersSection(TitledSection):
         becomes the click target, and says so (see :meth:`DraggableCard.set_clickable`).
         ``interactive`` is ``False`` for a card inside a switched-off Linked group, which
         still shows its state but can't be clicked back on past its group.
+
+        A member of a *split* array is the one card that gets the hint without the
+        click: the pool has taken the decision over, so there is nothing to arm, but a
+        card that has quietly stopped being a control needs to say so more than one that
+        still is.
         """
         role = self._activation_role(node, parent)
+        if self._selectable_array_member(parent) and _pool_is_split(parent):
+            card.setToolTip(_SPLIT_SELECT_HINT)
+            return
         if not (role and interactive):
             return
         card.set_clickable(True)
-        card.setToolTip(self._click_hint(role, parent))
+        card.setToolTip(_CLICK_HINTS[role])
         card.clicked.connect(lambda n=node, p=parent, r=role: self._on_card_clicked(n, p, r))
-
-    def _click_hint(self, role: str, parent: PowerGroup | None) -> str:
-        """What to tell the player a click on this card will do."""
-
-        if role == "select" and parent is not None and _pool_is_split(parent):
-            return _SPLIT_SELECT_HINT
-        return _CLICK_HINTS[role]
 
     def _show_activation(
         self, card: DraggableCard, node: PowerNode, parent: PowerGroup | None

@@ -34,6 +34,7 @@ from mm_companion.core.rules import (
     node_cost,
     power_display_name,
 )
+from mm_companion.ui.sections.pool_allocator import make_allocator
 from mm_companion.ui.widgets import BOLD_STYLE, make_spin_box, muted_style
 
 _INTRO = (
@@ -109,10 +110,20 @@ class DynamicPoolDialog(QDialog):
         self._pool = array_pool_points(group, game_data, character)
         self._rows: list[_MemberRow] = []
 
+        # Set while the allocator and the spin boxes are writing each other's values, so
+        # neither one's ``valueChanged`` bounces back as a fresh edit.
+        self._syncing = False
+
         layout = QVBoxLayout(self)
         intro = QLabel(_INTRO)
         intro.setWordWrap(True)
         layout.addWidget(intro)
+
+        # Filled in below, once the rows the allocator drives exist.
+        self._allocator: QWidget | None = None
+        self._allocator_slot = QVBoxLayout()
+        self._allocator_slot.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(self._allocator_slot)
 
         grid = QGridLayout()
         # The rank readout absorbs the slack, so the names and their spin boxes stay
@@ -134,6 +145,19 @@ class DynamicPoolDialog(QDialog):
             row = _MemberRow(child, full, spin, effect)
             spin.valueChanged.connect(self._refresh)
             self._rows.append(row)
+
+        # The direct control, above the exact one. It spreads the whole pool in a single
+        # gesture, which is what "a free action, once per turn" wants; the spin boxes
+        # below stay authoritative and remain the only way to hold points back.
+        self._allocator = make_allocator(
+            [member_label(row.node, game_data) for row in self._rows],
+            self._pool,
+            self._allocator_detail,
+        )
+        if self._allocator is not None:
+            self._allocator_slot.addWidget(self._allocator)
+            self._allocator.set_shares([row.points for row in self._rows])
+            self._allocator.sharesChanged.connect(self._on_allocated)
 
         self._total = QLabel()
         self._total.setStyleSheet(BOLD_STYLE)
@@ -174,6 +198,36 @@ class DynamicPoolDialog(QDialog):
         """How many of the pool's points are currently spread across the rows."""
         return sum(row.points for row in self._rows)
 
+    def _allocator_detail(self, index: int, points: int) -> str:
+        """What one side of the allocator's split currently buys.
+
+        The allocator holds no rules of its own, so it asks for this — the same sentence
+        the row below it prints, from the same :func:`dynamic_rank_share`.
+        """
+
+        row = self._rows[index]
+        return self._effect_text(row, points)
+
+    def _on_allocated(self, shares: list[int]) -> None:
+        """Write a split made on the allocator through to the spin boxes.
+
+        The spins remain the state: everything else in this dialog reads them, and
+        :meth:`apply_to` writes from them. Their bounds are lifted to the whole pool
+        first, because :meth:`_refresh` leaves each one capped at what the *other* rows
+        left over — so raising the row that is receiving points before lowering the one
+        giving them away would clamp the new split back into the old one's shape.
+        :meth:`_refresh` puts the real bounds back straight afterwards.
+        """
+
+        self._syncing = True
+        try:
+            for row, share in zip(self._rows, shares, strict=False):
+                row.spin.setMaximum(self._pool)
+                row.spin.setValue(share)
+        finally:
+            self._syncing = False
+        self._refresh()
+
     def _refresh(self) -> None:
         """Restate each row's rank and the running total, and re-bound the spin boxes.
 
@@ -195,8 +249,12 @@ class DynamicPoolDialog(QDialog):
         # No tint either way: the bound above makes going over impossible, and leaving
         # part of the pool unassigned is a legal thing to do rather than a mistake.
         self._total.setText(f"{assigned} of {self._pool} PP assigned")
+        # Follow a split typed into the spins, unless the spins are currently echoing
+        # one the allocator itself just made.
+        if self._allocator is not None and not self._syncing:
+            self._allocator.set_shares([row.points for row in self._rows])
 
-    def _effect_text(self, row: _MemberRow) -> str:
+    def _effect_text(self, row: _MemberRow, points: int | None = None) -> str:
         """What one row's share currently buys, named effect by effect.
 
         The rank *is* the answer the rules give — the book's own example is a Flight 5
@@ -204,20 +262,24 @@ class DynamicPoolDialog(QDialog):
         row prints "Flight 1 of 5" rather than a fraction the reader has to convert.
         A member every one of whose effects falls to zero is below its minimum and says
         so; anything longer than a couple of effects is elided rather than wrapped.
+
+        ``points`` asks the same question of a share the row is not holding *yet* — the
+        allocator describing where its handle is before the spin boxes have caught up.
         """
 
-        if not row.points:
+        held = row.points if points is None else points
+        if not held:
             return "off"
         parts = []
         for effect in _member_effects(row.node):
             base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
             name = effect.label or (base.name if base else effect.effect_id)
-            share = dynamic_rank_share(effect.rank, row.points, row.full_cost)
+            share = dynamic_rank_share(effect.rank, held, row.full_cost)
             parts.append(f"{name} {share} of {effect.rank}")
         if not parts:
             return ""
         if not any(
-            dynamic_rank_share(e.rank, row.points, row.full_cost) for e in _member_effects(row.node)
+            dynamic_rank_share(e.rank, held, row.full_cost) for e in _member_effects(row.node)
         ):
             return "too few points to run"
         return ", ".join(parts[:2]) + (", …" if len(parts) > 2 else "")

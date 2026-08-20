@@ -40,7 +40,7 @@ from ..data_loader import GameData, Modifier, SubBuild
 from ..powers import ModifierSelection, Power, PowerEffectInstance
 from .costs import power_points_spent
 from .powers_terms import note_value
-from .validation import POWER_CHECKS, leaf_powers
+from .validation import POWER_CHECKS, leaf_powers, power_level_violations
 
 __all__ = [
     "SubBuildSlot",
@@ -282,7 +282,11 @@ def power_sub_build_violations(
       it had, since silently deleting a player's character is not a rounding error;
     * **what a sub-character may not have** — a summoned minion "cannot have minions of
       their own, either from this effect or the Minions advantage" (p145), which is a
-      fact about the *nested* build and so unreachable from any picker at all.
+      fact about the *nested* build and so unreachable from any picker at all;
+    * **over Power Level** — a minion is "subject to the normal Power Level limits", and
+      the limit is the wielder's own, which is what the slot stamps onto the build. Its
+      own sheet shows a breach the way any sheet does, but opening the minion was the
+      only way to find out; the same walk runs here so the power that buys it says so.
     """
 
     violations: list[str] = []
@@ -302,6 +306,12 @@ def power_sub_build_violations(
                     f"this {slot.owner_name} allows."
                 )
             violations.extend(_forbidden(slot, name, build, game_data))
+            # The nested sheet's own PL check, run from out here. Each message is
+            # prefixed, since the reader is looking at the *power* and a bare
+            # "Dodge/Parry 25 exceeds PL cap 20" would read as the wielder's.
+            violations.extend(
+                f"{name}: {message}" for message in power_level_violations(build, game_data)
+            )
     return violations
 
 

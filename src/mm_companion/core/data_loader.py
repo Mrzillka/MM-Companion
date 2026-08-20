@@ -441,6 +441,14 @@ class ConfigOption:
     than first-wins — so a second choice can shade a price the first one set. Removable's
     Short-Term Only is worth ``-1`` off whichever tier is chosen (Equipment 4 → 3), and
     the rules let that reach 0, which is why the sum is floored there and not at 1.
+
+    ``supersedes``, on a **multiselect** option, names the other options this one already
+    covers, so ticking both is paying twice for one thing. An entry is a bare ``value``
+    in the same field (Environment's *Extreme cold* covers its *Intense cold*) or
+    ``"field:value"`` when the option it covers lives in a sibling field (Obscure's whole
+    *Sight* sense type covers the single *sight* sense). Nothing is blocked — the pair is
+    a legal, wasteful build, and the player may have meant it — but
+    :func:`mm_companion.core.rules.power_redundant_option_violations` says so.
     """
 
     value: str
@@ -449,6 +457,7 @@ class ConfigOption:
     flat: bool | None = None
     ranked: bool | None = None
     cost_delta: int = 0
+    supersedes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2401,6 +2410,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 flat=o.get("flat"),
                 ranked=o.get("ranked"),
                 cost_delta=int(o.get("costDelta", 0)),
+                supersedes=tuple(o.get("supersedes", ())),
             )
             for o in c.get("options", [])
         ),

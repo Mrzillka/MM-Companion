@@ -575,9 +575,12 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   (`_explain_cost`). With Removable in play too, the array's working sits in parentheses
   behind the gross the discount is charged against rather than nested inside the
   subtraction, so the number being read stays the one the −20 applies to.
-- **Re-run the two-price sweep after adding modifier records.** A `costFormula` naming two
-  prices with no `config` beneath it is silently the cheaper one — the sweep that caught
-  those covered both `modifiers.json` and `effect_modifiers.json`, and it is clean today.
+- **The two-price sweep is a test now**, not an instruction to remember
+  (`test_a_modifier_naming_two_prices_offers_a_way_to_pick_between_them`). A `costFormula`
+  naming two prices with nothing to dial them is silently charged the cheaper one and
+  looks fine while it happens; four things count as a dial — priced `select` options, a
+  `points` spin box, the modifier's own rank, or being `hidden` (structural, priced by
+  the engine).
 
 ### Readouts and warnings
 
@@ -589,9 +592,12 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   does not name falls back to the ranks the tier cost, which is still not an index — so
   Comprehend and Enhanced Movement read "Languages (3 ranks)" untouched. The combo on the
   card renders from the same labels, so the two can no longer disagree.
-- **Nothing enforces mutual exclusion in a multiselect.** A player can tick both "one sight
-  sense" and "all sight senses" on Obscure, or both intensities of the same Environment
-  condition, and pay for both. Visible on the card, but a warning would be fair.
+- **A multiselect says when one tick already covers another.** `supersedes` on an option
+  names what it makes redundant — a bare value for a sibling in the same field
+  (Environment's *Extreme cold* over its *Intense cold*), `"field:value"` across fields
+  (Obscure's whole *Sight* type over the single *sight* sense) — and
+  `power_redundant_option_violations` warns. It never unticks: the pair is a legal, merely
+  wasteful build, and a build that silently edits itself is worse than one that argues.
 - **A Variable Environment's redistribution is unchecked** — nothing verifies that what the
   player redistributes at use time stays inside the per-rank total they paid for.
 - **Both surfaces walk one check list.** Every per-power check is registered in
@@ -611,10 +617,10 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 
 ### Sub-builds
 
-- **A sub-build has no Power Level check of its own.** A minion is "subject to the normal
-  Power Level limits" and its own sheet shows them the way any sheet does, but the
-  *constructor* only warns about the point budget. Opening the minion is the only way to see
-  a PL breach in it.
+- **A sub-build is held to its wielder's Power Level.** The slot already stamped the PL
+  onto the build; `power_sub_build_violations` now runs the same `power_level_violations`
+  walk the nested sheet does and prefixes each message with the slot's name, so a breach
+  no longer needs the minion opened to be found.
 - **A sub-build is not counted anywhere outside its power.** A minion's gear, conditions and
   hero points are real fields on a real `Character` that nothing plays with: the GM cannot
   pin it, damage cannot be applied to it, and a session does not surface it as a combatant.
@@ -625,11 +631,12 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   makes one build right for the ordinary case, and Multiple Minions doubles how many of that
   *same* creature appear. A Variable Type Summon really does want a menu of minions — which
   is Variable's own unbuilt problem in miniature, and was left with it.
-- **A modifier's `subBuild` count reads the chip's rank**, so a *repeatable* sub-build-bearing
-  modifier would need thought: two copies would produce two independent slots sharing one
-  config key and overwrite each other. Nothing is both today, and
-  `test_the_ruleset_marks_exactly_the_repeatable_modifiers` would catch a seventh repeatable
-  being added — but not this pairing specifically.
+- **A modifier's `subBuild` count reads the chip's rank**, so a *repeatable*
+  sub-build-bearing modifier would need thought: two copies would produce two independent
+  slots sharing one config key and overwrite each other. Nothing is both today, and
+  `test_no_modifier_is_both_repeatable_and_buys_a_sub_build` is the tripwire for the day
+  something is — the failure would be silent data loss, so it is worth a test of its own
+  rather than being left to the reader.
 
 ### The Dynamic point pool
 

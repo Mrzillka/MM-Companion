@@ -566,21 +566,21 @@
           "hint": "Each condition costs its own points per rank and they add together — the lesser version of each is 1, the greater 2. Take the Variable extra to redistribute that total at will instead.",
           "options": [
             { "value": "cold_intense", "label": "Intense cold", "costValue": 1 },
-            { "value": "cold_extreme", "label": "Extreme cold", "costValue": 2 },
+            { "value": "cold_extreme", "label": "Extreme cold", "costValue": 2, "supersedes": ["cold_intense"] },
             { "value": "heat_intense", "label": "Intense heat", "costValue": 1 },
-            { "value": "heat_extreme", "label": "Extreme heat", "costValue": 2 },
+            { "value": "heat_extreme", "label": "Extreme heat", "costValue": 2, "supersedes": ["heat_intense"] },
             { "value": "hazardous_1", "label": "Hazardous movement (DC 10)", "costValue": 1 },
-            { "value": "hazardous_2", "label": "Hazardous movement (DC 15)", "costValue": 2 },
+            { "value": "hazardous_2", "label": "Hazardous movement (DC 15)", "costValue": 2, "supersedes": ["hazardous_1"] },
             { "value": "hindered_1", "label": "Hindered movement (−1 speed rank)", "costValue": 1 },
-            { "value": "hindered_2", "label": "Hindered movement (−2 speed ranks)", "costValue": 2 },
+            { "value": "hindered_2", "label": "Hindered movement (−2 speed ranks)", "costValue": 2, "supersedes": ["hindered_1"] },
             { "value": "gravity_high_1", "label": "High gravity (mass rank 1)", "costValue": 1 },
-            { "value": "gravity_high_2", "label": "High gravity (mass rank 2)", "costValue": 2 },
+            { "value": "gravity_high_2", "label": "High gravity (mass rank 2)", "costValue": 2, "supersedes": ["gravity_high_1"] },
             { "value": "gravity_low", "label": "Low gravity", "costValue": 1 },
-            { "value": "gravity_micro", "label": "Microgravity", "costValue": 2 },
+            { "value": "gravity_micro", "label": "Microgravity", "costValue": 2, "supersedes": ["gravity_low"] },
             { "value": "light_partial", "label": "Illumination (full concealment down to partial)", "costValue": 1 },
-            { "value": "light_daylight", "label": "Illumination (bright as daylight)", "costValue": 2 },
+            { "value": "light_daylight", "label": "Illumination (bright as daylight)", "costValue": 2, "supersedes": ["light_partial"] },
             { "value": "visibility_2", "label": "Reduced visibility (−2 to sight Perception)", "costValue": 1 },
-            { "value": "visibility_5", "label": "Reduced visibility (−5 to sight Perception)", "costValue": 2 }
+            { "value": "visibility_5", "label": "Reduced visibility (−5 to sight Perception)", "costValue": 2, "supersedes": ["visibility_2"] }
           ]
         }
       ],
@@ -975,14 +975,14 @@
           "type": "multiselect",
           "hint": "Two points per rank for every sense of that type at once — four for all sight senses. Ten per rank blocks everything.",
           "options": [
-            { "value": "Sight", "label": "Sight", "costValue": 4 },
-            { "value": "Hearing", "label": "Hearing", "costValue": 2 },
-            { "value": "Smell", "label": "Smell", "costValue": 2 },
-            { "value": "Taste", "label": "Taste", "costValue": 2 },
-            { "value": "Touch", "label": "Touch", "costValue": 2 },
-            { "value": "Radio", "label": "Radio", "costValue": 2 },
-            { "value": "Mental", "label": "Mental", "costValue": 2 },
-            { "value": "Special", "label": "Special", "costValue": 2 }
+            { "value": "Sight", "label": "Sight", "costValue": 4, "supersedes": ["senses:sight"] },
+            { "value": "Hearing", "label": "Hearing", "costValue": 2, "supersedes": ["senses:hearing"] },
+            { "value": "Smell", "label": "Smell", "costValue": 2, "supersedes": ["senses:smell"] },
+            { "value": "Taste", "label": "Taste", "costValue": 2, "supersedes": ["senses:taste"] },
+            { "value": "Touch", "label": "Touch", "costValue": 2, "supersedes": ["senses:touch"] },
+            { "value": "Radio", "label": "Radio", "costValue": 2, "supersedes": ["senses:radio"] },
+            { "value": "Mental", "label": "Mental", "costValue": 2, "supersedes": ["senses:mental"] },
+            { "value": "Special", "label": "Special", "costValue": 2, "supersedes": ["senses:special"] }
           ]
         }
       ],

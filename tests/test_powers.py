@@ -80,6 +80,7 @@ from mm_companion.core.rules import (
     power_modifier_requirement_violations,
     power_pl_violations,
     power_points_spent,
+    power_redundant_option_violations,
     power_rolls,
     power_runtime_gates,
     power_scope_terms,
@@ -451,6 +452,66 @@ def test_a_gated_config_field_prints_no_readout_while_its_gate_is_shut() -> None
     effect.config["imposedEffect"] = "shrinking"
     (row,) = [r for r in effect_stat_rows(effect, data, None, 0) if r.key == "imposedRank"]
     assert (row.label, row.value) == ("At rank", "1")
+
+
+def test_a_sense_type_covers_the_single_sense_inside_it() -> None:
+    data = load_game_data()
+    # Obscure prices every box that is ticked, and the whole Sight type already blocks
+    # the single sight sense it costs 2 more per rank to add on top.
+    effect = PowerEffectInstance(
+        "obscure", rank=4, config={"senses": ["sight", "hearing"], "senseTypes": ["Sight"]}
+    )
+    (message,) = power_redundant_option_violations(Power(effects=[effect]), data)
+    # Both fields label the option "Sight", so each is named by its field or the
+    # sentence reads "Sight already covers Sight".
+    assert message == (
+        'Obscure: "Blocks the whole sense type: Sight" already covers '
+        '"Blocks one sense in: Sight", so paying for both buys nothing.'
+    )
+    # Hearing was ticked as a single sense only, so it is not redundant.
+    assert "Hearing" not in message
+
+
+def test_the_stronger_of_two_intensities_covers_the_weaker() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "environment",
+        rank=2,
+        config={"conditions": ["cold_intense", "cold_extreme", "heat_intense"]},
+    )
+    (message,) = power_redundant_option_violations(Power(effects=[effect]), data)
+    # One field, so no need to name it.
+    assert message == (
+        "Environment: Extreme cold already covers Intense cold, " "so paying for both buys nothing."
+    )
+
+
+def test_a_build_that_ticks_no_overlapping_pair_warns_about_nothing() -> None:
+    data = load_game_data()
+    # The whole sight type plus a *different* single sense is an ordinary build.
+    fine = PowerEffectInstance(
+        "obscure", rank=4, config={"senses": ["hearing"], "senseTypes": ["Sight"]}
+    )
+    assert power_redundant_option_violations(Power(effects=[fine]), data) == []
+    # ...and so is either intensity on its own.
+    for value in ("cold_intense", "cold_extreme"):
+        effect = PowerEffectInstance("environment", rank=2, config={"conditions": [value]})
+        assert power_redundant_option_violations(Power(effects=[effect]), data) == []
+
+
+def test_every_environment_intensity_pair_is_marked() -> None:
+    data = load_game_data()
+    field = next(f for e in data.effects if e.id == "environment" for f in e.config_fields)
+    # The dearer option of each pair covers the cheaper one, and nothing marks itself or
+    # points at an option that does not exist.
+    by_value = {o.value: o for o in field.options}
+    marked = {o.value: o.supersedes for o in field.options if o.supersedes}
+    assert len(marked) == len(field.options) // 2
+    for value, targets in marked.items():
+        for target in targets:
+            assert target in by_value, target
+            assert target != value
+            assert by_value[target].cost_value < by_value[value].cost_value
 
 
 def _elemental_array() -> tuple[Character, Power, object]:

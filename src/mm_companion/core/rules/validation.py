@@ -350,6 +350,80 @@ def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
     return violations
 
 
+def power_redundant_option_violations(power: Power, game_data: GameData) -> list[str]:
+    """Multiselect options ticked alongside another that already covers them.
+
+    A multiselect prices every box that is ticked, and some of those boxes contain each
+    other: Obscure's whole *Sight* sense type already blocks the single *sight* sense it
+    costs 2 more to add, and Environment's *Extreme cold* already imposes its *Intense
+    cold*. Ticking both is legal and simply wasteful, so this warns rather than blocking
+    or quietly unticking — the player may be describing something the rules do not
+    model, and a build that silently edits itself is worse than one that argues.
+
+    Which option covers which is data (``supersedes`` on the option), not a rule about
+    names: a bare value names a sibling in the same field, ``"field:value"`` one in
+    another field of the same effect.
+    """
+
+    violations: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        fields = {f.key: f for f in base.config_fields}
+        for field in base.config_fields:
+            if field.type != "multiselect":
+                continue
+            chosen = effect.config.get(field.key)
+            if not isinstance(chosen, list):
+                continue
+            for option in field.options:
+                if option.value not in chosen:
+                    continue
+                for target in option.supersedes:
+                    key, _, value = target.rpartition(":")
+                    key = key or field.key
+                    held = effect.config.get(key)
+                    if not isinstance(held, list) or value not in held:
+                        continue
+                    # Two fields of one effect can label their options identically —
+                    # Obscure's single *sight* sense and its whole *Sight* sense type are
+                    # both just "Sight" — so a cross-field pair names the fields too, or
+                    # the sentence reads "Sight already covers Sight".
+                    cross = key != field.key
+                    covered_field = fields.get(key)
+                    ticked = _option_name(field, option.label, cross)
+                    covered = _option_name(
+                        covered_field, _option_label(covered_field, value), cross
+                    )
+                    violations.append(
+                        f"{base.name}: {ticked} already covers {covered}, "
+                        "so paying for both buys nothing."
+                    )
+    return violations
+
+
+def _option_label(field, value: str) -> str:
+    """A config option's display label, falling back to the value it stores."""
+
+    if field is None:
+        return value
+    return next((o.label for o in field.options if o.value == value), value)
+
+
+def _option_name(field, label: str, qualify: bool) -> str:
+    """An option's label, named by its field when two fields could both mean it.
+
+    Quoted in that case only: ``Extreme cold already covers Intense cold`` reads as a
+    sentence, while an unquoted ``Blocks the whole sense type: Sight already covers
+    Blocks one sense in: Sight`` does not.
+    """
+
+    if not qualify or field is None:
+        return label
+    return f'"{field.label}: {label}"'
+
+
 def power_trait_allocation_violations(
     power: Power, game_data: GameData, char: Character | None = None
 ) -> list[str]:
@@ -603,6 +677,10 @@ POWER_CHECKS.register(
 POWER_CHECKS.register(
     "over-allocated",
     lambda power, _char, data: power_allocation_violations(power, data),
+)
+POWER_CHECKS.register(
+    "paying twice for one choice",
+    lambda power, _char, data: power_redundant_option_violations(power, data),
 )
 POWER_CHECKS.register(
     "trait over its rank cap",

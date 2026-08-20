@@ -231,6 +231,35 @@ def test_more_builds_than_the_power_buys_is_flagged_rather_than_deleted() -> Non
     assert "3 built where this power buys 1" in message
 
 
+def test_a_minion_is_held_to_the_wielders_power_level() -> None:
+    """A minion is "subject to the normal Power Level limits" (p145), and the limit is
+    the wielder's — which is what the slot stamps onto the build."""
+    data = load_game_data()
+    char, power = _summoner()
+    char.power_level = 8
+    slot = power_sub_build_slots(power, data, char)[0]
+    minion = new_sub_build(slot, data)
+    assert minion.power_level == 8
+    for key in ("FGT", "AGL", "STA", "STR"):
+        minion.abilities[key] = 20
+    store_sub_build(slot, 0, minion)
+
+    messages = power_sub_build_violations(power, data, char)
+    # Each is prefixed with the slot: the reader is looking at the *power*, and a bare
+    # "Dodge + Toughness 20 exceeds PL cap 16" would read as the wielder's own breach.
+    assert any(m.startswith("Minion: Dodge + Toughness") for m in messages)
+    assert any(m.startswith("Minion: Fortitude + Will") for m in messages)
+
+
+def test_a_minion_inside_its_budget_and_its_power_level_warns_about_nothing() -> None:
+    data = load_game_data()
+    char, power = _summoner()
+    char.power_level = 10
+    slot = power_sub_build_slots(power, data, char)[0]
+    store_sub_build(slot, 0, new_sub_build(slot, data))
+    assert power_sub_build_violations(power, data, char) == []
+
+
 # -- the constructor -------------------------------------------------------------
 
 

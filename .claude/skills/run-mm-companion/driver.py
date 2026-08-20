@@ -1003,14 +1003,19 @@ def build(target: str):
         win = DynamicPoolDialog(group, data, char)
         win.resize(560, 340)
     elif target == "sheet-broken":
-        # A build that breaks two constructor-only checks: an over-spent Concealment
-        # (6 ranks of senses bought with 2) and an Affliction imposing an effect it
-        # cannot afford. The sheet card shows neither.
+        # A build that breaks three checks that used to be constructor-only: an
+        # over-spent Concealment (6 ranks of senses bought with 2), an Affliction
+        # imposing an effect it cannot afford, and an Obscure paying twice for sight.
         from mm_companion.core.powers import Power, PowerEffectInstance
         from mm_companion.ui.main_window import MainWindow
 
         win = MainWindow(locked=False)
         sheet = win._sheet
+        fog = PowerEffectInstance(
+            "obscure",
+            rank=4,
+            config={"senses": ["sight", "hearing"], "senseTypes": ["Sight"]},
+        )
         hidden = PowerEffectInstance("concealment", rank=2)
         hidden.config["senses"] = [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 2}]
         curse = PowerEffectInstance("affliction", rank=2)
@@ -1024,13 +1029,13 @@ def build(target: str):
                 "imposedRank": 20,
             }
         )
-        for name, effect in (("Vanish", hidden), ("Hex", curse)):
+        for name, effect in (("Vanish", hidden), ("Hex", curse), ("Fog Bank", fog)):
             sheet.character.powers.append(Power(name=name, effects=[effect]))
         sheet.powers.refresh()
         for key in sheet.block_keys():
             if key not in ("powers", "system_info"):
                 sheet.hide_block(key)
-        win.resize(900, 700)
+        win.resize(900, 1000)
     elif target == "sheet-stunt":
         # A power stunt as its own card — the badge naming its source and the word
         # "Stunt" where every other card prints a cost — beside the source power.

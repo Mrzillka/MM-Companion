@@ -831,6 +831,7 @@
           "key": "tier",
           "label": "Tier",
           "type": "select",
+          "namesOwner": true,
           "hint": "How readily the item is taken away. Worth its value per 5 points of the whole power's cost, rounded up — a 98-point suit of Removable armour is discounted 20, to 78.",
           "options": [
             { "value": "removable", "label": "Removable (only while Stunned and Defenseless)", "costValue": 1 },

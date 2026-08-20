@@ -26,6 +26,7 @@ from mm_companion.core.rules import (
     advantage_points_spent,
     array_alternate_cost,
     array_base_index,
+    array_cost_formula,
     array_dynamic_primary_cost,
     array_pool_points,
     configuration_by_id,
@@ -62,8 +63,10 @@ from mm_companion.core.rules import (
     live_powers,
     modifier_label,
     node_cost,
+    node_cost_formula,
     node_display_cost,
     power_allocation_violations,
+    power_cost_formula,
     power_display_name,
     power_from_configuration,
     power_game_terms,
@@ -385,7 +388,67 @@ def test_allocation_choices_appear_in_game_terms() -> None:
         "comprehend", rank=4, config={"categories": [{"id": "languages", "tier": 3}]}
     )
     line = effect_game_terms(effect, data)
-    assert "Languages 3" in line
+    # What the tier bought, not its index. Comprehend's tiers go unnamed by the ruleset,
+    # so this one falls back to the ranks it cost — which is still not "Languages 3".
+    assert "Languages (3 ranks)" in line
+
+
+def test_an_allocation_names_its_tier_rather_than_numbering_it() -> None:
+    data = load_game_data()
+    # A Concealment hiding from every sight sense costs 4 of its ranks and used to read
+    # "Sight 2" — the tier's index — next to a card combo reading "4 ranks". Two numbers
+    # meaning different things, side by side.
+    effect = PowerEffectInstance(
+        "concealment",
+        rank=6,
+        config={"senses": [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 1}]},
+    )
+    (row,) = [r for r in effect_stat_rows(effect, data, None, 0) if r.key == "senses"]
+    assert row.value == "Sight (all sight senses), Hearing (normal hearing)"
+
+
+def test_an_unnamed_tier_still_reports_ranks_rather_than_an_index() -> None:
+    data = load_game_data()
+    # A ruleset that names none of its tiers (a mod's own allocation field) keeps
+    # working: the fallback is what the tier cost, which is at least an answer.
+    field = next(f for e in data.effects if e.id == "enhanced_movement" for f in e.config_fields)
+    option = next(o for o in field.alloc_options if o.id == "permeate")
+    assert option.tier_labels == ()
+    effect = PowerEffectInstance(
+        "enhanced_movement", rank=6, config={field.key: [{"id": "permeate", "tier": 3}]}
+    )
+    (row,) = [r for r in effect_stat_rows(effect, data, None, 0) if r.key == field.key]
+    assert "Permeate (6 ranks)" in row.value
+
+
+def test_a_tier_that_names_its_modifier_replaces_the_name_instead_of_qualifying_it() -> None:
+    data = load_game_data()
+    removable = data.modifier_catalog()["removable"]
+
+    # Removable's tiers are names for the whole flaw, so appending one to a modifier
+    # already called Removable read "Removable (removable (only while stunned and
+    # defenseless))".
+    def label(**config) -> str:
+        return modifier_label(removable, ModifierSelection("removable", config=config))
+
+    assert label() == "Removable"
+    assert label(tier="removable") == "Removable (only while Stunned and Defenseless)"
+    assert label(tier="easily_removable") == "Easily Removable (a Disarm or Grab in action time)"
+    assert label(tier="equipment") == "Equipment (ordinary gear, and all of the above)"
+
+
+def test_a_gated_config_field_prints_no_readout_while_its_gate_is_shut() -> None:
+    data = load_game_data()
+    # An Affliction that names no imposed effect has no rank for one either. The rank
+    # field is gated on the *effect* being chosen (a gate with no value means "holds
+    # anything"), so a stray default can no longer print "At rank: 1" on its own.
+    effect = PowerEffectInstance(
+        "affliction", rank=10, config={"degree3": "transformed", "imposedRank": 1}
+    )
+    assert not [r for r in effect_stat_rows(effect, data, None, 0) if r.key == "imposedRank"]
+    effect.config["imposedEffect"] = "shrinking"
+    (row,) = [r for r in effect_stat_rows(effect, data, None, 0) if r.key == "imposedRank"]
+    assert (row.label, row.value) == ("At rank", "1")
 
 
 def test_growth_readout_maps_rank_to_size_table_modifiers() -> None:
@@ -600,6 +663,103 @@ def test_removable_cannot_discount_a_power_below_one_point() -> None:
     assert power_total_cost(power, data) == 1
     # A power with nothing bought still costs nothing, though.
     assert power_total_cost(Power(effects=[PowerEffectInstance("damage", rank=0)]), data) == 0
+
+
+def test_an_array_total_shows_the_working_its_cards_cannot() -> None:
+    data = load_game_data()
+    # Three cards reading 20, 16 and 10 come to 23: only the costliest is paid in full,
+    # and the Dynamic base is a rank of Alternate Effect on top of it. Nothing on the
+    # cards adds up to 23, which is exactly why the total has to say so.
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=10),
+            PowerEffectInstance("move_object", rank=8),
+            PowerEffectInstance("flight", rank=10, dynamic=True),
+        ],
+    )
+    assert power_total_cost(power, data) == 23
+    assert power_cost_formula(power, data) == "20 base + 1 Dynamic base + 2 × 1 alternate"
+
+
+def test_an_array_formula_collapses_members_of_a_kind() -> None:
+    data = load_game_data()
+
+    def array(*members: tuple[int, bool]) -> str:
+        return array_cost_formula(members, data)
+
+    # One of a kind is named singly; several are counted rather than listed, because the
+    # point is the rule being applied and the cards above already name each member.
+    assert array((16, False), (10, False)) == "16 base + 1 alternate"
+    assert array((16, False), (10, False), (8, False)) == "16 base + 2 × 1 alternate"
+    assert array((16, False), (10, True)) == "16 base + 2 Dynamic alternate"
+    assert array((16, False), (10, True), (8, False)) == (
+        "16 base + 1 alternate + 2 Dynamic alternate"
+    )
+    # Not an array at all: one member, or none, explains nothing.
+    assert array((16, False)) == ""
+    assert array() == ""
+
+
+def test_a_removable_array_shows_both_halves_of_its_arithmetic() -> None:
+    data = load_game_data()
+    # The gross the discount is charged against is the number worth reading, so the
+    # array's working sits behind it in parentheses rather than inside the subtraction.
+    base = PowerEffectInstance("damage", rank=20, flaws=[ModifierSelection("removable")])
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[base, PowerEffectInstance("move_object", rank=4)],
+    )
+    assert power_gross_cost(power, data) == 21
+    assert power_total_cost(power, data) == 16
+    assert power_cost_formula(power, data) == "21 (20 base + 1 alternate) − 5 Removable"
+
+
+def test_only_a_pooling_array_owes_a_working() -> None:
+    data = load_game_data()
+    # An ordinary power's total *is* the sum of its cards, so there is nothing to explain
+    # and the constructor shows the bare number.
+    plain = Power(effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_cost_formula(plain, data) == ""
+    # An array of one is not an array: it pools nothing.
+    solo = Power(structure=STRUCTURE_ARRAY, effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_cost_formula(solo, data) == ""
+    # A linked power sums its effects like any other.
+    linked = Power(
+        structure=STRUCTURE_LINKED,
+        effects=[PowerEffectInstance("damage", rank=8), PowerEffectInstance("flight", rank=2)],
+    )
+    assert power_cost_formula(linked, data) == ""
+
+
+def test_a_group_explains_its_array_the_way_a_power_does() -> None:
+    data = load_game_data()
+    array = PowerGroup(
+        mode=STRUCTURE_ARRAY,
+        children=[
+            Power(name="A", effects=[PowerEffectInstance("damage", rank=10)]),
+            Power(name="B", effects=[PowerEffectInstance("move_object", rank=6)]),
+            Power(
+                name="C",
+                effects=[
+                    PowerEffectInstance("flight", rank=5),
+                ],
+            ),
+        ],
+    )
+    array.children[2].dynamic = True
+    assert node_cost(array, data) == 15
+    assert node_cost_formula(array, data) == "12 base + 1 alternate + 2 Dynamic alternate"
+    # A group that does not pool has nothing to explain; a leaf falls through to its own
+    # formula; a stunt costs nothing at all and explains itself on its card.
+    array.mode = STRUCTURE_INDEPENDENT
+    assert node_cost_formula(array, data) == ""
+    leaf = Power(
+        effects=[PowerEffectInstance("protection", rank=98, flaws=[ModifierSelection("removable")])]
+    )
+    assert node_cost_formula(leaf, data) == "98 − 20 Removable"
+    leaf.stunt_of = "whatever"
+    assert node_cost_formula(leaf, data) == ""
 
 
 def test_subtle_points_config_sets_the_flat_cost() -> None:
@@ -1443,7 +1603,7 @@ def test_the_imposed_effect_reads_by_name_in_the_game_terms() -> None:
     # Named, not spelled as the id it stores - and the rank renders as its number
     # rather than blowing the whole line up looking for an option label for a 4.
     assert "Transformed into: Shrinking" in line
-    assert "at rank: 4" in line
+    assert "At rank: 4" in line
 
 
 def test_summon_states_the_points_its_minion_is_built_on() -> None:

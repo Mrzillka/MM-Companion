@@ -47,10 +47,15 @@ _INTRO = (
 #: array's ordinary alternates are not running — which is what the rules mean by them
 #: being mutually exclusive with everything else.
 _ORDINARY_NOTE = (
-    "This array's other {count} member{plural} are not Dynamic, so they cannot hold a "
-    "share: while any points are split they are switched off. Clear the split to go "
-    "back to selecting one live alternate."
+    "This array's other {subject} not Dynamic, so {pronoun} cannot hold a share: while "
+    "any points are split {pronoun} are switched off. Clear the split to go back to "
+    "selecting one live alternate."
 )
+
+#: How :data:`_ORDINARY_NOTE` names the members it is about. An array can hold exactly
+#: one non-Dynamic member as easily as five, and "other 1 member are not Dynamic" read
+#: like a bug in the sentence rather than a fact about the build.
+_ORDINARY_SUBJECT = {True: ("member is", "it"), False: ("{count} members are", "they")}
 
 _NOTHING_DYNAMIC = (
     "No member of this array is Dynamic yet. Tick a member's Dynamic box to let it "
@@ -138,8 +143,10 @@ class DynamicPoolDialog(QDialog):
         if not dynamic:
             note = QLabel(_NOTHING_DYNAMIC)
         elif ordinary:
-            plural = "" if ordinary == 1 else "s"
-            note = QLabel(_ORDINARY_NOTE.format(count=ordinary, plural=plural))
+            subject, pronoun = _ORDINARY_SUBJECT[ordinary == 1]
+            note = QLabel(
+                _ORDINARY_NOTE.format(subject=subject.format(count=ordinary), pronoun=pronoun)
+            )
         else:
             note = QLabel("")
         note.setWordWrap(True)

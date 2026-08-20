@@ -570,7 +570,9 @@ def test_switching_to_array_recomputes_cost_and_badges_cards(qapp: QApplication)
 
     window.canvas._mode_bar.changed.emit(STRUCTURE_ARRAY)
     assert window.power.structure == STRUCTURE_ARRAY
-    assert window._cost.text() == "Total cost: 9 PP"  # 8 base + 1 flat alternate
+    # An array is the other build whose total is not the sum of its cards, so the
+    # working is shown for the same reason Removable's is.
+    assert window._cost.text() == "Total cost: 9 PP  (8 base + 1 alternate)"
     assert base._role_badge.text() == "Base"
     assert alt._role_badge.text().startswith("Alternate")
 
@@ -1022,7 +1024,7 @@ def test_editing_a_multi_effect_power_restores_its_structure(qapp: QApplication)
     assert window.power.structure == STRUCTURE_ARRAY
     assert window.canvas.cards[0]._role_badge.text() == "Base"
     assert window.canvas.cards[1]._role_badge.text().startswith("Alternate")
-    assert window._cost.text() == "Total cost: 9 PP"  # 8 base + 1 flat alternate
+    assert window._cost.text() == "Total cost: 9 PP  (8 base + 1 alternate)"
 
 
 def test_editing_from_the_section_replaces_the_power_in_place(qapp: QApplication) -> None:
@@ -1205,14 +1207,20 @@ def test_the_imposed_effect_picker_opens_only_on_transformed(qapp: QApplication)
     )
     imposed = combos()[-1]
     assert imposed.isVisibleTo(card)
-    # The rank spin beside it seeds its own default once the gate opens, so the number
-    # it shows is the number everything downstream prices against.
-    assert card.instance.config["imposedRank"] == 1
+    # The rank spin is gated one step further on — on an effect actually being named,
+    # not merely on the degree that could impose one. Without that, an Affliction whose
+    # picker was still empty printed "At rank: 1" in its game terms, a number for a
+    # choice nobody had made.
+    assert "imposedRank" not in card.instance.config
 
-    # Closing the gate again drops what it held, so nothing is warned about a choice
-    # the player can no longer see.
     imposed.setCurrentIndex([imposed.itemText(i) for i in range(imposed.count())].index("Morph"))
     assert card.instance.config["imposedEffect"] == "morph"
+    # Now it seeds its own default, which is the number everything downstream prices
+    # against.
+    assert card.instance.config["imposedRank"] == 1
+
+    # Closing the outer gate drops both: the effect it held, and the rank that was only
+    # ever gated on that effect. Nothing is warned about a choice the player cannot see.
     degree3.setCurrentIndex(0)
     assert "imposedEffect" not in card.instance.config
     assert "imposedRank" not in card.instance.config

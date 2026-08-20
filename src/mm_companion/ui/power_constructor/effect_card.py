@@ -27,6 +27,7 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     TRAIT_CATEGORIES,
+    config_field_gate_open,
     effect_allocation_used,
     effect_cost_breakdown,
     effect_cost_formula,
@@ -385,19 +386,12 @@ class EffectCard(QFrame):
     def _field_gate_open(self, field) -> bool:
         """Whether a field gated on a sibling's value is currently showing.
 
-        ``showWhenField`` / ``showWhenValue`` let one config choice reveal another —
-        Affliction's imposed-effect picker appears only once a degree reads Transformed.
-        The sibling may be single- or multi-select (Extra Condition upgrades the degree
-        pickers), so a list counts when it *contains* the value and a scalar when it
-        equals it. A field naming no gate is always open.
+        The rule itself is :func:`~mm_companion.core.rules.config_field_gate_open` —
+        shared with the game-terms rows, so a field this card is hiding never shows up
+        as a readout beside it.
         """
 
-        if not field.show_when_field:
-            return True
-        held = self.instance.config.get(field.show_when_field)
-        if isinstance(held, list):
-            return field.show_when_value in held
-        return held == field.show_when_value
+        return config_field_gate_open(field, self.instance.config)
 
     def _hidden_config_keys(self) -> set[str]:
         """Effect config-field keys suppressed by an attached modifier whose own config
@@ -617,10 +611,11 @@ class EffectCard(QFrame):
 
         def update_total() -> None:
             used = effect_allocation_used(self.instance, self._data)
+            plural = "" if used == 1 else "s"
             if self._rank_synced:
                 # No budget, so no "of what" and nothing to overspend: the number is
                 # what the rows add up to, which is also the effect's rank.
-                label.setText(f"Allocated {used} ranks")
+                label.setText(f"Allocated {used} rank{plural}")
                 label.setStyleSheet("")
                 return
             rank = self._rank.value()
@@ -689,7 +684,13 @@ class EffectCard(QFrame):
             if len(option.tiers) > 1:
                 combo = QComboBox()
                 for index, cost in enumerate(option.tiers, start=1):
-                    combo.addItem(f"{cost} ranks", index)
+                    # Name what the tier buys, not just what it costs. The game-terms
+                    # panel beside the card says the same thing the same way
+                    # (``_config_display_allocation``), so the two never read as two
+                    # different facts about one choice.
+                    ranks = f"{cost} rank" if cost == 1 else f"{cost} ranks"
+                    named = option.tier_label(index)
+                    combo.addItem(f"{named} ({ranks})" if named else ranks, index)
                 combo.setCurrentIndex(min(max(chosen.get(option.id, 1), 1), len(option.tiers)) - 1)
                 combo.setEnabled(box.isChecked())
                 guard_wheel(combo)

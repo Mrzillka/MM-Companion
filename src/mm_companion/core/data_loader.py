@@ -492,6 +492,12 @@ class AllocationOption:
     the character's movement speeds. ``tier_notes`` is an optional per-tier caveat shown
     beside that rate (Wall-Crawling's "vulnerable while climbing"). Both are read by
     :func:`mm_companion.core.rules.movement_mode_lines`.
+
+    ``tier_labels`` names what each tier *buys*, one entry per tier ("all sight senses").
+    It is what a readout says instead of the tier's number: a Concealment at Sight tier 2
+    used to print "Sight 2" beside a combo reading "4 ranks", two numbers that mean
+    different things sitting next to each other. Optional — an option without one falls
+    back to naming the ranks the tier costs, which is still not its index.
     """
 
     id: str
@@ -501,6 +507,7 @@ class AllocationOption:
     description: str = ""
     speeds: tuple[SpeedRank | None, ...] = ()
     tier_notes: tuple[str, ...] = ()
+    tier_labels: tuple[str, ...] = ()
 
     def speed(self, tier: int) -> SpeedRank | None:
         """The rate a 1-based ``tier`` grants, or ``None`` when it grants none."""
@@ -513,6 +520,18 @@ class AllocationOption:
         if 1 <= tier <= len(self.tier_notes):
             return self.tier_notes[tier - 1]
         return ""
+
+    def tier_label(self, tier: int) -> str:
+        """What a 1-based ``tier`` buys (``""`` when the option does not say)."""
+        if 1 <= tier <= len(self.tier_labels):
+            return self.tier_labels[tier - 1]
+        return ""
+
+    def tier_cost(self, tier: int) -> int:
+        """The ranks a 1-based ``tier`` costs, clamped to the tiers the option has."""
+        if not self.tiers:
+            return 0
+        return self.tiers[max(0, min(tier, len(self.tiers)) - 1)]
 
 
 @dataclass(frozen=True)
@@ -587,6 +606,13 @@ class EffectConfigField:
     ``show_when_value`` — Affliction reveals its imposed-effect picker only once a
     degree is set to Transformed. The sibling may be single- or multi-select, so
     "holds" means equals *or* contains. Both empty (the default) means always shown.
+
+    ``names_owner`` marks a ``select`` whose options are names for the *modifier itself*
+    rather than qualifiers of it, so the chosen label replaces the modifier's name
+    instead of being appended in parentheses. Removable's tiers are the case it exists
+    for: their labels read "Removable (only while Stunned and Defenseless)" / "Easily
+    Removable (…)", which qualified a modifier already called Removable produced
+    "Removable (removable (only while stunned and defenseless))".
     """
 
     key: str
@@ -598,6 +624,7 @@ class EffectConfigField:
     toggles: str | None = None
     source: str | None = None
     hides_field: bool = False
+    names_owner: bool = False
     hint: str = ""
     min_value: int = 0
     max_value: int = 0
@@ -2358,6 +2385,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         toggles=c.get("toggles"),
         source=c.get("source"),
         hides_field=bool(c.get("hidesField", False)),
+        names_owner=bool(c.get("namesOwner", False)),
         hint=c.get("hint", ""),
         min_value=int(c.get("min", 0)),
         max_value=int(c.get("max", 0)),
@@ -2385,6 +2413,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 description=o.get("description", ""),
                 speeds=tuple(_parse_speed_rank(s) for s in o.get("speeds", ())),
                 tier_notes=tuple(o.get("tierNotes", ())),
+                tier_labels=tuple(o.get("tierLabels", ())),
             )
             for o in c.get("allocOptions", [])
         ),

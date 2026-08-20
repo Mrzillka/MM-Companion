@@ -316,6 +316,29 @@ def test_modifier_overrides_normalize_camelcase_keys() -> None:
     }
 
 
+def test_an_allocation_option_can_name_what_each_tier_buys() -> None:
+    data = load_game_data()
+    field = next(f for e in data.effects if e.id == "concealment" for f in e.config_fields)
+    sight = next(o for o in field.alloc_options if o.id == "sight")
+    assert sight.tiers == (2, 4)
+    assert sight.tier_labels == ("normal sight", "all sight senses")
+    assert sight.tier_label(2) == "all sight senses"
+    assert sight.tier_cost(2) == 4
+    # Out-of-range tiers clamp rather than raising; an unnamed tier is simply blank.
+    assert sight.tier_cost(9) == 4
+    assert sight.tier_cost(0) == 2
+    assert sight.tier_label(9) == ""
+
+
+def test_a_select_can_declare_that_it_names_its_modifier() -> None:
+    data = load_game_data()
+    tier = next(f for f in data.modifier_catalog()["removable"].config_fields if f.key == "tier")
+    assert tier.names_owner
+    # Every other select is an ordinary qualifier and says nothing of the sort.
+    loss = next(f for f in data.modifier_catalog()["removable"].config_fields if f.key == "loss")
+    assert not loss.names_owner
+
+
 def test_load_game_data_is_cached() -> None:
     assert load_game_data() is load_game_data()
 

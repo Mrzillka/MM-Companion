@@ -1180,9 +1180,11 @@ class PowerConstructorWindow(QMainWindow):
         else:
             total = power_total_cost(self.power, self._data, self._character)
             suffix = " (homerule)" if self.power.cost_override is not None else ""
-            # A Removable power costs less than the sum of the cards above it, because
-            # its discount is charged against the power's total rather than any one
-            # effect. Show that arithmetic here — it is the only place it is visible.
+            # Two builds cost something other than the sum of the cards above them: a
+            # Removable power (whose discount is charged against the whole power rather
+            # than any one effect) and an array (which pays its costliest effect in full
+            # and a flat point or two for each of the rest). Show that arithmetic here —
+            # it is the only place either is visible.
             if working := power_cost_formula(self.power, self._data, self._character):
                 suffix += f"  ({working})"
         self._cost.setText(f"Total cost: {total} {self._currency}{suffix}")

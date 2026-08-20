@@ -98,6 +98,7 @@ from mm_companion.core.rules import (
     leaf_powers,
     live_array_children,
     live_powers,
+    node_cost_formula,
     node_display_cost,
     power_display_name,
     power_has_custom_modifier,
@@ -831,6 +832,7 @@ class PowersSection(TitledSection):
 
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
+        self._explain_cost(cost, group)
         row.addWidget(cost)
 
         ungroup = QPushButton("✕")
@@ -840,6 +842,21 @@ class PowersSection(TitledSection):
         row.addWidget(ungroup)
         ungroup.setVisible(not self._locked)
         return header
+
+    def _explain_cost(self, label: QLabel, node: PowerNode) -> None:
+        """Put the working behind a node's price on its cost label, when there is any.
+
+        The constructor prints the same working beside its total, in full — there is
+        room on a line of its own. Here there is not: a card's header already carries a
+        name, up to three badges, a Dynamic box and two buttons, and a group's carries a
+        mode toggle and a Split points button as well. So the arithmetic goes on the
+        tooltip of the one thing it explains, which is where a player asking "why does
+        this say 23 when the cards say 10, 16 and 20" is already pointing.
+        """
+
+        working = node_cost_formula(node, self._data, self._character)
+        if working:
+            label.setToolTip(working)
 
     def _arm_card_menu(self, card: DraggableCard, power: Power) -> None:
         """Arm the card's right-click menu — Extra Effort, then this power's counters.
@@ -1425,6 +1442,7 @@ class PowersSection(TitledSection):
             )
         else:
             cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
+            self._explain_cost(cost, power)
         cost.setEnabled(False)
         layout.addWidget(cost)
 

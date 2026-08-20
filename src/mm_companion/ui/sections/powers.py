@@ -55,10 +55,13 @@ from PySide6.QtCore import QAbstractAnimation, QEasingCurve, Qt, QVariantAnimati
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
+    QDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -81,10 +84,16 @@ from mm_companion.core.rules import (
     PIN_POWER,
     PinRef,
     active_array_child,
+    array_alternate_cost,
+    array_dynamic_primary_cost,
+    array_pool_points,
+    counter_rolls,
     debilitated_traits,
     effect_current_rank,
     effect_stands,
+    group_array_base_index,
     leaf_powers,
+    live_array_children,
     live_powers,
     node_display_cost,
     power_display_name,
@@ -109,6 +118,7 @@ from mm_companion.ui.cards import (
     effects_block,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -136,12 +146,33 @@ _CLICK_HINTS = {
     "select": "Click this card to make it the array's live alternate; its siblings switch off.",
 }
 
+# The same click while the array's points are split across its Dynamic members, when
+# "its siblings switch off" has stopped being true: the split decides who is running,
+# so selecting one member no longer switches anything off (see live_array_children).
+_SPLIT_SELECT_HINT = (
+    "This array's points are split across its Dynamic members, so they are all running "
+    "at once — selecting a member only matters once the split is cleared."
+)
+
 # What each group mode is called on its title bar.
 _MODE_LABELS = {
     STRUCTURE_INDEPENDENT: "Group of powers",
     STRUCTURE_ARRAY: "Group of alternate effects",
     STRUCTURE_LINKED: "Group of linked powers",
 }
+
+
+def _pool_is_split(group: PowerGroup) -> bool:
+    """Whether any of this array's Dynamic members is currently holding a share.
+
+    The one question that decides whether an array behaves as a set of mutually
+    exclusive alternates or as a pool running several at once, so the hint, the dimming
+    and the header button all ask it here rather than each spelling it out.
+    """
+
+    return group.mode == STRUCTURE_ARRAY and any(
+        child.dynamic and (child.dynamic_points or 0) > 0 for child in group.children
+    )
 
 
 def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
@@ -474,6 +505,10 @@ class PowersSection(TitledSection):
     def _open_constructor(self) -> None:
         window = PowerConstructorWindow(self._data, character=self._character)
         window.powerSaved.connect(self._on_power_saved)
+        # The constructor is a window, not a block, so it cannot reach the roller
+        # itself; its Improvise panel asks and this section hands the request on the
+        # same way its own cards do.
+        window.rollRequested.connect(self.rollRequested)
         window.closed.connect(lambda w=window: self._on_window_closed(w))
         self._windows.append(window)
         window.show()
@@ -491,6 +526,7 @@ class PowersSection(TitledSection):
         no-op and a save swaps in exactly the power that was opened.
         """
         window = PowerConstructorWindow(self._data, character=self._character, power=power)
+        window.rollRequested.connect(self.rollRequested)
         window.powerSaved.connect(
             lambda edited, original=power: self._on_power_edited(original, edited)
         )
@@ -765,6 +801,14 @@ class PowersSection(TitledSection):
 
         row.addStretch()
 
+        dynamic = self._dynamic_toggle(group, parent)
+        if dynamic is not None:
+            row.addWidget(dynamic)
+
+        split = self._pool_button(group)
+        if split is not None:
+            row.addWidget(split)
+
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
         row.addWidget(cost)
@@ -776,6 +820,121 @@ class PowersSection(TitledSection):
         row.addWidget(ungroup)
         ungroup.setVisible(not self._locked)
         return header
+
+    def _arm_counter_menu(self, card: DraggableCard, power: Power) -> None:
+        """Offer this power's counter rolls on the card's right-click menu (p107).
+
+        Countering is a **tactic**, not something a power calls for: you Ready an effect,
+        and when your opponent uses one with an opposing descriptor you spend a reaction on
+        an opposed effect check. So it does not belong in the dice footer beside the rolls
+        the power actually makes — putting it there gave every attack card and every weapon
+        in the Equipment block a die button for a case the GM has to approve first.
+
+        A right-click menu costs no space at all and is where the app already puts a
+        card-adjacent action (the footer's own Pin menu). A power with nothing that could
+        be readied gets no menu rather than an empty one.
+        """
+
+        specs = counter_rolls(power, self._character, self._data)
+        if not specs:
+            return
+        card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        card.customContextMenuRequested.connect(
+            lambda pos, c=card, ss=specs: self._show_counter_menu(c, ss, pos)
+        )
+
+    def counter_menu(self, card: DraggableCard, specs: list) -> QMenu:
+        """The counter menu itself, built but not shown.
+
+        Split from :meth:`_show_counter_menu` so the wiring can be checked without
+        ``exec`` — a modal menu headless is a test that hangs rather than a test that
+        passes.
+        """
+
+        menu = QMenu(card)
+        for spec in specs:
+            action = menu.addAction(f"{spec.label}  +{spec.modifier}")
+            action.setToolTip(spec.hint)
+            action.triggered.connect(lambda _checked=False, s=spec: self.rollRequested.emit(s))
+        return menu
+
+    def _show_counter_menu(self, card: DraggableCard, specs: list, pos) -> None:
+        self.counter_menu(card, specs).exec(card.mapToGlobal(pos))
+
+    def _dynamic_toggle(self, node: PowerNode, parent: PowerGroup | None) -> QWidget | None:
+        """A Dynamic switch for a member of an ``array`` group, or ``None``.
+
+        The whole-card twin of the Power Constructor's per-effect switch, and the same
+        question at the other level an array exists at: a Dynamic member shares the
+        array's point pool and runs alongside the array's other Dynamic members instead
+        of switching them off, and pays a dearer Alternate Effect for it (p101).
+
+        Offered only inside a real array — a group of one has nothing to be an alternate
+        *of* — and to leaf powers and nested groups alike, since either can be a member.
+        Locked, it follows :class:`_ModeToggle` rather than the buttons around it: the
+        flag stays readable and stops being a control, and the click falls through to
+        the card, which is the array's member selector.
+        """
+
+        if parent is None or parent.mode != STRUCTURE_ARRAY or len(parent.children) < 2:
+            return None
+        box = QCheckBox("Dynamic")
+        box.setChecked(node.dynamic)
+        base = group_array_base_index(parent, self._data, self._character)
+        if parent.children[base] is node:
+            price = f"one Alternate Effect ({array_dynamic_primary_cost(self._data)} PP)"
+        else:
+            dear = array_alternate_cost(self._data, dynamic=True)
+            price = f"{dear} PP instead of {array_alternate_cost(self._data)}"
+        box.setToolTip(
+            "Share this array's point pool with its other Dynamic members and run "
+            f"alongside them at reduced effectiveness, rather than switching them off. "
+            f"Costs {price}."
+        )
+        box.toggled.connect(lambda on, n=node: self._set_dynamic(n, on))
+        if self._locked:
+            box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        return box
+
+    def _pool_button(self, group: PowerGroup) -> QWidget | None:
+        """The "Split points" button on an array that has a Dynamic member, else ``None``.
+
+        Deciding the split is a *free action* the character takes at the table (p101),
+        not a build decision, so — unlike the Dynamic switch beside it — the button
+        survives the lock: it is the same kind of control as the card click that selects
+        an array's live alternate.
+        """
+
+        if group.mode != STRUCTURE_ARRAY or not any(c.dynamic for c in group.children):
+            return None
+        button = QPushButton("Split points")
+        pool = array_pool_points(group, self._data, self._character)
+        assigned = sum(c.dynamic_points or 0 for c in group.children if c.dynamic)
+        if assigned:
+            button.setText(f"Split points ({assigned}/{pool})")
+        button.setToolTip(
+            "Share this array's points across its Dynamic members, which then run at "
+            "the same time at reduced effectiveness."
+        )
+        button.clicked.connect(lambda _checked=False, g=group: self._split_pool(g))
+        return button
+
+    def _split_pool(self, group: PowerGroup) -> None:
+        """Open the split editor, and rebuild on OK — every member's ranks just moved."""
+
+        dialog = DynamicPoolDialog(group, self._data, self._character, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply_to()
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+
+    def _set_dynamic(self, node: PowerNode, on: bool) -> None:
+        """Mark an array member Dynamic (or not) and reprice the tree."""
+        node.dynamic = on
+        self._rebuild_list()
+        self.changed.emit()
 
     def _rename_group(self, group: PowerGroup) -> None:
         """Prompt for a new group name; blank clears it back to the mode label."""
@@ -853,7 +1012,10 @@ class PowersSection(TitledSection):
     def _node_is_inactive(self, node: PowerNode, parent: PowerGroup | None, role: str) -> bool:
         """Whether the card should be drawn in its dimmed, switched-off state."""
         if role == "select":
-            return active_array_child(parent) is not node
+            # Which member is *running* rather than which is selected: once the pool is
+            # split every Dynamic member holding a share is live at once, so dimming all
+            # but the selected one would contradict the numbers on the sheet.
+            return not any(child is node for child in live_array_children(parent))
         if role == "toggle":
             if isinstance(node, PowerGroup):
                 return not self._group_is_active(node)
@@ -878,8 +1040,15 @@ class PowersSection(TitledSection):
         if not (role and interactive):
             return
         card.set_clickable(True)
-        card.setToolTip(_CLICK_HINTS[role])
+        card.setToolTip(self._click_hint(role, parent))
         card.clicked.connect(lambda n=node, p=parent, r=role: self._on_card_clicked(n, p, r))
+
+    def _click_hint(self, role: str, parent: PowerGroup | None) -> str:
+        """What to tell the player a click on this card will do."""
+
+        if role == "select" and parent is not None and _pool_is_split(parent):
+            return _SPLIT_SELECT_HINT
+        return _CLICK_HINTS[role]
 
     def _show_activation(
         self, card: DraggableCard, node: PowerNode, parent: PowerGroup | None
@@ -972,6 +1141,7 @@ class PowersSection(TitledSection):
         """
         card = DraggableCard(power.id)
         self._arm_activation(card, power, parent, interactive)
+        self._arm_counter_menu(card, power)
         layout = QVBoxLayout(card)
         layout.addWidget(self._header_row(power, card, parent))
 
@@ -1060,6 +1230,10 @@ class PowersSection(TitledSection):
             layout.addWidget(homerule)
         layout.addStretch()
 
+        dynamic = self._dynamic_toggle(power, parent)
+        if dynamic is not None:
+            layout.addWidget(dynamic)
+
         # Inside an array group a non-base member contributes only its flat pooled cost;
         # every other card shows its full assembled cost (node_display_cost decides).
         cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
@@ -1127,7 +1301,7 @@ class PowersSection(TitledSection):
             dial = _RankDial(
                 caption,
                 effect.rank,
-                effect_current_rank(effect) if standing else 0,
+                effect_current_rank(effect, self._data, self._character) if standing else 0,
                 self._dial_labels(steps),
                 interactive,
             )

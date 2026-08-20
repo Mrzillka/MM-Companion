@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import re
+from dataclasses import replace
 from fractions import Fraction
 
 from mm_companion.core.character import Character
@@ -24,14 +26,25 @@ from mm_companion.core.rules import (
     advantage_points_spent,
     array_alternate_cost,
     array_base_index,
+    array_dynamic_primary_cost,
+    array_pool_points,
+    configuration_by_id,
+    configurations_for_effect,
+    counter_rolls,
+    dynamic_rank_cap,
+    dynamic_rank_share,
+    effect_action_at_most,
     effect_allocation_used,
     effect_attack_skill_bonus,
     effect_cost_breakdown,
     effect_cost_formula,
+    effect_current_rank,
     effect_effective_rank,
     effect_game_terms,
     effect_is_active,
+    effect_is_personal,
     effect_makes_attack,
+    effect_opposed_check,
     effect_per_rank_cost,
     effect_readout_rows,
     effect_size_rank_shift,
@@ -43,19 +56,28 @@ from mm_companion.core.rules import (
     granted_advantages,
     granted_skill_rows,
     group_array_base_index,
+    imposable_effects,
+    imposed_effect_cost,
+    live_array_children,
     live_powers,
     modifier_label,
     node_cost,
     node_display_cost,
     power_allocation_violations,
     power_display_name,
+    power_from_configuration,
     power_game_terms,
+    power_gross_cost,
     power_has_custom_modifier,
     power_has_standing_effect,
+    power_imposed_effect_violations,
     power_linked_range_violations,
     power_modifier_requirement_violations,
     power_pl_violations,
+    power_points_spent,
+    power_rolls,
     power_runtime_gates,
+    power_scope_terms,
     power_strength_amount_violations,
     power_total_cost,
     power_trait_allocation_violations,
@@ -70,6 +92,7 @@ from mm_companion.core.rules import (
     trait_display_name,
     trait_rate,
 )
+from mm_companion.core.rules.powers_terms import _render_note
 
 
 def test_base_effect_cost_is_per_rank() -> None:
@@ -77,6 +100,168 @@ def test_base_effect_cost_is_per_rank() -> None:
     # Damage is 1 PP/rank; rank 8 with no modifiers costs 8.
     effect = PowerEffectInstance("damage", rank=8)
     assert effect_total_cost(effect, data) == 8
+
+
+def test_every_standard_configuration_names_records_that_exist() -> None:
+    data = load_game_data()
+    effects = {e.id for e in data.effects}
+    modifiers = set(data.modifier_catalog())
+    assert data.configurations, "the base ruleset ships the book's standard configurations"
+    for configuration in data.configurations:
+        assert configuration.base_effect in effects, configuration.id
+        assert configuration.effects, configuration.id
+        for configured in configuration.effects:
+            assert configured.effect_id in effects, (configuration.id, configured.effect_id)
+            for modifier in (*configured.extras, *configured.flaws):
+                assert modifier.id in modifiers, (configuration.id, modifier.id)
+
+
+def test_building_a_configuration_gives_an_ordinary_editable_power() -> None:
+    data = load_game_data()
+    blast = configuration_by_id(data, "blast")
+    power = power_from_configuration(blast)
+    # Named after itself, one Damage effect carrying the Ranged extra, and nothing about
+    # it remembers being a configuration — it is a plain Power from here on.
+    assert power.name == "Blast"
+    assert [e.effect_id for e in power.effects] == ["damage"]
+    assert [m.modifier_id for m in power.effects[0].extras] == ["ranged"]
+    power.effects[0].rank = 8
+    assert power_total_cost(power, data) == 16  # 8 × (1 damage + 1 ranged)
+
+
+def test_a_built_configuration_shares_nothing_with_the_catalog_record() -> None:
+    data = load_game_data()
+    stun = configuration_by_id(data, "stun")
+    first, second = power_from_configuration(stun), power_from_configuration(stun)
+    first.effects[0].config["degree1"] = "impaired"
+    # Editing one build must not reach the catalog record or any other build of it.
+    assert second.effects[0].config["degree1"] == "dazed"
+    assert stun.effects[0].config["degree1"] == "dazed"
+
+
+def test_standard_configurations_cost_what_the_book_prints() -> None:
+    data = load_game_data()
+    # The printed cost is reference text, never used in the arithmetic — so comparing
+    # the two is a real check that the recorded build is the right one.
+    per_rank = re.compile(r"^(\d+) points? per rank$")
+    fixed = re.compile(r"^(\d+) points?(?: \(rank \d+\))?$")
+    # Two configurations cannot reach their printed cost: the mimicries put a Close
+    # Range flaw on a Personal-range effect, where the book gives it no value. The
+    # reason is recorded in configurations.json's _meta.
+    known_gaps = {"material_mimicry", "power_mimicry"}
+    checked = 0
+    for configuration in data.configurations:
+        power = power_from_configuration(configuration)
+        note = configuration.cost_note
+        if match := per_rank.match(note):
+            one = power_total_cost(power, data)
+            for effect in power.effects:
+                effect.rank = 4
+            rate = (power_total_cost(power, data) - one) / 3
+            if configuration.id in known_gaps:
+                continue
+            assert rate == int(match.group(1)), (configuration.id, rate, note)
+        elif (match := fixed.match(note)) or note == "Feature 1":
+            want = int(match.group(1)) if match else 1
+            assert power_total_cost(power, data) == want, (configuration.id, note)
+        else:
+            continue  # a descriptive cost ("see description"), checked by hand
+        checked += 1
+    assert checked > 70, "most configurations should be machine-checkable"
+
+
+def test_configurations_are_grouped_by_the_effect_they_are_built_on() -> None:
+    data = load_game_data()
+    names = {c.name for c in configurations_for_effect(data, "affliction")}
+    assert {"Dazzle", "Snare", "Stun", "Toxin", "Mind Control"} <= names
+    assert configurations_for_effect(data, "burrowing") == []
+
+
+def test_a_flat_flaw_cannot_take_an_effect_below_one_point() -> None:
+    data = load_game_data()
+    # Damage 1 costs 1; Activation for a standard action is a flat -2. Without the floor
+    # (p150) that prices at -1 and pays the character back for taking a flaw.
+    effect = PowerEffectInstance(
+        "damage",
+        rank=1,
+        flaws=[ModifierSelection("activation", config={"actions": "standard"})],
+    )
+    assert effect_total_cost(effect, data) == 1
+    # An effect with nothing bought still costs nothing, though.
+    empty = PowerEffectInstance("damage", rank=0)
+    assert effect_total_cost(empty, data) == 0
+    # Commlink is the configuration that exposed this: 1-point-per-rank Communication
+    # under an Equipment-tier Removable, which discounts more than the whole power.
+    assert (
+        power_total_cost(power_from_configuration(configuration_by_id(data, "commlink")), data) == 1
+    )
+
+
+def test_a_configured_base_cost_is_priced_from_the_options_chosen() -> None:
+    data = load_game_data()
+    # Illusion is 1 PP/rank per sense type it fools, and sight counts as two
+    # (PDF p131). Rank 4 fooling sight and hearing is 3 PP/rank, so 12.
+    effect = PowerEffectInstance("illusion", rank=4, config={"senseTypes": ["Sight", "Hearing"]})
+    assert effect_per_rank_cost(effect, data) == 3
+    assert effect_total_cost(effect, data) == 12
+
+
+def test_a_configured_base_cost_falls_back_to_its_floor_while_unset() -> None:
+    data = load_game_data()
+    # A freshly dropped card has configured nothing, and must still price at the
+    # effect's minimum rather than at zero: Illusion 1, Remote Sensing 5, Transmute 2.
+    for effect_id, floor in (("illusion", 1), ("remote_sensing", 5), ("transmute", 2)):
+        effect = PowerEffectInstance(effect_id, rank=3)
+        assert effect_total_cost(effect, data) == floor * 3, effect_id
+
+
+def test_a_configured_base_cost_is_capped() -> None:
+    data = load_game_data()
+    # Every sense type is 9 points by the sum (sight counting double) but Illusion
+    # caps at 5 per rank, which is what "all sense types" costs (PDF p131).
+    everything = ["Sight", "Hearing", "Smell", "Taste", "Touch", "Radio", "Mental", "Special"]
+    effect = PowerEffectInstance("illusion", rank=2, config={"senseTypes": everything})
+    assert effect_total_cost(effect, data) == 10
+
+
+def test_environment_adds_its_conditions_together_and_has_no_ceiling() -> None:
+    data = load_game_data()
+    # Each Environment condition costs its own 1 or 2 per rank and they sum, with no
+    # cap in the rules (PDF p124-125): extreme cold (2) plus -5 visibility (2) is 4.
+    effect = PowerEffectInstance(
+        "environment", rank=5, config={"conditions": ["cold_extreme", "visibility_5"]}
+    )
+    assert effect_per_rank_cost(effect, data) == 4
+    assert effect_total_cost(effect, data) == 20
+
+
+def test_the_books_own_configurations_price_as_printed() -> None:
+    data = load_game_data()
+    # Worked examples from the book, at rank 10 so the total reads as the per-rank cost.
+    # Scrying (p143), Darkness and Silence (p139), Mist (p125).
+    cases = (
+        ("remote_sensing", {"senseTypes": ["Sight", "Hearing"]}, 7),
+        ("obscure", {"senses": ["sight"]}, 2),
+        ("obscure", {"senses": ["hearing"]}, 1),
+        ("obscure", {"senseTypes": ["Sight"]}, 4),
+        ("environment", {"conditions": ["visibility_2"]}, 1),
+        ("transmute", {"scope": "anything"}, 5),
+    )
+    for effect_id, config, per_rank in cases:
+        effect = PowerEffectInstance(effect_id, rank=10, config=dict(config))
+        assert effect_total_cost(effect, data) == per_rank * 10, (effect_id, config)
+
+
+def test_a_configured_base_cost_still_takes_modifiers_normally() -> None:
+    data = load_game_data()
+    # Telepresence: Remote Sensing (sight + hearing) at 7, Medium at -1, so 6 per rank
+    # (p143) — a per-rank flaw discounts the configured base like any other.
+    effect = PowerEffectInstance(
+        "remote_sensing", rank=4, config={"senseTypes": ["Sight", "Hearing"]}
+    )
+    effect.flaws.append(ModifierSelection(modifier_id="medium_remote_sensing"))
+    assert effect_total_cost(effect, data) == 24
+    assert effect_cost_formula(effect, data) == "4 × (7 − 1)"
 
 
 def test_allocation_used_sums_selected_tier_costs() -> None:
@@ -89,6 +274,86 @@ def test_allocation_used_sums_selected_tier_costs() -> None:
     )
     assert effect_allocation_used(effect, data) == 4
     assert power_allocation_violations(Power(effects=[effect]), data) == []
+
+
+def test_enhanced_senses_can_buy_the_dimensional_sense() -> None:
+    data = load_game_data()
+    # The book lists Dimensional among the Enhanced Senses options at "+1 point flat for
+    # a single other dimension, +2 for a group of related dimensions, +3 for any" (p122).
+    # Enhanced Senses costs 1 point per rank, so those points *are* ranks and it meters
+    # against the effect's budget like every other option beside it.
+    for tier in (1, 2, 3):
+        effect = PowerEffectInstance(
+            "enhanced_senses", rank=tier, config={"senses": [{"id": "dimensional", "tier": tier}]}
+        )
+        assert effect_allocation_used(effect, data) == tier
+        assert effect_total_cost(effect, data) == tier
+        assert power_allocation_violations(Power(effects=[effect]), data) == []
+
+
+def test_the_ruleset_marks_exactly_the_repeatable_modifiers() -> None:
+    data = load_game_data()
+    # A second copy of a modifier almost always double-charges while overriding nothing,
+    # so repeatability is opt-in data rather than "does it carry config" — which was the
+    # old proxy and let Removable, Check Required, Ranged and the rest be taken twice.
+    repeatable = {m.id for m in data.modifier_catalog().values() if m.repeatable}
+    assert repeatable == {
+        "custom_extra",  # whatever the player named it
+        "custom_flaw",
+        "feature_extra",  # one minor feature each
+        "limited",  # "only at night" beside "only vs. robots"
+        "limited_degree",  # the book: two applications blank two of the three degrees
+        "quirk",
+    }
+    # The Transform configuration is built on two Limited Degrees, so the flag is load-
+    # bearing rather than decorative.
+    transform = power_from_configuration(configuration_by_id(data, "transform"))
+    assert [f.modifier_id for f in transform.effects[0].flaws] == [
+        "limited_degree",
+        "limited_degree",
+    ]
+
+
+def test_concealment_spends_its_ranks_on_the_senses_it_hides_from() -> None:
+    data = load_game_data()
+    # The book's own example (p115): "with Concealment 5, you can have Full Concealment
+    # from all sight senses (4 ranks) as well as normal hearing (1 rank)". Sight is the
+    # double-cost type; the cost stays a flat 2 per rank whatever the ranks are spent on.
+    effect = PowerEffectInstance(
+        "concealment",
+        rank=5,
+        config={"senses": [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 1}]},
+    )
+    assert effect_allocation_used(effect, data) == 5
+    assert effect_total_cost(effect, data) == 10
+    assert power_allocation_violations(Power(effects=[effect]), data) == []
+
+    # Every sight sense costs 4, so a Concealment 2 cannot afford it.
+    over = PowerEffectInstance(
+        "concealment", rank=2, config={"senses": [{"id": "sight", "tier": 2}]}
+    )
+    assert len(power_allocation_violations(Power(effects=[over]), data)) == 1
+
+    # Touch is absent on purpose: hiding from touch means being incorporeal, which is
+    # the Insubstantial effect (p115).
+    base = next(e for e in data.effects if e.id == "concealment")
+    senses = next(f for f in base.config_fields if f.type == "allocation")
+    assert "touch" not in {o.id for o in senses.alloc_options}
+
+
+def test_the_two_concealment_configurations_record_which_sense() -> None:
+    data = load_game_data()
+    # Both used to ship at the right rank with the sense named only in their prose.
+    for name, sense, rank, cost in (
+        ("inaudibility", "hearing", 1, 2),
+        ("invisibility", "sight", 2, 4),
+    ):
+        power = power_from_configuration(configuration_by_id(data, name))
+        effect = power.effects[0]
+        assert effect.config["senses"] == [{"id": sense, "tier": 1}]
+        assert effect.rank == rank
+        assert effect_allocation_used(effect, data) == rank
+        assert power_total_cost(power, data) == cost
 
 
 def test_over_allocation_is_flagged() -> None:
@@ -264,17 +529,77 @@ def test_side_effect_toggle_changes_the_per_rank_discount() -> None:
     assert effect_total_cost(always, data) == 3
 
 
-def test_removable_tier_changes_the_flat_discount() -> None:
+def test_removable_is_priced_from_the_whole_power_not_one_effect() -> None:
     data = load_game_data()
-    # Protection 10: Removable is -1 flat by default, Easily Removable -2.
-    default = PowerEffectInstance("protection", rank=10, flaws=[ModifierSelection("removable")])
-    easily = PowerEffectInstance(
-        "protection",
-        rank=10,
-        flaws=[ModifierSelection("removable", config={"tier": "easily_removable"})],
+    # The rules' own worked example (PDF p161): a suit of armour whose effects come to
+    # 98 points is discounted 98 / 5 = 19.6, rounded up to 20 -> 78.
+    armour = Power(
+        name="Powered Armor",
+        effects=[
+            PowerEffectInstance("protection", rank=98, flaws=[ModifierSelection("removable")])
+        ],
     )
-    assert effect_total_cost(default, data) == 9
-    assert effect_total_cost(easily, data) == 8
+    # The effect itself is untouched: the flaw is charged against the power, not here.
+    assert effect_total_cost(armour.effects[0], data) == 98
+    assert power_gross_cost(armour, data) == 98
+    assert power_total_cost(armour, data) == 78
+    (term,) = power_scope_terms(armour, data, 98)
+    assert (term.magnitude, term.units, term.amount) == (1, 20, -20)
+
+
+def test_removable_tier_scales_the_per_five_points_discount() -> None:
+    data = load_game_data()
+    power = Power(effects=[PowerEffectInstance("protection", rank=98)])
+
+    def at(**config) -> int:
+        power.effects[0].flaws = [ModifierSelection("removable", config=config)]
+        return power_total_cost(power, data)
+
+    assert at(tier="removable") == 78  # -1 x 20
+    assert at(tier="easily_removable") == 58  # -2 x 20
+    assert at(tier="equipment") == 18  # -4 x 20
+    # Short-Term Only is worth 1 off the flaw's own value, and may take it to 0 (p160).
+    assert at(tier="equipment", loss="short_term_only") == 38  # -3 x 20
+    assert at(tier="removable", loss="short_term_only") == 98  # no discount at all
+
+
+def test_one_removable_discounts_a_power_however_many_effects_carry_it() -> None:
+    data = load_game_data()
+
+    # Removable "applies to the power as a whole and not to individual effects" (p161),
+    # but the constructor attaches modifiers to effects — so a suit of armour naturally
+    # ends up with a copy on each. Charging every one would quadruple the discount.
+    def suit(count: int) -> Power:
+        effects = [PowerEffectInstance("protection", rank=25) for _ in range(4)]
+        for effect in effects[:count]:
+            effect.flaws = [ModifierSelection("removable", config={"tier": "easily_removable"})]
+        return Power(effects=effects)
+
+    assert power_gross_cost(suit(0), data) == 100
+    assert power_total_cost(suit(1), data) == 60  # -2 x 20
+    assert power_total_cost(suit(4), data) == 60  # the same discount, not four of them
+    # The costliest tier attached wins when they disagree.
+    mixed = suit(1)
+    mixed.effects[1].flaws = [ModifierSelection("removable", config={"tier": "equipment"})]
+    assert power_total_cost(mixed, data) == 20  # -4 x 20
+
+
+def test_removable_cannot_discount_a_power_below_one_point() -> None:
+    data = load_game_data()
+    # Communication 4 costs 4; an Equipment-tier Removable is -4 per 5 points, which
+    # would zero it. The 1-point floor (p150) holds at the power level too.
+    power = Power(
+        effects=[
+            PowerEffectInstance(
+                "communication",
+                rank=4,
+                flaws=[ModifierSelection("removable", config={"tier": "equipment"})],
+            )
+        ]
+    )
+    assert power_total_cost(power, data) == 1
+    # A power with nothing bought still costs nothing, though.
+    assert power_total_cost(Power(effects=[PowerEffectInstance("damage", rank=0)]), data) == 0
 
 
 def test_subtle_points_config_sets_the_flat_cost() -> None:
@@ -704,14 +1029,75 @@ def test_attack_roll_adds_accurate_over_the_characters_attack() -> None:
     assert check.change == "better"
 
 
+def test_nullify_makes_its_own_opposed_check_rather_than_forcing_a_save() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Quench", effects=[PowerEffectInstance("nullify", rank=8)])
+    specs = {spec.label: spec for spec in power_rolls(power, char, data)}
+
+    # p138: "make an opposed check of your Nullify rank and the targeted effect rank or
+    # the target's Will". The *wielder* rolls it, at their rank - it used to sit in the
+    # resistance slot, which made it a target's roll carrying no bonus at all.
+    opposed = next(spec for spec in specs.values() if spec.kind == "effect-check")
+    assert opposed.modifier == 8
+    assert not opposed.rolled_by_target
+    assert opposed.dc is None  # the opposing check is the number to beat
+    assert not any(spec.rolled_by_target for spec in specs.values())
+
+
+def test_an_opposed_check_follows_the_effective_rank() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # An effect check is "d20 + effect rank" (p107), and the rank it opposes with is the
+    # one it actually resolves at.
+    effect = PowerEffectInstance("nullify", rank=8)
+    assert effect_opposed_check(effect, data, char)[0] == 8
+    effect.current_rank = 3  # dialled down mid-fight
+    assert effect_opposed_check(effect, data, char)[0] == 3
+    # An effect that makes no opposed check of its own says so by having none.
+    assert effect_opposed_check(PowerEffectInstance("damage", rank=8), data, char) is None
+
+
+def test_countering_is_offered_for_effects_that_are_actually_used() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+
+    def counters(effect_id: str) -> list[str]:
+        power = Power(name="X", effects=[PowerEffectInstance(effect_id, rank=8)])
+        return [spec.label for spec in counter_rolls(power, char, data)]
+
+    # The book's own two examples: a Blast countered with Move Object, Mind Control
+    # broken with Nullify (p107).
+    assert counters("move_object") and counters("nullify") and counters("damage")
+    # An always-on effect is not something you Ready and use, so it offers nothing.
+    assert counters("protection") == [] and counters("feature") == []
+    assert counters("flight") == []
+
+
+def test_a_counter_roll_is_the_wielders_at_their_effective_rank() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Water Control", effects=[PowerEffectInstance("move_object", rank=8)])
+    (spec,) = counter_rolls(power, char, data)
+    assert spec.modifier == 8 and spec.dc is None and not spec.rolled_by_target
+    assert "Move Object" in spec.label
+
+    # It is a tactic, not something the power calls for, so it stays out of the footer -
+    # otherwise every attack card and every weapon grows a die button for it.
+    assert all(spec.kind != "effect-check" for spec in power_rolls(power, char, data))
+
+
 def test_non_attack_roll_still_uses_the_effect_rank() -> None:
     data = load_game_data()
     char = Character.new_default(data)
     char.abilities["ATK"] = 6
 
-    # Nullify resolves "Effect vs. Will" — its own rank, never the character's Attack.
+    # Nullify's second roll is its own rank, never the character's Attack. It is an
+    # *opposed effect check* rather than a resistance: "make an opposed check of your
+    # Nullify rank and the targeted effect rank or the target's Will" (p138).
     rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("nullify", rank=7), data, char)}
-    assert rows["resistance"].value == "7 vs. Will or rank"
+    assert "resistance" not in rows
+    assert rows["opposed"].value.startswith("7 vs. ")
 
 
 def test_effect_stat_rows_opposed_effect_uses_rank_as_the_threshold() -> None:
@@ -730,9 +1116,11 @@ def test_effect_stat_rows_append_dc_to_a_config_chosen_resistance() -> None:
 
 def test_effect_stat_rows_leave_dc_less_effects_as_prose() -> None:
     data = load_game_data()
-    # Nullify is opposed (no static DC); the actor roll still resolves to its rank.
+    # Nullify sets no static DC, so its row is a rank against whatever it is opposing
+    # rather than a number to beat.
     rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("nullify", rank=7), data)}
-    assert rows["resistance"].value == "7 vs. Will or rank"
+    assert rows["opposed"].value.startswith("7 vs. ")
+    assert "DC" not in rows["opposed"].value
 
 
 def test_effect_stat_rows_accurate_raises_and_tints_the_attack_roll() -> None:
@@ -979,6 +1367,250 @@ def test_effect_stat_rows_effect_specific_narrative_modifier_lands_in_notes() ->
     assert notes.value == "Cumulative"
 
 
+def test_personal_range_is_the_effect_not_the_range_parameter() -> None:
+    data = load_game_data()
+    by_id = {e.id: e for e in data.effects}
+    # Most self-only effects simply say so in their Range parameter.
+    assert effect_is_personal(by_id["morph"]) and by_id["morph"].range_ == "Personal"
+    # Teleport does not: its Range is "Rank" because the rank is how far you go. The
+    # book settles it by naming Teleport as an effect an Affliction may impose (p110).
+    assert by_id["teleport"].range_ == "Rank"
+    assert effect_is_personal(by_id["teleport"])
+    # Environment's Range is "Rank" too, but it shapes an area around you rather than
+    # working on you, so it is not personal and is not imposable.
+    assert by_id["environment"].range_ == "Rank"
+    assert not effect_is_personal(by_id["environment"])
+    assert not effect_is_personal(by_id["damage"])
+
+
+def test_imposable_effects_are_personal_and_quick_enough() -> None:
+    data = load_game_data()
+    offered = imposable_effects(data)
+    ids = {e.id for e in offered}
+    # The book's own three examples are all there (p110).
+    assert {"morph", "shrinking", "teleport"} <= ids
+    # Nothing targeted is: an Affliction cannot impose a Damage on someone.
+    assert not ids & {"damage", "affliction", "environment", "healing", "illusion"}
+    # Every one of them is personal and takes a standard action or less, which is what
+    # makes the picker the enforcement rather than a warning after the fact.
+    assert all(effect_is_personal(e) for e in offered)
+    assert all(effect_action_at_most(e, "Standard", data) for e in offered)
+    assert [e.name for e in offered] == sorted(e.name for e in offered)
+
+
+def test_an_imposed_effect_may_not_cost_more_than_the_affliction() -> None:
+    data = load_game_data()
+    # Affliction 10 = 10 PP. Morph is 5 per rank, so rank 2 exactly spends the budget.
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=10,
+        config={"degree3": "transformed", "imposedEffect": "morph", "imposedRank": 2},
+    )
+    power = Power(name="Petrify", effects=[effect])
+    assert imposed_effect_cost(effect, data) == 10
+    assert power_imposed_effect_violations(power, data) == []  # equal to is allowed
+
+    effect.config["imposedRank"] = 3  # 15 PP against a 10 PP Affliction
+    violations = power_imposed_effect_violations(power, data)
+    assert len(violations) == 1
+    assert "15 PP" in violations[0] and "10 PP" in violations[0]
+
+    # The budget is the Affliction's *own* total, so its extras move it. Extra Condition
+    # is +1 per rank, taking a rank-10 Affliction to 20 and the 15 back inside it.
+    effect.extras.append(ModifierSelection("extra_condition"))
+    assert power_imposed_effect_violations(power, data) == []
+
+
+def test_no_imposed_effect_is_never_a_violation() -> None:
+    data = load_game_data()
+    bare = PowerEffectInstance("affliction", rank=1, config={"degree3": "transformed"})
+    assert imposed_effect_cost(bare, data) == 0
+    assert power_imposed_effect_violations(Power(effects=[bare]), data) == []
+    # An id no ruleset knows is ignored rather than crashing or costing something.
+    bare.config["imposedEffect"] = "not_an_effect"
+    assert imposed_effect_cost(bare, data) == 0
+    assert power_imposed_effect_violations(Power(effects=[bare]), data) == []
+
+
+def test_the_imposed_effect_reads_by_name_in_the_game_terms() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=10,
+        config={"degree3": "transformed", "imposedEffect": "shrinking", "imposedRank": 4},
+    )
+    line = power_game_terms(Power(name="Diminish", effects=[effect]), data)
+    # Named, not spelled as the id it stores - and the rank renders as its number
+    # rather than blowing the whole line up looking for an option label for a 4.
+    assert "Transformed into: Shrinking" in line
+    assert "at rank: 4" in line
+
+
+def test_summon_states_the_points_its_minion_is_built_on() -> None:
+    data = load_game_data()
+    # p145: "Create the summoned character with (effect rank x 15) Power Points", and the
+    # book's own worked figure - "with Summon 6, you summon a single 90-point minion".
+    effect = PowerEffectInstance("summon", rank=6)
+    rows = {r.label: r.value for r in effect_readout_rows(effect, data)}
+    assert rows["Minion built on"] == "90 points"
+
+
+def test_multiple_minions_is_bought_in_its_own_ranks_and_doubles() -> None:
+    data = load_game_data()
+    # p145: "Each application of this extra doubles your total number of minions ... with
+    # Multiple Minions 1, you can summon two 90-point minions, with Multiple Minions 2,
+    # four minions". So it is ranked in itself, not fixed at the effect's rank.
+    modifier = data.modifier_catalog()["multiple_minions"]
+    assert modifier.ranked and modifier.cost_value == 2
+
+    def note(rank: int) -> str:
+        effect = PowerEffectInstance(
+            "summon", rank=6, extras=[ModifierSelection("multiple_minions", rank=rank)]
+        )
+        rows = {r.label: r.value for r in effect_stat_rows(effect, data)}
+        return rows["Notes"]
+
+    assert "up to 2 minions" in note(1)
+    assert "up to 4 minions" in note(2)
+    assert "up to 8 minions" in note(3)
+
+    # And each rank is charged: Summon 2/rank + Multiple Minions 2 x its own rank.
+    effect = PowerEffectInstance(
+        "summon", rank=6, extras=[ModifierSelection("multiple_minions", rank=2)]
+    )
+    assert effect_total_cost(effect, data) == 6 * (2 + 2 * 2)
+
+
+def test_a_summons_hostile_flaw_is_worth_what_the_book_charges() -> None:
+    data = load_game_data()
+    # p145 prices Hostile at -2 per rank in its own right. It read as a free rider on
+    # Attitude and cost nothing, so a Summon took the drawback and paid for none of it.
+    hostile = data.modifier_catalog()["hostile"]
+    assert hostile.cost_value == 2 and not hostile.flat
+    plain = PowerEffectInstance("summon", rank=6)
+    with_flaw = PowerEffectInstance("summon", rank=6, flaws=[ModifierSelection("hostile")])
+    assert effect_total_cost(plain, data) == 12
+    # Summon is 2 per rank, so a -2 flaw takes it to net zero and the sub-1-per-rank
+    # ratio rule takes over (p150): 1 point per (2 - 0) ranks, so 3 for six ranks.
+    assert effect_total_cost(with_flaw, data) == 3
+
+
+def test_the_two_priced_summon_and_variable_options_can_be_dialled() -> None:
+    data = load_game_data()
+
+    # Variable Type: +1 per rank for a general type, +2 for a broad one (p145).
+    def summon_cost(breadth: str) -> int:
+        return effect_total_cost(
+            PowerEffectInstance(
+                "summon",
+                rank=5,
+                extras=[ModifierSelection("variable_type", config={"breadth": breadth})],
+            ),
+            data,
+        )
+
+    assert summon_cost("general") == 5 * (2 + 1)
+    assert summon_cost("broad") == 5 * (2 + 2)
+
+    # Variable's Action extra: simple +1 per rank, free +2 (p148).
+    def variable_cost(action: str) -> int:
+        return effect_total_cost(
+            PowerEffectInstance(
+                "variable",
+                rank=3,
+                extras=[ModifierSelection("action_variable", config={"action": action})],
+            ),
+            data,
+        )
+
+    assert variable_cost("simple") == 3 * (7 + 1)
+    assert variable_cost("free") == 3 * (7 + 2)
+
+    # Healing's Repair: +1 per rank, "+0 if the effect is Repair Only" (p130).
+    def healing_cost(scope: str) -> int:
+        return effect_total_cost(
+            PowerEffectInstance(
+                "healing", rank=5, extras=[ModifierSelection("repair", config={"scope": scope})]
+            ),
+            data,
+        )
+
+    assert healing_cost("both") == 5 * (2 + 1)
+    assert healing_cost("repair_only") == 5 * 2
+
+
+def test_no_modifier_states_a_price_range_it_cannot_be_dialled_to() -> None:
+    """A costFormula naming two prices with no config is silently the cheaper one.
+
+    That was the §5D gap, and pass 9 found four more of it hiding in the *effect-specific*
+    lists the original sweep had not covered. Pinned so a record added later cannot
+    reintroduce it without someone noticing.
+    """
+
+    import re
+
+    data = load_game_data()
+    ranged = re.compile(r"\d\s*(?:or|-|–)\s*\d")
+    offenders = [
+        modifier.id
+        for modifier in data.modifier_catalog().values()
+        if (ranged.search(modifier.cost_formula) or modifier.cost_formula.count("+") > 1)
+        and not modifier.config_fields
+    ]
+    # The array's Alternate Effect is the one exception: its "1 or 2 points flat" is the
+    # Dynamic flag on the member (§5J), not a choice made on a chip.
+    assert offenders == ["alternate_effect"]
+
+
+def test_a_priced_option_is_named_wherever_the_modifier_is() -> None:
+    data = load_game_data()
+    # Two cards costing different amounts must not read identically: a select whose
+    # options carry their own price qualifies the modifier's name.
+    modifier = data.modifier_catalog()["variable_type"]
+    broad = ModifierSelection("variable_type", config={"breadth": "broad"})
+    assert modifier_label(modifier, broad) == "Variable Type (broad type)"
+    # A choice that costs nothing extra stays out of the name.
+    plain = ModifierSelection("variable_type")
+    assert modifier_label(modifier, plain) == "Variable Type"
+
+
+def test_metamorph_budgets_its_forms_against_the_wielders_own_total() -> None:
+    data = load_game_data()
+    # p136: alternate forms "must have the same point total as you" - the one budget in
+    # the rules that is not a multiple of a rank, so it needs the character.
+    char = Character.new_default(data)
+    power = Power(
+        name="Beast Shape",
+        effects=[
+            PowerEffectInstance("morph", rank=3, extras=[ModifierSelection("metamorph", rank=2)])
+        ],
+    )
+    char.powers.append(power)
+    effect = power.effects[0]
+    total = power_points_spent(char, data)
+
+    note = {r.label: r.value for r in effect_stat_rows(effect, data, char)}["Notes"]
+    assert "2 alternate trait set(s)" in note  # one per rank of Metamorph
+    assert f"your own {total} power points" in note
+
+    # Built with no character open there is no total to state, so the number drops out
+    # of the sentence rather than being claimed as zero.
+    bare = {r.label: r.value for r in effect_stat_rows(effect, data)}["Notes"]
+    assert "power points" in bare and "0 power points" not in bare
+
+
+def test_an_unknown_note_value_kind_is_ignored() -> None:
+    data = load_game_data()
+    # A mod naming a kind this ruleset has never heard of leaves the placeholder to be
+    # stripped, rather than taking the whole Notes row down with it.
+    modifier = replace(
+        data.modifier_catalog()["metamorph"],
+        note_values={"points": {"kind": "not_a_registered_kind"}},
+    )
+    rendered = _render_note(modifier, 3, ModifierSelection("metamorph", rank=2), data)
+    assert "alternate trait set(s)" in rendered and "{points}" not in rendered
+
+
 def test_affliction_exposes_config_fields() -> None:
     data = load_game_data()
     affliction = next(e for e in data.effects if e.id == "affliction")
@@ -988,6 +1620,10 @@ def test_affliction_exposes_config_fields() -> None:
         "degree1",
         "degree2",
         "degree3",
+        # The Transformed condition may impose a Personal Range effect (p110); both
+        # fields are gated shut until a degree actually reads Transformed.
+        "imposedEffect",
+        "imposedRank",
     ]
 
 
@@ -1075,15 +1711,35 @@ def test_a_power_at_its_defaults_writes_no_runtime_keys() -> None:
     written back then still loads all-active.
     """
     raw = Power(name="Plain", effects=[PowerEffectInstance("protection", rank=4)]).to_dict()
-    for key in ("activated", "item_present", "array_active"):
+    for key in ("activated", "item_present", "array_active", "dynamic"):
         assert key not in raw
-    for key in ("toggled_on", "suppressed", "current_rank"):
+    for key in ("toggled_on", "suppressed", "current_rank", "dynamic"):
         assert key not in raw["effects"][0]
+    assert "dynamic" not in PowerGroup(mode=STRUCTURE_ARRAY, children=[]).to_dict()
 
     legacy = Power.from_dict({"name": "Legacy", "effects": [{"effect_id": "protection"}]})
     assert legacy.activated is True and legacy.item_present is True
     assert legacy.effects[0].toggled_on is True and legacy.effects[0].suppressed is False
     assert legacy.effects[0].current_rank is None
+    # An array saved before Dynamic existed loads with every member ordinary, so it
+    # still costs the 1 point per alternate it was built and saved at.
+    assert legacy.dynamic is False
+
+
+def test_the_dynamic_flag_round_trips_at_both_array_levels() -> None:
+    effect = PowerEffectInstance("damage", rank=6, dynamic=True)
+    power = Power(name="Bolt", effects=[effect], structure=STRUCTURE_ARRAY, dynamic=True)
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[power], dynamic=True)
+
+    raw = group.to_dict()
+    assert raw["dynamic"] is True
+    assert raw["children"][0]["dynamic"] is True
+    assert raw["children"][0]["effects"][0]["dynamic"] is True
+
+    restored = PowerGroup.from_dict(raw)
+    assert restored.dynamic is True
+    assert restored.children[0].dynamic is True
+    assert restored.children[0].effects[0].dynamic is True
 
 
 def test_a_modifier_at_its_defaults_writes_no_band_keys() -> None:
@@ -1132,6 +1788,82 @@ def test_array_pays_base_in_full_plus_a_flat_point_per_alternate() -> None:
     )
     flat = array_alternate_cost(data)
     assert power_total_cost(power, data) == 16 + 2 * flat
+
+
+def test_a_dynamic_alternate_costs_two_points_instead_of_one() -> None:
+    data = load_game_data()
+    # p151: "An Alternate Effect costs 1 Power Point, while a Dynamic Alternate Effect
+    # costs 2" - it is not mutually exclusive with its siblings, so it is worth more.
+    assert array_alternate_cost(data) == 1
+    assert array_alternate_cost(data, dynamic=True) == 2
+    # p101: making the array's primary Dynamic "requires 1 Alternate Effect rank".
+    assert array_dynamic_primary_cost(data) == array_alternate_cost(data)
+
+
+def test_dynamic_members_are_priced_per_member_not_per_array() -> None:
+    data = load_game_data()
+    # Damage 8 + Ranged = 16 (the base); two alternates, only one of them Dynamic.
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),  # 16
+            PowerEffectInstance("affliction", rank=4),  # ordinary alternate
+            PowerEffectInstance("move_object", rank=8, dynamic=True),  # Dynamic alternate
+        ],
+    )
+    assert power_total_cost(power, data) == 16 + 1 + 2
+
+    # Making the base Dynamic too adds one Alternate Effect rank on top of its own cost.
+    power.effects[0].dynamic = True
+    assert power_total_cost(power, data) == 16 + 1 + 2 + 1
+
+
+def test_the_books_worked_dynamic_array_costs_what_it_prints() -> None:
+    data = load_game_data()
+    # p101's Empyrean: a Dynamic base "has a 1-point modifier to make it Dynamic, and
+    # each additional Dynamic Alternate added to the array costs 2 points".
+    base = Power(name="Constructs", effects=[PowerEffectInstance("create", rank=10)], dynamic=True)
+    bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=5)], dynamic=True)
+    field = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=4)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[base, bolt, field])
+
+    full = node_cost(base, data)
+    assert node_cost(group, data) == full + 1 + 2 + 1  # base + its Dynamic rank + 2 + 1
+    # The base card carries its own Dynamic point; each alternate carries only its own.
+    assert node_display_cost(base, group, data) == full + 1
+    assert node_display_cost(bolt, group, data) == 2
+    assert node_display_cost(field, group, data) == 1
+
+
+def test_a_dynamic_flag_outside_an_array_changes_nothing() -> None:
+    data = load_game_data()
+    # Dynamic is an Alternate Effect's price, so it is only ever charged by an array.
+    effects = [
+        PowerEffectInstance("damage", rank=8, dynamic=True),
+        PowerEffectInstance("protection", rank=4, dynamic=True),
+    ]
+    independent = Power(effects=list(effects))
+    linked = Power(effects=list(effects), structure=STRUCTURE_LINKED)
+    lone = Power(structure=STRUCTURE_ARRAY, effects=[PowerEffectInstance("damage", rank=8)])
+    assert power_total_cost(independent, data) == 12
+    assert power_total_cost(linked, data) == 12
+    assert power_total_cost(lone, data) == 8
+
+
+def test_a_dynamic_member_is_tagged_in_the_game_terms() -> None:
+    data = load_game_data()
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")]),
+            PowerEffectInstance("affliction", rank=4, dynamic=True),
+        ],
+    )
+    summary = power_game_terms(power, data)
+    # The header still says "one effect active at a time"; the tag is the exception.
+    assert "Dynamic Alternate Effect, 2 pt" in summary
+    power.effects[0].dynamic = True
+    assert "[base, Dynamic]" in power_game_terms(power, data)
 
 
 def test_array_base_is_the_costliest_effect_regardless_of_order() -> None:
@@ -2561,3 +3293,172 @@ def test_a_banded_flaw_does_not_discount_a_strength_based_fold_in() -> None:
     # Both fold in the same 4 ranks at the same undiscounted rate; only the bought
     # ranks 9-12 differ, so the gap is exactly the 4 points the band saves.
     assert effect_total_cost(plain, data, char) - effect_total_cost(banded, data, char) == 4
+
+
+# --- the Dynamic point pool (p101) ----------------------------------------------------
+
+
+def _empyrean() -> tuple[Character, PowerGroup, Power, Power, Power]:
+    """p101's own array: a Dynamic Create base, a Dynamic Flight, an ordinary Protection."""
+
+    create = Power(
+        name="Constructs", effects=[PowerEffectInstance("create", rank=10)], dynamic=True
+    )
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=5)], dynamic=True)
+    field = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=8)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[create, flight, field])
+    char = Character()
+    char.powers = [group]
+    return char, group, create, flight, field
+
+
+def test_the_pool_is_what_the_arrays_base_member_costs() -> None:
+    data = load_game_data()
+    _char, group, create, _flight, _field = _empyrean()
+    # Every other member is bought for a flat point or two on top, so the points the
+    # array actually holds are its costliest member's.
+    assert array_pool_points(group, data) == node_cost(create, data) == 20
+    # Not an array, no pool.
+    assert array_pool_points(PowerGroup(children=list(group.children)), data) == 0
+
+
+def test_the_books_own_dynamic_flight_is_held_to_one_rank() -> None:
+    data = load_game_data()
+    char, _group, _create, flight, _field = _empyrean()
+    # p101: "a character can maintain the Dynamic Alternate Effect for their Flight so
+    # long as at least 2 Power Points are assigned to it, but their Flight speed is then
+    # limited to 1 rank of Flight."
+    assert node_cost(flight, data) == 10
+    assert dynamic_rank_share(5, 2, 10) == 1
+    flight.dynamic_points = 2
+    assert dynamic_rank_cap(flight.effects[0], data, char) == 1
+    assert effect_current_rank(flight.effects[0], data, char) == 1
+    # And with no share at all nothing is capped, which is every array saved before this.
+    flight.dynamic_points = None
+    assert dynamic_rank_cap(flight.effects[0], data, char) is None
+    assert effect_current_rank(flight.effects[0], data, char) == 5
+
+
+def test_a_share_too_small_for_a_rank_leaves_the_member_off() -> None:
+    data = load_game_data()
+    char, _group, create, flight, _field = _empyrean()
+    create.dynamic_points = 19
+    flight.dynamic_points = 1  # a tenth of Flight's 10 points buys half a rank
+    assert dynamic_rank_share(5, 1, 10) == 0
+    assert effect_current_rank(flight.effects[0], data, char) == 0
+    # Zero is only ever reachable through the pool - the dial's own floor is still 1.
+    flight.dynamic_points = None
+    flight.effects[0].current_rank = 0
+    assert effect_current_rank(flight.effects[0], data, char) == 1
+
+
+def test_dynamic_members_run_alongside_each_other_once_the_pool_is_split() -> None:
+    char, group, create, flight, field = _empyrean()
+    # Untouched, an array is what it always was: exactly one live member.
+    assert live_array_children(group) == [create]
+    assert [p.name for p in live_powers(char.powers)] == ["Constructs"]
+
+    create.dynamic_points = 18
+    flight.dynamic_points = 2
+    assert live_array_children(group) == [create, flight]
+    assert [p.name for p in live_powers(char.powers)] == ["Constructs", "Flight"]
+    # The ordinary alternate holds no share and cannot: it is not Dynamic.
+    assert all(child is not field for child in live_array_children(group))
+
+    # Handing the pool back returns the array to its selected alternate at full rank.
+    create.dynamic_points = None
+    flight.dynamic_points = None
+    assert live_array_children(group) == [create]
+
+
+def test_a_split_pool_scales_the_bonus_a_member_puts_on_the_sheet() -> None:
+    data = load_game_data()
+    char, _group, _create, _flight, field = _empyrean()
+    field.dynamic = True  # a Dynamic Protection 8, costing 8
+    assert power_trait_bonuses(char, data)["resistance"] == {}  # not the selected member
+
+    field.dynamic_points = 4
+    assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 4
+    field.dynamic_points = 8
+    assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 8
+
+
+def test_a_split_pool_lowers_the_rank_an_attack_resolves_at() -> None:
+    data = load_game_data()
+    bolt = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    other = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[bolt, other])
+    char = Character()
+    char.powers = [group]
+    assert effect_effective_rank(bolt.effects[0], data, char) == 10
+    bolt.dynamic_points = 5
+    other.dynamic_points = 5
+    assert effect_effective_rank(bolt.effects[0], data, char) == 5
+    # Cost is untouched: dialling a power down mid-fight refunds nothing.
+    assert node_cost(group, data) == 10 + 1 + 2  # base + its Dynamic rank + a Dynamic alternate
+
+
+def test_a_share_never_buys_more_rank_than_was_bought() -> None:
+    data = load_game_data()
+    char, _group, create, _flight, _field = _empyrean()
+    create.dynamic_points = 20  # the whole pool, which is exactly its own cost
+    assert effect_current_rank(create.effects[0], data, char) == 10
+    assert dynamic_rank_share(10, 99, 20) == 10
+
+
+def test_a_member_inside_two_split_arrays_takes_the_tighter_cap() -> None:
+    data = load_game_data()
+    inner_a = Power(name="A", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    inner_b = Power(name="B", effects=[PowerEffectInstance("damage", rank=10)], dynamic=True)
+    inner = PowerGroup(mode=STRUCTURE_ARRAY, children=[inner_a, inner_b], dynamic=True)
+    outer_other = Power(name="C", effects=[PowerEffectInstance("damage", rank=12)], dynamic=True)
+    outer = PowerGroup(mode=STRUCTURE_ARRAY, children=[outer_other, inner])
+    char = Character()
+    char.powers = [outer]
+
+    inner_a.dynamic_points = node_cost(inner_a, data) // 2  # half of A's own cost
+    inner.dynamic_points = node_cost(inner, data)  # the outer pool hands it everything
+    assert effect_current_rank(inner_a.effects[0], data, char) == 5
+
+
+def test_the_pool_is_ignored_without_a_wielder_to_find_the_member_in() -> None:
+    data = load_game_data()
+    _char, _group, _create, flight, _field = _empyrean()
+    flight.dynamic_points = 2
+    # The Power Constructor edits a power that is on no character; nothing is dialled
+    # there and nothing is pooled, so the bought rank is what it shows.
+    assert effect_current_rank(flight.effects[0]) == 5
+    assert effect_current_rank(flight.effects[0], data) == 5
+
+
+def test_a_held_down_member_prints_the_speed_it_is_actually_flying_at() -> None:
+    data = load_game_data()
+    char, _group, _create, flight, _field = _empyrean()
+    rows = {row.key: row.value for row in effect_stat_rows(flight.effects[0], data, char)}
+    full = rows["measure"]
+
+    flight.dynamic_points = 2
+    held = {row.key: row.value for row in effect_stat_rows(flight.effects[0], data, char)}
+    # A card titled "Flight 1" beside a speed bought at rank 5 contradicts itself.
+    assert held["measure"] != full
+    assert held["measure"] == _measure_at(data, 1)
+
+
+def _measure_at(data, rank: int) -> str:
+    """What the Flight speed row reads for a plain Flight bought at ``rank``."""
+
+    plain = PowerEffectInstance("flight", rank=rank)
+    return {row.key: row.value for row in effect_stat_rows(plain, data)}["measure"]
+
+
+def test_a_share_round_trips_and_is_written_only_when_set() -> None:
+    power = Power(name="Bolt", effects=[PowerEffectInstance("damage", rank=8)], dynamic=True)
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[power])
+    assert "dynamic_points" not in power.to_dict()
+    assert "dynamic_points" not in group.to_dict()
+
+    power.dynamic_points = 3
+    group.dynamic_points = 0
+    restored = PowerGroup.from_dict(group.to_dict())
+    assert restored.dynamic_points == 0
+    assert restored.children[0].dynamic_points == 3

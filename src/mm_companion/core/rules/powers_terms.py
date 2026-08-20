@@ -18,11 +18,13 @@ from ..powers import (
 )
 from ..registry import Registry
 from .appliers import trait_category
+from .costs import power_points_spent
 from .derived import effective_ability, skill_total
 from .powers_cost import (
     array_alternate_cost,
     array_base_index,
     effect_effective_rank,
+    imposable_effects,
     modifier_is_banded,
     selection_band,
 )
@@ -131,13 +133,20 @@ def _step_along(ladder: tuple[str, ...], value: str, step: int) -> str:
 
 
 def modifier_detail(modifier: Modifier, selection) -> str:
-    """The free-text detail a player typed into a modifier's text config field.
+    """The detail that qualifies a modifier's name where the bare name would mislead.
 
-    A modifier like Limited or Quirk carries a single ``"text"`` config field for
-    the player to describe *how* it applies. Returns the first non-empty such value
-    (e.g. ``"only at night"``), or ``""`` if none was entered. Used to qualify a
-    modifier's displayed name as ``"Limited (only at night)"`` wherever it is
-    listed, so a bare ``"Limited"`` never hides the circumstance the player chose.
+    Two kinds, in that order of preference:
+
+    - the **free text** a player typed into a ``"text"`` config field. Limited and Quirk
+      carry one for describing *how* they apply, and a bare "Limited" hides the
+      circumstance the player chose.
+    - the label of a chosen **priced option** — a ``select`` whose options carry their own
+      ``cost_value``. Those are the modifiers the rules give two prices to (Summon's
+      Variable Type is +1 for a general type and +2 for a broad one, p145), and naming
+      only the modifier leaves two cards that cost different amounts reading identically.
+      A select with no prices attached is a neutral choice and stays out of the name.
+
+    Returns ``""`` when there is nothing to add.
     """
 
     for cfg in modifier.config_fields:
@@ -145,6 +154,13 @@ def modifier_detail(modifier: Modifier, selection) -> str:
             value = str(selection.config.get(cfg.key, "")).strip()
             if value:
                 return value
+    for cfg in modifier.config_fields:
+        if cfg.type != "select" or not any(o.cost_value is not None for o in cfg.options):
+            continue
+        chosen = str(selection.config.get(cfg.key, "")).strip()
+        option = next((o for o in cfg.options if o.value == chosen), None)
+        if option is not None:
+            return option.label.lower()
     return ""
 
 
@@ -198,11 +214,130 @@ def _config_trait_name(game_data: GameData | None, value: str) -> str:
     return trait_display_name(game_data, value)
 
 
+@dataclass(frozen=True)
+class NoteValueContext:
+    """What a :data:`NOTE_VALUE_KINDS` handler is given to work a placeholder out.
+
+    ``spec`` is the modifier's own ``noteValues`` entry (its ``kind`` plus whatever
+    parameters that kind reads); ``selection`` is the attached chip, so a handler can use
+    the modifier's *own* rank; ``effect_rank`` is the host effect's. ``char`` is the
+    wielder and may be ``None`` — a power can be built with no character open, and a
+    handler that needs one says so by returning ``None`` rather than guessing a zero.
+
+    ``modifier`` is ``None`` when the number is not a modifier's at all. The registry
+    answers "what number does this spec stand for", and a sub-build's budget asks the
+    very same question from an *effect* (:class:`~..data_loader.SubBuild`) — Summon's
+    minion is priced off the effect's rank with no chip in sight. A handler that needs
+    the modifier says so by returning ``None``, exactly as one needing a character does.
+    """
+
+    spec: dict
+    modifier: Modifier | None
+    selection: object | None
+    effect_rank: int
+    char: Character | None
+    game_data: GameData | None
+
+
+#: One handler per ``noteValues`` ``kind``: it works out the number a note's placeholder
+#: stands for, given a :class:`NoteValueContext`, or ``None`` when it cannot (in which
+#: case the placeholder is dropped from the sentence). A mod's Python module can register
+#: another kind and then name it from a data file.
+NoteValue = Callable[["NoteValueContext"], int | None]
+NOTE_VALUE_KINDS: Registry[NoteValue] = Registry("noteValues.kind")
+
+
+@NOTE_VALUE_KINDS.handler("doubling")
+def _note_value_doubling(ctx: NoteValueContext) -> int | None:
+    """``base`` doubled once per rank of the modifier — Summon's Multiple Minions.
+
+    "Each application of this extra doubles your total number of minions ... with
+    Multiple Minions 1, you can summon two 90-point minions, with Multiple Minions 2,
+    four minions" (p145). Needs the chip, since it is the *modifier's* rank that doubles,
+    not the effect's.
+    """
+
+    if ctx.selection is None:
+        return None
+    return int(ctx.spec.get("base", 1)) * 2**ctx.selection.rank
+
+
+@NOTE_VALUE_KINDS.handler("character_points")
+def _note_value_character_points(ctx: NoteValueContext) -> int | None:
+    """What the wielder's own build costs — Morph's Metamorph budget.
+
+    Metamorph's alternate forms "must have the same point total as you" (p136), which is
+    the one budget in the rules that is not a multiple of a rank. ``None`` without a
+    character, so a power built outside a sheet simply omits the number instead of
+    claiming it is zero.
+    """
+
+    if ctx.char is None or ctx.game_data is None:
+        return None
+    return power_points_spent(ctx.char, ctx.game_data)
+
+
+@NOTE_VALUE_KINDS.handler("per_rank")
+def _note_value_per_rank(ctx: NoteValueContext) -> int | None:
+    """The host effect's rank times ``perRank`` — Summon's ``rank x 15`` minion (p145).
+
+    The same arithmetic a modifier's ``notePerRank`` already does for ``{n}``, said as a
+    spec instead, so a sub-build's budget can name it the way it names any other.
+    """
+
+    return ctx.effect_rank * int(ctx.spec.get("perRank", 1))
+
+
+@NOTE_VALUE_KINDS.handler("modifier_rank")
+def _note_value_modifier_rank(ctx: NoteValueContext) -> int | None:
+    """The *modifier's* own rank — how many alternate forms a Metamorph buys (p136).
+
+    ``None`` without a chip, since there is no such rank to read; a sub-build asking
+    this of an effect-owned slot therefore falls back to a single build.
+    """
+
+    if ctx.selection is None:
+        return None
+    return int(ctx.selection.rank)
+
+
+def note_value(
+    spec: dict,
+    *,
+    modifier: Modifier | None = None,
+    selection=None,
+    effect_rank: int = 0,
+    char: Character | None = None,
+    game_data: GameData | None = None,
+) -> int | None:
+    """Resolve one ``{"kind": ...}`` spec through :data:`NOTE_VALUE_KINDS`.
+
+    The one door onto the registry, so a note's placeholder and a sub-build's budget
+    ask the same question the same way. ``None`` when the spec names no kind, names one
+    nothing has registered, or the handler cannot answer from what it was given.
+    """
+
+    handler = NOTE_VALUE_KINDS.get(str(spec.get("kind", "")))
+    if handler is None:
+        return None
+    return handler(
+        NoteValueContext(
+            spec=spec,
+            modifier=modifier,
+            selection=selection,
+            effect_rank=effect_rank,
+            char=char,
+            game_data=game_data,
+        )
+    )
+
+
 def _render_note(
     modifier: Modifier,
     rank: int,
     selection=None,
     game_data: GameData | None = None,
+    char: Character | None = None,
 ) -> str:
     """A modifier's :attr:`note_template` with its placeholders resolved.
 
@@ -210,17 +345,35 @@ def _render_note(
     bare rank when that is zero) — Empowering's ``notePerRank`` of 15 turns a rank-4
     Affliction's note into "transformed form gains 60 power points".
 
-    With a ``selection``, three more placeholders resolve: ``{rank}`` is the modifier's
-    own rank, ``{dc}`` the difficulty it sets (the system's base DC plus that rank —
-    Check Required's "DC 10 + the flaw's rank"), and ``{<config key>}`` any value the
-    player chose on the chip, with a trait key rendered as its display name so a stored
+    Any placeholder the modifier names in :attr:`~...Modifier.note_values` is worked out
+    by its registered :data:`NOTE_VALUE_KINDS` handler, which is how a note says something
+    a rank alone cannot: how many minions Multiple Minions doubles you up to, or what a
+    Metamorph form's point budget is.
+
+    With a ``selection``, three more resolve: ``{rank}`` is the modifier's own rank,
+    ``{dc}`` the difficulty it sets (the system's base DC plus that rank — Check
+    Required's "DC 10 + the flaw's rank"), and ``{<config key>}`` any value the player
+    chose on the chip, with a trait key rendered as its display name so a stored
     ``"AGL"`` reads as "Agility".
     """
 
     value = rank * modifier.note_per_rank if modifier.note_per_rank else rank
     text = modifier.note_template.replace("{n}", str(value))
+    for key, spec in modifier.note_values.items():
+        resolved = note_value(
+            spec,
+            modifier=modifier,
+            selection=selection,
+            effect_rank=rank,
+            char=char,
+            game_data=game_data,
+        )
+        if resolved is not None:
+            text = text.replace(f"{{{key}}}", str(resolved))
     if selection is None:
-        return text
+        # Strip whatever is left, so a note rendered without a chip still reads as a
+        # sentence rather than showing its own braces.
+        return re.sub(r"\s*\{[^{}]*\}", "", text).strip()
     dc_base = game_data.system.defense_dc_base if game_data else 10
     text = text.replace("{rank}", str(selection.rank))
     text = text.replace("{dc}", str(dc_base + selection.rank))
@@ -270,7 +423,11 @@ def required_check_notes(effect: PowerEffectInstance, game_data: GameData) -> tu
 
 
 def _modifier_notes(
-    effect: PowerEffectInstance, catalog: dict, impactful: set[str]
+    effect: PowerEffectInstance,
+    catalog: dict,
+    impactful: set[str],
+    game_data: GameData | None = None,
+    char: Character | None = None,
 ) -> tuple[str, ...]:
     """Notes for the effect's attached modifiers that produced no visible stat change.
 
@@ -280,6 +437,11 @@ def _modifier_notes(
     otherwise it is listed by name — a ranked modifier taken above rank 1 carries its
     rank (e.g. ``"Penetrating 3"``), and one with a typed detail carries it
     (``"Limited (only at night)"``).
+
+    The **chip** goes to :func:`_render_note` along with it, which it did not used to:
+    without it a note could only ever say ``{n}``, and ``{rank}`` or a config key
+    silently vanished from the sentence. Multiple Minions doubles with its own rank and
+    Metamorph counts in its own ranks, so both needed the thing that was being dropped.
     """
 
     notes: list[str] = []
@@ -289,14 +451,14 @@ def _modifier_notes(
         if modifier is None or selection.modifier_id in impactful:
             continue
         if modifier.note_template:
-            notes.append(_render_note(modifier, effect.rank))
+            notes.append(_render_note(modifier, effect.rank, selection, game_data, char))
         else:
             notes.append(modifier_label(modifier, selection, effect_rank=effect_rank))
     return tuple(notes)
 
 
 def _effective_stats(
-    effect: PowerEffectInstance, game_data: GameData
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> tuple[dict[str, str], dict[str, str], dict[str, str], EffectImpact]:
     """``(base, effective, change, impact)`` for an effect's game-term fields.
 
@@ -416,7 +578,7 @@ def _effective_stats(
         if field.overrides and field.overrides in stats:
             value = effect.config.get(field.key)
             if value:
-                stats[field.overrides] = _config_display(field, value)
+                stats[field.overrides] = _config_display(field, value, game_data)
                 change[field.overrides] = ""
 
     # A Sustained effect must be toggled on and maintained with at least a free
@@ -462,7 +624,7 @@ def _effective_stats(
         grants_attack=grants_attack,
         drops_check=drops_check,
         check_notes=tuple(check_notes),
-        notes=_modifier_notes(effect, catalog, impactful),
+        notes=_modifier_notes(effect, catalog, impactful, game_data, char),
     )
     return base, stats, change, impact
 
@@ -546,7 +708,7 @@ def resolve_stat_display(
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base_effect is None:
         return raw_value
-    own_rank = effect_current_rank(effect)
+    own_rank = effect_current_rank(effect, game_data, char)
     if field_key == "range" and raw_value == "Rank":
         return game_data.measurements.label("distance", own_rank) or "Rank"
     # The dialled, hard-capped rank — the same one the roll numbers are built from, so
@@ -722,7 +884,7 @@ def effect_base_attack_bonus(
     elif char is not None:
         base = effective_ability(char, game_data, game_data.system.trait_keys.attack)
     else:
-        return effect_current_rank(effect)
+        return effect_current_rank(effect, game_data, char)
     return base + _effective_stats(effect, game_data)[3].check_bonus
 
 
@@ -886,7 +1048,7 @@ def _roll_numbers(
     # vs. …" phrase instead uses the effect's own rank. A linked combat focus
     # overrides the Attack via ``attack_bonus``. Without either we fall back to the
     # effect rank so a context-free summary still reads.
-    own_rank = effect_current_rank(effect)
+    own_rank = effect_current_rank(effect, game_data, char)
     if attack_bonus is not None:
         attack = attack_bonus
     elif char is not None:
@@ -943,13 +1105,17 @@ def effect_stat_rows(
     base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base_effect is None:
         return []
-    base, stats, change, impact = _effective_stats(effect, game_data)
+    base, stats, change, impact = _effective_stats(effect, game_data, char)
 
     # A "Rank" range means "a distance equal to the effect's rank" — show the number
-    # (in both base and current, so it isn't mistaken for a modifier change).
+    # (in both base and current, so it isn't mistaken for a modifier change). The rank
+    # read is the one the effect is **resolving** at, not the one it was bought at, for
+    # the reason the save DC beside it is: a power dialled down, or held down by its
+    # share of a Dynamic array's pool, does not still reach as far as it was built to.
+    live_rank = effect_live_rank(effect, game_data, char)
     for scope in (base, stats):
         if scope.get("range") == "Rank":
-            scope["range"] = game_data.measurements.label("distance", effect.rank) or "Rank"
+            scope["range"] = game_data.measurements.label("distance", live_rank) or "Rank"
 
     # Resolve the check/resistance phrases to concrete numbers: the save DC is
     # ``base + effective rank`` (effective rank folds in a Strength-Based bonus), and
@@ -992,13 +1158,24 @@ def effect_stat_rows(
             rows.append(EffectStat(key, label, base[key], stats[key], change[key]))
         if key == "range":
             rows.extend(_ranged_distance_rows(effect, game_data, char, base_effect))
+        if key == "resistance":
+            # An effect that makes an opposed check of its own says so here, next to the
+            # save it is so easily mistaken for. It is the *wielder's* roll, and it is
+            # rank against rank rather than against a fixed DC.
+            opposed = effect_opposed_check(effect, game_data, char)
+            if opposed is not None:
+                bonus, against = opposed
+                rows.append(EffectStat("opposed", "Opposed", "", f"{bonus} vs. {against}", ""))
     # An effect can impose a save DC without either a (shown) check or resistance
     # phrase to carry it — surface it in its own row so the number is never lost.
     check_shown = "" if impact.drops_check else stats["check"]
     if dc is not None and not check_shown and not stats["resistance"]:
         rows.append(EffectStat("effect_dc", "Effect DC", "", f"DC {dc}", ""))
     if base_effect.measure:
-        value = _measure_value(base_effect.measure, effect.rank, game_data)
+        # Live, like the range above: a Flight 5 held to 1 rank by its share of a
+        # Dynamic array's pool flies at 1 rank's speed, and a card printing the speed it
+        # was bought at beside a title reading "Flight 1" contradicts itself.
+        value = _measure_value(base_effect.measure, live_rank, game_data)
         if value:
             rows.append(EffectStat("measure", base_effect.measure.label, "", value, ""))
     allocation_field = trait_allocation_field(base_effect)
@@ -1010,13 +1187,15 @@ def effect_stat_rows(
             continue  # the Enhances row below already says it, and says it by name
         value = effect.config.get(field.key)
         if value:
-            rows.append(EffectStat(field.key, field.label, "", _config_display(field, value), ""))
+            rows.append(
+                EffectStat(field.key, field.label, "", _config_display(field, value, game_data), "")
+            )
     # A trait booster (Enhanced Trait, Protection) shows which traits it raises and by
     # how much — green, since it's an improvement — so the summary isn't blank. An
     # Enhanced Trait raises several at once, each at its own allocated rank.
     raised = [
         f"{trait_display_name(game_data, target)} +{ranks}"
-        for target, ranks in resolved_trait_allocation(effect, base_effect)
+        for target, ranks in resolved_trait_allocation(effect, base_effect, game_data, char)
         if trait_category(game_data, target)
     ]
     if raised:
@@ -1128,7 +1307,7 @@ def _readout_size_table(
     this is the bought rank there and the build preview is unchanged.
     """
 
-    rank = effect_current_rank(effect)
+    rank = effect_current_rank(effect, game_data, char)
     data = readout.data
     sign = int(data.get("sign", 1))
     if rank <= 0:
@@ -1321,7 +1500,54 @@ def _config_display_repeatable(field, value) -> str:
     return ", ".join(parts)
 
 
-def _config_display(field, value) -> str:
+@CONFIG_DISPLAY_KINDS.handler("points")
+def _config_display_points(field, value) -> str:
+    """A numeric config field reads as its number (an imposed effect's rank).
+
+    It needs a handler of its own only because the generic renderer joins option
+    *labels* and an int has none — without this, an Affliction naming the effect it
+    imposes crashed the whole game-terms line rather than printing a 4.
+    """
+
+    return str(value)
+
+
+# One source per data-driven ``select`` option list: a callable taking the
+# :class:`GameData` and returning ``(label, value)`` pairs in display order. A field
+# naming a ``source`` takes its options from the game data rather than listing them —
+# the effects an Affliction may impose is a *query* over ``effects.json``, and a list
+# written out by hand would go stale the moment a mod added one.
+#
+# It lives here, in core, rather than beside the constructor's widget builders, because
+# both the picker and this module's display text have to agree on what an id is called.
+# A mod's Python module can register another source and then name it from a data file.
+OptionSource = Callable[[GameData], tuple[tuple[str, str], ...]]
+CONFIG_OPTION_SOURCES: Registry[OptionSource] = Registry("config_field.source")
+
+#: The effects an Affliction's Transformed condition may impose (p110). Named in
+#: ``effects.json`` as ``"source": "personal_effects"``.
+OPTION_SOURCE_PERSONAL_EFFECTS = "personal_effects"
+
+
+@CONFIG_OPTION_SOURCES.handler(OPTION_SOURCE_PERSONAL_EFFECTS)
+def _personal_effect_options(game_data: GameData) -> tuple[tuple[str, str], ...]:
+    return tuple((effect.name, effect.id) for effect in imposable_effects(game_data))
+
+
+def config_source_options(field, game_data: GameData | None) -> tuple[tuple[str, str], ...]:
+    """A config field's ``(label, value)`` options, from its ``source`` or its own list.
+
+    The one place the two are reconciled, so a picker and a readout cannot end up
+    offering and naming different things.
+    """
+
+    source = CONFIG_OPTION_SOURCES.get(field.source or "")
+    if source is not None and game_data is not None:
+        return source(game_data)
+    return tuple((option.label, option.value) for option in field.options)
+
+
+def _config_display(field, value, game_data: GameData | None = None) -> str:
     """Display text for a stored config ``value``: an option's label, or, for a
     multiselect list, its labels joined with ``+`` (falls back to the raw value).
 
@@ -1329,15 +1555,19 @@ def _config_display(field, value) -> str:
     labels (tiered ones carry the chosen tier number); ``repeatable`` values (a list
     of row dicts) render as their named rows, an Immunity scope carrying its rank.
     Dispatches on the field's ``type`` through :data:`CONFIG_DISPLAY_KINDS`; an
-    unregistered type falls back to the generic option-label rendering."""
+    unregistered type falls back to the generic option-label rendering.
+
+    ``game_data`` is needed only by a field whose options come from a ``source``
+    (:func:`config_source_options`) — without it such a value renders as the raw id it
+    stores, which is a readable fallback rather than a wrong one."""
 
     handler = CONFIG_DISPLAY_KINDS.get(field.type)
     if handler is not None:
         return handler(field, value)
 
+    by_value = {v: label for label, v in config_source_options(field, game_data)}
     values = value if isinstance(value, list) else [value]
-    labels = (next((o.label for o in field.options if o.value == v), v) for v in values)
-    return " + ".join(labels)
+    return " + ".join(by_value.get(v, str(v)) for v in values)
 
 
 def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -1378,7 +1608,7 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
             continue
         value = effect.config.get(field.key)
         if value:
-            chosen.append(f"{field.label}: {_config_display(field, value)}")
+            chosen.append(f"{field.label}: {_config_display(field, value, game_data)}")
     raised = [
         f"{trait_display_name(game_data, target)} +{ranks}"
         for target, ranks in resolved_trait_allocation(effect, base)
@@ -1391,6 +1621,40 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
     return line
 
 
+def effect_opposed_check(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> tuple[int, str] | None:
+    """This effect's own opposed effect check as ``(bonus, what it is rolled against)``.
+
+    An effect check is ``d20 + effect rank`` (p107) and the **wielder** makes it, so the
+    bonus is the effect's *effective* rank — a Strength-Based or size-shifted effect
+    opposes with what it actually resolves at, the same rank its save DC is built from.
+
+    ``None`` for the effects that make no such check, which is all but Nullify in the base
+    ruleset. Nullify is the one the rules build on it: "make an opposed check of your
+    Nullify rank and the targeted effect rank or the target's Will" (p138).
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or not base.opposed_check:
+        return None
+    return effect_effective_rank(effect, game_data, char), base.opposed_check
+
+
+def array_member_note(dynamic: bool, game_data: GameData) -> str:
+    """How an array's non-base member is badged: its kind, and the flat cost it pays.
+
+    Reads :func:`~.powers_cost.array_alternate_cost` rather than spelling the number,
+    so a Dynamic member's dearer price shows up wherever a member is badged. Shared with
+    the constructor's two readouts so a badge cannot drift from what was actually
+    charged.
+    """
+
+    cost = array_alternate_cost(game_data, dynamic=dynamic)
+    kind = "Dynamic Alternate Effect" if dynamic else "Alternate Effect"
+    return f"{kind}, {cost} pt"
+
+
 def power_game_terms(power: Power, game_data: GameData, char: Character | None = None) -> str:
     """The power's game-term summary: one :func:`effect_game_terms` line per effect.
 
@@ -1399,6 +1663,11 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
     of each alternate — so the composite structure reads at a glance. ``char`` is
     threaded to :func:`array_base_index` so the base badge tracks the same
     Strength-adjusted costs the cards show.
+
+    A **Dynamic** member is tagged as one, because it is the exception to the header's
+    "one effect active at a time": it shares the array's point pool and runs alongside
+    the array's other Dynamic members at reduced effectiveness (p101), which is what its
+    dearer price buys.
     """
 
     lines = [effect_game_terms(e, game_data) for e in power.effects]
@@ -1407,10 +1676,12 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
         return "Linked (all effects activate together):\n" + body
     if len(power.effects) > 1 and power.structure == STRUCTURE_ARRAY:
         base = array_base_index(power, game_data, char)
-        alt = array_alternate_cost(game_data)
-        tagged = [
-            f"• {line}" + (" [base]" if i == base else f" (Alternate Effect, {alt} pt)")
-            for i, line in enumerate(lines)
-        ]
+        tagged = []
+        for index, (line, effect) in enumerate(zip(lines, power.effects, strict=True)):
+            if index == base:
+                note = " [base, Dynamic]" if effect.dynamic else " [base]"
+            else:
+                note = f" ({array_member_note(effect.dynamic, game_data)})"
+            tagged.append(f"• {line}{note}")
         return "Array (one effect active at a time):\n" + "\n".join(tagged)
     return "\n".join(lines)

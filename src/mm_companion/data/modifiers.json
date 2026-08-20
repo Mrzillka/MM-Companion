@@ -24,6 +24,7 @@
       "id": "custom_extra",
       "name": "Custom Extra",
       "category": "extra",
+      "repeatable": true,
       "costFormula": "you set the cost",
       "costValue": 0,
       "ranked": true,
@@ -43,6 +44,7 @@
       "id": "custom_flaw",
       "name": "Custom Flaw",
       "category": "flaw",
+      "repeatable": true,
       "costFormula": "you set the cost",
       "costValue": 0,
       "ranked": true,
@@ -70,13 +72,54 @@
       "description": "Bonus to attack checks made with this effect (+2 per rank)."
     },
     {
+      "id": "affects_corporeal",
+      "name": "Affects Corporeal",
+      "category": "extra",
+      "costFormula": "+1 point per rank",
+      "costValue": 1,
+      "flat": false,
+      "description": "Lets an insubstantial character use the effect on the solid world; it works at the rank of this extra, up to the effect's own."
+    },
+    {
+      "id": "affects_insubstantial",
+      "name": "Affects Insubstantial",
+      "category": "extra",
+      "costFormula": "1 or 2 points flat",
+      "costValue": 1,
+      "flat": true,
+      "config": [
+        {
+          "key": "points",
+          "label": "Points",
+          "type": "points",
+          "min": 1,
+          "max": 2,
+          "default": 1,
+          "hint": "1 point: works on insubstantial targets, but they resist with a bonus of half the effect rank. 2 points: works on them normally."
+        }
+      ],
+      "description": "Lets the effect reach insubstantial targets as well as solid ones."
+    },
+    {
       "id": "affects_objects",
       "name": "Affects Objects",
       "category": "extra",
       "costFormula": "+0 or +1 point per rank",
       "costValue": 1,
       "flat": false,
-      "description": "Lets a personal effect also work on objects."
+      "config": [
+        {
+          "key": "scope",
+          "label": "Works on",
+          "type": "select",
+          "hint": "Working on objects as well as people costs 1. An effect that works ONLY on objects is a net +0.",
+          "options": [
+            { "value": "as_well", "label": "People and objects", "costValue": 1 },
+            { "value": "only", "label": "Objects only", "costValue": 0 }
+          ]
+        }
+      ],
+      "description": "Lets an effect normally resisted by Fortitude work on non-living objects."
     },
     {
       "id": "affects_others",
@@ -85,7 +128,42 @@
       "costFormula": "+1 or +0 point per rank",
       "costValue": 1,
       "flat": false,
-      "description": "Lets a personal effect be granted to other people."
+      "config": [
+        {
+          "key": "scope",
+          "label": "Works on",
+          "type": "select",
+          "hint": "Granting the effect to others while keeping it yourself costs 1. An effect that works ONLY on others is a net +0.",
+          "options": [
+            { "value": "as_well", "label": "You and others", "costValue": 1 },
+            { "value": "only", "label": "Others only", "costValue": 0 }
+          ]
+        }
+      ],
+      "description": "Lets a personal effect be granted to other people by touch."
+    },
+    {
+      "id": "alternate_defense",
+      "name": "Alternate Defense",
+      "category": "extra",
+      "costFormula": "varies (see description)",
+      "costValue": 1,
+      "flat": false,
+      "config": [
+        {
+          "key": "against",
+          "label": "Attack lands against",
+          "type": "select",
+          "hint": "The attack check is made against Fortitude or Will (that resistance + 10) instead of Defense. Whether that is worth anything is the GM's call: a generally easier number to beat is +1, no real gain is +0, the worst of two is +1, and settling for the best of two is a -1 flaw.",
+          "options": [
+            { "value": "easier", "label": "A generally easier number", "costValue": 1 },
+            { "value": "even", "label": "No real gain", "costValue": 0 },
+            { "value": "worst", "label": "The worst of two", "costValue": 1 },
+            { "value": "best", "label": "The best of two", "costValue": -1 }
+          ]
+        }
+      ],
+      "description": "The attack check goes against the target's Fortitude or Will rather than their Defense."
     },
     {
       "id": "alternate_effect",
@@ -93,9 +171,33 @@
       "category": "extra",
       "costFormula": "1 or 2 points flat (per alternate)",
       "costValue": 1,
+      "dynamicCostValue": 2,
       "flat": true,
       "hidden": true,
-      "description": "Adds another interchangeable configuration to a power array. Applied automatically by a power/group's Array structure, not dragged onto an effect."
+      "description": "Adds another interchangeable configuration to a power array. An ordinary alternate costs 1 point and is mutually exclusive with its siblings; a Dynamic one costs 2 and shares the array's point pool, running alongside the other Dynamic members at reduced effectiveness. Making the array's base Dynamic costs one Alternate Effect rank. Applied automatically by a power/group's Array structure, not dragged onto an effect."
+    },
+    {
+      "id": "alternate_resistance",
+      "name": "Alternate Resistance",
+      "category": "extra",
+      "costFormula": "varies (see description)",
+      "costValue": 1,
+      "flat": false,
+      "config": [
+        {
+          "key": "against",
+          "label": "Resisted by",
+          "type": "select",
+          "hint": "The DC is unchanged; only which resistance is rolled differs. A generally weaker resistance is +1, no real gain is +0, the worst of two is +1, and settling for the best of two is a -1 flaw.",
+          "options": [
+            { "value": "easier", "label": "A generally weaker resistance", "costValue": 1 },
+            { "value": "even", "label": "No real gain", "costValue": 0 },
+            { "value": "worst", "label": "The worst of two", "costValue": 1 },
+            { "value": "best", "label": "The best of two", "costValue": -1 }
+          ]
+        }
+      ],
+      "description": "The effect is resisted by a different resistance than usual, against the same DC."
     },
     {
       "id": "area_effect",
@@ -146,6 +248,17 @@
       "costFormula": "1-3 points flat",
       "costValue": 1,
       "flat": true,
+      "config": [
+        {
+          "key": "points",
+          "label": "Points",
+          "type": "points",
+          "min": 1,
+          "max": 3,
+          "default": 1,
+          "hint": "1: one other dimension. 2: any of a related group. 3: any dimension in the setting."
+        }
+      ],
       "description": "Lets the effect reach into other dimensions."
     },
     {
@@ -163,6 +276,7 @@
       "id": "feature_extra",
       "name": "Feature (as extra)",
       "category": "extra",
+      "repeatable": true,
       "costFormula": "1 point per rank flat",
       "costValue": 1,
       "flat": true,
@@ -246,6 +360,17 @@
       "costFormula": "1-4 points flat",
       "costValue": 1,
       "flat": true,
+      "config": [
+        {
+          "key": "points",
+          "label": "Points",
+          "type": "points",
+          "min": 1,
+          "max": 4,
+          "default": 1,
+          "hint": "1: a fixed point away from you, aimed away. 2: any point away from you, or a fixed point aimed in a fixed direction. 3: any point aimed in a fixed direction, or a fixed point aimed anywhere. 4: any point, any direction."
+        }
+      ],
       "description": "Lets a ranged effect originate from somewhere other than you."
     },
     {
@@ -294,6 +419,18 @@
       "flat": false,
       "overrides": { "range": "Perception" },
       "dropsCheck": true,
+      "config": [
+        {
+          "key": "from",
+          "label": "Upgraded from",
+          "type": "select",
+          "hint": "How far the range is being moved: a Ranged effect pays 1, a Close one pays 2.",
+          "options": [
+            { "value": "ranged", "label": "Ranged", "costValue": 1 },
+            { "value": "close", "label": "Close", "costValue": 2 }
+          ]
+        }
+      ],
       "description": "Lets the effect target anything you can accurately perceive, no attack roll needed."
     },
     {
@@ -313,7 +450,19 @@
       "costValue": 1,
       "flat": false,
       "overrides": { "range": "Ranged" },
-      "description": "Turns a close-range effect into one usable at a distance."
+      "config": [
+        {
+          "key": "from",
+          "label": "Changed from",
+          "type": "select",
+          "hint": "From Close this is an extra (+1). From Perception range it is a step down, and worth -1 instead.",
+          "options": [
+            { "value": "close", "label": "Close", "costValue": 1 },
+            { "value": "perception", "label": "Perception", "costValue": -1 }
+          ]
+        }
+      ],
+      "description": "Turns a close-range effect into one usable at a distance, or steps a Perception-range effect down to Ranged."
     },
     {
       "id": "reach",
@@ -341,6 +490,17 @@
       "costFormula": "1 or 2 points flat",
       "costValue": 1,
       "flat": true,
+      "config": [
+        {
+          "key": "points",
+          "label": "Points",
+          "type": "points",
+          "min": 1,
+          "max": 2,
+          "default": 1,
+          "hint": "1 point: only within the effect's range. 2 points: at any distance."
+        }
+      ],
       "description": "Lets you remove the effect's conditions at will as a free action."
     },
     {
@@ -455,6 +615,18 @@
       "costValue": 1,
       "flat": true,
       "gate": "activation",
+      "config": [
+        {
+          "key": "action",
+          "label": "Activating takes",
+          "type": "select",
+          "hint": "An extra simple action to switch the power on is worth -1; an extra standard action is worth -2.",
+          "options": [
+            { "value": "simple", "label": "A simple action", "costValue": 1 },
+            { "value": "standard", "label": "A standard action", "costValue": 2 }
+          ]
+        }
+      ],
       "description": "The whole power needs an extra action to switch on before any of its effects can be used."
     },
     {
@@ -486,6 +658,18 @@
       "costValue": 1,
       "flat": false,
       "overrides": { "range": "Close" },
+      "config": [
+        {
+          "key": "from",
+          "label": "Reduced from",
+          "type": "select",
+          "hint": "How far the range is being cut: from Ranged it is worth -1, from Perception -2.",
+          "options": [
+            { "value": "ranged", "label": "Ranged", "costValue": 1 },
+            { "value": "perception", "label": "Perception", "costValue": 2 }
+          ]
+        }
+      ],
       "description": "Drops a Ranged or Perception-range effect down to Close range."
     },
     {
@@ -579,6 +763,7 @@
       "id": "limited",
       "name": "Limited",
       "category": "flaw",
+      "repeatable": true,
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
@@ -622,6 +807,7 @@
       "id": "quirk",
       "name": "Quirk",
       "category": "flaw",
+      "repeatable": true,
       "costFormula": "-1 point flat",
       "costValue": 1,
       "flat": true,
@@ -634,23 +820,36 @@
       "id": "removable",
       "name": "Removable",
       "category": "flaw",
-      "costFormula": "-1, -2, or -4 points per 5 total points (by tier)",
+      "costFormula": "-1, -2, or -4 points per 5 points of the power's total (by tier)",
       "costValue": 1,
       "flat": true,
+      "costScope": "power",
+      "costPerPoints": 5,
       "gate": "removable",
       "config": [
         {
           "key": "tier",
           "label": "Tier",
           "type": "select",
-          "hint": "How readily the item is taken away (a simplified flat discount, not the full per-5-points formula).",
+          "hint": "How readily the item is taken away. Worth its value per 5 points of the whole power's cost, rounded up — a 98-point suit of Removable armour is discounted 20, to 78.",
           "options": [
-            { "value": "removable", "label": "Removable", "costValue": 1 },
-            { "value": "easily_removable", "label": "Easily Removable", "costValue": 2 }
+            { "value": "removable", "label": "Removable (only while Stunned and Defenseless)", "costValue": 1 },
+            { "value": "easily_removable", "label": "Easily Removable (a Disarm or Grab in action time)", "costValue": 2 },
+            { "value": "equipment", "label": "Equipment (ordinary gear, and all of the above)", "costValue": 4 }
+          ]
+        },
+        {
+          "key": "loss",
+          "label": "Long-term loss",
+          "type": "select",
+          "hint": "Short-Term Only takes 1 off the flaw's value: the power can still be taken away, but is never lost for longer than a scene. It can reduce the value to 0, leaving no discount at all.",
+          "options": [
+            { "value": "long_term", "label": "Can be lost long-term" },
+            { "value": "short_term_only", "label": "Short-term only", "costDelta": -1 }
           ]
         }
       ],
-      "description": "The power can be taken away from you under the right circumstances."
+      "description": "The power can be taken away from you under the right circumstances. It applies to the power as a whole, not to one of its effects."
     },
     {
       "id": "resistible",

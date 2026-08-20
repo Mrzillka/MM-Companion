@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QLineEdit, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.registry import Registry
-from mm_companion.core.rules import TRAIT_COLUMN_TYPE, trait_rank_cap
+from mm_companion.core.rules import TRAIT_COLUMN_TYPE, config_source_options, trait_rank_cap
 from mm_companion.ui.power_constructor.trait_picker import (
     TRAIT_SOURCE_ALL,
     TRAIT_SOURCE_BOOSTABLE,
@@ -38,6 +38,7 @@ __all__ = [
     "RepeatableCellKind",
     "TraitPicker",
     "brick_tooltip",
+    "config_source_options",
     "combat_focus_options",
     "fill_trait_combo",
     "is_trait_allocation",
@@ -79,6 +80,9 @@ def register_base_config_widgets() -> None:
     )
     CONFIG_WIDGET_BUILDERS.register(
         "multiselect", lambda card, field, ft: card._multiselect_widget(field), replace=True
+    )
+    CONFIG_WIDGET_BUILDERS.register(
+        "points", lambda card, field, ft: card._points_widget(field), replace=True
     )
 
 
@@ -231,6 +235,7 @@ def combat_focus_options(character: Character | None, game_data: GameData) -> li
 # Custom drag payload formats: the record id travels as the mime data.
 EFFECT_MIME = "application/x-mm-effect"
 MODIFIER_MIME = "application/x-mm-modifier"
+CONFIGURATION_MIME = "application/x-mm-configuration"
 # A chip carries its own index when dragged to reorder within its group.
 CHIP_MIME = "application/x-mm-chip"
 

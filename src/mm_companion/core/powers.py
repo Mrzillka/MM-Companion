@@ -166,6 +166,15 @@ class PowerEffectInstance:
     the dial is turned is ``current_rank`` below. The size effects get a dial without
     asking, since a Growth is a ladder whether or not anyone ticked a box.
 
+    ``dynamic`` marks this effect a **Dynamic** member of its power's ``array``
+    structure (p101). It is *build* state: a Dynamic alternate costs 2 points instead
+    of 1 because it shares the array's point pool and runs alongside the array's other
+    Dynamic members at reduced effectiveness, rather than being mutually exclusive with
+    them; on the array's *base* effect it instead costs one Alternate Effect rank. It
+    means nothing outside an array and is priced by
+    :func:`mm_companion.core.rules.power_gross_cost`. Written only when set, so a power
+    saved before this is byte-for-byte what it was and still costs what it did.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -190,6 +199,7 @@ class PowerEffectInstance:
     pl_cap: str = ""
     rank_dial: bool = False
     current_rank: int | None = None
+    dynamic: bool = False
     overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -220,6 +230,8 @@ class PowerEffectInstance:
             data["suppressed"] = True
         if self.current_rank is not None:
             data["current_rank"] = self.current_rank
+        if self.dynamic:
+            data["dynamic"] = True
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
@@ -242,6 +254,7 @@ class PowerEffectInstance:
             toggled_on=bool(raw.get("toggled_on", True)),
             suppressed=bool(raw.get("suppressed", False)),
             current_rank=None if current is None else int(current),
+            dynamic=bool(raw.get("dynamic", False)),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 
@@ -272,6 +285,23 @@ class Power:
     and written only when switched off, so a power nobody has touched adds nothing to
     the file and an older save still loads all-active.
 
+    ``dynamic`` is the whole-power twin of :attr:`PowerEffectInstance.dynamic`, for
+    when the array is a :class:`PowerGroup` of whole powers rather than one power's own
+    effects: it makes this card a **Dynamic** member of its parent array, costing 2
+    points as an alternate (or one Alternate Effect rank as the array's base) in
+    exchange for sharing the pool with the other Dynamic members instead of switching
+    them off. Build state, and written only when set.
+
+    ``dynamic_points`` is how much of that shared pool this member currently holds —
+    *runtime* state, the free action the rules let a character take once per turn
+    (p101). ``None``, the default, means it holds no share at all and the array behaves
+    as it always has: exactly one selected member, running at full rank. A number
+    reduces the member's every rank in proportion to the share
+    (:func:`mm_companion.core.rules.dynamic_rank_cap`) and makes it live alongside its
+    fellow Dynamic members rather than instead of them
+    (:func:`mm_companion.core.rules.live_powers`). Written only when set, so an array
+    saved before the pool existed loads with no allocation and behaves identically.
+
     An attack-skill link is per-effect now (see
     :attr:`PowerEffectInstance.attack_skill`), not whole-power.
 
@@ -293,6 +323,8 @@ class Power:
     activated: bool = True
     item_present: bool = True
     array_active: bool = True
+    dynamic: bool = False
+    dynamic_points: int | None = None
     cost_override: int | None = None
 
     def to_dict(self) -> dict:
@@ -306,6 +338,10 @@ class Power:
             "linked_with": list(self.linked_with),
             "alternate_of": self.alternate_of,
         }
+        if self.dynamic:
+            data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
         if self.cost_override is not None:
             data["cost_override"] = self.cost_override
         # The runtime switches, written only when off — see the class docstring.
@@ -334,6 +370,7 @@ class Power:
         # dangles from the fresh id.
         power_id = raw.get("id") or uuid4().hex
         raw_cost = raw.get("cost_override")
+        raw_share = raw.get("dynamic_points")
         return cls(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
@@ -346,6 +383,8 @@ class Power:
             activated=bool(raw.get("activated", True)),
             item_present=bool(raw.get("item_present", True)),
             array_active=bool(raw.get("array_active", True)),
+            dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=None if raw_share is None else int(raw_share),
             cost_override=None if raw_cost is None else int(raw_cost),
         )
 
@@ -387,6 +426,14 @@ class PowerGroup:
     actually been picked, so a group saved before this loads on its first child as it
     always did.
 
+    ``dynamic`` marks *this group* a Dynamic member of the array it is nested in — the
+    same build flag :attr:`Power.dynamic` carries, so an array's member can be a whole
+    sub-group and still be priced as one. It says nothing about this group's own
+    children; each of those carries its own.
+
+    ``dynamic_points`` is the same runtime share :attr:`Power.dynamic_points` is, for
+    when the member of an array is a whole sub-group rather than one card.
+
     ``name`` is an optional player-given title for the group; when empty the UI falls
     back to a label derived from the :attr:`mode`.
     """
@@ -396,6 +443,8 @@ class PowerGroup:
     id: str = field(default_factory=lambda: uuid4().hex)
     active_child_id: str = ""
     name: str = ""
+    dynamic: bool = False
+    dynamic_points: int | None = None
 
     def to_dict(self) -> dict:
         data = {
@@ -407,6 +456,10 @@ class PowerGroup:
         }
         if self.active_child_id:
             data["active_child_id"] = self.active_child_id
+        if self.dynamic:
+            data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
         return data
 
     @classmethod
@@ -418,6 +471,10 @@ class PowerGroup:
             id=raw.get("id") or uuid4().hex,
             active_child_id=str(raw.get("active_child_id", "")),
             name=raw.get("name", ""),
+            dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=(
+                None if raw.get("dynamic_points") is None else int(raw["dynamic_points"])
+            ),
         )
 
 

@@ -40,12 +40,20 @@ effect+modifier combination.
 ```
 effect_cost_per_rank = base_cost_per_rank + sum(extra costs per rank) - sum(flaw costs per rank)
 effect_total_cost    = (effect_cost_per_rank * rank) + sum(flat extra costs) - sum(flat flaw costs)
-power_total_cost      = sum(effect_total_cost for every effect in the power)
+power_gross_cost     = sum(effect_total_cost for every effect in the power)
+power_total_cost     = power_gross_cost + sum(power-scope modifiers, priced from that gross)
 ```
 
 Minimum cost per rank is 1 Power Point — flaws can't push a per-rank cost below that. This is
 the number that gets deducted from the character's Power Point pool (see
 `mm-core-mechanics.md` §7) when the power is added to the character.
+
+**A power-scope modifier** is one the rules price against the whole power rather than any one
+effect, marked `costScope: "power"` in `modifiers.json`. Removable is the only one: it is worth
+its value (1 / 2 / 4 by tier) **per 5 points of the power's final cost, rounded up**, so a
+98-point suit of armour is discounted 20 points to 78. Every effect-level bucket skips such a
+modifier, and only the costliest selection of it counts however many effects carry a copy —
+the flaw applies once to the power. The result is floored at 1 Power Point.
 
 ---
 
@@ -108,9 +116,18 @@ resisted rank to cap, so a Flight + Attack stays out of PL scope.
   Each alternate effect costs a flat 1-2 points (from `modifiers.json`) regardless of its own
   rank, as long as its own total cost doesn't exceed the base power's cost. Permanent-duration
   effects can't be array members (they can't be switched off).
-- **Dynamic Alternate Effects**: a variant array where 2+ ranks of the Alternate Effect extra
-  let multiple array members split the pool of points and run **simultaneously** at reduced
-  rank, reconfigured freely each turn.
+- **Dynamic Alternate Effects**: an array member that is *not* mutually exclusive with its
+  siblings. It shares the array's point pool with the array's other Dynamic members and runs
+  **simultaneously** with them at reduced rank, reallocated once per turn as a free action.
+  That is what its dearer price buys: a Dynamic alternate costs 2 points rather than 1, and
+  making the array's *base* Dynamic costs one Alternate Effect rank on top of its own cost
+  (p101, p151). Dynamic is therefore a per-**member** flag, not an array-wide mode:
+  `PowerEffectInstance.dynamic` within a power, `Power.dynamic` / `PowerGroup.dynamic` within
+  a group, both read by `array_members_cost`. Two Dynamic members are needed before the
+  option does anything, which the book says outright and the app leaves to the player.
+  The **split itself** is runtime state (`dynamic_points`, §7): the array's pool is its base
+  member's cost, each member is held to `rank x points / full cost` rounded down, and every
+  member holding a share is live at once.
 
 ```
 Power (array example: "elemental control")
@@ -139,9 +156,12 @@ Linked and Array exist at **two levels**, both supported side by side:
   folds in array pooling at any depth. `rules.node_display_cost` gives the per-card
   figure (a non-base array member shows only the flat point). Runtime: an `array` group's
   `active_child_id` names the one live member, and `rules.live_powers` walks the tree
-  descending only into the active array branch so an unselected member's bonuses drop off
+  descending only into the live array branch so an unselected member's bonuses drop off
   the sheet (feeding `power_trait_bonuses`); the per-power on/off switch still drives
-  `effect_is_active`, and a Linked group's members toggle together.
+  `effect_is_active`, and a Linked group's members toggle together. *Which* branch is live
+  is `rules.live_array_children`: the selected member, unless the array's points have been
+  split across its Dynamic members, in which case every member holding a share runs at
+  once at the rank its share buys (§4).
 
   This tree **supersedes** the older flat cross-power references (`Power.alternate_of` /
   `Power.linked_with`). Those fields remain only so a pre-tree save still loads:
@@ -286,6 +306,72 @@ rather than editing that module. `Reduced Trait` uses the same machinery from th
 side: it is a *flat* flaw with `costMode: "as_trait"` and its own trait rows, so it
 discounts by whatever the lowered ranks would have cost.
 
+**Standard configurations.** The rulebook also names about ninety ready-made powers and
+lists what each is made of (PDF p236 by effect, p237 by name). They are shorthand, not new
+rules — nobody says "Damage, Ranged", they say *Blast* — so `configurations.json` records
+each as an assembly of the records above and `core/rules/configurations.py` turns one into
+an ordinary `Power`. Two consequences worth stating: a built configuration is editable like
+anything else and carries no marker of where it came from, and it costs whatever its pieces
+cost. The `costNote` beside each is the *book's* printed price, kept as reference and as a
+test oracle, never as an input to the arithmetic.
+
+**Base cost from configuration.** Five effects have no single points-per-rank: Illusion
+costs 1 per sense type it fools, sight counting as two, capped at 5 (PDF p131); Obscure
+1 per sense or 2 per whole sense type, sight double, capped at 10 (p139); Remote Sensing
+5 for the first sense type and 1 for each after, capped at 10 — sight again counting as
+two, which is why sight Remote Sensing is 6 (p142); Transmute 2/3/4/5 by how broad its
+source and result are (p147); and Environment, whose sub-effects cost 1 or 2 per rank
+*each* and simply add up, with no ceiling (p124–125).
+
+They are **not** a `BASE_COST_KINDS` mode, and the distinction is the point: they are
+still charged flat, per rank, exactly like everything else — only *which number* differs.
+So the number is what varies. An effect declares a `baseCostBy` block naming the config
+fields that drive its price (`{ "fields": [...], "base": 0, "min": 1, "max": 5 }`), each
+option in those fields carries its own `costValue`, and the cost is the sum of the chosen
+options plus `base`, clamped into `[min, max]` — with `min` doubling as what an
+unconfigured effect costs, so a freshly dropped card prices at its floor rather than at
+zero. `effect_base_cost_value` in `powers_cost.py` is the single place the constant and
+the configured cases are told apart; the per-rank cost, the flat total and the printed
+formula all read it, so a configured Illusion cannot cost one thing and explain another.
+
+Adding a sense type, an Environment condition or a whole new configured effect is
+therefore a data edit with no Python behind it.
+
+**The Dynamic point pool.** Each member carries its own `dynamic` flag, and
+`array_members_cost` charges `dynamicCostValue` (2) for a Dynamic alternate and one Alternate
+Effect rank for a Dynamic base, at both levels an array exists at — so a Dynamic array costs
+what the book prints. The **runtime allocation** rides beside it as `dynamic_points` on
+`Power` / `PowerGroup`: how many of the array's points that member currently holds. Three
+functions turn it into behaviour, all in `core/rules`:
+
+- `array_pool_points(group, ...)` — the pool, which is the *base* member's full cost, since
+  every other member is bought for a flat point or two on top of it.
+- `dynamic_rank_share(rank, points, full_cost)` — `rank x points / full_cost`, rounded down
+  and clamped to the bought rank. The book's own example is the test: a Flight 5 costing 10
+  points given 2 of them is "limited to 1 rank of Flight" (p101). **Zero is a real answer**
+  here and nowhere else — a member below its minimum is simply not running.
+- `live_array_children(group)` — the selected alternate as before, *unless* any Dynamic
+  member holds a share, in which case every member holding one is live together. That is
+  what the dearer alternate price actually buys, and it is why `live_powers` no longer
+  descends into exactly one child of an array.
+
+The cap reaches an effect's rank through an **injected hook** rather than an import:
+`effect_current_rank(effect, game_data, char)` asks `runtime`'s installed resolver, and
+`powers_cost` installs `dynamic_rank_cap` at import (`set_dynamic_rank_cap`) because working
+a share out needs point costs and `powers_cost` is the module that imports `runtime`, not the
+reverse. Nothing installed means nothing changes, the same bargain the handler registries
+strike. Putting it *there* rather than at each caller is what makes one number reach the save
+DC, the Toughness a Dynamic Protection grants, the speed a Dynamic Flight flies at and the
+card's own title. The member is priced without the wielder deliberately, since passing one
+would let a legacy Strength-Based selection reach `effective_ability`, which asks what the
+character's powers contribute, which asks this.
+
+Two things it deliberately does not do. A member is found by walking the character's own
+powers tree, so a power **not on a character** (the Power Constructor) is never capped —
+which is right, since nothing is dialled there either. And the split lives only at the
+*group* level: an array of a single power's own effects has no runtime member selection at
+all today, so a pool there would be built on sand.
+
 **Backward compatibility.** An effect with no rows falls back to a single
 `config["target"]` at the effect's full rank — which is how Protection's baked-in
 `"TOUGHNESS"`, a shield's authored `{"target": "DEF"}` and every character saved before the
@@ -401,6 +487,11 @@ Effect (from effects.json)
 ├── baseCostMode: "flat" | "as_trait"    // how that is charged; omitted means flat. One
 │                                        // handler per mode in `BASE_COST_KINDS` (§6)
 ├── configurableTarget: null | "trait"   // true for Enhanced Trait-style effects
+├── personal: bool                       // works on its user alone - the rules' "Personal
+│                                        // Range effect". Omitted means `range == "Personal"`;
+│                                        // stated only where the Range parameter disagrees
+│                                        // (Teleport's Range is "Rank"). Read through
+│                                        // `effect_is_personal`
 ├── config: []                           // the effect's configurable qualities (§9). A
 │                                        // `repeatable` field with a `trait` column and an
 │                                        // `int` column is a TRAIT ALLOCATION: each row
@@ -411,6 +502,8 @@ Effect (from effects.json)
 │                                        // supplies its check (so its own `check` is null)
 ├── rangeDistance: {}                    // optional; overrides how far this effect reaches
 │                                        // once its range is Ranged (see §10)
+├── subBuild: {}                         // optional; a whole nested Character this effect
+│                                        // buys, with its budget (Summon's minion) — §9
 └── statIntegration: { pattern: "passive_permanent"|"passive_toggle"|"instant_action"|"resource_pool",
                         affects: "ability"|"skill"|"advantage"|"defense"|"resistance"|
                                  "movement"|"senses"|"none"|"special" }
@@ -429,6 +522,9 @@ Modifier (from modifiers.json)
 │                                        // gets its own row and a dice-footer line, with
 │                                        // noteTemplate rendering it ("{trait} check, DC {dc}")
 ├── checkBonus, checkNote, stepField/stepBy, addsAbility, gate, hidden
+├── subBuild: {}                        // optional; the same block an effect can carry,
+│                                        // for a modifier that buys a nested Character
+│                                        // (Morph's Metamorph forms) — §9
 ├── statIntegration: {}                 // optional, the same shape a base effect carries:
 │                                        // what *taking this modifier* grants, read by the
 │                                        // same appliers (Striding -> ranks of Speed).
@@ -458,6 +554,16 @@ PowerEffectInstance  (part of a character's Power)
 │                                          // refunds nothing and legalises nothing.
 ├── rankDial (bool, default false)        // build: whether the card carries that slider
 │                                          // at all. A size effect gets one regardless.
+├── dynamic (bool, default false)         // build: a Dynamic member of this power's array
+│                                          // (§4) - shares the pool and runs alongside the
+│                                          // other Dynamic members, for 2 points instead
+│                                          // of 1. `Power`/`PowerGroup` carry the same
+│                                          // flag for a group-level array, and there also
+│                                          // carry `dynamicPoints` (int|null): runtime,
+│                                          // how much of the array's pool this member
+│                                          // currently holds. Null - the default - is no
+│                                          // share, and the array behaves as an ordinary
+│                                          // set of alternates
 ├── plCap ("" | "effect" | "attack")      // build: hold this effect hard to 2 x PL,
 │                                          // lowering the side not named
 │                                          // (`effect_pl_cap_shift`). Empty leaves the
@@ -470,6 +576,119 @@ Power
 ├── alternates: PowerEffectInstance[][]   // array members, if any
 └── activated / itemPresent / toggledOn   // runtime state flags per §7
 ```
+
+---
+
+## 9. Effect configuration fields
+
+An effect's `config` array declares the choices a player makes when building it — which
+resistance an Affliction targets, which condition each degree imposes. Each field stores
+its value under its `key` in the instance's `config` dict, and the field's `type` picks
+both the input widget (`CONFIG_WIDGET_BUILDERS`) and how a stored value reads back
+(`CONFIG_DISPLAY_KINDS`). Both are registries, so a mod adds a field type without editing
+either module.
+
+Three things a field can do beyond holding a value:
+
+- **`overrides`** names a game-term field the choice replaces, so an Affliction resisted by
+  Fortitude says so in its Resistance row rather than in a note beneath it.
+- **A `source`** replaces the field's own `options` with a list the *game data* decides.
+  `CONFIG_OPTION_SOURCES` lives in `core/rules`, not beside the constructor, because the
+  picker and the readout both have to turn an id into the same name;
+  `config_source_options` is the single call they share. `personal_effects` is the first
+  one: the effects an Affliction's Transformed condition may impose, which is a query over
+  `effects.json` and would go stale the moment a mod added an effect.
+- **A gate** hides the field until it is relevant. `hiddenWith` hides it while a modifier is
+  attached (Variable Conditions defers the degree choices to use-time); `multiselectWith`
+  upgrades it to multi-select instead; and `showWhenField` / `showWhenValue` reveal it only
+  while a *sibling* field holds a value (the imposed-effect picker, once a degree reads
+  Transformed). A gated field is **built and hidden**, not omitted — tearing the form down
+  from inside the signal of the combo that changed is how Qt teardown bugs start. Closing a
+  gate drops the stored value; opening one re-seeds the field's own default.
+
+---
+
+### Sub-build budgets
+
+Four things in the rules buy a whole sub-character's worth of points, and each states its
+budget as a derived number on the effect's card:
+
+| Where | Budget | Where it comes from | Cite |
+| --- | --- | --- | --- |
+| Summon | one minion on `rank x 15` PP | a `points_per_rank` readout | p145 |
+| Variable | `rank x 5` Variable Power Points | a `points_per_rank` readout | p148 |
+| Affliction → Empowering | the Transformed form on `rank x 15` PP | `noteTemplate` + `notePerRank` | p110 |
+| Morph → Metamorph | one trait set **per rank**, each worth *your own* point total | `noteTemplate` + `noteValues` | p136 |
+
+Summon's count moves too: **Multiple Minions** doubles it per rank of the extra (one rank
+for two minions, two for four), which is a `noteValues` entry rather than a multiple of
+anything the note already had.
+
+`noteValues` is `{placeholder: {"kind": ..., ...}}` on a modifier, each `kind` a handler in
+the `NOTE_VALUE_KINDS` registry taking a `NoteValueContext` (the spec, the modifier, the
+chip, the effect's rank, the wielder, the game data). It exists because `noteTemplate`'s
+`{n}` is always "the effect's rank times a constant", and two of these budgets are not:
+Multiple Minions counts in the *extra's* rank, and Metamorph's is the character's own
+total. A handler returns `None` when it cannot answer — `character_points` with no
+character in hand — and the placeholder is dropped from the sentence rather than shown as
+a zero.
+
+### The sub-builds themselves
+
+Two of the four hold a build as well as a budget, and both are declared in data by a
+`subBuild` block — on the **effect** record for Summon's minion, on the **modifier**
+record for Metamorph's forms:
+
+```json
+"subBuild": {
+  "key": "minion",
+  "label": "Minion",
+  "budget": { "kind": "per_rank", "perRank": 15 },
+  "count": { "kind": "modifier_rank" },
+  "forbidsEffects": ["summon"],
+  "forbidsAdvantages": ["minion"]
+}
+```
+
+`budget` and `count` are ordinary `NOTE_VALUE_KINDS` specs, resolved through the same
+`note_value()` door a `noteValues` placeholder goes through — a sub-build's budget is the
+same question a note asks, so `per_rank` and `modifier_rank` joined the registry and
+`NoteValueContext.modifier` became optional (Summon's is priced off the *effect's* rank,
+with no chip involved). `count` absent means one build.
+
+**A sub-build is an ordinary `Character`**, stored as a list of `to_dict()` dicts under
+`key` in the config dict that bought it — the effect's, or the chip's. That choice is what
+makes the feature small: `config` is already written verbatim to the save file, undo
+already snapshots the whole model as JSON, and the session layer already pushes the same
+dict, so a nested character needs no migration, no new key and no new code in any of the
+three. A *reference* to a saved NPC file was the alternative and was rejected: it couples a
+player's power to the GM's directory and dangles when the file moves.
+
+**The budget is stamped on read, not stored** (`sub_build_character`). Both it and the
+Power Level are derived from the power and its wielder, so dialling a Summon from rank 4 to
+rank 6 moves its minion's pool from 60 to 90 by itself — which is what lets the *sheet's
+own* spent-against-budget readout be the check, instead of a warning bolted beside it.
+
+`core/rules/subbuilds.py` sits below `validation` in the rules DAG (checking a minion means
+walking its powers tree, and `leaf_powers` is validation's). It exposes
+`power_sub_build_slots` / `effect_sub_build_slots`, the read/write pair
+(`sub_build_character`, `store_sub_build`, `remove_sub_build`, `new_sub_build`), and
+`power_sub_build_violations` — over budget, more builds than the power buys, or carrying
+what the slot forbids.
+
+The editor is `SubBuildWindow`, the ordinary sheet again (**not** NPC mode: an NPC swaps
+the point pool for an estimated PL, and a minion is the one GM-side character the rules do
+budget). It saves into the power rather than to a file, and shows Power Level and Power
+Points read-only via `SystemInfoSection.set_budget_fixed`. `SubBuildPanel` is the strip of
+buttons on the effect card that reaches it, showing every slot the card owns — the
+effect's own and its chips' alike — and importing the window **inside the handler**,
+because at module scope the constructor → main window → sheet → sections → constructor loop
+closes.
+
+**Variable's pool and Empowering's form still have no editor**, deliberately. Variable is a
+*menu* the book itself suggests writing out in advance — closer to an array of saved
+configurations than to one build — and Empowering's form is built by the GM for a target,
+not by the player for themselves. Both still print their budget.
 
 ---
 

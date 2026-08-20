@@ -435,6 +435,12 @@ class ConfigOption:
     Custom modifier's *flat* mode is charged ``cost × rank`` while its *per-rank* mode
     ignores the rank (it already scales with the effect's rank). ``None`` leaves the
     modifier's own ``ranked`` in force.
+
+    ``cost_delta`` *adjusts* the magnitude the option arrives at rather than replacing
+    it, and unlike the three above it is summed across **every** config field rather
+    than first-wins — so a second choice can shade a price the first one set. Removable's
+    Short-Term Only is worth ``-1`` off whichever tier is chosen (Equipment 4 → 3), and
+    the rules let that reach 0, which is why the sum is floored there and not at 1.
     """
 
     value: str
@@ -442,6 +448,7 @@ class ConfigOption:
     cost_value: int | None = None
     flat: bool | None = None
     ranked: bool | None = None
+    cost_delta: int = 0
 
 
 @dataclass(frozen=True)
@@ -574,7 +581,12 @@ class EffectConfigField:
     config field, gates its visibility on a sibling ``points`` field's value — the
     field appears only when that spin box reads exactly this number (Affliction's
     Variable Conditions reveals its "which degree" picker only at the 1-point tier).
-    Zero (the default) means always shown.
+    Zero (the default) means always shown. ``show_when_field`` / ``show_when_value``
+    are the same idea one level out, on an *effect's* own config: the field appears
+    only while the sibling field named by ``show_when_field`` holds
+    ``show_when_value`` — Affliction reveals its imposed-effect picker only once a
+    degree is set to Transformed. The sibling may be single- or multi-select, so
+    "holds" means equals *or* contains. Both empty (the default) means always shown.
     """
 
     key: str
@@ -591,6 +603,8 @@ class EffectConfigField:
     max_value: int = 0
     default_value: int = 0
     show_when_points: int = 0
+    show_when_field: str = ""
+    show_when_value: str = ""
     options: tuple[ConfigOption, ...] = ()
     alloc_options: tuple[AllocationOption, ...] = ()
     columns: tuple[RepeatableColumn, ...] = ()
@@ -653,6 +667,130 @@ class ResistanceOutcome:
 
 
 @dataclass(frozen=True)
+class ConfiguredModifier:
+    """One extra or flaw a standard power configuration already has attached.
+
+    ``id`` names a record in the merged modifier catalog (general or effect-specific);
+    ``rank`` is how many ranks of it a ranked modifier starts at (``0`` leaves the
+    selection's own default), and ``config`` seeds the modifier's config choices — the
+    Ranged extra's "from Close", a Limited Degree's chosen degree.
+    """
+
+    id: str
+    rank: int = 0
+    config: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ConfiguredEffect:
+    """One effect of a standard power configuration, already set up.
+
+    ``rank`` is a rank the configuration *nails down* — Invisibility is Concealment 2,
+    X-Ray Vision is Enhanced Senses 4 — and ``0`` leaves the player to choose, which is
+    the usual case for the per-rank configurations. ``config`` seeds the effect's own
+    configurable qualities (an Affliction's conditions by degree, Remote Sensing's sense
+    types).
+    """
+
+    effect_id: str
+    rank: int = 0
+    config: dict = field(default_factory=dict)
+    extras: tuple[ConfiguredModifier, ...] = ()
+    flaws: tuple[ConfiguredModifier, ...] = ()
+
+
+@dataclass(frozen=True)
+class PowerConfiguration:
+    """A named, pre-built power from the rulebook's standard configurations.
+
+    These are the game's own shorthand — *Blast* rather than "Damage, Ranged" — and
+    they are **not** new rules: each is an ordinary assembly of effects, extras and flaws
+    that already exist in the other data files, which is why building one produces a
+    :class:`~mm_companion.core.powers.Power` the player can then edit like any other.
+
+    ``base_effect`` is the effect id the configuration files under in the palette.
+    ``cost_note`` is the cost the *book* prints for it and ``cite`` the page — both are
+    reference text and neither is ever used in the arithmetic: what a built power costs
+    is derived from its effects and modifiers like anything else. Where the two disagree
+    the reason is a rule the app does not model yet (see ``configurations.json``'s
+    ``_meta.costNote``). ``structure`` matters only for a multi-effect configuration.
+    """
+
+    id: str
+    name: str
+    base_effect: str = ""
+    cost_note: str = ""
+    cite: str = ""
+    description: str = ""
+    structure: str = "independent"
+    effects: tuple[ConfiguredEffect, ...] = ()
+
+
+@dataclass(frozen=True)
+class BaseCostBy:
+    """How an effect whose base cost depends on its *configuration* works that cost out.
+
+    A handful of effects are not a fixed number of points per rank: Illusion costs 1 per
+    sense type it fools and Obscure 1 per sense it blocks (sight counting double for
+    both), Remote Sensing 5 for the first sense type and 1 for each after, Transmute 2 to
+    5 by how broad its source and result are, and Environment adds up the sub-effects it
+    imposes. All of them are still charged *flat, per rank* — only which number differs,
+    which is why this is a field on the effect rather than another
+    :data:`mm_companion.core.rules.BASE_COST_KINDS` mode.
+
+    The cost is ``base + Σ (cost_value of every option currently chosen across
+    ``fields``)``, clamped to ``[minimum, maximum]``. ``minimum`` is therefore also what
+    an unconfigured effect costs, which is what keeps a freshly dropped card priced at
+    its floor rather than at zero. ``maximum`` of ``None`` means the rules name no
+    ceiling (Environment, where sub-effects simply keep adding).
+
+    The per-option numbers live on the config options themselves
+    (:attr:`ConfigOption.cost_value`), the same place a modifier's config already keeps
+    them — so adding a sense type or a new Environment condition is a data edit with no
+    Python behind it.
+    """
+
+    fields: tuple[str, ...] = ()
+    base: int = 0
+    minimum: int = 1
+    maximum: int | None = None
+
+
+@dataclass(frozen=True)
+class SubBuild:
+    """A whole nested *character* an effect or a modifier buys, and its budget.
+
+    Four places in the rules spend a sub-character's worth of points inside a power:
+    Summon's minion (``rank x 15`` PP, p145), Morph's Metamorph forms (one per rank of
+    the extra, each on the wielder's own point total, p136), Variable's pool and
+    Affliction's Empowering form. The first two genuinely buy a *character* — the other
+    two are a menu and a GM's build — so only those two declare one of these.
+
+    ``key`` is the config key the builds are stored under, on the effect's ``config``
+    for an effect-owned slot and on the chip's for a modifier-owned one. The value is a
+    list of :meth:`Character.to_dict` dicts, so it is ordinary JSON and rides along in
+    every save, every undo snapshot and every session push with no special handling.
+
+    ``budget`` and ``count`` are :data:`mm_companion.core.rules.NOTE_VALUE_KINDS` specs
+    — the same ``{"kind": ...}`` shape a modifier's ``noteValues`` uses, resolved by the
+    same registry, so a mod can price a sub-build off anything a note can say. ``count``
+    absent means one build.
+
+    ``forbids_effects`` / ``forbids_advantages`` are what the sub-character may not
+    itself have: a summoned minion "cannot have minions of their own, either from this
+    effect or the Minions advantage" (p145). Checked as a warning, not prevented.
+    """
+
+    key: str
+    label: str
+    budget: dict = field(default_factory=dict)
+    count: dict = field(default_factory=dict)
+    hint: str = ""
+    forbids_effects: tuple[str, ...] = ()
+    forbids_advantages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Effect:
     """A base power effect from ``effects.json`` (see ``docs/mm-powers-architecture.md``).
 
@@ -663,7 +801,11 @@ class Effect:
     one of :data:`mm_companion.core.rules.BASE_COST_KINDS`. Effects are priced flat
     (points per rank) unless they say otherwise; Enhanced Trait is priced ``as_trait``,
     where the cost comes from the traits it raises and ``base_cost_value`` is only the
-    nominal rate its per-rank modifiers are read against. ``integration`` is the parsed
+    nominal rate its per-rank modifiers are read against. ``base_cost_by``, when set,
+    makes the points-per-rank a function of the effect's own configuration instead of a
+    constant (see :class:`BaseCostBy`); ``base_cost_value`` is then the unconfigured
+    floor, and :func:`mm_companion.core.rules.effect_base_cost_value` is what resolves
+    the two cases for every caller. ``integration`` is the parsed
     ``statIntegration`` component (see :class:`mm_companion.core.components.Integration`)
     describing how the effect patches stats — its activation ``pattern`` and, for the passive
     trait-boosting effects (Enhanced Trait, Protection), a ``trait_boost`` naming the
@@ -689,6 +831,25 @@ class Effect:
     Type of an instance (the ``attack`` extra sets it to ``"Attack"``), so a Control
     effect that implicitly attacks reads as Type "Attack" on its card while still
     filing under Control in the palette.
+
+    ``opposed_check`` names what an effect's own **opposed effect check** is rolled
+    against — Nullify's ``"targeted rank or Will"``. An effect check is ``d20 + effect
+    rank`` (p107) and the *wielder* makes it, which is the whole reason this is its own
+    field: Nullify's second roll reads like a resistance in the book's stat block, but the
+    procedure is "make an opposed check of your Nullify rank and the targeted effect rank
+    or the target's Will" — put in the ``resistance`` slot it becomes a roll attributed to
+    the target and carrying no bonus at all. Empty for every effect that makes no such
+    check of its own.
+
+    ``personal`` is whether the effect works on **its user alone** — which is what the
+    rules mean by "a Personal Range effect" (p110). It defaults to ``range_ ==
+    "Personal"`` and only the exceptions state it in the data, because a handful of
+    self-only effects spend their Range parameter on a *distance* instead: Teleport's
+    Range is "Rank" (the rank is how far you go), and so is Communication's and Remote
+    Sensing's. The book settles it by naming Teleport as an example of an effect an
+    Affliction may impose, alongside Morph and Shrinking. Read it through
+    :func:`mm_companion.core.rules.effect_is_personal`, not off the record, so the
+    default lives in one place.
     """
 
     id: str
@@ -696,12 +857,25 @@ class Effect:
     effect_type: str
     action: str = ""
     range_: str = ""
+    #: ``None`` means "not stated" and defers to ``range_``; see the class docstring
+    #: and :func:`mm_companion.core.rules.effect_is_personal`.
+    personal: bool | None = None
     duration: str = ""
     check: str | None = None
     resistance: str | None = None
+    #: What this effect's own opposed effect check is rolled against; see the class
+    #: docstring. Empty for effects that make none.
+    opposed_check: str = ""
     base_cost: str = ""
     base_cost_value: int = 1
     base_cost_mode: str = "flat"
+    #: Set when the effect's points-per-rank is worked out from its configuration
+    #: rather than being a constant (Illusion, Obscure, Remote Sensing, Transmute,
+    #: Environment). ``None`` for every effect priced at a flat rate.
+    base_cost_by: BaseCostBy | None = None
+    #: A whole nested character this effect buys, with its budget (Summon's minion).
+    #: ``None`` for every effect that buys no such thing; see :class:`SubBuild`.
+    sub_build: SubBuild | None = None
     #: Whether the effect's rank *is* the ranks its config allocates, rather than a
     #: budget the player sets by hand. True for Enhanced Trait, whose cost comes from
     #: the traits it raises and whose rank has no other meaning — so the constructor
@@ -772,6 +946,21 @@ class Modifier:
     modifier field that reaches back into character stats, so cost/PL math must be
     given the character to resolve it.
 
+    ``cost_scope`` says *what* the modifier is priced against. The default (empty) is
+    the effect it is attached to, which is every modifier but one. ``"power"`` prices it
+    against the assembled power's total instead — Removable "applies to the power as a
+    whole and not to individual effects" (p161) — so the effect-level buckets skip it
+    and :func:`mm_companion.core.rules.power_total_cost` applies it once, after the
+    effects are summed. ``cost_per_points``, alongside it, makes the magnitude a *rate*:
+    Removable's 5 means "its value per 5 points of the power's final cost, rounded up".
+    Zero charges the magnitude once.
+
+    ``dynamic_cost_value`` belongs to the array's ``alternate_effect`` record alone: an
+    Alternate Effect is "1 or 2 points flat" (p151), 1 for an ordinary alternate and 2
+    for a **Dynamic** one that shares the array's point pool. Making the array's *base*
+    Dynamic instead "requires 1 Alternate Effect rank" (p101) — that is ``cost_value``,
+    not a third number. Zero everywhere else.
+
     ``gate`` marks a flaw that can switch an effect's standing bonus off at runtime
     (one of :mod:`mm_companion.core.components`'s ``GATE_*`` kinds): Activation
     (``"activation"``), Removable (``"removable"``), Limited (``"limited"``),
@@ -780,6 +969,15 @@ class Modifier:
     ``requires_effect_id`` pairs with a ``"requires_effect"`` gate: it names the base
     effect id that must be currently active on the wielder for this effect's bonus to
     apply (e.g. ``"insubstantial"`` for the *Limited to While Insubstantial* flaw).
+
+    ``repeatable`` allows a *second* copy of the modifier on the same effect. The default
+    is one only: a duplicate almost always double-charges the power while overriding
+    nothing, since the later copy's game-term and cost effects are the same as the first's.
+    The exceptions are the modifiers whose meaning lives in their config text — two Limited
+    flaws ("only at night", "only vs. robots") are two different restrictions, and a Custom
+    modifier is whatever the player named it. Read by the constructor
+    (``EffectCard.attach_modifier``), not by the cost math, which prices whatever is
+    attached.
 
     ``hidden`` keeps a record out of the constructor's palette while leaving it in the
     modifier catalog for cost/lookup use — the structural ``linked`` / ``alternate_effect``
@@ -791,6 +989,15 @@ class Modifier:
     by the effect's rank times ``note_per_rank`` (or the bare rank when that is zero),
     so Affliction's Empowering reads "transformed form gains 60 power points" at rank 4.
     Empty leaves the modifier listed by name.
+
+    ``note_values`` supplies the placeholders a rank alone cannot answer, as
+    ``{name: {"kind": ..., ...}}``. ``kind`` picks a handler out of
+    :data:`mm_companion.core.rules.NOTE_VALUE_KINDS`, so the arithmetic is named in data
+    rather than spelled per modifier: Multiple Minions' count *doubles* with its rank
+    (p145) and Metamorph's alternate forms are each worth the **wielder's own** point
+    total (p136), and neither is a multiple of anything the note already had. A
+    placeholder whose value cannot be worked out — ``character_points`` with no
+    character in hand — is dropped from the sentence rather than shown as a zero.
 
     ``requires_any`` lists modifier ids of which at least one must also be attached to
     the same effect for this modifier to be valid — Affliction's Increasing Difficulty
@@ -820,11 +1027,22 @@ class Modifier:
     #: reach (Extended Range's ``1``). Zero for every modifier that doesn't reach further.
     distance_rank_bonus: int = 0
     adds_ability: str = ""
+    cost_scope: str = ""
+    cost_per_points: int = 0
+    #: What one *Dynamic* alternate costs, for the array modifier only (p151's "1 or 2
+    #: points flat"). Zero on every other record, and read through
+    #: :func:`mm_companion.core.rules.array_alternate_cost`.
+    dynamic_cost_value: int = 0
     gate: str = ""
     requires_effect_id: str = ""
+    repeatable: bool = False
+    #: A whole nested character this *modifier* buys (Morph's Metamorph forms).
+    #: ``None`` for every modifier that buys none; see :class:`SubBuild`.
+    sub_build: SubBuild | None = None
     hidden: bool = False
     note_template: str = ""
     note_per_rank: int = 0
+    note_values: dict[str, dict] = field(default_factory=dict)
     #: Using the effect first calls for an extra roll that can fail (Check Required).
     #: Such a modifier gets its own game-term row and a line in the card's dice footer
     #: rather than being buried in Notes — it is something someone has to roll.
@@ -989,6 +1207,23 @@ class DerivedTrait:
 
 
 @dataclass(frozen=True)
+class ImprovisedEffectRules:
+    """The dials behind an Improvised Effect's preparation (``system.json``, p101–102).
+
+    Preparing one takes a **time rank equal to its Power Point cost**, floored at
+    ``min_time_rank`` (3 — one minute). From there the two trades: each time rank shaved
+    off costs ``dc_per_time_rank_saved`` on the preparation DC, and each one spent beyond
+    the base grants ``check_bonus_per_time_rank_spent`` on the check. Both DCs start from
+    the system's ``defense_dc_base``, so a ruleset with a different base DC moves them
+    together.
+    """
+
+    min_time_rank: int = 3
+    dc_per_time_rank_saved: int = 5
+    check_bonus_per_time_rank_spent: int = 2
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -1008,6 +1243,7 @@ class SystemRules:
     unscoped_scope_values: tuple[str, ...] = ("All checks",)
     alternate_effect_modifier: str = "alternate_effect"
     linked_modifier: str = "linked"
+    improvised_effect: ImprovisedEffectRules = field(default_factory=ImprovisedEffectRules)
     ranged_distance: RangeDistance = field(default_factory=RangeDistance)
     derived_traits: tuple[DerivedTrait, ...] = ()
     #: Which effect's resistance ladder is *the* damage ladder — the rungs the GM's
@@ -1664,6 +1900,10 @@ class GameData:
     effects: list[Effect]
     modifiers: list[Modifier]
     effect_modifiers: dict[str, list[Modifier]]
+    #: The rulebook's named standard power configurations (Blast, Dazzle, Force Field,
+    #: …), each a ready-made assembly of the records above. Empty for a ruleset that
+    #: ships none.
+    configurations: tuple[PowerConfiguration, ...]
     costs: Costs
     measurements: Measurements
     game_term_ladders: dict[str, tuple[str, ...]]
@@ -2080,6 +2320,8 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         max_value=int(c.get("max", 0)),
         default_value=int(c.get("default", 0)),
         show_when_points=int(c.get("showWhenPoints", 0)),
+        show_when_field=c.get("showWhenField", ""),
+        show_when_value=c.get("showWhenValue", ""),
         options=tuple(
             ConfigOption(
                 value=o["value"],
@@ -2087,6 +2329,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 cost_value=o.get("costValue"),
                 flat=o.get("flat"),
                 ranked=o.get("ranked"),
+                cost_delta=int(o.get("costDelta", 0)),
             )
             for o in c.get("options", [])
         ),
@@ -2199,6 +2442,40 @@ def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
     return _parse_outcome_rung(raw.get("success"))
 
 
+def _parse_base_cost_by(raw: dict | None) -> BaseCostBy | None:
+    """Parse an effect's ``baseCostBy`` block, or ``None`` when it has none.
+
+    ``max`` is optional and absent means uncapped, so it cannot be read with a numeric
+    default the way ``base``/``min`` can.
+    """
+
+    if not raw:
+        return None
+    maximum = raw.get("max")
+    return BaseCostBy(
+        fields=tuple(raw.get("fields", ())),
+        base=int(raw.get("base", 0)),
+        minimum=int(raw.get("min", 1)),
+        maximum=None if maximum is None else int(maximum),
+    )
+
+
+def _parse_sub_build(raw: dict | None) -> SubBuild | None:
+    """Parse a ``subBuild`` block, or ``None`` for the records that declare none."""
+
+    if not raw:
+        return None
+    return SubBuild(
+        key=str(raw["key"]),
+        label=str(raw.get("label", "Build")),
+        budget=dict(raw.get("budget", {})),
+        count=dict(raw.get("count", {})),
+        hint=str(raw.get("hint", "")),
+        forbids_effects=tuple(raw.get("forbidsEffects", ())),
+        forbids_advantages=tuple(raw.get("forbidsAdvantages", ())),
+    )
+
+
 def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
     default_distance = ranged_distance or RangeDistance()
     return Effect(
@@ -2207,12 +2484,16 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         effect_type=e["effectType"],
         action=e.get("action", ""),
         range_=e.get("range", ""),
+        personal=None if e.get("personal") is None else bool(e["personal"]),
         duration=e.get("duration", ""),
         check=e.get("check"),
         resistance=e.get("resistance"),
+        opposed_check=e.get("opposedCheck", ""),
         base_cost=e.get("baseCost", ""),
         base_cost_value=int(e.get("baseCostValue", 1)),
         base_cost_mode=e.get("baseCostMode", "flat"),
+        base_cost_by=_parse_base_cost_by(e.get("baseCostBy")),
+        sub_build=_parse_sub_build(e.get("subBuild")),
         rank_follows_allocation=bool(e.get("rankFollowsAllocation", False)),
         integration=_parse_integration(
             e.get("statIntegration", {}), bool(e.get("configurableTarget", False))
@@ -2256,11 +2537,17 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_by=int(m.get("stepBy", 0)),
         distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
         adds_ability=m.get("addsAbility", ""),
+        cost_scope=m.get("costScope", ""),
+        cost_per_points=int(m.get("costPerPoints", 0)),
+        dynamic_cost_value=int(m.get("dynamicCostValue", 0)),
         gate=m.get("gate", ""),
         requires_effect_id=m.get("requiresEffect", ""),
+        repeatable=bool(m.get("repeatable", False)),
+        sub_build=_parse_sub_build(m.get("subBuild")),
         hidden=bool(m.get("hidden", False)),
         note_template=m.get("noteTemplate", ""),
         note_per_rank=int(m.get("notePerRank", 0)),
+        note_values={k: dict(v) for k, v in m.get("noteValues", {}).items()},
         requires_check=bool(m.get("requiresCheck", False)),
         requires_any=tuple(m.get("requiresAny", ())),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
@@ -2284,6 +2571,35 @@ def _parse_duration_action_floor(raw: dict) -> dict[str, str]:
     """Read ``durationActionFloor`` (duration -> minimum action) from ``modifiers.json``."""
 
     return {str(k): str(v) for k, v in raw.get("durationActionFloor", {}).items()}
+
+
+def _parse_configured_modifier(raw: dict) -> ConfiguredModifier:
+    return ConfiguredModifier(
+        id=raw["id"], rank=int(raw.get("rank", 0)), config=dict(raw.get("config", {}))
+    )
+
+
+def _parse_configured_effect(raw: dict) -> ConfiguredEffect:
+    return ConfiguredEffect(
+        effect_id=raw["effectId"],
+        rank=int(raw.get("rank", 0)),
+        config=dict(raw.get("config", {})),
+        extras=tuple(_parse_configured_modifier(m) for m in raw.get("extras", [])),
+        flaws=tuple(_parse_configured_modifier(m) for m in raw.get("flaws", [])),
+    )
+
+
+def _parse_configuration(raw: dict) -> PowerConfiguration:
+    return PowerConfiguration(
+        id=raw["id"],
+        name=raw["name"],
+        base_effect=raw.get("baseEffect", ""),
+        cost_note=raw.get("costNote", ""),
+        cite=raw.get("cite", ""),
+        description=raw.get("description", ""),
+        structure=raw.get("structure", "independent"),
+        effects=tuple(_parse_configured_effect(e) for e in raw.get("effects", [])),
+    )
 
 
 def _parse_effect_modifiers(raw: dict) -> dict[str, list[Modifier]]:
@@ -2895,6 +3211,20 @@ def _parse_costs(raw: dict) -> Costs:
     )
 
 
+def _parse_improvised_effect(raw: object, default: ImprovisedEffectRules) -> ImprovisedEffectRules:
+    """The Improvised Effect dials, each falling back to the built-in value."""
+
+    if not isinstance(raw, dict):
+        return default
+    return ImprovisedEffectRules(
+        min_time_rank=int(raw.get("minTimeRank", default.min_time_rank)),
+        dc_per_time_rank_saved=int(raw.get("dcPerTimeRankSaved", default.dc_per_time_rank_saved)),
+        check_bonus_per_time_rank_spent=int(
+            raw.get("checkBonusPerTimeRankSpent", default.check_bonus_per_time_rank_spent)
+        ),
+    )
+
+
 def _parse_range_distance(raw: dict | None, base: RangeDistance) -> RangeDistance | None:
     """A ``rangeDistance`` block laid over ``base``, or ``None`` when there is none.
 
@@ -2955,6 +3285,9 @@ def _parse_system(raw: dict) -> SystemRules:
             "alternate_effect_modifier", defaults.alternate_effect_modifier
         ),
         linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+        improvised_effect=_parse_improvised_effect(
+            sys.get("improvised_effect"), defaults.improvised_effect
+        ),
         damage_effect=sys.get("damage_effect", defaults.damage_effect),
         ranged_distance=_parse_range_distance(sys.get("ranged_distance"), defaults.ranged_distance)
         or defaults.ranged_distance,
@@ -3093,6 +3426,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     effects_raw = content.get("effects.json", {})
     modifiers_raw = content.get("modifiers.json", {})
     effect_modifiers_raw = content.get("effect_modifiers.json", {})
+    configurations_raw = content.get("configurations.json", {})
     effect_readouts_raw = content.get("effect_readouts.json", {})
     costs_raw = content.get("costs.json", {})
     system_raw = content.get("system.json", {})
@@ -3128,6 +3462,9 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         effects=[_parse_effect(e, system.ranged_distance) for e in effects_raw.get("effects", [])],
         modifiers=[_parse_modifier(m) for m in modifiers_raw.get("modifiers", [])],
         effect_modifiers=_parse_effect_modifiers(effect_modifiers_raw),
+        configurations=tuple(
+            _parse_configuration(c) for c in configurations_raw.get("configurations", [])
+        ),
         costs=_parse_costs(costs_raw),
         measurements=_parse_measurements(measurements_raw),
         game_term_ladders=_parse_ladders(modifiers_raw),

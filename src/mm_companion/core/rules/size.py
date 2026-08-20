@@ -63,7 +63,7 @@ def size_shift(char: Character, game_data: GameData) -> int:
                 if not effect_is_active(power, effect, base, game_data, char):
                     continue
                 sign = int(readout.data.get("sign", 1))
-                shift += sign * effect_current_rank(effect)
+                shift += sign * effect_current_rank(effect, game_data, char)
     return shift
 
 
@@ -276,5 +276,5 @@ def size_steps(
     # power is.
     if not effect_stands(power, effect, game_data, char):
         return tuple(steps)
-    now = effect_current_rank(effect)
+    now = effect_current_rank(effect, game_data, char)
     return tuple(replace(s, current=s.rank <= now <= s.last_rank) for s in steps)

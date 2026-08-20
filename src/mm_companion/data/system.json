@@ -28,7 +28,13 @@
     "unscoped_scope_values": ["All checks"],
     "_damage_effect": "Which effect's resistance ladder is the generic damage ladder — the one the GM's quick-damage buttons walk. Named here rather than spelled in Python, so a ruleset whose damage effect is called something else retargets it.",
     "damage_effect": "damage",
-    "alternate_effect_modifier": "alternate_effect",
+    "_improvised_effects": "Improvised Effects (p101-102): preparing one takes a time rank equal to its Power Point cost, never less than minTimeRank. Each time rank shaved off adds dcPerTimeRankSaved to the preparation DC; each one added grants checkBonusPerTimeRankSpent on the check. Both DCs are defense_dc_base plus the effect's cost.",
+  "improvised_effect": {
+   "minTimeRank": 3,
+   "dcPerTimeRankSaved": 5,
+   "checkBonusPerTimeRankSpent": 2
+  },
+  "alternate_effect_modifier": "alternate_effect",
     "linked_modifier": "linked",
     "derived_traits": [
       { "key": "DEF", "label": "Defence" },

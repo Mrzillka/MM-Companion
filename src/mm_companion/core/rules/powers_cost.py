@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 
 from ..character import Character
-from ..data_loader import Effect, GameData, Modifier
+from ..data_loader import Effect, EffectConfigField, GameData, Modifier
 from ..powers import (
     STRUCTURE_ARRAY,
     Power,
@@ -25,7 +25,12 @@ from .appliers import (
     trait_category,
 )
 from .derived import effective_ability
-from .runtime import boost_allocations, config_trait_allocation, effect_current_rank
+from .runtime import (
+    boost_allocations,
+    config_trait_allocation,
+    effect_current_rank,
+    set_dynamic_rank_cap,
+)
 from .size import effective_size_rank
 from .trait_rates import trait_allocation_cost, trait_rate
 
@@ -38,18 +43,69 @@ def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
     the first config field whose selected option carries a ``cost_value`` (a Side Effect
     always/on-failure toggle, a Removable tier) wins. ``None`` when no such choice is
     set, leaving the modifier's own ``cost_value``.
+
+    :func:`_config_cost_delta` is then added on top of whichever number that is — so a
+    second field can shade the price the first one set, which is what Removable's
+    Short-Term Only does to its tier.
     """
 
+    override = None
     for cfg in modifier.config_fields:
         chosen = selection.config.get(cfg.key)
         if cfg.type == "points":
-            return int(chosen) if chosen is not None else cfg.default_value
+            override = int(chosen) if chosen is not None else cfg.default_value
+            break
         option = next(
             (o for o in cfg.options if o.value == chosen and o.cost_value is not None), None
         )
         if option is not None:
-            return option.cost_value
-    return None
+            override = option.cost_value
+            break
+    delta = _config_cost_delta(modifier, selection)
+    if delta == 0:
+        return override
+    base = modifier.cost_value if override is None else override
+    return max(0, base + delta)
+
+
+def _config_cost_delta(modifier: Modifier, selection) -> int:
+    """Total ``cost_delta`` of the options currently chosen, across **all** config fields.
+
+    Unlike the first-wins overrides beside it this one is a sum: the delta shades a
+    magnitude another field decided, so several of them have to be able to stack. Floored
+    at zero by the caller — a flaw's magnitude is unsigned (the sign comes from its
+    category), and the rules let Short-Term Only take Removable's value all the way down
+    to "no discount at all" (p160) rather than to a bonus.
+    """
+
+    total = 0
+    for cfg in modifier.config_fields:
+        chosen = selection.config.get(cfg.key)
+        values = chosen if isinstance(chosen, list) else [chosen]
+        for option in cfg.options:
+            if option.cost_delta and option.value in values:
+                total += option.cost_delta
+    return total
+
+
+#: Priced against the effect it is attached to — the default, and all but one modifier.
+COST_SCOPE_EFFECT = ""
+
+#: Priced against the whole assembled *power* instead. Removable "applies to the power as
+#: a whole and not to individual effects" (p161), so its discount cannot be worked out
+#: until every effect has been summed. A modifier marked this way is skipped by every
+#: effect-level bucket below and applied once by :func:`power_scope_adjustment`.
+COST_SCOPE_POWER = "power"
+
+
+def modifier_is_power_scope(modifier: Modifier) -> bool:
+    """Whether this modifier is priced from the power's total rather than the effect's.
+
+    Asked here rather than compared inline so the effect-level buckets, the formula
+    builders and the constructor all read the same one line.
+    """
+
+    return modifier.cost_scope == COST_SCOPE_POWER
 
 
 def _effective_flat(modifier: Modifier, selection) -> bool:
@@ -196,7 +252,9 @@ def _signed_modifier_cost(
     total = 0
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or _effective_flat(modifier, selection) != flat:
+        if modifier is None or modifier_is_power_scope(modifier):
+            continue
+        if _effective_flat(modifier, selection) != flat:
             continue
         if not flat and effect_rank and modifier_is_banded(modifier, selection, effect_rank):
             continue
@@ -239,6 +297,11 @@ def effect_per_rank_cost(effect: PowerEffectInstance, game_data: GameData) -> in
     """The effect's net cost **per rank**: base cost plus per-rank extras minus per-rank
     flaws.
 
+    The base is :func:`effect_base_cost_value`, not the raw constant — for the handful of
+    effects priced from their configuration (Illusion, Obscure, …) what a rank costs moves
+    with the choices the player made, and this is the figure the Strength-Based divisor
+    below reads.
+
     Flat modifiers are deliberately excluded — they are charged once, so they do not
     change what a rank costs. That is exactly the distinction the Strength-Based
     divisor turns on (:func:`ability_rank_contribution`), and it is the same figure
@@ -248,7 +311,56 @@ def effect_per_rank_cost(effect: PowerEffectInstance, game_data: GameData) -> in
     base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
     if base is None:
         return 0
-    return base.base_cost_value + _net_per_rank_modifiers(effect, game_data)
+    return effect_base_cost_value(effect, base) + _net_per_rank_modifiers(effect, game_data)
+
+
+def _chosen_values(config: dict, field: EffectConfigField) -> tuple[str, ...]:
+    """The option values currently selected in one config field.
+
+    A ``multiselect`` stores a list and a ``select`` a bare string; both are normalised
+    to a tuple here so a caller need not know which kind of field it is looking at. An
+    unset field yields nothing.
+    """
+
+    stored = config.get(field.key)
+    if not stored:
+        return ()
+    return tuple(stored) if isinstance(stored, (list, tuple)) else (str(stored),)
+
+
+def effect_base_cost_value(effect: PowerEffectInstance, base: Effect) -> int:
+    """The effect's points **per rank** before any modifier — a constant, or configured.
+
+    Almost every effect is priced at its ``base_cost_value`` flat. Five are not: what
+    Illusion, Obscure, Remote Sensing, Transmute and Environment cost per rank depends on
+    how the player configured them (see :class:`~mm_companion.core.data_loader.BaseCostBy`
+    for the arithmetic and why it lives on the effect rather than in
+    :data:`BASE_COST_KINDS`). Those effects declare a ``baseCostBy`` block naming the
+    config fields that drive the price, and every option in them carries its own
+    ``cost_value``.
+
+    This is the single place the two cases are told apart. Everything that used to read
+    ``base.base_cost_value`` for pricing goes through here instead — the per-rank cost,
+    the flat total, and the formula the card prints — so a configured Illusion cannot end
+    up costing one thing and explaining another.
+
+    An option carrying no ``cost_value`` contributes nothing, which is what lets a
+    cost-driving field also hold ordinary descriptive choices.
+    """
+
+    by = base.base_cost_by
+    if by is None:
+        return base.base_cost_value
+    fields = {f.key: f for f in base.config_fields if f.key in by.fields}
+    total = by.base
+    for key in by.fields:
+        field = fields.get(key)
+        if field is None:
+            continue
+        prices = {o.value: o.cost_value for o in field.options if o.cost_value is not None}
+        total += sum(prices.get(value, 0) for value in _chosen_values(effect.config, field))
+    total = max(by.minimum, total)
+    return total if by.maximum is None else min(total, by.maximum)
 
 
 def ability_rank_contribution(ability: int, per_rank_cost: int) -> int:
@@ -323,7 +435,9 @@ def _banded_rank_terms(
     for selections, sign in ((effect.extras, +1), (effect.flaws, -1)):
         for selection in selections:
             modifier = catalog.get(selection.modifier_id)
-            if modifier is None or not modifier_is_banded(modifier, selection, effect.rank):
+            if modifier is None or modifier_is_power_scope(modifier):
+                continue
+            if not modifier_is_banded(modifier, selection, effect.rank):
                 continue
             magnitude = sign * _modifier_magnitude(modifier, selection, game_data, char)
             low, high = selection_band(selection, effect.rank)
@@ -349,9 +463,12 @@ class BaseCostContext:
 
     ``net_per_rank`` and ``flat`` are the modifier sums already bucketed by
     :func:`_net_per_rank_modifiers` / :func:`_net_flat_modifiers`, so a kind decides only
-    how the *base* is charged and how the modifiers land on it. ``folded_ranks`` is the
-    ranks an ability-folding modifier contributes (Strength-Based Damage) — free of base
-    cost, but still paying every per-rank modifier.
+    how the *base* is charged and how the modifiers land on it. ``base_value`` is that
+    base already resolved by :func:`effect_base_cost_value` — a constant for most effects,
+    and the configured price for the few whose cost depends on how they are set up — so a
+    kind never has to ask which sort it is holding. ``folded_ranks`` is the ranks an
+    ability-folding modifier contributes (Strength-Based Damage) — free of base cost, but
+    still paying every per-rank modifier.
 
     ``char`` may be ``None``: a power is priced with or without a character in hand, and
     what it costs must not depend on having one.
@@ -361,6 +478,7 @@ class BaseCostContext:
     base: Effect
     game_data: GameData
     char: Character | None
+    base_value: int
     net_per_rank: int
     flat: int
     folded_ranks: int
@@ -432,9 +550,16 @@ def _flat_base_cost(context: BaseCostContext) -> int:
 
     The runs are summed **unrounded** and rounded once, so two bands that each come to
     half a point come to one point together rather than two.
+
+    Flat flaws are then floored: the rules are explicit that a flat-value flaw cannot take
+    an effect below **1 point** (``docs/mm-powers-architecture.md`` §2, and the book's own
+    "flat-value modifiers" note), and without that a heavily-discounted cheap effect —
+    an Equipment-tier Removable on a 1-point Commlink — comes out *negative* and pays the
+    character back. An effect with no ranks bought is left at zero: nothing has been
+    bought yet, and charging a point for an empty card would read as a bug.
     """
 
-    net = context.base.base_cost_value + context.net_per_rank
+    net = context.base_value + context.net_per_rank
     ranked = math.ceil(
         sum(
             (
@@ -445,7 +570,8 @@ def _flat_base_cost(context: BaseCostContext) -> int:
         )
     )
     ranked += context.folded_ranks * context.net_per_rank
-    return ranked + context.flat
+    total = ranked + context.flat
+    return max(1, total) if ranked > 0 else total
 
 
 def _modifier_scale(nominal: int, net_per_rank: int) -> Fraction:
@@ -535,6 +661,7 @@ def _base_cost_context(
         base=base,
         game_data=game_data,
         char=char,
+        base_value=effect_base_cost_value(effect, base),
         net_per_rank=_net_per_rank_modifiers(effect, game_data, char),
         flat=_net_flat_modifiers(effect, game_data, char),
         folded_ranks=effect_rank_trait_bonus_cost(effect, game_data, char),
@@ -701,7 +828,7 @@ def effect_effective_rank(
     """
 
     return (
-        effect_current_rank(effect)
+        effect_current_rank(effect, game_data, char)
         + effect_rank_trait_bonus(effect, game_data, char)
         + effect_size_rank_shift(effect, game_data, char)
     )
@@ -728,7 +855,9 @@ def _modifier_terms(
     terms: list[int] = []
     for selection in mods:
         modifier = catalog.get(selection.modifier_id)
-        if modifier is None or _effective_flat(modifier, selection) != flat:
+        if modifier is None or modifier_is_power_scope(modifier):
+            continue
+        if _effective_flat(modifier, selection) != flat:
             continue
         if not flat and effect_rank and modifier_is_banded(modifier, selection, effect_rank):
             continue
@@ -777,7 +906,7 @@ def _flat_cost_formula(context: BaseCostContext) -> str:
     )
 
     def run_str(count: int, banded: tuple[int, ...]) -> str:
-        terms = [context.base.base_cost_value, *mod_terms, *banded]
+        terms = [context.base_value, *mod_terms, *banded]
         net = sum(terms)
         rate = _join_terms(terms)
         if net < 1:  # sub-1 PP/rank: 1 point per (2 − net) ranks
@@ -967,17 +1096,256 @@ def _join_terms(terms: list[int]) -> str:
     return " ".join(parts)
 
 
-def array_alternate_cost(game_data: GameData) -> int:
+def effect_is_personal(effect: Effect) -> bool:
+    """Whether an effect works on **its user alone** — the rules' "Personal Range effect".
+
+    Reads the record's :attr:`~mm_companion.core.data_loader.Effect.personal` when it
+    states one and falls back to ``range_ == "Personal"`` otherwise, so only the
+    exceptions have to be written down. The exceptions exist because a few self-only
+    effects spend their Range parameter on a *distance* instead — Teleport's Range is
+    "Rank", meaning how far you go — and the book settles those by naming Teleport
+    alongside Morph and Shrinking as effects an Affliction may impose (p110).
+    """
+
+    if effect.personal is not None:
+        return effect.personal
+    return effect.range_ == "Personal"
+
+
+def effect_action_at_most(effect: Effect, limit: str, game_data: GameData) -> bool:
+    """Whether an effect's Action is ``limit`` or faster, along the ``action`` ladder.
+
+    The ladder is data (``modifiers.json``'s ``gameTermLadders``), running from ``None``
+    up to ``Full round``, so "a standard action or less" is a position on it rather than
+    a list of action names spelled here. An effect whose action is not on the ladder at
+    all is treated as *not* within the limit, which is the cautious direction: a rule
+    that says "standard action or less" should not silently admit something it cannot
+    place.
+    """
+
+    ladder = game_data.game_term_ladders.get("action", ())
+    if limit not in ladder or effect.action not in ladder:
+        return False
+    return ladder.index(effect.action) <= ladder.index(limit)
+
+
+#: The action ceiling the rules put on an Affliction's imposed effect (p110).
+IMPOSED_EFFECT_ACTION_LIMIT = "Standard"
+
+
+def imposable_effects(game_data: GameData) -> tuple[Effect, ...]:
+    """The effects an Affliction's Transformed condition may impose (p110), in name order.
+
+    "The Transformed condition can be configured to impose a particular Personal Range
+    effect on the target ... The imposed effect must have a Power Point cost equal to or
+    less than the total cost of the Affliction and require a standard action or less to
+    activate."
+
+    Two of those three conditions are answered here, by *offering nothing that breaks
+    them* — the same bargain Concealment's missing Touch option strikes, and a better one
+    than a warning after the fact. The cost condition is the one that cannot be: it moves
+    as the Affliction is edited, so it is checked by
+    :func:`~.validation.power_imposed_effect_violations` instead.
+    """
+
+    return tuple(
+        sorted(
+            (
+                effect
+                for effect in game_data.effects
+                if effect_is_personal(effect)
+                and effect_action_at_most(effect, IMPOSED_EFFECT_ACTION_LIMIT, game_data)
+            ),
+            key=lambda e: e.name,
+        )
+    )
+
+
+def imposed_effect_cost(effect: PowerEffectInstance, game_data: GameData) -> int:
+    """What the effect an Affliction imposes costs, from its ``config``; 0 when none is set.
+
+    The imposed effect is named (``imposedEffect``) and ranked (``imposedRank``) in the
+    Affliction's own config rather than built as a power of its own, so it is priced by
+    costing a bare instance of it — the ordinary :func:`effect_total_cost`, not a second
+    pricing path that could disagree with the first.
+
+    Bare is the point and also the limit: an effect whose rank *is* an allocation
+    (Enhanced Trait) has nothing to price from a rank alone and reads 0. That leaves the
+    budget check unable to bite there, which is the permissive direction for a warning
+    and the honest one for a build the player has not actually assembled.
+    """
+
+    effect_id = str(effect.config.get("imposedEffect", "") or "")
+    if not effect_id or not any(e.id == effect_id for e in game_data.effects):
+        return 0
+    rank = max(1, int(effect.config.get("imposedRank", 1) or 1))
+    return effect_total_cost(PowerEffectInstance(effect_id, rank=rank), game_data)
+
+
+def array_alternate_cost(game_data: GameData, *, dynamic: bool = False) -> int:
     """The flat point cost of one array alternate, read from the ``Alternate Effect`` extra.
 
-    Kept data-driven: the number lives on the ``alternate_effect`` modifier in
-    ``modifiers.json`` (``costValue``), and *which* modifier id counts as the array
-    alternate comes from ``system.json`` (``alternate_effect_modifier``), not hardcoded
-    here. Falls back to 1 if the record is missing.
+    "An Alternate Effect costs 1 Power Point, while a Dynamic Alternate Effect costs 2"
+    (p151), so ``dynamic`` picks the record's ``dynamicCostValue`` over its ``costValue``.
+    A Dynamic alternate is dearer because it is not mutually exclusive with its siblings:
+    it shares the array's point pool and runs alongside the array's other Dynamic members
+    at reduced effectiveness (p101).
+
+    Kept data-driven: both numbers live on the ``alternate_effect`` modifier in
+    ``modifiers.json``, and *which* modifier id counts as the array alternate comes from
+    ``system.json`` (``alternate_effect_modifier``), not hardcoded here. Falls back to
+    1 (2 when dynamic) if the record is missing.
     """
 
     modifier = game_data.modifier_catalog().get(game_data.system.alternate_effect_modifier)
-    return modifier.cost_value if modifier else 1
+    if modifier is None:
+        return 2 if dynamic else 1
+    if dynamic and modifier.dynamic_cost_value:
+        return modifier.dynamic_cost_value
+    return modifier.cost_value
+
+
+def array_dynamic_primary_cost(game_data: GameData) -> int:
+    """What making an array's *base* member Dynamic costs.
+
+    "Making the primary power of an array Dynamic requires 1 Alternate Effect rank"
+    (p101) — so it is the ordinary :func:`array_alternate_cost`, not a third number, and
+    it is charged *on top of* the base's own full cost rather than instead of it. The
+    book's own worked example: Empyrean's base Create takes "a 1-point modifier to make
+    it Dynamic", and each Dynamic alternate beside it costs 2.
+    """
+
+    return array_alternate_cost(game_data)
+
+
+def array_members_cost(members: Sequence[tuple[int, bool]], game_data: GameData) -> int:
+    """Total cost of one array from its members' ``(full cost, dynamic)`` pairs.
+
+    The costliest member is the base and is paid in full (ties break to the first, as
+    :func:`array_base_index` and :func:`group_array_base_index` report); every other
+    member costs only its flat :func:`array_alternate_cost`, since they share one pool.
+    A Dynamic member pays the dearer alternate price, or — when it *is* the base —
+    :func:`array_dynamic_primary_cost` on top of its full cost.
+
+    Shared by the two levels an array exists at: a power's own effects
+    (:func:`power_gross_cost`) and a group's whole child powers (:func:`node_cost`).
+    An empty sequence costs nothing.
+    """
+
+    if not members:
+        return 0
+    costs = [cost for cost, _ in members]
+    base = costs.index(max(costs))
+    total = costs[base]
+    for index, (_, dynamic) in enumerate(members):
+        if index == base:
+            if dynamic:
+                total += array_dynamic_primary_cost(game_data)
+        else:
+            total += array_alternate_cost(game_data, dynamic=dynamic)
+    return total
+
+
+# --- the Dynamic point pool (p101) -----------------------------------------------------
+# Ordinary alternates are mutually exclusive; Dynamic ones instead "share the power
+# points of the array, allowing them to operate at the same time, but at reduced
+# effectiveness", split "once per turn as a free action". The split itself is runtime
+# state on the member (``dynamic_points``); everything below turns it into a rank.
+
+
+def array_pool_points(group: PowerGroup, game_data: GameData, char: Character | None = None) -> int:
+    """The point pool an ``array`` group's Dynamic members share out between them.
+
+    The array's points *are* its base member's full cost — every other member is bought
+    for a flat point or two on top (:func:`array_members_cost`), so the pool a Dynamic
+    split draws on is what the costliest child costs, which is the same number
+    :func:`group_array_base_index` picks the base by. Zero for anything that is not a
+    real array.
+    """
+
+    if group.mode != STRUCTURE_ARRAY or len(group.children) < 2:
+        return 0
+    return max(node_cost(child, game_data, char) for child in group.children)
+
+
+def dynamic_rank_share(rank: int, points: int, full_cost: int) -> int:
+    """What ``points`` of an array's pool buys of a member bought at ``rank``.
+
+    Proportional and rounded down: ``rank x points / full_cost``. The book's own worked
+    example is the check — a Flight 5 costs 10 points, so the 2 points assigned to it buy
+    ``5 x 2 / 10 = 1``, and it is "limited to 1 rank of Flight" (p101).
+
+    **Zero is a real answer**, unlike everywhere else a rank is computed: a member
+    holding less than one rank's worth is below the minimum the rules give it and is
+    simply not running, which needs no separate off switch. A member holding its whole
+    cost gets its whole rank, and one somehow holding more is capped there — a share
+    cannot buy ranks nobody bought.
+    """
+
+    if full_cost <= 0 or points <= 0 or rank <= 0:
+        return 0
+    return max(0, min(rank, rank * points // full_cost))
+
+
+def allocated_array_members(nodes: Sequence[PowerNode]) -> list[tuple[PowerNode, int]]:
+    """Every array member currently holding a share of its array's pool, with the share.
+
+    Walks the whole powers tree, so a nested array inside another array is found too.
+    Empty for every character nobody has split a pool on, which is what keeps
+    :func:`dynamic_rank_cap` free on the ordinary sheet: the walk is a list traversal and
+    no point cost is computed until a share is actually found.
+    """
+
+    found: list[tuple[PowerNode, int]] = []
+    for node in nodes:
+        if not isinstance(node, PowerGroup):
+            continue
+        if node.mode == STRUCTURE_ARRAY:
+            for child in node.children:
+                if child.dynamic and child.dynamic_points is not None:
+                    found.append((child, int(child.dynamic_points)))
+        found.extend(allocated_array_members(node.children))
+    return found
+
+
+def _member_effects(node: PowerNode) -> list[PowerEffectInstance]:
+    """Every effect under one array member — its own, or its whole subtree's."""
+
+    if isinstance(node, PowerGroup):
+        return [e for child in node.children for e in _member_effects(child)]
+    return list(node.effects)
+
+
+def dynamic_rank_cap(
+    effect: PowerEffectInstance, game_data: GameData, char: Character
+) -> int | None:
+    """The rank the Dynamic pool holds one effect to, or ``None`` when no pool reaches it.
+
+    The resolver :mod:`.runtime` asks through :func:`~.runtime.set_dynamic_rank_cap` —
+    installed from here because the answer needs point costs, and cost sits a layer above
+    runtime rather than beside it. Finding the effect is a walk over the character's own
+    powers tree by identity: a share is held by a *member* of an array (a whole card or a
+    whole sub-group), and it holds every effect beneath it down by the same proportion,
+    which is what "at reduced effectiveness" means for a member with several effects.
+
+    A member nested inside two allocated arrays is held to the **tighter** of the two
+    caps. That is the honest reading of two pools each rationing it, and it is the only
+    combination that cannot let an outer split hand back ranks an inner one withheld.
+
+    The member is priced **without the wielder** on purpose. Passing ``char`` would let a
+    legacy Strength-Based selection reach :func:`~.derived.effective_ability`, which asks
+    what the character's powers are contributing, which asks this — a loop. The pool is a
+    share of what the array was *bought* for, so the character-free price is also the
+    right one.
+    """
+
+    cap: int | None = None
+    for member, points in allocated_array_members(char.powers):
+        if not any(e is effect for e in _member_effects(member)):
+            continue
+        share = dynamic_rank_share(effect.rank, points, node_cost(member, game_data))
+        cap = share if cap is None else min(cap, share)
+    return cap
 
 
 def array_base_index(power: Power, game_data: GameData, char: Character | None = None) -> int:
@@ -994,14 +1362,113 @@ def array_base_index(power: Power, game_data: GameData, char: Character | None =
     return full.index(max(full))
 
 
+@dataclass(frozen=True)
+class PowerScopeTerm:
+    """One power-scope modifier's contribution to a power's total.
+
+    ``magnitude`` is what one unit of it is worth (Easily Removable's 2), ``units`` how
+    many units the power's own cost bought (``ceil(gross / cost_per_points)``, or 1 for a
+    modifier charged once), and ``amount`` the signed points it adds — negative for a
+    flaw. Kept as a record rather than a bare number because the constructor shows the
+    working: a −20 that appears from nowhere on a 98-point armour looks like a bug.
+    """
+
+    modifier: Modifier
+    magnitude: int
+    units: int
+    amount: int
+
+
+def power_scope_terms(
+    power: Power, game_data: GameData, gross: int, char: Character | None = None
+) -> tuple[PowerScopeTerm, ...]:
+    """The power-scope modifiers on a power, priced against its ``gross`` (pre-adjustment)
+    cost.
+
+    Every selection of a :data:`COST_SCOPE_POWER` modifier anywhere in the power is
+    collected, and **only the costliest selection of each modifier counts**. That is the
+    rule rather than a tidy-up: Removable "applies to the power as a whole and not to
+    individual effects" (p161), and the constructor attaches modifiers to effects, so a
+    five-effect suit of armour naturally ends up carrying five copies of the one flaw.
+    Summing them would quintuple a discount the book charges once.
+
+    Returns nothing for a power with no such modifier, which is all but the removable
+    ones — so the ordinary power pays exactly what it always did.
+    """
+
+    catalog = game_data.modifier_catalog()
+    best: dict[str, PowerScopeTerm] = {}
+    for effect in power.effects:
+        for selections, sign in ((effect.extras, +1), (effect.flaws, -1)):
+            for selection in selections:
+                modifier = catalog.get(selection.modifier_id)
+                if modifier is None or not modifier_is_power_scope(modifier):
+                    continue
+                magnitude = _modifier_magnitude(modifier, selection, game_data, char)
+                units = (
+                    math.ceil(gross / modifier.cost_per_points)
+                    if modifier.cost_per_points > 0
+                    else 1
+                )
+                term = PowerScopeTerm(
+                    modifier=modifier,
+                    magnitude=magnitude,
+                    units=units,
+                    amount=sign * magnitude * units,
+                )
+                previous = best.get(modifier.id)
+                if previous is None or abs(term.amount) > abs(previous.amount):
+                    best[modifier.id] = term
+    return tuple(term for term in best.values() if term.amount)
+
+
+def power_scope_adjustment(
+    power: Power, game_data: GameData, gross: int, char: Character | None = None
+) -> int:
+    """Net points the power-scope modifiers add to (or take off) a power's ``gross`` cost."""
+
+    return sum(term.amount for term in power_scope_terms(power, game_data, gross, char))
+
+
+def power_gross_cost(power: Power, game_data: GameData, char: Character | None = None) -> int:
+    """A power's cost from its effects alone, *before* any power-scope modifier.
+
+    An ``array`` power is pooled here rather than summed (:func:`array_members_cost`),
+    so the Alternate Effect points a Dynamic member costs are inside the gross a
+    power-scope modifier is then charged against — they are part of what the power cost
+    to build.
+
+    This is the 98 in the rules' own worked example (p161) — the total of every effect
+    with the extras and flaws applied to those effects — and the number Removable's
+    per-5-points rate is charged against. Split out from :func:`power_total_cost` so the
+    constructor can show both halves of that arithmetic, and so a caller that wants the
+    undiscounted price (equipment does) need not rebuild the power to get it.
+    """
+
+    if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
+        return array_members_cost(
+            [(effect_total_cost(e, game_data, char), e.dynamic) for e in power.effects],
+            game_data,
+        )
+    return sum(effect_total_cost(e, game_data, char) for e in power.effects)
+
+
 def power_total_cost(power: Power, game_data: GameData, char: Character | None = None) -> int:
     """Total power-point cost of a power (``docs/mm-powers-architecture.md`` §4).
 
     ``independent`` and ``linked`` powers cost the sum of their effects (linking
     is a +0 bundle). An ``array`` instead pays the costliest effect in full and a
     flat :func:`array_alternate_cost` for each remaining effect, since only one is
-    active at a time. ``char`` is threaded to :func:`effect_total_cost` so a
-    Strength-Based effect's folded-in ranks are priced against the wielder.
+    active at a time — dearer for a **Dynamic** member, which is not mutually exclusive
+    with its siblings (:func:`array_members_cost`). ``char`` is threaded to
+    :func:`effect_total_cost` so a Strength-Based effect's folded-in ranks are priced
+    against the wielder. That sum is :func:`power_gross_cost`.
+
+    A **power-scope** modifier is then applied on top of it, once for the whole power
+    rather than once per effect — Removable's "value per 5 total Power Points of the
+    power's final cost, rounded up". The result is floored at 1 point for the same reason
+    a flat flaw is (p150): a discount may make a power cheap, never free and never a
+    refund. A power that costs nothing to begin with still costs nothing.
 
     A Dev-mode :attr:`~mm_companion.core.powers.Power.cost_override` replaces the
     whole computed total, so a homerule power spends exactly that many points; it
@@ -1010,10 +1477,37 @@ def power_total_cost(power: Power, game_data: GameData, char: Character | None =
 
     if power.cost_override is not None:
         return power.cost_override
-    if power.structure == STRUCTURE_ARRAY and len(power.effects) > 1:
-        full = [effect_total_cost(e, game_data, char) for e in power.effects]
-        return max(full) + (len(full) - 1) * array_alternate_cost(game_data)
-    return sum(effect_total_cost(e, game_data, char) for e in power.effects)
+    gross = power_gross_cost(power, game_data, char)
+    if gross <= 0:
+        return gross
+    return max(1, gross + power_scope_adjustment(power, game_data, gross, char))
+
+
+def power_cost_formula(power: Power, game_data: GameData, char: Character | None = None) -> str:
+    """The working behind a power's total, or ``""`` when there is nothing to explain.
+
+    Only a power-scope modifier makes the total anything other than the sum of the effect
+    costs already shown on the cards, so this is empty for every ordinary power and the
+    constructor shows the bare number. When Removable is in play it reads
+    ``98 − 20 Removable``, which is the arithmetic the rules print (p161) and the thing a
+    player is most likely to think is a bug.
+    """
+
+    if power.cost_override is not None:
+        return ""
+    gross = power_gross_cost(power, game_data, char)
+    if gross <= 0:
+        return ""
+    terms = power_scope_terms(power, game_data, gross, char)
+    if not terms:
+        return ""
+    text = str(gross)
+    for term in terms:
+        sign = "−" if term.amount < 0 else "+"
+        text += f" {sign} {abs(term.amount)} {term.modifier.name}"
+    if gross + sum(term.amount for term in terms) < 1:
+        text += " (1 minimum)"
+    return text
 
 
 def node_cost(node: PowerNode, game_data: GameData, char: Character | None = None) -> int:
@@ -1023,8 +1517,10 @@ def node_cost(node: PowerNode, game_data: GameData, char: Character | None = Non
     A :class:`~mm_companion.core.powers.PowerGroup` recurses: ``independent`` and
     ``linked`` groups sum their children (linking is a +0 bundle), while an ``array``
     group pays its costliest child in full plus a flat :func:`array_alternate_cost` for
-    each other child (only one is active at a time). Nesting is handled by the
-    recursion — a child that is itself a group is priced the same way.
+    each other child (only one is active at a time), or the dearer Dynamic price for a
+    child that shares the pool instead (:func:`array_members_cost`). Nesting is handled
+    by the recursion — a child that is itself a group is priced the same way, and
+    carries its own ``dynamic`` flag for the array it sits in.
     """
 
     if isinstance(node, PowerGroup):
@@ -1032,7 +1528,10 @@ def node_cost(node: PowerNode, game_data: GameData, char: Character | None = Non
         if not costs:
             return 0
         if node.mode == STRUCTURE_ARRAY and len(costs) > 1:
-            return max(costs) + (len(costs) - 1) * array_alternate_cost(game_data)
+            return array_members_cost(
+                list(zip(costs, (child.dynamic for child in node.children), strict=True)),
+                game_data,
+            )
         return sum(costs)
     return power_total_cost(node, game_data, char)
 
@@ -1062,13 +1561,24 @@ def node_display_cost(
     """The point cost a node contributes *within its parent group*.
 
     Inside an ``array`` parent every child except the costliest (the base) contributes
-    only the flat :func:`array_alternate_cost`, since they share one pool. A base child,
-    or any node under a non-array parent (or at top level, ``parent=None``), contributes
+    only the flat :func:`array_alternate_cost`, since they share one pool — the dearer
+    price when the child is **Dynamic**. A Dynamic *base* contributes its full
+    :func:`node_cost` plus :func:`array_dynamic_primary_cost`, since making the primary
+    Dynamic is bought on top of it rather than instead of it. Any other base child, or
+    any node under a non-array parent (or at top level, ``parent=None``), contributes
     its full :func:`node_cost`.
     """
 
     if parent is not None and parent.mode == STRUCTURE_ARRAY and len(parent.children) > 1:
         base = group_array_base_index(parent, game_data, char)
         if parent.children[base] is not node:
-            return array_alternate_cost(game_data)
+            return array_alternate_cost(game_data, dynamic=node.dynamic)
+        if node.dynamic:
+            return node_cost(node, game_data, char) + array_dynamic_primary_cost(game_data)
     return node_cost(node, game_data, char)
+
+
+# The pool's arithmetic needs point costs, so runtime cannot import it; it is handed over
+# here instead (see :func:`~.runtime.set_dynamic_rank_cap`). Importing this module is what
+# turns the pool on, and :mod:`mm_companion.core.rules` always does.
+set_dynamic_rank_cap(dynamic_rank_cap)

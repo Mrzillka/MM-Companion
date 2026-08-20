@@ -98,6 +98,35 @@ def _gate_toggle(power: Power, effect: PowerEffectInstance) -> bool:
     return not effect.toggled_on
 
 
+# --- the Dynamic point pool's hook into rank ------------------------------------------
+# A Dynamic array member runs at "reduced effectiveness" in proportion to the share of
+# the array's point pool it currently holds (p101), and working that share out needs the
+# member's **point cost** — which lives a layer above this module, since
+# :mod:`.powers_cost` imports this one and not the other way about. So the arithmetic is
+# *injected* rather than imported: importing ``powers_cost`` installs the resolver here
+# (see :func:`set_dynamic_rank_cap`), and until it does — or in a build that never loads
+# it — the hook is ``None`` and every rank reads exactly as it did before the pool
+# existed. Same bargain as the registries above: nothing registered, nothing changes.
+#
+# The resolver answers "what rank is this effect held to by the pool?" — ``None`` when
+# the effect is under no allocated array at all, which is every effect on a character
+# nobody has split a pool on.
+DynamicRankCap = Callable[[PowerEffectInstance, GameData, "Character | None"], int | None]
+
+_dynamic_rank_cap: DynamicRankCap | None = None
+
+
+def set_dynamic_rank_cap(resolver: DynamicRankCap | None) -> None:
+    """Install the resolver :func:`effect_current_rank` asks about the Dynamic pool.
+
+    Called once by :mod:`.powers_cost` at import. Passing ``None`` uninstalls it, which
+    is what a test wanting the pre-pool behaviour back does.
+    """
+
+    global _dynamic_rank_cap
+    _dynamic_rank_cap = resolver
+
+
 def _boost_target(effect: PowerEffectInstance, boost) -> str:
     """The trait a :class:`TraitBoost` names, whatever kind of trait it is.
 
@@ -164,7 +193,13 @@ def config_trait_allocation(config: dict, record) -> tuple[tuple[str, int], ...]
 
 
 def boost_allocations(
-    effect: PowerEffectInstance, base, boost, *, live: bool = False
+    effect: PowerEffectInstance,
+    base,
+    boost,
+    *,
+    live: bool = False,
+    game_data: GameData | None = None,
+    char: Character | None = None,
 ) -> tuple[tuple[str, int], ...]:
     """Which traits one effect raises, and by how many ranks each.
 
@@ -180,7 +215,9 @@ def boost_allocations(
     simply reads as the one target it always had.
 
     ``live`` asks for the boost *as it currently stands* rather than as it was bought,
-    so a dialled-down effect grants less (:func:`effect_current_rank`). It reaches only
+    so a dialled-down effect grants less — and so does one held down by its share of a
+    Dynamic array's point pool, which is why the wielder and the game data travel with
+    it (:func:`effect_current_rank`). It reaches only
     the single-target fallback, and deliberately: an allocation's rows each carry a rank
     the player wrote down, and there is no honest way to turn "3 ranks of Stealth and 1
     of Treatment" half off. The effects that carry rows are the ones whose rank *is*
@@ -192,7 +229,7 @@ def boost_allocations(
     rows = config_trait_allocation(effect.config, base)
     if rows:
         return rows
-    rank = effect_current_rank(effect) if live else effect.rank
+    rank = effect_current_rank(effect, game_data, char) if live else effect.rank
     return ((_boost_target(effect, boost), rank),)
 
 
@@ -210,7 +247,12 @@ def _resolved_trait_target(effect: PowerEffectInstance, base) -> str:
     return _boost_target(effect, boost)
 
 
-def resolved_trait_allocation(effect: PowerEffectInstance, base) -> tuple[tuple[str, int], ...]:
+def resolved_trait_allocation(
+    effect: PowerEffectInstance,
+    base,
+    game_data: GameData | None = None,
+    char: Character | None = None,
+) -> tuple[tuple[str, int], ...]:
     """Every trait one effect raises and by how much, or ``()`` when it raises none.
 
     :func:`boost_allocations` narrowed to the boosts whose ``affects`` names a raisable
@@ -226,7 +268,7 @@ def resolved_trait_allocation(effect: PowerEffectInstance, base) -> tuple[tuple[
     boost = base.integration.trait_boost if base.integration else None
     if boost is None or not (boost.affects & TRAIT_CATEGORIES):
         return ()
-    allocation = boost_allocations(effect, base, boost, live=True)
+    allocation = boost_allocations(effect, base, boost, live=True, game_data=game_data, char=char)
     return tuple((target, ranks) for target, ranks in allocation if target)
 
 
@@ -281,7 +323,11 @@ def _effect_gates(effect: PowerEffectInstance, game_data: GameData) -> set[str]:
     return gates
 
 
-def effect_current_rank(effect: PowerEffectInstance) -> int:
+def effect_current_rank(
+    effect: PowerEffectInstance,
+    game_data: GameData | None = None,
+    char: Character | None = None,
+) -> int:
     """The rank an effect is *currently running at* — its bought rank unless dialled down.
 
     :attr:`~mm_companion.core.powers.PowerEffectInstance.current_rank` is runtime state
@@ -291,13 +337,28 @@ def effect_current_rank(effect: PowerEffectInstance) -> int:
     is the effect's own toggle, not a zeroth rung, and a rank-0 effect would quietly
     read as a rank-1 one nowhere else.
 
+    **The Dynamic point pool is the one thing that can push it to 0.** Given the wielder
+    and the game data, an effect inside an array member holding a share of that array's
+    pool is capped at what the share buys (:func:`set_dynamic_rank_cap`) — the book's own
+    example is a Flight 5 costing 10 points held to 1 rank by the 2 points assigned to it
+    (p101). A member holding too little for even rank 1 caps at 0 and is simply off,
+    which is what "a character can maintain the Dynamic Alternate Effect ... so long as
+    at least 2 Power Points are assigned to it" means from the other side. Without both
+    arguments — the Power Constructor, where nothing is dialled and nothing is wielded —
+    the cap is not asked for and the bought rank comes back, exactly as it always did.
+
     Cost never asks this. What a power is *worth* is what it was bought at, and dialling
     one down mid-fight refunds nothing.
     """
 
     if effect.current_rank is None:
-        return effect.rank
-    return max(1, min(effect.rank, int(effect.current_rank)))
+        rank = effect.rank
+    else:
+        rank = max(1, min(effect.rank, int(effect.current_rank)))
+    if game_data is None or char is None or _dynamic_rank_cap is None:
+        return rank
+    cap = _dynamic_rank_cap(effect, game_data, char)
+    return rank if cap is None else max(0, min(rank, cap))
 
 
 def effect_is_active(
@@ -527,7 +588,9 @@ def build_contributions(
 
         boost = base.integration.trait_boost
         if boost is not None:
-            for target, ranks in boost_allocations(effect, base, boost, live=True):
+            for target, ranks in boost_allocations(
+                effect, base, boost, live=True, game_data=game_data, char=char
+            ):
                 contributions.extend(
                     apply_stat_effect(
                         boost.apply,
@@ -556,7 +619,11 @@ def build_contributions(
                     granted.apply,
                     ApplyContext(
                         record=granted,
-                        rank=selection.rank if modifier.ranked else effect_current_rank(effect),
+                        rank=(
+                            selection.rank
+                            if modifier.ranked
+                            else effect_current_rank(effect, game_data, char)
+                        ),
                         target=_boost_target(effect, granted),
                         # Named for the pair, since neither half explains it alone: the
                         # power is what the sheet lists, the modifier is what granted it.
@@ -696,22 +763,49 @@ def active_array_child(group: PowerGroup) -> PowerNode | None:
     return group.children[0]
 
 
+def live_array_children(group: PowerGroup) -> list[PowerNode]:
+    """Which of an ``array`` group's children are running right now.
+
+    Ordinarily exactly one — :func:`active_array_child`, the selected alternate, since
+    an array's members are mutually exclusive. **Once points have been split across the
+    array's Dynamic members that stops being true**: they "operate at the same time, at
+    reduced effectiveness" (p101), so every member holding a positive share is live
+    together and the selection stops deciding anything.
+
+    A member holding *no* share is not live, which is how a player switches the pool
+    off again: with every share cleared the list falls back to the selected member at
+    full rank, which is what an array saved before the pool existed does on load.
+
+    Only the share's presence is read here, never its size — deciding whether a share
+    is large enough to buy a rank needs point costs, and that is
+    :func:`effect_current_rank`'s job one layer up. A member holding a share too small
+    to reach rank 1 is therefore *live* but running at rank 0, which contributes
+    nothing; the sheet reaches the same place either way.
+    """
+
+    shared = [c for c in group.children if c.dynamic and (c.dynamic_points or 0) > 0]
+    if shared:
+        return shared
+    child = active_array_child(group)
+    return [child] if child is not None else []
+
+
 def live_powers(nodes: list[PowerNode]) -> list[Power]:
     """Every leaf power currently contributing to the sheet, honouring array selection.
 
-    Descends the powers tree: an ``array`` group contributes only its
-    :func:`active_array_child` (so an unselected alternate's bonuses drop off), while
-    ``independent`` and ``linked`` groups contribute all their children. Leaf powers
-    pass straight through. Whether a *live* power's bonus actually applies is then a
-    per-power/effect runtime question left to :func:`effect_is_active`.
+    Descends the powers tree: an ``array`` group contributes only its live children
+    (:func:`live_array_children` — the selected alternate, or every Dynamic member
+    sharing the pool), while ``independent`` and ``linked`` groups contribute all of
+    them. Leaf powers pass straight through. Whether a *live* power's bonus actually
+    applies is then a per-power/effect runtime question left to
+    :func:`effect_is_active`.
     """
 
     result: list[Power] = []
     for node in nodes:
         if isinstance(node, PowerGroup):
             if node.mode == STRUCTURE_ARRAY and node.children:
-                child = active_array_child(node)
-                if child is not None:
+                for child in live_array_children(node):
                     result.extend(live_powers([child]))
             else:
                 result.extend(live_powers(node.children))

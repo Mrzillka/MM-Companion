@@ -182,7 +182,7 @@ def test_costs_are_loaded() -> None:
 def test_effects_and_modifiers_are_loaded() -> None:
     data = load_game_data()
     assert len(data.effects) == 42
-    assert len(data.modifiers) == 65
+    assert len(data.modifiers) == 69
 
 
 def test_effect_carries_numeric_base_cost_and_integration() -> None:
@@ -235,11 +235,22 @@ def test_modifiers_are_categorised_with_numeric_cost() -> None:
     assert categories == {"extra", "flaw"}
 
 
+def test_standard_configurations_are_loaded() -> None:
+    data = load_game_data()
+    assert len(data.configurations) == 90  # the book's named ready-made powers
+    blast = next(c for c in data.configurations if c.id == "blast")
+    assert blast.name == "Blast"
+    assert blast.base_effect == "damage"
+    assert blast.cost_note == "2 points per rank"  # reference text, never the arithmetic
+    assert [e.effect_id for e in blast.effects] == ["damage"]
+    assert [m.id for m in blast.effects[0].extras] == ["ranged"]
+
+
 def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
     data = load_game_data()
-    assert len(data.effect_modifiers) == 36  # effects with their own extras/flaws
+    assert len(data.effect_modifiers) == 37  # effects with their own extras/flaws
     total = sum(len(mods) for mods in data.effect_modifiers.values())
-    assert total == 231
+    assert total == 233
     for mods in data.effect_modifiers.values():
         for modifier in mods:
             # Category is injected from the extras/flaws array, not stored per entry.
@@ -273,7 +284,7 @@ def test_effect_specific_modifiers_retain_mechanical_fields() -> None:
 def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
     data = load_game_data()
     catalog = data.modifier_catalog()
-    assert len(catalog) == 65 + 231  # ids are globally unique, so no collisions
+    assert len(catalog) == 69 + 232  # ids are globally unique, so no collisions
     assert catalog["ranged"].category == "extra"  # general pool
     assert catalog["strength_based"].category == "extra"  # effect-specific pool
 

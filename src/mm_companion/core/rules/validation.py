@@ -10,7 +10,14 @@ from ..data_loader import GameData
 from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
 from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
-from .powers_cost import effect_build_rank, effect_size_rank_shift
+from .powers_cost import (
+    IMPOSED_EFFECT_ACTION_LIMIT,
+    effect_action_at_most,
+    effect_build_rank,
+    effect_size_rank_shift,
+    effect_total_cost,
+    imposed_effect_cost,
+)
 from .powers_terms import (
     _effect_name,
     _effective_stats,
@@ -382,6 +389,52 @@ def power_modifier_requirement_violations(power: Power, game_data: GameData) -> 
                 violations.append(
                     f"{_effect_name(effect, game_data)}: {modifier.name} requires " f"{needed}."
                 )
+    return violations
+
+
+def power_imposed_effect_violations(
+    power: Power, game_data: GameData, char: Character | None = None
+) -> list[str]:
+    """An Affliction imposing an effect it cannot afford, or one that is too slow (p110).
+
+    "The imposed effect must have a Power Point cost equal to or less than the total cost
+    of the Affliction and require a standard action or less to activate." The budget is
+    the **Affliction effect's** own total — with its extras and flaws, not the whole
+    power's — because that is what the rule names, and it is what moves when the player
+    dials the Affliction's rank.
+
+    The action limit is normally unreachable, since :func:`imposable_effects` offers no
+    effect that breaks it. It is checked anyway because the stored value outlives the
+    picker: a character saved against a ruleset where the effect was faster, or a mod
+    that reshapes one, would otherwise carry a build nothing ever questions.
+
+    A warning, not a clamp — like every other check here. ``char`` is threaded so the
+    Affliction's own cost is the one the wielder actually pays (a Strength-Based effect
+    folds their Strength in).
+    """
+
+    by_id = {effect.id: effect for effect in game_data.effects}
+    violations: list[str] = []
+    for effect in power.effects:
+        budget = effect_total_cost(effect, game_data, char)
+        imposed_id = str(effect.config.get("imposedEffect", "") or "")
+        imposed = by_id.get(imposed_id)
+        if imposed is None:
+            continue
+        name = _effect_name(effect, game_data)
+        cost = imposed_effect_cost(effect, game_data)
+        if cost > budget:
+            violations.append(
+                f"{name}: the imposed {imposed.name} costs {cost} PP, more than the "
+                f"{budget} PP this Affliction costs — an imposed effect may cost no more "
+                f"than the Affliction imposing it."
+            )
+        if not effect_action_at_most(imposed, IMPOSED_EFFECT_ACTION_LIMIT, game_data):
+            violations.append(
+                f"{name}: the imposed {imposed.name} takes a "
+                f"{imposed.action or 'nameless'} action — an imposed effect must take a "
+                f"{IMPOSED_EFFECT_ACTION_LIMIT.lower()} action or less."
+            )
     return violations
 
 

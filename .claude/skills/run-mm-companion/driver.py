@@ -1084,6 +1084,29 @@ def build(target: str):
             if key not in ("powers", "system_info"):
                 sheet.hide_block(key)
         win.resize(950, 900)
+    elif target == "pushed-traits":
+        # Extra Effort spent on the two things the rules name that are not effects:
+        # Strength, and one mode of movement. Both are pushed here, so the Abilities and
+        # System blocks should name Extra Effort as what is raising them.
+        from mm_companion.core.powers import Power, PowerEffectInstance
+        from mm_companion.core.rules import pushable_traits, spend_extra_effort
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.abilities["STR"] = 4
+        char.abilities["AGL"] = 2
+        char.powers.append(Power(name="Wings", effects=[PowerEffectInstance("flight", rank=4)]))
+        use = next(u for u in sheet._data.system.extra_effort.uses if u.id == "rank_increase")
+        for key in ("ability:STR", "movement:flight"):
+            target_trait = next(t for t in pushable_traits(char, sheet._data) if t.key == key)
+            spend_extra_effort(char, sheet._data, use, trait=target_trait, determination=True)
+        sheet.reseed()
+        for key in sheet.block_keys():
+            if key not in ("abilities", "system_info"):
+                sheet.hide_block(key)
+        win.resize(900, 780)
     else:  # pragma: no cover - guarded by argparse choices
         raise ValueError(target)
 
@@ -1146,6 +1169,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-broken",
             "sheet-stunt",
             "effect-array",
+            "pushed-traits",
             "all",
         ],
         help="which UI surface to launch and screenshot",

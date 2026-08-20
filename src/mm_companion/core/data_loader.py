@@ -1277,6 +1277,29 @@ class ExtraEffortUse:
 
 
 @dataclass(frozen=True)
+class PushableTrait:
+    """One thing other than an effect that Extra Effort's rank increase may name (p21).
+
+    The rules give three targets, and the app already had the first: an effect's rank,
+    "your Strength rank for either Damage or Lifting", or "your movement Speed rank in
+    one mode of movement you have". The other two are not
+    :class:`~mm_companion.core.powers.PowerEffectInstance` records — they are an ability and a
+    derived readout — so they are named here instead of being found on a power.
+
+    ``category`` is the contribution category the push lands in (``"ability"``,
+    ``"movement"``). A ``movement`` entry leaves ``stat`` empty, meaning **one of the
+    modes this character actually has**: which modes those are is a fact about the sheet,
+    not about the ruleset, so it is expanded per character rather than listed here.
+    ``note`` is the rules' own qualification, shown beside the label.
+    """
+
+    category: str
+    stat: str = ""
+    label: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class ExtraEffortRules:
     """What Extra Effort grants and what it costs (``system.json``, p20-21).
 
@@ -1299,6 +1322,7 @@ class ExtraEffortRules:
     untapped_potential_advantage: str = "Untapped Potential"
     extraordinary_effort_advantage: str = "Extraordinary Effort"
     uses: tuple[ExtraEffortUse, ...] = ()
+    pushable_traits: tuple[PushableTrait, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3344,6 +3368,16 @@ def _parse_extra_effort(raw: object, default: ExtraEffortRules) -> ExtraEffortRu
             raw.get("extraordinaryEffortAdvantage", default.extraordinary_effort_advantage)
         ),
         uses=uses or default.uses,
+        pushable_traits=tuple(
+            PushableTrait(
+                category=str(t.get("category", "")),
+                stat=str(t.get("stat", "")),
+                label=str(t.get("label", "")),
+                note=str(t.get("note", "")),
+            )
+            for t in raw.get("pushableTraits", ())
+        )
+        or default.pushable_traits,
     )
 
 

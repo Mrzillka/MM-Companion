@@ -401,10 +401,95 @@ def test_the_system_block_offers_the_uses_that_name_nothing(qapp: QApplication) 
     offered = {text: enabled for text, enabled in entries[1:]}
     assert offered["Extra action"] is True
     assert offered["Bonus on a check"] is True
-    # The two that have to name an effect are shown, disabled, pointing at the card —
+    # A power stunt has to name an effect, so it is shown disabled pointing at the card —
     # the book lists six uses and a menu of four would read as a shorter rule.
-    assert offered["Rank increase — on the power's card"] is False
     assert offered["Power stunt — on the power's card"] is False
+    # The rank increase can name something this block *does* own (Strength, a movement
+    # mode), so it becomes a submenu of them rather than a dead entry.
+    increase = next(a for a in menu.actions() if a.text() == "Rank increase")
+    assert increase.menu() is not None
+    inner = [a.text() for a in increase.menu().actions() if a.text()]
+    assert inner[0] == "Push one of your own traits"
+    assert "Strength (for Damage or Lifting)" in inner
+    assert "Speed: Ground speed (in one mode of movement you have)" in inner
+    # ...and the effect half still points at the card, from inside the submenu.
+    assert inner[-1] == "A power's rank — on the power's card"
+
+
+def test_only_the_movement_modes_a_character_has_are_offered(qapp: QApplication) -> None:
+    from mm_companion.core.rules import pushable_traits
+
+    data = load_game_data()
+    char, _ = _hero()
+    # "your movement Speed rank in one mode of movement you have" (p21) — so which modes
+    # are offered is a fact about the sheet, not a list in the ruleset.
+    assert [t.key for t in pushable_traits(char, data)] == ["ability:STR", "movement:ground"]
+
+    char.powers.append(Power(name="Wings", effects=[PowerEffectInstance("flight", rank=4)]))
+    assert [t.key for t in pushable_traits(char, data)] == [
+        "ability:STR",
+        "movement:ground",
+        "movement:flight",
+    ]
+
+
+def test_pushing_strength_and_a_movement_mode_moves_the_sheet(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mm_companion.core.rules import effective_ability, pushable_traits, speed_lines
+
+    data = load_game_data()
+    char, _ = _hero()
+    char.abilities["STR"] = 4
+    char.powers.append(Power(name="Wings", effects=[PowerEffectInstance("flight", rank=4)]))
+    sheet = CharacterSheet(data, char)
+    monkeypatch.setattr("mm_companion.ui.sections.system_info.ExtraEffortDialog", _AcceptedDialog)
+    use = extra_effort_use(data, "rank_increase")
+
+    strength = next(t for t in pushable_traits(char, data) if t.key == "ability:STR")
+    assert sheet.system_info.push_trait(use, strength)
+    assert effective_ability(char, data, "STR") == 5
+    assert "fatigued" in {c.condition_id for c in char.conditions}
+
+    flight = next(t for t in pushable_traits(char, data) if t.key == "movement:flight")
+    assert sheet.system_info.push_trait(use, flight)
+    assert next(line.rank for line in speed_lines(char, data) if line.mode == "flight") == 5
+
+    # The push is added on top of everything the build nets, never weighed against it:
+    # "its benefits can even increase your ranks or bonuses beyond the normal Power Level
+    # limits" (p20).
+    assert sheet.system_info.push_trait(use, strength)
+    assert effective_ability(char, data, "STR") == 6
+
+
+def test_the_system_block_says_what_extra_effort_is_holding_up(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mm_companion.core.rules import pushable_traits
+
+    data = load_game_data()
+    char, blast = _hero()
+    sheet = CharacterSheet(data, char)
+    monkeypatch.setattr("mm_companion.ui.sections.system_info.ExtraEffortDialog", _AcceptedDialog)
+    note = sheet.system_info._effort_note
+
+    # Nothing pushed, nothing said.
+    assert not note.isVisible()
+
+    strength = next(t for t in pushable_traits(char, data) if t.key == "ability:STR")
+    sheet.system_info.push_trait(extra_effort_use(data, "rank_increase"), strength)
+    # A pushed *trait* has no card to explain itself on, and the enhancement column that
+    # shows it looks like any other bonus — so it is named here.
+    assert note.text() == "⚡ Strength +1"
+
+    # An effect already says so on its own card, so it is counted rather than named.
+    blast.effects[0].extra_effort = 2
+    sheet.system_info.refresh_derived()
+    assert note.text() == "⚡ Strength +1, 1 effect"
+
+    sheet.system_info.clear_extra_effort()
+    sheet.system_info.refresh_derived()
+    assert note.text() == ""
 
 
 def test_the_system_block_charges_a_use_and_can_clear_the_pushes(
@@ -426,7 +511,7 @@ def test_the_system_block_charges_a_use_and_can_clear_the_pushes(
     assert not [text for text in labels if text.startswith("Clear")]
     blast.effects[0].extra_effort = 2
     labels = [a.text() for a in sheet.system_info.extra_effort_menu().actions()]
-    assert "Clear the ranks pushed into 1 effect" in labels
+    assert "Clear the ranks pushed into 1 trait" in labels
     assert sheet.system_info.clear_extra_effort() is True
     assert blast.effects[0].extra_effort == 0
 

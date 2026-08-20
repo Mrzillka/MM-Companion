@@ -38,6 +38,11 @@
   "extra_effort": {
     "fatigueLadder": ["fatigued", "exhausted", "incapacitated"],
     "rankIncrease": 1,
+    "_pushableTraits": "The rank increase may also name your Strength (for Damage or Lifting) or your Speed rank in one mode of movement you have (p21). A movement entry names no stat: which modes a character has is a fact about the sheet, not the ruleset, so it is expanded per character.",
+    "pushableTraits": [
+      { "category": "ability", "stat": "STR", "label": "Strength", "note": "for Damage or Lifting" },
+      { "category": "movement", "label": "Speed", "note": "in one mode of movement you have" }
+    ],
     "checkBonus": 2,
     "permanentDurations": ["Permanent"],
     "determinationAdvantage": "Determination",
@@ -46,7 +51,7 @@
     "uses": [
       { "id": "action", "label": "Extra action", "description": "An extra standard or simple action on your turn, or an extra reaction at any time." },
       { "id": "bonus", "label": "Bonus on a check", "description": "A +2 bonus on a single check, raising an existing bonus or cancelling a penalty." },
-      { "id": "rank_increase", "label": "Rank increase", "target": "effect", "description": "Raise the rank of one non-permanent effect until the end of your turn, past the Power Level limits." },
+      { "id": "rank_increase", "label": "Rank increase", "target": "effect", "description": "Raise the rank of one non-permanent effect until the end of your turn, past the Power Level limits — or your Strength, or your Speed in one mode of movement you have." },
       { "id": "power_stunt", "label": "Power stunt", "target": "effect", "description": "Use a temporary Alternate Effect of a non-permanent effect you have. The GM has final say over which stunts make sense." },
       { "id": "renewed_attempt", "label": "Renewed attempt", "description": "Attempt something again that would otherwise take until the next scene." },
       { "id": "resistance", "label": "Resistance check", "description": "Immediately make another resistance check against an ongoing effect." }

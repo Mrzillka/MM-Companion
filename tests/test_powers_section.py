@@ -647,6 +647,57 @@ def test_inactive_linked_group_disables_nested_member_cards(qapp: QApplication) 
     assert not any(c.is_clickable() for c in nested_member_cards(off_card))
 
 
+def test_a_power_stunt_is_refused_a_group(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+    bolt = Power(name="Ice Bolt", effects=[PowerEffectInstance("damage", rank=6)])
+    stunt = Power(name="Flame Shield", effects=[PowerEffectInstance("protection", rank=8)])
+    stunt.stunt_of = blast.id
+    char.powers.extend([blast, bolt, stunt])
+    sheet = CharacterSheet(data, char)
+    sec = sheet.powers
+
+    # A stunt costs 0, which inside an array makes it the cheapest member by definition
+    # — moving the base, the pool and every other member's flat price. And it is never
+    # saved, so the group would come back a member short.
+    sec._on_combine(stunt.id, blast.id)
+    assert [node.id for node in char.powers] == [blast.id, bolt.id, stunt.id]
+    # Neither direction: grouping something *onto* a stunt is the same drop.
+    sec._on_combine(bolt.id, stunt.id)
+    assert [node.id for node in char.powers] == [blast.id, bolt.id, stunt.id]
+
+    # An ordinary pair still groups, and the stunt is refused the group that results.
+    sec._on_combine(bolt.id, blast.id)
+    group = next(node for node in char.powers if isinstance(node, PowerGroup))
+    sec._on_move(stunt.id, group.id, 0)
+    assert [child.id for child in group.children] == [blast.id, bolt.id]
+    assert stunt in char.powers
+
+    # Reordering it at the top level is untouched — that is where a stunt belongs.
+    sec._on_move(stunt.id, "", 0)
+    assert char.powers[0] is stunt
+
+
+def test_the_group_list_shows_the_refusal_rather_than_swallowing_it(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+    stunt = Power(name="Flame Shield", effects=[PowerEffectInstance("protection", rank=8)])
+    stunt.stunt_of = blast.id
+    char.powers.append(PowerGroup(mode=STRUCTURE_INDEPENDENT, children=[blast]))
+    char.powers.append(stunt)
+    sec = CharacterSheet(data, char).powers
+
+    # The admission rule a group's NodeList is built with, so a refused drag is washed
+    # red instead of accepted and quietly dropped on the floor.
+    assert sec._groupable(blast.id)
+    assert not sec._groupable(stunt.id)
+    assert not sec._groupable("no such node")
+
+
 def test_a_broken_build_warns_on_its_card_not_only_in_the_constructor(
     qapp: QApplication,
 ) -> None:

@@ -598,15 +598,41 @@ class PowersSection(TitledSection):
                 ids |= PowersSection._subtree_ids(child)
         return ids
 
+    def _groupable(self, node_id: str) -> bool:
+        """Whether this node may join a group at all — false for a **power stunt**.
+
+        A stunt is bought with Extra Effort and a Hero Point rather than with points, so
+        it costs 0 (see :func:`~mm_companion.core.rules.node_cost`). Inside an array that
+        makes it the cheapest member by definition, which moves the base, the pool and
+        every other member's flat price — a temporary card silently repricing the build
+        it was taken from. It is not saved either (``strip_stunts``), so the group it
+        left would come back a member short.
+
+        The tree is drag-and-drop and nothing else refuses a drop, so this is asked in
+        three places: ``NodeList``'s admission rule (which *shows* the refusal), and both
+        mutation seams, which are the ones that hold the invariant.
+
+        A node this section cannot find is refused too. It cannot arrive from a drag
+        within the tree, and the mutation seams would drop it on the floor anyway — so
+        accepting it would mean lighting the target up for a move that never happens,
+        which is the failure this whole guard exists to avoid.
+        """
+
+        node = self._locate(node_id)
+        return node is not None and not power_is_stunt(node[0])
+
     def _on_combine(self, source_id: str, target_id: str) -> None:
         """Group the dragged node with a drop target into a new Independent group.
 
         Wraps the target (a card, or a whole group when dropped on its title bar) and
         the source into a fresh :class:`PowerGroup`, replacing the target in place —
         nesting naturally when the target already sits inside a group. Rejected when
-        the two are the same node or the target lives inside the source's own subtree.
+        the two are the same node, when the target lives inside the source's own
+        subtree, or when either of them is a stunt (:meth:`_groupable`).
         """
         if source_id == target_id:
+            return
+        if not (self._groupable(source_id) and self._groupable(target_id)):
             return
         source = self._locate(source_id)
         target = self._locate(target_id)
@@ -636,7 +662,9 @@ class PowersSection(TitledSection):
 
         This is how a card is reordered, pulled out of a group (dropped in a higher
         list), or added to a group as another member (dropped in the group's body).
-        Rejected when the destination lives inside the moved node's own subtree.
+        Rejected when the destination lives inside the moved node's own subtree, or when
+        a stunt is being moved *into* a group (:meth:`_groupable`) — reordering one at
+        the top level is fine, since that is where it belongs.
         """
         source = self._locate(source_id)
         if source is None:
@@ -645,6 +673,8 @@ class PowersSection(TitledSection):
         if parent_id == "":
             dest_list: list[PowerNode] = self._character.powers
         else:
+            if not self._groupable(source_id):
+                return
             if parent_id in self._subtree_ids(source_node):
                 return  # can't move a node into itself
             dest = self._locate(parent_id)
@@ -764,7 +794,9 @@ class PowersSection(TitledSection):
         child_interactive = interactive and (
             self._group_is_active(group) if group.mode == STRUCTURE_LINKED else True
         )
-        inner = NodeList(group.id)
+        # A group refuses a stunt outright, and shows the refusal rather than accepting
+        # the drop and quietly doing nothing (see :meth:`_groupable`).
+        inner = NodeList(group.id, accepts=self._groupable)
         inner.combineRequested.connect(self._on_combine)
         inner.moveRequested.connect(self._on_move)
         for child in group.children:

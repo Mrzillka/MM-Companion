@@ -647,6 +647,195 @@ def test_inactive_linked_group_disables_nested_member_cards(qapp: QApplication) 
     assert not any(c.is_clickable() for c in nested_member_cards(off_card))
 
 
+def _effect_array_sheet(qapp: QApplication):
+    from mm_companion.ui.character_sheet import CharacterSheet as _Sheet
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(
+        name="Elemental Command",
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("protection", rank=10),
+            PowerEffectInstance("flight", rank=6),
+        ],
+    )
+    char.powers.append(power)
+    return _Sheet(data, char), char, power
+
+
+def test_an_array_power_gets_a_picker_for_the_effect_it_is_using(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    (selector,) = sheet.powers.findChildren(_EffectSelector)
+    # Seeded on the base — Flight 6 costs 12 to the Protection's 10 — not on the first
+    # effect that happens to have been dropped on the canvas.
+    assert selector._combo.currentText() == "Flight 6"
+    assert [selector._combo.itemText(i) for i in range(selector._combo.count())] == [
+        "Protection 10",
+        "Flight 6",
+    ]
+
+
+def test_picking_an_effect_is_runtime_not_a_build_change(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    runtime: list[int] = []
+    changed: list[int] = []
+    sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
+    sheet.powers.changed.connect(lambda: changed.append(1))
+
+    sheet.powers.findChildren(_EffectSelector)[0]._combo.setCurrentIndex(0)
+    assert power.active_effect == 0
+    # Which alternate you are using is a play action, so it never marks the *build* as
+    # having moved — the same bargain the rank dial and the array-member click strike.
+    assert runtime and not changed
+
+
+def test_only_an_array_power_gets_the_picker(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    power.structure = STRUCTURE_INDEPENDENT
+    sheet.powers.refresh()
+    assert not sheet.powers.findChildren(_EffectSelector)
+
+    # ...and neither does an array of one, which pools nothing.
+    power.structure = STRUCTURE_ARRAY
+    del power.effects[1]
+    sheet.powers.refresh()
+    assert not sheet.powers.findChildren(_EffectSelector)
+
+
+def test_the_effect_picker_survives_the_lock(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, _power = _effect_array_sheet(qapp)
+    sheet.set_locked(True)
+    (selector,) = sheet.powers.findChildren(_EffectSelector)
+    assert not selector._combo.testAttribute(
+        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+    ), "choosing an alternate mid-play is not a build edit"
+
+
+def test_a_power_stunt_is_refused_a_group(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+    bolt = Power(name="Ice Bolt", effects=[PowerEffectInstance("damage", rank=6)])
+    stunt = Power(name="Flame Shield", effects=[PowerEffectInstance("protection", rank=8)])
+    stunt.stunt_of = blast.id
+    char.powers.extend([blast, bolt, stunt])
+    sheet = CharacterSheet(data, char)
+    sec = sheet.powers
+
+    # A stunt costs 0, which inside an array makes it the cheapest member by definition
+    # — moving the base, the pool and every other member's flat price. And it is never
+    # saved, so the group would come back a member short.
+    sec._on_combine(stunt.id, blast.id)
+    assert [node.id for node in char.powers] == [blast.id, bolt.id, stunt.id]
+    # Neither direction: grouping something *onto* a stunt is the same drop.
+    sec._on_combine(bolt.id, stunt.id)
+    assert [node.id for node in char.powers] == [blast.id, bolt.id, stunt.id]
+
+    # An ordinary pair still groups, and the stunt is refused the group that results.
+    sec._on_combine(bolt.id, blast.id)
+    group = next(node for node in char.powers if isinstance(node, PowerGroup))
+    sec._on_move(stunt.id, group.id, 0)
+    assert [child.id for child in group.children] == [blast.id, bolt.id]
+    assert stunt in char.powers
+
+    # Reordering it at the top level is untouched — that is where a stunt belongs.
+    sec._on_move(stunt.id, "", 0)
+    assert char.powers[0] is stunt
+
+
+def test_the_group_list_shows_the_refusal_rather_than_swallowing_it(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+    stunt = Power(name="Flame Shield", effects=[PowerEffectInstance("protection", rank=8)])
+    stunt.stunt_of = blast.id
+    char.powers.append(PowerGroup(mode=STRUCTURE_INDEPENDENT, children=[blast]))
+    char.powers.append(stunt)
+    sec = CharacterSheet(data, char).powers
+
+    # The admission rule a group's NodeList is built with, so a refused drag is washed
+    # red instead of accepted and quietly dropped on the floor.
+    assert sec._groupable(blast.id)
+    assert not sec._groupable(stunt.id)
+    assert not sec._groupable("no such node")
+
+
+def test_a_broken_build_warns_on_its_card_not_only_in_the_constructor(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A Concealment 2 that has spent six of its ranks on senses, and an Affliction whose
+    # Transformed condition imposes an effect four times dearer than the Affliction is.
+    # Both are constructor-only checks: before the shared POWER_CHECKS registry the card
+    # showed Power Level breaches and a stunt's ceiling and nothing else, so a character
+    # built under a different ruleset carried these with no marker on the sheet at all.
+    hidden = PowerEffectInstance(
+        "concealment",
+        rank=2,
+        config={"senses": [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 2}]},
+    )
+    curse = PowerEffectInstance(
+        "affliction",
+        rank=2,
+        config={
+            "resistance": "Will",
+            "degree3": "transformed",
+            "imposedEffect": "flight",
+            "imposedRank": 20,
+        },
+    )
+    char.powers.append(Power(name="Vanish", effects=[hidden]))
+    char.powers.append(Power(name="Hex", effects=[curse]))
+
+    sheet = CharacterSheet(data, char)
+    warnings = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⚠"]
+    assert len(warnings) == 2
+    tips = " ".join(w.toolTip() for w in warnings)
+    assert "allocated 6 of 2 ranks" in tips  # the over-spent Concealment
+    assert "imposed" in tips.lower()  # the unaffordable Transformed effect
+
+
+def test_the_card_and_the_constructor_read_the_same_checks(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    effect = PowerEffectInstance(
+        "concealment",
+        rank=1,
+        config={"senses": [{"id": "sight", "tier": 2}]},
+    )
+    power = Power(name="Vanish", effects=[effect])
+    char.powers.append(power)
+
+    sheet = CharacterSheet(data, char)
+    (warning,) = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⚠"]
+
+    window = PowerConstructorWindow(data, character=char, power=power)
+    # The card lists every sentence; the constructor puts the same ones behind a headline
+    # naming which checks failed. Neither can gain or lose one without the other.
+    assert window._warning.isVisible() or window._warning.toolTip()
+    assert window._warning.toolTip() == warning.toolTip()
+    assert "Over-allocated" in window._warning.text()
+    window.close()
+
+
 def test_homerule_power_shows_the_badge(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QLabel
 
@@ -1266,11 +1455,38 @@ def test_a_split_array_dims_the_members_that_are_not_running(qapp: QApplication)
     assert sec._node_is_inactive(flight, group, "select") is False
 
 
-def test_the_click_hint_stops_promising_the_siblings_switch_off(qapp: QApplication) -> None:
+def test_a_split_array_stops_arming_a_click_that_would_do_nothing(qapp: QApplication) -> None:
     sheet, _char, group = _pool_array(qapp)
     sec = sheet.powers
-    assert "siblings switch off" in sec._click_hint("select", group)
+    armour = group.children[0]
 
-    group.children[0].dynamic_points = 4
-    assert "siblings switch off" not in sec._click_hint("select", group)
-    assert "all running at once" in sec._click_hint("select", group)
+    # Unsplit, a member is the array's selector and says so.
+    assert sec._activation_role(armour, group) == "select"
+    card = sec._render_node(armour, group)
+    assert card.is_clickable()
+    assert "siblings switch off" in card.toolTip()
+
+    # Split, the pool decides who is running: the click is not armed at all — it used to
+    # move active_child_id silently with nothing visible happening — but the card still
+    # explains why it has stopped being a control.
+    armour.dynamic_points = 4
+    assert sec._activation_role(armour, group) == ""
+    card = sec._render_node(armour, group)
+    assert not card.is_clickable()
+    assert "all running at once" in card.toolTip()
+    assert "siblings switch off" not in card.toolTip()
+
+
+def test_a_split_array_still_dims_by_what_is_running_with_no_role_left(
+    qapp: QApplication,
+) -> None:
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour, flight = group.children
+
+    # Taking the click away must not take the dimming with it: an ordinary member of a
+    # split array is off, and has to look it.
+    flight.dynamic_points = 4
+    assert sec._activation_role(armour, group) == ""
+    assert sec._node_is_inactive(armour, group, "") is True
+    assert sec._node_is_inactive(flight, group, "") is False

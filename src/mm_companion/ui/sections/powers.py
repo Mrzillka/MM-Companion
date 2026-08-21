@@ -56,6 +56,7 @@ from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QInputDialog,
@@ -86,6 +87,7 @@ from mm_companion.core.rules import (
     USE_POWER_STUNT,
     PinRef,
     active_array_child,
+    active_array_effect_index,
     array_alternate_cost,
     array_dynamic_primary_cost,
     array_pool_points,
@@ -95,19 +97,21 @@ from mm_companion.core.rules import (
     effect_current_rank,
     effect_stands,
     group_array_base_index,
+    group_scope_note,
     leaf_powers,
     live_array_children,
     live_powers,
+    node_cost_formula,
     node_display_cost,
     power_display_name,
+    power_effects_are_array,
     power_has_custom_modifier,
     power_has_standing_effect,
-    power_pl_violations,
     power_roll_lines,
     power_rolls,
     power_runtime_gates,
-    power_stunt_violations,
     power_total_cost,
+    power_violations,
     powers_points_spent,
     pushable_effects,
     size_steps,
@@ -441,6 +445,60 @@ class _RankDial(QWidget):
         self.rankPicked.emit(self._slider.value())
 
 
+class _EffectSelector(QWidget):
+    """Which effect of an array *power* is currently in use.
+
+    The whole-card twin of the click that selects an array **group's** live member, one
+    level down: a power whose own effects are an array runs exactly one of them at a
+    time, and that is what makes it cheaper than the same effects bought independently.
+    A card is one widget, though, so there is no card to click — hence a control.
+
+    A combo rather than the group header's segmented toggle: an effect reads as its name
+    and rank ("Enhanced Trait 4"), several of those do not fit across a card, and an
+    array may hold more than three. Like the rank dial it stays live in the locked
+    sheet — choosing which alternate you are using is a play action, not a build edit —
+    and takes no focus, because committing rebuilds the card out from under it.
+    """
+
+    effectPicked = Signal(int)
+
+    def __init__(
+        self,
+        titles: list[str],
+        current: int,
+        interactive: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(int(theme.metric("space.sm")))
+
+        caption = QLabel("Using")
+        caption.setStyleSheet(muted_style())
+        row.addWidget(caption)
+
+        self._combo = QComboBox()
+        self._combo.addItems(titles)
+        self._combo.setCurrentIndex(max(0, min(current, len(titles) - 1)))
+        self._combo.setToolTip(
+            "Only one effect of an array runs at a time — that is what makes an array "
+            "cheaper than the same effects bought separately. The others contribute "
+            "nothing to the sheet until you pick them."
+        )
+        self._combo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
+        self._combo.setCursor(
+            Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
+        )
+        guard_wheel(self._combo)
+        self._combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        row.addWidget(self._combo)
+        row.addStretch()
+
+        # Connected after the initial index, so seeding never reads as a choice.
+        self._combo.currentIndexChanged.connect(self.effectPicked)
+
+
 class PowersSection(TitledSection):
     """Powers section: launches the Power Constructor and lists saved powers as a tree."""
 
@@ -598,15 +656,41 @@ class PowersSection(TitledSection):
                 ids |= PowersSection._subtree_ids(child)
         return ids
 
+    def _groupable(self, node_id: str) -> bool:
+        """Whether this node may join a group at all — false for a **power stunt**.
+
+        A stunt is bought with Extra Effort and a Hero Point rather than with points, so
+        it costs 0 (see :func:`~mm_companion.core.rules.node_cost`). Inside an array that
+        makes it the cheapest member by definition, which moves the base, the pool and
+        every other member's flat price — a temporary card silently repricing the build
+        it was taken from. It is not saved either (``strip_stunts``), so the group it
+        left would come back a member short.
+
+        The tree is drag-and-drop and nothing else refuses a drop, so this is asked in
+        three places: ``NodeList``'s admission rule (which *shows* the refusal), and both
+        mutation seams, which are the ones that hold the invariant.
+
+        A node this section cannot find is refused too. It cannot arrive from a drag
+        within the tree, and the mutation seams would drop it on the floor anyway — so
+        accepting it would mean lighting the target up for a move that never happens,
+        which is the failure this whole guard exists to avoid.
+        """
+
+        node = self._locate(node_id)
+        return node is not None and not power_is_stunt(node[0])
+
     def _on_combine(self, source_id: str, target_id: str) -> None:
         """Group the dragged node with a drop target into a new Independent group.
 
         Wraps the target (a card, or a whole group when dropped on its title bar) and
         the source into a fresh :class:`PowerGroup`, replacing the target in place —
         nesting naturally when the target already sits inside a group. Rejected when
-        the two are the same node or the target lives inside the source's own subtree.
+        the two are the same node, when the target lives inside the source's own
+        subtree, or when either of them is a stunt (:meth:`_groupable`).
         """
         if source_id == target_id:
+            return
+        if not (self._groupable(source_id) and self._groupable(target_id)):
             return
         source = self._locate(source_id)
         target = self._locate(target_id)
@@ -636,7 +720,9 @@ class PowersSection(TitledSection):
 
         This is how a card is reordered, pulled out of a group (dropped in a higher
         list), or added to a group as another member (dropped in the group's body).
-        Rejected when the destination lives inside the moved node's own subtree.
+        Rejected when the destination lives inside the moved node's own subtree, or when
+        a stunt is being moved *into* a group (:meth:`_groupable`) — reordering one at
+        the top level is fine, since that is where it belongs.
         """
         source = self._locate(source_id)
         if source is None:
@@ -645,6 +731,8 @@ class PowersSection(TitledSection):
         if parent_id == "":
             dest_list: list[PowerNode] = self._character.powers
         else:
+            if not self._groupable(source_id):
+                return
             if parent_id in self._subtree_ids(source_node):
                 return  # can't move a node into itself
             dest = self._locate(parent_id)
@@ -764,7 +852,9 @@ class PowersSection(TitledSection):
         child_interactive = interactive and (
             self._group_is_active(group) if group.mode == STRUCTURE_LINKED else True
         )
-        inner = NodeList(group.id)
+        # A group refuses a stunt outright, and shows the refusal rather than accepting
+        # the drop and quietly doing nothing (see :meth:`_groupable`).
+        inner = NodeList(group.id, accepts=self._groupable)
         inner.combineRequested.connect(self._on_combine)
         inner.moveRequested.connect(self._on_move)
         for child in group.children:
@@ -831,6 +921,7 @@ class PowersSection(TitledSection):
 
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
+        self._explain_cost(cost, group)
         row.addWidget(cost)
 
         ungroup = QPushButton("✕")
@@ -840,6 +931,27 @@ class PowersSection(TitledSection):
         row.addWidget(ungroup)
         ungroup.setVisible(not self._locked)
         return header
+
+    def _explain_cost(self, label: QLabel, node: PowerNode) -> None:
+        """Put the working behind a node's price on its cost label, when there is any.
+
+        The constructor prints the same working beside its total, in full — there is
+        room on a line of its own. Here there is not: a card's header already carries a
+        name, up to three badges, a Dynamic box and two buttons, and a group's carries a
+        mode toggle and a Split points button as well. So the arithmetic goes on the
+        tooltip of the one thing it explains, which is where a player asking "why does
+        this say 23 when the cards say 10, 16 and 20" is already pointing.
+        """
+
+        parts = [node_cost_formula(node, self._data, self._character)]
+        if isinstance(node, PowerGroup):
+            # Not a warning: three genuinely separate removable devices really are
+            # charged three times, and nothing can tell that build from one device split
+            # across three cards. It states the arithmetic and lets the player decide.
+            parts.append(group_scope_note(node, self._data, self._character))
+        tooltip = "\n".join(part for part in parts if part)
+        if tooltip:
+            label.setToolTip(tooltip)
 
     def _arm_card_menu(self, card: DraggableCard, power: Power) -> None:
         """Arm the card's right-click menu — Extra Effort, then this power's counters.
@@ -1148,13 +1260,14 @@ class PowersSection(TitledSection):
         always makes an *Independent* group) that is itself inside the Linked group, and
         it still has to switch with its linked siblings rather than sprout its own switch.
         """
-        if (
-            isinstance(parent, PowerGroup)
-            and parent.mode == STRUCTURE_ARRAY
-            and len(parent.children) >= 2
-            and any(self._node_has_standing(child) for child in parent.children)
-        ):
-            return "select"
+        if self._selectable_array_member(parent):
+            # ...unless the array's points are split, when the pool decides who is
+            # running and selecting a member decides nothing. The click used to be armed
+            # anyway: the cursor promised something, `active_child_id` quietly moved, and
+            # nothing on screen changed. `_arm_activation` still tooltips *why*, because
+            # a card that has silently stopped being a control is worse than one that
+            # says it has.
+            return "" if _pool_is_split(parent) else "select"
         if self._linked_ancestor(node) is not None:
             return ""
         if isinstance(node, PowerGroup):
@@ -1169,12 +1282,31 @@ class PowersSection(TitledSection):
             return "toggle"
         return ""
 
+    def _selectable_array_member(self, parent: PowerGroup | None) -> bool:
+        """Whether a card in *parent* is one of a live array's mutually exclusive members.
+
+        An array only has something to select between if it has two of them and at least
+        one *stands* on the sheet — an all-instant array keeps nothing active, so its
+        members are not switches. Asked by :meth:`_activation_role` (does a click do
+        anything) and :meth:`_node_is_inactive` (is this one running), which have to
+        agree about what an array is even when the pool has taken the click away.
+        """
+
+        return (
+            isinstance(parent, PowerGroup)
+            and parent.mode == STRUCTURE_ARRAY
+            and len(parent.children) >= 2
+            and any(self._node_has_standing(child) for child in parent.children)
+        )
+
     def _node_is_inactive(self, node: PowerNode, parent: PowerGroup | None, role: str) -> bool:
         """Whether the card should be drawn in its dimmed, switched-off state."""
-        if role == "select":
+        if self._selectable_array_member(parent):
             # Which member is *running* rather than which is selected: once the pool is
             # split every Dynamic member holding a share is live at once, so dimming all
-            # but the selected one would contradict the numbers on the sheet.
+            # but the selected one would contradict the numbers on the sheet. Asked of
+            # the array rather than of the card's role, because a split takes the role
+            # away and the dimming has to outlive it.
             return not any(child is node for child in live_array_children(parent))
         if role == "toggle":
             if isinstance(node, PowerGroup):
@@ -1195,20 +1327,21 @@ class PowersSection(TitledSection):
         becomes the click target, and says so (see :meth:`DraggableCard.set_clickable`).
         ``interactive`` is ``False`` for a card inside a switched-off Linked group, which
         still shows its state but can't be clicked back on past its group.
+
+        A member of a *split* array is the one card that gets the hint without the
+        click: the pool has taken the decision over, so there is nothing to arm, but a
+        card that has quietly stopped being a control needs to say so more than one that
+        still is.
         """
         role = self._activation_role(node, parent)
+        if self._selectable_array_member(parent) and _pool_is_split(parent):
+            card.setToolTip(_SPLIT_SELECT_HINT)
+            return
         if not (role and interactive):
             return
         card.set_clickable(True)
-        card.setToolTip(self._click_hint(role, parent))
+        card.setToolTip(_CLICK_HINTS[role])
         card.clicked.connect(lambda n=node, p=parent, r=role: self._on_card_clicked(n, p, r))
-
-    def _click_hint(self, role: str, parent: PowerGroup | None) -> str:
-        """What to tell the player a click on this card will do."""
-
-        if role == "select" and parent is not None and _pool_is_split(parent):
-            return _SPLIT_SELECT_HINT
-        return _CLICK_HINTS[role]
 
     def _show_activation(
         self, card: DraggableCard, node: PowerNode, parent: PowerGroup | None
@@ -1315,6 +1448,12 @@ class PowersSection(TitledSection):
         if effects is not None:
             layout.addWidget(effects)
 
+        # Under the breakdown that names the effects, above the dials that turn one of
+        # them up: which of an array's effects is running is the choice you make first.
+        selector = self._effect_selector(power, interactive)
+        if selector is not None:
+            layout.addWidget(selector)
+
         # A dialled effect is a range, not a switch: a slider over the ranks the wielder
         # can hold it at, under the effect breakdown that explains what each notch is
         # worth and above the dice, with the rest of the mid-play controls.
@@ -1385,12 +1524,14 @@ class PowersSection(TitledSection):
             )
             layout.addWidget(badge)
 
-        # A power that breaks a PL cap carries a warning marker naming the breach;
-        # enforcement is a warning for now (see storage.pl_enforcement). A stunt adds the
-        # one rule that is its own: an alternate effect costs no more than its base.
-        violations = power_pl_violations(
-            power, self._character, self._data
-        ) + power_stunt_violations(power, self._character, self._data)
+        # A power that breaks any build rule carries a warning marker naming every
+        # breach; enforcement is a warning for now (see storage.pl_enforcement). This is
+        # the same walk over the same POWER_CHECKS registry the Power Constructor's
+        # warning band makes, so the two cannot disagree — before it, the card showed
+        # Power Level and a stunt's ceiling alone, and a character built under a
+        # different ruleset could carry an over-spent allocation, an over-budget imposed
+        # effect or an over-budget minion with nothing on the sheet saying so.
+        violations = power_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))
@@ -1425,6 +1566,7 @@ class PowersSection(TitledSection):
             )
         else:
             cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
+            self._explain_cost(cost, power)
         cost.setEnabled(False)
         layout.addWidget(cost)
 
@@ -1444,6 +1586,31 @@ class PowersSection(TitledSection):
         layout.addWidget(remove)
         remove.setVisible(not self._locked)
         return host
+
+    # -- the array's live effect ------------------------------------------
+    def _effect_selector(self, power: Power, interactive: bool) -> QWidget | None:
+        """The picker for which of an array power's own effects is in use; ``None``
+        for every power that is not one, which is nearly all of them."""
+
+        if not power_effects_are_array(power):
+            return None
+        titles = [effect_title(effect, self._character, self._data) for effect in power.effects]
+        current = active_array_effect_index(power, self._data, self._character)
+        selector = _EffectSelector(titles, current, interactive)
+        selector.effectPicked.connect(lambda index, p=power: self._on_effect_picked(p, index))
+        return selector
+
+    def _on_effect_picked(self, power: Power, index: int) -> None:
+        """Put an array power onto one of its own effects.
+
+        Runtime, so it emits ``runtimeChanged`` rather than ``changed`` — the same
+        bargain the rank dial and the array-member click strike. The rebuild is what
+        redraws every other effect's summary as no longer contributing.
+        """
+
+        power.active_effect = index
+        self._rebuild_list()
+        self.runtimeChanged.emit()
 
     # -- the rank dial ----------------------------------------------------
     def _rank_dials(

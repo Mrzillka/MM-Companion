@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
@@ -229,6 +229,85 @@ def test_more_builds_than_the_power_buys_is_flagged_rather_than_deleted() -> Non
     power.effects[0].extras[0].rank = 1
     (message,) = power_sub_build_violations(power, data, char)
     assert "3 built where this power buys 1" in message
+
+
+def test_variable_type_turns_the_one_minion_into_a_menu() -> None:
+    """ "You always summon the same minion unless you apply the Variable Type modifier"
+    (p145) — so Variable Type does not buy *more* minions at once, it lets the player
+    build several to choose between."""
+    data = load_game_data()
+    char, power = _summoner()
+    assert power_sub_build_slots(power, data, char)[0].menu is False
+
+    power.effects[0].extras.append(ModifierSelection("variable_type"))
+    slot = power_sub_build_slots(power, data, char)[0]
+    assert slot.menu is True
+    # The count is untouched: one is still summoned at a time, so there is no allowance
+    # to raise — the slot simply stops being counted against.
+    assert slot.count == 1
+
+    for index in range(3):
+        store_sub_build(slot, index, new_sub_build(slot, data))
+    assert power_sub_build_violations(power, data, char) == []
+    # Each is still built on the same budget, and still checked against it.
+    assert len(sub_build_characters(slot)) == 3
+
+    # Take the modifier away and the extra minions are flagged again rather than deleted.
+    power.effects[0].extras.clear()
+    (message,) = power_sub_build_violations(power, data, char)
+    assert "3 built where this power buys 1" in message
+
+
+def test_the_menu_strip_never_fills_up(qapp) -> None:
+    from PySide6.QtWidgets import QPushButton
+
+    data = load_game_data()
+    char, power = _summoner()
+    power.effects[0].extras.append(ModifierSelection("variable_type"))
+    slot = power_sub_build_slots(power, data, char)[0]
+    for index in range(2):
+        build = new_sub_build(slot, data)
+        build.profile["hero_name"] = f"Wolf {index}"
+        store_sub_build(slot, index, build)
+
+    window = PowerConstructorWindow(data, character=char, power=power)
+    card = window.canvas.cards[0]
+    labels = [b.text() for b in card._sub_builds.findChildren(QPushButton)]
+    # Counted by what has been built, not by an allowance there isn't one of.
+    assert "Minions (2), one at a time — 90 PP each" in [
+        lbl.text() for lbl in card._sub_builds.findChildren(QLabel)
+    ]
+    assert any(text.startswith("+ Another minion") for text in labels)
+    window.close()
+
+
+def test_a_minion_is_held_to_the_wielders_power_level() -> None:
+    """A minion is "subject to the normal Power Level limits" (p145), and the limit is
+    the wielder's — which is what the slot stamps onto the build."""
+    data = load_game_data()
+    char, power = _summoner()
+    char.power_level = 8
+    slot = power_sub_build_slots(power, data, char)[0]
+    minion = new_sub_build(slot, data)
+    assert minion.power_level == 8
+    for key in ("FGT", "AGL", "STA", "STR"):
+        minion.abilities[key] = 20
+    store_sub_build(slot, 0, minion)
+
+    messages = power_sub_build_violations(power, data, char)
+    # Each is prefixed with the slot: the reader is looking at the *power*, and a bare
+    # "Dodge + Toughness 20 exceeds PL cap 16" would read as the wielder's own breach.
+    assert any(m.startswith("Minion: Dodge + Toughness") for m in messages)
+    assert any(m.startswith("Minion: Fortitude + Will") for m in messages)
+
+
+def test_a_minion_inside_its_budget_and_its_power_level_warns_about_nothing() -> None:
+    data = load_game_data()
+    char, power = _summoner()
+    char.power_level = 10
+    slot = power_sub_build_slots(power, data, char)[0]
+    store_sub_build(slot, 0, new_sub_build(slot, data))
+    assert power_sub_build_violations(power, data, char) == []
 
 
 # -- the constructor -------------------------------------------------------------

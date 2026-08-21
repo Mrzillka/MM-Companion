@@ -13,6 +13,7 @@ from .appliers import (
     CATEGORY_ADVANTAGE,
     CATEGORY_RESISTANCE,
     CATEGORY_SKILL,
+    GROUP_EFFORT,
     GROUP_POWERS,
     SPECIALIZED_ROW_MARKER,
     STACK_SUM,
@@ -220,6 +221,53 @@ def granted_skill_rows(char: Character, game_data: GameData) -> dict[str, TraitB
     }
 
 
+#: How :attr:`~mm_companion.core.character.Character.extra_effort` spells one target:
+#: the contribution category, then the trait key it lands on.
+EFFORT_KEY_SEP = ":"
+
+#: What the sheet names as the source of a pushed rank.
+EFFORT_SOURCE = "Extra Effort"
+
+
+def effort_key(category: str, stat: str) -> str:
+    """The :attr:`~mm_companion.core.character.Character.extra_effort` key for one target."""
+
+    return f"{category}{EFFORT_KEY_SEP}{stat}"
+
+
+def effort_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
+    """Every rank the character has pushed into a **trait** with Extra Effort.
+
+    The rank increase may name an effect, "your Strength rank for either Damage or
+    Lifting", or "your movement Speed rank in one mode of movement you have" (p21). An
+    effect's push lives on the effect; the other two are an ability and a derived
+    readout, so they are stored on the character
+    (:attr:`~mm_companion.core.character.Character.extra_effort`) and arrive here.
+
+    They land in :data:`~.appliers.GROUP_EFFORT`, which is *added* on top of whatever the
+    build already nets rather than weighed against it: Extra Effort's benefits "can even
+    increase your ranks or bonuses beyond the normal Power Level limits", so a Strength
+    pushed by 1 is one more than the character had, however they came to have it.
+
+    ``game_data`` is unused today and taken anyway, so a ruleset that wants to filter or
+    rename what may be pushed has the door open without every caller changing.
+    """
+
+    del game_data  # see the docstring
+    return tuple(
+        TraitContribution(
+            amount=int(ranks),
+            stat=key.partition(EFFORT_KEY_SEP)[2],
+            category=key.partition(EFFORT_KEY_SEP)[0],
+            source=EFFORT_SOURCE,
+            stacking=STACK_SUM,
+            group=GROUP_EFFORT,
+        )
+        for key, ranks in char.extra_effort.items()
+        if ranks and EFFORT_KEY_SEP in key
+    )
+
+
 def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
     """Every stat contribution standing on the sheet, in the order the sheet grants them.
 
@@ -227,7 +275,8 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     size (:func:`~.size.size_contributions`), then the active powers
     (:func:`~.runtime.power_contributions`), then the advantages
     (:func:`advantage_contributions`) — the bought ones and the ones a power granted —
-    then the worn gear (:func:`~.runtime.equipment_contributions`). Conditions are
+    then the worn gear (:func:`~.runtime.equipment_contributions`), and last whatever the
+    character has pushed with Extra Effort (:func:`effort_contributions`). Conditions are
     deliberately absent — they are a display-only overlay and never part of the build.
 
     Order matters twice over. Size comes first because it is the one thing here nobody
@@ -247,7 +296,17 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     # find the advantages a power granted, and this function sits on the path of every
     # derived total the sheet prints — gathering twice would be paid for per skill row.
     granted = granted_advantages(char, game_data, size + powers + equipment)
-    return size + powers + advantage_contributions(char, game_data, granted) + equipment
+    # Effort last, and in a group of its own that never competes: it is added on top of
+    # whatever the bought groups netted, which is what "beyond the normal Power Level
+    # limits" means. It is deliberately *not* offered to `granted_advantages` — straining
+    # cannot grant you an advantage.
+    return (
+        size
+        + powers
+        + advantage_contributions(char, game_data, granted)
+        + equipment
+        + effort_contributions(char, game_data)
+    )
 
 
 def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:

@@ -18,6 +18,18 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   independent and linked sum their effects' costs (linked is a +0 bundle), an
   array pays the costliest effect in full plus a flat point per alternate. Cost
   math and the game-terms summary read `structure` to decide.
+- **Only one effect of an array runs at a time**, which is the reason it is cheaper than
+  the same effects bought independently — so the discount and the restriction are two
+  halves of one rule and have to be enforced together. `Power.active_effect` is the
+  runtime index of the effect in use (`None` = the base, the costliest, the one paid for
+  in full), `active_array_effect_index` clamps it the way `effect_current_rank` clamps a
+  dialled rank, and `effect_is_selected` gates `effect_is_active` on it — which is the
+  one door every standing contribution goes through, so trait bonuses, movement and size
+  are all covered by the single check. The card carries a **Using** picker
+  (`_EffectSelector`) and fades the effects that are not running. It is the whole-card
+  twin, one level down, of the click that selects an array *group's* live member; the
+  default differs on purpose (a group falls back to its first child, since a group's
+  children are cards the player ordered themselves).
 - **A member of an array can be `dynamic`.** An ordinary alternate is mutually
   exclusive with its siblings and costs 1 point; a **Dynamic** one shares the array's
   point pool and runs *alongside* the array's other Dynamic members at reduced
@@ -198,7 +210,10 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
 - **Two config-field mechanisms came out of that**, both generic and both usable by a mod
   with no Python. `showWhenField` / `showWhenValue` reveal a field only while a *sibling*
   field holds a given value — the imposed-effect picker appears once a degree reads
-  Transformed. The gated widget is **built and hidden**, never omitted, because rebuilding
+  Transformed — and naming a field with no value means "while it holds anything", which
+  is how the imposed *rank* waits for an effect to actually be picked instead of printing
+  "At rank: 1" for a choice nobody had made. `config_field_gate_open` in **core** answers
+  it for the card and the game-terms rows alike. The gated widget is **built and hidden**, never omitted, because rebuilding
   the form from inside the very combo whose change triggered it is how Qt teardown bugs
   start; closing a gate drops the stored value and opening it re-seeds the field's default
   (`_config_seeders`), so the spin box and the model never disagree. Separately, a `select`
@@ -548,40 +563,55 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 - **The equipment-currency configurations build as powers, not gear.** Commlink is "1
   Equipment Point per rank" and still drops onto the power canvas like anything else (see
   [the equipment layer](equipment.md) for the currency it ought to be bought in).
-- **A power-scope modifier stops at the `Power`.** Removable is charged once per `Power`,
-  which is what the rules mean by "the power as a whole" — so a device modelled as a
-  `PowerGroup` of several powers gets one discount *per child power*, each priced from that
-  child's own total. That is the same arithmetic only when every split lands on a multiple
-  of 5. Nothing checks for it; the honest build is one power with many effects, which is how
-  the book's own armour example is written.
-- **An array's total is not shown as working.** The constructor prints `Total cost: 24 PP`
-  under three cards reading 20, 8 and 10 — the pooling explains it and each card's badge
-  names its own share, but the total line itself does not. `power_cost_formula` was built
-  for exactly this complaint about Removable and fires only for a power-scope modifier;
-  extending it to render the array working would close the same gap for every array.
-- **Re-run the two-price sweep after adding modifier records.** A `costFormula` naming two
-  prices with no `config` beneath it is silently the cheaper one — the sweep that caught
-  those covered both `modifiers.json` and `effect_modifiers.json`, and it is clean today.
+- **A power-scope modifier stops at the `Power`**, which is what the rules mean by "the
+  power as a whole" — so a device modelled as a `PowerGroup` of several powers gets one
+  discount *per child power*, each rounded up on its own. That is the same arithmetic only
+  when every split lands on a multiple of 5. `group_scope_note` **states** the difference
+  on the group's cost tooltip and never warns about it: three genuinely separate removable
+  devices really are charged three times, and nothing can tell that build from one device
+  split across three cards. It is silent unless the two numbers actually differ. The honest
+  single-device build is one power with many effects, which is how the book's own armour
+  example is written.
+- **An array's total shows its working** (`array_cost_formula`) — `23 PP (20 base + 1
+  Dynamic base + 2 × 1 alternate)` — on the constructor's cost line and, since a card
+  header has no room for a second number, on the tooltip of a group's or a card's cost
+  (`_explain_cost`). With Removable in play too, the array's working sits in parentheses
+  behind the gross the discount is charged against rather than nested inside the
+  subtraction, so the number being read stays the one the −20 applies to.
+- **The two-price sweep is a test now**, not an instruction to remember
+  (`test_a_modifier_naming_two_prices_offers_a_way_to_pick_between_them`). A `costFormula`
+  naming two prices with nothing to dial them is silently charged the cheaper one and
+  looks fine while it happens; four things count as a dial — priced `select` options, a
+  `points` spin box, the modifier's own rank, or being `hidden` (structural, priced by
+  the engine).
 
 ### Readouts and warnings
 
-- **An allocation readout prints the tier *index*, not what it cost.** A Concealment hiding
-  from every sight sense reads "Sight 2" in the game-terms panel — tier 2, which costs 4
-  ranks — while the card's own combo beside it says "4 ranks". The same is true of Enhanced
-  Senses' Accurate. It is shared by every `allocation` field, which is why it was not
-  changed underneath four effects at once; `tier_notes` already exists in the schema
-  (Enhanced Movement uses it for Wall-Crawling's caveat) and is where a per-tier name goes.
-- **Nothing enforces mutual exclusion in a multiselect.** A player can tick both "one sight
-  sense" and "all sight senses" on Obscure, or both intensities of the same Environment
-  condition, and pay for both. Visible on the card, but a warning would be fair.
+- **An allocation names what its tier bought.** It used to print the tier's *index* —
+  a Concealment hiding from every sight sense read "Sight 2" beside a card combo reading
+  "4 ranks", two numbers meaning different things. The names are game content
+  (`tierLabels` on an `allocOptions` entry, beside the `tierNotes` Enhanced Movement
+  already used), and Concealment and Enhanced Senses carry them. An option the ruleset
+  does not name falls back to the ranks the tier cost, which is still not an index — so
+  Comprehend and Enhanced Movement read "Languages (3 ranks)" untouched. The combo on the
+  card renders from the same labels, so the two can no longer disagree.
+- **A multiselect says when one tick already covers another.** `supersedes` on an option
+  names what it makes redundant — a bare value for a sibling in the same field
+  (Environment's *Extreme cold* over its *Intense cold*), `"field:value"` across fields
+  (Obscure's whole *Sight* type over the single *sight* sense) — and
+  `power_redundant_option_violations` warns. It never unticks: the pair is a legal, merely
+  wasteful build, and a build that silently edits itself is worse than one that argues.
 - **A Variable Environment's redistribution is unchecked** — nothing verifies that what the
   player redistributes at use time stays inside the per-rank total they paid for.
-- **Almost every warning is constructor-only.** The allocation, linked-range, Strength,
-  requirement, imposed-effect and sub-build checks all live in the Power Constructor; the
-  sheet card shows **Power Level** breaches (and a stunt's own ceiling) alone. That is the
-  convention rather than an oversight — `_strength_violations` says so — but it does mean a
-  character built under a different ruleset can carry an over-budget imposed effect with no
-  marker on the sheet until someone opens the constructor.
+- **Both surfaces walk one check list.** Every per-power check is registered in
+  `POWER_CHECKS` (`validation.py`), so the sheet card's ⚠ and the constructor's warning
+  band can never disagree about what is wrong: the card lists every sentence behind its
+  single glyph, the constructor groups the same ones under a headline naming which checks
+  failed. It is a registry rather than a list so a mod's rule reaches both, and because
+  `power_sub_build_violations` lives *above* validation in the import DAG and has to
+  register itself. The three checks that **block a save** are deliberately not part of it
+  — refusing to save is a different question from warning — and `_save_power` asks those
+  directly.
 - **Nullify's card reads differently than it used to.** Its `resistance` row was replaced by
   an `opposed` one, so a card that read "Resistance: 8 vs. Will or rank" now reads "Opposed:
   8 vs. targeted rank or Will" and gains a rollable footer line where it had an unrollable
@@ -590,64 +620,102 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 
 ### Sub-builds
 
-- **A sub-build has no Power Level check of its own.** A minion is "subject to the normal
-  Power Level limits" and its own sheet shows them the way any sheet does, but the
-  *constructor* only warns about the point budget. Opening the minion is the only way to see
-  a PL breach in it.
+- **A sub-build is held to its wielder's Power Level.** The slot already stamped the PL
+  onto the build; `power_sub_build_violations` now runs the same `power_level_violations`
+  walk the nested sheet does and prefixes each message with the slot's name, so a breach
+  no longer needs the minion opened to be found.
 - **A sub-build is not counted anywhere outside its power.** A minion's gear, conditions and
   hero points are real fields on a real `Character` that nothing plays with: the GM cannot
   pin it, damage cannot be applied to it, and a session does not surface it as a combatant.
   It is a *build*, not a creature at the table. "Send this minion to the GM window" is the
   obvious next thing to want.
-- **A Summon's minion is a single build even with Variable Type.** The book's own reading
-  (p145: "You always summon the same minion unless you apply the Variable Type modifier")
-  makes one build right for the ordinary case, and Multiple Minions doubles how many of that
-  *same* creature appear. A Variable Type Summon really does want a menu of minions — which
-  is Variable's own unbuilt problem in miniature, and was left with it.
-- **A modifier's `subBuild` count reads the chip's rank**, so a *repeatable* sub-build-bearing
-  modifier would need thought: two copies would produce two independent slots sharing one
-  config key and overwrite each other. Nothing is both today, and
-  `test_the_ruleset_marks_exactly_the_repeatable_modifiers` would catch a seventh repeatable
-  being added — but not this pairing specifically.
+- **A Variable Type Summon holds a menu of minions.** One build is right for the ordinary
+  case — p145: "You always summon the same minion unless you apply the Variable Type
+  modifier" — and Multiple Minions doubles how many of that *same* creature appear. With
+  Variable Type attached the slot becomes a `menu`: as many builds as the player cares to
+  make, each on the same budget, none counted against an allowance (the power still
+  summons one at a time, so there is no allowance to raise). Which modifiers do that is
+  data — `menuWith` on the slot, because it is the *slot* that changes shape.
+  **Which one is summoned is not modelled**: a minion is a build, not a creature at the
+  table (see the bullet above), so a runtime selection would decide nothing until that
+  changes.
+- **A modifier's `subBuild` count reads the chip's rank**, so a *repeatable*
+  sub-build-bearing modifier would need thought: two copies would produce two independent
+  slots sharing one config key and overwrite each other. Nothing is both today, and
+  `test_no_modifier_is_both_repeatable_and_buys_a_sub_build` is the tripwire for the day
+  something is — the failure would be silent data loss, so it is worth a test of its own
+  rather than being left to the reader.
 
 ### The Dynamic point pool
 
+- **Only a two-member split has a control of its own.** Deciding the split is a free
+  action taken once per turn at the table, so the dialog leads with a direct one — a
+  single slider handle between the two members, everything left of it one member's and
+  everything right the other's (`ui/sections/pool_allocator.py`). Three or more members
+  still get only the spin grid. The intended control is a **regular N-gon with a
+  draggable puck**: the puck's barycentric coordinates are the members' shares, so
+  dragging it to a vertex gives that member everything and holding it in the middle
+  spreads the pool evenly, rounded by largest-remainder so the shares still sum to the
+  pool exactly. `make_allocator` is the only place that needs to learn about it and
+  `sharesChanged` already carries a list, so nothing downstream changes. It wants custom
+  painting, which nothing in this app does but `connection_indicator._StatusDot` — copy
+  its colour handling, because a theme token is allowed to be a `palette(...)`
+  expression that `QColor` cannot parse.
+- **An allocator always spreads the whole pool; the spin boxes are still the state.**
+  Leaving part of a pool unassigned is legal and the slider cannot express it, so the
+  spins remain authoritative and remain the way to hold points back. Opening the dialog
+  on a spin-made split with slack puts the handle where the first member's share is and
+  says what is unspent underneath, rather than moving the numbers to suit the control.
+
 - **A pooled split lives only at the group level.** `dynamic_points` is on `Power` and
   `PowerGroup`, not on `PowerEffectInstance`, so an array of a *single power's own effects*
-  is priced for Dynamic members but cannot split its pool. The reason is one level down: an
-  effect-level array has **no runtime member selection at all** — nothing checks "is this the
-  selected effect", so every effect of an array-structured power is live simultaneously
-  today, Dynamic or not. Building a pool on top of that would ration ranks in an array that
-  is already, wrongly, running everything; fixing the selection first is the honest order.
+  is priced for Dynamic members but cannot split its pool. The selection underneath it is
+  now there — `Power.active_effect` names the effect in use, `effect_is_selected` gates
+  `effect_is_active` on it, and the card carries a **Using** picker — so an effect-level
+  pool is buildable in the way it was not before: it wants `dynamic_points` on
+  `PowerEffectInstance`, a `live_array_effects` beside `live_array_children`, and a way to
+  reach the split dialog from a card rather than from a group header.
 - **A split array's ordinary members go dark.** `live_array_children` gives the pool
   priority: once any Dynamic member holds a share, the array's *non*-Dynamic alternates are
   not running, since they cannot hold a share and the whole pool is spoken for. That is the
   rules-correct reading and the dialog says so, but it does mean the way back to an ordinary
-  alternate is "Clear the split" rather than clicking its card — and clicking one still moves
-  `active_child_id`, silently, until the split is cleared.
+  alternate is "Clear the split" rather than clicking its card. While the pool is split
+  `_activation_role` therefore returns `""` for every member — the click used to be armed
+  and moved `active_child_id` with nothing visible happening — and the card keeps the
+  tooltip saying why it has stopped being a control. The dimming outlives the role:
+  `_node_is_inactive` asks the array (`_selectable_array_member`), not the card.
 - **The split does not follow a rebuild.** A share is an absolute number of points, so
   editing the array moves the pool underneath a split already made. Nothing renormalises: the
   shares stay put and may now sum to less than the pool (legal, just wasteful) or, if the base
   got cheaper, to more than it. The dialog re-bounds every row the moment it is reopened, so
   the fix is one visit; a rebuild that quietly rescaled a player's split would be worse.
-- **`effect_current_rank` can return 0.** Only through the pool, and only for a member below
-  its minimum — but every reader of it should be checked against that before assuming a rank
-  is at least 1. The dial's own floor is unchanged.
+- **`effect_current_rank` can return 0** — only through the pool, and only for a member
+  below its minimum. Every reader has been checked against that: none divides by it, the
+  size readout returns early on it, and everywhere else it is a summand or a fallback
+  where 0 is the honest answer. A *new* reader still owes the same check.
 
 ### Extra Effort and power stunts
 
-- **Only an *effect* can be pushed.** The rank increase "includes improving your Strength
-  rank for either Damage or Lifting, or your movement Speed rank in one mode of movement you
-  have" (p21), and neither of those is a `PowerEffectInstance`: they are an ability and a
-  derived readout. The seam exists — `trait_contributions` is where a temporary ability bonus
-  would join size, powers, advantages and gear — but it is a second feature with a second
-  control. A Flight or a Speed *effect* is pushable today; unaided ground speed and Strength
-  are not.
-- **Four of the six uses charge the fatigue and change no number.** An extra action, a +2 on
-  a check, a renewed attempt and a fresh resistance check are table business: the app records
-  them in the roll history and takes the rung. The +2 in particular does not reach the
-  roller's bonus slider — wiring it there would mean the roller knowing which roll the effort
-  was spent on, which nothing tracks.
+- **A trait can be pushed as well as an effect.** The rank increase names an effect, "your
+  Strength rank for either Damage or Lifting, or your movement Speed rank in one mode of
+  movement you have" (p21). The last two are not `PowerEffectInstance`s, so they are stored
+  on the character (`Character.extra_effort`, keyed `"category:stat"`) and reach the sheet
+  through `effort_contributions`, which joins `trait_contributions` and `_movement_grants`
+  in `GROUP_EFFORT` — a group that is *added* rather than weighed, since the benefit
+  explicitly goes "beyond the normal Power Level limits". What may be pushed is data
+  (`system.json`'s `pushableTraits`); a movement entry names no stat and is expanded into
+  the modes **this character has**, since that is a fact about the sheet. The System block
+  offers them as a submenu of the rank increase — neither has a card to be offered on —
+  and says beside the button what is currently held up. **Strength is applied as the
+  ability**, which is broader than "for Damage or Lifting": the app has no separate lifting
+  trait to aim at, which is the same simplification the shipped Lifting *effect* makes.
+- **The +2 lands in the roller; three uses still change no number.** "A +2 bonus on a single
+  check" is raised on the `bonus-requested` topic and added to the Dice block's bonus
+  slider — added, never replacing, since a circumstance bonus the player already dialled in
+  is theirs. Nothing tracks *which* check it was meant for, so it is the player's to spend
+  or drag off, which is the same bargain the pushed ranks strike. An extra action, a
+  renewed attempt and a fresh resistance check remain table business: the app records them
+  in the roll history and takes the rung.
 - **Nothing expires.** Extra Effort lasts "until the end of your turn" and the fatigue
   arrives "at the start of your next turn"; there is no turn tracker, so the push is cleared
   by a button (per power on its card, per character in the System menu) and the fatigue lands
@@ -660,11 +728,13 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   The doubled rank increase and the doubled fatigue are exact; taking an extra action *and* a
   rank increase for one doubled cost means using the menu twice, which charges two rungs
   anyway. The arithmetic agrees; only the wording of the second use is missing.
-- **A stunt can be dragged into a group.** The powers tree is drag-and-drop and nothing
-  refuses a stunt card a group, so one can end up an array member — costing 0, which makes it
-  the array's cheapest alternate and changes the pooling arithmetic under it. `strip_stunts`
-  recurses for exactly that reason, so it still never reaches the file, and the ⚠ still names
-  the ceiling; the honest fix is a drop guard in `_on_combine`/`_on_move`.
+- **A stunt is refused a group.** It costs 0, so inside an array it would be the cheapest
+  member by definition — moving the base, the pool and every other member's flat price —
+  and it is never saved, so the group would come back a member short. `_groupable` is
+  asked by both mutation seams (`_on_combine`/`_on_move`) and by the group `NodeList`'s
+  admission rule, so the refusal is *shown* rather than the drop being accepted and
+  dropped on the floor. Reordering a stunt at the top level is untouched. `strip_stunts`
+  still recurses, since a file written before this can hold one.
 - **Nothing stops a stunt and its source power being live at once.** The rules make an
   alternate effect mutually exclusive with what it is an alternate of, and the array
   machinery enforces that for a bought alternate — but a stunt is a card of its own, so no

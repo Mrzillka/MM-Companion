@@ -44,6 +44,7 @@ from mm_companion.core.rules import (
     TARGET_EFFECT,
     USE_POWER_STUNT,
     USE_RANK_INCREASE,
+    PushTarget,
     determination_ranks,
     effect_current_rank,
     effect_display_name,
@@ -54,7 +55,9 @@ from mm_companion.core.rules import (
     next_fatigue,
     power_is_stunt,
     pushable_effects,
+    pushable_traits,
     pushed_effects,
+    pushed_traits,
     stunt_powers,
 )
 from mm_companion.ui.widgets import BOLD_STYLE
@@ -64,6 +67,10 @@ from mm_companion.ui.widgets import BOLD_STYLE
 #: player looks for in this menu, and a list that quietly omitted two of the book's six
 #: uses would read as a shorter rule.
 _ON_THE_CARD = "on the power's card"
+
+#: Above the rank increase's own submenu — the two things the rules let it name that
+#: are not effects, and so have no card of their own to be offered on.
+_TRAIT_HEADER = "Push one of your own traits"
 
 #: The character-wide menu's title line, so the menu says what it costs before it is used.
 _MENU_TITLE = "Extra Effort — {cost} at the start of your next turn"
@@ -85,12 +92,17 @@ def character_effort_menu(
     on_chosen: Callable[[ExtraEffortUse], None],
     on_clear: Callable[[], None] | None = None,
     on_drop_stunts: Callable[[], None] | None = None,
+    on_push_trait: Callable[[ExtraEffortUse, PushTarget], None] | None = None,
 ) -> QMenu:
     """The whole list of uses, for the block that owns no effect in particular.
 
     Built from the ruleset's list, so a mod adding a seventh use is offered it here with
-    no Python; the two that have to name an effect are shown disabled, pointing at the
-    card where they can actually be taken.
+    no Python. The two that have to name an effect point at the card where they can be
+    taken — except that the **rank increase** can also name something this block *does*
+    own: "your Strength rank for either Damage or Lifting, or your movement Speed rank in
+    one mode of movement you have" (p21). Neither is an effect, so neither has a card, and
+    a submenu of the character's own pushable traits is offered here instead
+    (:func:`~mm_companion.core.rules.pushable_traits`).
     """
 
     menu = QMenu(parent)
@@ -98,8 +110,12 @@ def character_effort_menu(
     header = menu.addAction(_MENU_TITLE.format(cost=cost))
     header.setEnabled(False)
     menu.addSeparator()
+    traits = pushable_traits(character, game_data) if on_push_trait is not None else []
     for use in extra_effort_uses(game_data):
         if use.target == TARGET_EFFECT:
+            if use.id == USE_RANK_INCREASE and traits:
+                _add_trait_submenu(menu, use, traits, on_push_trait)
+                continue
             action = menu.addAction(f"{use.label} — {_ON_THE_CARD}")
             action.setEnabled(False)
             continue
@@ -109,12 +125,12 @@ def character_effort_menu(
     # The way back. Extra Effort lasts "until the end of your turn" and nothing here
     # tracks turns, so the end of one is a button — offered only while there is
     # something to take back, and character-wide because that is what a turn ending is.
-    pushed = pushed_effects(character)
+    pushed = len(pushed_effects(character)) + len(pushed_traits(character))
     if pushed and on_clear is not None:
         menu.addSeparator()
-        plural = "" if len(pushed) == 1 else "s"
-        clear = menu.addAction(f"Clear the ranks pushed into {len(pushed)} effect{plural}")
-        clear.setToolTip("Your turn ended: every effect goes back to the rank it was bought at.")
+        plural = "" if pushed == 1 else "s"
+        clear = menu.addAction(f"Clear the ranks pushed into {pushed} trait{plural}")
+        clear.setToolTip("Your turn ended: everything goes back to the rank it was bought at.")
         clear.triggered.connect(lambda _checked=False: on_clear())
     # Stunts get their own entry rather than riding on that one, because they answer to a
     # different clock: a push is over at the end of your turn, a stunt at the end of the
@@ -128,6 +144,35 @@ def character_effort_menu(
         drop.setToolTip("The scene ended: a stunt is temporary, and its card goes with it.")
         drop.triggered.connect(lambda _checked=False: on_drop_stunts())
     return menu
+
+
+def _add_trait_submenu(
+    menu: QMenu,
+    use: ExtraEffortUse,
+    traits: list[PushTarget],
+    on_push_trait: Callable[[ExtraEffortUse, PushTarget], None],
+) -> None:
+    """The rank increase's own submenu: the character's Strength and movement modes.
+
+    A submenu rather than a flat run of entries, because the list grows with every mode
+    the character has and the top level of this menu is the ruleset's six uses — a
+    Strength and four movement modes would bury them.
+    """
+
+    submenu = menu.addMenu(use.label)
+    submenu.setToolTip(use.description)
+    header = submenu.addAction(_TRAIT_HEADER)
+    header.setEnabled(False)
+    submenu.addSeparator()
+    for target in traits:
+        label = f"{target.label} ({target.note})" if target.note else target.label
+        if target.held:
+            label += f" — {target.held} already pushed"
+        action = submenu.addAction(label)
+        action.triggered.connect(lambda _checked=False, u=use, t=target: on_push_trait(u, t))
+    submenu.addSeparator()
+    on_card = submenu.addAction(f"A power's rank — {_ON_THE_CARD}")
+    on_card.setEnabled(False)
 
 
 def add_power_effort_actions(

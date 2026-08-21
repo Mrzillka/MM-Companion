@@ -37,7 +37,10 @@ from dataclasses import dataclass, replace
 from ..character import Character
 from ..data_loader import ExtraEffortRules, ExtraEffortUse, GameData
 from ..powers import Power, PowerEffectInstance, PowerGroup, PowerNode, power_is_stunt
+from .appliers import CATEGORY_ABILITY, CATEGORY_MOVEMENT
 from .conditions import apply_condition
+from .derived import EFFORT_KEY_SEP, effective_ability, effort_key
+from .movement import speed_lines
 from .powers_terms import effective_effect_stats
 from .runtime import effect_current_rank
 from .validation import leaf_powers
@@ -51,6 +54,12 @@ USE_RANK_INCREASE = "rank_increase"
 
 #: Its sibling: the other effect-naming use, and the seam the stunt pass will build on.
 USE_POWER_STUNT = "power_stunt"
+
+#: The use whose benefit is a number on the *next roll* rather than on the build: "a +2
+#: bonus on a single check". Named for the same reason the two above are — a ruleset may
+#: retitle it — and read so the roller can be handed the bonus rather than the player
+#: having to remember to type it in.
+USE_CHECK_BONUS = "bonus"
 
 
 def extra_effort_rules(game_data: GameData) -> ExtraEffortRules:
@@ -210,6 +219,9 @@ class ExtraEffortOutcome:
     use: ExtraEffortUse
     ranks: int = 0
     rank: int = 0
+    #: The Bonus use's own: what the next check is worth extra. Nothing on the build
+    #: moves for it — it is a number for one roll — so it is reported rather than stored.
+    check_bonus: int = 0
     target: str = ""
     fatigue: str = ""
     determination: bool = False
@@ -224,6 +236,7 @@ def spend_extra_effort(
     *,
     effect: PowerEffectInstance | None = None,
     effect_name: str = "",
+    trait: PushTarget | None = None,
     doubled: bool = False,
     determination: bool = False,
 ) -> ExtraEffortOutcome:
@@ -233,6 +246,13 @@ def spend_extra_effort(
     :attr:`~mm_companion.core.powers.PowerEffectInstance.extra_effort` up by
     :func:`extra_effort_rank_increase`; a power stunt changes nothing on the build — the
     GM adjudicates the stunt, and the app's part is the effort and the record.
+
+    ``trait`` is the *other* thing a Rank Increase may name (:func:`pushable_traits`):
+    the character's Strength, or one mode of their movement. It pushes the same number of
+    ranks into :attr:`~mm_companion.core.character.Character.extra_effort` instead, from
+    where :func:`~.derived.effort_contributions` puts it on the sheet. The two are
+    mutually exclusive — a use names one thing — and ``effect`` wins if both arrive,
+    since only a card can offer one.
 
     ``doubled`` is **Extraordinary Effort** (p86): two benefits — here, twice the ranks —
     for "two instances of the Fatigued condition", so the ladder is climbed twice.
@@ -254,6 +274,18 @@ def spend_extra_effort(
         # What the card will actually read, not bought + pushed: an effect turned down on
         # its dial, or held under a Dynamic share, is pushed from where it stands.
         rank = effect_current_rank(effect, game_data, char)
+    elif use.id == USE_RANK_INCREASE and trait is not None:
+        ranks = extra_effort_rank_increase(char, game_data) * (2 if doubled else 1)
+        # Cumulative for the same reason an effect's push is: two uses are two rungs of
+        # fatigue, and the ranks should stack the way the price does.
+        char.extra_effort[trait.key] = max(0, char.extra_effort.get(trait.key, 0)) + ranks
+        rank = _trait_rank(char, game_data, trait)
+        effect_name = effect_name or trait.label
+    check_bonus = 0
+    if use.id == USE_CHECK_BONUS:
+        # Doubled by Extraordinary Effort like every other benefit: "two benefits"
+        # for two rungs, and twice a +2 is the honest reading of taking this one twice.
+        check_bonus = extra_effort_rules(game_data).check_bonus * (2 if doubled else 1)
     fatigue = ""
     if not determination:
         for _ in range(2 if doubled else 1):
@@ -264,12 +296,30 @@ def spend_extra_effort(
         use=use,
         ranks=ranks,
         rank=rank,
+        check_bonus=check_bonus,
         target=effect_name,
         fatigue=fatigue,
         determination=determination,
         doubled=doubled,
     )
     return replace(outcome, note=extra_effort_note(outcome, game_data))
+
+
+def _trait_rank(char: Character, game_data: GameData, trait: PushTarget) -> int:
+    """What a pushed trait now reads, so the note can say where it got to.
+
+    Asked of the sheet rather than added up here: a movement mode's rank is the net of
+    everything granting it, and a note that said "pushed Flight to 5" while the sheet
+    said 4 would be the kind of disagreement this whole layer exists to avoid. ``0`` for
+    a category with nothing to ask, which reads as "no number to report".
+    """
+
+    category, _, stat = trait.key.partition(EFFORT_KEY_SEP)
+    if category == CATEGORY_MOVEMENT:
+        return next((line.rank for line in speed_lines(char, game_data) if line.mode == stat), 0)
+    if category == CATEGORY_ABILITY:
+        return effective_ability(char, game_data, stat)
+    return 0
 
 
 def extra_effort_note(outcome: ExtraEffortOutcome, game_data: GameData) -> str:
@@ -282,6 +332,10 @@ def extra_effort_note(outcome: ExtraEffortOutcome, game_data: GameData) -> str:
 
     if outcome.ranks and outcome.target:
         benefit = f"pushed {outcome.target} to rank {outcome.rank} with Extra Effort"
+    elif outcome.check_bonus:
+        # Names the number, because it is about to be sitting in the roller's bonus and
+        # the history is where a player checks what it was for.
+        benefit = f"took +{outcome.check_bonus} on a check with Extra Effort"
     else:
         # The article is a guess, and a cheap one: every use's label is a noun phrase the
         # ruleset wrote, so the alternative is either a grammar field in the data or a
@@ -312,11 +366,11 @@ def clear_power_extra_effort(power: Power) -> int:
 
 
 def clear_extra_effort(char: Character) -> int:
-    """Drop every rank Extra Effort has pushed into this character's effects.
+    """Drop every rank Extra Effort has pushed into this character — effects and traits.
 
     Extra Effort lasts "until the end of your turn" and the app tracks no turns, so the
     end of one is a button rather than a tick — the same bargain the array's point split
-    strikes. Returns how many effects were cleared, so a caller can leave the sheet alone
+    strikes. Returns how many things were cleared, so a caller can leave the sheet alone
     when there was nothing to clear.
     """
 
@@ -324,6 +378,8 @@ def clear_extra_effort(char: Character) -> int:
     for effect in pushed_effects(char):
         effect.extra_effort = 0
         cleared += 1
+    cleared += len([key for key, ranks in char.extra_effort.items() if ranks])
+    char.extra_effort.clear()
     return cleared
 
 
@@ -366,3 +422,76 @@ def pushed_effects(char: Character) -> list[PowerEffectInstance]:
         for effect in power.effects
         if effect.extra_effort
     ]
+
+
+@dataclass(frozen=True)
+class PushTarget:
+    """One thing on this sheet that Extra Effort's rank increase could name.
+
+    The offer, not the push: ``key`` is where the ranks would be written in
+    :attr:`~mm_companion.core.character.Character.extra_effort`, and ``label``/``note``
+    are what the menu says. ``held`` is what is already pushed there, so an entry can
+    show what a second use would build on.
+    """
+
+    key: str
+    label: str
+    note: str = ""
+    held: int = 0
+
+
+def pushable_traits(char: Character, game_data: GameData) -> list[PushTarget]:
+    """The character's own traits Extra Effort may push, in the ruleset's order.
+
+    The rank increase names an effect, "your Strength rank for either Damage or
+    Lifting", or "your movement Speed rank in one mode of movement you have" (p21). The
+    effects are :func:`character_pushable_powers`' business; these are the other two.
+
+    A ``movement`` entry naming no ``stat`` is expanded into **the modes this character
+    actually has** — "one mode of movement you have" is a fact about the sheet, so the
+    ruleset states the rule and the sheet supplies the list. A character who cannot fly
+    is offered no Flight to push.
+
+    The Strength entry is offered as an *ability*, which is broader than the rules'
+    "for Damage or Lifting": the app has no separate lifting trait to aim at, which is
+    the same simplification the shipped **Lifting** effect already makes (it raises the
+    ability too). The note says which uses the rules mean.
+    """
+
+    targets: list[PushTarget] = []
+    for record in extra_effort_rules(game_data).pushable_traits:
+        if record.category == CATEGORY_MOVEMENT and not record.stat:
+            for line in speed_lines(char, game_data):
+                key = effort_key(CATEGORY_MOVEMENT, line.mode)
+                label = f"{record.label or 'Speed'}: {line.label}"
+                targets.append(PushTarget(key, label, record.note, char.extra_effort.get(key, 0)))
+            continue
+        if not record.stat:
+            continue
+        key = effort_key(record.category, record.stat)
+        targets.append(
+            PushTarget(key, record.label or record.stat, record.note, char.extra_effort.get(key, 0))
+        )
+    return targets
+
+
+def pushed_traits(char: Character) -> dict[str, int]:
+    """Every trait currently holding Extra Effort ranks, keyed as they are stored."""
+
+    return {key: ranks for key, ranks in char.extra_effort.items() if ranks}
+
+
+def pushed_trait_labels(char: Character, game_data: GameData) -> dict[str, int]:
+    """The same, keyed by what to *call* each one — the sheet's readable view.
+
+    Resolved through :func:`pushable_traits` so a pushed mode is named the way the menu
+    that offered it named it, and a key whose trait has since gone (a Flight power
+    deleted while its push stood) falls back to the bare stat rather than vanishing —
+    the ranks are still on the character and still want clearing.
+    """
+
+    by_key = {target.key: target.label for target in pushable_traits(char, game_data)}
+    return {
+        by_key.get(key, key.partition(EFFORT_KEY_SEP)[2] or key): ranks
+        for key, ranks in pushed_traits(char).items()
+    }

@@ -40,7 +40,7 @@ from ..data_loader import GameData, Modifier, SubBuild
 from ..powers import ModifierSelection, Power, PowerEffectInstance
 from .costs import power_points_spent
 from .powers_terms import note_value
-from .validation import leaf_powers
+from .validation import POWER_CHECKS, leaf_powers, power_level_violations
 
 __all__ = [
     "SubBuildSlot",
@@ -69,6 +69,11 @@ class SubBuildSlot:
     power built with no character open has no such number. A slot with no budget is
     editable but unchecked — the same bargain every other rule here strikes when it
     cannot see a character.
+
+    ``menu`` marks a slot the player may fill as often as they like — a Variable Type
+    Summon, which "always summon[s] the same minion" without it (p145). It is not a
+    bigger ``count``: the power still summons one at a time, so nothing is counted
+    against it and the over-count warning stands down.
     """
 
     spec: SubBuild
@@ -76,6 +81,7 @@ class SubBuildSlot:
     modifier: Modifier | None = None
     selection: ModifierSelection | None = None
     count: int = 1
+    menu: bool = False
     budget: int | None = None
     power_level: int | None = None
     #: What bought this slot, by display name — the modifier for a chip-owned slot,
@@ -124,11 +130,13 @@ def _slot(
         )
 
     count = resolve(spec.count)
+    attached = {sel.modifier_id for sel in (*effect.extras, *effect.flaws)}
     return SubBuildSlot(
         spec=spec,
         effect=effect,
         modifier=modifier,
         selection=selection,
+        menu=bool(attached & set(spec.menu_with)),
         # No ``count`` declared — or a kind that cannot answer from what this slot has —
         # means the one build Summon buys, never zero: a slot nobody can fill is a
         # button that does nothing.
@@ -279,16 +287,22 @@ def power_sub_build_violations(
       costing more than its wielder. The budget moves with the power, so this can only
       be a live check;
     * **too many builds** — a Metamorph dropped from rank 3 to rank 1 keeps the forms
-      it had, since silently deleting a player's character is not a rounding error;
+      it had, since silently deleting a player's character is not a rounding error. A
+      **menu** slot is exempt: a Variable Type Summon is entitled to as many minions as
+      the player builds, since it still summons one of them at a time;
     * **what a sub-character may not have** — a summoned minion "cannot have minions of
       their own, either from this effect or the Minions advantage" (p145), which is a
-      fact about the *nested* build and so unreachable from any picker at all.
+      fact about the *nested* build and so unreachable from any picker at all;
+    * **over Power Level** — a minion is "subject to the normal Power Level limits", and
+      the limit is the wielder's own, which is what the slot stamps onto the build. Its
+      own sheet shows a breach the way any sheet does, but opening the minion was the
+      only way to find out; the same walk runs here so the power that buys it says so.
     """
 
     violations: list[str] = []
     for slot in power_sub_build_slots(power, game_data, char):
         builds = sub_build_characters(slot)
-        if len(builds) > slot.count:
+        if not slot.menu and len(builds) > slot.count:
             violations.append(
                 f"{slot.label}: {len(builds)} built where this power buys "
                 f"{slot.count} — the extra one(s) cost nothing and do nothing."
@@ -302,6 +316,12 @@ def power_sub_build_violations(
                     f"this {slot.owner_name} allows."
                 )
             violations.extend(_forbidden(slot, name, build, game_data))
+            # The nested sheet's own PL check, run from out here. Each message is
+            # prefixed, since the reader is looking at the *power* and a bare
+            # "Dodge/Parry 25 exceeds PL cap 20" would read as the wielder's.
+            violations.extend(
+                f"{name}: {message}" for message in power_level_violations(build, game_data)
+            )
     return violations
 
 
@@ -331,3 +351,13 @@ def _forbidden(slot: SubBuildSlot, name: str, build: Character, game_data: GameD
                     f"{name}: has the {advantage.name} advantage, which a {kind} may not."
                 )
     return messages
+
+
+# A minion over its budget is a build error like any other, so it belongs on both
+# surfaces that list them. It is registered from here rather than listed in
+# ``validation`` because checking a nested character means walking its powers tree, and
+# ``leaf_powers`` is validation's — the import only goes one way.
+POWER_CHECKS.register(
+    "sub-build over budget",
+    lambda power, char, data: power_sub_build_violations(power, data, char),
+)

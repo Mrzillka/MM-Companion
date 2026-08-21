@@ -46,6 +46,8 @@ from mm_companion.core.rules import (
     initiative_roll,
     movement_mode_lines,
     power_level_for_points,
+    pushed_effects,
+    pushed_trait_labels,
     reconcile_points_to_level,
     speed_columns,
     spend_extra_effort,
@@ -391,6 +393,10 @@ class SystemInfoSection(QGroupBox):
     #: The same fan-out the Conditions block's own signal drives, because it is the same
     #: event: the model changed, and every view over a condition has to restate itself.
     conditionsChanged = Signal()
+    #: The +2 Extra Effort buys on a check (p21) — the one benefit that is a number on
+    #: the *next roll* rather than on the build. Nothing tracks which roll that will be,
+    #: so it is handed to the block that owns the sliders and the player rolls with it.
+    bonusRequested = Signal(int)
     #: The Initiative readout was right-clicked and pinned — carries a
     #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
     #: GM opened from a card (see :meth:`set_pin_target`).
@@ -622,12 +628,40 @@ class SystemInfoSection(QGroupBox):
             "next turn you gain the next rung of the fatigue ladder."
         )
         self._extra_effort.clicked.connect(self._show_extra_effort_menu)
+        # What is currently pushed. A power's card carries an "Extra Effort" row saying
+        # why a rank moved; a pushed *trait* has no card, and the enhancement column that
+        # shows it looks like any other bonus — so without this the only sign the
+        # character is straining is a number that has quietly changed.
+        self._effort_note = QLabel()
+        self._effort_note.setStyleSheet(tinted_style("tint.warning", bold=False))
+        self._effort_note.setVisible(False)
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._extra_effort)
+        layout.addWidget(self._effort_note)
         layout.addStretch()
         return row
+
+    def _refresh_effort_note(self) -> None:
+        """Restate what Extra Effort is currently holding up, or hide the note.
+
+        Names the traits, because those are the ones with nowhere else to say it, and
+        counts the effects, because each of those already says so on its own card.
+        """
+
+        parts = [
+            f"{label} +{ranks}"
+            for label, ranks in pushed_trait_labels(self._character, self._data).items()
+        ]
+        effects = len(pushed_effects(self._character))
+        if effects:
+            parts.append(f"{effects} effect{'' if effects == 1 else 's'}")
+        self._effort_note.setText(("⚡ " + ", ".join(parts)) if parts else "")
+        self._effort_note.setToolTip(
+            "Held up by Extra Effort until the end of your turn — clear it from this menu."
+        )
+        self._effort_note.setVisible(bool(parts))
 
     def extra_effort_menu(self) -> QMenu:
         """The menu of uses, built but not shown — the seam the tests take.
@@ -643,6 +677,7 @@ class SystemInfoSection(QGroupBox):
             self.use_extra_effort,
             self.clear_extra_effort,
             self.drop_stunts,
+            self.push_trait,
         )
 
     def _show_extra_effort_menu(self) -> None:
@@ -657,6 +692,12 @@ class SystemInfoSection(QGroupBox):
         core's, so a rung gained this way bundles and supersedes exactly like one the
         Conditions block applied — and the blocks that show conditions restate themselves
         off the topics raised here.
+
+        The **Bonus** use is the one whose benefit is not on the build at all: "+2 on a
+        single check", which nothing here can apply because nothing tracks which check it
+        will be. It is raised on ``bonus-requested`` instead, and the Dice block drops it
+        into the bonus slider — so the player rolls with it rather than being charged a
+        rung of fatigue for a number they then have to remember to type in.
         """
 
         dialog = ExtraEffortDialog(self._character, self._data, use, parent=self)
@@ -671,13 +712,49 @@ class SystemInfoSection(QGroupBox):
         )
         if dialog.spend_hero_point:
             self.adjust_hero_points(-1)
+        if outcome.check_bonus:
+            self.bonusRequested.emit(outcome.check_bonus)
         self.noteRequested.emit(outcome.note)
         self.conditionsChanged.emit()
         self._emit_edited()
         return True
 
+    def push_trait(self, use, target) -> bool:
+        """Push ranks into one of the character's own traits; ``False`` when cancelled.
+
+        The rank increase's third target, after an effect's rank: "your Strength rank for
+        either Damage or Lifting, or your movement Speed rank in one mode of movement you
+        have" (p21). Neither is an effect, so neither has a card to be taken on, and this
+        block is the one that owns the character rather than any one power.
+
+        A *build* change rather than a runtime one, for the reason
+        :meth:`clear_extra_effort` publishes one: the ranks are saved with the sheet, and
+        every block that shows an ability or a speed restates itself off ``facts-changed``.
+        """
+
+        dialog = ExtraEffortDialog(
+            self._character, self._data, use, effect_name=target.label, parent=self
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            trait=target,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.adjust_hero_points(-1)
+        self.noteRequested.emit(outcome.note)
+        self.conditionsChanged.emit()
+        self.changed.emit()
+        self._emit_edited()
+        return True
+
     def clear_extra_effort(self) -> bool:
-        """Take back every rank Extra Effort pushed into this character's effects.
+        """Take back every rank Extra Effort pushed into this character.
 
         Publishes an ordinary *build* change rather than reaching into the Powers block:
         the ranks live on the effects, the block that draws them subscribes to
@@ -896,6 +973,7 @@ class SystemInfoSection(QGroupBox):
         (a slowing/immobilising condition on ground speed, a check penalty on initiative)
         the same display-only way the stat grids show them — the build math is untouched.
         """
+        self._refresh_effort_note()
         self._speed.render_lines(condition_speed_lines(self._character, self._data))
         self._speed.setToolTip(
             _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))

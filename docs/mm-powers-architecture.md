@@ -649,9 +649,20 @@ Three things a field can do beyond holding a value:
   attached (Variable Conditions defers the degree choices to use-time); `multiselectWith`
   upgrades it to multi-select instead; and `showWhenField` / `showWhenValue` reveal it only
   while a *sibling* field holds a value (the imposed-effect picker, once a degree reads
-  Transformed). A gated field is **built and hidden**, not omitted — tearing the form down
-  from inside the signal of the combo that changed is how Qt teardown bugs start. Closing a
-  gate drops the stored value; opening one re-seeds the field's own default.
+  Transformed) — and a `showWhenField` with **no** `showWhenValue` means "while the sibling
+  holds anything at all", which is how the imposed *rank* waits for an effect to be named
+  rather than merely for the degree that could impose one. A gated field is **built and
+  hidden**, not omitted — tearing the form down from inside the signal of the combo that
+  changed is how Qt teardown bugs start. Closing a gate drops the stored value; opening one
+  re-seeds the field's own default. One `config_field_gate_open` answers the question for
+  both the card and the game-terms rows, so a hidden field can never print a readout beside
+  itself.
+- **`namesOwner`** marks a `select` whose options are names for the *modifier* rather than
+  qualifiers of it, so the chosen label replaces the modifier's name instead of being
+  appended in parentheses — and keeps the capitals the ruleset gave it. Removable is the
+  case it exists for: its tiers read "Removable (only while Stunned and Defenseless)",
+  which appended to a modifier already called Removable produced "Removable (removable
+  (only while stunned and defenseless))".
 
 ---
 

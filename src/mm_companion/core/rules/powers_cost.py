@@ -30,6 +30,7 @@ from .runtime import (
     boost_allocations,
     config_trait_allocation,
     effect_current_rank,
+    set_array_base_index,
     set_dynamic_rank_cap,
 )
 from .size import effective_size_rank
@@ -1484,14 +1485,50 @@ def power_total_cost(power: Power, game_data: GameData, char: Character | None =
     return max(1, gross + power_scope_adjustment(power, game_data, gross, char))
 
 
+def array_cost_formula(members: Sequence[tuple[int, bool]], game_data: GameData) -> str:
+    """The working behind one array's total, from the same ``(full cost, dynamic)`` pairs
+    :func:`array_members_cost` prices; ``""`` for anything that is not a real array.
+
+    An array is the one place a total cannot be got at by adding up the numbers already
+    on the cards: three cards reading 10, 16 and 20 come to 23, because only the
+    costliest is paid in full and the rest are a flat point or two on top. Without the
+    working that is indistinguishable from a bug, which is the same complaint
+    :func:`power_cost_formula` was built for over Removable.
+
+    Members of a kind are collapsed rather than listed one by one — six alternates read
+    ``6 × 1 alternate``, not six ``+ 1`` terms — because the point is the *rule* being
+    applied, and a card that names each member is already above it.
+    """
+
+    if len(members) < 2:
+        return ""
+    costs = [cost for cost, _ in members]
+    base = costs.index(max(costs))
+    parts = [f"{costs[base]} base"]
+    if members[base][1]:
+        parts.append(f"{array_dynamic_primary_cost(game_data)} Dynamic base")
+    for dynamic, label in ((False, "alternate"), (True, "Dynamic alternate")):
+        count = sum(1 for i, (_, d) in enumerate(members) if i != base and d == dynamic)
+        if not count:
+            continue
+        price = array_alternate_cost(game_data, dynamic=dynamic)
+        parts.append(f"{price} {label}" if count == 1 else f"{count} × {price} {label}")
+    return " + ".join(parts)
+
+
 def power_cost_formula(power: Power, game_data: GameData, char: Character | None = None) -> str:
     """The working behind a power's total, or ``""`` when there is nothing to explain.
 
-    Only a power-scope modifier makes the total anything other than the sum of the effect
-    costs already shown on the cards, so this is empty for every ordinary power and the
-    constructor shows the bare number. When Removable is in play it reads
-    ``98 − 20 Removable``, which is the arithmetic the rules print (p161) and the thing a
-    player is most likely to think is a bug.
+    Two things make a total anything other than the sum of the effect costs already shown
+    on the cards, and each has its own clause. An **array** pools its members
+    (:func:`array_cost_formula`), and a **power-scope** modifier is charged once against
+    the whole power — Removable reads ``98 − 20 Removable``, the arithmetic the rules
+    print (p161) and the thing a player is most likely to think is a bug.
+
+    With both in play the array's working is parenthesised behind the gross it produces
+    (``22 (20 base + 2 × 1 alternate) − 5 Removable``) rather than nested inside the
+    subtraction, so the number the discount is charged against stays the one being read.
+    An ordinary power has neither and gets the bare number.
     """
 
     if power.cost_override is not None:
@@ -1499,16 +1536,101 @@ def power_cost_formula(power: Power, game_data: GameData, char: Character | None
     gross = power_gross_cost(power, game_data, char)
     if gross <= 0:
         return ""
+    working = ""
+    if power.structure == STRUCTURE_ARRAY:
+        working = array_cost_formula(
+            [(effect_total_cost(e, game_data, char), e.dynamic) for e in power.effects],
+            game_data,
+        )
     terms = power_scope_terms(power, game_data, gross, char)
     if not terms:
-        return ""
-    text = str(gross)
+        return working
+    text = f"{gross} ({working})" if working else str(gross)
     for term in terms:
         sign = "−" if term.amount < 0 else "+"
         text += f" {sign} {abs(term.amount)} {term.modifier.name}"
     if gross + sum(term.amount for term in terms) < 1:
         text += " (1 minimum)"
     return text
+
+
+def group_scope_note(group: PowerGroup, game_data: GameData, char: Character | None = None) -> str:
+    """What a **power-scope** modifier costs a group, when several children carry one.
+
+    Removable is charged "per 5 points of the power's final cost" and applies to "the
+    power as a whole" (p161) — and a `Power` is where that whole stops. So a device
+    modelled as a *group* of three removable powers is charged three separate discounts,
+    each rounded up on its own, which is not the same number as one power with the same
+    effects: three powers of 6 points are discounted 2 each, where an 18-point power is
+    discounted 4.
+
+    That is not a mistake to be corrected — three genuinely separate removable devices
+    really are charged three times, and nothing here can tell that build from the other
+    one. So this **states the arithmetic** rather than warning about it, and only when
+    the two numbers actually differ. The honest single-device build is one power with
+    many effects, which is how the book's own armour is written; a player who can see
+    what the split is worth can decide which they meant.
+
+    ``""`` when no modifier is doubled up, or when splitting changes nothing.
+    """
+
+    if group.mode == STRUCTURE_ARRAY:
+        # An array pays for one member, so a second child's discount is not a second
+        # discount on the same points — there is nothing to compare against.
+        return ""
+    children = [child for child in group.children if isinstance(child, Power)]
+    charged: dict[str, list[PowerScopeTerm]] = {}
+    for child in children:
+        for term in power_scope_terms(
+            child, game_data, power_gross_cost(child, game_data, char), char
+        ):
+            charged.setdefault(term.modifier.id, []).append(term)
+    notes = []
+    for terms in charged.values():
+        if len(terms) < 2:
+            continue
+        separate = sum(term.amount for term in terms)
+        # What one power holding every one of these effects would have been charged: the
+        # costliest tier taken, against the summed gross.
+        whole = sum(power_gross_cost(child, game_data, char) for child in children)
+        dearest = max(terms, key=lambda t: abs(t.amount))
+        units = (
+            math.ceil(whole / dearest.modifier.cost_per_points)
+            if dearest.modifier.cost_per_points > 0
+            else 1
+        )
+        combined = (-1 if dearest.amount < 0 else 1) * dearest.magnitude * units
+        if separate == combined:
+            continue
+        notes.append(
+            f"{dearest.modifier.name} is charged once per power, so this group takes it "
+            f"{len(terms)} times ({abs(separate)} points, where one power holding the "
+            f"same effects would be {abs(combined)})."
+        )
+    return " ".join(notes)
+
+
+def node_cost_formula(node: PowerNode, game_data: GameData, char: Character | None = None) -> str:
+    """The working behind a *tree node's* total — the group-level twin of
+    :func:`power_cost_formula`, and empty whenever there is nothing to explain.
+
+    A group's children are whole cards, each already printing its own contribution, so
+    the only group that owes an explanation is an ``array``: its total is
+    :func:`array_cost_formula` over what those children cost at full rank, which is not
+    the sum of the flat prices beside their names. A leaf falls through to its own
+    formula, and a stunt — which costs nothing at all — explains itself on its card.
+    """
+
+    if power_is_stunt(node):
+        return ""
+    if isinstance(node, PowerGroup):
+        if node.mode != STRUCTURE_ARRAY:
+            return ""
+        return array_cost_formula(
+            [(node_cost(child, game_data, char), child.dynamic) for child in node.children],
+            game_data,
+        )
+    return power_cost_formula(node, game_data, char)
 
 
 def node_cost(node: PowerNode, game_data: GameData, char: Character | None = None) -> int:
@@ -1591,3 +1713,8 @@ def node_display_cost(
 # here instead (see :func:`~.runtime.set_dynamic_rank_cap`). Importing this module is what
 # turns the pool on, and :mod:`mm_companion.core.rules` always does.
 set_dynamic_rank_cap(dynamic_rank_cap)
+
+# The same hand-over for the same reason: which effect of an array is its base is a
+# question about cost, and an unselected array runs its base
+# (:func:`~.runtime.active_array_effect_index`).
+set_array_base_index(array_base_index)

@@ -85,9 +85,16 @@ GROUP_EQUIPMENT = "equipment"
 # creature must not stop the armour counting either.
 GROUP_INTRINSIC = "intrinsic"
 
+# The other group that does not compete: what the character is straining past their
+# limits for. Extra Effort's benefits "can even increase your ranks or bonuses beyond
+# the normal Power Level limits" (p20), so a pushed rank is added on top of whatever the
+# build already nets rather than weighed against it — a Strength pushed by 1 is 1 more
+# than the character had, however they came to have it.
+GROUP_EFFORT = "effort"
+
 #: Groups that are always added rather than competing. Kept as a set so a mod can
 #: neither be surprised by the special case nor need a second resolver to express one.
-ALWAYS_ADDED_GROUPS = frozenset({GROUP_INTRINSIC})
+ALWAYS_ADDED_GROUPS = frozenset({GROUP_INTRINSIC, GROUP_EFFORT})
 
 
 @dataclass(frozen=True)

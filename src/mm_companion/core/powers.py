@@ -288,6 +288,16 @@ class Power:
     alternate costs a flat point (:func:`mm_companion.core.rules.power_display_cost`).
     Both reference the target power by its stable :attr:`id`, not its (mutable) name.
 
+    ``active_effect`` is runtime state for a power whose **own effects** are an array:
+    the index of the one currently in use, ``None`` meaning "the base" (the costliest,
+    which is what the array is paid for). Only one effect of an array runs at a time —
+    that is what makes an array cheaper than the same effects bought independently — so
+    without it a three-effect array granted every one of its effects' bonuses at once
+    while paying for one. It is an *index* rather than an id because an effect has no
+    id to name, and it is clamped on read for the same reason ``current_rank`` is: a
+    build edited down to fewer effects keeps a selection it can still honour rather than
+    pointing past the end.
+
     ``activated`` and ``item_present`` are whole-power *runtime* state (§7): the
     Activation gate needs ``activated``, and a Removable gate's bonus applies only
     while ``item_present``. ``array_active`` is runtime too — for an array member,
@@ -346,6 +356,7 @@ class Power:
     activated: bool = True
     item_present: bool = True
     array_active: bool = True
+    active_effect: int | None = None
     dynamic: bool = False
     dynamic_points: int | None = None
     cost_override: int | None = None
@@ -370,6 +381,8 @@ class Power:
             data["cost_override"] = self.cost_override
         if self.stunt_of:
             data["stunt_of"] = self.stunt_of
+        if self.active_effect is not None:
+            data["active_effect"] = self.active_effect
         # The runtime switches, written only when off — see the class docstring.
         for key, value in (
             ("activated", self.activated),
@@ -397,6 +410,7 @@ class Power:
         power_id = raw.get("id") or uuid4().hex
         raw_cost = raw.get("cost_override")
         raw_share = raw.get("dynamic_points")
+        raw_effect = raw.get("active_effect")
         return cls(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
@@ -413,6 +427,7 @@ class Power:
             dynamic_points=None if raw_share is None else int(raw_share),
             cost_override=None if raw_cost is None else int(raw_cost),
             stunt_of=raw.get("stunt_of", ""),
+            active_effect=None if raw_effect is None else int(raw_effect),
         )
 
 

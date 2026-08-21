@@ -166,13 +166,12 @@
         },
         {
           "key": "imposedRank",
-          "label": "at rank",
+          "label": "At rank",
           "type": "points",
           "min": 1,
           "max": 30,
           "default": 1,
-          "showWhenField": "degree3",
-          "showWhenValue": "transformed",
+          "showWhenField": "imposedEffect",
           "hint": "The rank the imposed effect runs at. Its cost must not exceed this Affliction's own total cost."
         }
       ],
@@ -299,13 +298,13 @@
           "type": "allocation",
           "hint": "Spend the effect's ranks on the senses you are hidden from: one rank buys one sense, two ranks the whole sense type. Sight costs double (2 for normal sight, 4 for every sight sense). Touch senses are missing on purpose — hiding from touch means being incorporeal, which is the Insubstantial effect.",
           "allocOptions": [
-            { "id": "sight", "label": "Sight", "tiers": [2, 4], "description": "Normal sight first, then every sight sense — infravision, ultravision and the rest included. Sight is the double-cost type." },
-            { "id": "hearing", "label": "Hearing", "tiers": [1, 2], "description": "Normal hearing first, then every hearing sense, so sonar and ultra-hearing find nothing either." },
-            { "id": "smell", "label": "Smell", "tiers": [1, 2], "description": "Normal scent first, then every olfactory sense." },
-            { "id": "taste", "label": "Taste", "tiers": [1, 2], "description": "Normal taste first, then every taste sense." },
-            { "id": "radio", "label": "Radio", "tiers": [1, 2], "description": "Normal radio sense first, then every radio sense." },
-            { "id": "mental", "label": "Mental", "tiers": [1, 2], "description": "Normal mental sense first, then every mental sense." },
-            { "id": "special", "label": "Special", "tiers": [1, 2], "description": "One sense that fits no other type, then every sense of that type." }
+            { "id": "sight", "label": "Sight", "tiers": [2, 4], "tierLabels": ["normal sight", "all sight senses"], "description": "Normal sight first, then every sight sense — infravision, ultravision and the rest included. Sight is the double-cost type." },
+            { "id": "hearing", "label": "Hearing", "tiers": [1, 2], "tierLabels": ["normal hearing", "all hearing senses"], "description": "Normal hearing first, then every hearing sense, so sonar and ultra-hearing find nothing either." },
+            { "id": "smell", "label": "Smell", "tiers": [1, 2], "tierLabels": ["normal scent", "all olfactory senses"], "description": "Normal scent first, then every olfactory sense." },
+            { "id": "taste", "label": "Taste", "tiers": [1, 2], "tierLabels": ["normal taste", "all taste senses"], "description": "Normal taste first, then every taste sense." },
+            { "id": "radio", "label": "Radio", "tiers": [1, 2], "tierLabels": ["normal radio", "all radio senses"], "description": "Normal radio sense first, then every radio sense." },
+            { "id": "mental", "label": "Mental", "tiers": [1, 2], "tierLabels": ["normal mental sense", "all mental senses"], "description": "Normal mental sense first, then every mental sense." },
+            { "id": "special", "label": "Special", "tiers": [1, 2], "tierLabels": ["one special sense", "all senses of that type"], "description": "One sense that fits no other type, then every sense of that type." }
           ]
         }
       ],
@@ -479,29 +478,29 @@
           "type": "allocation",
           "hint": "Spend the effect's ranks across sense qualities (each applied to a chosen sense or sense type). Tiered qualities buy increasing scope.",
           "allocOptions": [
-            { "id": "accurate", "label": "Accurate", "tiers": [2, 4], "description": "The sense pinpoints a target precisely enough to target with it, rather than only noticing that something is there." },
-            { "id": "acute", "label": "Acute", "tiers": [1, 2], "description": "The sense distinguishes fine detail, telling one thing apart from another of its kind (one scent from another)." },
-            { "id": "analytical", "label": "Analytical", "tiers": [1, 2], "description": "An acute sense that also reads exact composition — the precise chemical make-up, not just 'smells of almonds'." },
+            { "id": "accurate", "label": "Accurate", "tiers": [2, 4], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense pinpoints a target precisely enough to target with it, rather than only noticing that something is there." },
+            { "id": "acute", "label": "Acute", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense distinguishes fine detail, telling one thing apart from another of its kind (one scent from another)." },
+            { "id": "analytical", "label": "Analytical", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "An acute sense that also reads exact composition — the precise chemical make-up, not just 'smells of almonds'." },
             { "id": "awareness", "label": "Awareness", "tiers": [1], "description": "Notice effects of one chosen descriptor being used at a distance, which is the usual way a Subtle effect gets spotted at all." },
-            { "id": "counters_concealment", "label": "Counters Concealment", "tiers": [2, 5], "description": "Ignore Concealment against this sense — one Concealment effect, then every Concealment effect for the whole sense type." },
+            { "id": "counters_concealment", "label": "Counters Concealment", "tiers": [2, 5], "tierLabels": ["one Concealment effect", "every Concealment on the sense type"], "description": "Ignore Concealment against this sense — one Concealment effect, then every Concealment effect for the whole sense type." },
             { "id": "counters_illusion", "label": "Counters Illusion", "tiers": [2], "description": "See through an Illusion affecting this sense." },
             { "id": "danger_sense", "label": "Danger Sense", "tiers": [2], "description": "Never be caught fully unaware — you get a notice check against surprise through this sense." },
             { "id": "dark_vision", "label": "Dark-Vision", "tiers": [2], "description": "See normally in total darkness; darkness does not conceal from this sense at all." },
             { "id": "detect", "label": "Detect", "tiers": [1], "description": "A new sense for one thing, quality or effect. It says only that the thing is there — add Accurate, Acute, Radius or Ranged for more." },
-            { "id": "dimensional", "label": "Dimensional", "tiers": [1, 2, 3], "description": "Extend every one of your senses into another dimension near where you stand in it — one named dimension, then a related group of them, then any dimension the setting has. The same 1 / 2 / 3 points as the Dimensional extra; take it here or there, not both." },
+            { "id": "dimensional", "label": "Dimensional", "tiers": [1, 2, 3], "tierLabels": ["one named dimension", "a group of dimensions", "any dimension"], "description": "Extend every one of your senses into another dimension near where you stand in it — one named dimension, then a related group of them, then any dimension the setting has. The same 1 / 2 / 3 points as the Dimensional extra; take it here or there, not both." },
             { "id": "direction_sense", "label": "Direction Sense", "tiers": [1], "description": "Always know which way is north and which way you are facing." },
             { "id": "distance_sense", "label": "Distance Sense", "tiers": [1], "description": "Judge distances exactly by sense alone." },
-            { "id": "extended", "label": "Extended", "tiers": [1, 2], "perNote": "per sense", "description": "The sense reaches ten times as far before distance penalties start — one sense, then the whole sense type." },
+            { "id": "extended", "label": "Extended", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "perNote": "per sense", "description": "The sense reaches ten times as far before distance penalties start — one sense, then the whole sense type." },
             { "id": "infravision", "label": "Infravision", "tiers": [1], "description": "See heat, letting you make out warm shapes in darkness or through smoke." },
             { "id": "low_light_vision", "label": "Low-Light Vision", "tiers": [1], "description": "Dim light does not conceal — you see in shadow as though it were bright." },
-            { "id": "microscopic_vision", "label": "Microscopic Vision", "tiers": [1, 2, 3, 4], "description": "See detail far too small for the naked eye, each tier one step finer (cell, then microbe, then molecule, then atom)." },
-            { "id": "penetrates_concealment", "label": "Penetrates Concealment", "tiers": [2, 4], "description": "Obstacles do not conceal from this sense: it reads straight through them. The lower tier buys a non-accurate sense type, the higher one an accurate sense." },
+            { "id": "microscopic_vision", "label": "Microscopic Vision", "tiers": [1, 2, 3, 4], "tierLabels": ["cell", "microbe", "molecule", "atom"], "description": "See detail far too small for the naked eye, each tier one step finer (cell, then microbe, then molecule, then atom)." },
+            { "id": "penetrates_concealment", "label": "Penetrates Concealment", "tiers": [2, 4], "tierLabels": ["a non-accurate sense type", "an accurate sense"], "description": "Obstacles do not conceal from this sense: it reads straight through them. The lower tier buys a non-accurate sense type, the higher one an accurate sense." },
             { "id": "radio", "label": "Radio", "tiers": [1], "description": "A new radio sense: receive broadcast radio signals directly." },
-            { "id": "radius", "label": "Radius", "tiers": [1, 2], "description": "The sense works in every direction at once, so nothing can approach from a blind side — one sense, then the whole sense type." },
-            { "id": "ranged", "label": "Ranged", "tiers": [1, 2], "description": "A normally touch-range sense works at a distance, at a penalty per space — one sense, then the whole sense type." },
-            { "id": "rapid", "label": "Rapid", "tiers": [1, 2], "perNote": "per sense", "description": "The sense takes in detail three time ranks faster than normal, letting you speed-read or catch what flickers past — one sense, then the whole sense type." },
+            { "id": "radius", "label": "Radius", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense works in every direction at once, so nothing can approach from a blind side — one sense, then the whole sense type." },
+            { "id": "ranged", "label": "Ranged", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "A normally touch-range sense works at a distance, at a penalty per space — one sense, then the whole sense type." },
+            { "id": "rapid", "label": "Rapid", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "perNote": "per sense", "description": "The sense takes in detail three time ranks faster than normal, letting you speed-read or catch what flickers past — one sense, then the whole sense type." },
             { "id": "time_sense", "label": "Time Sense", "tiers": [1], "description": "Always know what time it is, and time an event as exactly as a stopwatch." },
-            { "id": "tracking", "label": "Tracking", "tiers": [1, 2], "description": "Follow a trail with the sense, at half speed then at full speed." },
+            { "id": "tracking", "label": "Tracking", "tiers": [1, 2], "tierLabels": ["half speed", "full speed"], "description": "Follow a trail with the sense, at half speed then at full speed." },
             { "id": "ultra_hearing", "label": "Ultra-Hearing", "tiers": [1], "description": "Hear frequencies above and below the normal range, including ultrasound." },
             { "id": "ultravision", "label": "Ultravision", "tiers": [1], "description": "See ultraviolet light, making otherwise invisible marks and traces visible." }
           ]
@@ -567,21 +566,21 @@
           "hint": "Each condition costs its own points per rank and they add together — the lesser version of each is 1, the greater 2. Take the Variable extra to redistribute that total at will instead.",
           "options": [
             { "value": "cold_intense", "label": "Intense cold", "costValue": 1 },
-            { "value": "cold_extreme", "label": "Extreme cold", "costValue": 2 },
+            { "value": "cold_extreme", "label": "Extreme cold", "costValue": 2, "supersedes": ["cold_intense"] },
             { "value": "heat_intense", "label": "Intense heat", "costValue": 1 },
-            { "value": "heat_extreme", "label": "Extreme heat", "costValue": 2 },
+            { "value": "heat_extreme", "label": "Extreme heat", "costValue": 2, "supersedes": ["heat_intense"] },
             { "value": "hazardous_1", "label": "Hazardous movement (DC 10)", "costValue": 1 },
-            { "value": "hazardous_2", "label": "Hazardous movement (DC 15)", "costValue": 2 },
+            { "value": "hazardous_2", "label": "Hazardous movement (DC 15)", "costValue": 2, "supersedes": ["hazardous_1"] },
             { "value": "hindered_1", "label": "Hindered movement (−1 speed rank)", "costValue": 1 },
-            { "value": "hindered_2", "label": "Hindered movement (−2 speed ranks)", "costValue": 2 },
+            { "value": "hindered_2", "label": "Hindered movement (−2 speed ranks)", "costValue": 2, "supersedes": ["hindered_1"] },
             { "value": "gravity_high_1", "label": "High gravity (mass rank 1)", "costValue": 1 },
-            { "value": "gravity_high_2", "label": "High gravity (mass rank 2)", "costValue": 2 },
+            { "value": "gravity_high_2", "label": "High gravity (mass rank 2)", "costValue": 2, "supersedes": ["gravity_high_1"] },
             { "value": "gravity_low", "label": "Low gravity", "costValue": 1 },
-            { "value": "gravity_micro", "label": "Microgravity", "costValue": 2 },
+            { "value": "gravity_micro", "label": "Microgravity", "costValue": 2, "supersedes": ["gravity_low"] },
             { "value": "light_partial", "label": "Illumination (full concealment down to partial)", "costValue": 1 },
-            { "value": "light_daylight", "label": "Illumination (bright as daylight)", "costValue": 2 },
+            { "value": "light_daylight", "label": "Illumination (bright as daylight)", "costValue": 2, "supersedes": ["light_partial"] },
             { "value": "visibility_2", "label": "Reduced visibility (−2 to sight Perception)", "costValue": 1 },
-            { "value": "visibility_5", "label": "Reduced visibility (−5 to sight Perception)", "costValue": 2 }
+            { "value": "visibility_5", "label": "Reduced visibility (−5 to sight Perception)", "costValue": 2, "supersedes": ["visibility_2"] }
           ]
         }
       ],
@@ -976,14 +975,14 @@
           "type": "multiselect",
           "hint": "Two points per rank for every sense of that type at once — four for all sight senses. Ten per rank blocks everything.",
           "options": [
-            { "value": "Sight", "label": "Sight", "costValue": 4 },
-            { "value": "Hearing", "label": "Hearing", "costValue": 2 },
-            { "value": "Smell", "label": "Smell", "costValue": 2 },
-            { "value": "Taste", "label": "Taste", "costValue": 2 },
-            { "value": "Touch", "label": "Touch", "costValue": 2 },
-            { "value": "Radio", "label": "Radio", "costValue": 2 },
-            { "value": "Mental", "label": "Mental", "costValue": 2 },
-            { "value": "Special", "label": "Special", "costValue": 2 }
+            { "value": "Sight", "label": "Sight", "costValue": 4, "supersedes": ["senses:sight"] },
+            { "value": "Hearing", "label": "Hearing", "costValue": 2, "supersedes": ["senses:hearing"] },
+            { "value": "Smell", "label": "Smell", "costValue": 2, "supersedes": ["senses:smell"] },
+            { "value": "Taste", "label": "Taste", "costValue": 2, "supersedes": ["senses:taste"] },
+            { "value": "Touch", "label": "Touch", "costValue": 2, "supersedes": ["senses:touch"] },
+            { "value": "Radio", "label": "Radio", "costValue": 2, "supersedes": ["senses:radio"] },
+            { "value": "Mental", "label": "Mental", "costValue": 2, "supersedes": ["senses:mental"] },
+            { "value": "Special", "label": "Special", "costValue": 2, "supersedes": ["senses:special"] }
           ]
         }
       ],
@@ -1175,6 +1174,7 @@
       "subBuild": {
         "key": "minion",
         "label": "Minion",
+        "menuWith": ["variable_type"],
         "budget": { "kind": "per_rank", "perRank": 15 },
         "hint": "Build the summoned character on effect rank x 15 power points, under your own Power Level. They cannot have minions of their own.",
         "forbidsEffects": ["summon"],

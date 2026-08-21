@@ -441,6 +441,14 @@ class ConfigOption:
     than first-wins — so a second choice can shade a price the first one set. Removable's
     Short-Term Only is worth ``-1`` off whichever tier is chosen (Equipment 4 → 3), and
     the rules let that reach 0, which is why the sum is floored there and not at 1.
+
+    ``supersedes``, on a **multiselect** option, names the other options this one already
+    covers, so ticking both is paying twice for one thing. An entry is a bare ``value``
+    in the same field (Environment's *Extreme cold* covers its *Intense cold*) or
+    ``"field:value"`` when the option it covers lives in a sibling field (Obscure's whole
+    *Sight* sense type covers the single *sight* sense). Nothing is blocked — the pair is
+    a legal, wasteful build, and the player may have meant it — but
+    :func:`mm_companion.core.rules.power_redundant_option_violations` says so.
     """
 
     value: str
@@ -449,6 +457,7 @@ class ConfigOption:
     flat: bool | None = None
     ranked: bool | None = None
     cost_delta: int = 0
+    supersedes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -492,6 +501,12 @@ class AllocationOption:
     the character's movement speeds. ``tier_notes`` is an optional per-tier caveat shown
     beside that rate (Wall-Crawling's "vulnerable while climbing"). Both are read by
     :func:`mm_companion.core.rules.movement_mode_lines`.
+
+    ``tier_labels`` names what each tier *buys*, one entry per tier ("all sight senses").
+    It is what a readout says instead of the tier's number: a Concealment at Sight tier 2
+    used to print "Sight 2" beside a combo reading "4 ranks", two numbers that mean
+    different things sitting next to each other. Optional — an option without one falls
+    back to naming the ranks the tier costs, which is still not its index.
     """
 
     id: str
@@ -501,6 +516,7 @@ class AllocationOption:
     description: str = ""
     speeds: tuple[SpeedRank | None, ...] = ()
     tier_notes: tuple[str, ...] = ()
+    tier_labels: tuple[str, ...] = ()
 
     def speed(self, tier: int) -> SpeedRank | None:
         """The rate a 1-based ``tier`` grants, or ``None`` when it grants none."""
@@ -513,6 +529,18 @@ class AllocationOption:
         if 1 <= tier <= len(self.tier_notes):
             return self.tier_notes[tier - 1]
         return ""
+
+    def tier_label(self, tier: int) -> str:
+        """What a 1-based ``tier`` buys (``""`` when the option does not say)."""
+        if 1 <= tier <= len(self.tier_labels):
+            return self.tier_labels[tier - 1]
+        return ""
+
+    def tier_cost(self, tier: int) -> int:
+        """The ranks a 1-based ``tier`` costs, clamped to the tiers the option has."""
+        if not self.tiers:
+            return 0
+        return self.tiers[max(0, min(tier, len(self.tiers)) - 1)]
 
 
 @dataclass(frozen=True)
@@ -587,6 +615,13 @@ class EffectConfigField:
     ``show_when_value`` — Affliction reveals its imposed-effect picker only once a
     degree is set to Transformed. The sibling may be single- or multi-select, so
     "holds" means equals *or* contains. Both empty (the default) means always shown.
+
+    ``names_owner`` marks a ``select`` whose options are names for the *modifier itself*
+    rather than qualifiers of it, so the chosen label replaces the modifier's name
+    instead of being appended in parentheses. Removable's tiers are the case it exists
+    for: their labels read "Removable (only while Stunned and Defenseless)" / "Easily
+    Removable (…)", which qualified a modifier already called Removable produced
+    "Removable (removable (only while stunned and defenseless))".
     """
 
     key: str
@@ -598,6 +633,7 @@ class EffectConfigField:
     toggles: str | None = None
     source: str | None = None
     hides_field: bool = False
+    names_owner: bool = False
     hint: str = ""
     min_value: int = 0
     max_value: int = 0
@@ -779,6 +815,14 @@ class SubBuild:
     ``forbids_effects`` / ``forbids_advantages`` are what the sub-character may not
     itself have: a summoned minion "cannot have minions of their own, either from this
     effect or the Minions advantage" (p145). Checked as a warning, not prevented.
+
+    ``menu_with`` names modifiers that turn a counted slot into an **open menu** — as
+    many builds as the player cares to make, one of them summoned at a time. "You always
+    summon the same minion unless you apply the Variable Type modifier" (p145) is the one
+    case: a Variable Type Summon is not entitled to *more* minions at once, it is entitled
+    to have built several to choose between. It is a list of modifier ids rather than a
+    flag on the modifier because it is the *slot* that changes shape, and the slot is
+    where a reader looks to find out how many builds it holds.
     """
 
     key: str
@@ -788,6 +832,7 @@ class SubBuild:
     hint: str = ""
     forbids_effects: tuple[str, ...] = ()
     forbids_advantages: tuple[str, ...] = ()
+    menu_with: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1241,6 +1286,29 @@ class ExtraEffortUse:
 
 
 @dataclass(frozen=True)
+class PushableTrait:
+    """One thing other than an effect that Extra Effort's rank increase may name (p21).
+
+    The rules give three targets, and the app already had the first: an effect's rank,
+    "your Strength rank for either Damage or Lifting", or "your movement Speed rank in
+    one mode of movement you have". The other two are not
+    :class:`~mm_companion.core.powers.PowerEffectInstance` records — they are an ability and a
+    derived readout — so they are named here instead of being found on a power.
+
+    ``category`` is the contribution category the push lands in (``"ability"``,
+    ``"movement"``). A ``movement`` entry leaves ``stat`` empty, meaning **one of the
+    modes this character actually has**: which modes those are is a fact about the sheet,
+    not about the ruleset, so it is expanded per character rather than listed here.
+    ``note`` is the rules' own qualification, shown beside the label.
+    """
+
+    category: str
+    stat: str = ""
+    label: str = ""
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class ExtraEffortRules:
     """What Extra Effort grants and what it costs (``system.json``, p20-21).
 
@@ -1263,6 +1331,7 @@ class ExtraEffortRules:
     untapped_potential_advantage: str = "Untapped Potential"
     extraordinary_effort_advantage: str = "Extraordinary Effort"
     uses: tuple[ExtraEffortUse, ...] = ()
+    pushable_traits: tuple[PushableTrait, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2358,6 +2427,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         toggles=c.get("toggles"),
         source=c.get("source"),
         hides_field=bool(c.get("hidesField", False)),
+        names_owner=bool(c.get("namesOwner", False)),
         hint=c.get("hint", ""),
         min_value=int(c.get("min", 0)),
         max_value=int(c.get("max", 0)),
@@ -2373,6 +2443,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 flat=o.get("flat"),
                 ranked=o.get("ranked"),
                 cost_delta=int(o.get("costDelta", 0)),
+                supersedes=tuple(o.get("supersedes", ())),
             )
             for o in c.get("options", [])
         ),
@@ -2385,6 +2456,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 description=o.get("description", ""),
                 speeds=tuple(_parse_speed_rank(s) for s in o.get("speeds", ())),
                 tier_notes=tuple(o.get("tierNotes", ())),
+                tier_labels=tuple(o.get("tierLabels", ())),
             )
             for o in c.get("allocOptions", [])
         ),
@@ -2516,6 +2588,7 @@ def _parse_sub_build(raw: dict | None) -> SubBuild | None:
         hint=str(raw.get("hint", "")),
         forbids_effects=tuple(raw.get("forbidsEffects", ())),
         forbids_advantages=tuple(raw.get("forbidsAdvantages", ())),
+        menu_with=tuple(raw.get("menuWith", ())),
     )
 
 
@@ -3305,6 +3378,16 @@ def _parse_extra_effort(raw: object, default: ExtraEffortRules) -> ExtraEffortRu
             raw.get("extraordinaryEffortAdvantage", default.extraordinary_effort_advantage)
         ),
         uses=uses or default.uses,
+        pushable_traits=tuple(
+            PushableTrait(
+                category=str(t.get("category", "")),
+                stat=str(t.get("stat", "")),
+                label=str(t.get("label", "")),
+                note=str(t.get("note", "")),
+            )
+            for t in raw.get("pushableTraits", ())
+        )
+        or default.pushable_traits,
     )
 
 

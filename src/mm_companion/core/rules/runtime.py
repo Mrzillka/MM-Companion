@@ -127,6 +127,26 @@ def set_dynamic_rank_cap(resolver: DynamicRankCap | None) -> None:
     _dynamic_rank_cap = resolver
 
 
+# The second injected resolver, and injected for exactly the reason above: which effect
+# of an array is its *base* is a question about cost (the costliest is paid in full),
+# and cost lives one layer up. It answers "which index is this power's base effect?".
+ArrayBaseIndex = Callable[[Power, GameData, "Character | None"], int]
+
+_array_base_index: ArrayBaseIndex | None = None
+
+
+def set_array_base_index(resolver: ArrayBaseIndex | None) -> None:
+    """Install the resolver :func:`active_array_effect_index` asks for an array's base.
+
+    Called once by :mod:`.powers_cost` at import, like :func:`set_dynamic_rank_cap`.
+    Without it an unselected array falls back to its first effect, which is what the
+    group level does anyway (:func:`active_array_child`).
+    """
+
+    global _array_base_index
+    _array_base_index = resolver
+
+
 def _boost_target(effect: PowerEffectInstance, boost) -> str:
     """The trait a :class:`TraitBoost` names, whatever kind of trait it is.
 
@@ -415,6 +435,8 @@ def effect_is_active(
         return False
     if not power.array_active:  # an array member not currently selected as active
         return False
+    if not effect_is_selected(power, effect, game_data, char):
+        return False  # ...and the same rule one level down, among the power's own effects
     gates = _effect_gates(effect, game_data)
     if behaviour is not None and behaviour.toggled:  # passive_toggle implies a toggle gate
         gates = gates | {GATE_TOGGLE}
@@ -785,6 +807,66 @@ def active_array_child(group: PowerGroup) -> PowerNode | None:
         if child.id == group.active_child_id:
             return child
     return group.children[0]
+
+
+def power_effects_are_array(power: Power) -> bool:
+    """Whether this power's **own effects** are an array — two or more, pooled.
+
+    The same test :func:`~.powers_cost.power_gross_cost` prices by, so the level that
+    decides only one effect runs is the level that charged for only one.
+    """
+
+    return power.structure == STRUCTURE_ARRAY and len(power.effects) > 1
+
+
+def active_array_effect_index(
+    power: Power, game_data: GameData, char: Character | None = None
+) -> int:
+    """Which of an array power's own effects is in use — a clamped index into ``effects``.
+
+    ``power.active_effect`` when the player has chosen one, else the **base**: the
+    costliest effect, the one the array pays for in full, which is also the one the
+    constructor and the card badge "base". (The group level defaults to its *first*
+    child instead — a group's children are cards the player ordered themselves, while a
+    power's effects are ordered by when they were dropped on the canvas, so "the one you
+    paid for" is the better guess here than "the one you built first".)
+
+    Clamped, so a build edited down to fewer effects keeps a selection it can honour —
+    the same bargain :func:`effect_current_rank` strikes with a dialled rank. ``0`` for
+    anything that is not an array of two or more.
+    """
+
+    if not power_effects_are_array(power):
+        return 0
+    if power.active_effect is None:
+        if _array_base_index is None:  # cost not loaded; the first effect is the guess
+            return 0
+        return max(0, min(_array_base_index(power, game_data, char), len(power.effects) - 1))
+    return max(0, min(power.active_effect, len(power.effects) - 1))
+
+
+def effect_is_selected(
+    power: Power,
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None = None,
+) -> bool:
+    """Whether *effect* is the one its power's array currently has in use.
+
+    ``True`` for every effect of a power that is not an array, which is almost all of
+    them. An array's alternates are mutually exclusive — that is precisely what makes an
+    array cheaper than the same effects bought independently — so an array power whose
+    effects all applied at once was handing out an independent build's bonuses for an
+    array's price.
+
+    Identity, not equality: two effects of one power can be the same base effect at the
+    same rank (a Damage array of two descriptors), and they are still different members.
+    """
+
+    if not power_effects_are_array(power):
+        return True
+    index = active_array_effect_index(power, game_data, char)
+    return power.effects[index] is effect
 
 
 def live_array_children(group: PowerGroup) -> list[PowerNode]:

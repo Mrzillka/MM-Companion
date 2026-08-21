@@ -132,6 +132,29 @@ def _step_along(ladder: tuple[str, ...], value: str, step: int) -> str:
     return ladder[max(0, min(len(ladder) - 1, index))]
 
 
+def modifier_naming_option(modifier: Modifier, selection) -> str:
+    """The label of a chosen option that *names* the modifier, or ``""``.
+
+    A ``select`` marked ``namesOwner`` holds names for the modifier itself rather than
+    qualifiers of it. Removable is the case: its tiers read "Removable (only while
+    Stunned and Defenseless)", "Easily Removable (…)" and "Equipment (…)", each a name
+    for the whole flaw — appending one to a modifier already called Removable read
+    "Removable (removable (only while stunned and defenseless))".
+
+    Unlike :func:`modifier_detail` the label is returned verbatim: it is a name, so it
+    keeps the capitalisation the ruleset gave it.
+    """
+
+    for cfg in modifier.config_fields:
+        if cfg.type != "select" or not cfg.names_owner:
+            continue
+        chosen = str(selection.config.get(cfg.key, "")).strip()
+        option = next((o for o in cfg.options if o.value == chosen), None)
+        if option is not None:
+            return option.label
+    return ""
+
+
 def modifier_detail(modifier: Modifier, selection) -> str:
     """The detail that qualifies a modifier's name where the bare name would mislead.
 
@@ -149,6 +172,8 @@ def modifier_detail(modifier: Modifier, selection) -> str:
     Returns ``""`` when there is nothing to add.
     """
 
+    if modifier_naming_option(modifier, selection):
+        return ""  # the option is the modifier's name, not a qualifier of it
     for cfg in modifier.config_fields:
         if cfg.type == "text":
             value = str(selection.config.get(cfg.key, "")).strip()
@@ -181,11 +206,15 @@ def modifier_label(
 
     A blank Custom modifier leads with the player's typed name instead of the generic
     record name (``"Custom Extra"``), so the homebrew shows up under the name the player
-    gave it; it falls back to the record name until one is typed.
+    gave it; it falls back to the record name until one is typed. A modifier whose
+    chosen option *is* a name for it (:func:`modifier_naming_option`) leads with that
+    for the same reason.
     """
 
     detail = modifier_detail(modifier, selection)
-    base = detail if modifier.custom and detail else modifier.name
+    base = modifier_naming_option(modifier, selection) or modifier.name
+    if modifier.custom and detail:
+        base = detail
     label = base
     if modifier.ranked and selection.rank > 1:
         label = f"{base}{rank_sep}{selection.rank}"
@@ -1185,6 +1214,8 @@ def effect_stat_rows(
             continue  # a checkbox is a toggle or surfaced via a readout, not a value row
         if field.key == allocation_key:
             continue  # the Enhances row below already says it, and says it by name
+        if not config_field_gate_open(field, effect.config):
+            continue  # the card is not showing this field, so neither is its readout
         value = effect.config.get(field.key)
         if value:
             rows.append(
@@ -1487,6 +1518,21 @@ CONFIG_DISPLAY_KINDS: Registry[ConfigDisplay] = Registry("config_field.type")
 
 @CONFIG_DISPLAY_KINDS.handler("allocation")
 def _config_display_allocation(field, value) -> str:
+    """An allocation reads as what each option *bought*, never as its tier's index.
+
+    The index is an implementation detail that happens to be a small number, and printing
+    it put two numbers meaning different things side by side: a Concealment hiding from
+    every sight sense read "Sight 2" here while the card's own combo read "4 ranks".
+
+    So a multi-tier option says what the tier *buys* — ``Sight (all sight senses)`` —
+    and falls back to what it cost when the ruleset does not name it (``Permeate (6
+    ranks)``), which is still an answer rather than an index. The name rather than the
+    cost, because this row is read on the finished sheet as often as in the constructor,
+    and there "what am I hidden from" is the question; the card's own combo beside it
+    carries the price while the power is being built. A single-tier option has no choice
+    to report and stays a bare name.
+    """
+
     by_id = {o.id: o for o in field.alloc_options}
     parts = []
     for entry in value:
@@ -1495,7 +1541,12 @@ def _config_display_allocation(field, value) -> str:
             continue
         label = option.label
         if len(option.tiers) > 1:
-            label += f" {entry.get('tier', 1)}"
+            tier = entry.get("tier", 1)
+            named = option.tier_label(tier)
+            if not named:
+                ranks = option.tier_cost(tier)
+                named = f"{ranks} rank" if ranks == 1 else f"{ranks} ranks"
+            label += f" ({named})"
         parts.append(label)
     return ", ".join(parts)
 
@@ -1560,6 +1611,32 @@ def config_source_options(field, game_data: GameData | None) -> tuple[tuple[str,
     if source is not None and game_data is not None:
         return source(game_data)
     return tuple((option.label, option.value) for option in field.options)
+
+
+def config_field_gate_open(field, config: dict) -> bool:
+    """Whether a config field gated on a sibling's value is currently showing.
+
+    ``showWhenField`` / ``showWhenValue`` let one config choice reveal another —
+    Affliction's imposed-effect picker appears only once a degree reads Transformed, and
+    the rank *that* effect runs at appears only once one is named. The sibling may be
+    single- or multi-select (Extra Condition upgrades the degree pickers), so a list
+    counts when it *contains* the value and a scalar when it equals it. Naming a field
+    with **no** value means "whenever the sibling holds anything at all". A field naming
+    no gate is always open.
+
+    Shared by the Power Constructor (which builds the widget and hides it) and the
+    game-terms rows (which would otherwise print a value for a field the card is not
+    showing — an Affliction with no imposed effect chosen still read "at rank: 1").
+    """
+
+    if not field.show_when_field:
+        return True
+    held = config.get(field.show_when_field)
+    if not field.show_when_value:
+        return bool(held)
+    if isinstance(held, list):
+        return field.show_when_value in held
+    return held == field.show_when_value
 
 
 def _config_display(field, value, game_data: GameData | None = None) -> str:

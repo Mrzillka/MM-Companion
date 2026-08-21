@@ -316,6 +316,84 @@ def test_modifier_overrides_normalize_camelcase_keys() -> None:
     }
 
 
+def test_a_modifier_naming_two_prices_offers_a_way_to_pick_between_them() -> None:
+    """The audit's two-price sweep, kept as a guard rather than as an instruction.
+
+    A ``costFormula`` reading "+1 or +2 points flat" with nothing to dial it is silently
+    charged the *cheaper* number, and the record looks completely fine while it happens —
+    which is why several were wrong for a long time. Four things count as a dial: priced
+    ``select`` options, a ``points`` spin box, the modifier's own rank, or being
+    ``hidden`` (a structural record the engine prices itself, like Alternate Effect).
+
+    Parentheticals are stripped first: "requires Shrinking 5" is a prerequisite, not a
+    second price.
+    """
+
+    import re
+
+    data = load_game_data()
+    records = list(data.modifiers) + [m for ms in data.effect_modifiers.values() for m in ms]
+    number = re.compile(r"[-+]?\d+(?:/\d+)?")
+
+    def has_a_dial(modifier) -> bool:
+        return bool(
+            modifier.ranked
+            or modifier.hidden
+            or any(f.type == "points" for f in modifier.config_fields)
+            or any(
+                o.cost_value is not None or o.cost_delta
+                for f in modifier.config_fields
+                for o in f.options
+            )
+        )
+
+    undialled = [
+        m.id
+        for m in records
+        if len(
+            {n.lstrip("+-") for n in number.findall(re.sub(r"\([^)]*\)", "", m.cost_formula or ""))}
+        )
+        >= 2
+        and not has_a_dial(m)
+    ]
+    assert undialled == [], f"these name two prices with no way to choose: {undialled}"
+
+
+def test_no_modifier_is_both_repeatable_and_buys_a_sub_build() -> None:
+    """A modifier's ``subBuild`` count reads the chip's rank, so two copies of one
+    repeatable modifier would open two independent slots sharing a single config key and
+    overwrite each other's characters. Nothing is both today; this is the tripwire for
+    the day something is, since the failure is silent data loss."""
+
+    data = load_game_data()
+    records = list(data.modifiers) + [m for ms in data.effect_modifiers.values() for m in ms]
+    both = [m.id for m in records if m.repeatable and m.sub_build]
+    assert both == [], f"repeatable *and* sub-build-bearing: {both}"
+
+
+def test_an_allocation_option_can_name_what_each_tier_buys() -> None:
+    data = load_game_data()
+    field = next(f for e in data.effects if e.id == "concealment" for f in e.config_fields)
+    sight = next(o for o in field.alloc_options if o.id == "sight")
+    assert sight.tiers == (2, 4)
+    assert sight.tier_labels == ("normal sight", "all sight senses")
+    assert sight.tier_label(2) == "all sight senses"
+    assert sight.tier_cost(2) == 4
+    # Out-of-range tiers clamp rather than raising; an unnamed tier is simply blank.
+    assert sight.tier_cost(9) == 4
+    assert sight.tier_cost(0) == 2
+    assert sight.tier_label(9) == ""
+
+
+def test_a_select_can_declare_that_it_names_its_modifier() -> None:
+    data = load_game_data()
+    tier = next(f for f in data.modifier_catalog()["removable"].config_fields if f.key == "tier")
+    assert tier.names_owner
+    # Every other select is an ordinary qualifier and says nothing of the sort.
+    loss = next(f for f in data.modifier_catalog()["removable"].config_fields if f.key == "loss")
+    assert not loss.names_owner
+
+
 def test_load_game_data_is_cached() -> None:
     assert load_game_data() is load_game_data()
 

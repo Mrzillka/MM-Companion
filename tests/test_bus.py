@@ -13,6 +13,7 @@ from __future__ import annotations
 from mm_companion.ui.blocks import block_descriptors
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
+    BONUS_REQUESTED,
     BUILD_CHANGED,
     CAPS_CHANGED,
     CONDITION_CHANGED,
@@ -49,6 +50,7 @@ REQUEST_TOPICS = {
     PIN_REQUESTED,
     UNPIN_REQUESTED,
     HERO_POINT_REQUESTED,
+    BONUS_REQUESTED,
 }
 
 

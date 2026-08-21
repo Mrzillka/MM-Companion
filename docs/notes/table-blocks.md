@@ -92,7 +92,37 @@ exactly these pieces.
   order is the one that saves, which makes Skills' "by total" a snapshot rather than
   a live view.
 
-Two things the blocks add on top:
+Three things the blocks add on top:
+
+- **Resistances** is the one stat table that shows a row as **three numbers**, because
+  three different things move a resistance and one total says nothing about which:
+  **Ability** (the derived base — an Enhanced Stamina raises this), **Rank** (what was
+  bought on top, starting at 0 — Protection and worn armour land past it), and **Total**
+  (`resistance_total`, with a condition's overlay painted on). Both readouts come from
+  `core.rules` and neither is ever added up in the widget; only the middle one is a
+  control, and it holds **exactly what the model stores**.
+  It did not always. The spin box used to hold the *total*, with the model storing the
+  difference from a base the widget subtracted back out on every edit
+  (`value - resistance_base(...)`), and that one trick paid for three separate
+  complications: an ability moving had to re-seed a spin box the player might be typing
+  in, the resistance range in `costs.json` had to be twice an ability's so a
+  high-Stamina character's total would fit, and `set_stat_value` had to exist at all —
+  a clamped display there would have rewritten the stored delta from the wrong number
+  on the very next edit. Three columns cost none of that and end all of it.
+  Column 1 is the seam: the two stat tables keep four columns and the *same indices*,
+  and Resistances trades the short-code cell for its base value by passing `base_store`
+  to `build_stat_table` (`ui/sections/stat_table.py`, whose module docstring holds the
+  rest). Opt-in, because only a derived family has a base to show — and affordable only
+  because a resistance's own `abbr` is blank in the base data, so that column stood
+  empty in this block for its whole life. Everything that reads a row off either table
+  addresses `COL_TOTAL`, so a table that had *shifted* its columns to make room would
+  have moved that out from under the roll payload, the pin menu and the tests.
+  The Total column is the other half of the trade: unlike Abilities' it is **never
+  blank**, since it is now the number the game asks for rather than an "and here is what
+  changed" (`apply_value_column`, beside the `apply_stat_effects` that still serves
+  Abilities). A condition reaches the Total and nothing else — it is display-only and
+  never part of the build, and a base a condition had rewritten would read as something
+  the character *has*.
 
 - **Advantages** dropped its ▲/▼ and "Remove" buttons for those gestures. Its picker
   keeps "Add"; removal is a thing done *to a row*, so it is on the row.

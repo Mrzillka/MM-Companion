@@ -466,6 +466,28 @@ def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
     return total + (bonus.amount if bonus else 0)
 
 
+def _resistance_base_trait(game_data: GameData, key: str) -> tuple[str, str]:
+    """The ``(category, key)`` of the trait a resistance derives from, or ``("", "")``.
+
+    Fortitude and Toughness derive from Stamina and Will from Awareness — *abilities* —
+    while Dodge derives from the Defense combat trait, which is itself a (derived)
+    resistance, and Defense derives from nothing at all. Both :func:`resistance_base`
+    and :func:`resistance_base_bonus` have to draw that same distinction, and a
+    resistance whose base moved while the tint explaining it did not is exactly what
+    two copies of this would produce.
+    """
+
+    res = _resistance(game_data, key)
+    base_key = res.ability if res else ""
+    if not base_key:
+        return "", ""
+    if any(a.key == base_key for a in game_data.abilities):
+        return CATEGORY_ABILITY, base_key
+    if any(r.key == base_key for r in game_data.resistances):
+        return CATEGORY_RESISTANCE, base_key
+    return "", ""
+
+
 def resistance_base(char: Character, game_data: GameData, key: str) -> int:
     """The trait a resistance derives from, before its bought ranks and power boosts.
 
@@ -473,18 +495,32 @@ def resistance_base(char: Character, game_data: GameData, key: str) -> int:
     read at its effective value (:func:`effective_ability`). Dodge instead derives
     from the Defense combat trait, which is itself a (derived) resistance, so the base
     can be another resistance's total. A resistance with no linked trait (Defense
-    itself) has base 0. This is the value a "no ranks bought" resistance equals.
+    itself) has base 0. This is the value a "no ranks bought" resistance equals, and
+    the Ability column of the Resistances block shows it.
     """
 
-    res = _resistance(game_data, key)
-    base_key = res.ability if res else ""
-    if not base_key:
-        return 0
-    if any(a.key == base_key for a in game_data.abilities):
+    category, base_key = _resistance_base_trait(game_data, key)
+    if category == CATEGORY_ABILITY:
         return effective_ability(char, game_data, base_key)
-    if any(r.key == base_key for r in game_data.resistances):
+    if category == CATEGORY_RESISTANCE:
         return resistance_total(char, game_data, base_key)
     return 0
+
+
+def resistance_base_bonus(char: Character, game_data: GameData, key: str) -> TraitBonus | None:
+    """What is raising the trait a resistance derives from, or ``None`` when nothing is.
+
+    A resistance's base is someone else's total, so an Enhanced Trait on *Stamina*
+    raises Toughness without touching a rank anyone bought. The sheet says which of
+    the three numbers a source moved by tinting the column it moved — this is the one
+    behind the Ability column, and :func:`_trait_bonus` on the resistance itself
+    (Protection) is the one behind the Total.
+    """
+
+    category, base_key = _resistance_base_trait(game_data, key)
+    if not category:
+        return None
+    return _trait_bonus(char, game_data, category, base_key)
 
 
 def resistance_total(char: Character, game_data: GameData, key: str) -> int:

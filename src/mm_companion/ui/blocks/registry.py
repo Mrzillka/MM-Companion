@@ -217,7 +217,7 @@ _BASE_BLOCKS = [
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
         {
             ABILITY_CHANGED: "follow_ability_change",
-            ENHANCEMENTS_CHANGED: "refresh_enhancements",
+            ENHANCEMENTS_CHANGED: "refresh_readouts",
             COST_RATES_CHANGED: "refresh_cost",
         },
         _ROLLS_AND_LOADS,

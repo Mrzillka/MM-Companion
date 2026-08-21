@@ -1,12 +1,20 @@
 """Shared helpers for the ability and resistance stat tables.
 
-Abilities and resistances are laid out identically — one row per trait, with its
-short code, its rank, and a "→ total" that appears only when a power or a
-condition moves it — so both
-:class:`~mm_companion.ui.sections.abilities.AbilitiesSection` and
+Abilities and resistances are laid out alike — one row per trait, four columns —
+so both :class:`~mm_companion.ui.sections.abilities.AbilitiesSection` and
 :class:`~mm_companion.ui.sections.resistances.ResistancesSection` build their table
-through :func:`build_stat_table` and refresh their totals through
-:func:`apply_stat_effects`.
+through :func:`build_stat_table`. They part company over what the row *says*, and
+the difference is the point rather than an inconsistency:
+
+* an **ability** is a number the player typed, so its row is its short code, its
+  rank, and a "→ total" that appears only when a power or a condition moves it
+  (:func:`apply_stat_effects`);
+* a **resistance** is three numbers that move independently — the trait it derives
+  from, the ranks bought on top, and the total everything else lands on — so its
+  row gives the short-code column up to the first of them (``base_store``) and
+  fills the other two always (:func:`apply_value_column`). One number there would
+  say what a resistance is without saying what made it that, which is the question
+  a player actually asks when Protection and an Enhanced Stamina are both in play.
 
 It is a real :class:`QTableWidget` rather than a hand-laid grid, which is what the
 Skills block has always been. Three things come with that and none of them are
@@ -75,7 +83,18 @@ def bonus_tint(amount: int) -> str:
 
 
 COL_NAME, COL_ABBR, COL_RANK, COL_TOTAL = range(4)
+#: Column 1 is the one column the two stat tables disagree about, and they share an
+#: *index* rather than a meaning: Abilities prints the trait's short code there (STR,
+#: STA), Resistances the value of the trait it derives from — a resistance's own abbr
+#: is blank in the base data, so the column stood empty in that block for its whole
+#: life. Deliberately the same index: everything that reads a row off one of these
+#: tables addresses :data:`COL_TOTAL`, and a table that shifted its columns to make
+#: room would move that out from under the roll payload, the pin menu and the tests.
+COL_BASE = COL_ABBR
 HEADERS = ["Trait", "ABL", "Rank", "Total"]
+#: The same four columns as :data:`HEADERS`, for a table that opts into a base-value
+#: column (``base_store``) in place of the short code.
+BASE_HEADERS = ["Trait", "Ability", "Rank", "Total"]
 
 #: What a table needs to make its rows rollable: a factory turning a trait key into
 #: that trait's :class:`RollSpec`, and the sink the spec goes to (the section's
@@ -132,6 +151,7 @@ def build_stat_table(
     on_change: Callable[[str, int], None],
     trait_range: TraitRange,
     *,
+    base_store: dict[str, QTableWidgetItem] | None = None,
     roll_spec: RollHookFactory | None = None,
     roll_sink: Callable[[RollSpec], None] | None = None,
     load_sink: Callable[[RollSpec], None] | None = None,
@@ -149,6 +169,12 @@ def build_stat_table(
     spanned across before the first derived entry. *store* and *total_store* are
     filled in place, keyed by each entry's ``key``.
 
+    Given *base_store*, column 1 holds a read-only *value* — the trait this row derives
+    from — instead of this row's short code, and is filled in place like *total_store*
+    (see :func:`apply_value_column`). Opt-in rather than always on: only a derived
+    family has a base to show, and only that family's short code is blank enough to
+    give the column up.
+
     Given *roll_spec* and *roll_sink*, double-clicking a row rolls that trait, and
     with *load_sink* a single click loads it into the roller's chip without throwing
     the die. The spec is built at click time from the trait key, so it is never
@@ -160,7 +186,7 @@ def build_stat_table(
     # ``fit_width`` because this table *is* the whole block, so its columns are
     # what the block's minimum width should be.
     table = AutoHeightTable(0, len(HEADERS), fit_width=True)
-    table.setHorizontalHeaderLabels(HEADERS)
+    table.setHorizontalHeaderLabels(HEADERS if base_store is None else BASE_HEADERS)
     table.verticalHeader().setVisible(False)
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     header = table.horizontalHeader()
@@ -188,7 +214,12 @@ def build_stat_table(
             separated = True
 
         table.setItem(row, COL_NAME, readonly_item(entry.name))
-        table.setItem(row, COL_ABBR, readonly_item(entry.abbr, center=True))
+        if base_store is None:
+            table.setItem(row, COL_ABBR, readonly_item(entry.abbr, center=True))
+        else:
+            base = readonly_item("", center=True)
+            base_store[entry.key] = base
+            table.setItem(row, COL_BASE, base)
 
         spin = make_spin_box(
             trait_range.min,
@@ -302,11 +333,16 @@ def tint_item(item: QTableWidgetItem | None, token: str | None, struck: bool = F
 def set_stat_value(spin: QSpinBox, value: int) -> None:
     """Seed a stat spin box, widening its range first if *value* falls outside it.
 
-    A spin box silently clamps a value it can't represent, which is destructive here:
-    the resistance spins hold a *total* and the model stores only the bought delta, so a
-    clamped display would make the very next edit rewrite that delta from the wrong
-    number. Rather than lose ranks to a range that is too tight (a stingy mod's, or a
-    character built before a range was narrowed), stretch the range to fit.
+    A spin box silently clamps a value it can't represent, and a clamped rank is a
+    rank the sheet has quietly *spent the points on and not shown*: the next write
+    back to the model would take the clamp remainder for the player's answer. Rather
+    than lose ranks to a range that is too tight (a stingy mod's, or a character built
+    before a range was narrowed), stretch the range to fit.
+
+    This used to matter most to the resistance spins, which held a derived total and
+    so ran past an ability's ceiling on a high-Stamina character. They hold bought
+    ranks now and rarely reach it, which lowers the stakes without removing them —
+    a range is a ruleset's opinion, and a character can be loaded under a different one.
     """
 
     if value < spin.minimum():
@@ -337,35 +373,89 @@ def apply_stat_effects(
     for key, item in totals.items():
         bonus = bonuses.get(key)
         effect = cond_effects.get(key)
-        has_cond = effect is not None and effect.active
-        if not bonus and not has_cond:
-            item.setText("")
-            item.setToolTip("")
-            tint_item(item, None)
+        if not bonus and not (effect is not None and effect.active):
+            paint_stat_cell(item, "", None, None)
             continue
 
         total = spins[key].value() + (bonus.amount if bonus else 0)
-        if has_cond:
-            total = effect.apply(total)
-        item.setText(f"→ {total}")
+        paint_stat_cell(item, f"→ {_overlaid(total, effect)}", bonus, effect)
 
-        tips = []
-        if bonus:
-            tips.append(f"{bonus.amount:+d} from {', '.join(bonus.sources)}")
-        if has_cond and effect.tooltip:
-            tips.append(effect.tooltip)
-        item.setToolTip("\n".join(tips))
 
-        tint_item(
-            item,
-            CONDITION_TINT if has_cond else bonus_tint(bonus.amount if bonus else 0),
-            struck=has_cond and effect.trait_lost,
-        )
+def apply_value_column(
+    items: dict[str, QTableWidgetItem],
+    values: dict[str, int | None],
+    bonuses: dict,
+    cond_effects: dict[str, ConditionEffect] | None = None,
+) -> None:
+    """Fill a read-out column with numbers the rules layer already worked out.
+
+    The other half of :func:`apply_stat_effects`, for a column that *is* a number
+    rather than an "and here is what changed": every cell carries one at all times,
+    so it is written plainly (no ``→``), and *values* is what ``core.rules``
+    computed rather than anything the widget added up. A key mapped to ``None`` has
+    no number to show — Defence derives from nothing — and reads as a dash.
+
+    Tint and tooltip are the same bargain the Total column strikes: a modifier
+    colours the cell by its sign and names its sources on hover, an active condition
+    overrules it in red. *Which* column a given source reaches is the caller's to
+    decide, and is the whole point of the Resistances block's three numbers — a
+    power on Stamina lands in Ability, Protection in Total.
+    """
+
+    cond_effects = cond_effects or {}
+    for key, item in items.items():
+        value = values.get(key)
+        if value is None:
+            paint_stat_cell(item, "—", None, None)
+            continue
+        effect = cond_effects.get(key)
+        paint_stat_cell(item, str(_overlaid(value, effect)), bonuses.get(key), effect)
+
+
+def _overlaid(value: int, effect: ConditionEffect | None) -> int:
+    """*value* with an active condition's overlay applied — the display-only number."""
+
+    return effect.apply(value) if effect is not None and effect.active else value
+
+
+def paint_stat_cell(
+    item: QTableWidgetItem,
+    text: str,
+    bonus,
+    effect: ConditionEffect | None,
+) -> None:
+    """Write one read-out cell: its text, its tint, and the tooltip explaining both.
+
+    Passing neither a *bonus* nor an active *effect* clears the cell back to plain,
+    which is what an unmodified row wants and why this is not a bare ``setText``: a
+    tint left behind from the last refresh would otherwise still be painted (see
+    :func:`tint_item`, which has the same trap one layer down).
+    """
+
+    item.setText(text)
+    has_cond = effect is not None and effect.active
+
+    tips = []
+    if bonus:
+        tips.append(f"{bonus.amount:+d} from {', '.join(bonus.sources)}")
+    if has_cond and effect.tooltip:
+        tips.append(effect.tooltip)
+    item.setToolTip("\n".join(tips))
+
+    if has_cond:
+        token = CONDITION_TINT
+    elif bonus:
+        token = bonus_tint(bonus.amount)
+    else:
+        token = None
+    tint_item(item, token, struck=has_cond and effect.trait_lost)
 
 
 __all__ = [
+    "BASE_HEADERS",
     "CONDITION_TINT",
     "COL_ABBR",
+    "COL_BASE",
     "COL_NAME",
     "COL_RANK",
     "COL_TOTAL",
@@ -373,8 +463,10 @@ __all__ = [
     "ROLL_ROLE",
     "WORSE_TINT",
     "apply_stat_effects",
+    "apply_value_column",
     "bonus_tint",
     "build_stat_table",
+    "paint_stat_cell",
     "pin_menu_contributor",
     "set_stat_value",
     "tint_item",

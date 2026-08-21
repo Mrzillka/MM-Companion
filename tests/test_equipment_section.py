@@ -321,9 +321,10 @@ def test_worn_gear_shows_in_the_resistances_enhancement_column(qapp, data) -> No
     char = _hero(data, "chain_mail")  # Protection 3
     sheet = CharacterSheet(data, char)
 
-    cell = sheet.resistances._resistance_enh["TOUGHNESS"]
+    cell = sheet.resistances._resistance_total["TOUGHNESS"]
+    base = sheet.resistances._resistance_base["TOUGHNESS"].text()
     bought = sheet.resistances._resistances["TOUGHNESS"].value()
-    assert cell.text() == f"→ {bought + 3}"
+    assert cell.text() == str(int(base) + bought + 3)
     assert "Chain-Mail" in cell.toolTip()
 
 
@@ -333,7 +334,9 @@ def test_stowing_gear_takes_it_back_out_of_that_column(qapp, data) -> None:
 
     sheet.equipment._toggle_worn(char.equipment[0])
 
-    assert sheet.resistances._resistance_enh["TOUGHNESS"].text() == ""
+    # Not blank: the Total column always says what the resistance is, so stowing the
+    # armour takes it back to the unboosted number rather than to nothing.
+    assert sheet.resistances._resistance_total["TOUGHNESS"].text() == "0"
 
 
 # -- the catalog picker ---------------------------------------------------------------

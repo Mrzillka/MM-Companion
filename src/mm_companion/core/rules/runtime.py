@@ -367,6 +367,16 @@ def effect_current_rank(
     arguments — the Power Constructor, where nothing is dialled and nothing is wielded —
     the cap is not asked for and the bought rank comes back, exactly as it always did.
 
+    **Where there is a share, the share decides** — the cap *replaces* the dialled rank
+    rather than being the smaller of the two. That is what makes the card's single slider
+    honest: a Dynamic member has one control, and it spends points. Taking the minimum
+    instead was a deadlock. The card used to carry a rank dial beside the share dial, the
+    rank one wrote a value the cap then clamped away, and because the clamp was a ``min``
+    that written-and-clamped value survived as a **floor** — so raising the share
+    afterwards moved nothing. Replacing rather than combining also means ``current_rank``
+    is left alone: a Growth dialled to Large keeps its rung stored, and gets it back the
+    moment the split is cleared, instead of being overwritten by the pool.
+
     **Extra Effort is the one thing that pushes it up**, and it is added last, after
     every clamp above: pushing an effect past what it was bought at is the whole of
     "straining body and mind to do more when it really counts", and the benefit
@@ -387,7 +397,7 @@ def effect_current_rank(
     if game_data is None or char is None or _dynamic_rank_cap is None:
         return rank + push
     cap = _dynamic_rank_cap(effect, game_data, char)
-    return (rank if cap is None else max(0, min(rank, cap))) + push
+    return (rank if cap is None else max(0, cap)) + push
 
 
 def effect_is_active(
@@ -861,12 +871,39 @@ def effect_is_selected(
 
     Identity, not equality: two effects of one power can be the same base effect at the
     same rank (a Damage array of two descriptors), and they are still different members.
+
+    **Once the power's own points have been split** across its Dynamic effects the
+    selection stops deciding: every effect holding a share runs at the same time, which
+    is exactly what the second point of a Dynamic alternate buys
+    (:func:`live_array_effects`).
     """
 
     if not power_effects_are_array(power):
         return True
+    shared = live_array_effects(power)
+    if shared:
+        return any(e is effect for e in shared)
     index = active_array_effect_index(power, game_data, char)
     return power.effects[index] is effect
+
+
+def live_array_effects(power: Power) -> list[PowerEffectInstance]:
+    """Which of an ``array`` power's own effects are running right now.
+
+    The effect-level twin of :func:`live_array_children`, and the same rule one level
+    down: ordinarily the array's alternates are mutually exclusive and the *Using*
+    picker decides, but once points have been split across the power's Dynamic effects
+    every effect holding a positive share is live together.
+
+    Empty when nothing is split — which is every power saved before an effect could hold
+    a share — so the selection goes on deciding and nothing about such a power moved.
+    Like the group-level version it reads only the share's *presence*: whether a share
+    is big enough to buy a rank is :func:`effect_current_rank`'s question, one layer up.
+    """
+
+    if not power_effects_are_array(power):
+        return []
+    return [e for e in power.effects if e.dynamic and (e.dynamic_points or 0) > 0]
 
 
 def live_array_children(group: PowerGroup) -> list[PowerNode]:

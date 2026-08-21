@@ -19,9 +19,15 @@ from mm_companion.core.powers import (
     Power,
     PowerEffectInstance,
 )
-from mm_companion.core.rules import effect_total_cost, imposable_effects, power_total_cost
+from mm_companion.core.rules import (
+    effect_has_rank_dial,
+    effect_total_cost,
+    imposable_effects,
+    power_total_cost,
+)
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
 
 
 @pytest.fixture(scope="module")
@@ -295,11 +301,10 @@ def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None
     card = window.canvas.add_effect("damage")
     card.attach_modifier("ranged")  # per-rank, not ranked
 
-    # The rank spin is the one wearing the "×" prefix. A per-rank modifier does carry
-    # the rank-band pair, but those are hidden until the band is asked for.
+    # The rank spin is the one wearing the "×" prefix. A per-rank modifier carries no
+    # spin box at all now that its rank band is edited in Extended settings.
     spins = card._chips[0].findChildren(QSpinBox)
     assert [s for s in spins if s.prefix() == "×"] == []
-    assert all(not s.isVisibleTo(card._chips[0]) for s in spins)
 
 
 def test_extras_and_flaws_groups_reveal_and_hide_with_their_chips(qapp: QApplication) -> None:
@@ -1149,40 +1154,234 @@ def test_damage_strength_based_checkbox_toggles_the_extra(qapp: QApplication) ->
     assert card.instance.extras == []
 
 
-def test_the_dynamic_switch_shows_only_for_an_array_member(qapp: QApplication) -> None:
+def _band_rows(window) -> list:
+    """The Extended-settings band lines, each a title over an optional effect name."""
+
+    host = window._rank_bands_host
+    return [host.itemAt(i).widget() for i in range(host.count())]
+
+
+def _band_spins(row) -> list:
+    from PySide6.QtWidgets import QSpinBox
+
+    return row.findChildren(QSpinBox)
+
+
+def test_only_a_per_rank_modifier_gets_a_band_row(qapp: QApplication) -> None:
+    """A flat modifier is charged once whatever it covers, so a band would say nothing."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    assert not window._rank_bands_row.isVisibleTo(window._extended_body)
+
+    card.attach_modifier("tiring")  # per-rank
+    window.canvas.changed.emit()
+    assert window._rank_bands_row.isVisibleTo(window._extended_body)
+    assert len(_band_rows(window)) == 1
+
+    card.attach_modifier("quirk")  # flat
+    window.canvas.changed.emit()
+    assert len(_band_rows(window)) == 1
+
+
+def test_a_band_row_names_its_effect_only_when_two_of_them_share_a_modifier(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    def names(row) -> list[str]:
+        return [lbl.text() for lbl in row.findChildren(QLabel) if lbl.font().italic()]
+
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    first._rank.setValue(12)
+    first.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    assert names(_band_rows(window)[0]) == []  # nothing to be confused with
+
+    second = window.canvas.add_effect("affliction")
+    second._rank.setValue(8)
+    second.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    rows = _band_rows(window)
+    assert len(rows) == 2
+    assert [names(row) for row in rows] == [["Damage"], ["Affliction"]]
+
+
+def test_a_band_covering_every_rank_stores_nothing_at_all(qapp: QApplication) -> None:
+    """Widening the pair all the way is how a band is taken back off."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    selection = card.instance.flaws[0]
+
+    low, high = _band_spins(_band_rows(window)[0])
+    assert (low.maximum(), high.maximum()) == (12, 12)
+    assert (low.value(), high.value()) == (1, 12)
+
+    low.setValue(9)
+    assert (selection.applies_from, selection.applies_to) == (9, 12)
+
+    low.setValue(1)
+    assert (selection.applies_from, selection.applies_to) == (0, 0)
+    assert "applies_from" not in selection.to_dict()
+
+
+def test_a_band_moves_the_cards_own_cost_formula(qapp: QApplication) -> None:
+    """The line under the card is the working; it has to follow the band that changed it.
+
+    It used to be restated for free — the band lived on a chip, and a chip's `changed`
+    went through the card — so editing it from the window left the card printing the
+    price of a build that no longer existed.
+    """
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+
+    before = card._cost.text()
+    _band_spins(_band_rows(window)[0])[0].setValue(9)
+    after = card._cost.text()
+
+    assert after != before
+    # Eight plain ranks at full price and four discounted ones, priced in one run each.
+    assert after.endswith(f"= {effect_total_cost(card.instance, window._data)} PP")
+
+
+def test_a_band_never_reads_backwards(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+
+    low, high = _band_spins(_band_rows(window)[0])
+    high.setValue(4)
+    low.setValue(9)
+    assert high.value() == 9
+    assert card.instance.flaws[0].applies_from == 9
+
+
+def test_a_band_follows_a_rank_edited_down_under_it(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    _band_spins(_band_rows(window)[0])[0].setValue(9)
+
+    card._rank.setValue(6)
+    low, high = _band_spins(_band_rows(window)[0])
+    assert (low.maximum(), high.maximum()) == (6, 6)
+    assert (low.value(), high.value()) == (6, 6)
+
+
+def test_a_size_effect_opens_with_its_slider_ticked_and_can_be_switched_off(
+    qapp: QApplication,
+) -> None:
+    """The whole point of the tri-state: the box used to change nothing on a Growth."""
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    growth = window.canvas.add_effect("growth")
+    growth._rank.setValue(3)
+    window.canvas.changed.emit()
+    assert window._rank_dial.isChecked()
+    assert effect_has_rank_dial(growth.instance, data) is True
+
+    window._rank_dial.setChecked(False)
+    assert growth.instance.rank_dial is False
+    assert effect_has_rank_dial(growth.instance, data) is False
+
+
+def test_an_untouched_box_leaves_a_dropped_effect_its_own_default(
+    qapp: QApplication,
+) -> None:
+    """Dropping a Growth into a Blast power must not take the Growth's ladder away."""
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window.canvas.add_effect("damage")._rank.setValue(10)
+    growth = window.canvas.add_effect("growth")
+    growth._rank.setValue(3)
+
+    assert growth.instance.rank_dial is None
+    assert effect_has_rank_dial(growth.instance, data) is True
+
+
+def test_a_dynamic_array_holds_its_sliders_on(qapp: QApplication) -> None:
+    """The split is made on them, so switching them off would leave it no control."""
+
+    window = PowerConstructorWindow(load_game_data())
+    window.canvas.add_effect("damage")._rank.setValue(10)
+    window.canvas.add_effect("flight")._rank.setValue(5)
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    assert not window._rank_dial_note.isVisibleTo(window._rank_dial_row)
+
+    window.canvas._on_structure_changed(MODE_ARRAY_DYNAMIC)
+    assert window._rank_dial.isChecked()
+    assert all(e.rank_dial for e in window.power.effects)
+    assert window._rank_dial_note.isVisibleTo(window._rank_dial_row)
+    assert window._rank_dial.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+def test_dynamic_is_the_mode_bars_fourth_answer_not_a_per_card_switch(
+    qapp: QApplication,
+) -> None:
     from PySide6.QtWidgets import QCheckBox
 
     window = PowerConstructorWindow(load_game_data())
     first = window.canvas.add_effect("damage")
-
-    def switch(card) -> QCheckBox:
-        return next(b for b in card.findChildren(QCheckBox) if b.text() == "Dynamic")
-
-    # A single effect has no array to be an alternate of.
-    assert not switch(first).isVisibleTo(first)
-
     second = window.canvas.add_effect("affliction")
-    window.canvas._on_structure_changed(STRUCTURE_LINKED)
-    assert not switch(first).isVisibleTo(first)
+
+    # No card carries a Dynamic box any more - the question is asked once, by the bar.
+    for card in (first, second):
+        assert [b for b in card.findChildren(QCheckBox) if b.text() == "Dynamic"] == []
+
+    window.canvas._on_structure_changed(MODE_ARRAY_DYNAMIC)
+    assert window.power.structure == STRUCTURE_ARRAY
+    assert all(e.dynamic for e in window.power.effects)
+
+    # And plain Array is how it is taken back off.
     window.canvas._on_structure_changed(STRUCTURE_ARRAY)
-    assert switch(first).isVisibleTo(first) and switch(second).isVisibleTo(second)
+    assert not any(e.dynamic for e in window.power.effects)
 
 
-def test_marking_an_alternate_dynamic_raises_the_powers_total(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QCheckBox
+def test_the_dynamic_segment_lights_for_an_array_with_any_dynamic_member(
+    qapp: QApplication,
+) -> None:
+    """A mixed array saved while Dynamic was per-member reads as what it is."""
 
+    window = PowerConstructorWindow(load_game_data())
+    window.canvas.add_effect("damage")
+    window.canvas.add_effect("affliction")
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    window.power.effects[1].dynamic = True
+    window.canvas._sync_structure_ui()
+
+    bar = window.canvas._mode_bar
+    assert bar._buttons[MODE_ARRAY_DYNAMIC].isChecked()
+    assert not bar._buttons[STRUCTURE_ARRAY].isChecked()
+
+
+def test_a_dynamic_array_raises_the_powers_total(qapp: QApplication) -> None:
     data = load_game_data()
     window = PowerConstructorWindow(data)
     window.canvas.add_effect("damage")._rank.setValue(8)
-    alternate = window.canvas.add_effect("affliction")
+    window.canvas.add_effect("affliction")
     window.canvas._on_structure_changed(STRUCTURE_ARRAY)
     before = power_total_cost(window.power, data)
 
-    box = next(b for b in alternate.findChildren(QCheckBox) if b.text() == "Dynamic")
-    box.setChecked(True)
-    assert alternate.instance.dynamic is True
-    # 2 points for the Dynamic alternate rather than 1 - one more than it was.
-    assert power_total_cost(window.power, data) == before + 1
+    window.canvas._on_structure_changed(MODE_ARRAY_DYNAMIC)
+    # 2 points for the Dynamic alternate rather than 1, and one Alternate Effect rank
+    # on top of the base's own full cost.
+    assert power_total_cost(window.power, data) == before + 2
 
 
 def test_the_imposed_effect_picker_opens_only_on_transformed(qapp: QApplication) -> None:

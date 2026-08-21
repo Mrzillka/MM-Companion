@@ -29,33 +29,104 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   (`_EffectSelector`) and fades the effects that are not running. It is the whole-card
   twin, one level down, of the click that selects an array *group's* live member; the
   default differs on purpose (a group falls back to its first child, since a group's
-  children are cards the player ordered themselves).
-- **A member of an array can be `dynamic`.** An ordinary alternate is mutually
-  exclusive with its siblings and costs 1 point; a **Dynamic** one shares the array's
-  point pool and runs *alongside* the array's other Dynamic members at reduced
+  children are cards the player ordered themselves). **A split pool takes the picker
+  away**, the same way it disarms a member card's click one level up: with every Dynamic
+  effect running at once the selection decides nothing, and a picker that still moved
+  `active_effect` would be a control with nothing visible behind it. The game-terms
+  header stops claiming the restriction too.
+- **A Dynamic array is the structure switch's fourth answer.** An ordinary alternate is
+  mutually exclusive with its siblings and costs 1 point; a **Dynamic** one shares the
+  array's point pool and runs *alongside* the array's other Dynamic members at reduced
   effectiveness, and costs 2 for exactly that reason (p101, p151). Making the array's
   **base** Dynamic instead "requires 1 Alternate Effect rank" — 1 point charged on top
-  of its own full cost, not instead of it. So the flag is per **member**, not per array,
-  and it exists at both levels an array does: `PowerEffectInstance.dynamic` for a
-  power's own effects, `Power.dynamic` / `PowerGroup.dynamic` for a group of whole
-  cards. `array_members_cost` is the one place the pooling arithmetic lives, shared by
-  `power_gross_cost` and `node_cost` so the two levels cannot drift. Both numbers are
-  data (`costValue` / `dynamicCostValue` on the `alternate_effect` record), never
-  spelled in Python. It is *build* state, written only when set, so an array saved
-  before it loads with every member ordinary and costs what it always did.
+  of its own full cost, not instead of it. It used to be a checkbox on each member
+  beside an Independent / Linked / Array strip, which asked the same question twice:
+  an array and a Dynamic array are two answers to *how do these combine*, not one
+  answer and a modifier on it. So both strips carry a fourth segment now
+  (`PowerModeBar._MODES`, `_ModeToggle._MODES`) and the checkboxes are gone.
+  **The model did not move, only the control**: `MODE_ARRAY_DYNAMIC` is a *view* over
+  "the mode is `array` and every member carries `dynamic`", derived in one place per
+  level (`_group_mode`, `PowerCanvas._on_structure_changed`) and never stored, because
+  a fourth `STRUCTURES` constant would have to be handled at each of the ~50 places
+  that ask `== STRUCTURE_ARRAY`. Per-member is also what the rules price, so
+  `array_members_cost` — the one place the pooling arithmetic lives, shared by
+  `power_gross_cost` and `node_cost` so the two levels cannot drift — is untouched, and
+  both numbers stay data (`costValue` / `dynamicCostValue` on the `alternate_effect`
+  record). The segment lights when **any** member is Dynamic rather than all of them, so
+  a mixed array saved while the flag was per-member reads as what it is instead of as a
+  plain array that quietly costs more; nothing is migrated.
 - **The pool a Dynamic member shares is `dynamic_points`** — *runtime* state beside the
-  build flag, on `Power` and `PowerGroup` (the two things an array's members can be).
-  It is the free action the rules give a character once per turn: the array's points are
-  its base member's cost (`array_pool_points`), the sheet's **Split points** dialog hands
-  them out, and each member is then held to what its share buys —
-  `rank x points / full cost`, rounded down (`dynamic_rank_share`). A Flight 5 costing 10
-  given 2 points runs at 1 rank, which is the book's own worked example. A share too
-  small for even one rank floors at **0** — the one place a rank may be zero — and the
-  member is simply off. `live_array_children` is the other half: once anything is split,
-  every member holding a share is live *at the same time* and the selected alternate
-  stops deciding, which is exactly what the second point of a Dynamic alternate buys.
-  With nothing split an array behaves as it always has, so a character saved before this
-  loads unchanged.
+  build flag, and now on all three things an array's members can be: `Power` and
+  `PowerGroup` for a group of whole cards, `PowerEffectInstance` for a power's own
+  effects. It is the free action the rules give a character once per turn: the array's
+  points are its base member's cost (`array_pool_points`, or `power_pool_points` one
+  level down), and each member is held to what its share buys — `rank x points / full
+  cost`, rounded down (`dynamic_rank_share`). A Flight 5 costing 10 given 2 points runs
+  at 1 rank, which is the book's own worked example. A share too small for even one rank
+  floors at **0** — the one place a rank may be zero — and the member is simply off.
+  `live_array_children` and its effect-level twin `live_array_effects` are the other
+  half: once anything is split, every member holding a share is live *at the same time*
+  and the selected alternate stops deciding, which is exactly what the second point of a
+  Dynamic alternate buys. With nothing split an array behaves as it always has, so a
+  character saved before this loads unchanged.
+- **A Dynamic member has exactly one slider, and it spends points.** The share dial
+  *replaces* the rank dial rather than sitting beside it (`_rank_is_shared`). Two of them
+  is what a Growth in a Dynamic array used to get, and they deadlocked: the rank one wrote
+  a `current_rank` the share then clamped away, and because the clamp was a `min` the
+  written-and-clamped value survived as a **floor the share could no longer lift**, so
+  raising the share afterwards moved nothing. `effect_current_rank` therefore lets the cap
+  *replace* the dialled rank rather than taking the smaller of the two — which is also why
+  nothing clears `current_rank`: a Growth dialled to Large keeps its rung stored and gets
+  it back the moment the split is cleared. The one slider answers to the rank dial's own
+  names (`_share_caption`): "Size" on a Growth, "Rank" on a Flight, with the points on the
+  label — `Large · 4 PP`.
+- **The groove ends where the pool does.** A share slider's right-hand end *is* the most
+  that member can be set to, and it gains a division for every point a sibling hands back:
+  a Growth 6 holding all six of a six-point pool leaves an Elongation 3 with one notch,
+  and dropping the Growth a rung gives the Elongation two. The index space is the member's
+  whole ladder and what is affordable is always a **prefix** of it, so notch *n* means the
+  same points however far the end has travelled — which is what lets the end move under
+  the eye without the handle changing meaning. `_SplitGroup` is what moves it: the dials
+  report every notch they pass (`previewed`), and it re-ends every *other* dial and counts
+  the header down (`6/10 PP · 4 left`) **while a handle is still moving**, writing nothing
+  until the release so a whole gesture stays one undoable step. A member is never left
+  without a slider — it used to vanish outright once its siblings had spent the pool, with
+  no way to give it points again.
+- **One denominator.** `dynamic_member_cost` is the single answer to "what does this member
+  cost for the purpose of rationing it", asked by `dynamic_rank_cap`, by the slider's
+  notches and by the label beside them. There were two: the cards priced with the wielder
+  and the cap priced without, so a notch could promise `6 PP · Flight 3` while the sheet
+  ran Flight 2. It is character-free, and not merely as a tie-break — pricing against the
+  wielder reaches `effective_ability`, which asks what the powers contribute, which asks
+  the cap, and the loop terminates today only because the cap happens to price char-free.
+- **A commit made with a button still down is deferred a turn.** Every commit ends in a
+  rebuild that deletes the slider making it, and a **groove click** reaches the commit from
+  inside `mousePressEvent` — so it tore the widget down while it still held the mouse grab,
+  the rest of the gesture went nowhere, and a queued auto-repeat could re-fire against a
+  stale reading of the pool. A release has already cleared the button and a keyboard step
+  never had one, so those still commit straight through and the dial stays synchronous
+  everywhere it was.
+- **The split is made on the members' own sliders, not in a dialog.** It was a
+  modal grid of spin boxes behind a *Split points* button, and the dialog kept having to
+  explain the thing that makes the slider the right control: a share is only ever
+  interesting for the rank it buys. So the notches **are** the ranks and the points are
+  what each one spends — `dynamic_share_steps` prices every rank with
+  `dynamic_share_points` (the exact inverse of `dynamic_rank_share`) and drops the ranks
+  no share can reach, since a 6-rank member costing 3 points climbs two rungs for its
+  first point and a notch that quietly landed elsewhere would be a control that lies.
+  A member costing 2 points a rank therefore moves the split 2 points a notch and one
+  costing 1 moves it by 1, so **every stop is a legal price for every member at once**,
+  which is the whole reason the steps are computed per member rather than being a plain
+  points slider. Each slider is bounded by what is left of the pool once the *others*
+  are paid, so the split can be walked up to the pool and never past it and any member
+  can always be turned down to free points for another. Sliding every member to nothing
+  is the way back to an ordinary array — what *Clear the split* used to be a button for
+  — and stores `None` rather than `0`, so a file is byte-for-byte what it was before
+  anyone split anything. The group header keeps the one number no single slider can
+  show, a muted `4/10 PP split` (`_pool_readout`). A Dynamic array's sliders are
+  therefore **not optional**: the Extended-settings box that governs them is forced on
+  and made read-only while the array is Dynamic, since taking them away would leave the
+  split with no control at all.
 - **The cap reaches rank through an injected hook, not an import.** Working a share out
   needs point costs, and `powers_cost` imports `runtime` rather than the other way
   about — so `powers_cost` *installs* `dynamic_rank_cap` into runtime
@@ -293,6 +364,26 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   and are in nobody's band, so `_net_per_rank_modifiers` — which is also the divisor
   `ability_rank_contribution` reads — counts only the unbanded selections. `modifier_label`
   is where the band becomes words (`Tiring (ranks 9–12)`), so card, chip and notes agree.
+  **The band is edited in Extended settings, not on the chip.** It was two spin boxes and
+  an *Only some ranks* checkbox on the chip itself until a multi-effect power made the set
+  of them unreadable — a chip is a cramped label, and a band is a statement about the
+  build as a whole. The panel lists one line per per-rank selection
+  (`_banded_selections` / `_rebuild_rank_bands`), and the checkbox is gone with it: the
+  full range `1..rank` is stored as `0`/`0`, so widening the pair all the way is how a
+  band is taken back off and an untouched power still serializes byte-for-byte as it did.
+  A line carries an **italic subtitle naming its effect** only when the same modifier is
+  attached to two of the power's effects, which is the one case two identical rows cannot
+  be told apart; a modifier on one effect needs no such line and does not get one. The
+  spins are rebuilt whenever the canvas changes — that is what keeps their ceiling on the
+  effect's rank now that the chip no longer does (`sync_effect_rank` is gone) — and
+  editing one refreshes rather than rebuilds, or the widget under the player's thumb
+  would be destroyed mid-edit. Its explanation is a **hover on the caption** (with a ⓘ so
+  the hover is findable) rather than standing prose, because a paragraph in the middle of
+  a column of short controls pushes the rows the player came for off the screen. And the
+  edit reaches the **cards**: `PowerCanvas.refresh_costs` restates each card's own cost
+  formula, which the band used to move for free when it lived on a chip and now has to be
+  asked for, since a price change that starts in the window reaches nothing on the canvas
+  by itself.
 - **A power can be held *hard* to Power Level.** A breach was only ever a ⚠. An effect's
   `pl_cap` (`""` / `"effect"` / `"attack"`) makes it bite: `effect_pl_cap_shift` returns
   the `(rank_cut, attack_cut)` that brings `attack + rank` back inside the cap, keeping
@@ -318,16 +409,32 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   — an allocation's rows each carry a rank the player wrote down, and there is no honest
   way to turn "3 ranks of Stealth and 1 of Treatment" half off; the effects that carry
   rows are the ones whose rank *is* their allocation, which is exactly where the
-  constructor declines to offer a dial. Which effects get one is `rank_dial` on the
-  build, plus every size effect for free (see [Size and movement](size-and-movement.md)).
+  constructor declines to offer a dial. Which effects get one is `effect_has_rank_dial`,
+  the **one** door both the card and the constructor's checkbox go through. `rank_dial`
+  on the build is **tri-state** for it: `True`/`False` is the player's decision and
+  `None` — the default, and what every save written before this says — hands the question
+  to the ruleset, which says yes to anything carrying a size readout
+  (`effect_dials_by_default`, see [Size and movement](size-and-movement.md)). A size
+  effect used to get its ladder *regardless* of the box, which made the checkbox a
+  control that changed nothing on exactly the card it mattered most on; making the
+  ruleset supply the default rather than an exemption is what fixed that, and it needed
+  no migration because an absent key was already the thing that meant "nobody decided".
+  One case overrides the player: a **Dynamic** array splits its points on these sliders,
+  so the box is forced on and made read-only while it is Dynamic (`_dial_is_forced`).
 - **Extended settings is a *power*-level panel over *effect*-level flags.** All three of
   the above, plus `size_scales_damage`, are stored per effect — that is the level they
   apply at, and it is what lets `core` read them without a `Power` in hand — while the
   constructor drives every effect in the power from one checkbox each. Each row hides
   itself when the build has nothing it could apply to (`_resisted_effects`,
-  `_dialable_effects`) and the section hides when every row has. An effect dropped on the
-  canvas **inherits** the switches rather than its own defaults, or turning one off and
-  then adding an effect would quietly turn it back on.
+  `_dialable_effects`, `_banded_selections`) and the section hides when every row has. An
+  effect dropped on the canvas **inherits** the switches rather than its own defaults, or
+  turning one off and then adding an effect would quietly turn it back on. The rank-slider
+  box is the exception, and only until it is touched: while `_dial_touched` is false it is
+  a *readout* of what the ruleset has decided for the effects on the canvas, since
+  inheriting there would take a dropped Growth's ladder away.
+  The panel's fourth row is the odd one: the **rank bands** are per *modifier selection*
+  rather than per effect, so they are a rebuilt list rather than a checkbox — see the
+  band bullet below.
 - **Effective vs. bought**: `effect_effective_rank` adds an ability a modifier
   folds in (Strength-Based Damage → Strength) to the bought rank — this is the
   rank that sets save DCs and PL caps, while cost counts only the bought rank.
@@ -648,38 +755,16 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 
 ### The Dynamic point pool
 
-- **Only a two-member split has a control of its own.** Deciding the split is a free
-  action taken once per turn at the table, so the dialog leads with a direct one — a
-  single slider handle between the two members, everything left of it one member's and
-  everything right the other's (`ui/sections/pool_allocator.py`). Three or more members
-  still get only the spin grid. The intended control is a **regular N-gon with a
-  draggable puck**: the puck's barycentric coordinates are the members' shares, so
-  dragging it to a vertex gives that member everything and holding it in the middle
-  spreads the pool evenly, rounded by largest-remainder so the shares still sum to the
-  pool exactly. `make_allocator` is the only place that needs to learn about it and
-  `sharesChanged` already carries a list, so nothing downstream changes. It wants custom
-  painting, which nothing in this app does but `connection_indicator._StatusDot` — copy
-  its colour handling, because a theme token is allowed to be a `palette(...)`
-  expression that `QColor` cannot parse.
-- **An allocator always spreads the whole pool; the spin boxes are still the state.**
-  Leaving part of a pool unassigned is legal and the slider cannot express it, so the
-  spins remain authoritative and remain the way to hold points back. Opening the dialog
-  on a spin-made split with slack puts the handle where the first member's share is and
-  says what is unspent underneath, rather than moving the numbers to suit the control.
-
-- **A pooled split lives only at the group level.** `dynamic_points` is on `Power` and
-  `PowerGroup`, not on `PowerEffectInstance`, so an array of a *single power's own effects*
-  is priced for Dynamic members but cannot split its pool. The selection underneath it is
-  now there — `Power.active_effect` names the effect in use, `effect_is_selected` gates
-  `effect_is_active` on it, and the card carries a **Using** picker — so an effect-level
-  pool is buildable in the way it was not before: it wants `dynamic_points` on
-  `PowerEffectInstance`, a `live_array_effects` beside `live_array_children`, and a way to
-  reach the split dialog from a card rather than from a group header.
+- **Leaving part of a pool unassigned is still legal, and the sliders can say so.** The
+  old allocator could not — one handle between two members always spread the whole pool,
+  which is why the spin boxes stayed authoritative beside it — but a per-member slider
+  can simply be left short. Nothing tints it: a wasteful split is a legal build, and the
+  group's `4/10 PP split` readout states what is spent rather than what is wrong.
 - **A split array's ordinary members go dark.** `live_array_children` gives the pool
   priority: once any Dynamic member holds a share, the array's *non*-Dynamic alternates are
   not running, since they cannot hold a share and the whole pool is spoken for. That is the
-  rules-correct reading and the dialog says so, but it does mean the way back to an ordinary
-  alternate is "Clear the split" rather than clicking its card. While the pool is split
+  rules-correct reading, but it does mean the way back to an ordinary alternate is sliding
+  every share to nothing rather than clicking its card. While the pool is split
   `_activation_role` therefore returns `""` for every member — the click used to be armed
   and moved `active_child_id` with nothing visible happening — and the card keeps the
   tooltip saying why it has stopped being a control. The dimming outlives the role:
@@ -687,8 +772,8 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
 - **The split does not follow a rebuild.** A share is an absolute number of points, so
   editing the array moves the pool underneath a split already made. Nothing renormalises: the
   shares stay put and may now sum to less than the pool (legal, just wasteful) or, if the base
-  got cheaper, to more than it. The dialog re-bounds every row the moment it is reopened, so
-  the fix is one visit; a rebuild that quietly rescaled a player's split would be worse.
+  got cheaper, to more than it. Every slider re-bounds itself the moment the cards are rebuilt,
+  so the fix is one gesture; a rebuild that quietly rescaled a player's split would be worse.
 - **`effect_current_rank` can return 0** — only through the pool, and only for a member
   below its minimum. Every reader has been checked against that: none divides by it, the
   size readout returns early on it, and everywhere else it is a summand or a fallback

@@ -519,6 +519,8 @@ class PowerTermsView(QWidget):
         if power.structure == STRUCTURE_LINKED:
             return "Linked (all effects activate together):"
         if power.structure == STRUCTURE_ARRAY:
+            # The constructor never holds a split — that is runtime, made on the sheet —
+            # so it always states the restriction the structure buys.
             return "Array (one effect active at a time):"
         return ""
 

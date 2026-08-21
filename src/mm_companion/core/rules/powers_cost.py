@@ -1270,6 +1270,20 @@ def array_pool_points(group: PowerGroup, game_data: GameData, char: Character | 
     return max(node_cost(child, game_data, char) for child in group.children)
 
 
+def power_pool_points(power: Power, game_data: GameData, char: Character | None = None) -> int:
+    """The pool a single power's own Dynamic effects share out between them.
+
+    The effect-level twin of :func:`array_pool_points`, and the same rule one level
+    down: an ``array`` power pays its costliest effect in full and a flat point or two
+    for each other one, so the pool is what that base effect costs. Zero for anything
+    that is not a real array of effects.
+    """
+
+    if power.structure != STRUCTURE_ARRAY or len(power.effects) < 2:
+        return 0
+    return max(effect_total_cost(effect, game_data, char) for effect in power.effects)
+
+
 def dynamic_rank_share(rank: int, points: int, full_cost: int) -> int:
     """What ``points`` of an array's pool buys of a member bought at ``rank``.
 
@@ -1287,6 +1301,55 @@ def dynamic_rank_share(rank: int, points: int, full_cost: int) -> int:
     if full_cost <= 0 or points <= 0 or rank <= 0:
         return 0
     return max(0, min(rank, rank * points // full_cost))
+
+
+def dynamic_share_points(rank: int, wanted: int, full_cost: int) -> int:
+    """The smallest share that buys ``wanted`` ranks of a member bought at ``rank``.
+
+    The exact inverse of :func:`dynamic_rank_share`, and the reason a Dynamic member's
+    slider can be a *rank* slider at all: every notch converts to the cheapest number of
+    points that reaches it, so the split always lands on a legal cost. It is also what
+    makes the notches step differently per member — a member costing 2 points a rank
+    moves the split 2 points per notch and one costing 1 moves it by 1, which is what
+    keeps both of them priced correctly out of the one pool.
+
+    Zero ranks cost nothing; asking for more ranks than were bought is capped at the
+    member's whole cost, since a share cannot buy ranks nobody paid for.
+
+    Not every rank is necessarily *reachable*: a 6-rank member costing 3 points gets two
+    ranks for its first point, so nothing buys exactly one. :func:`dynamic_share_steps`
+    is the list of the ones that are, and is what a control should offer.
+    """
+
+    if full_cost <= 0 or rank <= 0 or wanted <= 0:
+        return 0
+    if wanted >= rank:
+        return full_cost
+    return -(-wanted * full_cost // rank)  # ceil, so the share actually reaches `wanted`
+
+
+def dynamic_share_steps(rank: int, full_cost: int) -> tuple[tuple[int, int], ...]:
+    """Every ``(points, rank)`` a member's share can actually stop at, cheapest first.
+
+    A Dynamic member's card slider is a *rank* slider whose value is spent in points, and
+    these are its notches: one per rank the pool can genuinely buy, priced by
+    :func:`dynamic_share_points` and confirmed against :func:`dynamic_rank_share`, so the
+    two can never disagree about what a share is worth. Always starts at ``(0, 0)`` —
+    holding nothing is a legal split and the way a member is switched off.
+
+    Ranks that no share buys are simply absent: a member costing less than a point a rank
+    climbs two rungs for its first point, and a notch that silently landed somewhere else
+    would be a control that lies.
+    """
+
+    steps = [(0, 0)]
+    for wanted in range(1, max(0, rank) + 1):
+        points = dynamic_share_points(rank, wanted, full_cost)
+        reached = dynamic_rank_share(rank, points, full_cost)
+        if reached != wanted or points <= steps[-1][0]:
+            continue
+        steps.append((points, reached))
+    return tuple(steps)
 
 
 def allocated_array_members(nodes: Sequence[PowerNode]) -> list[tuple[PowerNode, int]]:
@@ -1310,12 +1373,42 @@ def allocated_array_members(nodes: Sequence[PowerNode]) -> list[tuple[PowerNode,
     return found
 
 
-def _member_effects(node: PowerNode) -> list[PowerEffectInstance]:
-    """Every effect under one array member — its own, or its whole subtree's."""
+def member_effects(node: PowerNode) -> list[PowerEffectInstance]:
+    """Every effect under one array member — its own, or its whole subtree's.
+
+    Public because the card that shows a member's share has the same question to ask:
+    what a share buys is stated effect by effect, and a member can be a whole sub-group
+    of cards as easily as a single one.
+    """
 
     if isinstance(node, PowerGroup):
-        return [e for child in node.children for e in _member_effects(child)]
+        return [e for child in node.children for e in member_effects(child)]
     return list(node.effects)
+
+
+def dynamic_member_cost(node, game_data: GameData) -> int:
+    """What one array member costs for the purpose of rationing its share.
+
+    The **one** denominator in the Dynamic pool, and it exists because there were two:
+    the cards priced their share notches *with* the wielder while :func:`dynamic_rank_cap`
+    priced the same member *without* one, so a notch could promise "6 PP · Flight 3" while
+    the sheet ran Flight 2. Whatever asks what a share is worth — the cap, the slider's
+    notches, the label beside them — asks here.
+
+    It is priced **without the wielder** on purpose, and that is not merely a tie-break.
+    Passing a character would let a legacy Strength-Based selection reach
+    :func:`~.derived.effective_ability`, which asks what the character's powers are
+    contributing, which asks the cap — a loop that terminates today only because the cap
+    happens to price character-free. It is also the right number on its own terms: the
+    pool is a share of what the array was **bought** for.
+
+    Takes a whole member (a card or a sub-group) or a single effect, since an array exists
+    at both levels and so does its pool.
+    """
+
+    if isinstance(node, PowerEffectInstance):
+        return effect_total_cost(node, game_data)
+    return node_cost(node, game_data)
 
 
 def dynamic_rank_cap(
@@ -1333,20 +1426,25 @@ def dynamic_rank_cap(
     A member nested inside two allocated arrays is held to the **tighter** of the two
     caps. That is the honest reading of two pools each rationing it, and it is the only
     combination that cannot let an outer split hand back ranks an inner one withheld.
+    An effect holding a share of its *own* power's pool — the effect-level array, whose
+    members are effects rather than cards — is folded into the same minimum, so a card
+    inside a split group whose own effects are also split is rationed by both.
 
-    The member is priced **without the wielder** on purpose. Passing ``char`` would let a
-    legacy Strength-Based selection reach :func:`~.derived.effective_ability`, which asks
-    what the character's powers are contributing, which asks this — a loop. The pool is a
-    share of what the array was *bought* for, so the character-free price is also the
-    right one.
+    The member is priced through :func:`dynamic_member_cost`, which is character-free and
+    says why.
     """
 
     cap: int | None = None
     for member, points in allocated_array_members(char.powers):
-        if not any(e is effect for e in _member_effects(member)):
+        if not any(e is effect for e in member_effects(member)):
             continue
-        share = dynamic_rank_share(effect.rank, points, node_cost(member, game_data))
+        share = dynamic_rank_share(effect.rank, points, dynamic_member_cost(member, game_data))
         cap = share if cap is None else min(cap, share)
+    if effect.dynamic and effect.dynamic_points is not None:
+        own = dynamic_rank_share(
+            effect.rank, int(effect.dynamic_points), dynamic_member_cost(effect, game_data)
+        )
+        cap = own if cap is None else min(cap, own)
     return cap
 
 

@@ -170,7 +170,7 @@ class EffectCard(QFrame):
         # flaws — render a chip for each (the config form built above already reads
         # them, e.g. an attached Extra Condition, so only the chips need seeding).
         self._seed_modifier_chips()
-        self._refresh_cost()
+        self.refresh_cost()
 
     # -- construction pieces ----------------------------------------------
     def _build_header(self, effect) -> QHBoxLayout:
@@ -185,20 +185,9 @@ class EffectCard(QFrame):
         self._role_badge = QLabel()
         self._role_badge.setVisible(False)
         header.addWidget(self._role_badge)
-        # Dynamic is a per-member decision, so it belongs on the card rather than in
-        # the window's Extended settings (which drive every effect together). The
-        # canvas shows it only for a member of an array.
-        self._dynamic = QCheckBox("Dynamic")
-        self._dynamic.setToolTip(
-            "Share the array's point pool with the other Dynamic members and run "
-            "alongside them at reduced effectiveness, instead of switching them off. "
-            "Costs 2 points as an alternate rather than 1, or one Alternate Effect "
-            "rank when this is the array's base."
-        )
-        self._dynamic.setChecked(self.instance.dynamic)
-        self._dynamic.setVisible(False)
-        self._dynamic.toggled.connect(self._on_dynamic_toggled)
-        header.addWidget(self._dynamic)
+        # Whether these effects are Dynamic is asked once, by the canvas's mode bar:
+        # it is the fourth answer to "how do these effects combine", not a checkbox on
+        # each card. The role badge beside this still prints what the answer costs.
         header.addStretch()
         header.addWidget(QLabel("Rank"))
         # An effect whose rank *is* its allocation has no rank to set: the spin shows
@@ -757,7 +746,7 @@ class EffectCard(QFrame):
             update_total()
             # As in :meth:`_on_config_changed`: a trait-allocation row *is* the cost of
             # an as-trait effect, so the footer moves with it and not only the readout.
-            self._refresh_cost()
+            self.refresh_cost()
             self.changed.emit()
 
         def add_row(initial: dict | None = None) -> None:
@@ -842,7 +831,7 @@ class EffectCard(QFrame):
         # out the imposed-effect picker), so the gates are restated first: closing one
         # drops its stored value, and that is a value the cost may have read.
         self._refresh_config_gates()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     # -- enhanced-trait target picker -------------------------------------
@@ -980,7 +969,7 @@ class EffectCard(QFrame):
         self._build_chip(modifier, selection, is_flaw)
         self._populate_config_form()  # a gating extra may change a field's type
         self._refresh_attack_skill_visibility()  # Perception Range drops the attack roll
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _build_chip(self, modifier: Modifier, selection: ModifierSelection, is_flaw: bool) -> None:
@@ -989,7 +978,7 @@ class EffectCard(QFrame):
         Shared by :meth:`attach_modifier` (which first appends the selection) and
         :meth:`_seed_modifier_chips` (which renders ones already present on load).
         """
-        chip = ModifierChip(modifier, selection, self._data, self._character, self.instance.rank)
+        chip = ModifierChip(modifier, selection, self._data, self._character)
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(lambda m=modifier: self._on_chip_changed(m))
         self._chips.append(chip)
@@ -1025,7 +1014,7 @@ class EffectCard(QFrame):
         self._hint.setVisible(not self._chips)
         self._populate_config_form()  # removing a gating extra may downgrade a field
         self._refresh_attack_skill_visibility()  # removing Perception Range restores it
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _reorder_bucket(self, bucket: list, from_index: int, to_index: int) -> None:
@@ -1036,25 +1025,14 @@ class EffectCard(QFrame):
         cost/summary recompute.
         """
         if _move_item(bucket, from_index, to_index):
-            self._refresh_cost()
+            self.refresh_cost()
             self.changed.emit()
-
-    def _on_dynamic_toggled(self, on: bool) -> None:
-        # Nothing on *this* card moves: a Dynamic member's price is an Alternate Effect
-        # point paid by the array, not by the effect, so the card's own footer is
-        # deliberately unchanged and only the power's total and badges shift.
-        self.instance.dynamic = on
-        self.changed.emit()
 
     def _on_rank_changed(self, value: int) -> None:
         self.instance.rank = value
         for update_total in self._alloc_updaters:  # the rank is the allocation budget
             update_total()
-        # The rank is also the ceiling of a chip's rank band, so a rank lowered under a
-        # band has to bring it down rather than leave it naming ranks that are gone.
-        for chip in self._chips:
-            chip.sync_effect_rank(value)
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _on_chip_changed(self, modifier: Modifier | None = None) -> None:
@@ -1066,7 +1044,7 @@ class EffectCard(QFrame):
             any(f.hides_field for f in modifier.config_fields) or self._is_form_gate(modifier.id)
         ):
             self._populate_config_form()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _cell_context(self) -> CellContext:
@@ -1094,7 +1072,7 @@ class EffectCard(QFrame):
         self._rank.setValue(rank)
         self._rank.blockSignals(False)
 
-    def _refresh_cost(self) -> None:
+    def refresh_cost(self) -> None:
         # Every edit reaches here, which is why the sub-build strip re-reads from it: a
         # rank change moves a Summon's minion budget and a chip change adds or removes a
         # Metamorph's slots outright.
@@ -1148,7 +1126,6 @@ class EffectCard(QFrame):
         """
 
         labels = {"base": "Base", "alternate": "Alternate", "linked": "Linked"}
-        self._dynamic.setVisible(role in ("base", "alternate"))
         if role not in labels:
             self._role_badge.clear()
             self._role_badge.setVisible(False)

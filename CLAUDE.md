@@ -93,6 +93,7 @@ several of them are the only record of a bug that shaped it.
 | [The table blocks](docs/notes/table-blocks.md) | Abilities, Resistances, Advantages or Skills |
 | [Shared UI utilities and view modes](docs/notes/ui-utilities.md) | adding widgets, or the lock |
 | [The mod pipeline](docs/notes/mods.md) | data loading, startup, or a `register_*` seam |
+| [Accepted debts](docs/notes/debts.md) | picking up agreed work that is not done yet |
 
 Alongside them, `docs/` holds the longer-form documents the notes refer back to:
 the rules design (`mm-core-mechanics`, `mm-skills-design`, `mm-advantages-design`,

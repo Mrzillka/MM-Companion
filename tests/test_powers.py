@@ -35,6 +35,8 @@ from mm_companion.core.rules import (
     counter_rolls,
     dynamic_rank_cap,
     dynamic_rank_share,
+    dynamic_share_points,
+    dynamic_share_steps,
     effect_action_at_most,
     effect_allocation_used,
     effect_attack_skill_bonus,
@@ -43,6 +45,7 @@ from mm_companion.core.rules import (
     effect_current_rank,
     effect_effective_rank,
     effect_game_terms,
+    effect_has_rank_dial,
     effect_is_active,
     effect_is_personal,
     effect_is_selected,
@@ -63,6 +66,7 @@ from mm_companion.core.rules import (
     imposable_effects,
     imposed_effect_cost,
     live_array_children,
+    live_array_effects,
     live_powers,
     modifier_label,
     node_cost,
@@ -2103,6 +2107,97 @@ def test_the_dynamic_flag_round_trips_at_both_array_levels() -> None:
     assert restored.dynamic is True
     assert restored.children[0].dynamic is True
     assert restored.children[0].effects[0].dynamic is True
+
+
+def test_a_rank_dial_nobody_has_decided_writes_nothing_and_asks_the_ruleset() -> None:
+    """The tri-state costs no migration: an absent key is "nobody has decided"."""
+
+    data = load_game_data()
+    growth = PowerEffectInstance("growth", rank=3)
+    blast = PowerEffectInstance("damage", rank=10)
+    assert growth.rank_dial is None and blast.rank_dial is None
+    assert "rank_dial" not in growth.to_dict()
+
+    # The ruleset answers, and it says yes to anything carrying a size readout.
+    assert effect_has_rank_dial(growth, data) is True
+    assert effect_has_rank_dial(blast, data) is False
+
+    # A file written before the tri-state reads back the dials it always had.
+    legacy = PowerEffectInstance.from_dict({"effect_id": "growth", "rank": 3})
+    assert legacy.rank_dial is None and effect_has_rank_dial(legacy, data) is True
+    ticked = PowerEffectInstance.from_dict({"effect_id": "damage", "rank_dial": True})
+    assert ticked.rank_dial is True and effect_has_rank_dial(ticked, data) is True
+
+
+def test_the_player_can_switch_a_size_effects_ladder_off() -> None:
+    """The point of the tri-state: a Growth's checkbox used to change nothing."""
+
+    data = load_game_data()
+    growth = PowerEffectInstance("growth", rank=3, rank_dial=False)
+    assert effect_has_rank_dial(growth, data) is False
+    assert growth.to_dict()["rank_dial"] is False
+    assert PowerEffectInstance.from_dict(growth.to_dict()).rank_dial is False
+
+
+def test_a_share_buys_the_rank_it_was_priced_for() -> None:
+    """Every notch a control offers is a legal price for the rank it names."""
+
+    for rank, full_cost in ((5, 10), (4, 4), (10, 25), (1, 5)):
+        for points, reached in dynamic_share_steps(rank, full_cost):
+            assert dynamic_rank_share(rank, points, full_cost) == reached
+            assert dynamic_share_points(rank, reached, full_cost) == points
+
+
+def test_a_sub_one_point_per_rank_member_climbs_two_rungs_a_point() -> None:
+    """A rank no share can buy is not offered rather than quietly landing elsewhere."""
+
+    # 6 ranks for 3 points: the first point buys two ranks, so nothing buys exactly one.
+    assert dynamic_share_steps(6, 3) == ((0, 0), (1, 2), (2, 4), (3, 6))
+    assert dynamic_rank_share(6, 1, 3) == 2
+
+
+def test_an_effects_own_share_round_trips_and_is_written_only_when_set() -> None:
+    effect = PowerEffectInstance("flight", rank=5)
+    assert effect.dynamic_points is None
+    assert "dynamic_points" not in effect.to_dict()
+
+    effect.dynamic_points = 4
+    restored = PowerEffectInstance.from_dict(json.loads(json.dumps(effect.to_dict())))
+    assert restored.dynamic_points == 4
+
+
+def test_a_powers_own_dynamic_effects_run_at_once_once_its_pool_is_split() -> None:
+    """The effect-level twin of the group pool: `live_array_effects`."""
+
+    data = load_game_data()
+    blast = PowerEffectInstance("damage", rank=10)
+    fly = PowerEffectInstance("flight", rank=5)
+    power = Power(name="Fire Control", structure=STRUCTURE_ARRAY, effects=[blast, fly])
+
+    # Unsplit, the array's alternates are mutually exclusive and the picker decides.
+    assert live_array_effects(power) == []
+    assert effect_is_selected(power, blast, data) is True
+    assert effect_is_selected(power, fly, data) is False
+
+    blast.dynamic = fly.dynamic = True
+    fly.dynamic_points = 4
+    assert live_array_effects(power) == [fly]
+    assert effect_is_selected(power, fly, data) is True
+    assert effect_is_selected(power, blast, data) is False
+
+
+def test_an_effects_own_share_holds_its_rank_down() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    fly = PowerEffectInstance("flight", rank=5)
+    fly.dynamic = True
+    power = Power(name="Flame Jets", structure=STRUCTURE_ARRAY, effects=[fly])
+    char.powers.append(power)
+    assert effect_current_rank(fly, data, char) == 5
+
+    # The book's own worked example, one level down: a Flight 5 costing 10 given 2.
+    fly.dynamic_points = 2
+    assert effect_current_rank(fly, data, char) == 1
 
 
 def test_a_modifier_at_its_defaults_writes_no_band_keys() -> None:

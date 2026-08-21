@@ -1759,7 +1759,8 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
     A **Dynamic** member is tagged as one, because it is the exception to the header's
     "one effect active at a time": it shares the array's point pool and runs alongside
     the array's other Dynamic members at reduced effectiveness (p101), which is what its
-    dearer price buys.
+    dearer price buys. Once the pool has actually been split the header says so outright
+    rather than going on claiming a restriction the split has lifted.
     """
 
     lines = [effect_game_terms(e, game_data) for e in power.effects]

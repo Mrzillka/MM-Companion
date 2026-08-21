@@ -227,6 +227,44 @@ class SizeStep:
     current: bool = False
 
 
+def effect_dials_by_default(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether the ruleset gives this effect a rank slider without being asked.
+
+    A size effect does, because a Growth 3 is not one leap to Gargantuan — it is Large,
+    then Huge, then Gargantuan, and which rung you are standing on is a mid-fight
+    decision the card has to be able to make. Nothing here names Growth or Shrinking:
+    the test is the :data:`SIZE_READOUT_KIND` readout :func:`size_steps` already reads,
+    so a mod's own size effect defaults to a ladder on the same terms.
+
+    Every other effect defaults to no slider — a Blast is all-or-nothing until somebody
+    says otherwise.
+    """
+
+    return any(
+        readout.kind == SIZE_READOUT_KIND
+        for readout in game_data.effect_readouts.get(effect.effect_id, ())
+    )
+
+
+def effect_has_rank_dial(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether this effect's card carries a rank slider at all.
+
+    The one door both the sheet card and the Power Constructor's *Extended settings*
+    checkbox go through, so the box can never say one thing and the card another.
+    ``rank_dial`` is tri-state: the player's ``True``/``False`` wins, and ``None`` — the
+    default, and what every save written before the tri-state says — hands the question
+    to :func:`effect_dials_by_default`.
+
+    It answers only whether the *control* exists. Whether it is worth drawing (a rank-1
+    effect has nothing to choose between) is the card's own question, and how far the
+    dial is turned is ``current_rank``.
+    """
+
+    if effect.rank_dial is not None:
+        return bool(effect.rank_dial)
+    return effect_dials_by_default(effect, game_data)
+
+
 def size_steps(
     power: Power, effect: PowerEffectInstance, char: Character, game_data: GameData
 ) -> tuple[SizeStep, ...]:

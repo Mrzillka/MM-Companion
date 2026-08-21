@@ -31,10 +31,14 @@ from mm_companion.core.equipment import EquipmentItem
 from mm_companion.core.powers import (
     PL_CAP_ATTACK,
     PL_CAP_EFFECT,
+    STRUCTURE_ARRAY,
     Power,
     power_is_homerule,
 )
 from mm_companion.core.rules import (
+    effect_dials_by_default,
+    effect_display_name,
+    effect_has_rank_dial,
     effective_size,
     effective_size_rank,
     improvised_effect_cost,
@@ -42,14 +46,21 @@ from mm_companion.core.rules import (
     improvised_rolls,
     improvised_skills,
     item_ep_cost,
+    modifier_detail,
+    modifier_is_per_rank,
     modifier_label,
     pl_cap_note,
     power_allocation_violations,
-    power_check_results,
     power_cost_formula,
+    power_imposed_effect_violations,
     power_linked_range_violations,
+    power_modifier_requirement_violations,
     power_pl_violations,
+    power_strength_amount_violations,
+    power_sub_build_violations,
     power_total_cost,
+    power_trait_allocation_violations,
+    selection_band,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.attachment_dialog import AttachmentDialog
@@ -134,6 +145,11 @@ class PowerConstructorWindow(QMainWindow):
         # build, so every method below goes on working on the power it always did.
         self._gear = gear or item is not None
         self._editing = (item if self._gear else power) is not None
+        # Whether the player has actually touched the rank-slider box. Until they do,
+        # each effect keeps its own ``None`` and the ruleset answers for it — otherwise
+        # dropping a Growth into an untouched Blast power would quietly take the
+        # Growth's ladder away.
+        self._dial_touched = False
         if self._gear:
             self.item: EquipmentItem | None = (
                 deepcopy(item) if item is not None else EquipmentItem()
@@ -495,6 +511,12 @@ class PowerConstructorWindow(QMainWindow):
         level they apply at and the journey ``attack_skill`` already made; these
         checkboxes drive them together.)
 
+        Beneath them sits the one group that is per *modifier selection* rather than
+        per effect: the **rank bands**, one line per per-rank extra or flaw saying which
+        of its effect's ranks it actually covers. They were edited on the chips
+        themselves until a multi-effect power made the set of them unreadable — a chip
+        is a cramped label, and a band is a statement about the build as a whole.
+
         Each **row** hides itself whenever the power has nothing it could apply to, and
         the section hides when every row has — the way the structure bar appears only
         once there are two effects to structure.
@@ -522,6 +544,8 @@ class PowerConstructorWindow(QMainWindow):
         body.addWidget(self._pl_cap_row)
         self._rank_dial_row = self._build_rank_dial_row()
         body.addWidget(self._rank_dial_row)
+        self._rank_bands_row = self._build_rank_bands_row()
+        body.addWidget(self._rank_bands_row)
         outer.addWidget(self._extended_body)
 
         self._extended_row = host
@@ -747,7 +771,14 @@ class PowerConstructorWindow(QMainWindow):
         return row
 
     def _build_rank_dial_row(self) -> QWidget:
-        """The build half of the runtime rank dial: whether the card carries a slider."""
+        """The build half of the runtime rank dial: whether the card carries a slider.
+
+        One box for every power, size effects included. A Growth used to get its ladder
+        whatever this said, which made the box a control that changed nothing on exactly
+        the card it mattered most on; now the ruleset merely supplies the *default*
+        (:func:`~mm_companion.core.rules.effect_has_rank_dial`) and the player has the
+        last word in both directions.
+        """
 
         row = QWidget()
         layout = QVBoxLayout(row)
@@ -757,11 +788,150 @@ class PowerConstructorWindow(QMainWindow):
         self._rank_dial.setToolTip(
             "Let this power be used below its bought rank in play — a Damage 10 fired "
             "at 5. It costs the same either way: what a power is worth is what it was "
-            "bought at, and dialling one down refunds nothing."
+            "bought at, and dialling one down refunds nothing. A size effect starts "
+            "ticked, since a Growth 3 is a ladder rather than a single leap."
         )
         self._rank_dial.toggled.connect(self._on_rank_dial_toggled)
         layout.addWidget(self._rank_dial)
+        self._rank_dial_note = QLabel()
+        self._rank_dial_note.setStyleSheet(muted_style())
+        self._rank_dial_note.setWordWrap(True)
+        self._rank_dial_note.setVisible(False)
+        layout.addWidget(self._rank_dial_note)
         return row
+
+    def _build_rank_bands_row(self) -> QWidget:
+        """The rank bands: which ranks of its effect each per-rank modifier covers.
+
+        A caption over a host layout the rows are rebuilt into, rather than a fixed set
+        of widgets — the set of modifiers changes every time a chip is attached or
+        removed, which is exactly the tear-down-and-rebuild shape
+        :meth:`_rebuild_improvised_rolls` already uses.
+        """
+
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        caption = QLabel("Ranks each modifier applies to")
+        layout.addWidget(caption)
+        note = QLabel(
+            "A modifier may cover part of an effect rather than all of it — a Blast 12 "
+            "whose top four ranks alone are Tiring pays for eight plain ranks and four "
+            "discounted ones. The full range costs what it always did."
+        )
+        note.setStyleSheet(muted_style())
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self._rank_bands_host = QVBoxLayout()
+        self._rank_bands_host.setContentsMargins(16, 0, 0, 0)
+        self._rank_bands_host.setSpacing(2)
+        layout.addLayout(self._rank_bands_host)
+        return row
+
+    def _banded_selections(self) -> list:
+        """Every selection in the build that a band could change the price of.
+
+        Only a **per-rank** modifier gets one: a flat one is charged once whatever it
+        covers, so a band there would be a control that changes no number. The same
+        question :func:`~mm_companion.core.rules.modifier_is_per_rank` answers for the
+        cost math, so the panel cannot offer a row the arithmetic ignores.
+        """
+
+        by_id = {m.id: m for m in self._data.modifiers}
+        found = []
+        for effect in self.power.effects:
+            for selection in (*effect.extras, *effect.flaws):
+                modifier = by_id.get(selection.modifier_id)
+                if modifier is None or not modifier_is_per_rank(modifier, selection):
+                    continue
+                found.append((effect, selection, modifier))
+        return found
+
+    def _rebuild_rank_bands(self, entries: list) -> None:
+        """Draw one from/to line per banded selection, naming the effect when it must.
+
+        The subtitle is the answer to an ambiguity, not a habit: a power whose Blast and
+        whose Damage are both Tiring shows two identical rows otherwise, and there is no
+        way to tell which one is being edited. A modifier attached to a single effect
+        needs no such line, so it does not get one.
+        """
+
+        while self._rank_bands_host.count():
+            item = self._rank_bands_host.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        carriers: dict[str, set[int]] = {}
+        for effect, selection, _modifier in entries:
+            carriers.setdefault(selection.modifier_id, set()).add(id(effect))
+        shared = {key for key, effects in carriers.items() if len(effects) > 1}
+        for effect, selection, modifier in entries:
+            self._rank_bands_host.addWidget(
+                self._band_line(effect, selection, modifier, named=selection.modifier_id in shared)
+            )
+
+    def _band_line(self, effect, selection, modifier, *, named: bool) -> QWidget:
+        """One modifier's from/to pair, over an italic effect name where needed."""
+
+        host = QWidget()
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        detail = modifier_detail(modifier, selection)
+        title = QLabel(f"{modifier.name} ({detail})" if detail else modifier.name)
+        row.addWidget(title)
+        row.addStretch()
+        rank = max(1, effect.rank)
+        low, high = selection_band(selection, rank)
+        spins = (
+            make_spin_box(1, rank, value=low, buttons=False, max_width=44),
+            make_spin_box(1, rank, value=high, buttons=False, max_width=44),
+        )
+        row.addWidget(spins[0])
+        row.addWidget(QLabel("–"))
+        row.addWidget(spins[1])
+        for spin in spins:
+            spin.valueChanged.connect(
+                lambda _v, s=selection, e=effect, pair=spins: self._commit_band(s, e, pair)
+            )
+        outer.addLayout(row)
+
+        if named:
+            subtitle = QLabel(effect_display_name(effect, self._data))
+            font = subtitle.font()
+            font.setItalic(True)
+            subtitle.setFont(font)
+            subtitle.setStyleSheet(muted_style())
+            outer.addWidget(subtitle)
+        return host
+
+    def _commit_band(self, selection, effect, spins) -> None:
+        """Write a band down, keeping ``from`` at or below ``to``.
+
+        A pair covering the **whole** effect is stored as ``0``/``0`` rather than as
+        ``1``/``rank``: that is what the model means by "every rank", so a power nobody
+        has banded serializes byte-for-byte as it did before this panel existed and the
+        single-run short-circuit in the cost math is untouched. It is also what replaces
+        the chip's old *Only some ranks* checkbox — widening the pair all the way is how
+        a band is taken back off.
+        """
+
+        low = spins[0].value()
+        high = max(low, spins[1].value())
+        if high != spins[1].value():
+            spins[1].blockSignals(True)
+            spins[1].setValue(high)
+            spins[1].blockSignals(False)
+        whole = (low, high) == (1, max(1, effect.rank))
+        selection.applies_from = 0 if whole else low
+        selection.applies_to = 0 if whole else high
+        self._refresh_extended()
 
     def _chosen_pl_cap(self) -> str:
         """Which side of the Power Level trade-off the priority buttons protect."""
@@ -789,19 +959,31 @@ class PowerConstructorWindow(QMainWindow):
     def _dialable_effects(self) -> list:
         """The effects a rank slider could usefully be offered for.
 
-        An effect bought at rank 1 has nothing to dial between, and one whose rank *is*
-        its allocation (Enhanced Trait) has no rank of its own to turn down — its rows
-        would say one thing and the slider another.
+        An effect bought at rank 1 has nothing to dial between **unless the ruleset
+        gives it a ladder anyway** — a Growth 1 really does climb a rung — and one whose
+        rank *is* its allocation (Enhanced Trait) has no rank of its own to turn down,
+        since its rows would say one thing and the slider another.
         """
 
         by_id = {e.id: e for e in self._data.effects}
         return [
             effect
             for effect in self.power.effects
-            if effect.rank > 1
+            if (effect.rank > 1 or effect_dials_by_default(effect, self._data))
             and (base := by_id.get(effect.effect_id)) is not None
             and not base.rank_follows_allocation
         ]
+
+    def _dial_is_forced(self) -> bool:
+        """Whether this build's sliders are not the player's to switch off.
+
+        A Dynamic array splits its points *on* those sliders, so taking them away would
+        leave the split with no control at all.
+        """
+
+        return self.power.structure == STRUCTURE_ARRAY and any(
+            effect.dynamic for effect in self.power.effects
+        )
 
     def _on_extended_toggled(self, expanded: bool) -> None:
         glyph = self._EXPANDED_GLYPH if expanded else self._COLLAPSED_GLYPH
@@ -826,7 +1008,44 @@ class PowerConstructorWindow(QMainWindow):
         if self._pl_cap.isChecked():
             self._on_pl_cap_toggled(True)
 
+    def _refresh_rank_dial_row(self) -> None:
+        """Force the box on where the split needs it, and say why.
+
+        A Dynamic array hands its points out on the members' rank sliders, so the box is
+        ticked and made read-only rather than left as a switch that would take the
+        split's only control away. Read-only, never ``setEnabled(False)`` — nothing in
+        this app greys a control out — so it goes on saying what is true.
+        """
+
+        forced = self._dial_is_forced()
+        if forced and not self._rank_dial.isChecked():
+            self._rank_dial.blockSignals(True)
+            self._rank_dial.setChecked(True)
+            self._rank_dial.blockSignals(False)
+            self._on_rank_dial_toggled(True)
+        # The idiom a locked checkbox takes everywhere in this app: transparent to the
+        # mouse and out of the tab order, never ``setEnabled(False)``, so it stays
+        # readable instead of going grey.
+        self._rank_dial.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, forced)
+        self._rank_dial.setFocusPolicy(
+            Qt.FocusPolicy.NoFocus if forced else Qt.FocusPolicy.StrongFocus
+        )
+        self._rank_dial_note.setVisible(forced)
+        self._rank_dial_note.setText(
+            "A Dynamic array shares its points out on these sliders, so they stay."
+            if forced
+            else ""
+        )
+
     def _on_rank_dial_toggled(self, on: bool) -> None:
+        """Record the player's decision — explicitly, in both directions.
+
+        Writing a real ``True``/``False`` rather than leaving the flag at ``None`` is
+        what makes un-ticking a Growth's box actually take its ladder away: ``None``
+        means "nobody has decided", and the ruleset decides in favour of the ladder.
+        """
+
+        self._dial_touched = True
         for effect in self._dialable_effects():
             effect.rank_dial = on
 
@@ -849,13 +1068,25 @@ class PowerConstructorWindow(QMainWindow):
 
         resisted = self._resisted_effects()
         dialable = self._dialable_effects()
-        self._show_extended_rows(resisted, dialable)
+        banded = self._banded_selections()
+        self._show_extended_rows(resisted, dialable, banded)
+        self._rebuild_rank_bands(banded)
         cap = self._chosen_pl_cap() if self._pl_cap.isChecked() else ""
         for effect in resisted:
             effect.size_scales_damage = self._size_damage.isChecked()
             effect.pl_cap = cap
-        for effect in dialable:
-            effect.rank_dial = self._rank_dial.isChecked()
+        if self._dial_touched:
+            for effect in dialable:
+                effect.rank_dial = self._rank_dial.isChecked()
+        elif dialable:
+            # Untouched, the box is a *readout* of what the ruleset has decided for the
+            # effects on the canvas, not a switch that has been thrown — so dropping a
+            # Growth in ticks it, and dropping a Blast into an untouched Growth power
+            # unticks it, rather than either one silently rewriting the other's flag.
+            self._rank_dial.blockSignals(True)
+            self._rank_dial.setChecked(all(effect_has_rank_dial(e, self._data) for e in dialable))
+            self._rank_dial.blockSignals(False)
+        self._refresh_rank_dial_row()
         self._refresh_size_damage_note()
         self._refresh_pl_cap_note()
 
@@ -864,7 +1095,9 @@ class PowerConstructorWindow(QMainWindow):
 
         resisted = self._resisted_effects()
         dialable = self._dialable_effects()
-        self._show_extended_rows(resisted, dialable)
+        banded = self._banded_selections()
+        self._show_extended_rows(resisted, dialable, banded)
+        self._rebuild_rank_bands(banded)
         if resisted:
             caps = {e.pl_cap for e in resisted}
             cap = caps.pop() if len(caps) == 1 else ""
@@ -883,18 +1116,20 @@ class PowerConstructorWindow(QMainWindow):
                     button.blockSignals(False)
         if dialable:
             self._rank_dial.blockSignals(True)
-            self._rank_dial.setChecked(all(e.rank_dial for e in dialable))
+            self._rank_dial.setChecked(all(effect_has_rank_dial(e, self._data) for e in dialable))
             self._rank_dial.blockSignals(False)
+        self._refresh_rank_dial_row()
         self._refresh_size_damage_note()
         self._refresh_pl_cap_note()
 
-    def _show_extended_rows(self, resisted: list, dialable: list) -> None:
+    def _show_extended_rows(self, resisted: list, dialable: list, banded: list) -> None:
         """Show each row only where it applies, and the section only if a row does."""
 
         self._size_damage_row.setVisible(bool(resisted))
         self._pl_cap_row.setVisible(bool(resisted))
         self._rank_dial_row.setVisible(bool(dialable))
-        self._extended_row.setVisible(bool(resisted or dialable))
+        self._rank_bands_row.setVisible(bool(banded))
+        self._extended_row.setVisible(bool(resisted or dialable or banded))
 
     def _refresh_size_damage_note(self) -> None:
         """Say what the switch is worth *to this character*, right now."""
@@ -1176,11 +1411,9 @@ class PowerConstructorWindow(QMainWindow):
         else:
             total = power_total_cost(self.power, self._data, self._character)
             suffix = " (homerule)" if self.power.cost_override is not None else ""
-            # Two builds cost something other than the sum of the cards above them: a
-            # Removable power (whose discount is charged against the whole power rather
-            # than any one effect) and an array (which pays its costliest effect in full
-            # and a flat point or two for each of the rest). Show that arithmetic here —
-            # it is the only place either is visible.
+            # A Removable power costs less than the sum of the cards above it, because
+            # its discount is charged against the power's total rather than any one
+            # effect. Show that arithmetic here — it is the only place it is visible.
             if working := power_cost_formula(self.power, self._data, self._character):
                 suffix += f"  ({working})"
         self._cost.setText(f"Total cost: {total} {self._currency}{suffix}")
@@ -1188,23 +1421,104 @@ class PowerConstructorWindow(QMainWindow):
     def _refresh_game_terms(self) -> None:
         self._terms.set_power(self.power, self._data, self._character)
 
-    def _refresh_pl_warning(self) -> None:
-        """Show or hide the live warning band from every build check the power fails.
+    def _pl_violations(self) -> list[str]:
+        """Power Level cap breaches for the current power (empty without a character)."""
+        if self._character is None:
+            return []
+        return power_pl_violations(self.power, self._character, self._data)
 
-        The checks themselves are :data:`~mm_companion.core.rules.POWER_CHECKS`, walked
-        once: the failing keys become the headline and their sentences the tooltip. The
-        sheet card's ⚠ walks the same registry (``power_violations``), so a warning
-        cannot exist here and be missing there — which it was for six of the nine checks
-        until the registry replaced two hand-kept lists. A mod that registers a rule gets
-        both surfaces without touching either.
+    def _alloc_violations(self) -> list[str]:
+        """Tier-4 over-allocation breaches (an effect spending ranks it doesn't have)."""
+        return power_allocation_violations(self.power, self._data)
+
+    def _trait_cap_violations(self) -> list[str]:
+        """Allocation rows holding more ranks of a trait than it can be taken at.
+
+        Only advantages have a ceiling of their own — most are not ranked, a few cap at a
+        fixed number — so in practice this is "three ranks put into a one-rank advantage".
+        A warning, not a clamp: the row is the player's and on screen, and quietly
+        charging for fewer ranks than it shows would leave the footer disagreeing with it.
         """
 
-        results = power_check_results(self.power, self._character, self._data)
-        headline = ("⚠ " + " & ".join(key for key, _ in results).capitalize()) if results else ""
+        return power_trait_allocation_violations(self.power, self._data, self._character)
+
+    def _linked_violations(self) -> list[str]:
+        """Linked effects that don't share a common Range (a build error)."""
+        return power_linked_range_violations(self.power, self._data)
+
+    def _strength_violations(self) -> list[str]:
+        """Strength-Based amounts paying for more of an ability than the wielder has.
+
+        Constructor-only: the character-sheet card never shows this warning.
+        """
+        if self._character is None:
+            return []
+        return power_strength_amount_violations(self.power, self._character, self._data)
+
+    def _requirement_violations(self) -> list[str]:
+        """Modifiers attached without a prerequisite they depend on (Increasing
+        Difficulty without Cumulative/Progressive) — a house-rule warning."""
+        return power_modifier_requirement_violations(self.power, self._data)
+
+    def _imposed_violations(self) -> list[str]:
+        """An Affliction's Transformed condition imposing an effect it cannot afford.
+
+        The imposed effect may cost no more than the Affliction imposing it (p110), and
+        that budget moves every time the Affliction's rank or modifiers do — which is
+        why it is a live warning rather than something the picker could have prevented,
+        the way the picker does prevent a too-slow or non-Personal effect.
+        """
+        return power_imposed_effect_violations(self.power, self._data, self._character)
+
+    def _sub_build_violations(self) -> list[str]:
+        """Nested characters over their budget, past their count, or carrying what they
+        may not — a Summon's minion, a Metamorph's alternate forms (see
+        :mod:`mm_companion.core.rules.subbuilds`)."""
+        return power_sub_build_violations(self.power, self._data, self._character)
+
+    def _refresh_pl_warning(self) -> None:
+        """Show or hide the live warning from the current PL, allocation, and link breaches."""
+        pl = self._pl_violations()
+        alloc = self._alloc_violations()
+        caps = self._trait_cap_violations()
+        linked = self._linked_violations()
+        strength = self._strength_violations()
+        requirement = self._requirement_violations()
+        imposed = self._imposed_violations()
+        sub_builds = self._sub_build_violations()
+        headlines = []
+        if pl:
+            headlines.append("over Power Level")
+        if alloc:
+            headlines.append("over-allocated")
+        if caps:
+            headlines.append("trait over its rank cap")
+        if linked:
+            headlines.append("mismatched linked Range")
+        if strength:
+            headlines.append("Strength shortfall")
+        if requirement:
+            headlines.append("missing required modifier")
+        if imposed:
+            headlines.append("imposed effect over budget")
+        if sub_builds:
+            headlines.append("sub-build over budget")
+        headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
         if headline:
             self._warning.setText(headline)
             self._warning.setToolTip(
-                "\n".join(message for _key, messages in results for message in messages)
+                "\n".join(
+                    (
+                        *pl,
+                        *alloc,
+                        *caps,
+                        *linked,
+                        *strength,
+                        *requirement,
+                        *imposed,
+                        *sub_builds,
+                    )
+                )
             )
         self._warning.setVisible(bool(headline))
 
@@ -1238,7 +1552,7 @@ class PowerConstructorWindow(QMainWindow):
                 "Add at least one effect before saving this power.",
             )
             return
-        alloc = power_allocation_violations(self.power, self._data)
+        alloc = self._alloc_violations()
         if alloc:
             QMessageBox.warning(
                 self,
@@ -1247,7 +1561,7 @@ class PowerConstructorWindow(QMainWindow):
                 "than it has:\n\n• " + "\n• ".join(alloc),
             )
             return
-        linked = power_linked_range_violations(self.power, self._data)
+        linked = self._linked_violations()
         if linked:
             QMessageBox.warning(
                 self,
@@ -1256,9 +1570,7 @@ class PowerConstructorWindow(QMainWindow):
                 "the same Range:\n\n• " + "\n• ".join(linked),
             )
             return
-        violations = (
-            power_pl_violations(self.power, self._character, self._data) if self._character else []
-        )
+        violations = self._pl_violations()
         if violations and storage.pl_enforcement() == storage.PL_ENFORCE_BLOCK:
             QMessageBox.warning(
                 self,

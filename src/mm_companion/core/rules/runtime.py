@@ -861,12 +861,39 @@ def effect_is_selected(
 
     Identity, not equality: two effects of one power can be the same base effect at the
     same rank (a Damage array of two descriptors), and they are still different members.
+
+    **Once the power's own points have been split** across its Dynamic effects the
+    selection stops deciding: every effect holding a share runs at the same time, which
+    is exactly what the second point of a Dynamic alternate buys
+    (:func:`live_array_effects`).
     """
 
     if not power_effects_are_array(power):
         return True
+    shared = live_array_effects(power)
+    if shared:
+        return any(e is effect for e in shared)
     index = active_array_effect_index(power, game_data, char)
     return power.effects[index] is effect
+
+
+def live_array_effects(power: Power) -> list[PowerEffectInstance]:
+    """Which of an ``array`` power's own effects are running right now.
+
+    The effect-level twin of :func:`live_array_children`, and the same rule one level
+    down: ordinarily the array's alternates are mutually exclusive and the *Using*
+    picker decides, but once points have been split across the power's Dynamic effects
+    every effect holding a positive share is live together.
+
+    Empty when nothing is split — which is every power saved before an effect could hold
+    a share — so the selection goes on deciding and nothing about such a power moved.
+    Like the group-level version it reads only the share's *presence*: whether a share
+    is big enough to buy a rank is :func:`effect_current_rank`'s question, one layer up.
+    """
+
+    if not power_effects_are_array(power):
+        return []
+    return [e for e in power.effects if e.dynamic and (e.dynamic_points or 0) > 0]
 
 
 def live_array_children(group: PowerGroup) -> list[PowerNode]:

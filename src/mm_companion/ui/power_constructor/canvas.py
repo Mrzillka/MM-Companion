@@ -48,12 +48,26 @@ def _idle_canvas_rules(filled: bool) -> str:
     return f"border: {width}px {style} {theme.color('border.empty')};"
 
 
+#: The mode bar's fourth answer. It is a *view*, not a fourth
+#: :data:`~mm_companion.core.powers.STRUCTURE_ARRAY`-style structure: a Dynamic array is
+#: an array every one of whose members carries the ``dynamic`` flag. Keeping it out of
+#: ``STRUCTURES`` is what leaves every cost, runtime and validation reader — which ask
+#: "is this an array?" in some fifty places — correct without being touched, and it is
+#: the honest model besides, since the rules price Dynamic per member.
+MODE_ARRAY_DYNAMIC = "array_dynamic"
+
+
 class PowerModeBar(QWidget):
-    """A three-way switch for how a multi-effect power's effects combine.
+    """A four-way switch for how a multi-effect power's effects combine.
 
     Shown by the canvas only once a power holds two or more effects. Emits
-    :attr:`changed` with the chosen structure id (``independent`` / ``linked`` /
-    ``array``); the canvas writes it to the :class:`Power` and recomputes.
+    :attr:`changed` with the chosen id (``independent`` / ``linked`` / ``array`` /
+    :data:`MODE_ARRAY_DYNAMIC`); the canvas writes it to the :class:`Power` and
+    recomputes.
+
+    **Dynamic** used to be a checkbox on each effect card beside this bar, which asked
+    the player the same question twice — an array and a Dynamic array are two answers to
+    "how do these effects combine", not one answer and a modifier on it.
     """
 
     changed = Signal(str)
@@ -65,8 +79,14 @@ class PowerModeBar(QWidget):
             STRUCTURE_ARRAY,
             "Array",
             "One effect active at a time; the costliest is paid in full and each other "
-            "is a flat-cost alternate. Mark a member Dynamic to have it share the "
-            "pool and run alongside the other Dynamic members instead.",
+            "is a flat-cost alternate.",
+        ),
+        (
+            MODE_ARRAY_DYNAMIC,
+            "Dynamic array",
+            "The effects share the array's points and run at the same time at reduced "
+            "effectiveness, instead of switching each other off. Each alternate costs "
+            "the dearer Dynamic price, and the split is made on the card's sliders.",
         ),
     )
 
@@ -97,8 +117,17 @@ class PowerModeBar(QWidget):
                 self.changed.emit(structure)
                 return
 
-    def set_structure(self, structure: str) -> None:
-        """Reflect ``structure`` in the buttons without re-emitting :attr:`changed`."""
+    def set_structure(self, structure: str, dynamic: bool = False) -> None:
+        """Reflect a structure in the buttons without re-emitting :attr:`changed`.
+
+        *dynamic* lights the fourth segment instead of *Array*. It is true when **any**
+        member is Dynamic rather than all of them, so a build saved while Dynamic was a
+        per-member checkbox — and which may well be a mixed array — reads as what it is
+        rather than as a plain array that quietly costs more.
+        """
+
+        if structure == STRUCTURE_ARRAY and dynamic:
+            structure = MODE_ARRAY_DYNAMIC
         button = self._buttons.get(structure)
         if button is not None:
             button.setChecked(True)
@@ -226,7 +255,7 @@ class PowerCanvas(QFrame):
             cards.append(self._build_card(instance))
         if was_empty and len(built.effects) > 1:
             self._power.structure = built.structure
-            self._mode_bar.set_structure(built.structure)
+            self._mode_bar.set_structure(built.structure, any(e.dynamic for e in built.effects))
         self._sync_structure_ui()
         self.configurationDropped.emit(configuration.name)
         self.changed.emit()
@@ -255,7 +284,6 @@ class PowerCanvas(QFrame):
         for instance in self._power.effects:
             self._build_card(instance)
         self._sync_structure_ui()
-        self._mode_bar.set_structure(self._power.structure)
 
     def _remove_card(self, card: EffectCard) -> None:
         # Match the instance by *identity*, not equality: two cards holding the same
@@ -281,7 +309,19 @@ class PowerCanvas(QFrame):
         self.changed.emit()
 
     def _on_structure_changed(self, structure: str) -> None:
-        self._power.structure = structure
+        """Write the chosen structure down, fanning *Dynamic array* out to the members.
+
+        The fourth segment is a view over "array, every member Dynamic", so picking it
+        sets the flag on every effect and picking plain *Array* clears it. That is the
+        whole of the mapping: the cost math still prices Dynamic per member and has not
+        moved.
+        """
+
+        dynamic = structure == MODE_ARRAY_DYNAMIC
+        self._power.structure = STRUCTURE_ARRAY if dynamic else structure
+        if self._power.structure == STRUCTURE_ARRAY:
+            for effect in self._power.effects:
+                effect.dynamic = dynamic
         self._refresh_roles()
         self.changed.emit()
 
@@ -293,6 +333,10 @@ class PowerCanvas(QFrame):
         if not multi and self._power.structure != STRUCTURE_INDEPENDENT:
             self._power.structure = STRUCTURE_INDEPENDENT
             self._mode_bar.set_structure(STRUCTURE_INDEPENDENT)
+        else:
+            self._mode_bar.set_structure(
+                self._power.structure, any(e.dynamic for e in self._power.effects)
+            )
         self._refresh_roles()
 
     def _refresh_roles(self) -> None:

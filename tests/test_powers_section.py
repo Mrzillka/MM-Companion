@@ -26,6 +26,7 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     counter_rolls,
+    effect_current_rank,
     effect_readout_rows,
     effect_roll_numbers,
     effect_total_cost,
@@ -36,7 +37,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
+from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
 from mm_companion.ui.sections.powers import (
     PowersSection,
     _DraggableCard,
@@ -146,7 +147,9 @@ def test_array_group_active_member_normalizes(qapp: QApplication) -> None:
     assert group.active_child_id == b.id
 
 
-def test_the_dynamic_switch_appears_only_for_a_real_array_member(qapp: QApplication) -> None:
+def test_dynamic_is_the_mode_toggles_fourth_segment_not_a_per_card_switch(
+    qapp: QApplication,
+) -> None:
     from PySide6.QtWidgets import QCheckBox
 
     sheet, char = _sheet_with("A", "B")
@@ -161,19 +164,40 @@ def test_the_dynamic_switch_appears_only_for_a_real_array_member(qapp: QApplicat
             if box.text() == "Dynamic"
         ]
 
-    # An Independent or Linked group has no alternates, so nothing to be Dynamic about.
-    sheet.powers._set_group_mode(group, STRUCTURE_INDEPENDENT)
-    assert boxes() == []
-    sheet.powers._set_group_mode(group, STRUCTURE_LINKED)
-    assert boxes() == []
-    # An array offers one per member.
+    # No card carries a Dynamic box any more - the question is asked once, by the strip.
     sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
-    assert len(boxes()) == 2
+    assert boxes() == []
+    assert not any(child.dynamic for child in group.children)
+
+    # The fourth segment fans the flag out over every member, and Array takes it back off.
+    sheet.powers._set_group_mode(group, MODE_ARRAY_DYNAMIC)
+    assert group.mode == STRUCTURE_ARRAY
+    assert all(child.dynamic for child in group.children)
+    assert boxes() == []
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    assert not any(child.dynamic for child in group.children)
 
 
-def test_the_dynamic_switch_reprices_the_array(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QCheckBox
+def test_the_dynamic_segment_lights_for_an_array_with_any_dynamic_member(
+    qapp: QApplication,
+) -> None:
+    """A mixed array saved while Dynamic was per-member reads as what it is."""
 
+    sheet, char = _sheet_with("A", "B")
+    a, b = char.powers
+    sheet.powers._on_combine(b.id, a.id)
+    group = char.powers[0]
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+
+    group.children[1].dynamic = True
+    sheet.powers._rebuild_list()
+    toggle = _mode_toggle(sheet.powers)
+    assert [b.text() for b in toggle.findChildren(QPushButton) if b.isChecked()] == [
+        "Dynamic array"
+    ]
+
+
+def test_the_dynamic_segment_reprices_the_array(qapp: QApplication) -> None:
     sheet, char = _sheet_with("Base", "Alt")
     base, alt = char.powers
     sheet.powers._on_combine(alt.id, base.id)
@@ -182,15 +206,11 @@ def test_the_dynamic_switch_reprices_the_array(qapp: QApplication) -> None:
     data = load_game_data()
     before = node_cost(group, data)
 
-    # Ticking the box on the alternate takes it from a 1-point alternate to a 2-point one.
-    sheet.powers._set_dynamic(group.children[1], True)
-    assert group.children[1].dynamic is True
-    assert node_cost(group, data) == before + 1
-    assert [
-        box.isChecked()
-        for box in sheet.powers._list_host.findChildren(QCheckBox)
-        if box.text() == "Dynamic"
-    ] == [False, True]
+    # A 1-point alternate becomes a 2-point one, and the base pays an Alternate Effect
+    # rank on top of its own full cost.
+    sheet.powers._set_group_mode(group, MODE_ARRAY_DYNAMIC)
+    assert all(child.dynamic for child in group.children)
+    assert node_cost(group, data) == before + 2
 
 
 def test_the_counter_menu_is_offered_only_where_something_could_be_readied(
@@ -1003,7 +1023,12 @@ def test_the_locked_group_card_keeps_the_mode_and_drops_the_switch(qapp: QApplic
     sheet.powers.set_locked(False)
     toggle = _mode_toggle(sheet.powers)
     shown = [b for b in toggle.findChildren(QPushButton) if not b.isHidden()]
-    assert [b.text() for b in shown] == ["Independent", "Array", "Linked"]
+    assert [b.text() for b in shown] == [
+        "Independent",
+        "Array",
+        "Dynamic array",
+        "Linked",
+    ]
     assert not shown[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
@@ -1359,66 +1384,60 @@ def _pool_array(qapp: QApplication) -> tuple[CharacterSheet, Character, PowerGro
     return _sheet_for(char), char, group
 
 
-def _split_buttons(sec: PowersSection) -> list[QPushButton]:
-    return [
-        b for b in sec._list_host.findChildren(QPushButton) if b.text().startswith("Split points")
-    ]
+def _share_dials(sec: PowersSection) -> list[_RankDial]:
+    """Every Dynamic-share slider on the board — the split's only control now."""
+
+    return [d for d in sec._list_host.findChildren(_RankDial) if d.caption() == "Share"]
 
 
-def test_the_split_button_appears_only_on_an_array_with_a_dynamic_member(
+def test_a_share_dial_appears_only_on_a_dynamic_member_of_an_array(
     qapp: QApplication,
 ) -> None:
-    sheet, char, group = _pool_array(qapp)
-    assert len(_split_buttons(sheet.powers)) == 1
+    sheet, _char, group = _pool_array(qapp)
+    assert len(_share_dials(sheet.powers)) == 2
 
-    # Nothing Dynamic, nothing to split.
-    for child in group.children:
-        sheet.powers._set_dynamic(child, False)
-    assert _split_buttons(sheet.powers) == []
+    # Nothing Dynamic, nothing to share.
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    assert _share_dials(sheet.powers) == []
 
     # Nor outside an array: the pool is an array's, and only an array has one.
-    sheet.powers._set_dynamic(group.children[0], True)
+    sheet.powers._set_group_mode(group, MODE_ARRAY_DYNAMIC)
     sheet.powers._set_group_mode(group, STRUCTURE_LINKED)
-    assert _split_buttons(sheet.powers) == []
+    assert _share_dials(sheet.powers) == []
 
 
-def test_the_split_survives_the_lock_because_it_is_a_free_action(qapp: QApplication) -> None:
+def test_the_share_dial_survives_the_lock_because_it_is_a_free_action(
+    qapp: QApplication,
+) -> None:
     """Deciding the split happens at the table (p101), so it is not build chrome."""
+
     sheet, _char, _group = _pool_array(qapp)
     sheet.set_locked(True)
-    assert len(_split_buttons(sheet.powers)) == 1
-    assert _split_buttons(sheet.powers)[0].isEnabled()
+    assert len(_share_dials(sheet.powers)) == 2
 
 
-def test_the_dialog_bounds_the_split_by_the_pool(qapp: QApplication) -> None:
-    data = load_game_data()
+def test_the_share_dials_notches_are_bounded_by_what_the_pool_has_left(
+    qapp: QApplication,
+) -> None:
     sheet, _char, group = _pool_array(qapp)
     armour, flight = group.children
-    dialog = DynamicPoolDialog(group, data, sheet.character)
 
-    # Protection 8 is the costliest member, so the pool is its 8 points.
-    assert dialog._pool == 8
-    rows = dialog._rows
-    assert [row.node for row in rows] == [armour, flight]
+    # Protection 8 is the costliest member, so the pool is its 8 points, and a member
+    # holding nothing can be dialled all the way up to it.
+    assert sheet.powers._affordable_steps(armour, 8, 8) == [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
-    rows[0].spin.setValue(8)
-    assert dialog.assigned() == 8
-    # Nothing is left for the other row, which can no longer be dialled up at all.
-    assert rows[1].spin.maximum() == 0
-    rows[0].spin.setValue(5)
-    assert rows[1].spin.maximum() == 3
+    # With 5 spoken for elsewhere only the first four notches can be paid for.
+    assert sheet.powers._affordable_steps(flight, 6, 3) == [0, 2]
 
 
-def test_accepting_the_dialog_moves_every_members_ranks(qapp: QApplication) -> None:
+def test_moving_a_share_dial_moves_every_members_ranks(qapp: QApplication) -> None:
     data = load_game_data()
     sheet, char, group = _pool_array(qapp)
     armour, flight = group.children
     assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 8
 
-    dialog = DynamicPoolDialog(group, data, char)
-    dialog._rows[0].spin.setValue(4)
-    dialog._rows[1].spin.setValue(4)
-    dialog.apply_to()
+    sheet.powers._on_share_dialled(armour, [0, 2, 4, 6, 8], 2)
+    sheet.powers._on_share_dialled(flight, [0, 2, 4, 6], 2)
 
     assert armour.dynamic_points == 4 and flight.dynamic_points == 4
     # Half the pool, half the Toughness - and the Flight is running at the same time.
@@ -1426,18 +1445,38 @@ def test_accepting_the_dialog_moves_every_members_ranks(qapp: QApplication) -> N
     assert [p.name for p in live_powers(char.powers)] == ["Force Field", "Flight"]
 
 
-def test_clearing_the_split_stores_nothing_at_all(qapp: QApplication) -> None:
-    data = load_game_data()
-    sheet, char, group = _pool_array(qapp)
+def test_a_share_dialled_to_nothing_stores_nothing_at_all(qapp: QApplication) -> None:
+    sheet, _char, group = _pool_array(qapp)
     group.children[0].dynamic_points = 4
 
-    dialog = DynamicPoolDialog(group, data, char)
-    dialog._clear()
-    dialog.apply_to()
+    sheet.powers._on_share_dialled(group.children[0], [0, 2, 4, 6, 8], 0)
 
     # A zero share and no share behave alike, so the file keeps the quieter one.
-    assert [child.dynamic_points for child in group.children] == [None, None]
+    assert group.children[0].dynamic_points is None
     assert "dynamic_points" not in group.children[0].to_dict()
+
+
+def test_a_powers_own_dynamic_effects_get_share_dials_too(qapp: QApplication) -> None:
+    """An array exists at two levels, and so does its pool — so the control does too."""
+
+    char = Character.new_default(load_game_data())
+    blast = PowerEffectInstance("damage", rank=10)
+    fly = PowerEffectInstance("flight", rank=5)
+    power = Power(name="Fire Control", structure=STRUCTURE_ARRAY, effects=[blast, fly])
+    char.powers.append(power)
+    sheet = _sheet_for(char)
+    assert _share_dials(sheet.powers) == []
+
+    blast.dynamic = fly.dynamic = True
+    sheet.powers._rebuild_list()
+    assert len(_share_dials(sheet.powers)) == 2
+
+    # The share is written to the effect, not to its dialled rank.
+    sheet.powers._on_share_dialled(fly, [0, 2, 4, 6, 8, 10], 1)
+    assert fly.dynamic_points == 2
+    assert fly.current_rank is None
+    # The book's own worked example: a Flight 5 costing 10, given 2, runs at 1 rank.
+    assert effect_current_rank(fly, load_game_data(), char) == 1
 
 
 def test_a_split_array_dims_the_members_that_are_not_running(qapp: QApplication) -> None:

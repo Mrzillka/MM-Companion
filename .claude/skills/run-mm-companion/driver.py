@@ -557,6 +557,40 @@ def build(target: str):
         power = Power(name="Titan's Fists", effects=[PowerEffectInstance("damage", rank=8)])
         power.description = "Slabs of fist the size of a car door."
         win = PowerConstructorWindow(data, character=char, power=power)
+    elif target == "constructor-bands":
+        # The rank bands, which used to be two spin boxes on each chip. Two effects both
+        # carrying Tiring, so both rows earn the italic effect subtitle that tells them
+        # apart, beside a third modifier that has one effect to itself.
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.powers import (
+            STRUCTURE_LINKED,
+            ModifierSelection,
+            Power,
+            PowerEffectInstance,
+        )
+        from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+        data = load_game_data()
+        blast = PowerEffectInstance(
+            "damage",
+            rank=12,
+            flaws=[ModifierSelection("tiring", applies_from=9, applies_to=12)],
+        )
+        curse = PowerEffectInstance(
+            "affliction",
+            rank=8,
+            config={"resistance": "Will", "degree1": "dazed"},
+            extras=[ModifierSelection("ranged")],
+            flaws=[ModifierSelection("tiring")],
+        )
+        power = Power(
+            name="Sunfire",
+            structure=STRUCTURE_LINKED,
+            effects=[blast, curse],
+        )
+        power.description = "A blaze that scorches and blinds at once."
+        win = PowerConstructorWindow(data, power=power)
+        win.resize(1500, 900)
     elif target == "equipment-constructor":
         # The same builder in gear mode, opened on a catalog sword: the shot is about
         # what differs — the Equipment title, the EP total, and the group combo beside
@@ -961,9 +995,10 @@ def build(target: str):
         win = PowerConstructorWindow(data, character=char, power=power)
         win.resize(1500, 900)
     elif target in ("array-split", "array-split-locked"):
-        # A sheet array group with its points split across two Dynamic members. The
-        # fourth member is *not* Dynamic, so it cannot hold a share and is switched off
-        # — but its card still looks exactly as clickable as the others.
+        # A Dynamic array group with its points split across its members, each share
+        # made on that card's own rank slider. The fourth member is *not* Dynamic, so it
+        # cannot hold a share and is switched off — but its card still looks exactly as
+        # clickable as the others.
         from mm_companion.core.powers import (
             STRUCTURE_ARRAY,
             Power,
@@ -991,31 +1026,31 @@ def build(target: str):
             if key not in ("powers", "system_info"):
                 sheet.hide_block(key)
         win.resize(900, 950)
-    elif target == "pool-dialog":
-        # The split dialog itself, on an array with two Dynamic members — the spin-box
-        # grid the allocator is built beside.
-        from mm_companion.core.character import Character
-        from mm_companion.core.data_loader import load_game_data
+    elif target == "effect-split":
+        # The pool one level down: a single power whose *own* effects are a Dynamic
+        # array, each sharing the power's points on its own slider.
         from mm_companion.core.powers import (
             STRUCTURE_ARRAY,
             Power,
             PowerEffectInstance,
-            PowerGroup,
         )
-        from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
+        from mm_companion.ui.main_window import MainWindow
 
-        data = load_game_data()
-        char = Character.new_default(data)
-        blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
-        fly = Power(name="Flame Jets", effects=[PowerEffectInstance("flight", rank=5)])
-        fly.dynamic = True
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        blast = PowerEffectInstance("damage", rank=10, label="Fire Blast")
+        fly = PowerEffectInstance("flight", rank=5, label="Flame Jets")
+        blast.dynamic = fly.dynamic = True
         fly.dynamic_points = 4
-        shield = Power(name="Heat Shield", effects=[PowerEffectInstance("protection", rank=8)])
-        shield.dynamic = True
-        group = PowerGroup(mode=STRUCTURE_ARRAY, name="Fire Control", children=[blast, fly, shield])
-        char.powers.append(group)
-        win = DynamicPoolDialog(group, data, char)
-        win.resize(560, 340)
+        blast.dynamic_points = 6
+        sheet.character.powers.append(
+            Power(name="Fire Control", structure=STRUCTURE_ARRAY, effects=[blast, fly])
+        )
+        sheet.powers.refresh()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(900, 800)
     elif target == "sheet-broken":
         # A build that breaks three checks that used to be constructor-only: an
         # over-spent Concealment (6 ranks of senses bought with 2), an Affliction
@@ -1148,6 +1183,7 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-pinned-bottom",
             "constructor",
             "constructor-extended",
+            "constructor-bands",
             "enhanced-trait",
             "enhanced-trait-sheet",
             "sheet-size",
@@ -1179,7 +1215,7 @@ def main(argv: list[str] | None = None) -> int:
             "imposed-effect",
             "array-split",
             "array-split-locked",
-            "pool-dialog",
+            "effect-split",
             "sheet-broken",
             "sheet-stunt",
             "effect-array",

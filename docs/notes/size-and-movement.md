@@ -69,7 +69,7 @@ data-first; nothing below names a trait, an effect or a column in Python.
   `rules.effect_current_rank`, which `size_shift` and `_readout_size_table` both read.
   **Cost never asks it**: what a power is worth is what it was bought at, and dialling
   one down mid-fight refunds nothing. The field is generic on the effect, and **so is
-  the dial now**: any effect whose build ticks `rank_dial` gets one, and
+  the dial now**: any effect `effect_has_rank_dial` says yes to gets one, and
   `effect_effective_rank` reads `effect_current_rank` rather than the bought rank, so a
   Damage 10 fired at 5 forces a save against 5 (see "Rank as a dial" in
   [The powers layer](powers.md)). Validation reads `effect_build_rank` instead, for the
@@ -80,7 +80,11 @@ data-first; nothing below names a trait, an effect or a column in Python.
   is the thing being chosen while "rank 2" is an accounting fact the card already prints.
   An effect has rungs because the ruleset gave it a `size_table` readout
   (`SIZE_READOUT_KIND`), so nothing here names Growth or Shrinking and a mod's own size
-  effect gets the dial for free. Two rules that are easy to re-break: ranks the Size
+  effect gets the ladder for free. **That is now a default rather than an exemption**:
+  `effect_dials_by_default` reads the same readout, and `effect_has_rank_dial` lets the
+  player's `rank_dial` overrule it in either direction. A size effect used to get its
+  dial whatever the constructor's checkbox said, which made that box a control that
+  changed nothing on exactly the card it mattered most on. Two rules that are easy to re-break: ranks the Size
   Table **clamps** fold into the step that first reached them (`last_rank` closes the
   span, so a Colossal character's Growth 4 spends four ranks reading "Awesome"), and
   *current* is gated on the power being **live on the character** as well as

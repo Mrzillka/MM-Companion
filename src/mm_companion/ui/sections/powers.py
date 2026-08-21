@@ -55,7 +55,6 @@ from PySide6.QtCore import QAbstractAnimation, QEasingCurve, Qt, QVariantAnimati
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -88,25 +87,31 @@ from mm_companion.core.rules import (
     PinRef,
     active_array_child,
     active_array_effect_index,
-    array_alternate_cost,
-    array_dynamic_primary_cost,
     array_pool_points,
     clear_power_extra_effort,
     counter_rolls,
     debilitated_traits,
+    dynamic_rank_share,
+    dynamic_share_steps,
     effect_current_rank,
+    effect_display_name,
+    effect_has_rank_dial,
     effect_stands,
-    group_array_base_index,
+    effect_total_cost,
     group_scope_note,
     leaf_powers,
     live_array_children,
+    live_array_effects,
     live_powers,
+    member_effects,
+    node_cost,
     node_cost_formula,
     node_display_cost,
     power_display_name,
     power_effects_are_array,
     power_has_custom_modifier,
     power_has_standing_effect,
+    power_pool_points,
     power_roll_lines,
     power_rolls,
     power_runtime_gates,
@@ -131,7 +136,7 @@ from mm_companion.ui.cards import (
 )
 from mm_companion.ui.extra_effort import ExtraEffortDialog, add_power_effort_actions
 from mm_companion.ui.power_constructor import PowerConstructorWindow
-from mm_companion.ui.sections.dynamic_pool_dialog import DynamicPoolDialog
+from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -171,8 +176,38 @@ _SPLIT_SELECT_HINT = (
 _MODE_LABELS = {
     STRUCTURE_INDEPENDENT: "Group of powers",
     STRUCTURE_ARRAY: "Group of alternate effects",
+    MODE_ARRAY_DYNAMIC: "Group of dynamic alternate effects",
     STRUCTURE_LINKED: "Group of linked powers",
 }
+
+
+def _group_mode(group: PowerGroup) -> str:
+    """Which of the toggle's four segments a group is currently on.
+
+    :data:`~mm_companion.ui.power_constructor.canvas.MODE_ARRAY_DYNAMIC` is a *view*
+    over the model rather than a fourth stored structure — an array whose members carry
+    the ``dynamic`` flag — so this is the one place the view is derived and the switch,
+    the title and the rename placeholder cannot disagree about it. **Any** Dynamic
+    member counts, so a mixed array saved while Dynamic was a per-member checkbox reads
+    as what it is instead of as a plain array that quietly costs more.
+    """
+
+    if group.mode == STRUCTURE_ARRAY and any(child.dynamic for child in group.children):
+        return MODE_ARRAY_DYNAMIC
+    return group.mode
+
+
+def _held_effects(node) -> list[PowerEffectInstance]:
+    """The effects one share holds down — a whole member's, or a single effect's own.
+
+    A share is held by a member of an array, and an array exists at two levels: its
+    members are whole cards at the group level and single effects inside one power. The
+    slider is the same either way, so this is where the two shapes meet.
+    """
+
+    if isinstance(node, PowerEffectInstance):
+        return [node]
+    return member_effects(node)
 
 
 def _pool_is_split(group: PowerGroup) -> bool:
@@ -270,11 +305,17 @@ def _lit_width(button: QPushButton) -> int:
 
 
 class _ModeToggle(QWidget):
-    """A segmented Independent / Array / Linked switch for a group's title bar.
+    """A segmented Independent / Array / Dynamic array / Linked switch for a group.
 
-    Mirrors the Power Constructor's mode bar (the same three choices for how parts
+    Mirrors the Power Constructor's mode bar (the same four choices for how parts
     combine), but scoped to whole cards in a group rather than one power's effects.
-    Emits :attr:`modeChanged` with a structure id when the user picks a segment.
+    Emits :attr:`modeChanged` with a structure id — or
+    :data:`~mm_companion.ui.power_constructor.canvas.MODE_ARRAY_DYNAMIC` — when the user
+    picks a segment.
+
+    **Dynamic** was a checkbox beside this strip, which asked the same question twice:
+    an array and a Dynamic array are two answers to "how do these members combine", not
+    one answer and a modifier on it.
 
     The lit segment *is* how the card reports its group's mode, so it states its own
     look rather than trusting the platform to paint a checked button — see
@@ -291,6 +332,13 @@ class _ModeToggle(QWidget):
             "Array",
             "One member active at a time; the costliest is paid in "
             "full and each other is a flat-cost alternate.",
+        ),
+        (
+            MODE_ARRAY_DYNAMIC,
+            "Dynamic array",
+            "The members share the array's points and run at the same time at reduced "
+            "effectiveness, instead of switching each other off. Each alternate costs "
+            "the dearer Dynamic price, and the split is made on the cards' sliders.",
         ),
         (STRUCTURE_LINKED, "Linked", "Members always activate together as one; costs add up."),
     )
@@ -401,6 +449,7 @@ class _RankDial(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(int(theme.metric("space.sm")))
 
+        self._caption_text = caption
         caption_label = QLabel(caption)
         caption_label.setStyleSheet(muted_style())
         row.addWidget(caption_label)
@@ -430,6 +479,11 @@ class _RankDial(QWidget):
         # player having moved it.
         self._slider.valueChanged.connect(self._on_value_changed)
         self._slider.sliderReleased.connect(self._commit)
+
+    def caption(self) -> str:
+        """What this dial is *of* — "Size", "Share", or the effect's own name."""
+
+        return self._caption_text
 
     def _label_for(self, rank: int) -> str:
         return self._labels.get(rank, f"Rank {rank}")
@@ -889,7 +943,7 @@ class PowersSection(TitledSection):
         row.addWidget(grip)
         grip.setVisible(not self._locked)
 
-        mode_label = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
+        mode_label = _MODE_LABELS.get(_group_mode(group), _MODE_LABELS[STRUCTURE_INDEPENDENT])
         label = QLabel(group.name or mode_label)
         label.setStyleSheet(BOLD_STYLE)
         row.addWidget(label)
@@ -904,18 +958,14 @@ class PowersSection(TitledSection):
         # Order matters: the lock keeps whichever segment is lit, so the mode has to
         # be set before it — see _ModeToggle.set_locked.
         toggle = _ModeToggle()
-        toggle.set_mode(group.mode)
+        toggle.set_mode(_group_mode(group))
         toggle.modeChanged.connect(lambda mode, g=group: self._set_group_mode(g, mode))
         toggle.set_locked(self._locked)
         row.addWidget(toggle)
 
         row.addStretch()
 
-        dynamic = self._dynamic_toggle(group, parent)
-        if dynamic is not None:
-            row.addWidget(dynamic)
-
-        split = self._pool_button(group)
+        split = self._pool_readout(group)
         if split is not None:
             row.addWidget(split)
 
@@ -1133,84 +1183,37 @@ class PowersSection(TitledSection):
             action.setToolTip(spec.hint)
             action.triggered.connect(lambda _checked=False, s=spec: self.rollRequested.emit(s))
 
-    def _dynamic_toggle(self, node: PowerNode, parent: PowerGroup | None) -> QWidget | None:
-        """A Dynamic switch for a member of an ``array`` group, or ``None``.
+    def _pool_readout(self, group: PowerGroup) -> QWidget | None:
+        """How much of a Dynamic array's pool is currently spread, or ``None``.
 
-        The whole-card twin of the Power Constructor's per-effect switch, and the same
-        question at the other level an array exists at: a Dynamic member shares the
-        array's point pool and runs alongside the array's other Dynamic members instead
-        of switching them off, and pays a dearer Alternate Effect for it (p101).
+        A readout, not a control: the split itself is made on each member's own rank
+        slider, which is the point of moving it there — a member's share and the rank
+        that share buys are one gesture instead of a number typed into a dialog and a
+        rank worked out afterwards. What the header still owes the player is the one
+        number no single slider can show, which is how much of the pool is spoken for.
 
-        Offered only inside a real array — a group of one has nothing to be an alternate
-        *of* — and to leaf powers and nested groups alike, since either can be a member.
-        Locked, it follows :class:`_ModeToggle` rather than the buttons around it: the
-        flag stays readable and stops being a control, and the click falls through to
-        the card, which is the array's member selector.
-        """
-
-        if parent is None or parent.mode != STRUCTURE_ARRAY or len(parent.children) < 2:
-            return None
-        box = QCheckBox("Dynamic")
-        box.setChecked(node.dynamic)
-        base = group_array_base_index(parent, self._data, self._character)
-        if parent.children[base] is node:
-            price = f"one Alternate Effect ({array_dynamic_primary_cost(self._data)} PP)"
-        else:
-            dear = array_alternate_cost(self._data, dynamic=True)
-            price = f"{dear} PP instead of {array_alternate_cost(self._data)}"
-        box.setToolTip(
-            "Share this array's point pool with its other Dynamic members and run "
-            f"alongside them at reduced effectiveness, rather than switching them off. "
-            f"Costs {price}."
-        )
-        box.toggled.connect(lambda on, n=node: self._set_dynamic(n, on))
-        if self._locked:
-            box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        return box
-
-    def _pool_button(self, group: PowerGroup) -> QWidget | None:
-        """The "Split points" button on an array that has a Dynamic member, else ``None``.
-
-        Deciding the split is a *free action* the character takes at the table (p101),
-        not a build decision, so — unlike the Dynamic switch beside it — the button
-        survives the lock: it is the same kind of control as the card click that selects
-        an array's live alternate.
+        Leaving part of a pool unassigned stays legal, so nothing is tinted: this says
+        what is spent, not what is wrong.
         """
 
         if group.mode != STRUCTURE_ARRAY or not any(c.dynamic for c in group.children):
             return None
-        button = QPushButton("Split points")
         pool = array_pool_points(group, self._data, self._character)
         assigned = sum(c.dynamic_points or 0 for c in group.children if c.dynamic)
-        if assigned:
-            button.setText(f"Split points ({assigned}/{pool})")
-        button.setToolTip(
-            "Share this array's points across its Dynamic members, which then run at "
-            "the same time at reduced effectiveness."
+        if not assigned:
+            return None
+        label = QLabel(f"{assigned}/{pool} PP split")
+        label.setStyleSheet(muted_style())
+        label.setToolTip(
+            "This array's points are shared across its Dynamic members, which run at "
+            "the same time at reduced effectiveness. Move a member's rank slider to "
+            "change its share; slide them all to nothing to hand the pool back."
         )
-        button.clicked.connect(lambda _checked=False, g=group: self._split_pool(g))
-        return button
-
-    def _split_pool(self, group: PowerGroup) -> None:
-        """Open the split editor, and rebuild on OK — every member's ranks just moved."""
-
-        dialog = DynamicPoolDialog(group, self._data, self._character, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        dialog.apply_to()
-        self._rebuild_list()
-        self.runtimeChanged.emit()
-
-    def _set_dynamic(self, node: PowerNode, on: bool) -> None:
-        """Mark an array member Dynamic (or not) and reprice the tree."""
-        node.dynamic = on
-        self._rebuild_list()
-        self.changed.emit()
+        return label
 
     def _rename_group(self, group: PowerGroup) -> None:
         """Prompt for a new group name; blank clears it back to the mode label."""
-        placeholder = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
+        placeholder = _MODE_LABELS.get(_group_mode(group), _MODE_LABELS[STRUCTURE_INDEPENDENT])
         name, ok = QInputDialog.getText(
             self,
             "Rename group",
@@ -1225,7 +1228,21 @@ class PowersSection(TitledSection):
         self.changed.emit()
 
     def _set_group_mode(self, group: PowerGroup, mode: str) -> None:
-        group.mode = mode
+        """Put a group on one of the toggle's four segments.
+
+        *Dynamic array* is a view rather than a stored mode (:func:`_group_mode`), so it
+        is written as an array whose every member carries the flag, and picking plain
+        *Array* is how it is taken back off. The cost math is untouched by that: it
+        still prices Dynamic per member, which is what the rules do.
+        """
+
+        dynamic = mode == MODE_ARRAY_DYNAMIC
+        group.mode = STRUCTURE_ARRAY if dynamic else mode
+        if group.mode == STRUCTURE_ARRAY:
+            for child in group.children:
+                child.dynamic = dynamic
+                if not dynamic:
+                    child.dynamic_points = None
         self._normalize_arrays()
         self._rebuild_list()
         self.changed.emit()
@@ -1454,6 +1471,15 @@ class PowersSection(TitledSection):
         if selector is not None:
             layout.addWidget(selector)
 
+        # A Dynamic member's share of its array's pool, made on the same slider a rank
+        # is: the share and the rank it buys are one gesture rather than a number typed
+        # into a dialog and a rank worked out afterwards.
+        share = self._share_dial(power, parent, interactive)
+        if share is not None:
+            layout.addWidget(share)
+        for dial in self._effect_share_dials(power, interactive):
+            layout.addWidget(dial)
+
         # A dialled effect is a range, not a switch: a slider over the ranks the wielder
         # can hold it at, under the effect breakdown that explains what each notch is
         # worth and above the dice, with the rest of the mid-play controls.
@@ -1549,10 +1575,6 @@ class PowersSection(TitledSection):
             layout.addWidget(homerule)
         layout.addStretch()
 
-        dynamic = self._dynamic_toggle(power, parent)
-        if dynamic is not None:
-            layout.addWidget(dynamic)
-
         # Inside an array group a non-base member contributes only its flat pooled cost;
         # every other card shows its full assembled cost (node_display_cost decides). A
         # stunt contributes nothing, and "0 PP" beside a real build reads as a bug — so it
@@ -1590,9 +1612,17 @@ class PowersSection(TitledSection):
     # -- the array's live effect ------------------------------------------
     def _effect_selector(self, power: Power, interactive: bool) -> QWidget | None:
         """The picker for which of an array power's own effects is in use; ``None``
-        for every power that is not one, which is nearly all of them."""
+        for every power that is not one, which is nearly all of them.
 
-        if not power_effects_are_array(power):
+        Also ``None`` **once the power's points are split**: every effect holding a share
+        is running at the same time, so the selection has stopped deciding anything and
+        a picker that still moved ``active_effect`` would be a control with nothing
+        visible behind it. That is the same bargain ``_activation_role`` strikes one
+        level up, where a split array's member cards stop being clickable. The way back
+        is the same too — slide every share to nothing.
+        """
+
+        if not power_effects_are_array(power) or live_array_effects(power):
             return None
         titles = [effect_title(effect, self._character, self._data) for effect in power.effects]
         current = active_array_effect_index(power, self._data, self._character)
@@ -1612,20 +1642,182 @@ class PowersSection(TitledSection):
         self._rebuild_list()
         self.runtimeChanged.emit()
 
+    # -- the Dynamic share dial -------------------------------------------
+    def _share_dial(
+        self, node: PowerNode, parent: PowerGroup | None, interactive: bool
+    ) -> QWidget | None:
+        """A slider for how much of its array's pool a Dynamic member is holding.
+
+        The split used to be a modal dialog of spin boxes reached from the group header.
+        It is the same slider a rank is dialled on now, for the reason the dialog itself
+        had to keep explaining: a share is only ever interesting for the rank it buys, so
+        the notches *are* the ranks and the points are what each one spends
+        (:func:`~mm_companion.core.rules.dynamic_share_steps`). A member costing 2 points
+        a rank moves the split 2 points a notch and one costing 1 moves it by 1, so every
+        stop is a legal price for both of them — which is the whole reason the steps are
+        computed per member rather than being a plain points slider.
+
+        Ranks no share can buy are simply not offered: a 6-rank member costing 3 points
+        climbs two rungs for its first point, and a notch that quietly landed somewhere
+        else would be a control that lies.
+
+        Bounded by what is left of the pool once the *other* members are paid, so the
+        split can be walked up to the pool and never past it, and any member can always
+        be turned down to free points for another. Like every runtime control on a card
+        it survives the lock: deciding the split is a free action at the table (p101),
+        not a build edit.
+        """
+
+        if parent is None or not node.dynamic or parent.mode != STRUCTURE_ARRAY:
+            return None
+        pool = array_pool_points(parent, self._data, self._character)
+        full = node_cost(node, self._data, self._character)
+        if pool <= 0 or full <= 0:
+            return None
+        held = max(0, node.dynamic_points or 0)
+        spare = held + pool - sum(c.dynamic_points or 0 for c in parent.children if c.dynamic)
+        steps = self._affordable_steps(node, full, spare)
+        if len(steps) < 2:
+            return None
+        dial = _RankDial(
+            "Share",
+            len(steps) - 1,
+            self._share_index(steps, held),
+            {index: self._share_label(node, points, full) for index, points in enumerate(steps)},
+            interactive,
+        )
+        dial.rankPicked.connect(
+            lambda index, n=node, st=steps: self._on_share_dialled(n, st, index)
+        )
+        return dial
+
+    def _effect_share_dials(self, power: Power, interactive: bool) -> list[QWidget]:
+        """The same slider one level down: a power's *own* Dynamic effects, sharing its pool.
+
+        An array exists at two levels and so does its pool, so the control does too. The
+        arithmetic is identical — only what holds the share differs, an effect rather
+        than a whole card — which is why both go through
+        :meth:`_affordable_steps` and :func:`~mm_companion.core.rules.dynamic_share_steps`
+        and cannot price the same rank two ways.
+        """
+
+        if power.structure != STRUCTURE_ARRAY or len(power.effects) < 2:
+            return []
+        pool = power_pool_points(power, self._data, self._character)
+        if pool <= 0:
+            return []
+        assigned = sum(e.dynamic_points or 0 for e in power.effects if e.dynamic)
+        dials: list[QWidget] = []
+        for effect in power.effects:
+            if not effect.dynamic:
+                continue
+            full = effect_total_cost(effect, self._data, self._character)
+            if full <= 0:
+                continue
+            held = max(0, effect.dynamic_points or 0)
+            steps = self._affordable_steps(effect, full, held + pool - assigned)
+            if len(steps) < 2:
+                continue
+            dial = _RankDial(
+                "Share",
+                len(steps) - 1,
+                self._share_index(steps, held),
+                {
+                    index: self._share_label(effect, points, full)
+                    for index, points in enumerate(steps)
+                },
+                interactive,
+            )
+            dial.rankPicked.connect(
+                lambda index, e=effect, st=steps: self._on_share_dialled(e, st, index)
+            )
+            dials.append(dial)
+        return dials
+
+    def _affordable_steps(self, node, full: int, spare: int) -> list[int]:
+        """The share notches, in points, dropping the ones the pool cannot pay for.
+
+        A member with several effects has several ranks, so the notches are the union of
+        every effect's — one stop wherever *anything* under this card would move. That is
+        what "at reduced effectiveness" means for a member holding more than one effect:
+        the whole card is held down by the same proportion.
+        """
+
+        points = {0}
+        for effect in _held_effects(node):
+            points.update(p for p, _rank in dynamic_share_steps(effect.rank, full))
+        return [p for p in sorted(points) if p <= spare]
+
+    @staticmethod
+    def _share_index(steps: list[int], held: int) -> int:
+        """Which notch a stored share is sitting on — the last one it can pay for."""
+
+        best = 0
+        for index, points in enumerate(steps):
+            if points <= held:
+                best = index
+        return best
+
+    def _share_label(self, node, points: int, full: int) -> str:
+        """What one notch of the share dial costs and buys, named effect by effect.
+
+        The rank *is* the answer the rules give — the book's own example is a Flight 5
+        costing 10 held to "1 rank of Flight" by the 2 assigned to it (p101) — so a notch
+        reads "6 PP · Flight 3" rather than a fraction the reader has to convert. A share
+        too small for even one rank of anything says so instead of reading as rank 0.
+        """
+
+        if points <= 0:
+            return "Off"
+        parts = []
+        for effect in _held_effects(node):
+            share = dynamic_rank_share(effect.rank, points, full)
+            parts.append(f"{effect_display_name(effect, self._data)} {share}")
+        if not parts or not any(
+            dynamic_rank_share(e.rank, points, full) for e in _held_effects(node)
+        ):
+            return f"{points} PP · too few points to run"
+        return f"{points} PP · " + ", ".join(parts[:2]) + (", …" if len(parts) > 2 else "")
+
+    def _on_share_dialled(self, node, steps: list[int], index: int) -> None:
+        """Hand a member the share its slider was left on.
+
+        Runtime, so it emits ``runtimeChanged`` like the rank dial beside it. A notch at
+        zero is stored as *no share at all* rather than a zero — the two behave
+        identically and the model writes ``dynamic_points`` only when it is set, so
+        sliding every member back to nothing leaves a saved character byte-for-byte what
+        it was before anyone split the pool. That is also the way back to an ordinary
+        array, which is what clearing the split used to be a button for.
+        """
+
+        points = steps[max(0, min(index, len(steps) - 1))]
+        node.dynamic_points = points or None
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+
     # -- the rank dial ----------------------------------------------------
     def _rank_dials(
         self, power: Power, parent: PowerGroup | None, interactive: bool
     ) -> list[QWidget]:
         """One :class:`_RankDial` per effect that has ranks worth choosing between.
 
-        Two ways in, and the block names neither Growth nor Damage. A **size** effect
-        earns one because the ruleset gave it a size readout
-        (:func:`~mm_companion.core.rules.size_steps`), so a mod's own size effect gets a
-        dial without touching this file; any other effect earns one because the player
-        ticked *Add a rank slider* in the constructor's Extended settings.
+        One way in, and the block names neither Growth nor Damage:
+        :func:`~mm_companion.core.rules.effect_has_rank_dial`, which is the *Add a rank
+        slider* checkbox in the constructor's Extended settings when the player has
+        touched it and the ruleset's own answer when they have not — and the ruleset
+        says yes to anything carrying a size readout, so a mod's own size effect gets a
+        ladder without touching this file. That is the whole of the rule now: a Growth's
+        checkbox used to be a control that changed nothing, because a size effect got its
+        dial whatever the box said.
 
-        A single-rank effect gets nothing either way: dialling a Growth 1 is exactly the
-        card's own on/off switch, and a second way to press it is not a choice.
+        A single-rank effect gets nothing: dialling a Growth 1 is exactly the card's own
+        on/off switch, and a second way to press it is not a choice. A size effect is
+        measured by its *rungs* rather than its rank there, since the ladder a Growth 1
+        climbs is real even though its rank is one.
+
+        An effect holding a share of its power's own Dynamic pool is skipped: its rank
+        is not the player's to set directly, and :meth:`_share_dial` is the control that
+        does move it.
 
         The caption names the *effect* only when the power has more than one, which is
         the same bargain the dice footer's labels strike: on the ordinary single-effect
@@ -1634,9 +1826,11 @@ class PowersSection(TitledSection):
         """
         dials: list[QWidget] = []
         for effect in power.effects:
+            if any(e is effect for e in live_array_effects(power)):
+                continue  # its rank is its share; see _share_dial
             steps = size_steps(power, effect, self._character, self._data)
             sized = len(steps) >= 2
-            if not sized and not (effect.rank_dial and effect.rank > 1):
+            if not effect_has_rank_dial(effect, self._data) or not (sized or effect.rank > 1):
                 continue
             caption = "Size" if sized else "Rank"
             if len(power.effects) > 1:

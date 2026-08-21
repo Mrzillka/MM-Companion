@@ -163,8 +163,19 @@ class PowerEffectInstance:
 
     ``rank_dial`` puts a **rank slider** on the sheet card, so an effect bought at 10 can
     be used at 5 in play. It is a build decision (whether the control exists); how far
-    the dial is turned is ``current_rank`` below. The size effects get a dial without
-    asking, since a Growth is a ladder whether or not anyone ticked a box.
+    the dial is turned is ``current_rank`` below. It is **tri-state**: ``None`` — the
+    default — means nobody has decided and the ruleset answers, which gives a size
+    effect its ladder for free and leaves everything else without one; ``True`` and
+    ``False`` are the player's decision and win either way
+    (:func:`mm_companion.core.rules.effect_has_rank_dial`). That is what lets a Growth's
+    checkbox be a real control rather than one that changes nothing, and it costs no
+    migration: a save from before this has no key at all, reads back ``None``, and so
+    still carries exactly the dials it always did.
+
+    ``dynamic_points`` is this effect's share of its power's Dynamic pool — *runtime*
+    state, the effect-level twin of the field ``Power`` and ``PowerGroup`` carry, and
+    the number a Dynamic member's card slider writes. ``None`` means it holds no share.
+    See :func:`mm_companion.core.rules.dynamic_rank_share`.
 
     ``dynamic`` marks this effect a **Dynamic** member of its power's ``array``
     structure (p101). It is *build* state: a Dynamic alternate costs 2 points instead
@@ -206,9 +217,10 @@ class PowerEffectInstance:
     attack_skill: str = ""
     size_scales_damage: bool = True
     pl_cap: str = ""
-    rank_dial: bool = False
+    rank_dial: bool | None = None
     current_rank: int | None = None
     dynamic: bool = False
+    dynamic_points: int | None = None
     extra_effort: int = 0
     overrides: dict = field(default_factory=dict)
 
@@ -232,8 +244,8 @@ class PowerEffectInstance:
             data["size_scales_damage"] = False
         if self.pl_cap:
             data["pl_cap"] = self.pl_cap
-        if self.rank_dial:
-            data["rank_dial"] = True
+        if self.rank_dial is not None:
+            data["rank_dial"] = bool(self.rank_dial)
         if not self.toggled_on:
             data["toggled_on"] = False
         if self.suppressed:
@@ -242,6 +254,8 @@ class PowerEffectInstance:
             data["current_rank"] = self.current_rank
         if self.dynamic:
             data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
         if self.extra_effort:
             data["extra_effort"] = self.extra_effort
         if self.overrides:
@@ -251,6 +265,8 @@ class PowerEffectInstance:
     @classmethod
     def from_dict(cls, raw: dict) -> PowerEffectInstance:
         current = raw.get("current_rank")
+        dial = raw.get("rank_dial")
+        share = raw.get("dynamic_points")
         return cls(
             effect_id=raw["effect_id"],
             label=str(raw.get("label", "")),
@@ -262,11 +278,12 @@ class PowerEffectInstance:
             attack_skill=raw.get("attack_skill", ""),
             size_scales_damage=bool(raw.get("size_scales_damage", True)),
             pl_cap=str(raw.get("pl_cap", "")) if raw.get("pl_cap") in PL_CAPS else "",
-            rank_dial=bool(raw.get("rank_dial", False)),
+            rank_dial=None if dial is None else bool(dial),
             toggled_on=bool(raw.get("toggled_on", True)),
             suppressed=bool(raw.get("suppressed", False)),
             current_rank=None if current is None else int(current),
             dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=None if share is None else max(0, int(share)),
             extra_effort=max(0, int(raw.get("extra_effort", 0))),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )

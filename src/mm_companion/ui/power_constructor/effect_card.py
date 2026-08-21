@@ -185,20 +185,9 @@ class EffectCard(QFrame):
         self._role_badge = QLabel()
         self._role_badge.setVisible(False)
         header.addWidget(self._role_badge)
-        # Dynamic is a per-member decision, so it belongs on the card rather than in
-        # the window's Extended settings (which drive every effect together). The
-        # canvas shows it only for a member of an array.
-        self._dynamic = QCheckBox("Dynamic")
-        self._dynamic.setToolTip(
-            "Share the array's point pool with the other Dynamic members and run "
-            "alongside them at reduced effectiveness, instead of switching them off. "
-            "Costs 2 points as an alternate rather than 1, or one Alternate Effect "
-            "rank when this is the array's base."
-        )
-        self._dynamic.setChecked(self.instance.dynamic)
-        self._dynamic.setVisible(False)
-        self._dynamic.toggled.connect(self._on_dynamic_toggled)
-        header.addWidget(self._dynamic)
+        # Whether these effects are Dynamic is asked once, by the canvas's mode bar:
+        # it is the fourth answer to "how do these effects combine", not a checkbox on
+        # each card. The role badge beside this still prints what the answer costs.
         header.addStretch()
         header.addWidget(QLabel("Rank"))
         # An effect whose rank *is* its allocation has no rank to set: the spin shows
@@ -989,7 +978,7 @@ class EffectCard(QFrame):
         Shared by :meth:`attach_modifier` (which first appends the selection) and
         :meth:`_seed_modifier_chips` (which renders ones already present on load).
         """
-        chip = ModifierChip(modifier, selection, self._data, self._character, self.instance.rank)
+        chip = ModifierChip(modifier, selection, self._data, self._character)
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(lambda m=modifier: self._on_chip_changed(m))
         self._chips.append(chip)
@@ -1039,21 +1028,10 @@ class EffectCard(QFrame):
             self._refresh_cost()
             self.changed.emit()
 
-    def _on_dynamic_toggled(self, on: bool) -> None:
-        # Nothing on *this* card moves: a Dynamic member's price is an Alternate Effect
-        # point paid by the array, not by the effect, so the card's own footer is
-        # deliberately unchanged and only the power's total and badges shift.
-        self.instance.dynamic = on
-        self.changed.emit()
-
     def _on_rank_changed(self, value: int) -> None:
         self.instance.rank = value
         for update_total in self._alloc_updaters:  # the rank is the allocation budget
             update_total()
-        # The rank is also the ceiling of a chip's rank band, so a rank lowered under a
-        # band has to bring it down rather than leave it naming ranks that are gone.
-        for chip in self._chips:
-            chip.sync_effect_rank(value)
         self._refresh_cost()
         self.changed.emit()
 
@@ -1148,7 +1126,6 @@ class EffectCard(QFrame):
         """
 
         labels = {"base": "Base", "alternate": "Alternate", "linked": "Linked"}
-        self._dynamic.setVisible(role in ("base", "alternate"))
         if role not in labels:
             self._role_badge.clear()
             self._role_badge.setVisible(False)

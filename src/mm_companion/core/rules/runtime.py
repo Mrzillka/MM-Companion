@@ -367,6 +367,16 @@ def effect_current_rank(
     arguments — the Power Constructor, where nothing is dialled and nothing is wielded —
     the cap is not asked for and the bought rank comes back, exactly as it always did.
 
+    **Where there is a share, the share decides** — the cap *replaces* the dialled rank
+    rather than being the smaller of the two. That is what makes the card's single slider
+    honest: a Dynamic member has one control, and it spends points. Taking the minimum
+    instead was a deadlock. The card used to carry a rank dial beside the share dial, the
+    rank one wrote a value the cap then clamped away, and because the clamp was a ``min``
+    that written-and-clamped value survived as a **floor** — so raising the share
+    afterwards moved nothing. Replacing rather than combining also means ``current_rank``
+    is left alone: a Growth dialled to Large keeps its rung stored, and gets it back the
+    moment the split is cleared, instead of being overwritten by the pool.
+
     **Extra Effort is the one thing that pushes it up**, and it is added last, after
     every clamp above: pushing an effect past what it was bought at is the whole of
     "straining body and mind to do more when it really counts", and the benefit
@@ -387,7 +397,7 @@ def effect_current_rank(
     if game_data is None or char is None or _dynamic_rank_cap is None:
         return rank + push
     cap = _dynamic_rank_cap(effect, game_data, char)
-    return (rank if cap is None else max(0, min(rank, cap))) + push
+    return (rank if cap is None else max(0, cap)) + push
 
 
 def effect_is_active(

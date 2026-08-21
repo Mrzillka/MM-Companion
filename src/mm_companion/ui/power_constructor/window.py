@@ -813,16 +813,18 @@ class PowerConstructorWindow(QMainWindow):
         layout = QVBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        caption = QLabel("Ranks each modifier applies to")
-        layout.addWidget(caption)
-        note = QLabel(
+        # The explanation is a hover, not three lines of standing prose: this panel is a
+        # column of short controls and a paragraph in the middle of it pushes the rows
+        # the player came for off the screen. The glyph is what makes the hover findable
+        # — a tooltip nobody knows is there is not documentation.
+        caption = QLabel("Ranks each modifier applies to  \u24d8")
+        caption.setToolTip(
             "A modifier may cover part of an effect rather than all of it — a Blast 12 "
             "whose top four ranks alone are Tiring pays for eight plain ranks and four "
-            "discounted ones. The full range costs what it always did."
+            "discounted ones. Widening a pair to the whole effect is how a band is taken "
+            "back off, and costs what it always did."
         )
-        note.setStyleSheet(muted_style())
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        layout.addWidget(caption)
         self._rank_bands_host = QVBoxLayout()
         self._rank_bands_host.setContentsMargins(16, 0, 0, 0)
         self._rank_bands_host.setSpacing(2)
@@ -931,6 +933,11 @@ class PowerConstructorWindow(QMainWindow):
         whole = (low, high) == (1, max(1, effect.rank))
         selection.applies_from = 0 if whole else low
         selection.applies_to = 0 if whole else high
+        # The cards carry their own cost line, and a band moves it. They used to be
+        # restated for free, because the band lived on a chip and a chip's `changed`
+        # went through the card; editing it from up here reaches the window's total and
+        # the terms table but nothing on the canvas unless it is asked for.
+        self.canvas.refresh_costs()
         self._refresh_extended()
 
     def _chosen_pl_cap(self) -> str:
@@ -1055,6 +1062,9 @@ class PowerConstructorWindow(QMainWindow):
         self._refresh_cost()
         self._refresh_game_terms()
         self._refresh_pl_warning()
+        # The improvised calculator reckons from the power's gross cost, so anything
+        # here that moves a price moves what rigging it up on the spot would take.
+        self._refresh_improvised()
         self._refresh_size_damage_note()
         self._refresh_pl_cap_note()
 

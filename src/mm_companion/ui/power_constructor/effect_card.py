@@ -170,7 +170,7 @@ class EffectCard(QFrame):
         # flaws — render a chip for each (the config form built above already reads
         # them, e.g. an attached Extra Condition, so only the chips need seeding).
         self._seed_modifier_chips()
-        self._refresh_cost()
+        self.refresh_cost()
 
     # -- construction pieces ----------------------------------------------
     def _build_header(self, effect) -> QHBoxLayout:
@@ -746,7 +746,7 @@ class EffectCard(QFrame):
             update_total()
             # As in :meth:`_on_config_changed`: a trait-allocation row *is* the cost of
             # an as-trait effect, so the footer moves with it and not only the readout.
-            self._refresh_cost()
+            self.refresh_cost()
             self.changed.emit()
 
         def add_row(initial: dict | None = None) -> None:
@@ -831,7 +831,7 @@ class EffectCard(QFrame):
         # out the imposed-effect picker), so the gates are restated first: closing one
         # drops its stored value, and that is a value the cost may have read.
         self._refresh_config_gates()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     # -- enhanced-trait target picker -------------------------------------
@@ -969,7 +969,7 @@ class EffectCard(QFrame):
         self._build_chip(modifier, selection, is_flaw)
         self._populate_config_form()  # a gating extra may change a field's type
         self._refresh_attack_skill_visibility()  # Perception Range drops the attack roll
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _build_chip(self, modifier: Modifier, selection: ModifierSelection, is_flaw: bool) -> None:
@@ -1014,7 +1014,7 @@ class EffectCard(QFrame):
         self._hint.setVisible(not self._chips)
         self._populate_config_form()  # removing a gating extra may downgrade a field
         self._refresh_attack_skill_visibility()  # removing Perception Range restores it
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _reorder_bucket(self, bucket: list, from_index: int, to_index: int) -> None:
@@ -1025,14 +1025,14 @@ class EffectCard(QFrame):
         cost/summary recompute.
         """
         if _move_item(bucket, from_index, to_index):
-            self._refresh_cost()
+            self.refresh_cost()
             self.changed.emit()
 
     def _on_rank_changed(self, value: int) -> None:
         self.instance.rank = value
         for update_total in self._alloc_updaters:  # the rank is the allocation budget
             update_total()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _on_chip_changed(self, modifier: Modifier | None = None) -> None:
@@ -1044,7 +1044,7 @@ class EffectCard(QFrame):
             any(f.hides_field for f in modifier.config_fields) or self._is_form_gate(modifier.id)
         ):
             self._populate_config_form()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _cell_context(self) -> CellContext:
@@ -1072,7 +1072,7 @@ class EffectCard(QFrame):
         self._rank.setValue(rank)
         self._rank.blockSignals(False)
 
-    def _refresh_cost(self) -> None:
+    def refresh_cost(self) -> None:
         # Every edit reaches here, which is why the sub-build strip re-reads from it: a
         # rank change moves a Summon's minion budget and a chip change adds or removes a
         # Metamorph's slots outright.

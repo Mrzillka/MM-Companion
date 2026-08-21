@@ -84,7 +84,13 @@ data-first; nothing below names a trait, an effect or a column in Python.
   `effect_dials_by_default` reads the same readout, and `effect_has_rank_dial` lets the
   player's `rank_dial` overrule it in either direction. A size effect used to get its
   dial whatever the constructor's checkbox said, which made that box a control that
-  changed nothing on exactly the card it mattered most on. Two rules that are easy to re-break: ranks the Size
+  changed nothing on exactly the card it mattered most on. **A Dynamic array member's
+  ladder is its share**: the card carries one slider, still captioned "Size", whose
+  notches spend points instead of naming a rank the player is free to pick — the pool
+  decides the rank there, and two sliders claiming it deadlocked (see "A Dynamic member
+  has exactly one slider" in [The powers layer](powers.md)).
+
+  Two rules that are easy to re-break: ranks the Size
   Table **clamps** fold into the step that first reached them (`last_rank` closes the
   span, so a Colossal character's Growth 4 spends four ranks reading "Awesome"), and
   *current* is gated on the power being **live on the character** as well as

@@ -1385,15 +1385,27 @@ def _pool_array(qapp: QApplication) -> tuple[CharacterSheet, Character, PowerGro
 
 
 def _share_dials(sec: PowersSection) -> list[_RankDial]:
-    """Every Dynamic-share slider on the board — the split's only control now."""
+    """Every Dynamic-share slider on the board — the split's only control now.
 
-    return [d for d in sec._list_host.findChildren(_RankDial) if d.caption() == "Share"]
+    A share dial's label always prices the notch in points, whatever its caption says:
+    a Dynamic member's slider *is* its rank slider, so it is captioned "Size" on a Growth
+    and "Rank" on a Flight rather than announcing the machinery behind it.
+    """
+
+    return [
+        d
+        for d in sec._list_host.findChildren(_RankDial)
+        if any("PP" in text for text in d._labels.values())
+    ]
 
 
 def test_a_share_dial_appears_only_on_a_dynamic_member_of_an_array(
     qapp: QApplication,
 ) -> None:
     sheet, _char, group = _pool_array(qapp)
+    group.children[0].dynamic_points = 4
+    group.children[1].dynamic_points = 2
+    sheet.powers._rebuild_list()
     assert len(_share_dials(sheet.powers)) == 2
 
     # Nothing Dynamic, nothing to share.
@@ -1411,23 +1423,65 @@ def test_the_share_dial_survives_the_lock_because_it_is_a_free_action(
 ) -> None:
     """Deciding the split happens at the table (p101), so it is not build chrome."""
 
-    sheet, _char, _group = _pool_array(qapp)
+    sheet, _char, group = _pool_array(qapp)
+    group.children[0].dynamic_points = 4
+    group.children[1].dynamic_points = 2
     sheet.set_locked(True)
     assert len(_share_dials(sheet.powers)) == 2
 
 
-def test_the_share_dials_notches_are_bounded_by_what_the_pool_has_left(
+def test_the_share_dials_groove_is_its_whole_ladder_however_little_is_left(
     qapp: QApplication,
 ) -> None:
+    """The range is the member's own ranks; only the reachable ceiling follows the pool.
+
+    Bounding the range instead made a member's groove a function of everyone else's
+    allocation, so moving one member visibly jumped another's unchanged handle.
+    """
+
     sheet, _char, group = _pool_array(qapp)
     armour, flight = group.children
+    sec = sheet.powers
 
-    # Protection 8 is the costliest member, so the pool is its 8 points, and a member
-    # holding nothing can be dialled all the way up to it.
-    assert sheet.powers._affordable_steps(armour, 8, 8) == [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    # Protection 8 costs 8, so its ladder is a point a rank whatever the pool has left.
+    assert sec._share_steps(armour, 8, 0) == [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    assert sec._share_steps(armour, 8, 0) == sec._share_steps(armour, 8, 0)
 
-    # With 5 spoken for elsewhere only the first four notches can be paid for.
-    assert sheet.powers._affordable_steps(flight, 6, 3) == [0, 2]
+    # Flight 3 costs 6, so two points a rank — and the ceiling is what says how far up.
+    assert sec._share_steps(flight, 6, 0) == [0, 2, 4, 6]
+    assert sec._share_index([0, 2, 4, 6], 3) == 1  # 3 points can only pay for the 2 notch
+    assert sec._share_index([0, 2, 4, 6], 0) == 0
+
+    # A stored share that is not a notch is shown rather than rounded away, or the pool
+    # would go on charging a point the card had stopped displaying.
+    assert sec._share_steps(flight, 6, 3) == [0, 2, 3, 4, 6]
+
+
+def test_a_member_whose_siblings_hold_the_pool_keeps_its_slider(
+    qapp: QApplication,
+) -> None:
+    """It used to vanish outright — not disabled, absent — with no way back."""
+
+    sheet, _char, group = _pool_array(qapp)
+    armour, flight = group.children
+    armour.dynamic_points = 8  # the whole pool
+    sheet.powers._rebuild_list()
+
+    dials = _share_dials(sheet.powers)
+    assert len(dials) == 2
+    # The one with nothing left is still there, ended at the single notch it can reach.
+    starved = dials[1]
+    assert starved._slider.maximum() == 0
+    assert flight.dynamic_points is None
+
+    # Hand a point back and the starved slider gains exactly one division; hand two back
+    # and it gains another. The right-hand end of the groove is what the pool has left.
+    armour.dynamic_points = 6
+    sheet.powers._rebuild_list()
+    assert _share_dials(sheet.powers)[1]._slider.maximum() == 1
+    armour.dynamic_points = 4
+    sheet.powers._rebuild_list()
+    assert _share_dials(sheet.powers)[1]._slider.maximum() == 2
 
 
 def test_moving_a_share_dial_moves_every_members_ranks(qapp: QApplication) -> None:
@@ -1468,6 +1522,8 @@ def test_a_powers_own_dynamic_effects_get_share_dials_too(qapp: QApplication) ->
     assert _share_dials(sheet.powers) == []
 
     blast.dynamic = fly.dynamic = True
+    blast.dynamic_points = 6
+    fly.dynamic_points = 4
     sheet.powers._rebuild_list()
     assert len(_share_dials(sheet.powers)) == 2
 

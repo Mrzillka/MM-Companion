@@ -1231,6 +1231,29 @@ def test_a_band_covering_every_rank_stores_nothing_at_all(qapp: QApplication) ->
     assert "applies_from" not in selection.to_dict()
 
 
+def test_a_band_moves_the_cards_own_cost_formula(qapp: QApplication) -> None:
+    """The line under the card is the working; it has to follow the band that changed it.
+
+    It used to be restated for free — the band lived on a chip, and a chip's `changed`
+    went through the card — so editing it from the window left the card printing the
+    price of a build that no longer existed.
+    """
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+
+    before = card._cost.text()
+    _band_spins(_band_rows(window)[0])[0].setValue(9)
+    after = card._cost.text()
+
+    assert after != before
+    # Eight plain ranks at full price and four discounted ones, priced in one run each.
+    assert after.endswith(f"= {effect_total_cost(card.instance, window._data)} PP")
+
+
 def test_a_band_never_reads_backwards(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")

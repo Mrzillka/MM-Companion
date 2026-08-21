@@ -1386,6 +1386,31 @@ def member_effects(node: PowerNode) -> list[PowerEffectInstance]:
     return list(node.effects)
 
 
+def dynamic_member_cost(node, game_data: GameData) -> int:
+    """What one array member costs for the purpose of rationing its share.
+
+    The **one** denominator in the Dynamic pool, and it exists because there were two:
+    the cards priced their share notches *with* the wielder while :func:`dynamic_rank_cap`
+    priced the same member *without* one, so a notch could promise "6 PP · Flight 3" while
+    the sheet ran Flight 2. Whatever asks what a share is worth — the cap, the slider's
+    notches, the label beside them — asks here.
+
+    It is priced **without the wielder** on purpose, and that is not merely a tie-break.
+    Passing a character would let a legacy Strength-Based selection reach
+    :func:`~.derived.effective_ability`, which asks what the character's powers are
+    contributing, which asks the cap — a loop that terminates today only because the cap
+    happens to price character-free. It is also the right number on its own terms: the
+    pool is a share of what the array was **bought** for.
+
+    Takes a whole member (a card or a sub-group) or a single effect, since an array exists
+    at both levels and so does its pool.
+    """
+
+    if isinstance(node, PowerEffectInstance):
+        return effect_total_cost(node, game_data)
+    return node_cost(node, game_data)
+
+
 def dynamic_rank_cap(
     effect: PowerEffectInstance, game_data: GameData, char: Character
 ) -> int | None:
@@ -1405,22 +1430,19 @@ def dynamic_rank_cap(
     members are effects rather than cards — is folded into the same minimum, so a card
     inside a split group whose own effects are also split is rationed by both.
 
-    The member is priced **without the wielder** on purpose. Passing ``char`` would let a
-    legacy Strength-Based selection reach :func:`~.derived.effective_ability`, which asks
-    what the character's powers are contributing, which asks this — a loop. The pool is a
-    share of what the array was *bought* for, so the character-free price is also the
-    right one.
+    The member is priced through :func:`dynamic_member_cost`, which is character-free and
+    says why.
     """
 
     cap: int | None = None
     for member, points in allocated_array_members(char.powers):
         if not any(e is effect for e in member_effects(member)):
             continue
-        share = dynamic_rank_share(effect.rank, points, node_cost(member, game_data))
+        share = dynamic_rank_share(effect.rank, points, dynamic_member_cost(member, game_data))
         cap = share if cap is None else min(cap, share)
     if effect.dynamic and effect.dynamic_points is not None:
         own = dynamic_rank_share(
-            effect.rank, int(effect.dynamic_points), effect_total_cost(effect, game_data)
+            effect.rank, int(effect.dynamic_points), dynamic_member_cost(effect, game_data)
         )
         cap = own if cap is None else min(cap, own)
     return cap

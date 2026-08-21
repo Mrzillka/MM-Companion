@@ -69,7 +69,44 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   and the selected alternate stops deciding, which is exactly what the second point of a
   Dynamic alternate buys. With nothing split an array behaves as it always has, so a
   character saved before this loads unchanged.
-- **The split is made on the members' own rank sliders, not in a dialog.** It was a
+- **A Dynamic member has exactly one slider, and it spends points.** The share dial
+  *replaces* the rank dial rather than sitting beside it (`_rank_is_shared`). Two of them
+  is what a Growth in a Dynamic array used to get, and they deadlocked: the rank one wrote
+  a `current_rank` the share then clamped away, and because the clamp was a `min` the
+  written-and-clamped value survived as a **floor the share could no longer lift**, so
+  raising the share afterwards moved nothing. `effect_current_rank` therefore lets the cap
+  *replace* the dialled rank rather than taking the smaller of the two — which is also why
+  nothing clears `current_rank`: a Growth dialled to Large keeps its rung stored and gets
+  it back the moment the split is cleared. The one slider answers to the rank dial's own
+  names (`_share_caption`): "Size" on a Growth, "Rank" on a Flight, with the points on the
+  label — `Large · 4 PP`.
+- **The groove ends where the pool does.** A share slider's right-hand end *is* the most
+  that member can be set to, and it gains a division for every point a sibling hands back:
+  a Growth 6 holding all six of a six-point pool leaves an Elongation 3 with one notch,
+  and dropping the Growth a rung gives the Elongation two. The index space is the member's
+  whole ladder and what is affordable is always a **prefix** of it, so notch *n* means the
+  same points however far the end has travelled — which is what lets the end move under
+  the eye without the handle changing meaning. `_SplitGroup` is what moves it: the dials
+  report every notch they pass (`previewed`), and it re-ends every *other* dial and counts
+  the header down (`6/10 PP · 4 left`) **while a handle is still moving**, writing nothing
+  until the release so a whole gesture stays one undoable step. A member is never left
+  without a slider — it used to vanish outright once its siblings had spent the pool, with
+  no way to give it points again.
+- **One denominator.** `dynamic_member_cost` is the single answer to "what does this member
+  cost for the purpose of rationing it", asked by `dynamic_rank_cap`, by the slider's
+  notches and by the label beside them. There were two: the cards priced with the wielder
+  and the cap priced without, so a notch could promise `6 PP · Flight 3` while the sheet
+  ran Flight 2. It is character-free, and not merely as a tie-break — pricing against the
+  wielder reaches `effective_ability`, which asks what the powers contribute, which asks
+  the cap, and the loop terminates today only because the cap happens to price char-free.
+- **A commit made with a button still down is deferred a turn.** Every commit ends in a
+  rebuild that deletes the slider making it, and a **groove click** reaches the commit from
+  inside `mousePressEvent` — so it tore the widget down while it still held the mouse grab,
+  the rest of the gesture went nowhere, and a queued auto-repeat could re-fire against a
+  stale reading of the pool. A release has already cleared the button and a keyboard step
+  never had one, so those still commit straight through and the dial stays synchronous
+  everywhere it was.
+- **The split is made on the members' own sliders, not in a dialog.** It was a
   modal grid of spin boxes behind a *Split points* button, and the dialog kept having to
   explain the thing that makes the slider the right control: a share is only ever
   interesting for the rank it buys. So the notches **are** the ranks and the points are
@@ -340,7 +377,13 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   spins are rebuilt whenever the canvas changes — that is what keeps their ceiling on the
   effect's rank now that the chip no longer does (`sync_effect_rank` is gone) — and
   editing one refreshes rather than rebuilds, or the widget under the player's thumb
-  would be destroyed mid-edit.
+  would be destroyed mid-edit. Its explanation is a **hover on the caption** (with a ⓘ so
+  the hover is findable) rather than standing prose, because a paragraph in the middle of
+  a column of short controls pushes the rows the player came for off the screen. And the
+  edit reaches the **cards**: `PowerCanvas.refresh_costs` restates each card's own cost
+  formula, which the band used to move for free when it lived on a chip and now has to be
+  asked for, since a price change that starts in the window reaches nothing on the canvas
+  by itself.
 - **A power can be held *hard* to Power Level.** A breach was only ever a ⚠. An effect's
   `pl_cap` (`""` / `"effect"` / `"attack"`) makes it bite: `effect_pl_cap_shift` returns
   the `(rank_cut, attack_cut)` that brings `attack + rank` back inside the cap, keeping

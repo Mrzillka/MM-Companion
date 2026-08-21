@@ -339,6 +339,20 @@ class PowerCanvas(QFrame):
             )
         self._refresh_roles()
 
+    def refresh_costs(self) -> None:
+        """Restate every card's own cost line.
+
+        The window's total and the game-terms table are refreshed by the window itself;
+        the per-effect formula under each card belongs to the card and nothing outside
+        could reach it. That was fine while every price change started *on* a card — a
+        rank spin, a chip attached, a config combo — and stopped being fine when the
+        rank bands moved into Extended settings, which is a price change that starts in
+        the window.
+        """
+
+        for card in self._cards:
+            card.refresh_cost()
+
     def _refresh_roles(self) -> None:
         """Badge each card with its part in the current structure (§4)."""
         multi = len(self._cards) >= 2

@@ -579,22 +579,57 @@ def test_applying_a_condition_refreshes_derived_readouts_through_the_bus(
     assert "immobilised" in sheet.system_info._speed.rendered_text()
 
 
-def test_high_resistance_total_is_not_clamped_away(qapp: QApplication) -> None:
-    """A resistance spin box holds the *total*, which on a high-Stamina character runs
-    past an ability's ceiling. Clamping it would make the next edit recompute the
-    bought delta from the wrong number and silently refund points."""
+def test_a_resistance_row_reads_as_ability_rank_and_total(qapp: QApplication) -> None:
+    """The three numbers that make a resistance, each in its own column: the trait it
+    derives from, the ranks bought on top, and what they come to."""
     data = load_game_data()
     sheet = CharacterSheet(data)
     sheet.character.resistances["TOUGHNESS"] = 10  # ten bought ranks
     sheet.abilities._abilities["STA"].setValue(28)
-    sheet.resistances.refresh_bases()
+    sheet.resistances.refresh_ranks()
 
-    spin = sheet.resistances._resistances["TOUGHNESS"]
-    assert spin.value() == 38  # 28 base + 10 bought, not clamped to 30
+    section = sheet.resistances
+    assert section._resistance_base["TOUGHNESS"].text() == "28"
+    assert section._resistances["TOUGHNESS"].value() == 10  # the ranks, not the total
+    assert section._resistance_total["TOUGHNESS"].text() == "38"
 
-    # One decrement moves the bought delta by exactly one, not down to a clamp remainder.
-    spin.setValue(spin.value() - 1)
+    # The spin is the bought ranks outright, so an edit is a write and nothing else:
+    # no base to subtract back out, and nothing a clamped display could rewrite.
+    section._resistances["TOUGHNESS"].setValue(9)
     assert sheet.character.resistances["TOUGHNESS"] == 9
+    assert section._resistance_total["TOUGHNESS"].text() == "37"
+
+
+def test_a_resistance_with_no_trait_to_derive_from_shows_a_dash(qapp: QApplication) -> None:
+    """Defence is bought outright. A 0 in its Ability column would claim a base it
+    hasn't got; the total is still the number the game asks for."""
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.resistances._resistances["DEF"].setValue(4)
+
+    assert sheet.resistances._resistance_base["DEF"].text() == "—"
+    assert sheet.resistances._resistance_total["DEF"].text() == "4"
+    # And Dodge derives from Defence, so its own Ability column followed that edit.
+    assert sheet.resistances._resistance_base["DODGE"].text() == "4"
+
+
+def test_an_enhanced_ability_tints_the_resistance_it_feeds(qapp: QApplication) -> None:
+    """An Enhanced Trait moves the *base*, not the ranks, so it lands in the Ability
+    column and says which power put it there."""
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.character.powers.append(
+        Power(
+            name="Iron Hide",
+            effects=[PowerEffectInstance("enhanced_trait", rank=4, config={"target": "STA"})],
+        )
+    )
+    sheet.resistances.refresh_readouts()
+
+    cell = sheet.resistances._resistance_base["TOUGHNESS"]
+    assert cell.text() == "4"
+    assert cell.foreground().color().name() == theme.color("tint.better")
+    assert "Iron Hide" in cell.toolTip()
 
 
 def test_resistance_range_comes_from_the_data(qapp: QApplication) -> None:

@@ -966,11 +966,15 @@ def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) ->
     )
     sheet = CharacterSheet(data, character)
 
-    tough = sheet.resistances._resistance_enh["TOUGHNESS"]
-    assert tough.text() == "→ 5"  # Protection boost shown on load
+    tough = sheet.resistances._resistance_total["TOUGHNESS"]
+    assert tough.text() == "5"  # Protection boost shown on load
+    assert "Armor" in tough.toolTip()
 
     sheet.powers._remove_power(character.powers[0])
-    assert tough.text() == ""  # boost cleared when the power goes
+    # The Total column always states the resistance, so losing the boost takes it to
+    # the number the character is left with rather than to a blank cell.
+    assert tough.text() == "0"
+    assert tough.toolTip() == ""
 
 
 # -- edit-in-place ------------------------------------------------------------

@@ -219,8 +219,9 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - Cross-section reactivity uses Qt signals over that shared model. Ability spin
   boxes emit `AbilitiesSection.abilityChanged(key, value)` →
   `SkillsSection.set_ability_value` (refreshes skill totals) and →
-  `ResistancesSection.follow_ability_change` (re-seeds bases derived from that
-  ability). Each block also emits a generic `changed` signal; `CharacterSheet`
+  `ResistancesSection.follow_ability_change` (restates the readouts of the
+  resistances derived from that ability — never their ranks, which are the
+  player's). Each block also emits a generic `changed` signal; `CharacterSheet`
   connects them to recompute build-wide derived values (currently
   `rules.power_points_spent`, pushed into the power-points pool label via
   `SystemInfoSection.set_pool_current`). Follow this pattern — write to the model

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QContextMenuEvent
-from PySide6.QtWidgets import QApplication, QFrame
+from PySide6.QtWidgets import QApplication, QFrame, QTableWidgetItem
 
 from mm_companion.core.character import AdvantageSelection, AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
@@ -462,15 +462,19 @@ def test_hit_on_toughness_shows_a_red_effective_total(qapp2: QApplication) -> No
     sheet.abilities._abilities["STA"].setValue(3)  # Toughness base 3
     apply_condition(char, "hit", data)
     apply_condition(char, "hit", data)
-    sheet.resistances.refresh_enhancements()
-    total = sheet.resistances._resistance_enh["TOUGHNESS"]
-    assert total.text() == "→ 1"  # 3 - 2
+    sheet.resistances.refresh_readouts()
+    total = sheet.resistances._resistance_total["TOUGHNESS"]
+    assert total.text() == "1"  # 3 - 2
     assert total.foreground().color().name() == theme.color(CONDITION_TINT)
 
-    # And it goes back to a blank cell once the condition is gone.
+    # The condition is display-only, so it never reaches the Ability column beside it.
+    assert sheet.resistances._resistance_base["TOUGHNESS"].text() == "3"
+
+    # And the total goes back to the built number once the condition is gone.
     char.conditions.clear()
-    sheet.resistances.refresh_enhancements()
-    assert total.text() == ""
+    sheet.resistances.refresh_readouts()
+    assert total.text() == "3"
+    assert total.foreground().color() == QTableWidgetItem().foreground().color()
 
 
 def test_hit_chip_remove_button_decrements(qapp2: QApplication) -> None:

@@ -26,6 +26,7 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     counter_rolls,
+    dynamic_member_cost,
     effect_current_rank,
     effect_readout_rows,
     effect_roll_numbers,
@@ -1490,8 +1491,10 @@ def test_moving_a_share_dial_moves_every_members_ranks(qapp: QApplication) -> No
     armour, flight = group.children
     assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 8
 
-    sheet.powers._on_share_dialled(armour, [0, 2, 4, 6, 8], 2)
-    sheet.powers._on_share_dialled(flight, [0, 2, 4, 6], 2)
+    armour_ladder = sheet.powers._share_notches(armour, 8, 0)
+    flight_ladder = sheet.powers._share_notches(flight, 6, 0)
+    sheet.powers._on_share_dialled(armour, armour_ladder, armour_ladder.index((4, 4)))
+    sheet.powers._on_share_dialled(flight, flight_ladder, flight_ladder.index((4, 2)))
 
     assert armour.dynamic_points == 4 and flight.dynamic_points == 4
     # Half the pool, half the Toughness - and the Flight is running at the same time.
@@ -1503,7 +1506,9 @@ def test_a_share_dialled_to_nothing_stores_nothing_at_all(qapp: QApplication) ->
     sheet, _char, group = _pool_array(qapp)
     group.children[0].dynamic_points = 4
 
-    sheet.powers._on_share_dialled(group.children[0], [0, 2, 4, 6, 8], 0)
+    sheet.powers._on_share_dialled(
+        group.children[0], sheet.powers._share_notches(group.children[0], 8, 4), 0
+    )
 
     # A zero share and no share behave alike, so the file keeps the quieter one.
     assert group.children[0].dynamic_points is None
@@ -1593,6 +1598,80 @@ def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(
     assert dial._labels[dial.value()] == "3 PP · Growth 3"
 
 
+def test_a_share_dial_can_stop_at_a_rank_its_share_overshoots(qapp: QApplication) -> None:
+    """A share buys a ceiling, not a rank, so the player still picks the rung.
+
+    A Growth 6 discounted to 5 PP by a Quirk is rationed 6 ranks to 5 points: 4 PP buys
+    four ranks and 5 PP buys all six, so *nothing* bought exactly five and a Diminutive
+    wielder could be Large or Gargantuan but never Huge. Bigger is not better for a size
+    effect — a Gargantuan character is easier to hit and impossible to hide — so every
+    rank gets a notch, priced at the cheapest share that reaches it.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    effect = PowerEffectInstance("growth", rank=6)
+    effect.flaws = [ModifierSelection(modifier_id="quirk")]  # 6 ranks for 5 points
+    growth = Power(name="Giant Form", effects=[effect])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    char.powers.append(PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach]))
+    sec = _sheet_for(char).powers
+    assert dynamic_member_cost(growth, data) == 5
+
+    # Two notches at one price, differing by where they stop.
+    ladder = sec._share_notches(growth, 5, 0)
+    assert ladder[-2:] == [(5, 5), (5, 6)]
+    dial = _share_dials(sec)[0]
+    assert dial._labels[5] == "5 PP · Growth 5"
+    assert dial._labels[6] == "5 PP · Growth 6"
+
+    dial._slider.setValue(5)
+    assert effective_size(char, data) == "Huge"
+    assert growth.dynamic_points == 5  # paid for six...
+    assert effect.current_rank == 5  # ...and standing at five
+    assert _share_dials(sec)[0].value() == 5  # and the handle comes back to that notch
+
+    # The rung above spends the same points on the rank they actually buy, and stores
+    # no hold at all, so only a member deliberately held below its ceiling carries one.
+    _share_dials(sec)[0]._slider.setValue(6)
+    assert effective_size(char, data) == "Gargantuan"
+    assert growth.dynamic_points == 5 and effect.current_rank is None
+
+
+def test_a_rank_left_over_from_a_rank_dial_does_not_hold_a_share_down(
+    qapp: QApplication,
+) -> None:
+    """A hold is the *pair* — the rank stored and the share that prices it.
+
+    An effect dialled down before its power joined a pool keeps that rank, and reading
+    it on its own would quietly cap a member nobody had touched: the share is what
+    decides for everything but the notch the player actually stopped on.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    effect = PowerEffectInstance("growth", rank=6)
+    effect.flaws = [ModifierSelection(modifier_id="quirk")]
+    effect.current_rank = 3  # left behind by the rank dial it had before the pool
+    growth = Power(name="Giant Form", effects=[effect])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    growth.dynamic_points = 4  # ...which four points do not price
+    char.powers.append(PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach]))
+    sec = _sheet_for(char).powers
+
+    assert effect_current_rank(effect, data, char) == 4  # the share decides
+    assert effective_size(char, data) == "Large"
+    assert _share_dials(sec)[0].value() == 4
+    # ...and the first commit clears the leftover rather than leaving it to bite later.
+    ladder = sec._share_notches(growth, 5, 4)
+    sec._on_share_dialled(growth, ladder, ladder.index((3, 3)))
+    assert effect.current_rank is None and growth.dynamic_points == 3
+
+
 def test_a_powers_own_dynamic_effects_get_share_dials_too(qapp: QApplication) -> None:
     """An array exists at two levels, and so does its pool — so the control does too."""
 
@@ -1611,7 +1690,7 @@ def test_a_powers_own_dynamic_effects_get_share_dials_too(qapp: QApplication) ->
     assert len(_share_dials(sheet.powers)) == 2
 
     # The share is written to the effect, not to its dialled rank.
-    sheet.powers._on_share_dialled(fly, [0, 2, 4, 6, 8, 10], 1)
+    sheet.powers._on_share_dialled(fly, sheet.powers._share_notches(fly, 10, 4), 1)
     assert fly.dynamic_points == 2
     assert fly.current_rank is None
     # The book's own worked example: a Flight 5 costing 10, given 2, runs at 1 rank.

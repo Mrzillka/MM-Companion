@@ -161,6 +161,29 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   that lands back on that seat writes nothing, so leaving the handle alone keeps the array
   unsplit; only dragging it somewhere else splits the pool, and dragging it to zero still
   puts the member down.
+- **A notch is a share *and* a rank, because a share buys a ceiling.** The two are
+  different ladders wherever a member does not cost a round number of points a rank: a
+  Growth 6 discounted to 5 PP by a Quirk is rationed six ranks to five points, so 4 PP
+  buys four ranks, 5 PP buys all six, and *nothing* buys exactly five — a Diminutive
+  wielder could be Large or Gargantuan and never Huge. Pricing the notches
+  (`dynamic_share_steps`, which dropped the ranks no share reached) made that a rung the
+  player simply could not have, and for a size effect that is not a rounding error:
+  bigger is easier to hit and impossible to hide, so the rung is the point. So
+  `_share_notches` carries **one notch per rank**, priced at the cheapest share that
+  reaches it, and the notch remembers the rank it stops at — the two notches that share a
+  price (`5 PP · Growth 5` beside `5 PP · Growth 6`) differ only by that. A member holding
+  *several* effects still gets price notches and no ranks: one share rations them all
+  together, so there is no single rank to stand at.
+- **The hold is a pair, and that is what keeps it from biting.** `_hold_member` writes the
+  notch's rank into the effect's `current_rank` beside the share it spent, and only when
+  it is genuinely **below** what those points buy — so a file gains one only for a member
+  deliberately held down. `dynamic_held_rank` reads it back only when the stored share is
+  exactly what that rank's notch costs, and `_share_cap` lowers the member's ceiling to it.
+  That pairing is the whole rule: it tells a deliberate hold apart from a `current_rank`
+  left behind by a rank dial the effect had *before* it joined a pool — which would
+  otherwise quietly cap a member nobody had touched, the deadlock of two controls writing
+  one number arriving by the back door — and it is what tells the two notches sharing a
+  price apart, on the card (`_seat`) and on the sheet alike.
 - **The cap reaches rank through an injected hook, not an import.** Working a share out
   needs point costs, and `powers_cost` imports `runtime` rather than the other way
   about — so `powers_cost` *installs* `dynamic_rank_cap` into runtime

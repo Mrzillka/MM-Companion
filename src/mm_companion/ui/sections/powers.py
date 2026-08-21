@@ -99,6 +99,7 @@ from mm_companion.core.rules import (
     clear_power_extra_effort,
     counter_rolls,
     debilitated_traits,
+    dynamic_held_rank,
     dynamic_member_cost,
     dynamic_rank_share,
     dynamic_share_points,
@@ -1903,7 +1904,7 @@ class PowersSection(TitledSection):
         interactive: bool,
         power: Power | None = None,
         split: _SplitGroup | None = None,
-        fallback: int = 0,
+        fallback: tuple[int, int | None] = (0, None),
     ) -> QWidget | None:
         """One share slider, whatever holds the share.
 
@@ -1914,37 +1915,94 @@ class PowersSection(TitledSection):
         true notch rather than quietly reading low, so the number on the card and the
         number charged against the pool are the same one.
 
-        *fallback* seats a member that is running on **no** share at all — an unsplit
-        array's selected alternate (:meth:`_fallback_share`). It is a reading rather than
-        a claim, so it is what the handle is drawn on and what a commit landing back on
-        it counts as *no change*, while the pool goes on being counted without it until
-        the player actually moves the handle.
+        *fallback* is the notch a member running on **no** share at all is standing on —
+        an unsplit array's selected alternate (:meth:`_fallback_share`). It is a reading
+        rather than a claim, so it is what the handle is drawn on and what a commit
+        landing back on it counts as *no change*, while the pool goes on being counted
+        without it until the player actually moves the handle.
         """
 
-        steps = self._share_steps(node, full, held)
-        if len(steps) < 2:
+        notches = self._share_notches(node, full, held)
+        if len(notches) < 2:
             return None
-        seat = fallback or held
-        index = steps.index(seat) if seat in steps else self._share_index(steps, seat)
+        steps = [points for points, _rank in notches]
+        seat = fallback if fallback[0] else (held, self._held_rank(node, held, full))
+        index = self._seat(notches, *seat)
         dial = _RankDial(
             self._share_caption(node, power),
             len(steps) - 1,  # brought in to what is affordable by set_ceiling below
             index,
-            {i: self._share_label(node, points, full) for i, points in enumerate(steps)},
+            {
+                i: self._share_label(node, points, rank, full)
+                for i, (points, rank) in enumerate(notches)
+            },
             interactive,
         )
         dial.set_ceiling(max(self._share_index(steps, affordable), index))
         if split is not None:
-            split.add(dial, steps, phantom=bool(fallback))
+            split.add(dial, steps, phantom=bool(fallback[0]))
         dial.rankPicked.connect(
-            lambda picked, n=node, st=steps, seated=steps[index]: self._on_share_dialled(
-                n, st, picked, seated
+            lambda picked, n=node, nt=notches, seated=index: self._on_share_dialled(
+                n, nt, picked, seated
             )
         )
         return dial
 
-    def _fallback_share(self, node, host, full: int) -> int:
-        """The share a member holding *none* is running on anyway, priced in points.
+    @staticmethod
+    def _seat(notches: list[tuple[int, int | None]], points: int, rank: int | None) -> int:
+        """Which notch a member sitting on *points*, standing at *rank*, is drawn on.
+
+        The last notch at the share it holds — the most that share buys, which is what a
+        member nobody has held below its ceiling is running at — unless one of the
+        notches at that price is the rank it is actually standing at, which is the whole
+        reason two of them can share a price (:meth:`_share_notches`).
+        """
+
+        seat = 0
+        for index, (price, hold) in enumerate(notches):
+            if price != points:
+                continue
+            seat = index
+            if rank is not None and hold == rank:
+                return index
+        return seat
+
+    def _held_rank(self, node, points: int, full: int) -> int | None:
+        """The rank this member is deliberately held at, below what its share buys.
+
+        The model's side of the notch the player stopped on, and read by exactly the rule
+        the sheet reads it by (:func:`~mm_companion.core.rules.dynamic_held_rank`), so the
+        handle and the rank on the card can never come from two different answers.
+        """
+
+        effects = _held_effects(node)
+        if len(effects) != 1:
+            return None
+        return dynamic_held_rank(effects[0], points, full)
+
+    def _hold_member(self, node, hold: int | None) -> None:
+        """Pin a member to the rank its notch names, or let its share decide again.
+
+        Written only where it is doing work — a notch that stands exactly where its share
+        already reaches stores nothing — so a file gains a ``current_rank`` only for a
+        member deliberately held below its ceiling, and a value left behind by a rank dial
+        the effect had before it joined the pool is cleared the first time the slider is
+        touched.
+        """
+
+        effects = _held_effects(node)
+        if len(effects) != 1:
+            return
+        effect = effects[0]
+        if hold is None or hold <= 0:
+            effect.current_rank = None
+            return
+        full = dynamic_member_cost(node, self._data)
+        buys = dynamic_rank_share(effect.rank, node.dynamic_points or 0, full)
+        effect.current_rank = hold if hold < buys else None
+
+    def _fallback_share(self, node, host, full: int) -> tuple[int, int | None]:
+        """The notch a member holding *no* share is running on anyway — share and rank.
 
         Zero for every member the pool is actually rationing — its own share seats its
         dial, and that is the whole story. But an array whose shares are all handed back
@@ -1964,26 +2022,25 @@ class PowersSection(TitledSection):
         asked, since the split rations them together anyway.
 
         A reading, not a claim: nothing is written, and the array's :class:`_SplitGroup`
-        leaves these points out of the pool it counts down until the handle is moved.
+        leaves these points out of the pool it counts down until the handle is moved. The
+        rank comes back with the price so the handle lands on the right one of the two
+        notches that can share it (:meth:`_seat`).
         """
 
         if node.dynamic_points is not None or not self._member_is_running(node):
-            return 0
+            return (0, None)
         if isinstance(node, PowerEffectInstance):
             if not effect_is_selected(host, node, self._data, self._character):
-                return 0
+                return (0, None)
             effects = [node]
         else:
             if not any(child is node for child in live_array_children(host)):
-                return 0
+                return (0, None)
             effects = _held_effects(node)
         if len(effects) != 1:
-            return full
-        return dynamic_share_points(
-            effects[0].rank,
-            effect_current_rank(effects[0], self._data, self._character),
-            full,
-        )
+            return (full, None)
+        rank = effect_current_rank(effects[0], self._data, self._character)
+        return (dynamic_share_points(effects[0].rank, rank, full), rank)
 
     def _split_for(self, host, pool: int) -> _SplitGroup:
         """The coordinator joining one array's share sliders, made on first ask.
@@ -2015,25 +2072,57 @@ class PowersSection(TitledSection):
             return "Size"
         return "Rank"
 
-    def _share_steps(self, node, full: int, held: int) -> list[int]:
-        """Every notch this member's share can stop on, cheapest first.
+    def _share_notches(self, node, full: int, held: int) -> list[tuple[int, int | None]]:
+        """Every ``(share, rank)`` this member's slider can stop on, cheapest first.
 
-        The member's **whole** ladder, in points, cheapest first — the index space the
-        dial is built over. How much of it is reachable is
-        :meth:`_RankDial.set_ceiling`'s business, and because the affordable notches are
-        always a *prefix* of this list (they are the ones under a budget, and the list is
-        sorted), bringing the end in never changes what a notch means.
+        **One notch per rank, not per price.** A share buys a ceiling rather than a rank,
+        and the two are different ladders wherever a member does not cost a round number
+        of points a rank: five points of a six-rank member costing five buys all six, and
+        nothing at all buys exactly five. Pricing the notches meant that rank simply was
+        not on the slider — a Growth could be Large or Gargantuan and never Huge, which
+        for a size effect is not a rounding error but a rung the player wanted (bigger is
+        easier to hit and impossible to hide). So every rank gets a notch, priced at the
+        cheapest share that *reaches* it, and the notch carries the rank it stands at:
+        the two notches that share a price differ by where they stop, which is what
+        :func:`~mm_companion.core.rules.dynamic_held_rank` reads back.
+
+        The rank is ``None`` for a member holding **several** effects, whose share
+        rations them all together and which therefore has no single rank to stand at;
+        those notches are the prices its effects can stop on, as they always were.
 
         A stored share that is not a notch (a hand-edited file, or a ladder that changed
-        under it) is folded in rather than rounded away: rounding it down for display
-        while the pool went on charging the full amount lost the difference the moment
-        the dial was touched.
+        under it) is folded in the same way: rounding it down for display while the pool
+        went on charging the full amount lost the difference the moment the dial was
+        touched.
         """
 
-        points = {0, max(0, held)}
-        for effect in _held_effects(node):
-            points.update(p for p, _rank in dynamic_share_steps(effect.rank, full))
-        return sorted(points)
+        effects = _held_effects(node)
+        notches: list[tuple[int, int | None]] = [(0, 0)]
+        if len(effects) == 1:
+            rank = effects[0].rank
+            notches += [(dynamic_share_points(rank, r, full), r) for r in range(1, rank + 1)]
+        else:
+            prices: set[int] = set()
+            for effect in effects:
+                prices.update(p for p, _rank in dynamic_share_steps(effect.rank, full))
+            notches += [(p, None) for p in sorted(prices) if p > 0]
+        if held > 0 and all(points != held for points, _rank in notches):
+            notches.append((held, None))
+            notches.sort(key=lambda notch: notch[0])  # stable: the ranks keep their order
+        return notches
+
+    def _share_steps(self, node, full: int, held: int) -> list[int]:
+        """What each notch of :meth:`_share_notches` **spends**, cheapest first.
+
+        The ladder as the pool sees it, which is what bounds it: how much of it is
+        reachable is :meth:`_RankDial.set_ceiling`'s business, and because the affordable
+        notches are always a *prefix* of this list (they are the ones under a budget, and
+        the list is sorted) bringing the end in never changes what a notch means. Two
+        notches at one price are two ranks the same share can stop at, so the prefix
+        holds and the ceiling lands on the higher of them.
+        """
+
+        return [points for points, _rank in self._share_notches(node, full, held)]
 
     @staticmethod
     def _share_index(steps: list[int], budget: int) -> int:
@@ -2045,7 +2134,7 @@ class PowersSection(TitledSection):
                 best = index
         return best
 
-    def _share_label(self, node, points: int, full: int) -> str:
+    def _share_label(self, node, points: int, hold: int | None, full: int) -> str:
         """What one notch of the share dial costs and buys, named effect by effect.
 
         The rank *is* the answer the rules give — the book's own example is a Flight 5
@@ -2053,12 +2142,19 @@ class PowersSection(TitledSection):
         a notch reads "6 PP · Flight 3" rather than a fraction the reader has to convert.
         A share too small for even one rank of anything says so instead of reading as
         rank 0.
+
+        *hold* is the rank the notch **stands** at where that is the player's to choose
+        (:meth:`_share_notches`), and it is the only thing separating the two notches
+        that share a price: "5 PP · Growth 5" is the one that stops at Huge, and
+        "5 PP · Growth 6" beside it spends the same points on Gargantuan.
         """
 
         if points <= 0:
             return "Off"
         effects = _held_effects(node)
-        shares = [dynamic_rank_share(e.rank, points, full) for e in effects]
+        shares = [
+            dynamic_rank_share(e.rank, points, full) if hold is None else hold for e in effects
+        ]
         if not shares:
             return f"{points} PP"
         if not any(shares):
@@ -2070,7 +2166,11 @@ class PowersSection(TitledSection):
         return f"{points} PP · " + ", ".join(parts[:2]) + (", …" if len(parts) > 2 else "")
 
     def _on_share_dialled(
-        self, node, steps: list[int], index: int, seated: int | None = None
+        self,
+        node,
+        notches: list[tuple[int, int | None]],
+        index: int,
+        seated: int | None = None,
     ) -> None:
         """Hand a member the share its slider was left on — and at zero, switch it off.
 
@@ -2099,19 +2199,28 @@ class PowersSection(TitledSection):
         the live preview between them can both report a notch the model already holds,
         and tearing every card down to write the number that is already there is how a
         gesture ends up fighting the widget making it. *Where it started* is the notch the
-        handle was **drawn** on (:meth:`_build_share_dial` passes it back) and the switch:
-        the share it holds for a member the pool is rationing, and the share it is running
-        on for one the fallback woke (:meth:`_fallback_share`) — so leaving that handle
-        where it sits keeps the array unsplit, while dragging it down to zero still puts
-        the member down.
+        handle was **drawn** on (:meth:`_build_share_dial` passes its index back) and the
+        switch: the share it holds for a member the pool is rationing, and the share it is
+        running on for one the fallback woke (:meth:`_fallback_share`) — so leaving that
+        handle where it sits keeps the array unsplit, while dragging it down to zero still
+        puts the member down.
+
+        A notch is a **share and a rank**, and both are written: two notches can spend the
+        same points and stop at different ranks (:meth:`_share_notches`), so the index is
+        what a commit is compared by and :meth:`_hold_member` stores the rank the handle
+        stopped at whenever it is below what those points buy.
         """
 
-        points = steps[max(0, min(index, len(steps) - 1))]
+        points, hold = notches[max(0, min(index, len(notches) - 1))]
         running = points > 0
-        held = (node.dynamic_points or 0) if seated is None else seated
-        if points == held and self._member_is_running(node) == running:
+        if seated is None:
+            full = dynamic_member_cost(node, self._data)
+            share = node.dynamic_points or 0
+            seated = self._seat(notches, share, self._held_rank(node, share, full))
+        if index == seated and self._member_is_running(node) == running:
             return
         node.dynamic_points = points or None
+        self._hold_member(node, hold if running else None)
         self._set_member_running(node, running)
         self._rebuild_list()
         self.runtimeChanged.emit()

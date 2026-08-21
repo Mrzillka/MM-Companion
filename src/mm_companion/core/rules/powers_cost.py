@@ -1328,6 +1328,37 @@ def dynamic_share_points(rank: int, wanted: int, full_cost: int) -> int:
     return -(-wanted * full_cost // rank)  # ceil, so the share actually reaches `wanted`
 
 
+def dynamic_held_rank(effect: PowerEffectInstance, points: int, full_cost: int) -> int | None:
+    """The rank a Dynamic member is deliberately held *below* its share at, or ``None``.
+
+    A share buys a **ceiling**, not a rank, and the two are not the same ladder: five
+    points of a six-rank member costing five buys all six ranks, and no whole number of
+    points buys exactly five — so a Growth whose wielder wants Huge rather than
+    Gargantuan has to be able to pay for six and stand at five. Bigger is not better for
+    a size effect (a Gargantuan character is easier to hit and impossible to hide), and
+    the same is true of any effect a player would pull: the pool decides what a member
+    *may* do, and the player still decides what it *is* doing. So the slider carries a
+    notch per rank rather than per price (:func:`dynamic_share_steps` is what it used to
+    carry) and writes the rank it stopped on into ``current_rank`` beside the share it
+    spent.
+
+    Read as a **pair**, which is the whole of the rule here: the hold counts only when
+    the stored share is exactly what that rank's notch costs. That is what tells a
+    deliberate hold apart from a ``current_rank`` left behind by a rank dial the effect
+    had before it joined a pool — which would otherwise quietly cap a member nobody had
+    touched, the same way two controls writing one number deadlocked the card that used
+    to carry both (see :func:`~.runtime.effect_current_rank`) — and it is what keeps the
+    two notches sharing a price (five ranks and six, both five points) apart.
+    """
+
+    held = effect.current_rank
+    if held is None or held <= 0 or full_cost <= 0:
+        return None
+    if dynamic_share_points(effect.rank, held, full_cost) != points:
+        return None
+    return min(held, effect.rank)
+
+
 def dynamic_share_steps(rank: int, full_cost: int) -> tuple[tuple[int, int], ...]:
     """Every ``(points, rank)`` a member's share can actually stop at, cheapest first.
 
@@ -1438,14 +1469,25 @@ def dynamic_rank_cap(
     for member, points in allocated_array_members(char.powers):
         if not any(e is effect for e in member_effects(member)):
             continue
-        share = dynamic_rank_share(effect.rank, points, dynamic_member_cost(member, game_data))
+        share = _share_cap(effect, points, dynamic_member_cost(member, game_data))
         cap = share if cap is None else min(cap, share)
     if effect.dynamic and effect.dynamic_points is not None:
-        own = dynamic_rank_share(
-            effect.rank, int(effect.dynamic_points), dynamic_member_cost(effect, game_data)
-        )
+        own = _share_cap(effect, int(effect.dynamic_points), dynamic_member_cost(effect, game_data))
         cap = own if cap is None else min(cap, own)
     return cap
+
+
+def _share_cap(effect: PowerEffectInstance, points: int, full_cost: int) -> int:
+    """What one share holds an effect to: the rank it buys, or the lower one it is held at.
+
+    The two halves of a Dynamic member's single slider — the points it spent and the notch
+    it stopped on (:func:`dynamic_held_rank`) — asked as one number, so both places a
+    share is read (a member's own, and the one an enclosing array hands it) answer alike.
+    """
+
+    share = dynamic_rank_share(effect.rank, points, full_cost)
+    held = dynamic_held_rank(effect, points, full_cost)
+    return share if held is None else min(share, held)
 
 
 def array_base_index(power: Power, game_data: GameData, char: Character | None = None) -> int:

@@ -101,10 +101,12 @@ from mm_companion.core.rules import (
     debilitated_traits,
     dynamic_member_cost,
     dynamic_rank_share,
+    dynamic_share_points,
     dynamic_share_steps,
     effect_current_rank,
     effect_display_name,
     effect_has_rank_dial,
+    effect_is_selected,
     effect_stands,
     group_scope_note,
     leaf_powers,
@@ -414,18 +416,26 @@ class _SplitGroup:
     pool has left once the previewing one is paid, and the header says what is unspent.
     Nothing here writes to the model — a drag is not a decision until it is released —
     which is what keeps a whole gesture a single undoable step.
+
+    A **phantom** entry is a member seated on a share it does not hold: an unsplit array
+    runs its selected alternate anyway, and its slider says so rather than reading "Off"
+    (:meth:`PowersSection._fallback_share`). Those points are not spoken for until the
+    player moves that handle, so they are counted as nothing while it sits where it was
+    drawn — otherwise the first split of an untouched array would find the pool already
+    eaten by a share nobody had assigned.
     """
 
     __slots__ = ("_pool", "_entries", "_readout")
 
     def __init__(self, pool: int) -> None:
         self._pool = max(0, pool)
-        # (dial, points-per-notch) per member, in the order their cards were drawn.
-        self._entries: list[tuple[_RankDial, list[int]]] = []
+        # (dial, points-per-notch, phantom seat) per member, in card order. The seat is
+        # -1 for a member that really holds its share, which no dial value ever equals.
+        self._entries: list[tuple[_RankDial, list[int], int]] = []
         self._readout = None
 
-    def add(self, dial: _RankDial, steps: list[int]) -> None:
-        self._entries.append((dial, steps))
+    def add(self, dial: _RankDial, steps: list[int], phantom: bool = False) -> None:
+        self._entries.append((dial, steps, dial.value() if phantom else -1))
         dial.previewed.connect(lambda _v: self.restate())
 
     def set_readout(self, label) -> None:
@@ -434,14 +444,17 @@ class _SplitGroup:
     def _held(self) -> list[int]:
         """What each member is holding *on screen* — the handle, not the model."""
 
-        return [steps[min(dial.value(), len(steps) - 1)] for dial, steps in self._entries]
+        return [
+            0 if dial.value() == seat else steps[min(dial.value(), len(steps) - 1)]
+            for dial, steps, seat in self._entries
+        ]
 
     def restate(self) -> None:
         """Re-bound every dial against the others and restate the header."""
 
         held = self._held()
         total = sum(held)
-        for index, (dial, steps) in enumerate(self._entries):
+        for index, (dial, steps, _seat) in enumerate(self._entries):
             budget = self._pool - (total - held[index])
             ceiling = PowersSection._share_index(steps, budget)
             # Never below what this member already holds: a rebuild can move the pool
@@ -1841,6 +1854,7 @@ class PowersSection(TitledSection):
             max(0, pool - others),
             interactive,
             split=self._split_for(parent, pool),
+            fallback=self._fallback_share(node, parent, full),
         )
 
     def _effect_share_dials(self, power: Power, interactive: bool) -> list[QWidget]:
@@ -1874,6 +1888,7 @@ class PowersSection(TitledSection):
                 interactive,
                 power=power,
                 split=self._split_for(power, pool),
+                fallback=self._fallback_share(effect, power, full),
             )
             if dial is not None:
                 dials.append(dial)
@@ -1888,6 +1903,7 @@ class PowersSection(TitledSection):
         interactive: bool,
         power: Power | None = None,
         split: _SplitGroup | None = None,
+        fallback: int = 0,
     ) -> QWidget | None:
         """One share slider, whatever holds the share.
 
@@ -1897,26 +1913,77 @@ class PowersSection(TitledSection):
         rebuild moved the pool under a split already made) still seats the handle at its
         true notch rather than quietly reading low, so the number on the card and the
         number charged against the pool are the same one.
+
+        *fallback* seats a member that is running on **no** share at all — an unsplit
+        array's selected alternate (:meth:`_fallback_share`). It is a reading rather than
+        a claim, so it is what the handle is drawn on and what a commit landing back on
+        it counts as *no change*, while the pool goes on being counted without it until
+        the player actually moves the handle.
         """
 
         steps = self._share_steps(node, full, held)
         if len(steps) < 2:
             return None
-        seated = steps.index(held) if held in steps else 0
+        seat = fallback or held
+        index = steps.index(seat) if seat in steps else self._share_index(steps, seat)
         dial = _RankDial(
             self._share_caption(node, power),
             len(steps) - 1,  # brought in to what is affordable by set_ceiling below
-            seated,
-            {index: self._share_label(node, points, full) for index, points in enumerate(steps)},
+            index,
+            {i: self._share_label(node, points, full) for i, points in enumerate(steps)},
             interactive,
         )
-        dial.set_ceiling(max(self._share_index(steps, affordable), seated))
+        dial.set_ceiling(max(self._share_index(steps, affordable), index))
         if split is not None:
-            split.add(dial, steps)
+            split.add(dial, steps, phantom=bool(fallback))
         dial.rankPicked.connect(
-            lambda index, n=node, st=steps: self._on_share_dialled(n, st, index)
+            lambda picked, n=node, st=steps, seated=steps[index]: self._on_share_dialled(
+                n, st, picked, seated
+            )
         )
         return dial
+
+    def _fallback_share(self, node, host, full: int) -> int:
+        """The share a member holding *none* is running on anyway, priced in points.
+
+        Zero for every member the pool is actually rationing — its own share seats its
+        dial, and that is the whole story. But an array whose shares are all handed back
+        is not split at all, and :func:`~mm_companion.core.rules.live_array_children`
+        then falls back to running its **selected alternate** at the rank it stands at;
+        one level down, :func:`~mm_companion.core.rules.effect_is_selected` says the same
+        of a power's own effects. That member is running, so its one slider has to say
+        where — seating it on "Off" is the same lie the zero notch was fixed for at the
+        other end (see :meth:`_on_share_dialled`), and the one an untouched Dynamic array
+        told about every member it was running.
+
+        Priced through the exact inverse of what a share buys
+        (:func:`~mm_companion.core.rules.dynamic_share_points`), so the handle lands on
+        the notch that *would* buy what the member is running: a member at its full rank
+        lands on its whole cost, which is what an unsplit array's alternate is worth. One
+        holding several effects is priced whole rather than by whichever of them was
+        asked, since the split rations them together anyway.
+
+        A reading, not a claim: nothing is written, and the array's :class:`_SplitGroup`
+        leaves these points out of the pool it counts down until the handle is moved.
+        """
+
+        if node.dynamic_points is not None or not self._member_is_running(node):
+            return 0
+        if isinstance(node, PowerEffectInstance):
+            if not effect_is_selected(host, node, self._data, self._character):
+                return 0
+            effects = [node]
+        else:
+            if not any(child is node for child in live_array_children(host)):
+                return 0
+            effects = _held_effects(node)
+        if len(effects) != 1:
+            return full
+        return dynamic_share_points(
+            effects[0].rank,
+            effect_current_rank(effects[0], self._data, self._character),
+            full,
+        )
 
     def _split_for(self, host, pool: int) -> _SplitGroup:
         """The coordinator joining one array's share sliders, made on first ask.
@@ -2002,7 +2069,9 @@ class PowersSection(TitledSection):
         ]
         return f"{points} PP · " + ", ".join(parts[:2]) + (", …" if len(parts) > 2 else "")
 
-    def _on_share_dialled(self, node, steps: list[int], index: int) -> None:
+    def _on_share_dialled(
+        self, node, steps: list[int], index: int, seated: int | None = None
+    ) -> None:
         """Hand a member the share its slider was left on — and at zero, switch it off.
 
         Runtime, so it emits ``runtimeChanged`` like the rank dial it replaces. A notch at
@@ -2029,14 +2098,18 @@ class PowersSection(TitledSection):
         A commit that lands where it started rebuilds nothing: the deferred commit and
         the live preview between them can both report a notch the model already holds,
         and tearing every card down to write the number that is already there is how a
-        gesture ends up fighting the widget making it. *Where it started* is the share
-        **and** the switch, so a member the fallback woke up under an "Off" handle can
-        still be put back down by clicking that handle where it already sits.
+        gesture ends up fighting the widget making it. *Where it started* is the notch the
+        handle was **drawn** on (:meth:`_build_share_dial` passes it back) and the switch:
+        the share it holds for a member the pool is rationing, and the share it is running
+        on for one the fallback woke (:meth:`_fallback_share`) — so leaving that handle
+        where it sits keeps the array unsplit, while dragging it down to zero still puts
+        the member down.
         """
 
         points = steps[max(0, min(index, len(steps) - 1))]
         running = points > 0
-        if (node.dynamic_points or 0) == points and self._member_is_running(node) == running:
+        held = (node.dynamic_points or 0) if seated is None else seated
+        if points == held and self._member_is_running(node) == running:
             return
         node.dynamic_points = points or None
         self._set_member_running(node, running)

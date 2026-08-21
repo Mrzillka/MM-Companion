@@ -146,6 +146,21 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   a commit that lands where it started now compares the **switch as well as the share**,
   so a member the fallback woke under an "Off" handle can still be put back down by
   clicking that handle where it already sits.
+- **And the handle sits where the member is running, share or no share.** The other end
+  of the same lie: an array nobody has split still runs its selected alternate, so
+  drawing every one of its sliders on "Off" said the array was doing nothing while the
+  sheet showed a Diminutive character at Gargantuan. `_fallback_share` prices what such a
+  member is *standing* at through `dynamic_share_points` — the exact inverse of the share
+  → rank conversion, so the handle lands on the notch that would buy what it is already
+  running, full rank landing on the member's whole cost and a member dialled down
+  mid-play on what that rung costs. A member holding several effects is priced whole.
+  It is a **reading, not a claim**, and two things follow. The array's `_SplitGroup`
+  counts such an entry as nothing while its handle sits where it was drawn (a *phantom*
+  entry), or the first split of an untouched array would find the pool already eaten by a
+  share nobody assigned — and it becomes real the moment the handle moves. And a commit
+  that lands back on that seat writes nothing, so leaving the handle alone keeps the array
+  unsplit; only dragging it somewhere else splits the pool, and dragging it to zero still
+  puts the member down.
 - **The cap reaches rank through an injected hook, not an import.** Working a share out
   needs point costs, and `powers_cost` imports `runtime` rather than the other way
   about — so `powers_cost` *installs* `dynamic_rank_cap` into runtime

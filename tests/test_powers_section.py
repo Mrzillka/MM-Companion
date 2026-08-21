@@ -1551,6 +1551,48 @@ def test_the_last_share_dialled_to_nothing_switches_its_member_off(
     assert effective_size(char, data) == "Large"  # Diminutive, plus four ranks
 
 
+def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(
+    qapp: QApplication,
+) -> None:
+    """An array nobody has split still runs its selected alternate, so its slider says so.
+
+    Every share handed back (or never assigned) is not a split at all: the array falls
+    back to the selected member at the rank it stands at. Its slider read "Off" while it
+    ran, which is the same lie the zero notch tells at the other end — and the pool has
+    to go on being counted without those points, or the first split of an untouched
+    array would find them already spent.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=6)])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    char.powers.append(PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach]))
+    sec = _sheet_for(char).powers
+
+    size_dial, reach_dial = _share_dials(sec)
+    assert effective_size(char, data) == "Gargantuan"  # Diminutive, plus all six ranks
+    assert size_dial._labels[size_dial.value()] == "6 PP · Growth 6"
+    # The alternate nobody selected is off, and its groove still reaches the whole pool:
+    # the seat above is a reading, not a claim on points anyone has assigned.
+    assert reach_dial.value() == 0
+    assert reach_dial.ceiling() == len(reach_dial._labels) - 1
+
+    # Left where it was drawn, the array is still unsplit — a handle that has not moved
+    # is not a decision.
+    size_dial._slider.setValue(size_dial.value())
+    assert growth.dynamic_points is None
+
+    # A member dialled down mid-play is priced by the rank it is *standing* at.
+    growth.effects[0].current_rank = 3
+    sec._rebuild_list()
+    dial = _share_dials(sec)[0]
+    assert effective_size(char, data) == "Medium"
+    assert dial._labels[dial.value()] == "3 PP · Growth 3"
+
+
 def test_a_powers_own_dynamic_effects_get_share_dials_too(qapp: QApplication) -> None:
     """An array exists at two levels, and so does its pool — so the control does too."""
 

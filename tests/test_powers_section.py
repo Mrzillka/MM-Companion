@@ -1510,6 +1510,47 @@ def test_a_share_dialled_to_nothing_stores_nothing_at_all(qapp: QApplication) ->
     assert "dynamic_points" not in group.children[0].to_dict()
 
 
+def test_the_last_share_dialled_to_nothing_switches_its_member_off(
+    qapp: QApplication,
+) -> None:
+    """A Growth parked on "Off" used to come straight back on, and grow the character.
+
+    Handing back the *last* share returns the array to its selected alternate at full
+    rank — which is what an array saved before the pool existed does on load — so the
+    member the player had just dialled to zero was live again: a Diminutive character
+    read as Medium under a slider saying the power was off. Zero is off on this dial as
+    it is on the rank dial it replaces, whatever the array then does with the member.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=6)])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    growth.dynamic_points = reach.dynamic_points = 3
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    assert effective_size(char, data) == "Medium"  # Diminutive, plus the three ranks held
+
+    size_dial, reach_dial = _share_dials(sec)
+    assert size_dial.caption() == "Size"
+    reach_dial._slider.setValue(0)
+    _share_dials(sec)[0]._slider.setValue(0)  # the card tree is rebuilt under each commit
+
+    assert effective_size(char, data) == "Diminutive"
+    assert not growth.activated
+    assert growth.dynamic_points is None  # the file still keeps the quieter of the two
+    # The card says so too, rather than being drawn as the array's live alternate.
+    assert sec._node_is_inactive(growth, group, sec._activation_role(growth, group))
+
+    # ...and the same handle pushed back up wakes it at the notch asked for.
+    _share_dials(sec)[0]._slider.setValue(4)
+    assert growth.activated
+    assert effective_size(char, data) == "Large"  # Diminutive, plus four ranks
+
+
 def test_a_powers_own_dynamic_effects_get_share_dials_too(qapp: QApplication) -> None:
     """An array exists at two levels, and so does its pool — so the control does too."""
 

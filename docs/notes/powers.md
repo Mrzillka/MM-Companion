@@ -127,6 +127,25 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   therefore **not optional**: the Extended-settings box that governs them is forced on
   and made read-only while the array is Dynamic, since taking them away would leave the
   split with no control at all.
+- **Zero on a share dial switches its member off, and it has to say so out loud.**
+  Handing a share back ordinarily drops the member out of `live_array_children` by
+  itself — but not the *last* one: with every share back the array falls back to its
+  selected alternate **at full rank**, which is the behaviour an array saved before the
+  pool existed needs on load. So a Growth parked on "Off" came straight back on, and a
+  Diminutive character read Gargantuan under a slider saying the power was off.
+  `_on_share_dialled` therefore flips the member's own master switch too, exactly as a
+  click on its card would, and a notch above zero flips it back. **Only `activated`, and
+  only on this member's own leaves**: it is the one flag `effect_is_active` reads
+  unconditionally, it is the one `_set_array_active` sets again when the player clicks the
+  card back on, and reaching wider (as `_set_power_active` does) would let one share
+  switch off a Linked group the array happens to sit inside — or leave `toggled_on`
+  cleared behind it, so the card click that should revive the member quietly did nothing.
+  The share itself still stores `None`, so the sentence above stays true. Two corollaries:
+  the *dimming* asks the same question after the pool's (`_node_is_inactive`), or the one
+  member the fallback woke would be the only undimmed card on a switched-off array; and
+  a commit that lands where it started now compares the **switch as well as the share**,
+  so a member the fallback woke under an "Off" handle can still be put back down by
+  clicking that handle where it already sits.
 - **The cap reaches rank through an injected hook, not an import.** Working a share out
   needs point costs, and `powers_cost` imports `runtime` rather than the other way
   about — so `powers_cost` *installs* `dynamic_rank_cap` into runtime

@@ -1474,7 +1474,13 @@ class PowersSection(TitledSection):
             # but the selected one would contradict the numbers on the sheet. Asked of
             # the array rather than of the card's role, because a split takes the role
             # away and the dimming has to outlive it.
-            return not any(child is node for child in live_array_children(parent))
+            if not any(child is node for child in live_array_children(parent)):
+                return True
+            # ...and a Dynamic member the fallback woke up while its own share dial sits
+            # on "Off" is switched off, whatever the array did with it (see
+            # :meth:`_on_share_dialled`). Only a Dynamic member can be parked that way,
+            # so an ordinary alternate is left reading exactly as it always did.
+            return bool(node.dynamic) and not self._member_is_running(node)
         if role == "toggle":
             if isinstance(node, PowerGroup):
                 return not self._group_is_active(node)
@@ -1997,7 +2003,7 @@ class PowersSection(TitledSection):
         return f"{points} PP · " + ", ".join(parts[:2]) + (", …" if len(parts) > 2 else "")
 
     def _on_share_dialled(self, node, steps: list[int], index: int) -> None:
-        """Hand a member the share its slider was left on.
+        """Hand a member the share its slider was left on — and at zero, switch it off.
 
         Runtime, so it emits ``runtimeChanged`` like the rank dial it replaces. A notch at
         zero is stored as *no share at all* rather than a zero — the two behave
@@ -2006,18 +2012,61 @@ class PowersSection(TitledSection):
         it was before anyone split the pool. That is also the way back to an ordinary
         array, which is what clearing the split used to be a button for.
 
+        **Zero is off, the same as it is on the rank dial this slider replaces**, and it
+        has to be said out loud here. Handing a share back ordinarily drops the member
+        out of :func:`~mm_companion.core.rules.live_array_children` all by itself — but
+        not the *last* one: with every share back the array falls back to its selected
+        alternate at full rank, so a Growth parked on "Off" came straight back on and the
+        sheet went on reading Gargantuan under a slider saying the power was off. So the
+        notch flips the member's own master switch too, exactly as a click on its card
+        would, and a notch above zero flips it back. Only ``activated``, and only on this
+        member's own leaves: that is the one flag
+        :func:`~mm_companion.core.rules.effect_is_active` reads unconditionally, it is
+        the one :meth:`_set_array_active` sets again when the player clicks the card, and
+        leaving the siblings alone is what keeps a share from switching off a Linked
+        group it happens to sit inside.
+
         A commit that lands where it started rebuilds nothing: the deferred commit and
         the live preview between them can both report a notch the model already holds,
         and tearing every card down to write the number that is already there is how a
-        gesture ends up fighting the widget making it.
+        gesture ends up fighting the widget making it. *Where it started* is the share
+        **and** the switch, so a member the fallback woke up under an "Off" handle can
+        still be put back down by clicking that handle where it already sits.
         """
 
         points = steps[max(0, min(index, len(steps) - 1))]
-        if (node.dynamic_points or 0) == points:
+        running = points > 0
+        if (node.dynamic_points or 0) == points and self._member_is_running(node) == running:
             return
         node.dynamic_points = points or None
+        self._set_member_running(node, running)
         self._rebuild_list()
         self.runtimeChanged.emit()
+
+    @staticmethod
+    def _member_is_running(node) -> bool:
+        """Whether a Dynamic array member's own switches are on.
+
+        Not whether it is *contributing* — that is the pool's question
+        (:func:`~mm_companion.core.rules.live_array_children`) and the gates' — only
+        whether the player has left this member switched on. A member is a whole card or
+        sub-group at the group level and a single effect at the power's own level, and
+        each answers with the flag its level switches.
+        """
+
+        if isinstance(node, PowerEffectInstance):
+            return node.toggled_on
+        return all(power.activated for power in PowersSection._leaf_powers(node))
+
+    @staticmethod
+    def _set_member_running(node, running: bool) -> None:
+        """Switch one Dynamic member on or off, leaving its siblings alone."""
+
+        if isinstance(node, PowerEffectInstance):
+            node.toggled_on = running
+            return
+        for power in PowersSection._leaf_powers(node):
+            power.activated = running
 
     # -- the rank dial ----------------------------------------------------
     @staticmethod

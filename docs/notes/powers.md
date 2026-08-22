@@ -127,6 +127,63 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   therefore **not optional**: the Extended-settings box that governs them is forced on
   and made read-only while the array is Dynamic, since taking them away would leave the
   split with no control at all.
+- **Zero on a share dial switches its member off, and it has to say so out loud.**
+  Handing a share back ordinarily drops the member out of `live_array_children` by
+  itself — but not the *last* one: with every share back the array falls back to its
+  selected alternate **at full rank**, which is the behaviour an array saved before the
+  pool existed needs on load. So a Growth parked on "Off" came straight back on, and a
+  Diminutive character read Gargantuan under a slider saying the power was off.
+  `_on_share_dialled` therefore flips the member's own master switch too, exactly as a
+  click on its card would, and a notch above zero flips it back. **Only `activated`, and
+  only on this member's own leaves**: it is the one flag `effect_is_active` reads
+  unconditionally, it is the one `_set_array_active` sets again when the player clicks the
+  card back on, and reaching wider (as `_set_power_active` does) would let one share
+  switch off a Linked group the array happens to sit inside — or leave `toggled_on`
+  cleared behind it, so the card click that should revive the member quietly did nothing.
+  The share itself still stores `None`, so the sentence above stays true. Two corollaries:
+  the *dimming* asks the same question after the pool's (`_node_is_inactive`), or the one
+  member the fallback woke would be the only undimmed card on a switched-off array; and
+  a commit that lands where it started now compares the **switch as well as the share**,
+  so a member the fallback woke under an "Off" handle can still be put back down by
+  clicking that handle where it already sits.
+- **And the handle sits where the member is running, share or no share.** The other end
+  of the same lie: an array nobody has split still runs its selected alternate, so
+  drawing every one of its sliders on "Off" said the array was doing nothing while the
+  sheet showed a Diminutive character at Gargantuan. `_fallback_share` prices what such a
+  member is *standing* at through `dynamic_share_points` — the exact inverse of the share
+  → rank conversion, so the handle lands on the notch that would buy what it is already
+  running, full rank landing on the member's whole cost and a member dialled down
+  mid-play on what that rung costs. A member holding several effects is priced whole.
+  It is a **reading, not a claim**, and two things follow. The array's `_SplitGroup`
+  counts such an entry as nothing while its handle sits where it was drawn (a *phantom*
+  entry), or the first split of an untouched array would find the pool already eaten by a
+  share nobody assigned — and it becomes real the moment the handle moves. And a commit
+  that lands back on that seat writes nothing, so leaving the handle alone keeps the array
+  unsplit; only dragging it somewhere else splits the pool, and dragging it to zero still
+  puts the member down.
+- **A notch is a share *and* a rank, because a share buys a ceiling.** The two are
+  different ladders wherever a member does not cost a round number of points a rank: a
+  Growth 6 discounted to 5 PP by a Quirk is rationed six ranks to five points, so 4 PP
+  buys four ranks, 5 PP buys all six, and *nothing* buys exactly five — a Diminutive
+  wielder could be Large or Gargantuan and never Huge. Pricing the notches
+  (`dynamic_share_steps`, which dropped the ranks no share reached) made that a rung the
+  player simply could not have, and for a size effect that is not a rounding error:
+  bigger is easier to hit and impossible to hide, so the rung is the point. So
+  `_share_notches` carries **one notch per rank**, priced at the cheapest share that
+  reaches it, and the notch remembers the rank it stops at — the two notches that share a
+  price (`5 PP · Growth 5` beside `5 PP · Growth 6`) differ only by that. A member holding
+  *several* effects still gets price notches and no ranks: one share rations them all
+  together, so there is no single rank to stand at.
+- **The hold is a pair, and that is what keeps it from biting.** `_hold_member` writes the
+  notch's rank into the effect's `current_rank` beside the share it spent, and only when
+  it is genuinely **below** what those points buy — so a file gains one only for a member
+  deliberately held down. `dynamic_held_rank` reads it back only when the stored share is
+  exactly what that rank's notch costs, and `_share_cap` lowers the member's ceiling to it.
+  That pairing is the whole rule: it tells a deliberate hold apart from a `current_rank`
+  left behind by a rank dial the effect had *before* it joined a pool — which would
+  otherwise quietly cap a member nobody had touched, the deadlock of two controls writing
+  one number arriving by the back door — and it is what tells the two notches sharing a
+  price apart, on the card (`_seat`) and on the sheet alike.
 - **The cap reaches rank through an injected hook, not an import.** Working a share out
   needs point costs, and `powers_cost` imports `runtime` rather than the other way
   about — so `powers_cost` *installs* `dynamic_rank_cap` into runtime

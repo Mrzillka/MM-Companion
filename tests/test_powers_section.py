@@ -32,6 +32,7 @@ from mm_companion.core.rules import (
     effect_roll_numbers,
     effect_total_cost,
     effective_size,
+    ground_speed_rank,
     live_powers,
     node_cost,
     power_trait_bonuses,
@@ -1554,6 +1555,39 @@ def test_the_last_share_dialled_to_nothing_switches_its_member_off(
     _share_dials(sec)[0]._slider.setValue(4)
     assert growth.activated
     assert effective_size(char, data) == "Large"  # Diminutive, plus four ranks
+
+
+def test_a_share_revives_every_switch_the_card_click_put_down(
+    qapp: QApplication,
+) -> None:
+    """A member switched off by clicking its card came back dead when paid for.
+
+    The card's own switch clears three flags together — ``activated``, ``item_present``
+    and every effect's ``toggled_on`` — while the share dial used to raise only the
+    first. So dialling points onto a member the player had clicked off spent the pool
+    and lit the card while ``effect_is_active`` went on reading it as off: the Speed
+    parked in this array bought its rank and the sheet never walked any faster.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    armour = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=8)])
+    sprint = Power(name="Sprint", effects=[PowerEffectInstance("speed", rank=1)])
+    armour.dynamic = sprint.dynamic = True
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[armour, sprint])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+
+    walking = ground_speed_rank(char, data)
+    sec._set_power_active(sprint, False)  # the card click, which puts all three down
+    assert not sprint.activated and not sprint.item_present
+    assert not sprint.effects[0].toggled_on
+
+    _share_dials(sec)[1]._slider.setValue(1)  # ...and now pay for it again
+
+    assert sprint.dynamic_points == 1
+    assert sec._member_is_running(sprint)
+    assert ground_speed_rank(char, data) == walking + 1
 
 
 def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(

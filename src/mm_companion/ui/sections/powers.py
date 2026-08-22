@@ -2187,13 +2187,10 @@ class PowersSection(TitledSection):
         not the *last* one: with every share back the array falls back to its selected
         alternate at full rank, so a Growth parked on "Off" came straight back on and the
         sheet went on reading Gargantuan under a slider saying the power was off. So the
-        notch flips the member's own master switch too, exactly as a click on its card
-        would, and a notch above zero flips it back. Only ``activated``, and only on this
-        member's own leaves: that is the one flag
-        :func:`~mm_companion.core.rules.effect_is_active` reads unconditionally, it is
-        the one :meth:`_set_array_active` sets again when the player clicks the card, and
-        leaving the siblings alone is what keeps a share from switching off a Linked
-        group it happens to sit inside.
+        notch flips the member's own master switches too, exactly as a click on its card
+        would, and a notch above zero flips them back — every switch the card flips
+        (:meth:`_set_member_running`), and only on this member's own leaves, which is
+        what keeps a share from switching off a Linked group it happens to sit inside.
 
         A commit that lands where it started rebuilds nothing: the deferred commit and
         the live preview between them can both report a notch the model already holds,
@@ -2238,17 +2235,36 @@ class PowersSection(TitledSection):
 
         if isinstance(node, PowerEffectInstance):
             return node.toggled_on
-        return all(power.activated for power in PowersSection._leaf_powers(node))
+        return all(PowersSection._power_is_active(p) for p in PowersSection._leaf_powers(node))
 
     @staticmethod
     def _set_member_running(node, running: bool) -> None:
-        """Switch one Dynamic member on or off, leaving its siblings alone."""
+        """Switch one Dynamic member on or off, leaving its siblings alone.
+
+        **Every** switch on the member's own leaves, not just ``activated``. A card
+        click switches a power off through :meth:`_set_power_active`, which clears
+        ``activated``, ``item_present`` and each effect's ``toggled_on`` together — so a
+        share dialled up afterwards that raised only ``activated`` left the other two
+        down, and :func:`~mm_companion.core.rules.effect_is_active` went on reading the
+        member as off. The points were spent, the card lit up, and the sheet never moved:
+        a Speed parked in a Dynamic array by a card click could not be bought back on.
+        Which flags a given power's gates actually consult is
+        :func:`~mm_companion.core.rules.effect_is_active`'s business, so this raises the
+        same three the card does and lets it choose.
+
+        *Its own leaves* is still the whole of the scope: reaching wider, as
+        :meth:`_set_power_active` does for a Linked group, would let one member's share
+        switch off a Linked group the array happens to sit inside.
+        """
 
         if isinstance(node, PowerEffectInstance):
             node.toggled_on = running
             return
         for power in PowersSection._leaf_powers(node):
             power.activated = running
+            power.item_present = running
+            for effect in power.effects:
+                effect.toggled_on = running
 
     # -- the rank dial ----------------------------------------------------
     @staticmethod

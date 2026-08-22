@@ -472,6 +472,7 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
+      "reachSpaces": 1,
       "description": "Extends a close-range effect's reach by a space per rank."
     },
     {

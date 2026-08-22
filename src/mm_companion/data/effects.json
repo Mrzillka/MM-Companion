@@ -414,6 +414,10 @@
         "pattern": "passive_toggle",
         "affects": "special"
       },
+      "reach": {
+        "perRankDistanceRank": 1,
+        "note": "Each rank extends the character's reach by the distance value at rank 1 (the extension actions are performed at with no check penalty; the same distance twice over carries -2 and three times over -5)."
+      },
       "description": "Stretches your limbs or body to extend your reach."
     },
     {

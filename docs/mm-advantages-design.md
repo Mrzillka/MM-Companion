@@ -224,6 +224,53 @@ A PL 10 character who takes Edit Scene 2 and Guidance 3 has already spent all 5 
 ranks — Luck, Determination, or any other Heroic advantage would need the budget freed up
 elsewhere (or a higher Power Level) before it could be added.
 
+---
+
+## 3.5 Advantages a power grants
+
+An **Enhanced Trait** may raise an advantage as readily as an ability — the rules' own
+*Berserker Rage* configuration is *Enhanced Advantage: Fearless 2* alongside Enhanced
+Strength. So an advantage on the sheet has two possible origins, and they are not
+interchangeable.
+
+- **Bought** — a row in `character.advantages`, paid for out of the advantage rate, subject
+  to its rank cap and, for a Heroic-type advantage, to the shared budget above.
+- **Granted** — a trait contribution of category `advantage` from an active power or worn
+  item, read by `granted_advantages`. **The power paid for it.** It therefore contributes
+  nothing to `advantage_points_spent` and draws nothing from the Heroic budget: both walk
+  `character.advantages` and only that. This is the same rule the ability boosts already
+  follow — the boosted ranks are the power's cost, never the ability's — and charging for a
+  granted advantage twice is exactly the bug that rule exists to avoid.
+
+Note what that implies for `validateHeroicBudget` above: it is written over
+`character.advantages`, and it should stay that way. A GM who wants granted Heroic
+advantages to compete for the pool is making a house rule, not fixing an oversight.
+
+A granted advantage otherwise behaves as the advantage it is: if it carries a
+`skillBonusPerRank` it grants that bonus at the granted ranks, chained through
+`advantage_contributions`. In the UI it appears in the Advantages block as a muted,
+unselectable row whose description names the granting power — present because a power that
+left no mark on the sheet reads as a power that does nothing, and unselectable because
+there is nothing about it for the player to rank, reorder or remove.
+
+### A granted advantage's subject
+
+An advantage that attaches to a *subject* (§3.4's `parameter` — Improved Critical's attack,
+Skill Mastery's skill) is granted for a subject too. The power's allocation row stores it on
+the trait key itself, `"Improved Critical::Sword"`, and `granted_advantage_selections`
+splits that back into name and parameter so the row prints as *Improved Critical (Sword)*,
+exactly as the bought one does. Three things fall out of that, and each is the point:
+
+- the **same advantage can be granted twice** for two subjects, because the two keys differ;
+- the subject **chains** like a bought one, so a granted `skillBonusPerRank` advantage whose
+  target is the player's choice still reaches the skill it names;
+- the constructor's picker asks for the subject through the *same* `ParameterSpec`
+  resolution the Advantages block uses (`ui/advantage_parameters.py`), so an advantage
+  cannot offer one set of subjects when bought and another when granted.
+
+The picker also holds a granted advantage to its own rank rules — `trait_rank_cap` stops the
+row's rank spin at 1 for an unranked advantage and at `maxRank` for a fixed-cap one, which
+is the same ceiling §3.3 applies to a bought one.
 
 ---
 

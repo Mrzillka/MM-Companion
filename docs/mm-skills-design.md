@@ -178,7 +178,9 @@ Skill (from skills-design.json.skills[])
 ├── categories: ("combat"|"interaction"|"manipulation"|"technical")[]   // rule bundles, see §6
 ├── action: default action time for the skill
 ├── summary: string            // one-line mechanical gloss (original paraphrase)
-├── specializations[] | focuses[]   // focuses[] only when focused=true
+├── specializations[] | focuses[]   // focuses[] only when focused=true; NAMES only, both
+├── focusNote?: string         // guidance for a focused skill whose focuses can't be listed
+├── specializationNote?: string  // ...the same, for a skill whose pools can't be listed
 ├── plLimit?: "attack"|"none"  // overrides the default skill-bonus cap (§4)
 ├── rankTable? / complexityTable?   // Languages' doubling table; technical build table
 └── uses: Use[]
@@ -234,10 +236,21 @@ the Attack PL cap applies to each focus's row independently. `focuses[]` lists *
 only; the GM may approve others, so the config UI should allow a free-text focus, not just a
 dropdown of the listed values.
 
+`focuses[]` therefore holds focus **names** and nothing else. A skill whose focuses cannot be
+enumerated at all — Expertise's fields of study, Languages' languages — leaves it empty and puts
+the guidance in `focusNote`, which is shown as a prompt rather than offered as something
+selectable. Prose in `focuses[]` reads as a choice the player can pick, and "Chosen freely per
+field of study, e.g. Science, Law, History" is not a focus. Both keys are read by the two places a
+focus is named: the Skills block's *Add focus…* and the Power Constructor's trait picker, where an
+Enhanced Trait may grant a focus the character never bought.
+
 `specializations[]` on a **non-focused** skill are the opposite: they're just illustrative common
 uses of the one shared skill (and map loosely onto that skill's `uses[]`), *unless* the player
 deliberately buys **specialized ranks** — the half-cost narrow rank pool from §7 — in which case
-that specialization becomes its own capped rank pool too.
+that specialization becomes its own capped rank pool too. Because any of them may be bought that
+way, the list holds pool **names** on the same rule `focuses[]` does, and a skill whose pools are
+drawn from something unlistable ("by specific sense", "by terrain") puts that in
+`specializationNote` instead — shown as the prompt where a pool is named, never offered as one.
 
 ---
 

@@ -70,7 +70,16 @@ Request topic           Payload / server
                         offering (it is told what is already pinned), and a
                         toggle whose menu label can go stale is the kind of
                         clever that misfires
+``hero-point-requested``  a delta (``int``); the System block moves the pips by
+                        it, through the one funnel that also writes the note
 ======================  ====================================================
+
+The last exists because **Extra Effort is paid for in another block's currency**
+(:mod:`mm_companion.ui.extra_effort`): shrugging the fatigue off is a Heroic Feat, which
+costs a hero point, and the pips are the System block's — as is the sentence a moved
+point writes into the history. Its *other* price, the fatigue itself, needs no topic of
+its own: a condition is applied to the shared model by the core resolver, and the
+Conditions block re-renders off ``condition-changed`` like any other subscriber.
 
 A request normally *reveals* the block that serves it (a roll is no use happening
 off screen), but a request raised as the **side effect** of another action must
@@ -126,6 +135,8 @@ LOAD_REQUESTED = "load-requested"
 NOTE_REQUESTED = "note-requested"
 PIN_REQUESTED = "pin-requested"
 UNPIN_REQUESTED = "unpin-requested"
+HERO_POINT_REQUESTED = "hero-point-requested"
+BONUS_REQUESTED = "bonus-requested"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
@@ -140,7 +151,17 @@ UNPIN_REQUESTED = "unpin-requested"
 #: the sheet serves them at all (see the table above), so there is no block to
 #: reveal — and hunting for one would be the sheet answering a question about
 #: itself.
-QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED})
+#:
+#: The hero-point topic is quiet for the note's reason: a point spent to shrug off Extra
+#: Effort's fatigue is the *price* of something the user did in another block, and
+#: throwing the System block open over it is the app grabbing the screen unasked. The
+#: roll history says what moved either way.
+#:
+#: ``bonus-requested`` is deliberately **not** quiet, for ``load-requested``'s reason: a
+#: player who has just spent a rung of fatigue on "+2 on a single check" is about to
+#: roll, and dropping the bonus into a Dice block they cannot see would be the app
+#: charging them for something they never got.
+QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED, HERO_POINT_REQUESTED})
 
 Handler = Callable[[], None]
 RequestHandler = Callable[[object], None]

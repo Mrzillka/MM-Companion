@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from fractions import Fraction
+from html import escape
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -24,11 +27,16 @@ from mm_companion.core.powers import (
 )
 from mm_companion.core.rules import (
     TRAIT_CATEGORIES,
+    config_field_gate_open,
     effect_allocation_used,
+    effect_cost_breakdown,
     effect_cost_formula,
     effect_makes_attack,
     effect_total_cost,
     effective_ability,
+    synced_effect_rank,
+    trait_allocation_field,
+    trait_display_name,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
@@ -37,13 +45,26 @@ from mm_companion.ui.power_constructor.common import (
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
     RANK_MAX,
-    _fill_trait_combo,
+    TRAIT_SOURCE_BUYABLE,
+    CellContext,
     _mime_id,
     _move_item,
+    config_source_options,
+    fill_trait_combo,
+    is_trait_allocation,
+    link_trait_row,
+    repeatable_cell_kind,
 )
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
+from mm_companion.ui.power_constructor.sub_build import SubBuildPanel
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
+
+
+def _fraction_text(value: Fraction) -> str:
+    """A cost or rate as ``4`` or ``1/2`` - the way the rules write a part of a point."""
+
+    return str(value) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
 
 
 def _idle_card_rules() -> str:
@@ -88,6 +109,18 @@ class EffectCard(QFrame):
         # Callables that refresh each Tier-4 allocation field's "used / rank" readout;
         # rebuilt with the config form and fired when the effect's rank changes.
         self._alloc_updaters: list = []
+        # Config rows whose visibility a *sibling* field's value drives, as
+        # (field, widget, form) — and, per key, how to put a hidden field's default back
+        # when its gate reopens. Declared here rather than only in the form builder: the
+        # target picker is wired before the form exists and can reach the gates.
+        self._gated_rows: list = []
+        self._config_seeders: dict = {}
+        # The whole characters this effect buys — a Summon's minion, one alternate form
+        # per rank of a Metamorph chip. Built here rather than where it is added to the
+        # layout below, because seeding the config form can already fire an edit, and
+        # `_refresh_cost` re-reads this strip.
+        self._sub_builds = SubBuildPanel(self.instance, self._data, self._character)
+        self._sub_builds.changed.connect(self.changed)
         self.setObjectName("EffectCard")
         self._drops = DropFeedback(self, "EffectCard", radius="radius.canvas")
         self._drops.set_idle(_idle_card_rules())
@@ -123,6 +156,11 @@ class EffectCard(QFrame):
         self._build_modifier_groups(layout)
         layout.addWidget(self._build_specific_button())
 
+        # Below the chips because a modifier can *add* a slot, so the strip reads in
+        # the order it is bought; hidden outright when there is none, which is every
+        # effect but two.
+        layout.addWidget(self._sub_builds)
+
         self._cost = QLabel()
         self._cost.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._cost.setStyleSheet("font-weight: bold;")
@@ -132,7 +170,7 @@ class EffectCard(QFrame):
         # flaws — render a chip for each (the config form built above already reads
         # them, e.g. an attached Extra Condition, so only the chips need seeding).
         self._seed_modifier_chips()
-        self._refresh_cost()
+        self.refresh_cost()
 
     # -- construction pieces ----------------------------------------------
     def _build_header(self, effect) -> QHBoxLayout:
@@ -147,11 +185,28 @@ class EffectCard(QFrame):
         self._role_badge = QLabel()
         self._role_badge.setVisible(False)
         header.addWidget(self._role_badge)
+        # Whether these effects are Dynamic is asked once, by the canvas's mode bar:
+        # it is the fourth answer to "how do these effects combine", not a checkbox on
+        # each card. The role badge beside this still prints what the answer costs.
         header.addStretch()
         header.addWidget(QLabel("Rank"))
+        # An effect whose rank *is* its allocation has no rank to set: the spin shows
+        # what the rows come to and is read-only, so a rank is decided in one place
+        # rather than two that have to be kept level (see ``synced_effect_rank``).
+        self._rank_synced = bool(effect and effect.rank_follows_allocation)
         self._rank = make_spin_box(
-            1, RANK_MAX, value=self.instance.rank, buttons=False, max_width=44
+            0 if self._rank_synced else 1,
+            RANK_MAX,
+            value=self.instance.rank,
+            buttons=False,
+            max_width=44,
         )
+        if self._rank_synced:
+            self._rank.setReadOnly(True)
+            self._rank.setToolTip(
+                "Set by the traits below - an Enhanced Trait's rank is the ranks it "
+                "allocates, and its cost comes from the traits themselves."
+            )
         self._rank.valueChanged.connect(self._on_rank_changed)
         header.addWidget(self._rank)
         remove = QPushButton("✕")
@@ -317,6 +372,16 @@ class EffectCard(QFrame):
             for f in effect.config_fields
         )
 
+    def _field_gate_open(self, field) -> bool:
+        """Whether a field gated on a sibling's value is currently showing.
+
+        The rule itself is :func:`~mm_companion.core.rules.config_field_gate_open` —
+        shared with the game-terms rows, so a field this card is hiding never shows up
+        as a readout beside it.
+        """
+
+        return config_field_gate_open(field, self.instance.config)
+
     def _hidden_config_keys(self) -> set[str]:
         """Effect config-field keys suppressed by an attached modifier whose own config
         declares ``hides_field`` — the modifier's chosen value names the effect field to
@@ -345,6 +410,8 @@ class EffectCard(QFrame):
                 widget.setParent(None)
                 widget.deleteLater()
         self._alloc_updaters = []  # rebuilt below alongside the fresh widgets
+        self._gated_rows = []
+        self._config_seeders = {}
 
         effect = self._effect()
         if effect is None or not effect.config_fields:
@@ -377,7 +444,36 @@ class EffectCard(QFrame):
             if field.hint:
                 widget.setToolTip(field.hint)
             form.addRow(field.label, widget)
+            if field.show_when_field:
+                # Built whatever the gate says and shown or hidden below, rather than
+                # rebuilt as the sibling moves: the sibling's own combo is what emits
+                # the change, and tearing the form down from inside its signal would
+                # delete the widget mid-emit.
+                self._gated_rows.append((field, widget, form))
         self._config_layout.addWidget(form_host)
+        self._refresh_config_gates()
+
+    def _refresh_config_gates(self) -> None:
+        """Show or hide each sibling-gated config row for the current choices.
+
+        Hiding also **drops the stored value**, so an Affliction whose third degree is
+        moved off Transformed stops carrying an imposed effect that nothing can see —
+        and stops being warned about one. That mirrors what the modifier gates above
+        already do to a choice they take away.
+        """
+
+        for field, widget, form in self._gated_rows:
+            open_ = self._field_gate_open(field)
+            widget.setVisible(open_)
+            label = form.labelForField(widget)
+            if label is not None:
+                label.setVisible(open_)
+            if not open_:
+                self.instance.config.pop(field.key, None)
+            elif field.key not in self.instance.config:
+                seed = self._config_seeders.get(field.key)
+                if seed is not None:
+                    seed()
 
     # Config field types whose stored value is a list rather than a scalar.
     _LIST_TYPES = ("multiselect", "allocation", "repeatable")
@@ -405,17 +501,63 @@ class EffectCard(QFrame):
         # ``select`` and any mod type without a builder render as the generic combo.
         return self._select_widget(field)
 
+    def _points_widget(self, field) -> QWidget:
+        """A bounded spin box for a numeric effect-config field (an imposed effect's rank).
+
+        The modifier chips have carried a ``points`` field for a while — a Subtle worth 1
+        or 2 — but an *effect's* config had no numeric input at all, so a field of this
+        type fell through to the option combo and showed an empty list. Seeds and stores
+        the default, so the value the closed spin already displays is the one everything
+        downstream prices against.
+        """
+
+        stored = self.instance.config.get(field.key)
+        value = field.default_value if stored is None else int(stored)
+        self.instance.config[field.key] = value
+        spin = make_spin_box(
+            field.min_value,
+            field.max_value or RANK_MAX,
+            value=value,
+            buttons=False,
+            max_width=48,
+        )
+        spin.valueChanged.connect(lambda v, k=field.key: self._on_config_changed(k, v))
+        # A gate that closes drops the stored value; one that opens again has to put it
+        # back, or the spin goes on showing a number nothing downstream can read. The
+        # widget is the only thing that knows what its own default is, so it says so
+        # here rather than the gate guessing.
+        self._config_seeders[field.key] = lambda: self._store_config(field.key, spin.value())
+        return spin
+
+    def _store_config(self, key: str, value) -> None:
+        """Write a config value without the redraw :meth:`_on_config_changed` does.
+
+        Used where the value is being *restored* rather than chosen — re-seeding a gated
+        field's default from inside the gate refresh, which is itself already inside a
+        redraw.
+        """
+
+        self.instance.config[key] = value
+
     def _text_widget(self, field) -> QWidget:
         edit = QLineEdit(self.instance.config.get(field.key, ""))
         edit.textChanged.connect(lambda text, k=field.key: self._on_config_changed(k, text))
         return edit
 
     def _select_widget(self, field) -> QWidget:
-        """The single-choice option combo (the default renderer for ``select``)."""
+        """The single-choice option combo (the default renderer for ``select``).
+
+        A field naming a ``source`` takes its options from the game data rather than
+        listing them itself — Affliction's imposed effect is "whichever effects the
+        rules allow", which is a query over ``effects.json`` that would go stale the
+        moment a mod added one. :func:`config_source_options` is the same call the
+        game-terms readout makes, so the picker and the readout cannot disagree about
+        what an id is called.
+        """
         combo = QComboBox()
         combo.addItem("—", "")  # the unset choice
-        for option in field.options:
-            combo.addItem(option.label, option.value)
+        for label, value in config_source_options(field, self._data):
+            combo.addItem(label, value)
         index = combo.findData(self.instance.config.get(field.key, ""))
         combo.setCurrentIndex(index if index >= 0 else 0)
         guard_wheel(combo)
@@ -458,6 +600,13 @@ class EffectCard(QFrame):
 
         def update_total() -> None:
             used = effect_allocation_used(self.instance, self._data)
+            plural = "" if used == 1 else "s"
+            if self._rank_synced:
+                # No budget, so no "of what" and nothing to overspend: the number is
+                # what the rows add up to, which is also the effect's rank.
+                label.setText(f"Allocated {used} rank{plural}")
+                label.setStyleSheet("")
+                return
             rank = self._rank.value()
             label.setText(f"Allocated {used} / {rank} ranks")
             over = f"color: {theme.color('tint.worse')}; font-weight: bold;"
@@ -524,7 +673,13 @@ class EffectCard(QFrame):
             if len(option.tiers) > 1:
                 combo = QComboBox()
                 for index, cost in enumerate(option.tiers, start=1):
-                    combo.addItem(f"{cost} ranks", index)
+                    # Name what the tier buys, not just what it costs. The game-terms
+                    # panel beside the card says the same thing the same way
+                    # (``_config_display_allocation``), so the two never read as two
+                    # different facts about one choice.
+                    ranks = f"{cost} rank" if cost == 1 else f"{cost} ranks"
+                    named = option.tier_label(index)
+                    combo.addItem(f"{named} ({ranks})" if named else ranks, index)
                 combo.setCurrentIndex(min(max(chosen.get(option.id, 1), 1), len(option.tiers)) - 1)
                 combo.setEnabled(box.isChecked())
                 guard_wheel(combo)
@@ -549,12 +704,14 @@ class EffectCard(QFrame):
         return container
 
     def _repeatable_widget(self, field) -> QWidget:
-        """A Tier-4 variable-length row list (Immunity scopes, Features).
+        """A Tier-4 variable-length row list (Immunity scopes, Enhanced Trait's traits).
 
-        Each row has one widget per :class:`RepeatableColumn` (a line edit for text, a
-        spin for an ``int`` rank) plus a remove button; an "Add" button appends a row.
+        Each row has one widget per :class:`RepeatableColumn` plus a remove button; an
+        "Add" button appends a row. What a column's cell looks like and how its value is
+        read back comes from :data:`REPEATABLE_CELL_KINDS`, so a mod adds a column kind
+        without editing this method and an unregistered one still renders as text.
         A "used / rank" readout meters the rows against the effect's rank (summed ranks
-        for Immunity, one per row for Feature). Rows are stored in
+        for Immunity and for Enhanced Trait, one per row for Feature). Rows are stored in
         ``instance.config[key]`` as a list of ``{column_key: value}`` dicts.
         """
 
@@ -581,12 +738,15 @@ class EffectCard(QFrame):
             for _widget, cells in row_widgets:
                 row = {}
                 for column in field.columns:
-                    cell = cells[column.key]
-                    row[column.key] = cell.value() if column.type == "int" else cell.text().strip()
+                    row[column.key] = repeatable_cell_kind(column).read(cells[column.key])
                 if any(str(v).strip() for v in row.values()):
                     rows.append(row)
             self.instance.config[field.key] = rows
+            self._sync_rank_to_allocation()
             update_total()
+            # As in :meth:`_on_config_changed`: a trait-allocation row *is* the cost of
+            # an as-trait effect, so the footer moves with it and not only the readout.
+            self.refresh_cost()
             self.changed.emit()
 
         def add_row(initial: dict | None = None) -> None:
@@ -597,21 +757,9 @@ class EffectCard(QFrame):
             row_layout.setSpacing(3)
             cells: dict = {}
             for column in field.columns:
-                if column.type == "int":
-                    cell = make_spin_box(
-                        0,
-                        RANK_MAX,
-                        value=int(initial.get(column.key, 0) or 0),
-                        buttons=False,
-                        max_width=48,
-                    )
-                    cell.valueChanged.connect(lambda _v: commit())
-                    row_layout.addWidget(cell)
-                else:
-                    cell = QLineEdit(str(initial.get(column.key, "")))
-                    cell.setPlaceholderText(column.label)
-                    cell.textChanged.connect(lambda _t: commit())
-                    row_layout.addWidget(cell, 1)
+                kind = repeatable_cell_kind(column)
+                cell = kind.build(self._cell_context(), column, initial, commit)
+                row_layout.addWidget(cell, kind.stretch)
                 cells[column.key] = cell
             remove = QPushButton("✕")
             remove.setFlat(True)
@@ -620,6 +768,7 @@ class EffectCard(QFrame):
             rows_layout.addWidget(row)
             entry = (row, cells)
             row_widgets.append(entry)
+            link_trait_row(self._cell_context(), field.columns, cells)
 
             def do_remove(_checked: bool = False) -> None:
                 if entry in row_widgets:
@@ -633,6 +782,8 @@ class EffectCard(QFrame):
         for row_data in existing:
             if isinstance(row_data, dict):
                 add_row(row_data)
+        if not row_widgets and is_trait_allocation(field):
+            add_row()  # the picker is the question; an empty one reads as a missing control
 
         add_button = QPushButton("＋ Add")
         add_button.clicked.connect(lambda: add_row())
@@ -672,17 +823,33 @@ class EffectCard(QFrame):
             self.instance.config[key] = value
         else:  # "", empty list, or None all clear the choice
             self.instance.config.pop(key, None)
+        # A config choice can decide what the effect *costs* — an Enhanced Trait is
+        # priced entirely from the traits it raises — so the card's own footer has to
+        # be redrawn here, exactly as a rank or a modifier change redraws it. The
+        # window's total tracks ``changed`` on its own; this label does not.
+        # A choice can also *reveal* another (Affliction's Transformed condition brings
+        # out the imposed-effect picker), so the gates are restated first: closing one
+        # drops its stored value, and that is a value the cost may have read.
+        self._refresh_config_gates()
+        self.refresh_cost()
         self.changed.emit()
 
     # -- enhanced-trait target picker -------------------------------------
     def _build_target_picker(self, effect) -> QWidget | None:
-        """A combo choosing which trait a configurable booster (Enhanced Trait) raises.
+        """A combo choosing which single trait a configurable booster raises.
 
         Returns ``None`` unless the effect's :class:`TraitBoost` is ``configurable``
-        and its ``affects`` names a numeric trait category (so senses/movement pickers
-        don't appear). The options — abilities, resistances, and skills — are read
-        from the game data, not hardcoded; the chosen key is stored in
-        ``instance.config['target']``.
+        and its ``affects`` names a raisable trait category (so senses/movement pickers
+        don't appear). The options are read from the game data, not hardcoded; the
+        chosen key is stored in ``instance.config['target']``.
+
+        Also ``None`` once the effect declares a *trait allocation* config field: that
+        field's rows say which traits are raised and by how much, and a second picker
+        claiming the same thing in one word would be a second answer to one question.
+        The combo therefore survives only for a booster that really does raise one
+        thing — none in the base data since Enhanced Trait grew its rows, but the seam
+        a mod's simpler booster still reaches, and the shape old saves are read back
+        through (see :func:`~mm_companion.core.rules.boost_allocations`).
         """
 
         boost = effect.integration.trait_boost if effect and effect.integration else None
@@ -690,12 +857,16 @@ class EffectCard(QFrame):
             return None
         if not (boost.affects & TRAIT_CATEGORIES):
             return None
+        if trait_allocation_field(effect) is not None:
+            return None
 
         host = QWidget()
         form = QFormLayout(host)
         form.setContentsMargins(0, 0, 0, 0)
         combo = QComboBox()
-        _fill_trait_combo(combo, self._data, self.instance.config.get("target", ""))
+        fill_trait_combo(
+            combo, self._data, self.instance.config.get("target", ""), TRAIT_SOURCE_BUYABLE
+        )
         guard_wheel(combo)
         combo.currentIndexChanged.connect(
             lambda _i, c=combo: self._on_config_changed("target", c.currentData())
@@ -764,10 +935,14 @@ class EffectCard(QFrame):
 
         Ignores an attach that could not change anything: one the effect already
         carries implicitly as part of its own definition (Damage's ``attack``), or a
-        second copy of a modifier with no config to tell the copies apart — that would
-        only double-charge the power. A modifier that *does* carry config can be taken
-        more than once, since each selection means something different (Limited "only
-        at night" alongside Limited "only vs. robots").
+        second copy of a modifier the ruleset does not mark ``repeatable`` — that would
+        only double-charge the power. Repeatability is **data**, not "does it have
+        config": having a config field was the old proxy for it and was always too loose
+        (Removable and Check Required both carry one and neither is meaningfully taken
+        twice), and it grew looser as the audit gave Ranged, Close, Activation and the
+        rest their own dials. The genuinely repeatable modifiers are the ones whose
+        meaning lives in their config text — Limited "only at night" alongside Limited
+        "only vs. robots", Quirk, Feature, and the Custom pair.
         """
         modifier = self._modifier(modifier_id)
         if modifier is None:
@@ -776,7 +951,7 @@ class EffectCard(QFrame):
         if base is not None and modifier_id in base.implicit_modifiers:
             return
         attached = {sel.modifier_id for sel in (*self.instance.extras, *self.instance.flaws)}
-        if modifier_id in attached and not modifier.config_fields:
+        if modifier_id in attached and not modifier.repeatable:
             return
         selection = ModifierSelection(modifier_id=modifier_id)
         is_flaw = modifier.category == "flaw"
@@ -794,7 +969,7 @@ class EffectCard(QFrame):
         self._build_chip(modifier, selection, is_flaw)
         self._populate_config_form()  # a gating extra may change a field's type
         self._refresh_attack_skill_visibility()  # Perception Range drops the attack roll
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _build_chip(self, modifier: Modifier, selection: ModifierSelection, is_flaw: bool) -> None:
@@ -839,7 +1014,7 @@ class EffectCard(QFrame):
         self._hint.setVisible(not self._chips)
         self._populate_config_form()  # removing a gating extra may downgrade a field
         self._refresh_attack_skill_visibility()  # removing Perception Range restores it
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _reorder_bucket(self, bucket: list, from_index: int, to_index: int) -> None:
@@ -850,14 +1025,14 @@ class EffectCard(QFrame):
         cost/summary recompute.
         """
         if _move_item(bucket, from_index, to_index):
-            self._refresh_cost()
+            self.refresh_cost()
             self.changed.emit()
 
     def _on_rank_changed(self, value: int) -> None:
         self.instance.rank = value
         for update_total in self._alloc_updaters:  # the rank is the allocation budget
             update_total()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
     def _on_chip_changed(self, modifier: Modifier | None = None) -> None:
@@ -869,14 +1044,71 @@ class EffectCard(QFrame):
             any(f.hides_field for f in modifier.config_fields) or self._is_form_gate(modifier.id)
         ):
             self._populate_config_form()
-        self._refresh_cost()
+        self.refresh_cost()
         self.changed.emit()
 
-    def _refresh_cost(self) -> None:
+    def _cell_context(self) -> CellContext:
+        """What a config row's cells are built against - the data, and whose sheet.
+
+        The character travels with the data because a trait row offers *this hero's*
+        skill focuses and specialized pools; without one it degrades to the catalog.
+        """
+
+        return CellContext(self._data, self._character)
+
+    def _sync_rank_to_allocation(self) -> None:
+        """Write an as-trait effect's rank back from its rows, and restate the spin.
+
+        A no-op for every other effect, whose rank the player sets. The spin's signal is
+        blocked while it is restated: it is being *told* the answer, and letting it
+        re-emit would run the rank handler in the middle of a config commit.
+        """
+
+        rank = synced_effect_rank(self.instance, self._data)
+        if rank is None or rank == self.instance.rank:
+            return
+        self.instance.rank = rank
+        self._rank.blockSignals(True)
+        self._rank.setValue(rank)
+        self._rank.blockSignals(False)
+
+    def refresh_cost(self) -> None:
+        # Every edit reaches here, which is why the sub-build strip re-reads from it: a
+        # rank change moves a Summon's minion budget and a chip change adds or removes a
+        # Metamorph's slots outright.
+        self._sub_builds.refresh()
         formula = effect_cost_formula(self.instance, self._data, self._character)
         total = effect_total_cost(self.instance, self._data, self._character)
         unit = self._unit
         self._cost.setText(f"{formula} = {total} {unit}" if formula else f"{total} {unit}")
+        self._cost.setToolTip(self._cost_detail())
+
+    def _cost_detail(self) -> str:
+        """The per-trait workings behind an as-trait footer - empty for anything else.
+
+        The footer pools its terms by kind, which is what makes it readable and what
+        loses the individual rows; this puts them back one hover away, each at the rate
+        it was charged. Rich text, since a column of figures wants a table.
+        """
+
+        terms = effect_cost_breakdown(self.instance, self._data, self._character)
+        if not terms:
+            return ""
+        rows = "".join(
+            "<tr>"
+            f"<td>{escape(trait_display_name(self._data, term.target))}</td>"
+            f"<td align='right'>&nbsp;{term.ranks}&nbsp;</td>"
+            f"<td>&times; {_fraction_text(term.rate)}</td>"
+            f"<td align='right'>&nbsp;= {_fraction_text(term.cost)}</td>"
+            "</tr>"
+            for term in terms
+        )
+        total = sum((term.cost for term in terms), Fraction(0))
+        return (
+            f"<table cellspacing='0'>{rows}"
+            "<tr><td colspan='3'><b>Total</b></td>"
+            f"<td align='right'><b>&nbsp;{_fraction_text(total)}</b></td></tr></table>"
+        )
 
     # -- structure role (driven by the canvas) ----------------------------
     def set_role(self, role: str, note: str = "") -> None:
@@ -885,6 +1117,12 @@ class EffectCard(QFrame):
         ``role`` is ``"base"``/``"alternate"`` (array), ``"linked"``, or ``""`` for
         an independent/single effect. ``note`` appends a detail (an alternate's flat
         cost) so the badge shows the number without this widget hardcoding it.
+
+        The **Dynamic** switch rides on the same call, since the question it asks only
+        exists inside an array: it appears for a ``base`` or ``alternate`` and hides
+        otherwise. Hiding it does *not* clear the flag — a power switched to Linked and
+        back keeps the members the player marked, the way the structure switch keeps
+        the effects.
         """
 
         labels = {"base": "Base", "alternate": "Alternate", "linked": "Linked"}

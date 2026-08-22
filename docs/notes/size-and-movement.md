@@ -68,52 +68,76 @@ data-first; nothing below names a trait, an effect or a column in Python.
   *down* later re-clamps rather than running at a rank it no longer has — that clamp is
   `rules.effect_current_rank`, which `size_shift` and `_readout_size_table` both read.
   **Cost never asks it**: what a power is worth is what it was bought at, and dialling
-  one down mid-fight refunds nothing. The field is generic on the effect and only the
-  size layer reads it today; nothing else has rungs to offer.
-- **The rungs are `size_steps`, and they name sizes rather than ranks.** One
+  one down mid-fight refunds nothing. The field is generic on the effect, and **so is
+  the dial now**: any effect `effect_has_rank_dial` says yes to gets one, and
+  `effect_effective_rank` reads `effect_current_rank` rather than the bought rank, so a
+  Damage 10 fired at 5 forces a save against 5 (see "Rank as a dial" in
+  [The powers layer](powers.md)). Validation reads `effect_build_rank` instead, for the
+  reason cost does.
+- **The dial's notches are `size_steps`, and they name sizes rather than ranks.** One
   `SizeStep` per rank of a size effect — `category` being what the *wielder becomes*
   there, read against their bought size exactly as the card's readout is, because "Huge"
   is the thing being chosen while "rank 2" is an accounting fact the card already prints.
   An effect has rungs because the ruleset gave it a `size_table` readout
   (`SIZE_READOUT_KIND`), so nothing here names Growth or Shrinking and a mod's own size
-  effect gets the strip for free. Two rules that are easy to re-break: ranks the Size
-  Table **clamps** fold into the rung that first reached them (`last_rank` closes the
-  span, or a Colossal character's Growth 4 offers four buttons all reading "Awesome" —
-  and a rank dialled into the folded part would light none of them), and *current* is
-  gated on the power being **live on the character** as well as `effect_is_active` —
-  an array alternate nobody picked answers that second question happily, since
-  `array_active` is a flag nothing maintains and only `live_powers` reads the array's
-  `active_child_id`.
-- **`_SizeLadder` is the strip on the card** (`ui/sections/powers.py`), one button per
-  rung, under the effect's term grid and above the dice footer with the rest of the
-  mid-play controls. It shares `_mode_toggle_style` with the group's mode toggle — the
-  same widget-level bargain over the same tokens, since a checkable `QPushButton` has to
-  state its own checked look (see [The theme layer](theme.md)). Four things it does that a plain
-  segmented control does not. **Nothing is lit while the power is off** — the ladder
-  says where the power *is*, and off is nowhere, not rank 1. **A rung does whatever a
-  click on the card body would have done, then lands where it was asked**: from off it
-  wakes the power at that rung (flipping the switches, or becoming the array's live
-  alternate), so dormant → Huge is one click, and **on the rung already lit it switches
-  the power off** — the strip is a whole control, not one that can only turn a power on.
-  The one exception is an array's *live* member, where a card click is deliberately a
-  no-op. That test goes through `size_steps` rather than comparing `current_rank`
-  directly, since a clamped rung spans several ranks and its button only carries the
-  lowest. It **stays live in the locked sheet** and emits `runtimeChanged`, never
-  `changed`, like every other card switch — which, the rung being saved, does now mark
-  the sheet unwritten (see "Runtime is saved" in [The powers layer](powers.md)). And a **single-rung effect gets no strip at
-  all**: a Growth 1's one rung *is* the card's own on/off switch, and a strip of one
-  button would be a second way to press it — which also covers a ladder the Size Table
-  clamped down to one. It wraps in a `FlowContainer`, because a Growth 10 is ten buttons
-  and a card in a pinned strip is narrow. Screenshot it with `driver.py size-ladder`,
-  and the rung coming back off disk with `driver.py size-ladder-reload`.
-- **The rungs are `NoFocus`, and `_rebuild_list` runs inside `preserved_scroll`.** Two
+  effect gets the ladder for free. **That is now a default rather than an exemption**:
+  `effect_dials_by_default` reads the same readout, and `effect_has_rank_dial` lets the
+  player's `rank_dial` overrule it in either direction. A size effect used to get its
+  dial whatever the constructor's checkbox said, which made that box a control that
+  changed nothing on exactly the card it mattered most on. **A Dynamic array member's
+  ladder is its share**: the card carries one slider, still captioned "Size", whose
+  notches spend points instead of naming a rank the player is free to pick — the pool
+  decides the rank there, and two sliders claiming it deadlocked (see "A Dynamic member
+  has exactly one slider" in [The powers layer](powers.md)).
+
+  Two rules that are easy to re-break: ranks the Size
+  Table **clamps** fold into the step that first reached them (`last_rank` closes the
+  span, so a Colossal character's Growth 4 spends four ranks reading "Awesome"), and
+  *current* is gated on the power being **live on the character** as well as
+  `effect_is_active` — an array alternate nobody picked answers that second question
+  happily, since `array_active` is a flag nothing maintains and only `live_powers` reads
+  the array's `active_child_id`. That pair is `effect_stands`, split out of `size_steps`
+  because the dial has to position itself by the same answer the ladder lit a rung by.
+  The dial spends the span rather than collapsing it: it carries a notch per **rank**,
+  labelled from these steps, so the handle can stop wherever the player puts it and
+  simply repeats the category where the table ran out.
+- **`_RankDial` is the slider on the card** (`ui/sections/powers.py`), one notch per
+  rank from `0` upwards, under the effect's term grid and above the dice footer with the
+  rest of the mid-play controls. It replaced a strip of checkable buttons, one per rung:
+  the strip could not serve an ordinary Damage (ten buttons reading "Rank 1"…"Rank 10"
+  is not a control), and the two would have been separate answers to one question. Five
+  things it does that a plain slider does not. **Zero is off, and off is where it sits
+  while the power is** — the dial says where the power *is*, and off is nowhere, not
+  rank 1. **A move does whatever a click on the card body would have done, then lands
+  where it was asked**: from zero it wakes the power at that notch (flipping the
+  switches, or becoming the array's live alternate), so dormant → Huge is one gesture,
+  and **sliding back to zero switches the power off** — the dial is a whole control, not
+  one that can only turn a power on. The one exception is an array's *live* member,
+  where a card click is deliberately a no-op, so zero there just puts the handle back.
+  It **commits on release**, never per tick: every runtime setter ends in
+  `_rebuild_list`, so a slider that wrote on each notch would delete itself under the
+  player's thumb — `valueChanged` moves only the label while `isSliderDown`, and a
+  keyboard or groove step (which leaves the handle up) commits at once. It **stays live
+  in the locked sheet** and emits `runtimeChanged`, never `changed`, like every other
+  card switch — which, the notch being saved, does now mark the sheet unwritten (see
+  "Runtime is saved" in [The powers layer](powers.md)). And a **single-rank effect gets
+  no dial at all**: a Growth 1's one notch *is* the card's own on/off switch, and a
+  slider of one would be a second way to press it. **How the handle is positioned
+  differs by effect**, and has to: a size effect reads `effect_stands`, since a Growth
+  that is switched off is nowhere — but an *instant* effect never stands at all
+  (`effect_is_active` is False for a Damage by pattern), so asking it there would peg
+  every blast card at Off. Those read whether the card is simply switched on. Screenshot
+  it with `driver.py size-ladder`, and the notch coming back off disk with `driver.py
+  size-ladder-reload`.
+- **The slider is `NoFocus`, and `_rebuild_list` runs inside `preserved_scroll`.** Two
   halves of one bug: every runtime setter rebuilds the whole card tree, so the block is
   briefly empty *and* whatever held focus inside it is destroyed — Qt hands focus to the
   next widget in the tab order, which is a table in some other block, and a `QScrollArea`
   scrolls to show a child that has just taken focus. The page jumped away from the card
-  under the cursor. `NoFocus` closes the cause (a rung is destroyed by its own click, so
-  focus could never usefully rest there, and the card body it sits on is not focusable
-  either); `widgets.preserved_scroll` closes the rest — it restores the bar **twice**,
+  under the cursor. `NoFocus` closes the cause (the slider is destroyed by its own
+  commit, so focus could never usefully rest there, and the card body it sits on is not
+  focusable either) — and it must be set **after** `guard_wheel`, which asks for
+  `StrongFocus` so a focused widget keeps its own wheel; `widgets.preserved_scroll` closes the rest — it restores the bar **twice**,
   now and on the next turn of the event loop, because the range is only recomputed on the
   following layout pass and an immediate `setValue` is clamped by the stale one.
   `EquipmentSection._rebuild_list` takes it too: wearing an item is the same rebuild.

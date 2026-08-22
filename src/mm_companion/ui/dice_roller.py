@@ -1026,6 +1026,19 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # written up on :attr:`contentChanged`.
         self.contentChanged.emit()
 
+    def add_bonus(self, amount: int) -> None:
+        """Add *amount* to the bonus slider, clamped to the range it offers.
+
+        For Extra Effort's "+2 on a single check", which is the one benefit that lands on
+        the next roll rather than on the build. Added to whatever is set rather than
+        replacing it: the player may already have dialled in a circumstance bonus, and
+        taking that away would be charging them a rung of fatigue to lose two points.
+        """
+
+        self._bonus_spin.setValue(
+            min(self._bonus_spin.maximum(), self._bonus_spin.value() + amount)
+        )
+
     def roll_spec(self, spec: RollSpec | None) -> bool:
         """Load *spec* and roll it at once. ``False`` if a die is already tumbling.
 

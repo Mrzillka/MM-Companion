@@ -9,7 +9,14 @@ power's effects, or an equipment item's — an item *is* a :class:`Power` under 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
@@ -25,6 +32,7 @@ from mm_companion.core.rules import (
     array_base_index,
     effect_attack_skill_bonus,
     effect_effective_rank,
+    effect_is_selected,
     effect_stat_rows,
     modifier_label,
 )
@@ -91,6 +99,10 @@ def effect_summary(
 
     header = QHBoxLayout()
     header.setContentsMargins(0, 0, 0, 0)
+    # Explicit, because a layout with zeroed margins can be given zero spacing too by
+    # the platform style — which ran the role note straight into the rank before it
+    # ("Protection 10alternate (1 pt)").
+    header.setSpacing(int(theme.metric("space.sm")))
     title = QLabel(effect_title(effect, character, data))
     title.setStyleSheet(BOLD_STYLE)
     header.addWidget(title)
@@ -112,13 +124,30 @@ def effect_summary(
     # terms take the whole width rather than leaving a third of the card blank.
     body.addLayout(terms_grid(effect, character, data), TERMS_STRETCH)
     layout.addLayout(body)
+
+    # An array's other effects are not running — only one is at a time, which is what
+    # the array paid for. Their numbers stay on the card (a player choosing between them
+    # needs to read them) but recede, so the summary never looks like a list of bonuses
+    # that all apply.
+    #
+    # Opacity, not ``setEnabled(False)``: every label here carries an explicit stylesheet
+    # colour (bold, muted, green/red tints), and a stylesheet colour outranks the
+    # disabled palette — so disabling the block greyed almost nothing. The card's own
+    # switched-off look reaches for the same effect and the same token
+    # (:meth:`~mm_companion.ui.cards.card.DraggableCard._apply_opacity`), and an effect
+    # is only attached while it is wanted, since one forces its whole subtree to paint
+    # through an offscreen buffer.
+    if not effect_is_selected(power, effect, data, character):
+        faded = QGraphicsOpacityEffect(box)
+        faded.setOpacity(theme.metric("opacity.inactive"))
+        box.setGraphicsEffect(faded)
     return box
 
 
 def modifiers_column(effect: PowerEffectInstance, data: GameData) -> QWidget | None:
     """The effect's extras (green) over its flaws (red); ``None`` when it has neither."""
-    extras = modifier_names(effect.extras, data)
-    flaws = modifier_names(effect.flaws, data)
+    extras = modifier_names(effect.extras, data, effect.rank)
+    flaws = modifier_names(effect.flaws, data, effect.rank)
     if not extras and not flaws:
         return None
     column = QWidget()
@@ -164,17 +193,22 @@ def effect_title(effect: PowerEffectInstance, character: Character, data: GameDa
     return f"{base.name if base else effect.effect_id} {rank}"
 
 
-def modifier_names(selections: list[ModifierSelection], data: GameData) -> list[str]:
+def modifier_names(
+    selections: list[ModifierSelection], data: GameData, effect_rank: int = 0
+) -> list[str]:
     """Resolve each selection to its modifier name, tagging a ranked one taken
     above rank 1 with its rank (e.g. ``"Accurate ×2"``) and a modifier with a
-    typed free-text detail with it (e.g. ``"Limited (only at night)"``)."""
+    typed free-text detail with it (e.g. ``"Limited (only at night)"``).
+
+    ``effect_rank`` lets a modifier applied to only part of its effect name the band it
+    covers; without one it is simply left off."""
     catalog = data.modifier_catalog()
     names: list[str] = []
     for selection in selections:
         modifier = catalog.get(selection.modifier_id)
         if modifier is None:
             continue
-        names.append(modifier_label(modifier, selection, rank_sep=" ×"))
+        names.append(modifier_label(modifier, selection, rank_sep=" ×", effect_rank=effect_rank))
     return names
 
 
@@ -186,9 +220,11 @@ def role_note(power: Power, index: int, character: Character, data: GameData) ->
     if power.structure == STRUCTURE_LINKED:
         return "linked"
     if power.structure == STRUCTURE_ARRAY:
+        effect = power.effects[index]
         if index == array_base_index(power, data, character):
-            return "base"
-        return f"alternate ({array_alternate_cost(data)} pt)"
+            return "base, dynamic" if effect.dynamic else "base"
+        kind = "dynamic alternate" if effect.dynamic else "alternate"
+        return f"{kind} ({array_alternate_cost(data, dynamic=effect.dynamic)} pt)"
     return ""
 
 

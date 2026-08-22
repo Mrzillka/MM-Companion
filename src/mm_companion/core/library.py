@@ -18,6 +18,7 @@ from pathlib import Path
 
 from mm_companion.core import storage
 from mm_companion.core.character import Character
+from mm_companion.core.powers import strip_stunts
 
 CHARACTER_SUFFIX = ".json"
 
@@ -145,7 +146,12 @@ def save_character(
     # self-contained; the model then references the stored copy.
     character.image_path = _store_image(character.image_path)
 
-    path.write_text(json.dumps(character.to_dict(), indent=2) + "\n", encoding="utf-8")
+    # A power stunt is invented at the table and lasts the scene, so it is deliberately
+    # not part of the file (see ``Power.stunt_of``). Everything else about the character
+    # is written exactly as ``to_dict`` states it.
+    payload = character.to_dict()
+    payload["powers"] = strip_stunts(payload.get("powers", []))
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return path
 
 

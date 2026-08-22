@@ -77,7 +77,7 @@ picker (checkbox/rank-stepper, auto-computed cost, auto-generated notes clause) 
 | **Area Effect** | General | Needs a shape field (cone/sphere/cube/line) — see §3's note on the Shape sub-extra |
 | **Reversible** | General | Toggle only, but changes the power's runtime behavior (owner can end conditions at will) — flag it in the power's action summary, not just notes |
 | **Sense-Dependent** | General | Free-text "which sense" field |
-| **Enhanced Trait's Reduced Trait** | Enhanced Trait | Second trait-target picker (which trait goes down) alongside the existing "which trait goes up" picker |
+| **Enhanced Trait's Reduced Trait** | Enhanced Trait | The same repeatable (trait, ranks) rows the effect itself carries — which traits go *down*, alongside the effect's rows for the ones going up. It is also the one flaw whose **cost is computed**: a flat `-1 × the cost of the reduced trait`, so the rows decide the discount and the effect is floored at 1 PP (`costMode: "as_trait"`, see `mm-powers-architecture.md` §6) |
 | **Multiple Minions / Variable Type / Controlled / Heroic** | Summon | These change what the follow-on "configure the minion" step looks like — see the Minion/Sidekick advantage pattern in `mm-advantages-design.md` |
 | **Mental Link (Summon)** | Summon | Toggle only, but should surface a "command minions telepathically" affordance in the combat UI once active |
 | **Nullify's scope** | Nullify | Already Tier 2 in the effects UI doc — free text, GM-approval flag |
@@ -236,7 +236,12 @@ weren't in your list:
   the Minion/Sidekick advantages' `npc_follower` pattern in the advantages design doc, since
   it's effectively the same "build a sub-character" UI problem appearing in a third place now
   (Minion advantage, Sidekick advantage, Summon effect).
-- **Enhanced Trait's Reduced Trait flaw** needs a *second* trait-target picker (which trait
-  goes down) in addition to the existing "which trait goes up" one from the Tier 2 effects UI
-  doc — I'd missed calling this out explicitly there, worth patching that file too if you want
-  full consistency.
+- **Enhanced Trait's Reduced Trait flaw** needs a *second* set of trait rows (which traits go
+  down) alongside the effect's own rows for the ones going up. **Resolved:** both are the same
+  `repeatable` field with a `trait` column and an `int` column, built from the one
+  `REPEATABLE_CELL_KINDS` registry so a row reads and stores identically whether it hangs off
+  the effect or off one of its flaws — which is what lets `config_trait_allocation` read both
+  with a single function. The effects UI doc has been patched to match (Enhanced Trait is
+  Tier 4 there now, not Tier 2). The chip's rows get the full trait picker, qualifiers
+  included, for the same reason: a Reduced Trait that could only name a whole skill while
+  the effect above it could name one focus would be a way around the cost.

@@ -201,6 +201,15 @@ class Character:
     #: autosaves to its own file, the same split the portrait makes between
     #: ``image_path`` and the pixels. See :class:`NotesState` and :mod:`..notes`.
     notes: dict[str, NotesState] = field(default_factory=dict)
+    #: Ranks pushed into the character's **own traits** with Extra Effort, keyed
+    #: ``"category:stat"`` (``"ability:STR"``, ``"movement:flight"``). *Runtime* state
+    #: like a power's ``activated``: it is spent at the table, costs no points and is
+    #: seen by no validation, but it is persisted so a sheet reopens the way it was left.
+    #: An effect's push lives on the effect instead
+    #: (:attr:`~..powers.PowerEffectInstance.extra_effort`); this is for the two things
+    #: the rules name that are *not* effects — Strength, and one mode of movement (p21).
+    #: Written only when something is pushed, so an untouched sheet adds nothing.
+    extra_effort: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -255,6 +264,11 @@ class Character:
             "complications": [c.to_dict() for c in self.complications],
             "conditions": [c.to_dict() for c in self.conditions],
             "powers": [p.to_dict() for p in self.powers],
+            **(
+                {"extra_effort": {k: v for k, v in self.extra_effort.items() if v}}
+                if any(self.extra_effort.values())
+                else {}
+            ),
             # Omitted entirely when the character owns no gear, so a save written
             # before equipment existed round-trips byte-for-byte.
             **({"equipment": [e.to_dict() for e in self.equipment]} if self.equipment else {}),
@@ -335,6 +349,9 @@ class Character:
                 for c in raw.get("conditions", [])
             ],
             powers=_migrate_flat_relations([node_from_dict(p) for p in raw.get("powers", [])]),
+            extra_effort={
+                str(key): int(value) for key, value in raw.get("extra_effort", {}).items()
+            },
             equipment=[EquipmentItem.from_dict(e) for e in raw.get("equipment", [])],
             equipment_group_order=[str(c) for c in raw.get("equipment_group_order", [])],
             cost_overrides={k: int(v) for k, v in raw.get("cost_overrides", {}).items()},

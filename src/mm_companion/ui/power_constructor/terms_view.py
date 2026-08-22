@@ -27,8 +27,8 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
 )
 from mm_companion.core.rules import (
-    array_alternate_cost,
     array_base_index,
+    array_member_note,
     effect_attack_skill_bonus,
     effect_effective_rank,
     effect_stat_rows,
@@ -519,6 +519,8 @@ class PowerTermsView(QWidget):
         if power.structure == STRUCTURE_LINKED:
             return "Linked (all effects activate together):"
         if power.structure == STRUCTURE_ARRAY:
+            # The constructor never holds a split — that is runtime, made on the sheet —
+            # so it always states the restriction the structure buys.
             return "Array (one effect active at a time):"
         return ""
 
@@ -528,9 +530,10 @@ class PowerTermsView(QWidget):
     ) -> str:
         if len(power.effects) < 2 or power.structure != STRUCTURE_ARRAY:
             return ""
+        effect = power.effects[index]
         if index == array_base_index(power, game_data, char):
-            return "base"
-        return f"Alternate Effect, {array_alternate_cost(game_data)} pt"
+            return "base, Dynamic" if effect.dynamic else "base"
+        return array_member_note(effect.dynamic, game_data)
 
     def _clear(self) -> None:
         self.effect_rows = []

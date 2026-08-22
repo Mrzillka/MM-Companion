@@ -40,11 +40,41 @@ def test_some_skills_are_focused() -> None:
     assert any(skill.focused for skill in data.skills)
 
 
-def test_focused_skills_expose_focuses() -> None:
+def test_focused_skills_say_what_their_focuses_are() -> None:
+    """Every focused skill answers "which focus?" — with a list, or with guidance.
+
+    ``focuses`` is a list of suggested focus *names*, offered wherever a focus is picked;
+    a skill whose focuses cannot be enumerated (Expertise's fields of study, Languages)
+    leaves it empty and puts the guidance in ``focus_note`` instead, so a picker never
+    offers a sentence as though it were a choice.
+    """
+
     data = load_game_data()
     focused = [s for s in data.skills if s.focused]
     assert focused
-    assert all(s.focuses for s in focused)
+    assert all(s.focuses or s.focus_note for s in focused)
+    expertise = next(s for s in focused if s.name == "Expertise")
+    assert expertise.focuses == () and expertise.focus_note
+    close_combat = next(s for s in focused if s.name == "Close Combat")
+    assert "Blades" in close_combat.focuses and not close_combat.focus_note
+
+
+def test_specializations_are_names_and_guidance_is_a_note() -> None:
+    """The same split ``focuses``/``focus_note`` makes, one field over.
+
+    Any of a skill's ``specializations`` may be bought as a narrow half-cost rank pool,
+    so the list is offered as *names* wherever a pool is named. Guidance for a skill
+    whose pools are drawn from something that cannot be listed lives in
+    ``specialization_note`` — "By specific sense" is not a pool anybody has.
+    """
+
+    data = load_game_data()
+    for skill in data.skills:
+        assert not any(name.startswith("By ") for name in skill.specializations), skill.name
+    perception = next(s for s in data.skills if s.name == "Perception")
+    assert perception.specializations == () and perception.specialization_note
+    stealth = next(s for s in data.skills if s.name == "Stealth")
+    assert "Hiding" in stealth.specializations and stealth.specialization_note
 
 
 def test_advantages_carry_type_tags() -> None:
@@ -152,7 +182,7 @@ def test_costs_are_loaded() -> None:
 def test_effects_and_modifiers_are_loaded() -> None:
     data = load_game_data()
     assert len(data.effects) == 42
-    assert len(data.modifiers) == 65
+    assert len(data.modifiers) == 69
 
 
 def test_effect_carries_numeric_base_cost_and_integration() -> None:
@@ -169,6 +199,30 @@ def test_effect_carries_numeric_base_cost_and_integration() -> None:
     enhanced = by_id["enhanced_trait"]
     assert enhanced.integration.trait_boost is not None
     assert enhanced.integration.trait_boost.configurable is True
+    # ...and the one effect priced "as trait" rather than at a flat rate per rank.
+    assert damage.base_cost_mode == "flat"  # the default every other effect keeps
+    assert enhanced.base_cost_mode == "as_trait"
+    assert "advantage" in enhanced.integration.trait_boost.affects
+
+
+def test_enhanced_trait_declares_a_trait_allocation() -> None:
+    """Its rank is spread across a list of traits, not spent on one."""
+
+    data = load_game_data()
+    enhanced = next(e for e in data.effects if e.id == "enhanced_trait")
+    field = next(f for f in enhanced.config_fields if f.type == "repeatable")
+    kinds = {c.type: c for c in field.columns}
+    assert set(kinds) == {"trait", "int"}
+    assert kinds["trait"].source == "boost_traits"  # advantages included
+
+
+def test_reduced_trait_is_priced_from_its_own_trait_rows() -> None:
+    data = load_game_data()
+    reduced = data.modifier_catalog()["reduced_trait"]
+    assert reduced.flat is True
+    assert reduced.cost_mode == "as_trait"  # not the flat costValue, which stays 0
+    field = next(f for f in reduced.config_fields if f.type == "repeatable")
+    assert {c.type for c in field.columns} == {"trait", "int"}
 
 
 def test_modifiers_are_categorised_with_numeric_cost() -> None:
@@ -181,11 +235,22 @@ def test_modifiers_are_categorised_with_numeric_cost() -> None:
     assert categories == {"extra", "flaw"}
 
 
+def test_standard_configurations_are_loaded() -> None:
+    data = load_game_data()
+    assert len(data.configurations) == 90  # the book's named ready-made powers
+    blast = next(c for c in data.configurations if c.id == "blast")
+    assert blast.name == "Blast"
+    assert blast.base_effect == "damage"
+    assert blast.cost_note == "2 points per rank"  # reference text, never the arithmetic
+    assert [e.effect_id for e in blast.effects] == ["damage"]
+    assert [m.id for m in blast.effects[0].extras] == ["ranged"]
+
+
 def test_effect_specific_modifiers_are_loaded_and_categorised() -> None:
     data = load_game_data()
-    assert len(data.effect_modifiers) == 36  # effects with their own extras/flaws
+    assert len(data.effect_modifiers) == 37  # effects with their own extras/flaws
     total = sum(len(mods) for mods in data.effect_modifiers.values())
-    assert total == 231
+    assert total == 233
     for mods in data.effect_modifiers.values():
         for modifier in mods:
             # Category is injected from the extras/flaws array, not stored per entry.
@@ -219,7 +284,7 @@ def test_effect_specific_modifiers_retain_mechanical_fields() -> None:
 def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
     data = load_game_data()
     catalog = data.modifier_catalog()
-    assert len(catalog) == 65 + 231  # ids are globally unique, so no collisions
+    assert len(catalog) == 69 + 232  # ids are globally unique, so no collisions
     assert catalog["ranged"].category == "extra"  # general pool
     assert catalog["strength_based"].category == "extra"  # effect-specific pool
 
@@ -249,6 +314,84 @@ def test_modifier_overrides_normalize_camelcase_keys() -> None:
         "effect_type": "Attack",
         "check": "Attack vs. Defense",
     }
+
+
+def test_a_modifier_naming_two_prices_offers_a_way_to_pick_between_them() -> None:
+    """The audit's two-price sweep, kept as a guard rather than as an instruction.
+
+    A ``costFormula`` reading "+1 or +2 points flat" with nothing to dial it is silently
+    charged the *cheaper* number, and the record looks completely fine while it happens —
+    which is why several were wrong for a long time. Four things count as a dial: priced
+    ``select`` options, a ``points`` spin box, the modifier's own rank, or being
+    ``hidden`` (a structural record the engine prices itself, like Alternate Effect).
+
+    Parentheticals are stripped first: "requires Shrinking 5" is a prerequisite, not a
+    second price.
+    """
+
+    import re
+
+    data = load_game_data()
+    records = list(data.modifiers) + [m for ms in data.effect_modifiers.values() for m in ms]
+    number = re.compile(r"[-+]?\d+(?:/\d+)?")
+
+    def has_a_dial(modifier) -> bool:
+        return bool(
+            modifier.ranked
+            or modifier.hidden
+            or any(f.type == "points" for f in modifier.config_fields)
+            or any(
+                o.cost_value is not None or o.cost_delta
+                for f in modifier.config_fields
+                for o in f.options
+            )
+        )
+
+    undialled = [
+        m.id
+        for m in records
+        if len(
+            {n.lstrip("+-") for n in number.findall(re.sub(r"\([^)]*\)", "", m.cost_formula or ""))}
+        )
+        >= 2
+        and not has_a_dial(m)
+    ]
+    assert undialled == [], f"these name two prices with no way to choose: {undialled}"
+
+
+def test_no_modifier_is_both_repeatable_and_buys_a_sub_build() -> None:
+    """A modifier's ``subBuild`` count reads the chip's rank, so two copies of one
+    repeatable modifier would open two independent slots sharing a single config key and
+    overwrite each other's characters. Nothing is both today; this is the tripwire for
+    the day something is, since the failure is silent data loss."""
+
+    data = load_game_data()
+    records = list(data.modifiers) + [m for ms in data.effect_modifiers.values() for m in ms]
+    both = [m.id for m in records if m.repeatable and m.sub_build]
+    assert both == [], f"repeatable *and* sub-build-bearing: {both}"
+
+
+def test_an_allocation_option_can_name_what_each_tier_buys() -> None:
+    data = load_game_data()
+    field = next(f for e in data.effects if e.id == "concealment" for f in e.config_fields)
+    sight = next(o for o in field.alloc_options if o.id == "sight")
+    assert sight.tiers == (2, 4)
+    assert sight.tier_labels == ("normal sight", "all sight senses")
+    assert sight.tier_label(2) == "all sight senses"
+    assert sight.tier_cost(2) == 4
+    # Out-of-range tiers clamp rather than raising; an unnamed tier is simply blank.
+    assert sight.tier_cost(9) == 4
+    assert sight.tier_cost(0) == 2
+    assert sight.tier_label(9) == ""
+
+
+def test_a_select_can_declare_that_it_names_its_modifier() -> None:
+    data = load_game_data()
+    tier = next(f for f in data.modifier_catalog()["removable"].config_fields if f.key == "tier")
+    assert tier.names_owner
+    # Every other select is an ordinary qualifier and says nothing of the sort.
+    loss = next(f for f in data.modifier_catalog()["removable"].config_fields if f.key == "loss")
+    assert not loss.names_owner
 
 
 def test_load_game_data_is_cached() -> None:

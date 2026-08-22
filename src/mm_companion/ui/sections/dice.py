@@ -100,6 +100,22 @@ class DiceSection(QGroupBox):
         if isinstance(spec, RollSpec):
             self.view.panel.load_spec(spec)
 
+    def add_bonus(self, amount: object) -> None:
+        """Put a bonus into the roller's slider — the ``bonus-requested`` topic's handler.
+
+        Extra Effort's "+2 bonus on a single check" (p21) is the one benefit that is a
+        number on the *next roll* rather than on the build, and nothing tracks which roll
+        that will be — so it goes where the player would otherwise have typed it, on top
+        of whatever is already set. Clearing it is the same gesture it always was:
+        dragging the slider back.
+
+        Ignores a payload that is not a positive int, for the reason
+        :meth:`perform_roll` ignores a bad spec — a mod block publishes here too.
+        """
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+            return
+        self.view.panel.add_bonus(amount)
+
     def post_note(self, text: object) -> None:
         """Write a line in the history — the ``note-requested`` topic's handler.
 

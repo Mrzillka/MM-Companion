@@ -24,15 +24,27 @@ from mm_companion.core.powers import (
     PowerEffectInstance,
     PowerGroup,
 )
-from mm_companion.core.rules import effect_readout_rows, effective_size, power_trait_bonuses
+from mm_companion.core.rules import (
+    counter_rolls,
+    dynamic_member_cost,
+    effect_current_rank,
+    effect_readout_rows,
+    effect_roll_numbers,
+    effect_total_cost,
+    effective_size,
+    live_powers,
+    node_cost,
+    power_trait_bonuses,
+)
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
 from mm_companion.ui.sections.powers import (
     PowersSection,
     _DraggableCard,
     _ModeToggle,
+    _RankDial,
     _RollLine,
-    _SizeLadder,
 )
 
 
@@ -134,6 +146,121 @@ def test_array_group_active_member_normalizes(qapp: QApplication) -> None:
     assert group.active_child_id in {a.id, b.id}
     sheet.powers._set_array_active(group, b.id)
     assert group.active_child_id == b.id
+
+
+def test_dynamic_is_the_mode_toggles_fourth_segment_not_a_per_card_switch(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    sheet, char = _sheet_with("A", "B")
+    a, b = char.powers
+    sheet.powers._on_combine(b.id, a.id)
+    group = char.powers[0]
+
+    def boxes() -> list[QCheckBox]:
+        return [
+            box
+            for box in sheet.powers._list_host.findChildren(QCheckBox)
+            if box.text() == "Dynamic"
+        ]
+
+    # No card carries a Dynamic box any more - the question is asked once, by the strip.
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    assert boxes() == []
+    assert not any(child.dynamic for child in group.children)
+
+    # The fourth segment fans the flag out over every member, and Array takes it back off.
+    sheet.powers._set_group_mode(group, MODE_ARRAY_DYNAMIC)
+    assert group.mode == STRUCTURE_ARRAY
+    assert all(child.dynamic for child in group.children)
+    assert boxes() == []
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    assert not any(child.dynamic for child in group.children)
+
+
+def test_the_dynamic_segment_lights_for_an_array_with_any_dynamic_member(
+    qapp: QApplication,
+) -> None:
+    """A mixed array saved while Dynamic was per-member reads as what it is."""
+
+    sheet, char = _sheet_with("A", "B")
+    a, b = char.powers
+    sheet.powers._on_combine(b.id, a.id)
+    group = char.powers[0]
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+
+    group.children[1].dynamic = True
+    sheet.powers._rebuild_list()
+    toggle = _mode_toggle(sheet.powers)
+    assert [b.text() for b in toggle.findChildren(QPushButton) if b.isChecked()] == [
+        "Dynamic array"
+    ]
+
+
+def test_the_dynamic_segment_reprices_the_array(qapp: QApplication) -> None:
+    sheet, char = _sheet_with("Base", "Alt")
+    base, alt = char.powers
+    sheet.powers._on_combine(alt.id, base.id)
+    group = char.powers[0]
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    data = load_game_data()
+    before = node_cost(group, data)
+
+    # A 1-point alternate becomes a 2-point one, and the base pays an Alternate Effect
+    # rank on top of its own full cost.
+    sheet.powers._set_group_mode(group, MODE_ARRAY_DYNAMIC)
+    assert all(child.dynamic for child in group.children)
+    assert node_cost(group, data) == before + 2
+
+
+def test_the_counter_menu_is_offered_only_where_something_could_be_readied(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)])
+    armor = Power(name="Armor", effects=[PowerEffectInstance("protection", rank=6)])
+    char.powers.extend([blast, armor])
+    sec = _sheet_for(char).powers
+    cards = {card.node_id: card for card in sec.findChildren(_DraggableCard)}
+
+    # Countering costs no space on the card: it is a right-click menu, not a footer line.
+    assert cards[blast.id].contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    # An always-on Protection is never readied, so its card gets no menu rather than an
+    # empty one.
+    assert cards[armor.id].contextMenuPolicy() != Qt.ContextMenuPolicy.CustomContextMenu
+
+
+def test_the_counter_menu_asks_the_roller_rather_than_rolling(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(
+        name="Blast",
+        effects=[
+            PowerEffectInstance("damage", rank=6),
+            PowerEffectInstance("affliction", rank=4),
+        ],
+    )
+    char.powers.append(blast)
+    sec = _sheet_for(char).powers
+    card = next(c for c in sec.findChildren(_DraggableCard) if c.node_id == blast.id)
+
+    menu = sec.card_menu(card, blast)
+    # One entry per effect that could be readied, each naming which one it is — below
+    # the separator that divides them from the card's Extra Effort entries.
+    actions = menu.actions()
+    counters = actions[[a.isSeparator() for a in actions].index(True) + 1 :]
+    labels = [action.text() for action in counters]
+    assert len(labels) == len(counter_rolls(blast, char, data)) == 2
+    assert "Damage" in labels[0] and "+6" in labels[0]
+    assert "Affliction" in labels[1] and "+4" in labels[1]
+
+    seen: list = []
+    sec.rollRequested.connect(seen.append)
+    counters[0].trigger()
+    # The section asks the roller, exactly as its footer lines do; it never rolls.
+    assert len(seen) == 1 and seen[0].modifier == 6 and seen[0].dc is None
 
 
 def _sheet_for(char: Character) -> CharacterSheet:
@@ -541,6 +668,195 @@ def test_inactive_linked_group_disables_nested_member_cards(qapp: QApplication) 
     assert not any(c.is_clickable() for c in nested_member_cards(off_card))
 
 
+def _effect_array_sheet(qapp: QApplication):
+    from mm_companion.ui.character_sheet import CharacterSheet as _Sheet
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(
+        name="Elemental Command",
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("protection", rank=10),
+            PowerEffectInstance("flight", rank=6),
+        ],
+    )
+    char.powers.append(power)
+    return _Sheet(data, char), char, power
+
+
+def test_an_array_power_gets_a_picker_for_the_effect_it_is_using(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    (selector,) = sheet.powers.findChildren(_EffectSelector)
+    # Seeded on the base — Flight 6 costs 12 to the Protection's 10 — not on the first
+    # effect that happens to have been dropped on the canvas.
+    assert selector._combo.currentText() == "Flight 6"
+    assert [selector._combo.itemText(i) for i in range(selector._combo.count())] == [
+        "Protection 10",
+        "Flight 6",
+    ]
+
+
+def test_picking_an_effect_is_runtime_not_a_build_change(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    runtime: list[int] = []
+    changed: list[int] = []
+    sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
+    sheet.powers.changed.connect(lambda: changed.append(1))
+
+    sheet.powers.findChildren(_EffectSelector)[0]._combo.setCurrentIndex(0)
+    assert power.active_effect == 0
+    # Which alternate you are using is a play action, so it never marks the *build* as
+    # having moved — the same bargain the rank dial and the array-member click strike.
+    assert runtime and not changed
+
+
+def test_only_an_array_power_gets_the_picker(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, power = _effect_array_sheet(qapp)
+    power.structure = STRUCTURE_INDEPENDENT
+    sheet.powers.refresh()
+    assert not sheet.powers.findChildren(_EffectSelector)
+
+    # ...and neither does an array of one, which pools nothing.
+    power.structure = STRUCTURE_ARRAY
+    del power.effects[1]
+    sheet.powers.refresh()
+    assert not sheet.powers.findChildren(_EffectSelector)
+
+
+def test_the_effect_picker_survives_the_lock(qapp: QApplication) -> None:
+    from mm_companion.ui.sections.powers import _EffectSelector
+
+    sheet, _char, _power = _effect_array_sheet(qapp)
+    sheet.set_locked(True)
+    (selector,) = sheet.powers.findChildren(_EffectSelector)
+    assert not selector._combo.testAttribute(
+        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+    ), "choosing an alternate mid-play is not a build edit"
+
+
+def test_a_power_stunt_is_refused_a_group(qapp: QApplication) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+    bolt = Power(name="Ice Bolt", effects=[PowerEffectInstance("damage", rank=6)])
+    stunt = Power(name="Flame Shield", effects=[PowerEffectInstance("protection", rank=8)])
+    stunt.stunt_of = blast.id
+    char.powers.extend([blast, bolt, stunt])
+    sheet = CharacterSheet(data, char)
+    sec = sheet.powers
+
+    # A stunt costs 0, which inside an array makes it the cheapest member by definition
+    # — moving the base, the pool and every other member's flat price. And it is never
+    # saved, so the group would come back a member short.
+    sec._on_combine(stunt.id, blast.id)
+    assert [node.id for node in char.powers] == [blast.id, bolt.id, stunt.id]
+    # Neither direction: grouping something *onto* a stunt is the same drop.
+    sec._on_combine(bolt.id, stunt.id)
+    assert [node.id for node in char.powers] == [blast.id, bolt.id, stunt.id]
+
+    # An ordinary pair still groups, and the stunt is refused the group that results.
+    sec._on_combine(bolt.id, blast.id)
+    group = next(node for node in char.powers if isinstance(node, PowerGroup))
+    sec._on_move(stunt.id, group.id, 0)
+    assert [child.id for child in group.children] == [blast.id, bolt.id]
+    assert stunt in char.powers
+
+    # Reordering it at the top level is untouched — that is where a stunt belongs.
+    sec._on_move(stunt.id, "", 0)
+    assert char.powers[0] is stunt
+
+
+def test_the_group_list_shows_the_refusal_rather_than_swallowing_it(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    blast = Power(name="Fire Blast", effects=[PowerEffectInstance("damage", rank=10)])
+    stunt = Power(name="Flame Shield", effects=[PowerEffectInstance("protection", rank=8)])
+    stunt.stunt_of = blast.id
+    char.powers.append(PowerGroup(mode=STRUCTURE_INDEPENDENT, children=[blast]))
+    char.powers.append(stunt)
+    sec = CharacterSheet(data, char).powers
+
+    # The admission rule a group's NodeList is built with, so a refused drag is washed
+    # red instead of accepted and quietly dropped on the floor.
+    assert sec._groupable(blast.id)
+    assert not sec._groupable(stunt.id)
+    assert not sec._groupable("no such node")
+
+
+def test_a_broken_build_warns_on_its_card_not_only_in_the_constructor(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A Concealment 2 that has spent six of its ranks on senses, and an Affliction whose
+    # Transformed condition imposes an effect four times dearer than the Affliction is.
+    # Both are constructor-only checks: before the shared POWER_CHECKS registry the card
+    # showed Power Level breaches and a stunt's ceiling and nothing else, so a character
+    # built under a different ruleset carried these with no marker on the sheet at all.
+    hidden = PowerEffectInstance(
+        "concealment",
+        rank=2,
+        config={"senses": [{"id": "sight", "tier": 2}, {"id": "hearing", "tier": 2}]},
+    )
+    curse = PowerEffectInstance(
+        "affliction",
+        rank=2,
+        config={
+            "resistance": "Will",
+            "degree3": "transformed",
+            "imposedEffect": "flight",
+            "imposedRank": 20,
+        },
+    )
+    char.powers.append(Power(name="Vanish", effects=[hidden]))
+    char.powers.append(Power(name="Hex", effects=[curse]))
+
+    sheet = CharacterSheet(data, char)
+    warnings = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⚠"]
+    assert len(warnings) == 2
+    tips = " ".join(w.toolTip() for w in warnings)
+    assert "allocated 6 of 2 ranks" in tips  # the over-spent Concealment
+    assert "imposed" in tips.lower()  # the unaffordable Transformed effect
+
+
+def test_the_card_and_the_constructor_read_the_same_checks(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    from mm_companion.ui.power_constructor import PowerConstructorWindow
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    effect = PowerEffectInstance(
+        "concealment",
+        rank=1,
+        config={"senses": [{"id": "sight", "tier": 2}]},
+    )
+    power = Power(name="Vanish", effects=[effect])
+    char.powers.append(power)
+
+    sheet = CharacterSheet(data, char)
+    (warning,) = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⚠"]
+
+    window = PowerConstructorWindow(data, character=char, power=power)
+    # The card lists every sentence; the constructor puts the same ones behind a headline
+    # naming which checks failed. Neither can gain or lose one without the other.
+    assert window._warning.isVisible() or window._warning.toolTip()
+    assert window._warning.toolTip() == warning.toolTip()
+    assert "Over-allocated" in window._warning.text()
+    window.close()
+
+
 def test_homerule_power_shows_the_badge(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QLabel
 
@@ -708,7 +1024,12 @@ def test_the_locked_group_card_keeps_the_mode_and_drops_the_switch(qapp: QApplic
     sheet.powers.set_locked(False)
     toggle = _mode_toggle(sheet.powers)
     shown = [b for b in toggle.findChildren(QPushButton) if not b.isHidden()]
-    assert [b.text() for b in shown] == ["Independent", "Array", "Linked"]
+    assert [b.text() for b in shown] == [
+        "Independent",
+        "Array",
+        "Dynamic array",
+        "Linked",
+    ]
     assert not shown[0].testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
@@ -725,58 +1046,70 @@ def _size_sheet(rank: int = 3, *, effect: str = "growth", size: str = "Medium"):
     return CharacterSheet(data, char), char, power
 
 
-def _ladder(sec: PowersSection) -> _SizeLadder:
-    ladder = sec.findChild(_SizeLadder)
-    assert ladder is not None
-    return ladder
+def _dial(sec: PowersSection) -> _RankDial:
+    dial = sec.findChild(_RankDial)
+    assert dial is not None
+    return dial
 
 
-def _rungs(sec: PowersSection) -> list[tuple[str, bool]]:
-    return [(b.text(), b.isChecked()) for b in _ladder(sec).findChildren(QPushButton)]
+def _dial_state(sec: PowersSection) -> tuple[int, int, str]:
+    """``(value, maximum, label)`` — where the dial is, how far it goes, what that is."""
+    dial = _dial(sec)
+    return dial._slider.value(), dial._slider.maximum(), dial._value.text()
 
 
-def test_a_growth_card_carries_one_rung_per_rank(qapp: QApplication) -> None:
-    """Labelled with the size reached, not the rank paid — and the top one lit."""
+def _dial_labels(sec: PowersSection) -> list[str]:
+    """What every notch of the dial reads, from Off upwards."""
+    dial = _dial(sec)
+    return [dial._label_for(rank) for rank in range(dial._slider.maximum() + 1)]
+
+
+def _turn(sec: PowersSection, rank: int) -> None:
+    """Move the dial the way a keyboard or groove step does — handle up, so it commits."""
+    _dial(sec)._slider.setValue(rank)
+
+
+def test_a_growth_card_carries_a_dial_named_by_size(qapp: QApplication) -> None:
+    """Notched by the size reached, not the rank paid — and standing at the top."""
     sheet, _char, _power = _size_sheet(3)
 
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", True)]
+    assert _dial_state(sheet.powers) == (3, 3, "Gargantuan")
+    assert _dial_labels(sheet.powers) == ["Off", "Large", "Huge", "Gargantuan"]
 
 
-def test_picking_a_rung_moves_the_sheet_and_the_card(qapp: QApplication) -> None:
+def test_turning_the_dial_moves_the_sheet_and_the_card(qapp: QApplication) -> None:
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
 
-    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
-    huge.click()
+    _turn(sheet.powers, 2)
 
     assert power.effects[0].current_rank == 2
     assert effective_size(char, data) == "Huge"
-    # The card is rebuilt from the model, so the new strip agrees with it.
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", True), ("Gargantuan", False)]
+    # The card is rebuilt from the model, so the new dial agrees with it.
+    assert _dial_state(sheet.powers) == (2, 3, "Huge")
 
 
-def test_a_rung_wakes_a_dormant_power_at_that_rung(qapp: QApplication) -> None:
-    """One click from off to Huge, rather than on-at-full then down to Huge."""
+def test_the_dial_wakes_a_dormant_power_at_that_notch(qapp: QApplication) -> None:
+    """One gesture from off to Huge, rather than on-at-full then down to Huge."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
     sheet.powers._set_power_active(power, False)
 
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+    assert _dial_state(sheet.powers) == (0, 3, "Off")
 
-    huge = next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge")
-    huge.click()
+    _turn(sheet.powers, 2)
     assert power.activated and power.effects[0].toggled_on
     assert effective_size(char, data) == "Huge"
 
 
-def test_a_rung_is_a_runtime_change_that_still_marks_the_sheet_dirty(
+def test_the_dial_is_a_runtime_change_that_still_marks_the_sheet_dirty(
     qapp: QApplication,
 ) -> None:
     """Like every other card switch — and, like them, saved with the build.
 
-    It stays a *runtime* signal (``changed`` is for build edits, and a rung re-derives
-    rather than re-costing), but the rung is in the save now, so the sheet has to know
-    it has something unwritten or closing the window would drop it.
+    It stays a *runtime* signal (``changed`` is for build edits, and the dial re-derives
+    rather than re-costing), but where it stands is in the save now, so the sheet has to
+    know it has something unwritten or closing the window would drop it.
     """
     sheet, _char, _power = _size_sheet(3)
     edits: list[int] = []
@@ -786,72 +1119,104 @@ def test_a_rung_is_a_runtime_change_that_still_marks_the_sheet_dirty(
     sheet.powers.runtimeChanged.connect(lambda: runtime.append(1))
     sheet.edited.connect(lambda: dirtied.append(1))
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
 
     assert edits == []
     assert runtime == [1]
     assert dirtied
 
 
-def test_a_rung_picked_on_the_card_survives_a_save_and_a_reopen(
+def test_a_notch_picked_on_the_card_survives_a_save_and_a_reopen(
     qapp: QApplication, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The reported bug, end to end: click Large, save, open the file again.
+    """The reported bug, end to end: dial to Large, save, open the file again.
 
     The two halves are tested apart (the flag round-trips in ``tests/test_powers.py``,
-    the click is above), and this is the one that says the user's actual sequence
+    the gesture is above), and this is the one that says the user's actual sequence
     works — the sheet writes what the card is showing.
     """
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
     sheet, char, _power = _size_sheet(3)
     char.profile["hero_name"] = "Colossus"
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
     reopened = library.load_character(library.save_character(char))
 
     assert reopened.powers[0].effects[0].current_rank == 1
     assert effective_size(reopened, load_game_data()) == "Large"
 
 
-def test_the_rungs_stay_live_in_the_locked_sheet(qapp: QApplication) -> None:
+def test_the_dial_stays_live_in_the_locked_sheet(qapp: QApplication) -> None:
     """How big you are standing there is a play action, not a build edit."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
     sheet.set_locked(True)
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
     assert effective_size(char, data) == "Large"
 
 
-def test_a_single_rung_power_gets_no_strip(qapp: QApplication) -> None:
-    """A Growth 1's one rung *is* the card's own switch; a strip would be a second one."""
+def test_a_single_rank_size_power_gets_no_dial(qapp: QApplication) -> None:
+    """A Growth 1's one notch *is* the card's own switch; a dial would be a second one."""
     sheet, _char, _power = _size_sheet(1)
 
-    assert sheet.powers.findChild(_SizeLadder) is None
+    assert sheet.powers.findChild(_RankDial) is None
 
 
-def test_a_power_that_changes_no_size_gets_no_strip(qapp: QApplication) -> None:
+def test_a_power_that_changes_no_size_gets_no_dial_unless_it_asks(
+    qapp: QApplication,
+) -> None:
     sheet, _char = _sheet_with("Blast")
 
-    assert sheet.powers.findChild(_SizeLadder) is None
+    assert sheet.powers.findChild(_RankDial) is None
 
 
-def test_the_card_readout_follows_the_rung_that_is_lit(qapp: QApplication) -> None:
+def test_an_effect_that_asks_for_a_dial_gets_one_named_by_rank(qapp: QApplication) -> None:
+    """The constructor's *Add a rank slider*: a Damage 10 can be fired at 5."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=10, rank_dial=True)])
+    char.powers.append(power)
+    sec = _sheet_for(char).powers
+
+    assert _dial_state(sec) == (10, 10, "Rank 10")
+    _turn(sec, 5)
+    assert power.effects[0].current_rank == 5
+    assert _dial_state(sec) == (5, 10, "Rank 5")
+
+
+def test_a_dialled_effect_forces_a_smaller_save(qapp: QApplication) -> None:
+    """The point of the dial: pulling a punch really does land softer."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    power = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=10, rank_dial=True)])
+    char.powers.append(power)
+    sec = _sheet_for(char).powers
+    effect = power.effects[0]
+
+    assert effect_roll_numbers(effect, data, char).dc == 20
+    _turn(sec, 5)
+    assert effect_roll_numbers(effect, data, char).dc == 15
+    # And it is still worth what it was bought at — dialling down refunds nothing.
+    assert effect_total_cost(effect, data, char) == 10
+
+
+def test_the_card_readout_follows_the_dial(qapp: QApplication) -> None:
     """The card's Size row and the sheet's Size line must never name two sizes."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Large").click()
+    _turn(sheet.powers, 1)
 
     row = next(r for r in effect_readout_rows(power.effects[0], data, char) if r.key == "size")
     assert row.value == "Large" == effective_size(char, data)
 
 
-def test_a_rung_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplication) -> None:
+def test_a_dial_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplication) -> None:
     """Visible — it still says where the power is set — but not a control.
 
-    Never ``setEnabled(False)``: nothing in this app greys a control out, so the
-    buttons go transparent to the mouse and the click falls through to the card.
+    Never ``setEnabled(False)``: nothing in this app greys a control out, so the slider
+    goes transparent to the mouse and the click falls through to the card.
     """
     data = load_game_data()
     char = Character.new_default(data)
@@ -861,14 +1226,14 @@ def test_a_rung_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplicat
     sec = _sheet_for(char).powers
     sec._set_group_active(char.powers[0], False)
 
-    buttons = _ladder(sec).findChildren(QPushButton)
-    assert [b.text() for b in buttons] == ["Large", "Huge", "Gargantuan"]
-    assert all(b.isEnabled() for b in buttons)
-    assert all(b.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) for b in buttons)
+    slider = _dial(sec)._slider
+    assert _dial_labels(sec) == ["Off", "Large", "Huge", "Gargantuan"]
+    assert slider.isEnabled()
+    assert slider.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
-def test_a_rung_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
-    """Picking a rung does whatever clicking the card would, then lands on that rung."""
+def test_the_dial_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
+    """Turning the dial does whatever clicking the card would, then lands on that notch."""
     data = load_game_data()
     char = Character.new_default(data)
     growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
@@ -877,44 +1242,33 @@ def test_a_rung_makes_an_array_member_the_live_alternate(qapp: QApplication) -> 
     char.powers.append(group)
     sec = _sheet_for(char).powers
 
-    assert _rungs(sec) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
-    next(b for b in _ladder(sec).findChildren(QPushButton) if b.text() == "Huge").click()
+    assert _dial_state(sec) == (0, 3, "Off")
+    _turn(sec, 2)
 
     assert group.active_child_id == growth.id
     assert effective_size(char, data) == "Huge"
 
 
-@pytest.mark.parametrize("preset", ["classic", "slate-dark", "parchment-light", "crimson-gold"])
-def test_the_lit_rung_states_its_own_look(qapp: QApplication, preset: str) -> None:
-    """The same trap the group's mode toggle fell into, on the same tokens."""
-    theme.set_active_theme(preset)
-    sheet, _char, _power = _size_sheet(3)
-
-    lit = _ladder(sheet.powers).styleSheet().split("QPushButton:checked")
-    assert len(lit) == 2, "the strip must state its own checked look"
-    assert "background:" in lit[1]
-
-
-def test_the_rung_already_lit_switches_the_power_off(qapp: QApplication) -> None:
-    """A click on the lit rung is the card's own click — the strip is a whole control."""
+def test_dialling_back_to_zero_switches_the_power_off(qapp: QApplication) -> None:
+    """Zero is the card's own click — the dial is a whole control, not a one-way one."""
     sheet, char, power = _size_sheet(3)
     data = load_game_data()
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    _turn(sheet.powers, 2)
     assert effective_size(char, data) == "Huge"
 
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    _turn(sheet.powers, 0)
     assert effective_size(char, data) == "Medium"
     assert not power.activated
-    assert _rungs(sheet.powers) == [("Large", False), ("Huge", False), ("Gargantuan", False)]
+    assert _dial_state(sheet.powers) == (0, 3, "Off")
 
-    # And the rung is remembered, so pressing it again comes back to Huge.
-    next(b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Huge").click()
+    # And the notch is remembered, so turning it up again comes back to Huge.
+    _turn(sheet.powers, 2)
     assert effective_size(char, data) == "Huge"
 
 
-def test_the_lit_rung_of_an_array_alternate_is_a_no_op(qapp: QApplication) -> None:
-    """An array always keeps exactly one live member, so its rung must not switch off."""
+def test_zeroing_an_array_alternate_is_a_no_op(qapp: QApplication) -> None:
+    """An array always keeps exactly one live member, so its dial must not switch off."""
     data = load_game_data()
     char = Character.new_default(data)
     growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=3)])
@@ -923,33 +1277,35 @@ def test_the_lit_rung_of_an_array_alternate_is_a_no_op(qapp: QApplication) -> No
     char.powers.append(group)
     sec = _sheet_for(char).powers
 
-    next(b for b in _ladder(sec).findChildren(QPushButton) if b.text() == "Gargantuan").click()
+    _turn(sec, 0)
 
     assert group.active_child_id == growth.id
     assert effective_size(char, data) == "Gargantuan"
 
 
-def test_a_clamped_rung_spans_the_ranks_that_fold_into_it(qapp: QApplication) -> None:
-    """The button carries the span's lowest rank, so 'is this the lit one' must too."""
+def test_ranks_the_size_table_clamps_repeat_their_category(qapp: QApplication) -> None:
+    """A Growth 6 on a Gargantuan hero really does spend five ranks at Awesome.
+
+    The dial has a notch per rank rather than per rung, so it can stop wherever the
+    player puts it; the label simply repeats where the table ran out.
+    """
     sheet, char, power = _size_sheet(6, size="Gargantuan")
     data = load_game_data()
 
-    assert _rungs(sheet.powers) == [("Colossal", False), ("Awesome", True)]
-    assert power.effects[0].current_rank is None  # lit at full rank, inside the span
+    assert _dial_labels(sheet.powers) == ["Off", "Colossal"] + ["Awesome"] * 5
+    assert power.effects[0].current_rank is None  # standing at full rank
 
-    next(
-        b for b in _ladder(sheet.powers).findChildren(QPushButton) if b.text() == "Awesome"
-    ).click()
-    assert effective_size(char, data) == "Gargantuan"  # the span's rung switched it off
+    _turn(sheet.powers, 0)
+    assert effective_size(char, data) == "Gargantuan"  # switched off, back to its own size
 
 
-def test_picking_a_rung_leaves_the_page_where_it_was(qapp: QApplication) -> None:
-    """The regression: the sheet jumped away from the card that was just clicked.
+def test_turning_the_dial_leaves_the_page_where_it_was(qapp: QApplication) -> None:
+    """The regression: the sheet jumped away from the card that was just used.
 
     Every runtime setter rebuilds the whole card tree, so the block is briefly empty —
     and whatever held focus inside it is destroyed, handing focus to a widget in some
     other block, which a ``QScrollArea`` then scrolls into view. Forced here, because
-    the rungs themselves are ``NoFocus`` precisely so it cannot happen by hand.
+    the slider itself is ``NoFocus`` precisely so it cannot happen by hand.
     """
     from mm_companion.ui.main_window import MainWindow
 
@@ -972,26 +1328,422 @@ def test_picking_a_rung_leaves_the_page_where_it_was(qapp: QApplication) -> None
     before = bar.value()
     assert before > 0, "the page has to be scrollable for this to mean anything"
 
-    button = next(
-        b
-        for b in win._sheet.powers.findChildren(_SizeLadder)[-1].findChildren(QPushButton)
-        if b.text() == "Huge"
-    )
-    button.setFocus()
+    slider = win._sheet.powers.findChildren(_RankDial)[-1]._slider
+    slider.setFocus()
     for _ in range(4):
         qapp.processEvents()
-    button.click()
+    slider.setValue(2)
     for _ in range(10):
         qapp.processEvents()
 
     assert bar.value() == before
-    assert char.powers[-1].effects[0].current_rank == 2  # and the click still landed
+    assert char.powers[-1].effects[0].current_rank == 2  # and the gesture still landed
 
 
-def test_a_rung_never_takes_focus(qapp: QApplication) -> None:
-    """The cause-level half: the button is destroyed by its own click, so focus on it
+def test_the_dial_never_takes_focus(qapp: QApplication) -> None:
+    """The cause-level half: the slider is destroyed by its own commit, so focus on it
     could only ever be handed to another block — which is what moved the page."""
     sheet, _char, _power = _size_sheet(3)
 
-    for button in _ladder(sheet.powers).findChildren(QPushButton):
-        assert button.focusPolicy() == Qt.FocusPolicy.NoFocus
+    assert _dial(sheet.powers)._slider.focusPolicy() == Qt.FocusPolicy.NoFocus
+
+
+def test_a_drag_commits_once_on_release(qapp: QApplication) -> None:
+    """A slider that wrote on every tick would delete itself under the player's thumb.
+
+    The label tracks the drag so the notch under the handle is readable; only letting go
+    reaches the section — which is what makes a rebuild-per-commit survivable at all.
+    """
+    sheet, _char, power = _size_sheet(3)
+    dial = _dial(sheet.powers)
+    committed: list[int] = []
+    dial.rankPicked.connect(committed.append)
+
+    dial._slider.setSliderDown(True)
+    dial._slider.setValue(2)
+    dial._slider.setValue(1)
+    assert committed == []
+    assert dial._value.text() == "Large"  # but the label followed the handle
+    assert power.effects[0].current_rank is None  # nothing written yet
+
+    dial._slider.setSliderDown(False)  # QAbstractSlider emits sliderReleased itself
+    assert committed == [1]
+
+
+# --- the Dynamic point pool -----------------------------------------------------------
+
+
+def _pool_array(qapp: QApplication) -> tuple[CharacterSheet, Character, PowerGroup]:
+    """A Dynamic Protection 8 (8 PP) beside a Dynamic Flight 3 (6 PP), so 8 is the pool."""
+
+    char = Character.new_default(load_game_data())
+    armour = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=8)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=3)])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[armour, flight])
+    armour.dynamic = flight.dynamic = True
+    char.powers.append(group)
+    return _sheet_for(char), char, group
+
+
+def _share_dials(sec: PowersSection) -> list[_RankDial]:
+    """Every Dynamic-share slider on the board — the split's only control now.
+
+    A share dial's label always prices the notch in points, whatever its caption says:
+    a Dynamic member's slider *is* its rank slider, so it is captioned "Size" on a Growth
+    and "Rank" on a Flight rather than announcing the machinery behind it.
+    """
+
+    return [
+        d
+        for d in sec._list_host.findChildren(_RankDial)
+        if any("PP" in text for text in d._labels.values())
+    ]
+
+
+def test_a_share_dial_appears_only_on_a_dynamic_member_of_an_array(
+    qapp: QApplication,
+) -> None:
+    sheet, _char, group = _pool_array(qapp)
+    group.children[0].dynamic_points = 4
+    group.children[1].dynamic_points = 2
+    sheet.powers._rebuild_list()
+    assert len(_share_dials(sheet.powers)) == 2
+
+    # Nothing Dynamic, nothing to share.
+    sheet.powers._set_group_mode(group, STRUCTURE_ARRAY)
+    assert _share_dials(sheet.powers) == []
+
+    # Nor outside an array: the pool is an array's, and only an array has one.
+    sheet.powers._set_group_mode(group, MODE_ARRAY_DYNAMIC)
+    sheet.powers._set_group_mode(group, STRUCTURE_LINKED)
+    assert _share_dials(sheet.powers) == []
+
+
+def test_the_share_dial_survives_the_lock_because_it_is_a_free_action(
+    qapp: QApplication,
+) -> None:
+    """Deciding the split happens at the table (p101), so it is not build chrome."""
+
+    sheet, _char, group = _pool_array(qapp)
+    group.children[0].dynamic_points = 4
+    group.children[1].dynamic_points = 2
+    sheet.set_locked(True)
+    assert len(_share_dials(sheet.powers)) == 2
+
+
+def test_the_share_dials_groove_is_its_whole_ladder_however_little_is_left(
+    qapp: QApplication,
+) -> None:
+    """The range is the member's own ranks; only the reachable ceiling follows the pool.
+
+    Bounding the range instead made a member's groove a function of everyone else's
+    allocation, so moving one member visibly jumped another's unchanged handle.
+    """
+
+    sheet, _char, group = _pool_array(qapp)
+    armour, flight = group.children
+    sec = sheet.powers
+
+    # Protection 8 costs 8, so its ladder is a point a rank whatever the pool has left.
+    assert sec._share_steps(armour, 8, 0) == [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    assert sec._share_steps(armour, 8, 0) == sec._share_steps(armour, 8, 0)
+
+    # Flight 3 costs 6, so two points a rank — and the ceiling is what says how far up.
+    assert sec._share_steps(flight, 6, 0) == [0, 2, 4, 6]
+    assert sec._share_index([0, 2, 4, 6], 3) == 1  # 3 points can only pay for the 2 notch
+    assert sec._share_index([0, 2, 4, 6], 0) == 0
+
+    # A stored share that is not a notch is shown rather than rounded away, or the pool
+    # would go on charging a point the card had stopped displaying.
+    assert sec._share_steps(flight, 6, 3) == [0, 2, 3, 4, 6]
+
+
+def test_a_member_whose_siblings_hold_the_pool_keeps_its_slider(
+    qapp: QApplication,
+) -> None:
+    """It used to vanish outright — not disabled, absent — with no way back."""
+
+    sheet, _char, group = _pool_array(qapp)
+    armour, flight = group.children
+    armour.dynamic_points = 8  # the whole pool
+    sheet.powers._rebuild_list()
+
+    dials = _share_dials(sheet.powers)
+    assert len(dials) == 2
+    # The one with nothing left is still there, ended at the single notch it can reach.
+    starved = dials[1]
+    assert starved._slider.maximum() == 0
+    assert flight.dynamic_points is None
+
+    # Hand a point back and the starved slider gains exactly one division; hand two back
+    # and it gains another. The right-hand end of the groove is what the pool has left.
+    armour.dynamic_points = 6
+    sheet.powers._rebuild_list()
+    assert _share_dials(sheet.powers)[1]._slider.maximum() == 1
+    armour.dynamic_points = 4
+    sheet.powers._rebuild_list()
+    assert _share_dials(sheet.powers)[1]._slider.maximum() == 2
+
+
+def test_moving_a_share_dial_moves_every_members_ranks(qapp: QApplication) -> None:
+    data = load_game_data()
+    sheet, char, group = _pool_array(qapp)
+    armour, flight = group.children
+    assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 8
+
+    armour_ladder = sheet.powers._share_notches(armour, 8, 0)
+    flight_ladder = sheet.powers._share_notches(flight, 6, 0)
+    sheet.powers._on_share_dialled(armour, armour_ladder, armour_ladder.index((4, 4)))
+    sheet.powers._on_share_dialled(flight, flight_ladder, flight_ladder.index((4, 2)))
+
+    assert armour.dynamic_points == 4 and flight.dynamic_points == 4
+    # Half the pool, half the Toughness - and the Flight is running at the same time.
+    assert power_trait_bonuses(char, data)["resistance"]["TOUGHNESS"].amount == 4
+    assert [p.name for p in live_powers(char.powers)] == ["Force Field", "Flight"]
+
+
+def test_a_share_dialled_to_nothing_stores_nothing_at_all(qapp: QApplication) -> None:
+    sheet, _char, group = _pool_array(qapp)
+    group.children[0].dynamic_points = 4
+
+    sheet.powers._on_share_dialled(
+        group.children[0], sheet.powers._share_notches(group.children[0], 8, 4), 0
+    )
+
+    # A zero share and no share behave alike, so the file keeps the quieter one.
+    assert group.children[0].dynamic_points is None
+    assert "dynamic_points" not in group.children[0].to_dict()
+
+
+def test_the_last_share_dialled_to_nothing_switches_its_member_off(
+    qapp: QApplication,
+) -> None:
+    """A Growth parked on "Off" used to come straight back on, and grow the character.
+
+    Handing back the *last* share returns the array to its selected alternate at full
+    rank — which is what an array saved before the pool existed does on load — so the
+    member the player had just dialled to zero was live again: a Diminutive character
+    read as Medium under a slider saying the power was off. Zero is off on this dial as
+    it is on the rank dial it replaces, whatever the array then does with the member.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=6)])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    growth.dynamic_points = reach.dynamic_points = 3
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    assert effective_size(char, data) == "Medium"  # Diminutive, plus the three ranks held
+
+    size_dial, reach_dial = _share_dials(sec)
+    assert size_dial.caption() == "Size"
+    reach_dial._slider.setValue(0)
+    _share_dials(sec)[0]._slider.setValue(0)  # the card tree is rebuilt under each commit
+
+    assert effective_size(char, data) == "Diminutive"
+    assert not growth.activated
+    assert growth.dynamic_points is None  # the file still keeps the quieter of the two
+    # The card says so too, rather than being drawn as the array's live alternate.
+    assert sec._node_is_inactive(growth, group, sec._activation_role(growth, group))
+
+    # ...and the same handle pushed back up wakes it at the notch asked for.
+    _share_dials(sec)[0]._slider.setValue(4)
+    assert growth.activated
+    assert effective_size(char, data) == "Large"  # Diminutive, plus four ranks
+
+
+def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(
+    qapp: QApplication,
+) -> None:
+    """An array nobody has split still runs its selected alternate, so its slider says so.
+
+    Every share handed back (or never assigned) is not a split at all: the array falls
+    back to the selected member at the rank it stands at. Its slider read "Off" while it
+    ran, which is the same lie the zero notch tells at the other end — and the pool has
+    to go on being counted without those points, or the first split of an untouched
+    array would find them already spent.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=6)])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    char.powers.append(PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach]))
+    sec = _sheet_for(char).powers
+
+    size_dial, reach_dial = _share_dials(sec)
+    assert effective_size(char, data) == "Gargantuan"  # Diminutive, plus all six ranks
+    assert size_dial._labels[size_dial.value()] == "6 PP · Growth 6"
+    # The alternate nobody selected is off, and its groove still reaches the whole pool:
+    # the seat above is a reading, not a claim on points anyone has assigned.
+    assert reach_dial.value() == 0
+    assert reach_dial.ceiling() == len(reach_dial._labels) - 1
+
+    # Left where it was drawn, the array is still unsplit — a handle that has not moved
+    # is not a decision.
+    size_dial._slider.setValue(size_dial.value())
+    assert growth.dynamic_points is None
+
+    # A member dialled down mid-play is priced by the rank it is *standing* at.
+    growth.effects[0].current_rank = 3
+    sec._rebuild_list()
+    dial = _share_dials(sec)[0]
+    assert effective_size(char, data) == "Medium"
+    assert dial._labels[dial.value()] == "3 PP · Growth 3"
+
+
+def test_a_share_dial_can_stop_at_a_rank_its_share_overshoots(qapp: QApplication) -> None:
+    """A share buys a ceiling, not a rank, so the player still picks the rung.
+
+    A Growth 6 discounted to 5 PP by a Quirk is rationed 6 ranks to 5 points: 4 PP buys
+    four ranks and 5 PP buys all six, so *nothing* bought exactly five and a Diminutive
+    wielder could be Large or Gargantuan but never Huge. Bigger is not better for a size
+    effect — a Gargantuan character is easier to hit and impossible to hide — so every
+    rank gets a notch, priced at the cheapest share that reaches it.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    effect = PowerEffectInstance("growth", rank=6)
+    effect.flaws = [ModifierSelection(modifier_id="quirk")]  # 6 ranks for 5 points
+    growth = Power(name="Giant Form", effects=[effect])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    char.powers.append(PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach]))
+    sec = _sheet_for(char).powers
+    assert dynamic_member_cost(growth, data) == 5
+
+    # Two notches at one price, differing by where they stop.
+    ladder = sec._share_notches(growth, 5, 0)
+    assert ladder[-2:] == [(5, 5), (5, 6)]
+    dial = _share_dials(sec)[0]
+    assert dial._labels[5] == "5 PP · Growth 5"
+    assert dial._labels[6] == "5 PP · Growth 6"
+
+    dial._slider.setValue(5)
+    assert effective_size(char, data) == "Huge"
+    assert growth.dynamic_points == 5  # paid for six...
+    assert effect.current_rank == 5  # ...and standing at five
+    assert _share_dials(sec)[0].value() == 5  # and the handle comes back to that notch
+
+    # The rung above spends the same points on the rank they actually buy, and stores
+    # no hold at all, so only a member deliberately held below its ceiling carries one.
+    _share_dials(sec)[0]._slider.setValue(6)
+    assert effective_size(char, data) == "Gargantuan"
+    assert growth.dynamic_points == 5 and effect.current_rank is None
+
+
+def test_a_rank_left_over_from_a_rank_dial_does_not_hold_a_share_down(
+    qapp: QApplication,
+) -> None:
+    """A hold is the *pair* — the rank stored and the share that prices it.
+
+    An effect dialled down before its power joined a pool keeps that rank, and reading
+    it on its own would quietly cap a member nobody had touched: the share is what
+    decides for everything but the notch the player actually stopped on.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.characteristics["size"] = "Diminutive"
+    effect = PowerEffectInstance("growth", rank=6)
+    effect.flaws = [ModifierSelection(modifier_id="quirk")]
+    effect.current_rank = 3  # left behind by the rank dial it had before the pool
+    growth = Power(name="Giant Form", effects=[effect])
+    reach = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=3)])
+    growth.dynamic = reach.dynamic = True
+    growth.dynamic_points = 4  # ...which four points do not price
+    char.powers.append(PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, reach]))
+    sec = _sheet_for(char).powers
+
+    assert effect_current_rank(effect, data, char) == 4  # the share decides
+    assert effective_size(char, data) == "Large"
+    assert _share_dials(sec)[0].value() == 4
+    # ...and the first commit clears the leftover rather than leaving it to bite later.
+    ladder = sec._share_notches(growth, 5, 4)
+    sec._on_share_dialled(growth, ladder, ladder.index((3, 3)))
+    assert effect.current_rank is None and growth.dynamic_points == 3
+
+
+def test_a_powers_own_dynamic_effects_get_share_dials_too(qapp: QApplication) -> None:
+    """An array exists at two levels, and so does its pool — so the control does too."""
+
+    char = Character.new_default(load_game_data())
+    blast = PowerEffectInstance("damage", rank=10)
+    fly = PowerEffectInstance("flight", rank=5)
+    power = Power(name="Fire Control", structure=STRUCTURE_ARRAY, effects=[blast, fly])
+    char.powers.append(power)
+    sheet = _sheet_for(char)
+    assert _share_dials(sheet.powers) == []
+
+    blast.dynamic = fly.dynamic = True
+    blast.dynamic_points = 6
+    fly.dynamic_points = 4
+    sheet.powers._rebuild_list()
+    assert len(_share_dials(sheet.powers)) == 2
+
+    # The share is written to the effect, not to its dialled rank.
+    sheet.powers._on_share_dialled(fly, sheet.powers._share_notches(fly, 10, 4), 1)
+    assert fly.dynamic_points == 2
+    assert fly.current_rank is None
+    # The book's own worked example: a Flight 5 costing 10, given 2, runs at 1 rank.
+    assert effect_current_rank(fly, load_game_data(), char) == 1
+
+
+def test_a_split_array_dims_the_members_that_are_not_running(qapp: QApplication) -> None:
+    sheet, char, group = _pool_array(qapp)
+    armour, flight = group.children
+    sec = sheet.powers
+
+    # Untouched: the selected member is lit and its sibling is dimmed.
+    assert sec._node_is_inactive(armour, group, "select") is False
+    assert sec._node_is_inactive(flight, group, "select") is True
+
+    armour.dynamic_points = 4
+    flight.dynamic_points = 4
+    assert sec._node_is_inactive(armour, group, "select") is False
+    assert sec._node_is_inactive(flight, group, "select") is False
+
+
+def test_a_split_array_stops_arming_a_click_that_would_do_nothing(qapp: QApplication) -> None:
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour = group.children[0]
+
+    # Unsplit, a member is the array's selector and says so.
+    assert sec._activation_role(armour, group) == "select"
+    card = sec._render_node(armour, group)
+    assert card.is_clickable()
+    assert "siblings switch off" in card.toolTip()
+
+    # Split, the pool decides who is running: the click is not armed at all — it used to
+    # move active_child_id silently with nothing visible happening — but the card still
+    # explains why it has stopped being a control.
+    armour.dynamic_points = 4
+    assert sec._activation_role(armour, group) == ""
+    card = sec._render_node(armour, group)
+    assert not card.is_clickable()
+    assert "all running at once" in card.toolTip()
+    assert "siblings switch off" not in card.toolTip()
+
+
+def test_a_split_array_still_dims_by_what_is_running_with_no_role_left(
+    qapp: QApplication,
+) -> None:
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour, flight = group.children
+
+    # Taking the click away must not take the dimming with it: an ordinary member of a
+    # split array is off, and has to look it.
+    flight.dynamic_points = 4
+    assert sec._activation_role(armour, group) == ""
+    assert sec._node_is_inactive(armour, group, "") is True
+    assert sec._node_is_inactive(flight, group, "") is False

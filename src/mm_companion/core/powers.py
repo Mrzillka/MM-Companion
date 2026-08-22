@@ -36,6 +36,13 @@ STRUCTURES = (STRUCTURE_INDEPENDENT, STRUCTURE_LINKED, STRUCTURE_ARRAY)
 ALTERNATE_EFFECT_MODIFIER = "alternate_effect"
 LINKED_MODIFIER = "linked"
 
+# Which side of the Power Level trade-off a hard-capped effect protects (see
+# :attr:`PowerEffectInstance.pl_cap`). ``PL_CAP_EFFECT`` keeps the effect rank and lets
+# the attack bonus fall; ``PL_CAP_ATTACK`` keeps the attack bonus and lets the rank fall.
+PL_CAP_EFFECT = "effect"
+PL_CAP_ATTACK = "attack"
+PL_CAPS = (PL_CAP_EFFECT, PL_CAP_ATTACK)
+
 
 @dataclass
 class ModifierSelection:
@@ -50,16 +57,34 @@ class ModifierSelection:
     toggle, a Triggered/Limited condition — see ``docs/mm-powers-ui-design.md`` §4). It
     is empty for the plain modifiers, and a modifier that discounts by tier
     (Removable, Side Effect) reads its value here rather than from a fixed cost.
+
+    ``applies_from`` / ``applies_to`` are the **rank band** the modifier covers: the
+    rules let one apply to part of an effect rather than all of it, so a hero can carry
+    a Blast 12 whose top four ranks alone are Tiring and routinely fire the other eight
+    for free. ``0``/``0`` — the default — means *every* rank, which is what every
+    modifier ever saved before this says, so nothing is migrated and an untouched
+    selection serializes byte-for-byte as it did.
+
+    A band only ever changes what a **per-rank** modifier costs. A flat one is charged
+    once whatever it covers, so the constructor offers no band for it and the cost math
+    ignores one that somehow got stored (see
+    :func:`mm_companion.core.rules.effect_total_cost`).
     """
 
     modifier_id: str
     rank: int = 1
     config: dict = field(default_factory=dict)
+    applies_from: int = 0
+    applies_to: int = 0
 
     def to_dict(self) -> dict:
         data = {"modifier_id": self.modifier_id, "rank": self.rank}
         if self.config:
             data["config"] = dict(self.config)
+        # Written only when the band says something — see the class docstring.
+        if self.applies_from or self.applies_to:
+            data["applies_from"] = self.applies_from
+            data["applies_to"] = self.applies_to
         return data
 
     @classmethod
@@ -68,6 +93,8 @@ class ModifierSelection:
             modifier_id=raw["modifier_id"],
             rank=int(raw.get("rank", 1)),
             config=dict(raw.get("config", {})),
+            applies_from=int(raw.get("applies_from", 0)),
+            applies_to=int(raw.get("applies_to", 0)),
         )
 
 
@@ -121,6 +148,53 @@ class PowerEffectInstance:
     the character, and reopening the sheet at Gargantuan silently changed four of its
     numbers.
 
+    ``pl_cap`` is the *Extended settings* **hard Power Level cap**: empty (the default)
+    leaves the cap a warning, as it has always been, while ``"effect"`` and ``"attack"``
+    make it bite. A capped effect can never resolve above ``attack + rank = 2 × PL``:
+    when a boost pushes it over, ``"effect"`` keeps the rank and lowers the attack bonus
+    and ``"attack"`` keeps the attack bonus and lowers the rank
+    (:func:`mm_companion.core.rules.effect_pl_cap_shift`). Unlike the soft warning the
+    hard cap measures against the *unshifted* ``2 × PL``, which is what a player asking
+    for a hard cap is asking for: a power that cannot exceed the table's limit however
+    large its wielder grows. It changes no point cost — a capped power is worth what it
+    was bought at — and it lives on the effect rather than the power for the reason
+    ``attack_skill`` and ``size_scales_damage`` do, though the constructor drives every
+    effect in a power from one checkbox.
+
+    ``rank_dial`` puts a **rank slider** on the sheet card, so an effect bought at 10 can
+    be used at 5 in play. It is a build decision (whether the control exists); how far
+    the dial is turned is ``current_rank`` below. It is **tri-state**: ``None`` — the
+    default — means nobody has decided and the ruleset answers, which gives a size
+    effect its ladder for free and leaves everything else without one; ``True`` and
+    ``False`` are the player's decision and win either way
+    (:func:`mm_companion.core.rules.effect_has_rank_dial`). That is what lets a Growth's
+    checkbox be a real control rather than one that changes nothing, and it costs no
+    migration: a save from before this has no key at all, reads back ``None``, and so
+    still carries exactly the dials it always did.
+
+    ``dynamic_points`` is this effect's share of its power's Dynamic pool — *runtime*
+    state, the effect-level twin of the field ``Power`` and ``PowerGroup`` carry, and
+    the number a Dynamic member's card slider writes. ``None`` means it holds no share.
+    See :func:`mm_companion.core.rules.dynamic_rank_share`.
+
+    ``dynamic`` marks this effect a **Dynamic** member of its power's ``array``
+    structure (p101). It is *build* state: a Dynamic alternate costs 2 points instead
+    of 1 because it shares the array's point pool and runs alongside the array's other
+    Dynamic members at reduced effectiveness, rather than being mutually exclusive with
+    them; on the array's *base* effect it instead costs one Alternate Effect rank. It
+    means nothing outside an array and is priced by
+    :func:`mm_companion.core.rules.power_gross_cost`. Written only when set, so a power
+    saved before this is byte-for-byte what it was and still costs what it did.
+
+    ``extra_effort`` is how many ranks of **Extra Effort** are currently pushed into
+    this effect (p20-21) — runtime state again, and the only one that reaches *above*
+    the bought rank: straining past your limits is exactly what Extra Effort is, and
+    "its benefits can even increase your ranks or bonuses beyond the normal Power Level
+    limits". 0 — the default — is an effect nobody is pushing, so an untouched effect
+    behaves and serializes as it always did. It costs nothing (the price is a rung of
+    the fatigue ladder, on the character) and validation never sees it, because a Power
+    Level cap is a statement about the build.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -142,7 +216,12 @@ class PowerEffectInstance:
     suppressed: bool = False
     attack_skill: str = ""
     size_scales_damage: bool = True
+    pl_cap: str = ""
+    rank_dial: bool | None = None
     current_rank: int | None = None
+    dynamic: bool = False
+    dynamic_points: int | None = None
+    extra_effort: int = 0
     overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -163,12 +242,22 @@ class PowerEffectInstance:
             data["label"] = self.label
         if not self.size_scales_damage:
             data["size_scales_damage"] = False
+        if self.pl_cap:
+            data["pl_cap"] = self.pl_cap
+        if self.rank_dial is not None:
+            data["rank_dial"] = bool(self.rank_dial)
         if not self.toggled_on:
             data["toggled_on"] = False
         if self.suppressed:
             data["suppressed"] = True
         if self.current_rank is not None:
             data["current_rank"] = self.current_rank
+        if self.dynamic:
+            data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
+        if self.extra_effort:
+            data["extra_effort"] = self.extra_effort
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
@@ -176,6 +265,8 @@ class PowerEffectInstance:
     @classmethod
     def from_dict(cls, raw: dict) -> PowerEffectInstance:
         current = raw.get("current_rank")
+        dial = raw.get("rank_dial")
+        share = raw.get("dynamic_points")
         return cls(
             effect_id=raw["effect_id"],
             label=str(raw.get("label", "")),
@@ -186,9 +277,14 @@ class PowerEffectInstance:
             descriptors=list(raw.get("descriptors", [])),
             attack_skill=raw.get("attack_skill", ""),
             size_scales_damage=bool(raw.get("size_scales_damage", True)),
+            pl_cap=str(raw.get("pl_cap", "")) if raw.get("pl_cap") in PL_CAPS else "",
+            rank_dial=None if dial is None else bool(dial),
             toggled_on=bool(raw.get("toggled_on", True)),
             suppressed=bool(raw.get("suppressed", False)),
             current_rank=None if current is None else int(current),
+            dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=None if share is None else max(0, int(share)),
+            extra_effort=max(0, int(raw.get("extra_effort", 0))),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 
@@ -209,6 +305,16 @@ class Power:
     alternate costs a flat point (:func:`mm_companion.core.rules.power_display_cost`).
     Both reference the target power by its stable :attr:`id`, not its (mutable) name.
 
+    ``active_effect`` is runtime state for a power whose **own effects** are an array:
+    the index of the one currently in use, ``None`` meaning "the base" (the costliest,
+    which is what the array is paid for). Only one effect of an array runs at a time —
+    that is what makes an array cheaper than the same effects bought independently — so
+    without it a three-effect array granted every one of its effects' bonuses at once
+    while paying for one. It is an *index* rather than an id because an effect has no
+    id to name, and it is clamped on read for the same reason ``current_rank`` is: a
+    build edited down to fewer effects keeps a selection it can still honour rather than
+    pointing past the end.
+
     ``activated`` and ``item_present`` are whole-power *runtime* state (§7): the
     Activation gate needs ``activated``, and a Removable gate's bonus applies only
     while ``item_present``. ``array_active`` is runtime too — for an array member,
@@ -219,8 +325,35 @@ class Power:
     and written only when switched off, so a power nobody has touched adds nothing to
     the file and an older save still loads all-active.
 
+    ``dynamic`` is the whole-power twin of :attr:`PowerEffectInstance.dynamic`, for
+    when the array is a :class:`PowerGroup` of whole powers rather than one power's own
+    effects: it makes this card a **Dynamic** member of its parent array, costing 2
+    points as an alternate (or one Alternate Effect rank as the array's base) in
+    exchange for sharing the pool with the other Dynamic members instead of switching
+    them off. Build state, and written only when set.
+
+    ``dynamic_points`` is how much of that shared pool this member currently holds —
+    *runtime* state, the free action the rules let a character take once per turn
+    (p101). ``None``, the default, means it holds no share at all and the array behaves
+    as it always has: exactly one selected member, running at full rank. A number
+    reduces the member's every rank in proportion to the share
+    (:func:`mm_companion.core.rules.dynamic_rank_cap`) and makes it live alongside its
+    fellow Dynamic members rather than instead of them
+    (:func:`mm_companion.core.rules.live_powers`). Written only when set, so an array
+    saved before the pool existed loads with no allocation and behaves identically.
+
     An attack-skill link is per-effect now (see
     :attr:`PowerEffectInstance.attack_skill`), not whole-power.
+
+    ``stunt_of`` marks this power a **power stunt** of another, by that power's
+    :attr:`id`: a temporary alternate effect bought at the table with Extra Effort and
+    usually a Hero Point (p20, p101), rather than with Power Points. Three things follow
+    from it and nothing else does — the card is badged and says what it came from, the
+    power contributes **0** to the point total (:func:`mm_companion.core.rules.node_cost`),
+    and it is **not saved**: a stunt is scoped to the scene it was invented in, so
+    :func:`strip_stunts` takes them out on the way to the file. It is still serialized,
+    because undo snapshots the model as JSON and a stunt that vanished on the next undo
+    would be worse than one that outlived its scene.
 
     ``cost_override`` is a Dev-mode / homerule edit: when set it *replaces* the
     power's whole computed point total (see
@@ -240,7 +373,11 @@ class Power:
     activated: bool = True
     item_present: bool = True
     array_active: bool = True
+    active_effect: int | None = None
+    dynamic: bool = False
+    dynamic_points: int | None = None
     cost_override: int | None = None
+    stunt_of: str = ""
 
     def to_dict(self) -> dict:
         data = {
@@ -253,8 +390,16 @@ class Power:
             "linked_with": list(self.linked_with),
             "alternate_of": self.alternate_of,
         }
+        if self.dynamic:
+            data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
         if self.cost_override is not None:
             data["cost_override"] = self.cost_override
+        if self.stunt_of:
+            data["stunt_of"] = self.stunt_of
+        if self.active_effect is not None:
+            data["active_effect"] = self.active_effect
         # The runtime switches, written only when off — see the class docstring.
         for key, value in (
             ("activated", self.activated),
@@ -281,6 +426,8 @@ class Power:
         # dangles from the fresh id.
         power_id = raw.get("id") or uuid4().hex
         raw_cost = raw.get("cost_override")
+        raw_share = raw.get("dynamic_points")
+        raw_effect = raw.get("active_effect")
         return cls(
             name=raw.get("name", ""),
             description=raw.get("description", ""),
@@ -293,8 +440,41 @@ class Power:
             activated=bool(raw.get("activated", True)),
             item_present=bool(raw.get("item_present", True)),
             array_active=bool(raw.get("array_active", True)),
+            dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=None if raw_share is None else int(raw_share),
             cost_override=None if raw_cost is None else int(raw_cost),
+            stunt_of=raw.get("stunt_of", ""),
+            active_effect=None if raw_effect is None else int(raw_effect),
         )
+
+
+def power_is_stunt(node: PowerNode) -> bool:
+    """Whether this node is a power stunt — a temporary alternate bought with effort.
+
+    Takes any :data:`PowerNode`, since the question is asked while walking the tree and a
+    :class:`PowerGroup` can never be one: a stunt is a card of its own.
+    """
+
+    return bool(getattr(node, "stunt_of", ""))
+
+
+def strip_stunts(nodes: list[dict]) -> list[dict]:
+    """A serialized powers list with every stunt card removed, recursively.
+
+    What "a stunt is not saved" means in practice. It works on the *serialized* form
+    rather than on the model because that is where saving happens, and it recurses into
+    groups because nothing stops a player dragging a stunt card into one — a stunt in an
+    array would otherwise be the one that survived to the file.
+    """
+
+    kept = []
+    for node in nodes:
+        if node.get("stunt_of"):
+            continue
+        if "children" in node:
+            node = {**node, "children": strip_stunts(node["children"])}
+        kept.append(node)
+    return kept
 
 
 def power_is_homerule(power: Power) -> bool:
@@ -334,6 +514,14 @@ class PowerGroup:
     actually been picked, so a group saved before this loads on its first child as it
     always did.
 
+    ``dynamic`` marks *this group* a Dynamic member of the array it is nested in — the
+    same build flag :attr:`Power.dynamic` carries, so an array's member can be a whole
+    sub-group and still be priced as one. It says nothing about this group's own
+    children; each of those carries its own.
+
+    ``dynamic_points`` is the same runtime share :attr:`Power.dynamic_points` is, for
+    when the member of an array is a whole sub-group rather than one card.
+
     ``name`` is an optional player-given title for the group; when empty the UI falls
     back to a label derived from the :attr:`mode`.
     """
@@ -343,6 +531,8 @@ class PowerGroup:
     id: str = field(default_factory=lambda: uuid4().hex)
     active_child_id: str = ""
     name: str = ""
+    dynamic: bool = False
+    dynamic_points: int | None = None
 
     def to_dict(self) -> dict:
         data = {
@@ -354,6 +544,10 @@ class PowerGroup:
         }
         if self.active_child_id:
             data["active_child_id"] = self.active_child_id
+        if self.dynamic:
+            data["dynamic"] = True
+        if self.dynamic_points is not None:
+            data["dynamic_points"] = self.dynamic_points
         return data
 
     @classmethod
@@ -365,6 +559,10 @@ class PowerGroup:
             id=raw.get("id") or uuid4().hex,
             active_child_id=str(raw.get("active_child_id", "")),
             name=raw.get("name", ""),
+            dynamic=bool(raw.get("dynamic", False)),
+            dynamic_points=(
+                None if raw.get("dynamic_points") is None else int(raw["dynamic_points"])
+            ),
         )
 
 

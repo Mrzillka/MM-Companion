@@ -3,51 +3,84 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from ..character import Character
 from ..data_loader import GameData
-from ..powers import STRUCTURE_LINKED, Power, PowerEffectInstance, PowerGroup, PowerNode
+from ..powers import (
+    STRUCTURE_LINKED,
+    Power,
+    PowerEffectInstance,
+    PowerGroup,
+    PowerNode,
+    power_is_stunt,
+)
+from ..registry import Registry
 from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
-from .powers_cost import effect_effective_rank, effect_size_rank_shift
-from .powers_terms import _effect_name, _effective_stats
+from .powers_cost import (
+    IMPOSED_EFFECT_ACTION_LIMIT,
+    effect_action_at_most,
+    effect_build_rank,
+    effect_size_rank_shift,
+    effect_total_cost,
+    imposed_effect_cost,
+    power_total_cost,
+)
+from .powers_terms import (
+    _effect_name,
+    _effective_stats,
+    effect_attack_skill_bonus,
+    effect_base_attack_bonus,
+    effect_makes_attack,
+)
+from .runtime import config_trait_allocation, power_display_name, trait_display_name
 from .size import size_resistance_shift, size_skill_shift
+from .trait_rates import trait_rank_cap
 
 
-def effect_attack_skill_bonus(
-    effect: PowerEffectInstance, char: Character | None, game_data: GameData
-) -> int | None:
-    """The attack-roll bonus an effect's linked Close/Ranged Combat focus supplies.
+def stunt_source(power: Power, char: Character) -> Power | None:
+    """The power a stunt was taken from, or ``None`` — including when it has been removed.
 
-    ``None`` when the effect has no ``attack_skill`` link (or there is no character),
-    so callers fall back to the wielder's Attack ability. Otherwise the linked focus
-    row's :func:`skill_total` — which already folds in the Attack ability, since these
-    combat skills derive from ``ATK`` — so it *replaces* the bare Attack rather than
-    stacking with it. A dangling row id degrades to that ability value (its ranks read
-    as 0).
+    A stunt holds its source by id rather than by reference, like every other cross-power
+    relationship on a character (``linked_with``, the old ``alternate_of``): a name is
+    editable and a reference does not survive the save/load round trip its neighbours make.
     """
 
-    if not effect.attack_skill or char is None:
+    if not power.stunt_of:
         return None
-    return skill_total(char, game_data, effect.attack_skill)
+    return next((other for other in leaf_powers(char.powers) if other.id == power.stunt_of), None)
 
 
-def effect_makes_attack(effect: PowerEffectInstance, game_data: GameData) -> bool:
-    """Whether the effect resolves with an **attack roll** (vs. auto-hit / no check).
+def power_stunt_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
+    """What is wrong with this power *as a stunt*; empty for an ordinary power.
 
-    True when a modifier grants the attack roll — an attacking effect's implicit
-    ``attack`` extra, or one taken explicitly on any other effect — and none drops it
-    (a Perception-Range extra removes the roll, making the effect auto-hit). Reads the
-    resolved :class:`~mm_companion.core.rules.EffectImpact` rather than the base
-    effect's check prose, so Deflect's "Deflect vs. Attack" is correctly *not* an
-    attack roll and an effect given the Attack extra correctly is one. This is the same
-    condition :func:`power_pl_violations` uses to pick the attack-plus-rank cap, and
-    what gates the constructor's attack-skill picker.
+    A stunt is a temporary **alternate effect** (p20), so the rule that bounds an alternate
+    bounds it: "an alternate effect can have a total cost in Power Points no greater than
+    the base power" (p98). It is checked against :func:`power_total_cost` rather than
+    against what the stunt contributes, which is 0 — the stunt is free at the till, not
+    free of the ceiling.
+
+    The other thing that can go wrong is that the power it came from is no longer on the
+    sheet: an alternate of nothing is not an alternate. It warns rather than deleting the
+    card, because a stunt costs nothing and quietly binning a build the player made is a
+    worse answer than telling them.
     """
 
-    impact = _effective_stats(effect, game_data)[3]
-    return impact.grants_attack and not impact.drops_check
+    if not power_is_stunt(power):
+        return []
+    source = stunt_source(power, char)
+    if source is None:
+        return ["Power stunt: the power it was taken from is no longer on the sheet"]
+    cost = power_total_cost(power, game_data, char)
+    ceiling = power_total_cost(source, game_data, char)
+    if cost > ceiling:
+        name = power_display_name(source, game_data)
+        return [
+            f"Power stunt: {cost} PP is dearer than the {ceiling} PP power it comes from "
+            f"({name}) — an alternate effect may cost no more than its base"
+        ]
+    return []
 
 
 def power_pl_violations(power: Power, char: Character, game_data: GameData) -> list[str]:
@@ -89,15 +122,15 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None or base.resistance_dc_base is None:
             continue  # not an attack/resisted effect — these caps don't apply
+        if effect.pl_cap:
+            # A hard-capped effect cannot breach: whichever side the player nominated
+            # gives way first (:func:`~.powers_terms.effect_pl_cap_shift`), so it is
+            # legal by construction and a ⚠ here would be warning about a number the
+            # sheet never shows.
+            continue
         # An effect linked to a Close/Ranged Combat focus uses that focus's total as
         # its attack bonus (replacing the bare Attack ability); otherwise the Attack.
-        linked = effect_attack_skill_bonus(effect, char, game_data)
-        attack_key = game_data.system.trait_keys.attack
-        attack_ability = (
-            linked if linked is not None else effective_ability(char, game_data, attack_key)
-        )
-        impact = _effective_stats(effect, game_data)[3]
-        rank = effect_effective_rank(effect, game_data, char)
+        rank = effect_build_rank(effect, game_data, char)
         # Size raises the Damage limit by as much as it raised the Strength folded into
         # it, so a big creature is not charged twice for being big. Zero for an effect
         # that folds no ability in, which is why a Blast gains nothing here.
@@ -105,7 +138,7 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         limit = base_limit + size_shift
         rank_limit = power_level + size_shift
         if effect_makes_attack(effect, game_data):
-            attack = attack_ability + impact.check_bonus
+            attack = effect_base_attack_bonus(effect, game_data, char)
             if attack + rank > limit:
                 violations.append(
                     f"{base.name}: attack +{attack} plus rank {rank} = {attack + rank} "
@@ -209,7 +242,7 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
                 # power_pl_violations makes by adding size_shift to its limits, and
                 # the two functions have to agree or the card claims a PL the
                 # validator says is legal several ranks lower.
-                rank = effect_effective_rank(effect, game_data, char)
+                rank = effect_build_rank(effect, game_data, char)
                 rank -= effect_size_rank_shift(effect, game_data, char)
                 if effect_makes_attack(effect, game_data):
                     linked = effect_attack_skill_bonus(effect, char, game_data)
@@ -269,18 +302,42 @@ def effect_allocation_used(effect: PowerEffectInstance, game_data: GameData) -> 
     return used
 
 
+def synced_effect_rank(effect: PowerEffectInstance, game_data: GameData) -> int | None:
+    """The rank an effect's own allocation dictates, or ``None`` when it dictates none.
+
+    An effect whose base declares ``rankFollowsAllocation`` (Enhanced Trait) has no rank
+    of its own to set: what it costs comes from the traits it raises, so its rank is
+    simply how many ranks those rows spend. Every other allocation effect — Enhanced
+    Senses, Comprehend, Immunity, Feature — keeps a rank the player buys and allocates
+    *within*, and gets ``None`` here.
+
+    The constructor writes this back onto the instance as the rows change, so the saved
+    rank and the rows can never drift apart; :func:`power_allocation_violations` skips
+    the same effects, since an effect that *is* its allocation cannot overspend it.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or not base.rank_follows_allocation:
+        return None
+    return effect_allocation_used(effect, game_data)
+
+
 def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
     """Over-allocation breaches: a Tier-4 effect spending more ranks than it has.
 
     Enhanced Senses/Movement, Comprehend, Immunity, and Feature allocate the effect's
     rank across a menu (see :func:`effect_allocation_used`); spending more than the
     effect's rank is invalid. Returns one message per over-allocated effect.
+
+    An effect whose rank *follows* its allocation (:func:`synced_effect_rank`) is skipped:
+    there is no budget to breach, and warning about one would be warning about a number
+    the player cannot set.
     """
 
     violations: list[str] = []
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-        if base is None:
+        if base is None or base.rank_follows_allocation:
             continue
         if not any(f.type in ("allocation", "repeatable") for f in base.config_fields):
             continue
@@ -290,6 +347,110 @@ def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
                 f"{base.name}: allocated {used} of {effect.rank} ranks "
                 f"— {used - effect.rank} over budget."
             )
+    return violations
+
+
+def power_redundant_option_violations(power: Power, game_data: GameData) -> list[str]:
+    """Multiselect options ticked alongside another that already covers them.
+
+    A multiselect prices every box that is ticked, and some of those boxes contain each
+    other: Obscure's whole *Sight* sense type already blocks the single *sight* sense it
+    costs 2 more to add, and Environment's *Extreme cold* already imposes its *Intense
+    cold*. Ticking both is legal and simply wasteful, so this warns rather than blocking
+    or quietly unticking — the player may be describing something the rules do not
+    model, and a build that silently edits itself is worse than one that argues.
+
+    Which option covers which is data (``supersedes`` on the option), not a rule about
+    names: a bare value names a sibling in the same field, ``"field:value"`` one in
+    another field of the same effect.
+    """
+
+    violations: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        fields = {f.key: f for f in base.config_fields}
+        for field in base.config_fields:
+            if field.type != "multiselect":
+                continue
+            chosen = effect.config.get(field.key)
+            if not isinstance(chosen, list):
+                continue
+            for option in field.options:
+                if option.value not in chosen:
+                    continue
+                for target in option.supersedes:
+                    key, _, value = target.rpartition(":")
+                    key = key or field.key
+                    held = effect.config.get(key)
+                    if not isinstance(held, list) or value not in held:
+                        continue
+                    # Two fields of one effect can label their options identically —
+                    # Obscure's single *sight* sense and its whole *Sight* sense type are
+                    # both just "Sight" — so a cross-field pair names the fields too, or
+                    # the sentence reads "Sight already covers Sight".
+                    cross = key != field.key
+                    covered_field = fields.get(key)
+                    ticked = _option_name(field, option.label, cross)
+                    covered = _option_name(
+                        covered_field, _option_label(covered_field, value), cross
+                    )
+                    violations.append(
+                        f"{base.name}: {ticked} already covers {covered}, "
+                        "so paying for both buys nothing."
+                    )
+    return violations
+
+
+def _option_label(field, value: str) -> str:
+    """A config option's display label, falling back to the value it stores."""
+
+    if field is None:
+        return value
+    return next((o.label for o in field.options if o.value == value), value)
+
+
+def _option_name(field, label: str, qualify: bool) -> str:
+    """An option's label, named by its field when two fields could both mean it.
+
+    Quoted in that case only: ``Extreme cold already covers Intense cold`` reads as a
+    sentence, while an unquoted ``Blocks the whole sense type: Sight already covers
+    Blocks one sense in: Sight`` does not.
+    """
+
+    if not qualify or field is None:
+        return label
+    return f'"{field.label}: {label}"'
+
+
+def power_trait_allocation_violations(
+    power: Power, game_data: GameData, char: Character | None = None
+) -> list[str]:
+    """Allocation rows holding more ranks of a trait than that trait can be taken at.
+
+    An advantage is the only trait with a ceiling of its own: most are not ranked at all
+    (three ranks of Fearless is not a stronger Fearless, it is three points wasted), and
+    a few carry a fixed ``maxRank``. Abilities, resistances and skills are bounded by the
+    Power Level instead, which :func:`power_pl_violations` checks against the whole build.
+
+    A warning rather than a clamp. The row is the player's, it is on screen, and silently
+    charging for fewer ranks than it shows would leave the footer disagreeing with the
+    rows above it — the one thing a cost line must never do.
+    """
+
+    violations: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        for target, ranks in config_trait_allocation(effect.config, base):
+            cap = trait_rank_cap(char, game_data, target)
+            if cap is None or ranks <= cap:
+                continue
+            name = trait_display_name(game_data, target)
+            reason = "is not ranked" if cap == 1 else f"is capped at {cap} ranks"
+            violations.append(f"{base.name}: {name} {reason}; {ranks} allocated.")
     return violations
 
 
@@ -355,6 +516,52 @@ def power_modifier_requirement_violations(power: Power, game_data: GameData) -> 
                 violations.append(
                     f"{_effect_name(effect, game_data)}: {modifier.name} requires " f"{needed}."
                 )
+    return violations
+
+
+def power_imposed_effect_violations(
+    power: Power, game_data: GameData, char: Character | None = None
+) -> list[str]:
+    """An Affliction imposing an effect it cannot afford, or one that is too slow (p110).
+
+    "The imposed effect must have a Power Point cost equal to or less than the total cost
+    of the Affliction and require a standard action or less to activate." The budget is
+    the **Affliction effect's** own total — with its extras and flaws, not the whole
+    power's — because that is what the rule names, and it is what moves when the player
+    dials the Affliction's rank.
+
+    The action limit is normally unreachable, since :func:`imposable_effects` offers no
+    effect that breaks it. It is checked anyway because the stored value outlives the
+    picker: a character saved against a ruleset where the effect was faster, or a mod
+    that reshapes one, would otherwise carry a build nothing ever questions.
+
+    A warning, not a clamp — like every other check here. ``char`` is threaded so the
+    Affliction's own cost is the one the wielder actually pays (a Strength-Based effect
+    folds their Strength in).
+    """
+
+    by_id = {effect.id: effect for effect in game_data.effects}
+    violations: list[str] = []
+    for effect in power.effects:
+        budget = effect_total_cost(effect, game_data, char)
+        imposed_id = str(effect.config.get("imposedEffect", "") or "")
+        imposed = by_id.get(imposed_id)
+        if imposed is None:
+            continue
+        name = _effect_name(effect, game_data)
+        cost = imposed_effect_cost(effect, game_data)
+        if cost > budget:
+            violations.append(
+                f"{name}: the imposed {imposed.name} costs {cost} PP, more than the "
+                f"{budget} PP this Affliction costs — an imposed effect may cost no more "
+                f"than the Affliction imposing it."
+            )
+        if not effect_action_at_most(imposed, IMPOSED_EFFECT_ACTION_LIMIT, game_data):
+            violations.append(
+                f"{name}: the imposed {imposed.name} takes a "
+                f"{imposed.action or 'nameless'} action — an imposed effect must take a "
+                f"{IMPOSED_EFFECT_ACTION_LIMIT.lower()} action or less."
+            )
     return violations
 
 
@@ -433,3 +640,99 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
             violations.append(f"{pair.label} {value} exceeds PL cap {limit}.")
 
     return violations
+
+
+# --- the whole-power check list --------------------------------------------------------
+# Every check above asks one question of one power. Two surfaces ask all of them: the
+# Power Constructor's warning band while a power is being built, and the ⚠ on its card
+# once it is saved. They used to ask different subsets — the card asked two — so a
+# character built under a different ruleset carried an over-budget imposed effect, an
+# over-spent allocation or an over-budget minion with no marker on the sheet at all, and
+# nothing said so until someone reopened the constructor.
+#
+# A registry rather than a list, for two reasons. A mod that adds a rule wants its
+# warning on both surfaces without editing either. And ``power_sub_build_violations``
+# lives in ``subbuilds``, which is *above* this module in the import DAG (checking a
+# minion means walking its powers tree, which is validation's job) — so it registers
+# itself on import rather than being reached for from here.
+
+#: One build check: ``(power, char, game_data) -> list[str]``. ``char`` is optional
+#: because the constructor can be opened without one; a check that needs a wielder
+#: returns nothing rather than guessing at one.
+PowerCheck = Callable[[Power, Character | None, GameData], list[str]]
+
+#: Every check a single power is held to, keyed by the headline the constructor's
+#: warning band shows for it. Iterated in registration order, which is the order both
+#: surfaces read in — Power Level first, because it is the one the rules enforce.
+POWER_CHECKS: Registry[PowerCheck] = Registry("power_check")
+
+POWER_CHECKS.register(
+    "over Power Level",
+    lambda power, char, data: power_pl_violations(power, char, data) if char else [],
+)
+POWER_CHECKS.register(
+    "power stunt over its ceiling",
+    lambda power, char, data: power_stunt_violations(power, char, data) if char else [],
+)
+POWER_CHECKS.register(
+    "over-allocated",
+    lambda power, _char, data: power_allocation_violations(power, data),
+)
+POWER_CHECKS.register(
+    "paying twice for one choice",
+    lambda power, _char, data: power_redundant_option_violations(power, data),
+)
+POWER_CHECKS.register(
+    "trait over its rank cap",
+    lambda power, char, data: power_trait_allocation_violations(power, data, char),
+)
+POWER_CHECKS.register(
+    "mismatched linked Range",
+    lambda power, _char, data: power_linked_range_violations(power, data),
+)
+POWER_CHECKS.register(
+    "Strength shortfall",
+    lambda power, char, data: power_strength_amount_violations(power, char, data) if char else [],
+)
+POWER_CHECKS.register(
+    "missing required modifier",
+    lambda power, _char, data: power_modifier_requirement_violations(power, data),
+)
+POWER_CHECKS.register(
+    "imposed effect over budget",
+    lambda power, char, data: power_imposed_effect_violations(power, data, char),
+)
+
+
+def power_check_results(
+    power: Power, char: Character | None, game_data: GameData
+) -> list[tuple[str, list[str]]]:
+    """Every :data:`POWER_CHECKS` entry that found something, as ``(headline, messages)``.
+
+    In registration order, and only the checks that failed — so a caller can build a
+    headline out of the keys and a tooltip out of the values without asking twice.
+    """
+
+    results = []
+    for headline in POWER_CHECKS:
+        check = POWER_CHECKS.get(headline)
+        messages = check(power, char, game_data) if check else []
+        if messages:
+            results.append((headline, messages))
+    return results
+
+
+def power_violations(power: Power, char: Character | None, game_data: GameData) -> list[str]:
+    """Everything wrong with one power's build, flattened — the sheet card's ⚠ tooltip.
+
+    The card has room for one glyph, so it shows every breach on one marker rather than
+    a badge per rule. The constructor puts the same sentences behind a headline naming
+    which checks failed (:func:`power_check_results`); neither can drift from the other,
+    because both walk the same registry.
+    """
+
+    return [
+        message
+        for _headline, messages in power_check_results(power, char, game_data)
+        for message in messages
+    ]

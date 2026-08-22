@@ -33,6 +33,8 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     PIN_INITIATIVE,
     PinRef,
+    clear_extra_effort,
+    clear_stunts,
     condition_check_penalty,
     condition_speed_lines,
     condition_speed_rank_mod,
@@ -44,10 +46,14 @@ from mm_companion.core.rules import (
     initiative_roll,
     movement_mode_lines,
     power_level_for_points,
+    pushed_effects,
+    pushed_trait_labels,
     reconcile_points_to_level,
     speed_columns,
+    spend_extra_effort,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.extra_effort import ExtraEffortDialog, character_effort_menu
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
@@ -379,9 +385,18 @@ class SystemInfoSection(QGroupBox):
     rollRequested = Signal(object)
     #: It was clicked once — show it in the roller's chip, ready to roll.
     loadRequested = Signal(object)
-    #: A sentence for the roll history — a hero point spent or gained. Carries the
-    #: text, since the block that writes it down cannot see what changed here.
+    #: A sentence for the roll history — a hero point spent or gained, or a use of
+    #: Extra Effort. Carries the text, since the block that writes it down cannot see
+    #: what changed here.
     noteRequested = Signal(str)
+    #: A condition was put on the character from here — the fatigue Extra Effort costs.
+    #: The same fan-out the Conditions block's own signal drives, because it is the same
+    #: event: the model changed, and every view over a condition has to restate itself.
+    conditionsChanged = Signal()
+    #: The +2 Extra Effort buys on a check (p21) — the one benefit that is a number on
+    #: the *next roll* rather than on the build. Nothing tracks which roll that will be,
+    #: so it is handed to the block that owns the sliders and the player rolls with it.
+    bonusRequested = Signal(int)
     #: The Initiative readout was right-clicked and pinned — carries a
     #: :class:`~mm_companion.core.rules.pins.PinRef`. Only ever raised on a sheet a
     #: GM opened from a card (see :meth:`set_pin_target`).
@@ -404,6 +419,9 @@ class SystemInfoSection(QGroupBox):
         self._editable: list[QWidget] = []
         # A GM's NPC has no point budget (see :meth:`set_npc_mode`).
         self._npc = False
+        # A sheet whose budget is handed to it rather than chosen (see
+        # :meth:`set_budget_fixed`).
+        self._budget_fixed = False
 
         form = self._form = QFormLayout(self)
         form.addRow("Power Level:", self._build_power_level())
@@ -415,6 +433,7 @@ class SystemInfoSection(QGroupBox):
         form.addRow(self._movement_row_label, self._build_movement_modes())
         form.addRow("Initiative:", self._build_initiative())
         form.addRow("Hero Points:", self._build_hero_points())
+        form.addRow("Extra Effort:", self._build_extra_effort())
 
         self.refresh_derived()
         self._loading = False
@@ -591,6 +610,194 @@ class SystemInfoSection(QGroupBox):
             self.noteRequested.emit(note)
         self._emit_edited()
 
+    def _build_extra_effort(self) -> QWidget:
+        """The button that offers what Extra Effort can buy, and charges what it costs.
+
+        It lives here because both of Extra Effort's currencies do: the fatigue it costs
+        is a condition on the shared model, and the Hero Point that shrugs the fatigue off
+        is these very pips. The two uses that name one of the character's own effects are
+        taken on the power's card instead — the menu says so rather than hiding them.
+
+        Deliberately **not** in ``_editable``: spending Extra Effort is a mid-play action
+        like clicking a pip, so it survives the lock.
+        """
+
+        self._extra_effort = QPushButton("Use…")
+        self._extra_effort.setToolTip(
+            "Push past your limits (p20). The benefit is immediate; at the start of your "
+            "next turn you gain the next rung of the fatigue ladder."
+        )
+        self._extra_effort.clicked.connect(self._show_extra_effort_menu)
+        # What is currently pushed. A power's card carries an "Extra Effort" row saying
+        # why a rank moved; a pushed *trait* has no card, and the enhancement column that
+        # shows it looks like any other bonus — so without this the only sign the
+        # character is straining is a number that has quietly changed.
+        self._effort_note = QLabel()
+        self._effort_note.setStyleSheet(tinted_style("tint.warning", bold=False))
+        self._effort_note.setVisible(False)
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._extra_effort)
+        layout.addWidget(self._effort_note)
+        layout.addStretch()
+        return row
+
+    def _refresh_effort_note(self) -> None:
+        """Restate what Extra Effort is currently holding up, or hide the note.
+
+        Names the traits, because those are the ones with nowhere else to say it, and
+        counts the effects, because each of those already says so on its own card.
+        """
+
+        parts = [
+            f"{label} +{ranks}"
+            for label, ranks in pushed_trait_labels(self._character, self._data).items()
+        ]
+        effects = len(pushed_effects(self._character))
+        if effects:
+            parts.append(f"{effects} effect{'' if effects == 1 else 's'}")
+        self._effort_note.setText(("⚡ " + ", ".join(parts)) if parts else "")
+        self._effort_note.setToolTip(
+            "Held up by Extra Effort until the end of your turn — clear it from this menu."
+        )
+        self._effort_note.setVisible(bool(parts))
+
+    def extra_effort_menu(self) -> QMenu:
+        """The menu of uses, built but not shown — the seam the tests take.
+
+        Split from :meth:`_show_extra_effort_menu` for the reason the Powers block splits
+        its counter menu: ``exec`` on a modal menu headless is a test that hangs.
+        """
+
+        return character_effort_menu(
+            self,
+            self._character,
+            self._data,
+            self.use_extra_effort,
+            self.clear_extra_effort,
+            self.drop_stunts,
+            self.push_trait,
+        )
+
+    def _show_extra_effort_menu(self) -> None:
+        menu = self.extra_effort_menu()
+        menu.exec(self._extra_effort.mapToGlobal(self._extra_effort.rect().bottomLeft()))
+
+    def use_extra_effort(self, use) -> bool:
+        """Confirm one use of Extra Effort and charge it; ``False`` when it was cancelled.
+
+        The fatigue is applied to the shared model by
+        :func:`~mm_companion.core.rules.spend_extra_effort` — the condition resolver is
+        core's, so a rung gained this way bundles and supersedes exactly like one the
+        Conditions block applied — and the blocks that show conditions restate themselves
+        off the topics raised here.
+
+        The **Bonus** use is the one whose benefit is not on the build at all: "+2 on a
+        single check", which nothing here can apply because nothing tracks which check it
+        will be. It is raised on ``bonus-requested`` instead, and the Dice block drops it
+        into the bonus slider — so the player rolls with it rather than being charged a
+        rung of fatigue for a number they then have to remember to type in.
+        """
+
+        dialog = ExtraEffortDialog(self._character, self._data, use, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.adjust_hero_points(-1)
+        if outcome.check_bonus:
+            self.bonusRequested.emit(outcome.check_bonus)
+        self.noteRequested.emit(outcome.note)
+        self.conditionsChanged.emit()
+        self._emit_edited()
+        return True
+
+    def push_trait(self, use, target) -> bool:
+        """Push ranks into one of the character's own traits; ``False`` when cancelled.
+
+        The rank increase's third target, after an effect's rank: "your Strength rank for
+        either Damage or Lifting, or your movement Speed rank in one mode of movement you
+        have" (p21). Neither is an effect, so neither has a card to be taken on, and this
+        block is the one that owns the character rather than any one power.
+
+        A *build* change rather than a runtime one, for the reason
+        :meth:`clear_extra_effort` publishes one: the ranks are saved with the sheet, and
+        every block that shows an ability or a speed restates itself off ``facts-changed``.
+        """
+
+        dialog = ExtraEffortDialog(
+            self._character, self._data, use, effect_name=target.label, parent=self
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            trait=target,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.adjust_hero_points(-1)
+        self.noteRequested.emit(outcome.note)
+        self.conditionsChanged.emit()
+        self.changed.emit()
+        self._emit_edited()
+        return True
+
+    def clear_extra_effort(self) -> bool:
+        """Take back every rank Extra Effort pushed into this character.
+
+        Publishes an ordinary *build* change rather than reaching into the Powers block:
+        the ranks live on the effects, the block that draws them subscribes to
+        ``facts-changed``, and one blanket republish is how every other cross-block edit
+        on this sheet restates itself.
+        """
+
+        if not clear_extra_effort(self._character):
+            return False
+        self.changed.emit()
+        self._emit_edited()
+        return True
+
+    def drop_stunts(self) -> bool:
+        """Drop every power stunt on the character — the scene ended.
+
+        Publishes a build change for the same reason :meth:`clear_extra_effort` does: the
+        cards belong to the Powers block, and the sheet restates itself off the model
+        rather than one block reaching into another.
+        """
+
+        if not clear_stunts(self._character):
+            return False
+        self.changed.emit()
+        self._emit_edited()
+        return True
+
+    def adjust_hero_points(self, delta: object) -> None:
+        """Move the hero-point total by ``delta`` — the seam the bus spends through.
+
+        A block that costs the character a hero point (Extra Effort shrugged off with a
+        Determination heroic feat, p22) has no business writing the model itself: the
+        pips, the clamp and the sentence for the roll history are all one funnel here
+        (:meth:`_on_hero_points_changed`), and a second writer would move a total the
+        pips then disagreed with.
+        """
+
+        try:
+            step = int(delta)
+        except (TypeError, ValueError):
+            return
+        self.set_hero_points(max(0, self._hero_points.value() + step))
+
     def set_hero_points(self, value: int) -> None:
         """Set the hero-point total from outside the sheet — a GM's session command.
 
@@ -766,6 +973,7 @@ class SystemInfoSection(QGroupBox):
         (a slowing/immobilising condition on ground speed, a check penalty on initiative)
         the same display-only way the stat grids show them — the build math is untouched.
         """
+        self._refresh_effort_note()
         self._speed.render_lines(condition_speed_lines(self._character, self._data))
         self._speed.setToolTip(
             _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))
@@ -801,5 +1009,27 @@ class SystemInfoSection(QGroupBox):
     def set_locked(self, locked: bool) -> None:
         """Turn the editable fields into read-only labels (locked) or back."""
         self._locked = locked
+        self._apply_lock()
+
+    def set_budget_fixed(self, fixed: bool) -> None:
+        """Show the Power Level and point budget read-only, for a *derived* budget.
+
+        A power's sub-build — a Summon's minion, a Metamorph form — is built on a
+        number the power hands it: ``rank x 15``, or its wielder's own total
+        (:mod:`mm_companion.core.rules.subbuilds`). Both are restamped every time the
+        build is opened, so leaving the spin boxes live would offer an edit that
+        silently does not stick. The rows stay *visible* — the budget is the whole
+        point of the window — they simply cannot be typed into.
+
+        Sticky, unlike :meth:`set_locked`: unlocking the sheet must not hand back a
+        field that was never the player's.
+        """
+        self._budget_fixed = fixed
+        self._apply_lock()
+
+    def _apply_lock(self) -> None:
+        """Re-apply the lock state to every editable field."""
+        derived = (self._power_level, self._power_points)
         for widget in self._editable:
-            set_widget_locked(widget, locked)
+            fixed = self._budget_fixed and widget in derived
+            set_widget_locked(widget, self._locked or fixed)

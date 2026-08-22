@@ -93,6 +93,7 @@ several of them are the only record of a bug that shaped it.
 | [The table blocks](docs/notes/table-blocks.md) | Abilities, Resistances, Advantages or Skills |
 | [Shared UI utilities and view modes](docs/notes/ui-utilities.md) | adding widgets, or the lock |
 | [The mod pipeline](docs/notes/mods.md) | data loading, startup, or a `register_*` seam |
+| [Accepted debts](docs/notes/debts.md) | picking up agreed work that is not done yet |
 
 Alongside them, `docs/` holds the longer-form documents the notes refer back to:
 the rules design (`mm-core-mechanics`, `mm-skills-design`, `mm-advantages-design`,
@@ -137,6 +138,14 @@ notes file that owns it.
 - **Extend an engine registry rather than editing a list** — readout kinds,
   condition mechanisms, stat appliers, config-field types and widgets, and sheet
   blocks all have a `register_*` hook a mod's Python module can call.
+- **The core rulebook is a gitignored local reference, read by grep.**
+  `reference/core-book.pdf` and the per-page text extracted from it under
+  `reference/core-book/` are ignored by git. Answer rules questions from `docs/`
+  and `docs/notes/` first; when the answer genuinely is not there, grep the
+  extracted text — see the `rulebook` skill. Never `Read` the PDF itself without
+  asking: it renders pages as images at ~2k tokens each. The book informs what a
+  mechanic does and is never transcribed into `data/` or `docs/` (see Licensing
+  boundary).
 
 ## Licensing boundary (matters when adding game data)
 

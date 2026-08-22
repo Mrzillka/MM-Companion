@@ -18,6 +18,7 @@ from .appliers import (
     resolve_contributions,
 )
 from .conditions import condition_speed_rank_mod
+from .derived import effort_contributions
 from .powers_cost import effect_effective_rank
 from .runtime import build_contributions, effect_is_active, live_powers, worn_items
 from .size import base_size_rank, effective_size_rank
@@ -52,6 +53,11 @@ class SpeedLine:
     rank_mod: int = 0
     immobilised: bool = False
     sources: tuple[str, ...] = ()
+    #: The mode key the line was netted from (``"ground"``, ``"flight"``) — what the
+    #: contributions are keyed by, as opposed to what the line is *called*. A caller that
+    #: needs to write back to a mode (Extra Effort pushing one) needs the key, and a
+    #: label is a display string that a ruleset may translate.
+    mode: str = ""
 
 
 def _size_speed_mod(char: Character, game_data: GameData) -> int:
@@ -194,10 +200,17 @@ def _movement_grants(char: Character, game_data: GameData) -> list[TraitContribu
 
     Gear travels under its own group and exclusivity, exactly as its trait bonuses do,
     so a worn glider is weighed against a Flight power rather than piled on top of it
-    (``docs/mm-equipment-design.md`` §3).
+    (``docs/mm-equipment-design.md`` §3). A mode pushed with Extra Effort joins them from
+    :func:`~.derived.effort_contributions`, in the group that never competes.
     """
 
-    grants: list[TraitContribution] = []
+    grants: list[TraitContribution] = [
+        # A mode's rank pushed with Extra Effort, in its own always-added group so it
+        # sits on top of the modes the build grants rather than competing with them.
+        grant
+        for grant in effort_contributions(char, game_data)
+        if grant.category == CATEGORY_MOVEMENT
+    ]
     for power in live_powers(char.powers):
         grants.extend(_measure_grants(power, char, game_data))
         grants.extend(
@@ -293,6 +306,7 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
             game_data.movement.ground_label,
             base + (ground.amount if ground else 0),
             sources=ground.sources if ground else (),
+            mode=ground_mode,
         )
     ]
     for mode, grants in by_mode.items():
@@ -304,6 +318,7 @@ def speed_lines(char: Character, game_data: GameData) -> list[SpeedLine]:
                 _mode_label(mode, game_data),
                 netted.amount,
                 sources=netted.sources,
+                mode=mode,
             )
         )
     return lines

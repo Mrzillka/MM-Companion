@@ -7,14 +7,27 @@ mutation methods the drop handlers delegate to (``add_effect`` / ``attach_modifi
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.core.powers import Power, PowerEffectInstance
-from mm_companion.core.rules import effect_total_cost
+from mm_companion.core.powers import (
+    STRUCTURE_ARRAY,
+    STRUCTURE_INDEPENDENT,
+    STRUCTURE_LINKED,
+    Power,
+    PowerEffectInstance,
+)
+from mm_companion.core.rules import (
+    effect_has_rank_dial,
+    effect_total_cost,
+    imposable_effects,
+    power_total_cost,
+)
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
 
 
 @pytest.fixture(scope="module")
@@ -115,6 +128,58 @@ def test_attaching_an_already_implicit_modifier_is_a_no_op(qapp: QApplication) -
     assert effect_total_cost(card.instance, data) == before
 
 
+def test_the_palette_offers_the_standard_configurations(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    _search, bricks = window._search_tabs["configurations"]
+    assert len(bricks) == len(data.configurations)
+    assert "blast" in {b._payload for b in bricks}
+
+
+def test_dropping_a_configuration_builds_it_and_titles_the_power(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+
+    cards = window.canvas.add_configuration("blast")
+
+    assert len(cards) == 1
+    assert [m.modifier_id for m in cards[0].instance.extras] == ["ranged"]
+    assert window._name.text() == "Blast"
+    cards[0].instance.rank = 8
+    assert power_total_cost(window.power, data) == 16
+
+
+def test_a_multi_effect_configuration_arrives_with_its_structure(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+
+    cards = window.canvas.add_configuration("berserker_rage")
+
+    assert len(cards) == 2
+    assert window.power.structure == STRUCTURE_LINKED
+
+
+def test_a_configuration_drop_leaves_an_existing_build_alone(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window._name.setText("Sunfire Lance")
+    window.canvas.add_effect("damage")
+
+    window.canvas.add_configuration("berserker_rage")
+
+    # Appended, not substituted: the player's own name and structure survive, and a
+    # Linked configuration does not silently relink a power they set up themselves.
+    assert window._name.text() == "Sunfire Lance"
+    assert window.power.structure == STRUCTURE_INDEPENDENT
+    assert len(window.power.effects) == 3
+
+
+def test_an_unknown_configuration_id_adds_nothing(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    assert window.canvas.add_configuration("no-such-configuration") == []
+    assert window.power.effects == []
+
+
 def test_duplicate_attach_is_a_no_op_only_when_the_copies_are_indistinguishable(
     qapp: QApplication,
 ) -> None:
@@ -122,16 +187,21 @@ def test_duplicate_attach_is_a_no_op_only_when_the_copies_are_indistinguishable(
     window = PowerConstructorWindow(data, character=_char_with_focus())
     card = window.canvas.add_effect("damage")
 
-    # Ranged carries no config, so a second copy would change no game term and only
-    # double-charge the power.
-    card.attach_modifier("ranged")
+    # A second Penetrating would change no game term and only double-charge the power.
+    card.attach_modifier("penetrating")
     cost = effect_total_cost(card.instance, data)
-    card.attach_modifier("ranged")
-    assert [s.modifier_id for s in card.instance.extras] == ["ranged"]
+    card.attach_modifier("penetrating")
+    assert [s.modifier_id for s in card.instance.extras] == ["penetrating"]
     assert effect_total_cost(card.instance, data) == cost
 
-    # Limited carries a free-text circumstance, so each copy means something different
-    # and taking it twice is legitimate.
+    # Nor does carrying config make a modifier repeatable: Ranged dials which range it
+    # upgrades from, and a second copy would charge that twice while overriding nothing.
+    card.attach_modifier("ranged")
+    card.attach_modifier("ranged")
+    assert [s.modifier_id for s in card.instance.extras] == ["penetrating", "ranged"]
+
+    # Limited is marked `repeatable` in the ruleset because its meaning lives in its
+    # free-text circumstance, so each copy is a different restriction.
     card.attach_modifier("limited")
     card.attach_modifier("limited")
     assert [s.modifier_id for s in card.instance.flaws] == ["limited", "limited"]
@@ -231,7 +301,10 @@ def test_unranked_modifier_chip_has_no_rank_spin_box(qapp: QApplication) -> None
     card = window.canvas.add_effect("damage")
     card.attach_modifier("ranged")  # per-rank, not ranked
 
-    assert card._chips[0].findChild(QSpinBox) is None
+    # The rank spin is the one wearing the "×" prefix. A per-rank modifier carries no
+    # spin box at all now that its rank band is edited in Extended settings.
+    spins = card._chips[0].findChildren(QSpinBox)
+    assert [s for s in spins if s.prefix() == "×"] == []
 
 
 def test_extras_and_flaws_groups_reveal_and_hide_with_their_chips(qapp: QApplication) -> None:
@@ -301,6 +374,18 @@ def test_effect_config_combos_write_choices_to_the_model(qapp: QApplication) -> 
     assert _stat(window, 0, "resistance").value == "Will vs. DC 11"
 
 
+def _visible(card, widget_type) -> list:
+    """A card's widgets of one type that are actually on show.
+
+    Several config pickers are built and then hidden rather than left out — a gate can
+    open again, and rebuilding the form from inside the very combo that changed is how
+    Qt teardown bugs start. So "how many pickers does this card offer" is a question
+    about visibility, not about how many objects exist.
+    """
+
+    return [w for w in card.findChildren(widget_type) if w.isVisibleTo(card)]
+
+
 def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QCheckBox, QComboBox
 
@@ -308,13 +393,15 @@ def test_degrees_are_single_select_until_extra_condition(qapp: QApplication) -> 
     card = window.canvas.add_effect("affliction")
 
     # By default the degrees are single-select combos and there are no check boxes.
-    assert len(card.findChildren(QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
-    assert card.findChildren(QCheckBox) == []
+    # Counted *visible*: the imposed-effect picker exists but is gated shut until a
+    # degree reads Transformed, so it is not one of the combos on offer.
+    assert len(_visible(card, QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
+    assert card._config_host.findChildren(QCheckBox) == []
 
     card.attach_modifier("extra_condition")  # the Affliction-only gating extra
-    assert card.findChildren(QCheckBox)  # all three degrees are now multiselect
+    assert card._config_host.findChildren(QCheckBox)  # all three degrees are now multiselect
     # only resistance and overcomeBy stay single-select combos
-    assert len(card.findChildren(QComboBox)) == 2
+    assert len(_visible(card, QComboBox)) == 2
 
 
 def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -> None:
@@ -324,7 +411,7 @@ def test_extra_condition_enables_two_conditions_per_degree(qapp: QApplication) -
     card = window.canvas.add_effect("affliction")
     card.attach_modifier("extra_condition")
 
-    boxes = {b.text(): b for b in card.findChildren(QCheckBox)}
+    boxes = {b.text(): b for b in card._config_host.findChildren(QCheckBox)}
     boxes["Dazed"].setChecked(True)
     boxes["Vulnerable"].setChecked(True)
 
@@ -488,7 +575,9 @@ def test_switching_to_array_recomputes_cost_and_badges_cards(qapp: QApplication)
 
     window.canvas._mode_bar.changed.emit(STRUCTURE_ARRAY)
     assert window.power.structure == STRUCTURE_ARRAY
-    assert window._cost.text() == "Total cost: 9 PP"  # 8 base + 1 flat alternate
+    # An array is the other build whose total is not the sum of its cards, so the
+    # working is shown for the same reason Removable's is.
+    assert window._cost.text() == "Total cost: 9 PP  (8 base + 1 alternate)"
     assert base._role_badge.text() == "Base"
     assert alt._role_badge.text().startswith("Alternate")
 
@@ -710,23 +799,103 @@ def test_constructor_summary_shows_the_characters_attack_bonus(qapp: QApplicatio
     assert rows["check"].value == "7 vs. Defense"
 
 
-# -- Enhanced Trait target picker & trait-boost display -----------------------
+# -- Enhanced Trait trait allocation & trait-boost display --------------------
 
 
 def _target_combo(card):
-    """The Enhanced-Trait target combo on an effect card, or None."""
+    """The single-target boost combo on an effect card, or None.
+
+    Enhanced Trait no longer has one — it allocates ranks across several traits through
+    :func:`_trait_rows` instead. Kept to assert exactly that, and that the boosters which
+    never had a picker still don't.
+    """
     from PySide6.QtWidgets import QComboBox
 
     return next((c for c in card.findChildren(QComboBox) if c.findData("STR") >= 0), None)
 
 
-def test_configurable_effect_offers_a_trait_target_picker(qapp: QApplication) -> None:
+def _trait_rows(card):
+    """The (trait picker, rank spin) pairs of an effect card's trait-allocation rows.
+
+    The picker is a composite now — a trait combo plus the qualifier control that
+    appears for a focused skill or a subject-taking advantage — so a row is addressed
+    through it rather than through the bare combo it contains.
+    """
+    from PySide6.QtWidgets import QSpinBox
+
+    from mm_companion.ui.power_constructor import TraitPicker
+
+    return [(p, p.parent().findChild(QSpinBox)) for p in card.findChildren(TraitPicker)]
+
+
+def _trait_combo(picker):
+    """The trait half of a picker — the combo that names the trait."""
+    from PySide6.QtWidgets import QComboBox
+
+    return next(c for c in picker.findChildren(QComboBox) if c.findData("STR") >= 0)
+
+
+def _qualifier(picker):
+    """The picker's qualifier control, or ``None`` while the chosen trait needs none."""
+    from PySide6.QtWidgets import QComboBox, QLineEdit
+
+    trait = _trait_combo(picker)
+    # Direct children only: an *editable* combo owns an internal QLineEdit, and a
+    # recursive search would hand that back as though it were the qualifier field.
+    direct = Qt.FindChildOption.FindDirectChildrenOnly
+    controls = [
+        *picker.findChildren(QComboBox, options=direct),
+        *picker.findChildren(QLineEdit, options=direct),
+    ]
+    # isHidden, not isVisible: nothing in an unshown window is "visible".
+    return next((w for w in controls if not w.isHidden() and w is not trait), None)
+
+
+def _allocate(card, pairs) -> None:
+    """Fill the card's trait-allocation rows with ``(trait key, ranks)``, adding as needed.
+
+    A *qualified* key ("Expertise::Law") is set on both halves of the picker, the way a
+    player would: the trait, then the focus or subject it narrows to.
+    """
+    from PySide6.QtWidgets import QComboBox, QPushButton
+
+    from mm_companion.core.rules import split_trait_key
+
+    add = next(b for b in card.findChildren(QPushButton) if b.text().endswith("Add"))
+    while len(_trait_rows(card)) < len(pairs):
+        add.click()
+    for (picker, spin), (target, ranks) in zip(_trait_rows(card), pairs, strict=False):
+        base, qualifier = split_trait_key(target)
+        combo = _trait_combo(picker)
+        combo.setCurrentIndex(combo.findData(base))
+        if qualifier:
+            control = _qualifier(picker)
+            assert control is not None, f"{base} offers no qualifier control"
+            if isinstance(control, QComboBox):
+                index = control.findData(qualifier)
+                if index >= 0:
+                    control.setCurrentIndex(index)
+                else:
+                    control.setCurrentText(qualifier)
+            else:
+                control.setText(qualifier)
+        spin.setValue(ranks)
+
+
+def test_configurable_effect_offers_a_trait_allocation(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_trait")
-    combo = _target_combo(card)
-    assert combo is not None  # abilities, resistances, skills all offered
+    rows = _trait_rows(card)
+    assert len(rows) == 1  # one blank row to start — the picker *is* the question
+    picker, spin = rows[0]
+    combo = _trait_combo(picker)
     assert combo.findData("TOUGHNESS") >= 0
     assert combo.findData("Acrobatics") >= 0
+    assert combo.findData("Fearless") >= 0  # advantages are traits an Enhanced Trait raises
+    assert spin is not None
+    # An ability has one row and nothing to narrow, so no second control appears.
+    combo.setCurrentIndex(combo.findData("STR"))
+    assert _qualifier(picker) is None
 
 
 def test_fixed_and_plain_effects_have_no_target_picker(qapp: QApplication) -> None:
@@ -734,14 +903,34 @@ def test_fixed_and_plain_effects_have_no_target_picker(qapp: QApplication) -> No
     # Protection's target is fixed (Toughness), Damage isn't a booster at all.
     assert _target_combo(window.canvas.add_effect("protection")) is None
     assert _target_combo(window.canvas.add_effect("damage")) is None
+    # Enhanced Trait's rows replace the old one-trait combo rather than joining it.
+    card = window.canvas.add_effect("enhanced_trait")
+    assert card._build_target_picker(card._effect()) is None
 
 
-def test_picking_a_target_writes_it_to_the_effect_config(qapp: QApplication) -> None:
+def test_allocating_traits_writes_rows_to_the_effect_config(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_trait")
-    combo = _target_combo(card)
-    combo.setCurrentIndex(combo.findData("AWE"))
-    assert card.instance.config["target"] == "AWE"
+    card._rank.setValue(8)
+    _allocate(card, [("AWE", 2), ("Stealth", 6)])
+    assert card.instance.config["traits"] == [
+        {"trait": "AWE", "ranks": 2},
+        {"trait": "Stealth", "ranks": 6},
+    ]
+
+
+def test_each_allocated_trait_is_priced_at_its_own_rate(qapp: QApplication) -> None:
+    """The worked example: Strength 2 + Treatment 6 + Expertise 2, Limited, is 4 PP.
+
+    4 + 3 + 1 = 8 at each trait's own buying rate, halved by the -1/rank Limited flaw.
+    """
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(10)
+    _allocate(card, [("STR", 2), ("Treatment", 6), ("Expertise", 2)])
+    assert effect_total_cost(card.instance, load_game_data()) == 8
+    card.attach_modifier("limited_enhanced_trait")
+    assert effect_total_cost(card.instance, load_game_data()) == 4
 
 
 def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplication) -> None:
@@ -753,8 +942,7 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
     window._name.setText("Mighty")
     card = window.canvas.add_effect("enhanced_trait")
     card._rank.setValue(3)
-    combo = _target_combo(card)
-    combo.setCurrentIndex(combo.findData("STR"))
+    _allocate(card, [("STR", 3)])
     window._save_power()
 
     enh = sheet.abilities._ability_enh["STR"]
@@ -778,11 +966,15 @@ def test_removing_a_boosting_power_clears_the_enhancement(qapp: QApplication) ->
     )
     sheet = CharacterSheet(data, character)
 
-    tough = sheet.resistances._resistance_enh["TOUGHNESS"]
-    assert tough.text() == "→ 5"  # Protection boost shown on load
+    tough = sheet.resistances._resistance_total["TOUGHNESS"]
+    assert tough.text() == "5"  # Protection boost shown on load
+    assert "Armor" in tough.toolTip()
 
     sheet.powers._remove_power(character.powers[0])
-    assert tough.text() == ""  # boost cleared when the power goes
+    # The Total column always states the resistance, so losing the boost takes it to
+    # the number the character is left with rather than to a blank cell.
+    assert tough.text() == "0"
+    assert tough.toolTip() == ""
 
 
 # -- edit-in-place ------------------------------------------------------------
@@ -841,7 +1033,7 @@ def test_editing_a_multi_effect_power_restores_its_structure(qapp: QApplication)
     assert window.power.structure == STRUCTURE_ARRAY
     assert window.canvas.cards[0]._role_badge.text() == "Base"
     assert window.canvas.cards[1]._role_badge.text().startswith("Alternate")
-    assert window._cost.text() == "Total cost: 9 PP"  # 8 base + 1 flat alternate
+    assert window._cost.text() == "Total cost: 9 PP  (8 base + 1 alternate)"
 
 
 def test_editing_from_the_section_replaces_the_power_in_place(qapp: QApplication) -> None:
@@ -958,12 +1150,319 @@ def test_damage_strength_based_checkbox_toggles_the_extra(qapp: QApplication) ->
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")
-    box = next(b for b in card.findChildren(QCheckBox))  # the Strength-Based config
+    box = next(b for b in card._config_host.findChildren(QCheckBox))  # Strength-Based
 
     box.setChecked(True)
     assert [s.modifier_id for s in card.instance.extras] == ["strength_based"]
     box.setChecked(False)
     assert card.instance.extras == []
+
+
+def _band_rows(window) -> list:
+    """The Extended-settings band lines, each a title over an optional effect name."""
+
+    host = window._rank_bands_host
+    return [host.itemAt(i).widget() for i in range(host.count())]
+
+
+def _band_spins(row) -> list:
+    from PySide6.QtWidgets import QSpinBox
+
+    return row.findChildren(QSpinBox)
+
+
+def test_only_a_per_rank_modifier_gets_a_band_row(qapp: QApplication) -> None:
+    """A flat modifier is charged once whatever it covers, so a band would say nothing."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    assert not window._rank_bands_row.isVisibleTo(window._extended_body)
+
+    card.attach_modifier("tiring")  # per-rank
+    window.canvas.changed.emit()
+    assert window._rank_bands_row.isVisibleTo(window._extended_body)
+    assert len(_band_rows(window)) == 1
+
+    card.attach_modifier("quirk")  # flat
+    window.canvas.changed.emit()
+    assert len(_band_rows(window)) == 1
+
+
+def test_a_band_row_names_its_effect_only_when_two_of_them_share_a_modifier(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    def names(row) -> list[str]:
+        return [lbl.text() for lbl in row.findChildren(QLabel) if lbl.font().italic()]
+
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    first._rank.setValue(12)
+    first.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    assert names(_band_rows(window)[0]) == []  # nothing to be confused with
+
+    second = window.canvas.add_effect("affliction")
+    second._rank.setValue(8)
+    second.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    rows = _band_rows(window)
+    assert len(rows) == 2
+    assert [names(row) for row in rows] == [["Damage"], ["Affliction"]]
+
+
+def test_a_band_covering_every_rank_stores_nothing_at_all(qapp: QApplication) -> None:
+    """Widening the pair all the way is how a band is taken back off."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    selection = card.instance.flaws[0]
+
+    low, high = _band_spins(_band_rows(window)[0])
+    assert (low.maximum(), high.maximum()) == (12, 12)
+    assert (low.value(), high.value()) == (1, 12)
+
+    low.setValue(9)
+    assert (selection.applies_from, selection.applies_to) == (9, 12)
+
+    low.setValue(1)
+    assert (selection.applies_from, selection.applies_to) == (0, 0)
+    assert "applies_from" not in selection.to_dict()
+
+
+def test_a_band_moves_the_cards_own_cost_formula(qapp: QApplication) -> None:
+    """The line under the card is the working; it has to follow the band that changed it.
+
+    It used to be restated for free — the band lived on a chip, and a chip's `changed`
+    went through the card — so editing it from the window left the card printing the
+    price of a build that no longer existed.
+    """
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+
+    before = card._cost.text()
+    _band_spins(_band_rows(window)[0])[0].setValue(9)
+    after = card._cost.text()
+
+    assert after != before
+    # Eight plain ranks at full price and four discounted ones, priced in one run each.
+    assert after.endswith(f"= {effect_total_cost(card.instance, window._data)} PP")
+
+
+def test_a_band_never_reads_backwards(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+
+    low, high = _band_spins(_band_rows(window)[0])
+    high.setValue(4)
+    low.setValue(9)
+    assert high.value() == 9
+    assert card.instance.flaws[0].applies_from == 9
+
+
+def test_a_band_follows_a_rank_edited_down_under_it(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(12)
+    card.attach_modifier("tiring")
+    window.canvas.changed.emit()
+    _band_spins(_band_rows(window)[0])[0].setValue(9)
+
+    card._rank.setValue(6)
+    low, high = _band_spins(_band_rows(window)[0])
+    assert (low.maximum(), high.maximum()) == (6, 6)
+    assert (low.value(), high.value()) == (6, 6)
+
+
+def test_a_size_effect_opens_with_its_slider_ticked_and_can_be_switched_off(
+    qapp: QApplication,
+) -> None:
+    """The whole point of the tri-state: the box used to change nothing on a Growth."""
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    growth = window.canvas.add_effect("growth")
+    growth._rank.setValue(3)
+    window.canvas.changed.emit()
+    assert window._rank_dial.isChecked()
+    assert effect_has_rank_dial(growth.instance, data) is True
+
+    window._rank_dial.setChecked(False)
+    assert growth.instance.rank_dial is False
+    assert effect_has_rank_dial(growth.instance, data) is False
+
+
+def test_an_untouched_box_leaves_a_dropped_effect_its_own_default(
+    qapp: QApplication,
+) -> None:
+    """Dropping a Growth into a Blast power must not take the Growth's ladder away."""
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window.canvas.add_effect("damage")._rank.setValue(10)
+    growth = window.canvas.add_effect("growth")
+    growth._rank.setValue(3)
+
+    assert growth.instance.rank_dial is None
+    assert effect_has_rank_dial(growth.instance, data) is True
+
+
+def test_a_dynamic_array_holds_its_sliders_on(qapp: QApplication) -> None:
+    """The split is made on them, so switching them off would leave it no control."""
+
+    window = PowerConstructorWindow(load_game_data())
+    window.canvas.add_effect("damage")._rank.setValue(10)
+    window.canvas.add_effect("flight")._rank.setValue(5)
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    assert not window._rank_dial_note.isVisibleTo(window._rank_dial_row)
+
+    window.canvas._on_structure_changed(MODE_ARRAY_DYNAMIC)
+    assert window._rank_dial.isChecked()
+    assert all(e.rank_dial for e in window.power.effects)
+    assert window._rank_dial_note.isVisibleTo(window._rank_dial_row)
+    assert window._rank_dial.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+def test_dynamic_is_the_mode_bars_fourth_answer_not_a_per_card_switch(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    second = window.canvas.add_effect("affliction")
+
+    # No card carries a Dynamic box any more - the question is asked once, by the bar.
+    for card in (first, second):
+        assert [b for b in card.findChildren(QCheckBox) if b.text() == "Dynamic"] == []
+
+    window.canvas._on_structure_changed(MODE_ARRAY_DYNAMIC)
+    assert window.power.structure == STRUCTURE_ARRAY
+    assert all(e.dynamic for e in window.power.effects)
+
+    # And plain Array is how it is taken back off.
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    assert not any(e.dynamic for e in window.power.effects)
+
+
+def test_the_dynamic_segment_lights_for_an_array_with_any_dynamic_member(
+    qapp: QApplication,
+) -> None:
+    """A mixed array saved while Dynamic was per-member reads as what it is."""
+
+    window = PowerConstructorWindow(load_game_data())
+    window.canvas.add_effect("damage")
+    window.canvas.add_effect("affliction")
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    window.power.effects[1].dynamic = True
+    window.canvas._sync_structure_ui()
+
+    bar = window.canvas._mode_bar
+    assert bar._buttons[MODE_ARRAY_DYNAMIC].isChecked()
+    assert not bar._buttons[STRUCTURE_ARRAY].isChecked()
+
+
+def test_a_dynamic_array_raises_the_powers_total(qapp: QApplication) -> None:
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window.canvas.add_effect("damage")._rank.setValue(8)
+    window.canvas.add_effect("affliction")
+    window.canvas._on_structure_changed(STRUCTURE_ARRAY)
+    before = power_total_cost(window.power, data)
+
+    window.canvas._on_structure_changed(MODE_ARRAY_DYNAMIC)
+    # 2 points for the Dynamic alternate rather than 1, and one Alternate Effect rank
+    # on top of the base's own full cost.
+    assert power_total_cost(window.power, data) == before + 2
+
+
+def test_the_imposed_effect_picker_opens_only_on_transformed(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+
+    def combos() -> list[QComboBox]:
+        return card._config_host.findChildren(QComboBox)
+
+    def degree_combo(index: int) -> QComboBox:
+        return combos()[index]
+
+    # Built but shut: an Affliction imposing no Transformed condition offers no picker.
+    assert not combos()[-1].isVisibleTo(card)
+    assert "imposedEffect" not in card.instance.config
+
+    degree3 = degree_combo(4)  # resistance, overcomeBy, degree1, degree2, degree3
+    degree3.setCurrentIndex(
+        [degree3.itemText(i) for i in range(degree3.count())].index("Transformed")
+    )
+    imposed = combos()[-1]
+    assert imposed.isVisibleTo(card)
+    # The rank spin is gated one step further on — on an effect actually being named,
+    # not merely on the degree that could impose one. Without that, an Affliction whose
+    # picker was still empty printed "At rank: 1" in its game terms, a number for a
+    # choice nobody had made.
+    assert "imposedRank" not in card.instance.config
+
+    imposed.setCurrentIndex([imposed.itemText(i) for i in range(imposed.count())].index("Morph"))
+    assert card.instance.config["imposedEffect"] == "morph"
+    # Now it seeds its own default, which is the number everything downstream prices
+    # against.
+    assert card.instance.config["imposedRank"] == 1
+
+    # Closing the outer gate drops both: the effect it held, and the rank that was only
+    # ever gated on that effect. Nothing is warned about a choice the player cannot see.
+    degree3.setCurrentIndex(0)
+    assert "imposedEffect" not in card.instance.config
+    assert "imposedRank" not in card.instance.config
+
+
+def test_the_imposed_picker_offers_only_what_the_rules_allow(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    card = window.canvas.add_effect("affliction")
+    imposed = card._config_host.findChildren(QComboBox)[-1]
+
+    offered = {imposed.itemData(i) for i in range(imposed.count())} - {""}
+    assert offered == {e.id for e in imposable_effects(data)}
+    # No Damage to impose, and no way to type one in: the picker is the rule.
+    assert "damage" not in offered
+
+
+def test_an_over_budget_imposed_effect_warns_in_the_constructor(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QAbstractSpinBox, QComboBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("affliction")
+    card._rank.setValue(6)  # a 6 PP Affliction
+
+    combos = card._config_host.findChildren(QComboBox)
+    degree3 = combos[4]
+    degree3.setCurrentIndex(
+        [degree3.itemText(i) for i in range(degree3.count())].index("Transformed")
+    )
+    imposed = card._config_host.findChildren(QComboBox)[-1]
+    imposed.setCurrentIndex([imposed.itemText(i) for i in range(imposed.count())].index("Morph"))
+    assert not window._warning.isVisible() or "budget" not in window._warning.text()
+
+    rank = [s for s in card._config_host.findChildren(QAbstractSpinBox) if s.isVisibleTo(card)][-1]
+    rank.setValue(3)  # Morph 3 = 15 PP against a 6 PP Affliction
+    assert "Imposed effect over budget" in window._warning.text()
+    assert "15 PP" in window._warning.toolTip()
 
 
 def test_allocation_checklist_spends_ranks_and_warns_when_over(qapp: QApplication) -> None:
@@ -973,7 +1472,7 @@ def test_allocation_checklist_spends_ranks_and_warns_when_over(qapp: QApplicatio
     card = window.canvas.add_effect("enhanced_senses")
     card._rank.setValue(2)
 
-    boxes = {b.text().split(" (")[0]: b for b in card.findChildren(QCheckBox)}
+    boxes = {b.text().split(" (")[0]: b for b in card._config_host.findChildren(QCheckBox)}
     boxes["Accurate"].setChecked(True)  # tiered 2/4 → default tier 1 = 2 ranks
     assert card.instance.config["senses"] == [{"id": "accurate", "tier": 1}]
     assert not window._warning.isVisibleTo(window)  # 2 of 2 ranks — exactly on budget
@@ -1008,13 +1507,15 @@ def test_modifier_chip_config_drives_cost(qapp: QApplication) -> None:
     card = window.canvas.add_effect("protection")
     card._rank.setValue(10)
     card.attach_modifier("removable")
-    assert window._cost.text() == "Total cost: 9 PP"  # -1 flat by default
+    # Removable is charged against the *power's* total, 10 here, at its value per 5
+    # points rounded up — so -1 x 2, and the footer shows that arithmetic.
+    assert window._cost.text() == "Total cost: 8 PP  (10 − 2 Removable)"
 
     chip = card._chips[0]
-    combo = chip.findChild(QComboBox)  # the tier selector
+    combo = chip.findChild(QComboBox)  # the tier selector, the first of the chip's two
     combo.setCurrentIndex(combo.findData("easily_removable"))
-    assert chip.selection.config == {"tier": "easily_removable"}
-    assert window._cost.text() == "Total cost: 8 PP"  # -2 flat
+    assert chip.selection.config == {"tier": "easily_removable", "loss": "long_term"}
+    assert window._cost.text() == "Total cost: 6 PP  (10 − 4 Removable)"  # -2 x 2
 
 
 def test_modifier_chip_text_field_writes_config(qapp: QApplication) -> None:
@@ -1067,15 +1568,14 @@ def test_variable_conditions_full_scope_hides_all_degree_pickers(qapp: QApplicat
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("affliction")
-    assert len(card.findChildren(QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
+    assert len(_visible(card, QComboBox)) == 5  # resistance + overcomeBy + 3 degrees
 
     card.attach_modifier("variable_conditions")  # defaults to the 2-point (all) scope
     notes = [lbl.text() for lbl in card.findChildren(QLabel)]
     assert notes.count("chosen when used") == 3  # every degree deferred to use-time
     # Only resistance + overcomeBy remain as *visible* combos; the chip's own "which
     # degree" picker exists but is hidden at full scope, so it doesn't count.
-    visible = [c for c in card.findChildren(QComboBox) if c.isVisibleTo(card)]
-    assert len(visible) == 2
+    assert len(_visible(card, QComboBox)) == 2
 
 
 def test_variable_conditions_partial_scope_defers_one_degree(qapp: QApplication) -> None:
@@ -1105,7 +1605,7 @@ def test_limited_degree_hides_the_chosen_degree_picker(qapp: QApplication) -> No
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("affliction")
     # resistance + overcomeBy + 3 degree pickers.
-    assert len(card.findChildren(QComboBox)) == 5
+    assert len(_visible(card, QComboBox)) == 5
 
     card.attach_modifier("limited_degree")  # an Affliction flaw with a degree picker
     # The flaw defaults to its first option (1st degree), so that degree's condition
@@ -1124,22 +1624,43 @@ def test_limited_degree_hides_the_chosen_degree_picker(qapp: QApplication) -> No
     assert "degree3" not in card.instance.config  # the disabled tier stores no condition
 
 
-def test_reduced_trait_offers_a_data_driven_trait_picker(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QComboBox
+def test_reduced_trait_offers_data_driven_trait_rows(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox, QSpinBox
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_trait")
-    card.attach_modifier("reduced_trait")  # an Enhanced Trait flaw: which trait drops
+    card.attach_modifier("reduced_trait")  # an Enhanced Trait flaw: which traits drop
     chip = card._chips[0]
     combo = chip.findChild(QComboBox)
     assert combo is not None
-    # The picker is populated from the game data (abilities/resistances/skills), not
-    # a static option list, and defaults to the unset "choose a trait" row.
+    # The picker is populated from the game data (abilities/resistances/skills/
+    # advantages), not a static option list, and defaults to the unset "choose" row.
     labels = [combo.itemText(i).strip() for i in range(combo.count())]
     assert "Strength" in labels and "Dodge" in labels
     assert combo.currentData() == ""  # no trait forced by default
     combo.setCurrentIndex(combo.findData("STR"))
-    assert card.instance.flaws[0].config["reduced_target"] == "STR"
+    chip.findChild(QSpinBox).setValue(2)
+    assert card.instance.flaws[0].config["reduced"] == [{"trait": "STR", "ranks": 2}]
+
+
+def test_reduced_trait_discounts_by_what_the_lowered_trait_cost(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox, QSpinBox
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+    assert effect_total_cost(card.instance, data) == 8  # 4 ranks at 2 PP a rank
+
+    card.attach_modifier("reduced_trait")
+    chip = card._chips[0]
+    chip.findChild(QComboBox).setCurrentIndex(chip.findChild(QComboBox).findData("DODGE"))
+    chip.findChild(QSpinBox).setValue(3)
+    assert effect_total_cost(card.instance, data) == 5  # 8 less the 3 PP of Dodge
+
+    chip.findChild(QSpinBox).setValue(50)  # more than the effect was ever worth
+    assert effect_total_cost(card.instance, data) == 1  # the rules' 1 PP floor holds
 
 
 # Cross-power relationships (Independent / Array / Linked between whole powers) are no
@@ -1167,7 +1688,7 @@ def test_mod_registered_config_field_type_renders_via_registry(qapp: QApplicatio
 
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
     card = window.canvas.add_effect("damage")
-    field = SimpleNamespace(key="mod_field", options=[])
+    field = SimpleNamespace(key="mod_field", options=[], source="")
 
     # An unregistered type falls back to the generic option combo.
     assert isinstance(card._config_widget(field, "stars"), QComboBox)
@@ -1219,13 +1740,16 @@ def test_effects_sort_toggle_hides_group_headers(qapp: QApplication) -> None:
     from mm_companion.ui.power_constructor import _GROUP_HEADER
 
     window = PowerConstructorWindow(load_game_data())
+    # Scoped to the Effects tab: Configurations is grouped and sortable too, and a
+    # window-wide search would toggle one tab and assert about both.
+    tab = window._search_tabs["effects"][0].parentWidget()
     # Select headers by their object name, not their text — a brick can share a group's
     # name (the Attack extra vs. the Attack effect group).
-    headers = [lbl for lbl in window.findChildren(QLabel) if lbl.objectName() == _GROUP_HEADER]
+    headers = [lbl for lbl in tab.findChildren(QLabel) if lbl.objectName() == _GROUP_HEADER]
     assert headers  # grouped by effect type by default
     assert all(not h.isHidden() for h in headers)
 
-    check = next(c for c in window.findChildren(QCheckBox) if "Sort A" in c.text())
+    check = next(c for c in tab.findChildren(QCheckBox) if "Sort A" in c.text())
     check.setChecked(True)  # flat alphabetical view drops the headers
     assert all(h.isHidden() for h in headers)
 
@@ -1429,7 +1953,7 @@ def test_allocation_options_hint_what_each_mode_does(qapp: QApplication) -> None
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_movement")
 
-    boxes = card.findChildren(QCheckBox)
+    boxes = card._config_host.findChildren(QCheckBox)
     wall_crawling = next(b for b in boxes if b.text().startswith("Wall-Crawling"))
     assert "walls" in wall_crawling.toolTip()
 
@@ -1656,3 +2180,338 @@ def test_the_note_says_what_this_wielder_size_is_worth(qapp: QApplication) -> No
 
     assert "Huge" in window._size_damage_note.text()
     assert "+2" in window._size_damage_note.text()
+
+
+def test_allocating_a_trait_updates_the_cards_own_cost_line(qapp: QApplication) -> None:
+    """The card's footer must move when the allocation does.
+
+    Every other cost-changing gesture on a card refreshes it — a rank change, a
+    modifier attaching, a chip reordering. An effect's *config* never did, because
+    until Enhanced Trait was priced "as trait" no config field could change a cost.
+    It can now, and the footer is the only place the arithmetic is shown.
+    """
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    before = card._cost.text()
+
+    _allocate(card, [("STR", 4)])
+    assert card._cost.text() != before
+    assert card._cost.text().endswith("8 PP")
+
+
+def test_allocating_a_trait_updates_the_windows_total(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+    assert "8" in window._cost.text()
+
+
+def test_clearing_an_allocated_trait_takes_the_cost_back_down(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+
+    # Back to nothing chosen: an unallocated Enhanced Trait costs nothing, and the
+    # footer has to say so rather than keeping the number it last showed.
+    combo, spin = _trait_rows(card)[0]
+    spin.setValue(0)
+    assert isinstance(spin, QSpinBox)
+    assert card._cost.text().endswith("0 PP")
+
+
+def test_reduced_trait_rows_update_the_cost_line_too(qapp: QApplication) -> None:
+    """The flaw's rows travel a different wire — the chip's ``changed`` — so prove it."""
+    from PySide6.QtWidgets import QComboBox, QSpinBox
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    card._rank.setValue(4)
+    _allocate(card, [("STR", 4)])
+    assert card._cost.text().endswith("8 PP")
+
+    card.attach_modifier("reduced_trait")
+    chip = card._chips[0]
+    combo = chip.findChild(QComboBox)
+    combo.setCurrentIndex(combo.findData("DODGE"))
+    chip.findChild(QSpinBox).setValue(3)
+    assert card._cost.text().endswith("5 PP")  # 8 less the 3 PP three ranks of Dodge cost
+
+
+# --- the trait + qualifier picker -----------------------------------------------------
+
+
+def test_a_focused_skill_asks_which_focus(qapp: QApplication) -> None:
+    """Picking "Expertise" alone would silently raise every field of study the hero has,
+    so the picker asks which — offering their own focuses first, and taking anything."""
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.focuses["Expertise"] = ["Law"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Expertise"))
+
+    focus = _qualifier(picker)
+    assert focus is not None and focus.isEditable()
+    assert focus.itemText(0) == "Law"  # the hero's own row leads
+    focus.setCurrentText("Stealth")  # and anything else may simply be typed
+    assert picker.value() == "Expertise::Stealth"
+
+
+def test_a_specialized_pool_is_offered_but_the_whole_skill_is_the_default(
+    qapp: QApplication,
+) -> None:
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.specializations["Stealth"] = ["Urban"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+
+    pool = _qualifier(picker)
+    assert picker.value() == "Stealth"  # the whole skill, every row of it
+    pool.setCurrentIndex(pool.findData("spec::Urban"))
+    assert picker.value() == "Stealth::spec::Urban"
+
+
+def test_a_new_specialization_can_be_named_for_a_skill_that_has_none(
+    qapp: QApplication, monkeypatch
+) -> None:
+    """The pool a power grants need not be one anybody bought — an Enhanced Trait may
+    invent *Stealth: Rooftops*, and a list of the hero's existing pools could never
+    offer it."""
+
+    from PySide6.QtWidgets import QToolButton
+
+    from mm_companion.ui.power_constructor import trait_picker as picker_module
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)  # no character at all
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+
+    add = picker.findChild(QToolButton)
+    assert add is not None and not add.isHidden()
+    asked: list[tuple] = []
+
+    def fake(_parent, _title, label, items, *a, **k):
+        asked.append((label, list(items)))
+        return ("Rooftops", True)
+
+    monkeypatch.setattr(picker_module.QInputDialog, "getItem", staticmethod(fake))
+    add.click()
+    # The same question the Skills block's *Add specialization…* asks: the catalog's
+    # suggestions, and the skill's own guidance as the prompt.
+    assert asked[-1] == ("By specific environment or terrain", ["Hiding", "Sneaking", "Tailing"])
+    assert picker.value() == "Stealth::spec::Rooftops"
+    # And it is a row of the list from here on, not a value the widget merely remembers.
+    assert _qualifier(picker).findData("spec::Rooftops") >= 0
+
+
+def test_naming_a_specialization_is_not_a_purchase(qapp: QApplication, monkeypatch) -> None:
+    """The power pays for the pool it grants, so nothing lands on the sheet: the Skills
+    block grows the row itself, muted, out of the granted bonus."""
+
+    from PySide6.QtWidgets import QToolButton
+
+    from mm_companion.ui.power_constructor import trait_picker as picker_module
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+    monkeypatch.setattr(
+        picker_module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("Rooftops", True))
+    )
+    picker.findChild(QToolButton).click()
+
+    assert character.specializations.get("Stealth") is None
+
+
+def test_a_cancelled_specialization_leaves_the_row_alone(qapp: QApplication, monkeypatch) -> None:
+    from PySide6.QtWidgets import QToolButton
+
+    from mm_companion.ui.power_constructor import trait_picker as picker_module
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.specializations["Stealth"] = ["Urban"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Stealth"))
+    pool = _qualifier(picker)
+    pool.setCurrentIndex(pool.findData("spec::Urban"))
+
+    monkeypatch.setattr(
+        picker_module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("", False))
+    )
+    picker.findChild(QToolButton).click()
+    assert picker.value() == "Stealth::spec::Urban"
+
+
+def test_a_focused_skill_offers_its_pools_beside_its_focuses(qapp: QApplication) -> None:
+    """Expertise carries both kinds of row, so the one qualifier control has to answer
+    for both — and a pool reads as a pool rather than as its raw key."""
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.focuses["Expertise"] = ["Law"]
+    character.specializations["Expertise"] = ["Case Law"]
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Expertise"))
+
+    choice = _qualifier(picker)
+    index = choice.findData("spec::Case Law")
+    assert index >= 0 and choice.itemText(index) == "Case Law (specialized)"
+    choice.setCurrentIndex(index)
+    assert picker.value() == "Expertise::spec::Case Law"
+    choice.setCurrentText("Law")  # and a focus is still whatever was typed
+    assert picker.value() == "Expertise::Law"
+
+
+def test_a_granted_pool_survives_reopening_the_power(qapp: QApplication) -> None:
+    """A saved Enhanced Trait naming a pool nobody bought has to find it in the list it
+    is rebuilt against, or committing the row would quietly reselect the whole skill."""
+
+    data = load_game_data()
+    power = Power(
+        name="Rooftop Runner",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_trait",
+                rank=4,
+                config={"traits": [{"trait": "Stealth::spec::Rooftops", "ranks": 4}]},
+            )
+        ],
+    )
+    window = PowerConstructorWindow(data, power=power)
+    card = window.canvas.cards[0]
+    picker, _spin = _trait_rows(card)[0]
+
+    assert picker.value() == "Stealth::spec::Rooftops"
+
+
+def test_an_advantage_with_a_subject_asks_for_it(qapp: QApplication) -> None:
+    """Improved Critical is bought per attack; granting it without saying which would be
+    granting an advantage that names nothing."""
+
+    data = load_game_data()
+    character = Character.new_default(data)
+    character.powers.append(Power(name="Sword", effects=[PowerEffectInstance("damage", rank=3)]))
+    window = PowerConstructorWindow(data, character=character)
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Improved Critical"))
+
+    subject = _qualifier(picker)
+    assert subject is not None
+    subject.setCurrentIndex(subject.findData("Sword"))
+    assert picker.value() == "Improved Critical::Sword"
+
+
+def test_changing_the_trait_drops_the_qualifier_it_answered(qapp: QApplication) -> None:
+    """ "Law" is not a focus of Close Combat; carrying it over would be a row nobody
+    chose."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, _spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Expertise"))
+    _qualifier(picker).setCurrentText("Law")
+    assert picker.value() == "Expertise::Law"
+    combo.setCurrentIndex(combo.findData("STR"))
+    assert picker.value() == "STR"
+    assert _qualifier(picker) is None
+
+
+def test_the_trait_list_explains_its_advantages(qapp: QApplication) -> None:
+    """Ninety bare names is not a list anyone can build from; every one of them hints,
+    as the palette bricks beside it do."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    combo = _trait_combo(_trait_rows(card)[0][0])
+    hint = combo.itemData(combo.findData("Fearless"), Qt.ItemDataRole.ToolTipRole)
+    assert "Fearless" in hint and "not ranked" not in hint  # Fearless is ranked, max 2
+    assert "max 2" in hint
+    assert "Acrobatics" in combo.itemData(combo.findData("Acrobatics"), Qt.ItemDataRole.ToolTipRole)
+
+
+# --- the rank that follows its allocation ---------------------------------------------
+
+
+def test_an_enhanced_traits_rank_follows_its_rows(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    assert card._rank.isReadOnly()
+    _allocate(card, [("STR", 2), ("Treatment", 6)])
+    assert card.instance.rank == 8
+    assert card._rank.value() == 8
+    # And the readout meters nothing, because there is no budget to meter against.
+    label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
+    assert label.text() == "Allocated 8 ranks"
+
+
+def test_an_ordinary_allocation_effect_keeps_its_hand_set_rank(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_senses")
+    assert not card._rank.isReadOnly()
+    label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
+    assert "/" in label.text()
+
+
+def test_a_rank_spin_stops_at_the_advantages_own_ceiling(qapp: QApplication) -> None:
+    """Three ranks of a two-rank advantage is a point thrown away; the spin says so
+    before the point is spent rather than after."""
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    picker, spin = _trait_rows(card)[0]
+    combo = _trait_combo(picker)
+    combo.setCurrentIndex(combo.findData("Fearless"))
+    assert spin.maximum() == 2
+    combo.setCurrentIndex(combo.findData("Agile Grab"))  # not ranked at all
+    assert spin.maximum() == 1
+    combo.setCurrentIndex(combo.findData("STR"))  # an ability: bounded by the PL, not here
+    assert spin.maximum() > 2
+
+
+# --- the cost line and what it hides --------------------------------------------------
+
+
+def test_the_cost_line_groups_by_trait_kind_and_hovers_the_detail(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("enhanced_trait")
+    _allocate(card, [("STR", 2), ("Stealth", 1), ("Perception", 1)])
+    assert card._cost.text() == "Abilities 4 + Skills 1 = 5 PP"
+    detail = card._cost.toolTip()
+    for trait in ("Strength", "Stealth", "Perception"):
+        assert trait in detail
+    assert "1/2" in detail  # the halves the grouped line pooled
+
+
+def test_an_ordinary_effects_cost_line_hides_nothing(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    assert card._cost.toolTip() == ""

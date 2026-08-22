@@ -51,15 +51,27 @@ construction.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, Qt, QVariantAnimation, Signal
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    Qt,
+    QTimer,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
+    QComboBox,
+    QDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -75,23 +87,51 @@ from mm_companion.core.powers import (
     PowerGroup,
     PowerNode,
     power_is_homerule,
+    power_is_stunt,
 )
 from mm_companion.core.rules import (
     PIN_POWER,
+    USE_POWER_STUNT,
     PinRef,
     active_array_child,
+    active_array_effect_index,
+    array_pool_points,
+    clear_power_extra_effort,
+    counter_rolls,
     debilitated_traits,
+    dynamic_held_rank,
+    dynamic_member_cost,
+    dynamic_rank_share,
+    dynamic_share_points,
+    dynamic_share_steps,
+    effect_current_rank,
+    effect_display_name,
+    effect_has_rank_dial,
+    effect_is_selected,
+    effect_stands,
+    group_scope_note,
     leaf_powers,
+    live_array_children,
+    live_array_effects,
+    live_powers,
+    member_effects,
+    node_cost_formula,
     node_display_cost,
     power_display_name,
+    power_effects_are_array,
     power_has_custom_modifier,
     power_has_standing_effect,
-    power_pl_violations,
+    power_pool_points,
     power_roll_lines,
     power_rolls,
     power_runtime_gates,
+    power_total_cost,
+    power_violations,
     powers_points_spent,
+    pushable_effects,
     size_steps,
+    spend_extra_effort,
+    stunt_source,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -104,10 +144,12 @@ from mm_companion.ui.cards import (
     effect_title,
     effects_block,
 )
-from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.extra_effort import ExtraEffortDialog, add_power_effort_actions
 from mm_companion.ui.power_constructor import PowerConstructorWindow
+from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
     hline_separator,
@@ -132,12 +174,63 @@ _CLICK_HINTS = {
     "select": "Click this card to make it the array's live alternate; its siblings switch off.",
 }
 
+# The same click while the array's points are split across its Dynamic members, when
+# "its siblings switch off" has stopped being true: the split decides who is running,
+# so selecting one member no longer switches anything off (see live_array_children).
+_SPLIT_SELECT_HINT = (
+    "This array's points are split across its Dynamic members, so they are all running "
+    "at once — selecting a member only matters once the split is cleared."
+)
+
 # What each group mode is called on its title bar.
 _MODE_LABELS = {
     STRUCTURE_INDEPENDENT: "Group of powers",
     STRUCTURE_ARRAY: "Group of alternate effects",
+    MODE_ARRAY_DYNAMIC: "Group of dynamic alternate effects",
     STRUCTURE_LINKED: "Group of linked powers",
 }
+
+
+def _group_mode(group: PowerGroup) -> str:
+    """Which of the toggle's four segments a group is currently on.
+
+    :data:`~mm_companion.ui.power_constructor.canvas.MODE_ARRAY_DYNAMIC` is a *view*
+    over the model rather than a fourth stored structure — an array whose members carry
+    the ``dynamic`` flag — so this is the one place the view is derived and the switch,
+    the title and the rename placeholder cannot disagree about it. **Any** Dynamic
+    member counts, so a mixed array saved while Dynamic was a per-member checkbox reads
+    as what it is instead of as a plain array that quietly costs more.
+    """
+
+    if group.mode == STRUCTURE_ARRAY and any(child.dynamic for child in group.children):
+        return MODE_ARRAY_DYNAMIC
+    return group.mode
+
+
+def _held_effects(node) -> list[PowerEffectInstance]:
+    """The effects one share holds down — a whole member's, or a single effect's own.
+
+    A share is held by a member of an array, and an array exists at two levels: its
+    members are whole cards at the group level and single effects inside one power. The
+    slider is the same either way, so this is where the two shapes meet.
+    """
+
+    if isinstance(node, PowerEffectInstance):
+        return [node]
+    return member_effects(node)
+
+
+def _pool_is_split(group: PowerGroup) -> bool:
+    """Whether any of this array's Dynamic members is currently holding a share.
+
+    The one question that decides whether an array behaves as a set of mutually
+    exclusive alternates or as a pool running several at once, so the hint, the dimming
+    and the header button all ask it here rather than each spelling it out.
+    """
+
+    return group.mode == STRUCTURE_ARRAY and any(
+        child.dynamic and (child.dynamic_points or 0) > 0 for child in group.children
+    )
 
 
 def roll_lines(power: Power, character: Character, data: GameData) -> list[str]:
@@ -171,10 +264,10 @@ def _mode_toggle_style(locked: bool) -> str:
     sideways as it lights up, which is the lesson the theme's tool-button rules and
     ``QuickRollStar`` already carry. No ``font-size`` here: weight only.
 
-    Shared with :class:`_SizeLadder`, which is the same widget-level bargain over the
-    same tokens — a strip of checkable push buttons, exactly one lit. Keeping one
-    stylesheet for both is what stops a card carrying two segmented strips that agree
-    about nothing.
+    Used by the group card's mode switch alone now that the size ladder has become a
+    slider; it stays a shared helper because a segmented strip is the shape any future
+    one-of-N card control wants, and two of them agreeing about nothing is the bug this
+    docstring exists to prevent.
     """
     accent = theme.color("accent")
     rest = (
@@ -222,11 +315,17 @@ def _lit_width(button: QPushButton) -> int:
 
 
 class _ModeToggle(QWidget):
-    """A segmented Independent / Array / Linked switch for a group's title bar.
+    """A segmented Independent / Array / Dynamic array / Linked switch for a group.
 
-    Mirrors the Power Constructor's mode bar (the same three choices for how parts
+    Mirrors the Power Constructor's mode bar (the same four choices for how parts
     combine), but scoped to whole cards in a group rather than one power's effects.
-    Emits :attr:`modeChanged` with a structure id when the user picks a segment.
+    Emits :attr:`modeChanged` with a structure id — or
+    :data:`~mm_companion.ui.power_constructor.canvas.MODE_ARRAY_DYNAMIC` — when the user
+    picks a segment.
+
+    **Dynamic** was a checkbox beside this strip, which asked the same question twice:
+    an array and a Dynamic array are two answers to "how do these members combine", not
+    one answer and a modifier on it.
 
     The lit segment *is* how the card reports its group's mode, so it states its own
     look rather than trusting the platform to paint a checked button — see
@@ -243,6 +342,13 @@ class _ModeToggle(QWidget):
             "Array",
             "One member active at a time; the costliest is paid in "
             "full and each other is a flat-cost alternate.",
+        ),
+        (
+            MODE_ARRAY_DYNAMIC,
+            "Dynamic array",
+            "The members share the array's points and run at the same time at reduced "
+            "effectiveness, instead of switching each other off. Each alternate costs "
+            "the dearer Dynamic price, and the split is made on the cards' sliders.",
         ),
         (STRUCTURE_LINKED, "Linked", "Members always activate together as one; costs add up."),
     )
@@ -298,37 +404,260 @@ class _ModeToggle(QWidget):
             )
 
 
-class _SizeLadder(QWidget):
-    """A size effect's rungs, as one button per size the wielder can hold themselves at.
+class _SplitGroup:
+    """Keeps one array's share sliders honest about each other, live.
 
-    Growth 3 is not one leap to Gargantuan — it is Large, then Huge, then Gargantuan,
-    and which of the three you are standing at is a mid-fight decision. So the card
-    carries a button per rung (:func:`~mm_companion.core.rules.size_steps`), labelled
-    with the **size the character becomes** rather than the rank it costs: a rank is an
-    accounting fact the card already prints, while "Huge" is the thing being chosen.
-    The labels are read against the wielder, so a Small character's ladder starts at
-    Medium.
+    A split is one decision spread over several controls: every member draws from the
+    same pool, so moving one changes what the others may take. Without something joining
+    them each slider knew only its own bounds at the moment it was built, and the truth
+    arrived a rebuild later — which is how a handle came to move because a *sibling* had.
 
-    Three things the strip does that a plain segmented control does not. Nothing is lit
-    while the power is switched off — the ladder reports where the power *is*, and off
-    is nowhere — and clicking a rung from there switches the power on at that rung, so
-    going from dormant to Huge is one click rather than two. Clicking the rung that is
-    already lit switches the power **off**, exactly as clicking the card would, so the
-    strip is a whole control rather than one that can only turn a power on. And the
-    buttons stay live in the locked sheet, like every other runtime control on a card:
-    how big you are standing there is a play action, not a build edit — though it is
-    saved with the build, so picking a rung does mark the sheet unwritten.
+    So the dials report every notch they pass (:attr:`_RankDial.previewed`) and this
+    restates the rest of the array from that: each other dial's ceiling becomes what the
+    pool has left once the previewing one is paid, and the header says what is unspent.
+    Nothing here writes to the model — a drag is not a decision until it is released —
+    which is what keeps a whole gesture a single undoable step.
 
-    It wraps (:class:`~mm_companion.ui.flow_layout.FlowContainer`), because a Growth 10
-    is ten buttons and a card in a pinned strip is narrow.
+    A **phantom** entry is a member seated on a share it does not hold: an unsplit array
+    runs its selected alternate anyway, and its slider says so rather than reading "Off"
+    (:meth:`PowersSection._fallback_share`). Those points are not spoken for until the
+    player moves that handle, so they are counted as nothing while it sits where it was
+    drawn — otherwise the first split of an untouched array would find the pool already
+    eaten by a share nobody had assigned.
     """
 
-    stepPicked = Signal(int)  #: the effect rank the player picked
+    __slots__ = ("_pool", "_entries", "_readout")
+
+    def __init__(self, pool: int) -> None:
+        self._pool = max(0, pool)
+        # (dial, points-per-notch, phantom seat) per member, in card order. The seat is
+        # -1 for a member that really holds its share, which no dial value ever equals.
+        self._entries: list[tuple[_RankDial, list[int], int]] = []
+        self._readout = None
+
+    def add(self, dial: _RankDial, steps: list[int], phantom: bool = False) -> None:
+        self._entries.append((dial, steps, dial.value() if phantom else -1))
+        dial.previewed.connect(lambda _v: self.restate())
+
+    def set_readout(self, label) -> None:
+        self._readout = label
+
+    def _held(self) -> list[int]:
+        """What each member is holding *on screen* — the handle, not the model."""
+
+        return [
+            0 if dial.value() == seat else steps[min(dial.value(), len(steps) - 1)]
+            for dial, steps, seat in self._entries
+        ]
+
+    def restate(self) -> None:
+        """Re-bound every dial against the others and restate the header."""
+
+        held = self._held()
+        total = sum(held)
+        for index, (dial, steps, _seat) in enumerate(self._entries):
+            budget = self._pool - (total - held[index])
+            ceiling = PowersSection._share_index(steps, budget)
+            # Never below what this member already holds: a rebuild can move the pool
+            # under a split already made, and a ceiling that cut into a stored share
+            # would silently spend it the moment the dial was touched.
+            seated = min(dial.value(), len(steps) - 1)
+            dial.set_ceiling(max(ceiling, seated))
+        if self._readout is not None:
+            left = self._pool - total
+            text = f"{total}/{self._pool} PP split"
+            self._readout.setText(text if left <= 0 else f"{text} \u00b7 {left} left")
+            self._readout.setStyleSheet(tinted_style("tint.warning") if left < 0 else muted_style())
+
+
+class _RankDial(QWidget):
+    """A slider for the rank an effect is currently *held at*, and what that means.
+
+    Two kinds of power want one and they want the same control. A Growth 3 is not one
+    leap to Gargantuan — it is Large, then Huge, then Gargantuan, and which of the three
+    you are standing at is a mid-fight decision. A Damage 10 is not all-or-nothing
+    either: a hero pulling their punches fires it at 5. So the card carries one slider
+    from ``0`` to the effect's bought rank, with a label beside it saying what the
+    current notch *is*: the **size the character becomes** for a size effect (read
+    against the wielder, so a Small character's dial starts at Medium) and the plain
+    rank otherwise. A rank is an accounting fact the card already prints; "Huge" is the
+    thing being chosen.
+
+    Ranks the Size Table clamps together simply repeat their category, which is honest —
+    a Growth 8 really does spend several of its ranks at Gargantuan.
+
+    Four behaviours carried over from the strip of buttons this replaces:
+
+    * **Zero is off.** Nothing is held while the power is switched off — the dial
+      reports where the power *is*, and off is nowhere — and sliding back to 0 switches
+      it off, exactly as clicking the card would, so the dial is a whole control rather
+      than one that can only turn a power on. Sliding up from 0 wakes the power at the
+      notch asked for, so going from dormant to Huge is one gesture.
+    * **It commits on release.** Every runtime setter ends in a rebuild, so a slider
+      that wrote on each tick would delete itself under the player's thumb. The label
+      tracks the drag; only ``sliderReleased`` (and a keyboard or groove step, which
+      leaves the handle up) reaches the section.
+    * **NoFocus**, because committing destroys the whole card: focus would land on
+      whatever the tab order offers next — a table in some other block — and a
+      ``QScrollArea`` scrolls to show a child that has just taken focus. That was the
+      page jumping away from the card under the cursor.
+    * **Live in the locked sheet**, like every other runtime control on a card: how far
+      a power is turned up is a play action, not a build edit. Inside a switched-off
+      Linked group it goes transparent to the mouse instead, so a click falls through to
+      the card exactly as it does off the group's own chrome — never
+      ``setEnabled(False)``, which nothing in this app does.
+    """
+
+    rankPicked = Signal(int)  #: the effect rank the player settled on (0 = switch off)
+    #: Every notch the handle passes, drag included. Nothing is written for these — they
+    #: are what lets a Dynamic array's other sliders restate their ceilings, and its
+    #: header its remaining points, while one of them is still moving.
+    previewed = Signal(int)
 
     def __init__(
         self,
         caption: str,
-        steps,
+        maximum: int,
+        current: int,
+        labels: dict[int, str],
+        interactive: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._labels = labels
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(int(theme.metric("space.sm")))
+
+        self._caption_text = caption
+        caption_label = QLabel(caption)
+        caption_label.setStyleSheet(muted_style())
+        row.addWidget(caption_label)
+
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setRange(0, max(0, maximum))
+        self._slider.setSingleStep(1)
+        self._slider.setPageStep(1)
+        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._slider.setTickInterval(1)
+        # The top of the groove. For a Dynamic member this moves as its siblings give
+        # points back, so the right-hand end of the track *is* the most it can be set
+        # to. See :meth:`set_ceiling`.
+        self._ceiling = max(0, maximum)
+        self._slider.setValue(max(0, min(maximum, current)))
+        self._slider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
+        self._slider.setCursor(
+            Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
+        )
+        guard_wheel(self._slider)  # don't let a card's slider steal the page wheel
+        # *After* the wheel guard, which asks for StrongFocus so a focused widget keeps
+        # its own wheel. Focus is the one thing this slider must never take: committing
+        # destroys the card, and a QScrollArea chases whatever takes focus next.
+        self._slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        row.addWidget(self._slider, 1)
+
+        self._value = QLabel(self._label_for(self._slider.value()))
+        row.addWidget(self._value)
+
+        # Connected *after* the initial value, so seeding the dial never reads as the
+        # player having moved it.
+        self._slider.valueChanged.connect(self._on_value_changed)
+        self._slider.sliderReleased.connect(self._commit)
+
+    def caption(self) -> str:
+        """What this dial is *of* — "Size", "Share", or the effect's own name."""
+
+        return self._caption_text
+
+    def value(self) -> int:
+        """The notch the handle is on right now, committed or merely being dragged."""
+
+        return self._slider.value()
+
+    def ceiling(self) -> int:
+        """The highest notch currently reachable."""
+
+        return self._ceiling
+
+    def set_ceiling(self, ceiling: int) -> None:
+        """Move the end of the groove to the highest notch currently reachable.
+
+        What a Dynamic member's slider needs: the track has to *end* where the pool ends,
+        so the right-hand end is the most this member can be set to and the divisions on
+        it are the choices it actually has. Free a point elsewhere and this slider gains
+        a division; spend one and it loses one. A member whose siblings hold everything
+        is left with the single notch it is sitting on rather than a long track most of
+        which refuses the handle — a slider that can be dragged into a region it then
+        rejects is the thing this exists to avoid.
+
+        The **index space does not move**: the notch list is the member's whole ladder
+        and what is affordable is always a prefix of it, so notch *n* buys the same rank
+        for the same points however far the end has travelled, and the handle keeps its
+        meaning while a sibling is still being dragged.
+
+        Never below the notch the handle is seated on. A rebuild can move the pool under
+        a split already made, and an end that cut into a stored share would spend it the
+        moment the dial was touched.
+        """
+
+        self._ceiling = max(0, min(ceiling, len(self._labels) - 1))
+        self._ceiling = max(self._ceiling, self._slider.value())
+        self._slider.setMaximum(self._ceiling)
+
+    def _label_for(self, rank: int) -> str:
+        return self._labels.get(rank, f"Rank {rank}")
+
+    def _on_value_changed(self, value: int) -> None:
+        self._value.setText(self._label_for(value))
+        self.previewed.emit(value)
+        # A drag reports every notch it passes; only the one it stops on is a decision.
+        # A keyboard or groove step leaves the handle up, and *is* one.
+        if not self._slider.isSliderDown():
+            self._commit()
+
+    def _commit(self) -> None:
+        """Report the notch settled on, once it is safe to be deleted for it.
+
+        Every commit ends in a rebuild that deletes this very widget. A **groove click**
+        reaches :meth:`_on_value_changed` from inside ``mousePressEvent``, so committing
+        straight through tore the slider down while it still held the mouse grab: the
+        rest of that gesture went nowhere, and a queued auto-repeat could re-fire against
+        a stale reading of the pool. So a commit made while a button is still held is
+        deferred a turn of the event loop, letting the press finish first.
+
+        Only that case. A release has already cleared the button, and a keyboard step or
+        a programmatic ``setValue`` never had one — those commit straight through, which
+        keeps the dial synchronous everywhere it was before.
+        """
+
+        value = self._slider.value()
+        if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            QTimer.singleShot(0, lambda: self.rankPicked.emit(value))
+            return
+        self.rankPicked.emit(value)
+
+
+class _EffectSelector(QWidget):
+    """Which effect of an array *power* is currently in use.
+
+    The whole-card twin of the click that selects an array **group's** live member, one
+    level down: a power whose own effects are an array runs exactly one of them at a
+    time, and that is what makes it cheaper than the same effects bought independently.
+    A card is one widget, though, so there is no card to click — hence a control.
+
+    A combo rather than the group header's segmented toggle: an effect reads as its name
+    and rank ("Enhanced Trait 4"), several of those do not fit across a card, and an
+    array may hold more than three. Like the rank dial it stays live in the locked
+    sheet — choosing which alternate you are using is a play action, not a build edit —
+    and takes no focus, because committing rebuilds the card out from under it.
+    """
+
+    effectPicked = Signal(int)
+
+    def __init__(
+        self,
+        titles: list[str],
+        current: int,
         interactive: bool = True,
         parent: QWidget | None = None,
     ) -> None:
@@ -337,55 +666,29 @@ class _SizeLadder(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(int(theme.metric("space.sm")))
 
-        label = QLabel(caption)
-        label.setStyleSheet(muted_style())
-        row.addWidget(label)
+        caption = QLabel("Using")
+        caption.setStyleSheet(muted_style())
+        row.addWidget(caption)
 
-        host = FlowContainer()
-        flow = FlowLayout(host, spacing=int(theme.metric("space.xs")))
-        # Exclusive, so lighting a rung puts the previous one out; but a strip with
-        # nothing lit is a legal state here (the power is off), which an exclusive
-        # QButtonGroup will not enter on its own — hence setChecked below rather than
-        # leaving it to the group.
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-        for step in steps:
-            button = QPushButton(step.category)
-            button.setCheckable(True)
-            button.setChecked(step.current)
-            button.setFixedHeight(22)
-            button.setMinimumWidth(_lit_width(button))
-            button.setCursor(
-                Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
-            )
-            # Inside a switched-off Linked group the strip is a read-out: left visible
-            # (it still says where the power is set) but transparent to the mouse, so a
-            # click falls through to the card exactly as it does off the group's own
-            # chrome. Never setEnabled(False) — nothing in this app greys a control out.
-            button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
-            # NoFocus even when live, unlike the group's mode toggle: clicking a rung
-            # destroys the whole card, so focus lands on whatever the tab order offers
-            # next — a table in some other block — and a QScrollArea scrolls to show a
-            # child that has just taken focus. That was the page jumping away from the
-            # card under the cursor. Nothing here is reachable by keyboard anyway; the
-            # card body this strip sits on is not focusable either.
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            span = (
-                f"rank {step.rank}"
-                if step.rank == step.last_rank
-                else f"rank {step.rank} and above ({step.category} is as far as the "
-                "Size Table goes)"
-            )
-            button.setToolTip(
-                f"Switch this power off — it is already held at {span}, {step.category}."
-                if step.current
-                else f"Hold this power at {span} — {step.category}."
-            )
-            button.clicked.connect(lambda _checked=False, r=step.rank: self.stepPicked.emit(r))
-            self._group.addButton(button)
-            flow.addWidget(button)
-        row.addWidget(host, 1)
-        self.setStyleSheet(_mode_toggle_style(False))
+        self._combo = QComboBox()
+        self._combo.addItems(titles)
+        self._combo.setCurrentIndex(max(0, min(current, len(titles) - 1)))
+        self._combo.setToolTip(
+            "Only one effect of an array runs at a time — that is what makes an array "
+            "cheaper than the same effects bought separately. The others contribute "
+            "nothing to the sheet until you pick them."
+        )
+        self._combo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
+        self._combo.setCursor(
+            Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
+        )
+        guard_wheel(self._combo)
+        self._combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        row.addWidget(self._combo)
+        row.addStretch()
+
+        # Connected after the initial index, so seeding never reads as a choice.
+        self._combo.currentIndexChanged.connect(self.effectPicked)
 
 
 class PowersSection(TitledSection):
@@ -411,6 +714,17 @@ class PowersSection(TitledSection):
     #: runtime one: rolling a power changes nothing about the power.
     rollRequested = Signal(object)
 
+    #: A sentence for the roll history — what a use of Extra Effort bought and what it
+    #: cost. Carries the text, like the System block's own note.
+    noteRequested = Signal(str)
+    #: Extra Effort was shrugged off with a Determination heroic feat, which costs a Hero
+    #: Point (p22). Carries the delta; the System block owns the pips and moves them.
+    heroPointRequested = Signal(int)
+    #: Extra Effort's fatigue was applied to the character. The same fan-out the
+    #: Conditions block's own signal drives — the model changed, and every view over a
+    #: condition restates itself.
+    conditionsChanged = Signal()
+
     #: How long a card takes to ease between its live and switched-off looks. A class
     #: attribute so tests can zero it and assert on the resting state without waiting
     #: on a timer.
@@ -433,6 +747,10 @@ class PowersSection(TitledSection):
         # fully off). Survives the card teardown a toggle triggers, so the replacement
         # card can ease on from where its predecessor was — see _show_activation.
         self._card_off: dict[str, float] = {}
+        # Per-array share-slider coordinators, keyed by group id; see :class:`_SplitGroup`,
+        # and the header labels waiting to be handed to them.
+        self._splits: dict[str, _SplitGroup] = {}
+        self._pool_labels: dict[str, QLabel] = {}
         self._card_off_prev: dict[str, float] = {}
         # Keep constructor windows referenced so Qt doesn't garbage-collect them the
         # moment the click handler returns.
@@ -461,6 +779,10 @@ class PowersSection(TitledSection):
     def _open_constructor(self) -> None:
         window = PowerConstructorWindow(self._data, character=self._character)
         window.powerSaved.connect(self._on_power_saved)
+        # The constructor is a window, not a block, so it cannot reach the roller
+        # itself; its Improvise panel asks and this section hands the request on the
+        # same way its own cards do.
+        window.rollRequested.connect(self.rollRequested)
         window.closed.connect(lambda w=window: self._on_window_closed(w))
         self._windows.append(window)
         window.show()
@@ -478,6 +800,7 @@ class PowersSection(TitledSection):
         no-op and a save swaps in exactly the power that was opened.
         """
         window = PowerConstructorWindow(self._data, character=self._character, power=power)
+        window.rollRequested.connect(self.rollRequested)
         window.powerSaved.connect(
             lambda edited, original=power: self._on_power_edited(original, edited)
         )
@@ -529,15 +852,41 @@ class PowersSection(TitledSection):
                 ids |= PowersSection._subtree_ids(child)
         return ids
 
+    def _groupable(self, node_id: str) -> bool:
+        """Whether this node may join a group at all — false for a **power stunt**.
+
+        A stunt is bought with Extra Effort and a Hero Point rather than with points, so
+        it costs 0 (see :func:`~mm_companion.core.rules.node_cost`). Inside an array that
+        makes it the cheapest member by definition, which moves the base, the pool and
+        every other member's flat price — a temporary card silently repricing the build
+        it was taken from. It is not saved either (``strip_stunts``), so the group it
+        left would come back a member short.
+
+        The tree is drag-and-drop and nothing else refuses a drop, so this is asked in
+        three places: ``NodeList``'s admission rule (which *shows* the refusal), and both
+        mutation seams, which are the ones that hold the invariant.
+
+        A node this section cannot find is refused too. It cannot arrive from a drag
+        within the tree, and the mutation seams would drop it on the floor anyway — so
+        accepting it would mean lighting the target up for a move that never happens,
+        which is the failure this whole guard exists to avoid.
+        """
+
+        node = self._locate(node_id)
+        return node is not None and not power_is_stunt(node[0])
+
     def _on_combine(self, source_id: str, target_id: str) -> None:
         """Group the dragged node with a drop target into a new Independent group.
 
         Wraps the target (a card, or a whole group when dropped on its title bar) and
         the source into a fresh :class:`PowerGroup`, replacing the target in place —
         nesting naturally when the target already sits inside a group. Rejected when
-        the two are the same node or the target lives inside the source's own subtree.
+        the two are the same node, when the target lives inside the source's own
+        subtree, or when either of them is a stunt (:meth:`_groupable`).
         """
         if source_id == target_id:
+            return
+        if not (self._groupable(source_id) and self._groupable(target_id)):
             return
         source = self._locate(source_id)
         target = self._locate(target_id)
@@ -567,7 +916,9 @@ class PowersSection(TitledSection):
 
         This is how a card is reordered, pulled out of a group (dropped in a higher
         list), or added to a group as another member (dropped in the group's body).
-        Rejected when the destination lives inside the moved node's own subtree.
+        Rejected when the destination lives inside the moved node's own subtree, or when
+        a stunt is being moved *into* a group (:meth:`_groupable`) — reordering one at
+        the top level is fine, since that is where it belongs.
         """
         source = self._locate(source_id)
         if source is None:
@@ -576,6 +927,8 @@ class PowersSection(TitledSection):
         if parent_id == "":
             dest_list: list[PowerNode] = self._character.powers
         else:
+            if not self._groupable(source_id):
+                return
             if parent_id in self._subtree_ids(source_node):
                 return  # can't move a node into itself
             dest = self._locate(parent_id)
@@ -655,6 +1008,10 @@ class PowersSection(TitledSection):
             # a fresh map — so a power that was removed or ungrouped leaves nothing
             # behind for a later node to inherit.
             self._card_off_prev, self._card_off = self._card_off, {}
+            # One coordinator per array holding a split, rebuilt with the cards it
+            # joins: a dial from a torn-down card must never be restated.
+            self._splits = {}
+            self._pool_labels = {}
             self._list_host.clear()
             for node in self._character.powers:
                 self._list_host.add_entry(node.id, self._render_node(node, None))
@@ -695,11 +1052,20 @@ class PowersSection(TitledSection):
         child_interactive = interactive and (
             self._group_is_active(group) if group.mode == STRUCTURE_LINKED else True
         )
-        inner = NodeList(group.id)
+        # A group refuses a stunt outright, and shows the refusal rather than accepting
+        # the drop and quietly doing nothing (see :meth:`_groupable`).
+        inner = NodeList(group.id, accepts=self._groupable)
         inner.combineRequested.connect(self._on_combine)
         inner.moveRequested.connect(self._on_move)
         for child in group.children:
             inner.add_entry(child.id, self._render_node(child, group, child_interactive))
+        # Now that the members' sliders exist, give the header's readout to the thing
+        # that counts it down while one of them is moving.
+        split = self._splits.get(group.id)
+        readout = self._pool_labels.get(group.id)
+        if split is not None and readout is not None:
+            split.set_readout(readout)
+            split.restate()
         indent = QWidget()
         indent_layout = QHBoxLayout(indent)
         indent_layout.setContentsMargins(14, 0, 0, 0)
@@ -730,7 +1096,7 @@ class PowersSection(TitledSection):
         row.addWidget(grip)
         grip.setVisible(not self._locked)
 
-        mode_label = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
+        mode_label = _MODE_LABELS.get(_group_mode(group), _MODE_LABELS[STRUCTURE_INDEPENDENT])
         label = QLabel(group.name or mode_label)
         label.setStyleSheet(BOLD_STYLE)
         row.addWidget(label)
@@ -745,15 +1111,20 @@ class PowersSection(TitledSection):
         # Order matters: the lock keeps whichever segment is lit, so the mode has to
         # be set before it — see _ModeToggle.set_locked.
         toggle = _ModeToggle()
-        toggle.set_mode(group.mode)
+        toggle.set_mode(_group_mode(group))
         toggle.modeChanged.connect(lambda mode, g=group: self._set_group_mode(g, mode))
         toggle.set_locked(self._locked)
         row.addWidget(toggle)
 
         row.addStretch()
 
+        split = self._pool_readout(group)
+        if split is not None:
+            row.addWidget(split)
+
         cost = QLabel(f"{node_display_cost(group, parent, self._data, self._character)} PP")
         cost.setEnabled(False)
+        self._explain_cost(cost, group)
         row.addWidget(cost)
 
         ungroup = QPushButton("✕")
@@ -764,9 +1135,249 @@ class PowersSection(TitledSection):
         ungroup.setVisible(not self._locked)
         return header
 
+    def _explain_cost(self, label: QLabel, node: PowerNode) -> None:
+        """Put the working behind a node's price on its cost label, when there is any.
+
+        The constructor prints the same working beside its total, in full — there is
+        room on a line of its own. Here there is not: a card's header already carries a
+        name, up to three badges, a Dynamic box and two buttons, and a group's carries a
+        mode toggle and a Split points button as well. So the arithmetic goes on the
+        tooltip of the one thing it explains, which is where a player asking "why does
+        this say 23 when the cards say 10, 16 and 20" is already pointing.
+        """
+
+        parts = [node_cost_formula(node, self._data, self._character)]
+        if isinstance(node, PowerGroup):
+            # Not a warning: three genuinely separate removable devices really are
+            # charged three times, and nothing can tell that build from one device split
+            # across three cards. It states the arithmetic and lets the player decide.
+            parts.append(group_scope_note(node, self._data, self._character))
+        tooltip = "\n".join(part for part in parts if part)
+        if tooltip:
+            label.setToolTip(tooltip)
+
+    def _arm_card_menu(self, card: DraggableCard, power: Power) -> None:
+        """Arm the card's right-click menu — Extra Effort, then this power's counters.
+
+        Both are things a power can be *used for* rather than things it calls for, which
+        is why neither is in the dice footer: putting the counter rolls there gave every
+        attack card and every weapon in the Equipment block a die button for a case the
+        GM has to approve first, and Extra Effort is a decision before it is a number.
+        A right-click menu costs no card space and is where the app already puts a
+        card-adjacent action (the footer's own Pin menu).
+
+        A card with nothing to offer — an always-on Protection, which can neither be
+        readied nor pushed — gets no menu rather than an empty one.
+        """
+
+        if not counter_rolls(power, self._character, self._data) and not pushable_effects(
+            power, self._data
+        ):
+            return
+        card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        card.customContextMenuRequested.connect(
+            lambda pos, c=card, p=power: self._show_card_menu(c, p, pos)
+        )
+
+    def card_menu(self, card: DraggableCard, power: Power) -> QMenu:
+        """The card's whole menu, built but not shown.
+
+        Split from :meth:`_show_card_menu` so the wiring can be checked without ``exec``
+        — a modal menu headless is a test that hangs rather than a test that passes.
+        """
+
+        menu = QMenu(card)
+        offered = add_power_effort_actions(
+            menu, power, self._character, self._data, self.use_extra_effort
+        )
+        if any(effect.extra_effort for effect in power.effects):
+            clear = menu.addAction("Clear Extra Effort")
+            clear.setToolTip(
+                "Extra Effort lasts until the end of your turn, and nothing here tracks "
+                "turns — take the ranks back when it is over."
+            )
+            clear.triggered.connect(lambda _checked=False, p=power: self.clear_extra_effort(p))
+            offered = True
+        specs = counter_rolls(power, self._character, self._data)
+        if specs and offered:
+            menu.addSeparator()
+        self.fill_counter_menu(menu, specs)
+        return menu
+
+    def _show_card_menu(self, card: DraggableCard, power: Power, pos) -> None:
+        self.card_menu(card, power).exec(card.mapToGlobal(pos))
+
+    def use_extra_effort(
+        self, use, power: Power, effect: PowerEffectInstance, effect_name: str
+    ) -> bool:
+        """Confirm one use of Extra Effort against this effect, and charge it.
+
+        The push itself is *runtime* state on the effect, so it rides the same signal a
+        card toggle does; the fatigue is applied to the shared model by
+        :func:`~mm_companion.core.rules.spend_extra_effort`, through the very condition
+        resolver the Conditions block applies with. Returns ``False`` when the dialog was
+        cancelled, so nothing was spent and nothing was gained.
+
+        A **power stunt** is the one use that cannot be confirmed in a single dialog: it
+        is a whole alternate effect the player has yet to build, so it opens the
+        constructor first and charges the effort when something comes back
+        (:meth:`_open_stunt`). ``True`` there means "the constructor is open", not "it
+        was spent" — nothing is until the build is confirmed.
+        """
+
+        if use.id == USE_POWER_STUNT:
+            self._open_stunt(use, power, effect, effect_name)
+            return True
+
+        dialog = ExtraEffortDialog(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.heroPointRequested.emit(-1)
+        self.noteRequested.emit(outcome.note)
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        self.conditionsChanged.emit()
+        return True
+
+    def _open_stunt(self, use, power: Power, effect: PowerEffectInstance, effect_name: str) -> None:
+        """Open the constructor to build a stunt of ``power``.
+
+        The build comes **first** and the effort is charged on the way back
+        (:meth:`_on_stunt_saved`): a player who closes the constructor without saving has
+        changed their mind, and charging them a rung of the fatigue ladder for a stunt
+        that does not exist would be the app inventing a rule.
+        """
+
+        window = PowerConstructorWindow(self._data, character=self._character)
+        window.rollRequested.connect(self.rollRequested)
+        window.powerSaved.connect(
+            lambda built, u=use, p=power, e=effect, n=effect_name: self._on_stunt_saved(
+                built, u, p, e, n
+            )
+        )
+        window.closed.connect(lambda w=window: self._on_window_closed(w))
+        self._windows.append(window)
+        window.show()
+
+    def _on_stunt_saved(
+        self, built: Power, use, power: Power, effect: PowerEffectInstance, effect_name: str
+    ) -> bool:
+        """Charge the Extra Effort, then put the finished stunt on the sheet as its own card.
+
+        Cancelling the cost dialog here drops the build rather than adding it free: the
+        dialog is the "yes, spend it" step, and a stunt nobody paid for is not a stunt.
+
+        The stunt is appended at the top level even when its source sits inside a group —
+        it is a card of its own, marked with what it came from, rather than a member of
+        anybody's array. It costs no points and is not saved (see ``Power.stunt_of``), so
+        this rides ``runtimeChanged`` rather than ``changed``.
+        """
+
+        dialog = ExtraEffortDialog(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        built.stunt_of = power.id
+        self._character.powers.append(built)
+        outcome = spend_extra_effort(
+            self._character,
+            self._data,
+            use,
+            effect=effect,
+            effect_name=effect_name,
+            doubled=dialog.doubled,
+            determination=dialog.determination,
+        )
+        if dialog.spend_hero_point:
+            self.heroPointRequested.emit(-1)
+        self.noteRequested.emit(outcome.note)
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        self.conditionsChanged.emit()
+        return True
+
+    def clear_extra_effort(self, power: Power) -> bool:
+        """Take back every rank Extra Effort pushed into this power; ``False`` if none."""
+
+        if not clear_power_extra_effort(power):
+            return False
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+        return True
+
+    def fill_counter_menu(self, menu: QMenu, specs: list) -> None:
+        """Add one entry per counter roll to ``menu``, each asking the roller for it."""
+
+        for spec in specs:
+            action = menu.addAction(f"{spec.label}  +{spec.modifier}")
+            action.setToolTip(spec.hint)
+            action.triggered.connect(lambda _checked=False, s=spec: self.rollRequested.emit(s))
+
+    def _pool_readout(self, group: PowerGroup) -> QWidget | None:
+        """How much of a Dynamic array's pool is currently spread, or ``None``.
+
+        A readout, not a control: the split itself is made on each member's own rank
+        slider, which is the point of moving it there — a member's share and the rank
+        that share buys are one gesture instead of a number typed into a dialog and a
+        rank worked out afterwards. What the header still owes the player is the one
+        number no single slider can show, which is how much of the pool is spoken for.
+
+        Leaving part of a pool unassigned stays legal, so nothing is tinted for it: this
+        says what is spent and what is left, not what is wrong. The one thing it does
+        flag is a split that has come to *more* than the pool, which no slider can
+        produce but a rebuild can — editing the array moves the pool underneath a split
+        already made.
+
+        It is handed to the array's :class:`_SplitGroup`, so it counts down while a
+        member's slider is still moving rather than a rebuild later.
+        """
+
+        if group.mode != STRUCTURE_ARRAY or not any(c.dynamic for c in group.children):
+            return None
+        pool = array_pool_points(group, self._data)
+        assigned = sum(c.dynamic_points or 0 for c in group.children if c.dynamic)
+        if not assigned:
+            return None
+        label = QLabel()
+        label.setToolTip(
+            "This array's points are shared across its Dynamic members, which run at "
+            "the same time at reduced effectiveness. Move a member's slider to change "
+            "its share; slide them all to nothing to hand the pool back."
+        )
+        # A group's header is built before its members' cards, so their sliders have not
+        # registered yet and the coordinator does not exist. Say the truth now and let
+        # :meth:`_make_group_card` hand the label over once they have.
+        label.setText(f"{assigned}/{pool} PP split")
+        label.setStyleSheet(muted_style())
+        self._pool_labels[group.id] = label
+        return label
+
     def _rename_group(self, group: PowerGroup) -> None:
         """Prompt for a new group name; blank clears it back to the mode label."""
-        placeholder = _MODE_LABELS.get(group.mode, _MODE_LABELS[STRUCTURE_INDEPENDENT])
+        placeholder = _MODE_LABELS.get(_group_mode(group), _MODE_LABELS[STRUCTURE_INDEPENDENT])
         name, ok = QInputDialog.getText(
             self,
             "Rename group",
@@ -781,7 +1392,21 @@ class PowersSection(TitledSection):
         self.changed.emit()
 
     def _set_group_mode(self, group: PowerGroup, mode: str) -> None:
-        group.mode = mode
+        """Put a group on one of the toggle's four segments.
+
+        *Dynamic array* is a view rather than a stored mode (:func:`_group_mode`), so it
+        is written as an array whose every member carries the flag, and picking plain
+        *Array* is how it is taken back off. The cost math is untouched by that: it
+        still prices Dynamic per member, which is what the rules do.
+        """
+
+        dynamic = mode == MODE_ARRAY_DYNAMIC
+        group.mode = STRUCTURE_ARRAY if dynamic else mode
+        if group.mode == STRUCTURE_ARRAY:
+            for child in group.children:
+                child.dynamic = dynamic
+                if not dynamic:
+                    child.dynamic_points = None
         self._normalize_arrays()
         self._rebuild_list()
         self.changed.emit()
@@ -816,13 +1441,14 @@ class PowersSection(TitledSection):
         always makes an *Independent* group) that is itself inside the Linked group, and
         it still has to switch with its linked siblings rather than sprout its own switch.
         """
-        if (
-            isinstance(parent, PowerGroup)
-            and parent.mode == STRUCTURE_ARRAY
-            and len(parent.children) >= 2
-            and any(self._node_has_standing(child) for child in parent.children)
-        ):
-            return "select"
+        if self._selectable_array_member(parent):
+            # ...unless the array's points are split, when the pool decides who is
+            # running and selecting a member decides nothing. The click used to be armed
+            # anyway: the cursor promised something, `active_child_id` quietly moved, and
+            # nothing on screen changed. `_arm_activation` still tooltips *why*, because
+            # a card that has silently stopped being a control is worse than one that
+            # says it has.
+            return "" if _pool_is_split(parent) else "select"
         if self._linked_ancestor(node) is not None:
             return ""
         if isinstance(node, PowerGroup):
@@ -837,10 +1463,38 @@ class PowersSection(TitledSection):
             return "toggle"
         return ""
 
+    def _selectable_array_member(self, parent: PowerGroup | None) -> bool:
+        """Whether a card in *parent* is one of a live array's mutually exclusive members.
+
+        An array only has something to select between if it has two of them and at least
+        one *stands* on the sheet — an all-instant array keeps nothing active, so its
+        members are not switches. Asked by :meth:`_activation_role` (does a click do
+        anything) and :meth:`_node_is_inactive` (is this one running), which have to
+        agree about what an array is even when the pool has taken the click away.
+        """
+
+        return (
+            isinstance(parent, PowerGroup)
+            and parent.mode == STRUCTURE_ARRAY
+            and len(parent.children) >= 2
+            and any(self._node_has_standing(child) for child in parent.children)
+        )
+
     def _node_is_inactive(self, node: PowerNode, parent: PowerGroup | None, role: str) -> bool:
         """Whether the card should be drawn in its dimmed, switched-off state."""
-        if role == "select":
-            return active_array_child(parent) is not node
+        if self._selectable_array_member(parent):
+            # Which member is *running* rather than which is selected: once the pool is
+            # split every Dynamic member holding a share is live at once, so dimming all
+            # but the selected one would contradict the numbers on the sheet. Asked of
+            # the array rather than of the card's role, because a split takes the role
+            # away and the dimming has to outlive it.
+            if not any(child is node for child in live_array_children(parent)):
+                return True
+            # ...and a Dynamic member the fallback woke up while its own share dial sits
+            # on "Off" is switched off, whatever the array did with it (see
+            # :meth:`_on_share_dialled`). Only a Dynamic member can be parked that way,
+            # so an ordinary alternate is left reading exactly as it always did.
+            return bool(node.dynamic) and not self._member_is_running(node)
         if role == "toggle":
             if isinstance(node, PowerGroup):
                 return not self._group_is_active(node)
@@ -860,8 +1514,16 @@ class PowersSection(TitledSection):
         becomes the click target, and says so (see :meth:`DraggableCard.set_clickable`).
         ``interactive`` is ``False`` for a card inside a switched-off Linked group, which
         still shows its state but can't be clicked back on past its group.
+
+        A member of a *split* array is the one card that gets the hint without the
+        click: the pool has taken the decision over, so there is nothing to arm, but a
+        card that has quietly stopped being a control needs to say so more than one that
+        still is.
         """
         role = self._activation_role(node, parent)
+        if self._selectable_array_member(parent) and _pool_is_split(parent):
+            card.setToolTip(_SPLIT_SELECT_HINT)
+            return
         if not (role and interactive):
             return
         card.set_clickable(True)
@@ -959,6 +1621,7 @@ class PowersSection(TitledSection):
         """
         card = DraggableCard(power.id)
         self._arm_activation(card, power, parent, interactive)
+        self._arm_card_menu(card, power)
         layout = QVBoxLayout(card)
         layout.addWidget(self._header_row(power, card, parent))
 
@@ -972,11 +1635,26 @@ class PowersSection(TitledSection):
         if effects is not None:
             layout.addWidget(effects)
 
-        # A size effect is a ladder, not a switch: one rung per size the wielder can
-        # hold themselves at, under the effect breakdown that explains what each rung
-        # is worth and above the dice, with the rest of the mid-play controls.
-        for ladder in self._size_ladders(power, parent, interactive):
-            layout.addWidget(ladder)
+        # Under the breakdown that names the effects, above the dials that turn one of
+        # them up: which of an array's effects is running is the choice you make first.
+        selector = self._effect_selector(power, interactive)
+        if selector is not None:
+            layout.addWidget(selector)
+
+        # A Dynamic member's share of its array's pool, made on the same slider a rank
+        # is: the share and the rank it buys are one gesture rather than a number typed
+        # into a dialog and a rank worked out afterwards.
+        share = self._share_dial(power, parent, interactive)
+        if share is not None:
+            layout.addWidget(share)
+        for dial in self._effect_share_dials(power, interactive):
+            layout.addWidget(dial)
+
+        # A dialled effect is a range, not a switch: a slider over the ranks the wielder
+        # can hold it at, under the effect breakdown that explains what each notch is
+        # worth and above the dice, with the rest of the mid-play controls.
+        for dial in self._rank_dials(power, parent, interactive):
+            layout.addWidget(dial)
 
         # A dedicated footer for the numbers that come up mid-play — one line per roll.
         # A power that rolls nothing gets neither the footer nor its rule.
@@ -1027,9 +1705,29 @@ class PowersSection(TitledSection):
         name.setFont(font)
         layout.addWidget(name)
 
-        # A power that breaks a PL cap carries a warning marker naming the breach;
-        # enforcement is a warning for now (see storage.pl_enforcement).
-        violations = power_pl_violations(power, self._character, self._data)
+        # A stunt says so, and says what it is a stunt *of*: it is a card of its own
+        # rather than a member of the source power's array, so the relationship is only
+        # ever visible here. Muted, because it is provenance rather than a number.
+        if power_is_stunt(power):
+            source = stunt_source(power, self._character)
+            of = power_display_name(source, self._data) if source else "a power now gone"
+            badge = QLabel(f"✦ stunt of {of}")
+            badge.setStyleSheet(muted_style(italic=True))
+            badge.setToolTip(
+                "A power stunt: a temporary alternate effect bought with Extra Effort "
+                "rather than with Power Points (p20). It costs nothing, it is not saved "
+                "with the character, and it lasts as long as the scene does."
+            )
+            layout.addWidget(badge)
+
+        # A power that breaks any build rule carries a warning marker naming every
+        # breach; enforcement is a warning for now (see storage.pl_enforcement). This is
+        # the same walk over the same POWER_CHECKS registry the Power Constructor's
+        # warning band makes, so the two cannot disagree — before it, the card showed
+        # Power Level and a stunt's ceiling alone, and a character built under a
+        # different ruleset could carry an over-spent allocation, an over-budget imposed
+        # effect or an over-budget minion with nothing on the sheet saying so.
+        violations = power_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))
@@ -1048,8 +1746,19 @@ class PowersSection(TitledSection):
         layout.addStretch()
 
         # Inside an array group a non-base member contributes only its flat pooled cost;
-        # every other card shows its full assembled cost (node_display_cost decides).
-        cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
+        # every other card shows its full assembled cost (node_display_cost decides). A
+        # stunt contributes nothing, and "0 PP" beside a real build reads as a bug — so it
+        # says what it is instead, and keeps the number it *would* have cost in the
+        # tooltip, since that is the number its ceiling is measured against.
+        if power_is_stunt(power):
+            cost = QLabel("Stunt")
+            cost.setToolTip(
+                f"Bought with Extra Effort, not with points — it would cost "
+                f"{power_total_cost(power, self._data, self._character)} PP."
+            )
+        else:
+            cost = QLabel(f"{node_display_cost(power, parent, self._data, self._character)} PP")
+            self._explain_cost(cost, power)
         cost.setEnabled(False)
         layout.addWidget(cost)
 
@@ -1070,70 +1779,602 @@ class PowersSection(TitledSection):
         remove.setVisible(not self._locked)
         return host
 
-    # -- the size ladder --------------------------------------------------
-    def _size_ladders(
+    # -- the array's live effect ------------------------------------------
+    def _effect_selector(self, power: Power, interactive: bool) -> QWidget | None:
+        """The picker for which of an array power's own effects is in use; ``None``
+        for every power that is not one, which is nearly all of them.
+
+        Also ``None`` **once the power's points are split**: every effect holding a share
+        is running at the same time, so the selection has stopped deciding anything and
+        a picker that still moved ``active_effect`` would be a control with nothing
+        visible behind it. That is the same bargain ``_activation_role`` strikes one
+        level up, where a split array's member cards stop being clickable. The way back
+        is the same too — slide every share to nothing.
+        """
+
+        if not power_effects_are_array(power) or live_array_effects(power):
+            return None
+        titles = [effect_title(effect, self._character, self._data) for effect in power.effects]
+        current = active_array_effect_index(power, self._data, self._character)
+        selector = _EffectSelector(titles, current, interactive)
+        selector.effectPicked.connect(lambda index, p=power: self._on_effect_picked(p, index))
+        return selector
+
+    def _on_effect_picked(self, power: Power, index: int) -> None:
+        """Put an array power onto one of its own effects.
+
+        Runtime, so it emits ``runtimeChanged`` rather than ``changed`` — the same
+        bargain the rank dial and the array-member click strike. The rebuild is what
+        redraws every other effect's summary as no longer contributing.
+        """
+
+        power.active_effect = index
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+
+    # -- the Dynamic share dial -------------------------------------------
+    def _share_dial(
+        self, node: PowerNode, parent: PowerGroup | None, interactive: bool
+    ) -> QWidget | None:
+        """The slider a Dynamic member's share is made on — and its **only** slider.
+
+        The split used to be a modal dialog of spin boxes reached from the group header.
+        It is the same slider a rank is dialled on now, for the reason the dialog itself
+        had to keep explaining: a share is only ever interesting for the rank it buys, so
+        the notches *are* the ranks and the points are what each one spends
+        (:func:`~mm_companion.core.rules.dynamic_share_steps`). A member costing 2 points
+        a rank moves the split 2 points a notch and one costing 1 moves it by 1, so every
+        stop is a legal price for both of them.
+
+        It **replaces** the rank dial rather than sitting beside it — :meth:`_rank_dials`
+        stands down for a member under a share. Two sliders each claiming the same rank
+        deadlocked: the rank one wrote a value the share then clamped away, and because
+        the clamp was a minimum that written-and-clamped value survived as a floor the
+        share could no longer lift.
+
+        The groove **ends where the pool does**: a member can be dragged to its
+        right-hand end and no further, and it gains a division for every point a sibling
+        hands back. A Growth 6 holding all six of a six-point pool leaves an Elongation 3
+        with a slider of one notch; drop the Growth a rung and the Elongation has two.
+        The slider is always drawn, even at one notch — it used to disappear outright
+        once its siblings had spent the pool, with no way to give it points again.
+        """
+
+        if parent is None or not node.dynamic or parent.mode != STRUCTURE_ARRAY:
+            return None
+        pool = array_pool_points(parent, self._data)
+        full = dynamic_member_cost(node, self._data)
+        if pool <= 0 or full <= 0:
+            return None
+        held = max(0, node.dynamic_points or 0)
+        others = sum(c.dynamic_points or 0 for c in parent.children if c.dynamic) - held
+        return self._build_share_dial(
+            node,
+            full,
+            held,
+            max(0, pool - others),
+            interactive,
+            split=self._split_for(parent, pool),
+            fallback=self._fallback_share(node, parent, full),
+        )
+
+    def _effect_share_dials(self, power: Power, interactive: bool) -> list[QWidget]:
+        """The same slider one level down: a power's *own* Dynamic effects, sharing its pool.
+
+        An array exists at two levels and so does its pool, so the control does too. The
+        arithmetic is identical — only what holds the share differs, an effect rather
+        than a whole card — which is why both go through :meth:`_build_share_dial` and
+        cannot price the same rank two ways.
+        """
+
+        if power.structure != STRUCTURE_ARRAY or len(power.effects) < 2:
+            return []
+        pool = power_pool_points(power, self._data)
+        if pool <= 0:
+            return []
+        assigned = sum(e.dynamic_points or 0 for e in power.effects if e.dynamic)
+        dials: list[QWidget] = []
+        for effect in power.effects:
+            if not effect.dynamic:
+                continue
+            full = dynamic_member_cost(effect, self._data)
+            if full <= 0:
+                continue
+            held = max(0, effect.dynamic_points or 0)
+            dial = self._build_share_dial(
+                effect,
+                full,
+                held,
+                max(0, pool - (assigned - held)),
+                interactive,
+                power=power,
+                split=self._split_for(power, pool),
+                fallback=self._fallback_share(effect, power, full),
+            )
+            if dial is not None:
+                dials.append(dial)
+        return dials
+
+    def _build_share_dial(
+        self,
+        node,
+        full: int,
+        held: int,
+        affordable: int,
+        interactive: bool,
+        power: Power | None = None,
+        split: _SplitGroup | None = None,
+        fallback: tuple[int, int | None] = (0, None),
+    ) -> QWidget | None:
+        """One share slider, whatever holds the share.
+
+        *affordable* is the most this member could pay for — what is unassigned plus what
+        it already holds — and it is where the groove ends, so the right-hand end of the
+        track is always the most the player can ask for. A share stored above it (a
+        rebuild moved the pool under a split already made) still seats the handle at its
+        true notch rather than quietly reading low, so the number on the card and the
+        number charged against the pool are the same one.
+
+        *fallback* is the notch a member running on **no** share at all is standing on —
+        an unsplit array's selected alternate (:meth:`_fallback_share`). It is a reading
+        rather than a claim, so it is what the handle is drawn on and what a commit
+        landing back on it counts as *no change*, while the pool goes on being counted
+        without it until the player actually moves the handle.
+        """
+
+        notches = self._share_notches(node, full, held)
+        if len(notches) < 2:
+            return None
+        steps = [points for points, _rank in notches]
+        seat = fallback if fallback[0] else (held, self._held_rank(node, held, full))
+        index = self._seat(notches, *seat)
+        dial = _RankDial(
+            self._share_caption(node, power),
+            len(steps) - 1,  # brought in to what is affordable by set_ceiling below
+            index,
+            {
+                i: self._share_label(node, points, rank, full)
+                for i, (points, rank) in enumerate(notches)
+            },
+            interactive,
+        )
+        dial.set_ceiling(max(self._share_index(steps, affordable), index))
+        if split is not None:
+            split.add(dial, steps, phantom=bool(fallback[0]))
+        dial.rankPicked.connect(
+            lambda picked, n=node, nt=notches, seated=index: self._on_share_dialled(
+                n, nt, picked, seated
+            )
+        )
+        return dial
+
+    @staticmethod
+    def _seat(notches: list[tuple[int, int | None]], points: int, rank: int | None) -> int:
+        """Which notch a member sitting on *points*, standing at *rank*, is drawn on.
+
+        The last notch at the share it holds — the most that share buys, which is what a
+        member nobody has held below its ceiling is running at — unless one of the
+        notches at that price is the rank it is actually standing at, which is the whole
+        reason two of them can share a price (:meth:`_share_notches`).
+        """
+
+        seat = 0
+        for index, (price, hold) in enumerate(notches):
+            if price != points:
+                continue
+            seat = index
+            if rank is not None and hold == rank:
+                return index
+        return seat
+
+    def _held_rank(self, node, points: int, full: int) -> int | None:
+        """The rank this member is deliberately held at, below what its share buys.
+
+        The model's side of the notch the player stopped on, and read by exactly the rule
+        the sheet reads it by (:func:`~mm_companion.core.rules.dynamic_held_rank`), so the
+        handle and the rank on the card can never come from two different answers.
+        """
+
+        effects = _held_effects(node)
+        if len(effects) != 1:
+            return None
+        return dynamic_held_rank(effects[0], points, full)
+
+    def _hold_member(self, node, hold: int | None) -> None:
+        """Pin a member to the rank its notch names, or let its share decide again.
+
+        Written only where it is doing work — a notch that stands exactly where its share
+        already reaches stores nothing — so a file gains a ``current_rank`` only for a
+        member deliberately held below its ceiling, and a value left behind by a rank dial
+        the effect had before it joined the pool is cleared the first time the slider is
+        touched.
+        """
+
+        effects = _held_effects(node)
+        if len(effects) != 1:
+            return
+        effect = effects[0]
+        if hold is None or hold <= 0:
+            effect.current_rank = None
+            return
+        full = dynamic_member_cost(node, self._data)
+        buys = dynamic_rank_share(effect.rank, node.dynamic_points or 0, full)
+        effect.current_rank = hold if hold < buys else None
+
+    def _fallback_share(self, node, host, full: int) -> tuple[int, int | None]:
+        """The notch a member holding *no* share is running on anyway — share and rank.
+
+        Zero for every member the pool is actually rationing — its own share seats its
+        dial, and that is the whole story. But an array whose shares are all handed back
+        is not split at all, and :func:`~mm_companion.core.rules.live_array_children`
+        then falls back to running its **selected alternate** at the rank it stands at;
+        one level down, :func:`~mm_companion.core.rules.effect_is_selected` says the same
+        of a power's own effects. That member is running, so its one slider has to say
+        where — seating it on "Off" is the same lie the zero notch was fixed for at the
+        other end (see :meth:`_on_share_dialled`), and the one an untouched Dynamic array
+        told about every member it was running.
+
+        Priced through the exact inverse of what a share buys
+        (:func:`~mm_companion.core.rules.dynamic_share_points`), so the handle lands on
+        the notch that *would* buy what the member is running: a member at its full rank
+        lands on its whole cost, which is what an unsplit array's alternate is worth. One
+        holding several effects is priced whole rather than by whichever of them was
+        asked, since the split rations them together anyway.
+
+        A reading, not a claim: nothing is written, and the array's :class:`_SplitGroup`
+        leaves these points out of the pool it counts down until the handle is moved. The
+        rank comes back with the price so the handle lands on the right one of the two
+        notches that can share it (:meth:`_seat`).
+        """
+
+        if node.dynamic_points is not None or not self._member_is_running(node):
+            return (0, None)
+        if isinstance(node, PowerEffectInstance):
+            if not effect_is_selected(host, node, self._data, self._character):
+                return (0, None)
+            effects = [node]
+        else:
+            if not any(child is node for child in live_array_children(host)):
+                return (0, None)
+            effects = _held_effects(node)
+        if len(effects) != 1:
+            return (full, None)
+        rank = effect_current_rank(effects[0], self._data, self._character)
+        return (dynamic_share_points(effects[0].rank, rank, full), rank)
+
+    def _split_for(self, host, pool: int) -> _SplitGroup:
+        """The coordinator joining one array's share sliders, made on first ask.
+
+        Keyed by the host's id, so a group of cards and a power's own effects each get
+        their own — an array exists at two levels and the two pools are separate.
+        """
+
+        split = self._splits.get(host.id)
+        if split is None:
+            split = _SplitGroup(pool)
+            self._splits[host.id] = split
+        return split
+
+    def _share_caption(self, node, power: Power | None) -> str:
+        """What the share dial calls itself — the same word the rank dial would use.
+
+        A Dynamic member's slider *is* its rank slider, so it answers to the same name: a
+        size effect's ladder is captioned "Size" whether or not a pool is rationing it,
+        and a member holding more than one effect is captioned "Share" because its label
+        already names them all.
+        """
+
+        effects = _held_effects(node)
+        if len(effects) != 1:
+            return "Share"
+        host = power if power is not None else (node if isinstance(node, Power) else None)
+        if host is not None and size_steps(host, effects[0], self._character, self._data):
+            return "Size"
+        return "Rank"
+
+    def _share_notches(self, node, full: int, held: int) -> list[tuple[int, int | None]]:
+        """Every ``(share, rank)`` this member's slider can stop on, cheapest first.
+
+        **One notch per rank, not per price.** A share buys a ceiling rather than a rank,
+        and the two are different ladders wherever a member does not cost a round number
+        of points a rank: five points of a six-rank member costing five buys all six, and
+        nothing at all buys exactly five. Pricing the notches meant that rank simply was
+        not on the slider — a Growth could be Large or Gargantuan and never Huge, which
+        for a size effect is not a rounding error but a rung the player wanted (bigger is
+        easier to hit and impossible to hide). So every rank gets a notch, priced at the
+        cheapest share that *reaches* it, and the notch carries the rank it stands at:
+        the two notches that share a price differ by where they stop, which is what
+        :func:`~mm_companion.core.rules.dynamic_held_rank` reads back.
+
+        The rank is ``None`` for a member holding **several** effects, whose share
+        rations them all together and which therefore has no single rank to stand at;
+        those notches are the prices its effects can stop on, as they always were.
+
+        A stored share that is not a notch (a hand-edited file, or a ladder that changed
+        under it) is folded in the same way: rounding it down for display while the pool
+        went on charging the full amount lost the difference the moment the dial was
+        touched.
+        """
+
+        effects = _held_effects(node)
+        notches: list[tuple[int, int | None]] = [(0, 0)]
+        if len(effects) == 1:
+            rank = effects[0].rank
+            notches += [(dynamic_share_points(rank, r, full), r) for r in range(1, rank + 1)]
+        else:
+            prices: set[int] = set()
+            for effect in effects:
+                prices.update(p for p, _rank in dynamic_share_steps(effect.rank, full))
+            notches += [(p, None) for p in sorted(prices) if p > 0]
+        if held > 0 and all(points != held for points, _rank in notches):
+            notches.append((held, None))
+            notches.sort(key=lambda notch: notch[0])  # stable: the ranks keep their order
+        return notches
+
+    def _share_steps(self, node, full: int, held: int) -> list[int]:
+        """What each notch of :meth:`_share_notches` **spends**, cheapest first.
+
+        The ladder as the pool sees it, which is what bounds it: how much of it is
+        reachable is :meth:`_RankDial.set_ceiling`'s business, and because the affordable
+        notches are always a *prefix* of this list (they are the ones under a budget, and
+        the list is sorted) bringing the end in never changes what a notch means. Two
+        notches at one price are two ranks the same share can stop at, so the prefix
+        holds and the ceiling lands on the higher of them.
+        """
+
+        return [points for points, _rank in self._share_notches(node, full, held)]
+
+    @staticmethod
+    def _share_index(steps: list[int], budget: int) -> int:
+        """The highest notch *budget* points can pay for."""
+
+        best = 0
+        for index, points in enumerate(steps):
+            if points <= budget:
+                best = index
+        return best
+
+    def _share_label(self, node, points: int, hold: int | None, full: int) -> str:
+        """What one notch of the share dial costs and buys, named effect by effect.
+
+        The rank *is* the answer the rules give — the book's own example is a Flight 5
+        costing 10 points held to "1 rank of Flight" by the 2 assigned to it (p101) — so
+        a notch reads "6 PP · Flight 3" rather than a fraction the reader has to convert.
+        A share too small for even one rank of anything says so instead of reading as
+        rank 0.
+
+        *hold* is the rank the notch **stands** at where that is the player's to choose
+        (:meth:`_share_notches`), and it is the only thing separating the two notches
+        that share a price: "5 PP · Growth 5" is the one that stops at Huge, and
+        "5 PP · Growth 6" beside it spends the same points on Gargantuan.
+        """
+
+        if points <= 0:
+            return "Off"
+        effects = _held_effects(node)
+        shares = [
+            dynamic_rank_share(e.rank, points, full) if hold is None else hold for e in effects
+        ]
+        if not shares:
+            return f"{points} PP"
+        if not any(shares):
+            return f"{points} PP · too few points to run"
+        parts = [
+            f"{effect_display_name(effect, self._data)} {share}"
+            for effect, share in zip(effects, shares, strict=True)
+        ]
+        return f"{points} PP · " + ", ".join(parts[:2]) + (", …" if len(parts) > 2 else "")
+
+    def _on_share_dialled(
+        self,
+        node,
+        notches: list[tuple[int, int | None]],
+        index: int,
+        seated: int | None = None,
+    ) -> None:
+        """Hand a member the share its slider was left on — and at zero, switch it off.
+
+        Runtime, so it emits ``runtimeChanged`` like the rank dial it replaces. A notch at
+        zero is stored as *no share at all* rather than a zero — the two behave
+        identically and the model writes ``dynamic_points`` only when it is set, so
+        sliding every member back to nothing leaves a saved character byte-for-byte what
+        it was before anyone split the pool. That is also the way back to an ordinary
+        array, which is what clearing the split used to be a button for.
+
+        **Zero is off, the same as it is on the rank dial this slider replaces**, and it
+        has to be said out loud here. Handing a share back ordinarily drops the member
+        out of :func:`~mm_companion.core.rules.live_array_children` all by itself — but
+        not the *last* one: with every share back the array falls back to its selected
+        alternate at full rank, so a Growth parked on "Off" came straight back on and the
+        sheet went on reading Gargantuan under a slider saying the power was off. So the
+        notch flips the member's own master switch too, exactly as a click on its card
+        would, and a notch above zero flips it back. Only ``activated``, and only on this
+        member's own leaves: that is the one flag
+        :func:`~mm_companion.core.rules.effect_is_active` reads unconditionally, it is
+        the one :meth:`_set_array_active` sets again when the player clicks the card, and
+        leaving the siblings alone is what keeps a share from switching off a Linked
+        group it happens to sit inside.
+
+        A commit that lands where it started rebuilds nothing: the deferred commit and
+        the live preview between them can both report a notch the model already holds,
+        and tearing every card down to write the number that is already there is how a
+        gesture ends up fighting the widget making it. *Where it started* is the notch the
+        handle was **drawn** on (:meth:`_build_share_dial` passes its index back) and the
+        switch: the share it holds for a member the pool is rationing, and the share it is
+        running on for one the fallback woke (:meth:`_fallback_share`) — so leaving that
+        handle where it sits keeps the array unsplit, while dragging it down to zero still
+        puts the member down.
+
+        A notch is a **share and a rank**, and both are written: two notches can spend the
+        same points and stop at different ranks (:meth:`_share_notches`), so the index is
+        what a commit is compared by and :meth:`_hold_member` stores the rank the handle
+        stopped at whenever it is below what those points buy.
+        """
+
+        points, hold = notches[max(0, min(index, len(notches) - 1))]
+        running = points > 0
+        if seated is None:
+            full = dynamic_member_cost(node, self._data)
+            share = node.dynamic_points or 0
+            seated = self._seat(notches, share, self._held_rank(node, share, full))
+        if index == seated and self._member_is_running(node) == running:
+            return
+        node.dynamic_points = points or None
+        self._hold_member(node, hold if running else None)
+        self._set_member_running(node, running)
+        self._rebuild_list()
+        self.runtimeChanged.emit()
+
+    @staticmethod
+    def _member_is_running(node) -> bool:
+        """Whether a Dynamic array member's own switches are on.
+
+        Not whether it is *contributing* — that is the pool's question
+        (:func:`~mm_companion.core.rules.live_array_children`) and the gates' — only
+        whether the player has left this member switched on. A member is a whole card or
+        sub-group at the group level and a single effect at the power's own level, and
+        each answers with the flag its level switches.
+        """
+
+        if isinstance(node, PowerEffectInstance):
+            return node.toggled_on
+        return all(power.activated for power in PowersSection._leaf_powers(node))
+
+    @staticmethod
+    def _set_member_running(node, running: bool) -> None:
+        """Switch one Dynamic member on or off, leaving its siblings alone."""
+
+        if isinstance(node, PowerEffectInstance):
+            node.toggled_on = running
+            return
+        for power in PowersSection._leaf_powers(node):
+            power.activated = running
+
+    # -- the rank dial ----------------------------------------------------
+    @staticmethod
+    def _rank_is_shared(power: Power, parent: PowerGroup | None) -> bool:
+        """Whether this whole card's ranks are decided by a share of an array's pool.
+
+        A Dynamic member of an array group is rationed as a unit — every effect under it
+        is held down by the same proportion — so none of them has a rank of its own to
+        dial. It is asked of the *parent*, which is the half :meth:`_rank_dials` used to
+        miss: ``live_array_effects`` answers about a power's own effects and is empty for
+        a leaf card, so a Growth that was a Dynamic member kept its Size dial and fought
+        its Share dial for the same number.
+        """
+
+        return parent is not None and parent.mode == STRUCTURE_ARRAY and power.dynamic
+
+    def _rank_dials(
         self, power: Power, parent: PowerGroup | None, interactive: bool
     ) -> list[QWidget]:
-        """One :class:`_SizeLadder` per size effect the power carries; usually none.
+        """One :class:`_RankDial` per effect that has ranks worth choosing between.
 
-        Which effects qualify is :func:`~mm_companion.core.rules.size_steps`' answer,
-        so this block names neither Growth nor Shrinking — an effect has rungs because
-        the ruleset gave it a size readout, and a mod's own size effect gets the strip
-        without touching this file.
+        One way in, and the block names neither Growth nor Damage:
+        :func:`~mm_companion.core.rules.effect_has_rank_dial`, which is the *Add a rank
+        slider* checkbox in the constructor's Extended settings when the player has
+        touched it and the ruleset's own answer when they have not — and the ruleset
+        says yes to anything carrying a size readout, so a mod's own size effect gets a
+        ladder without touching this file. That is the whole of the rule now: a Growth's
+        checkbox used to be a control that changed nothing, because a size effect got its
+        dial whatever the box said.
+
+        A single-rank effect gets nothing: dialling a Growth 1 is exactly the card's own
+        on/off switch, and a second way to press it is not a choice. A size effect is
+        measured by its *rungs* rather than its rank there, since the ladder a Growth 1
+        climbs is real even though its rank is one.
+
+        **An effect whose rank a share decides gets nothing here** — whether the share
+        is held by its own power (a Dynamic array of effects) or by the card it sits on
+        (a Dynamic member of an array group). Its rank is not the player's to set
+        directly; the share dial is the control that moves it, and it is deliberately the
+        only one. Two sliders claiming one rank is what made a Growth's ladder snap back:
+        this one wrote a rank the share then clamped away, and the clamped value stayed
+        behind as a floor the share could not lift.
 
         The caption names the *effect* only when the power has more than one, which is
         the same bargain the dice footer's labels strike: on the ordinary single-effect
-        Growth card "Size" is the whole story, while a Growth linked to a Shrinking
-        needs to say which strip is which.
+        Growth card "Size" is the whole story, while a Growth linked to a Shrinking needs
+        to say which dial is which.
         """
-        ladders: list[QWidget] = []
+        if self._rank_is_shared(power, parent):
+            return []  # the whole card is rationed; see _share_dial
+        dials: list[QWidget] = []
         for effect in power.effects:
+            if any(e is effect for e in live_array_effects(power)):
+                continue  # its rank is its share; see _share_dial
             steps = size_steps(power, effect, self._character, self._data)
-            if len(steps) < 2:
-                # A single rung is not a choice — a Growth 1 is exactly the card's own
-                # on/off switch, and a strip of one button would be a second way to
-                # press it.
+            sized = len(steps) >= 2
+            if not effect_has_rank_dial(effect, self._data) or not (sized or effect.rank > 1):
                 continue
-            caption = "Size"
+            caption = "Size" if sized else "Rank"
             if len(power.effects) > 1:
                 caption = effect_title(effect, self._character, self._data)
-            ladder = _SizeLadder(caption, steps, interactive)
-            ladder.stepPicked.connect(
-                lambda rank, p=power, e=effect, g=parent: self._on_size_step(p, e, g, rank)
+            # Where the handle sits. A *size* effect is positioned by whether it is
+            # standing on the sheet — a Growth that is switched off is nowhere, not at
+            # rank 1. An instant effect (a Damage) never "stands" at all, so asking the
+            # same question would peg every blast card at Off; what matters there is
+            # simply whether the card is switched on.
+            standing = (
+                effect_stands(power, effect, self._data, self._character)
+                if sized
+                else self._power_is_active(power)
+                and self._character is not None
+                and any(p is power for p in live_powers(self._character.powers))
             )
-            ladders.append(ladder)
-        return ladders
+            dial = _RankDial(
+                caption,
+                effect.rank,
+                effect_current_rank(effect, self._data, self._character) if standing else 0,
+                self._dial_labels(steps),
+                interactive,
+            )
+            dial.rankPicked.connect(
+                lambda rank, p=power, e=effect, g=parent: self._on_rank_dialled(p, e, g, rank)
+            )
+            dials.append(dial)
+        return dials
 
-    def _on_size_step(
+    @staticmethod
+    def _dial_labels(steps) -> dict[int, str]:
+        """What each notch of the dial *is*, where a plain rank number won't do.
+
+        A size effect's notches are named by the size the wielder becomes, one entry per
+        rank rather than per rung: the Size Table clamps several ranks into one category
+        near its ends, and a dial that skipped them would refuse to stop where the
+        player put it. Zero always reads "Off"; anything the map doesn't cover falls back
+        to its bare rank.
+        """
+        labels = {0: "Off"}
+        for step in steps:
+            for rank in range(step.rank, step.last_rank + 1):
+                labels[rank] = step.category
+        return labels
+
+    def _on_rank_dialled(
         self, power: Power, effect: PowerEffectInstance, parent: PowerGroup | None, rank: int
     ) -> None:
-        """Hold a size effect at *rank* — or, on the rung already lit, switch it off.
+        """Hold an effect at *rank* — or, at zero, switch the power off.
 
-        A rung does exactly what a click on the card would have done, and then lands on
-        the rung asked for. So picking one on a dormant power is a request to *be* that
-        size: it wakes the power (flipping its switches, or becoming its array's live
-        alternate) at the chosen rung rather than at full rank. And picking the rung
-        already in force is the card's own click again — off it goes, which is what
-        makes the strip a complete control rather than one that can only ever turn a
-        power on. The one exception is an array's live member, where clicking the card
-        is deliberately a no-op: an array always keeps exactly one member live, and
-        pressing its rung must not switch the whole array off.
+        The dial does exactly what a click on the card would have done, and then lands on
+        the notch asked for. So moving it on a dormant power is a request to *be* that
+        rank: it wakes the power (flipping its switches, or becoming its array's live
+        alternate) at the chosen notch rather than at full rank. And sliding back to zero
+        is the card's own click again — off it goes, which is what makes the dial a whole
+        control rather than one that can only ever turn a power on. The one exception is
+        an array's live member, where clicking the card is deliberately a no-op: an array
+        always keeps exactly one member live, and dialling one to zero must not switch
+        the whole array off.
 
-        The rung is compared through :func:`~mm_companion.core.rules.size_steps` rather
-        than against ``current_rank`` directly, because a rung the Size Table clamped
-        spans several ranks and the button only ever carries the lowest of them.
-
-        The rank is written after that test and before any activation path, so whichever
-        one runs rebuilds the cards with it already in place.
+        The rank is written before any activation path, so whichever one runs rebuilds
+        the cards with it already in place.
         """
         role = self._activation_role(power, parent)
-        lit = next(
-            (s for s in size_steps(power, effect, self._character, self._data) if s.current),
-            None,
-        )
-        if lit is not None and lit.rank == rank:
+        if rank <= 0:
             if role != "select":
                 self._set_power_active(power, False)  # rebuilds and emits
+            else:
+                self._rebuild_list()  # put the handle back where the array left it
             return
         effect.current_rank = rank
         if role == "select" and isinstance(parent, PowerGroup):

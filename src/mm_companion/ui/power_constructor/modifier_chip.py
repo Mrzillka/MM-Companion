@@ -30,9 +30,13 @@ from mm_companion.ui.power_constructor.common import (
     CHIP_MIME,
     STRENGTH_AMOUNT_MAX,
     TRAIT_SOURCES,
-    _fill_trait_combo,
+    CellContext,
     _move_item,
     brick_tooltip,
+    fill_trait_combo,
+    is_trait_allocation,
+    link_trait_row,
+    repeatable_cell_kind,
 )
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
@@ -51,6 +55,11 @@ class ModifierChip(QFrame):
     :data:`STRENGTH_AMOUNT_MAX`, independent of the wielder's current ability, so the
     cost stays stable when that ability changes; buying more than the wielder actually
     has is flagged as a warning, not repriced.
+
+    A per-rank modifier's **rank band** — the ranks of the effect it actually covers
+    — is deliberately *not* here. It lives in the window's *Extended settings* panel,
+    with every other band in the build: a chip is a cramped label, and the bands of a
+    multi-effect power scattered across several cards were unreadable as a set.
     """
 
     removeRequested = Signal(object)
@@ -154,6 +163,84 @@ class ModifierChip(QFrame):
         self.selection.config["amount"] = value
         self.changed.emit()
 
+    def _repeatable_rows(self, cfg) -> QWidget:
+        """A variable-length row list for a modifier's ``repeatable`` config field.
+
+        Reduced Trait's rows: which traits are lowered to pay for the raised ones, and
+        by how many ranks. Cells come from the same
+        :func:`~mm_companion.ui.power_constructor.common.repeatable_cell_kind` registry
+        the effect card's rows use, so a trait row reads and stores identically whether
+        it hangs off the effect or off one of its flaws — which is what lets
+        :func:`~mm_companion.core.rules.config_trait_allocation` read both with one
+        function. Stacked vertically rather than inline: a chip is a narrow thing and a
+        row is two controls wide.
+        """
+
+        host = QWidget()
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+        rows_host = QWidget()
+        rows_layout = QVBoxLayout(rows_host)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(2)
+        outer.addWidget(rows_host)
+
+        existing = self.selection.config.get(cfg.key)
+        if not isinstance(existing, list):
+            existing = []
+        row_widgets: list[tuple[QWidget, dict]] = []
+
+        def commit() -> None:
+            rows = []
+            for _widget, cells in row_widgets:
+                stored = {c.key: repeatable_cell_kind(c).read(cells[c.key]) for c in cfg.columns}
+                if any(str(v).strip() for v in stored.values()):
+                    rows.append(stored)
+            self.selection.config[cfg.key] = rows
+            self.changed.emit()
+
+        def add_row(initial: dict | None = None) -> None:
+            initial = initial or {}
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(3)
+            cells: dict = {}
+            for column in cfg.columns:
+                kind = repeatable_cell_kind(column)
+                cell = kind.build(CellContext(self._data, self._character), column, initial, commit)
+                row_layout.addWidget(cell, kind.stretch)
+                cells[column.key] = cell
+            remove = QPushButton("✕")
+            remove.setFlat(True)
+            remove.setFixedWidth(20)
+            row_layout.addWidget(remove)
+            rows_layout.addWidget(row_widget)
+            entry = (row_widget, cells)
+            row_widgets.append(entry)
+            link_trait_row(CellContext(self._data, self._character), cfg.columns, cells)
+
+            def do_remove(_checked: bool = False) -> None:
+                if entry in row_widgets:
+                    row_widgets.remove(entry)
+                row_widget.setParent(None)
+                row_widget.deleteLater()
+                commit()
+
+            remove.clicked.connect(do_remove)
+
+        for row_data in existing:
+            if isinstance(row_data, dict):
+                add_row(row_data)
+        if not row_widgets and is_trait_allocation(cfg):
+            add_row()  # the picker is the question; an empty one reads as a missing control
+
+        add_button = QPushButton("＋ Add")
+        add_button.clicked.connect(lambda: add_row())
+        outer.addWidget(add_button)
+        return host
+
     def _build_config(self, modifier: Modifier) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -183,11 +270,8 @@ class ModifierChip(QFrame):
                     # Data-driven trait list (Reduced Trait's "which trait goes down";
                     # Check Required's "which check", which also offers the derived
                     # stats a player can roll but not buy).
-                    _fill_trait_combo(
-                        combo,
-                        self._data,
-                        self.selection.config.get(cfg.key, ""),
-                        derived=cfg.source == "all_traits",
+                    fill_trait_combo(
+                        combo, self._data, self.selection.config.get(cfg.key, ""), cfg.source
                     )
                 else:
                     for option in cfg.options:
@@ -207,6 +291,13 @@ class ModifierChip(QFrame):
                 if cfg.show_when_points:
                     gated.append((combo, cfg.show_when_points))
                 row.addWidget(combo)
+            elif cfg.type == "repeatable":
+                rows_widget = self._repeatable_rows(cfg)
+                if cfg.hint:
+                    rows_widget.setToolTip(cfg.hint)
+                if cfg.show_when_points:
+                    gated.append((rows_widget, cfg.show_when_points))
+                row.addWidget(rows_widget)
             else:  # text
                 edit = QLineEdit(self.selection.config.get(cfg.key, ""))
                 edit.setPlaceholderText(cfg.label)

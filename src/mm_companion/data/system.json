@@ -28,7 +28,36 @@
     "unscoped_scope_values": ["All checks"],
     "_damage_effect": "Which effect's resistance ladder is the generic damage ladder — the one the GM's quick-damage buttons walk. Named here rather than spelled in Python, so a ruleset whose damage effect is called something else retargets it.",
     "damage_effect": "damage",
-    "alternate_effect_modifier": "alternate_effect",
+    "_improvised_effects": "Improvised Effects (p101-102): preparing one takes a time rank equal to its Power Point cost, never less than minTimeRank. Each time rank shaved off adds dcPerTimeRankSaved to the preparation DC; each one added grants checkBonusPerTimeRankSpent on the check. Both DCs are defense_dc_base plus the effect's cost.",
+  "improvised_effect": {
+   "minTimeRank": 3,
+   "dcPerTimeRankSaved": 5,
+   "checkBonusPerTimeRankSpent": 2
+  },
+  "_extra_effort": "Extra Effort (p20-21): a non-action that buys one of the listed benefits and costs a rung of the fatigue ladder at the start of your next turn. rankIncrease is what the Rank Increase use grants before Untapped Potential adds its ranks; checkBonus is what the Bonus use is worth. permanentDurations are the durations Extra Effort cannot improve or stunt with (p104, p159). The three advantages are named here rather than in Python: Determination shrugs the fatigue off, Untapped Potential deepens the rank increase, Extraordinary Effort buys two benefits for two rungs.",
+  "extra_effort": {
+    "fatigueLadder": ["fatigued", "exhausted", "incapacitated"],
+    "rankIncrease": 1,
+    "_pushableTraits": "The rank increase may also name your Strength (for Damage or Lifting) or your Speed rank in one mode of movement you have (p21). A movement entry names no stat: which modes a character has is a fact about the sheet, not the ruleset, so it is expanded per character.",
+    "pushableTraits": [
+      { "category": "ability", "stat": "STR", "label": "Strength", "note": "for Damage or Lifting" },
+      { "category": "movement", "label": "Speed", "note": "in one mode of movement you have" }
+    ],
+    "checkBonus": 2,
+    "permanentDurations": ["Permanent"],
+    "determinationAdvantage": "Determination",
+    "untappedPotentialAdvantage": "Untapped Potential",
+    "extraordinaryEffortAdvantage": "Extraordinary Effort",
+    "uses": [
+      { "id": "action", "label": "Extra action", "description": "An extra standard or simple action on your turn, or an extra reaction at any time." },
+      { "id": "bonus", "label": "Bonus on a check", "description": "A +2 bonus on a single check, raising an existing bonus or cancelling a penalty." },
+      { "id": "rank_increase", "label": "Rank increase", "target": "effect", "description": "Raise the rank of one non-permanent effect until the end of your turn, past the Power Level limits — or your Strength, or your Speed in one mode of movement you have." },
+      { "id": "power_stunt", "label": "Power stunt", "target": "effect", "description": "Use a temporary Alternate Effect of a non-permanent effect you have. The GM has final say over which stunts make sense." },
+      { "id": "renewed_attempt", "label": "Renewed attempt", "description": "Attempt something again that would otherwise take until the next scene." },
+      { "id": "resistance", "label": "Resistance check", "description": "Immediately make another resistance check against an ongoing effect." }
+    ]
+  },
+  "alternate_effect_modifier": "alternate_effect",
     "linked_modifier": "linked",
     "derived_traits": [
       { "key": "DEF", "label": "Defence" },

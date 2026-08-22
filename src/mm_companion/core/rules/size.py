@@ -23,7 +23,7 @@ from .appliers import (
     STACK_SUM,
     TraitContribution,
 )
-from .runtime import effect_current_rank, effect_is_active, live_powers
+from .runtime import effect_current_rank, effect_is_active, effect_stands, live_powers
 
 #: The ``effect_readouts.json`` readout kind that marks an effect as a size shift.
 #: Nothing here names Growth or Shrinking: an effect is a size effect because the
@@ -63,7 +63,7 @@ def size_shift(char: Character, game_data: GameData) -> int:
                 if not effect_is_active(power, effect, base, game_data, char):
                     continue
                 sign = int(readout.data.get("sign", 1))
-                shift += sign * effect_current_rank(effect)
+                shift += sign * effect_current_rank(effect, game_data, char)
     return shift
 
 
@@ -227,6 +227,44 @@ class SizeStep:
     current: bool = False
 
 
+def effect_dials_by_default(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether the ruleset gives this effect a rank slider without being asked.
+
+    A size effect does, because a Growth 3 is not one leap to Gargantuan — it is Large,
+    then Huge, then Gargantuan, and which rung you are standing on is a mid-fight
+    decision the card has to be able to make. Nothing here names Growth or Shrinking:
+    the test is the :data:`SIZE_READOUT_KIND` readout :func:`size_steps` already reads,
+    so a mod's own size effect defaults to a ladder on the same terms.
+
+    Every other effect defaults to no slider — a Blast is all-or-nothing until somebody
+    says otherwise.
+    """
+
+    return any(
+        readout.kind == SIZE_READOUT_KIND
+        for readout in game_data.effect_readouts.get(effect.effect_id, ())
+    )
+
+
+def effect_has_rank_dial(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether this effect's card carries a rank slider at all.
+
+    The one door both the sheet card and the Power Constructor's *Extended settings*
+    checkbox go through, so the box can never say one thing and the card another.
+    ``rank_dial`` is tri-state: the player's ``True``/``False`` wins, and ``None`` — the
+    default, and what every save written before the tri-state says — hands the question
+    to :func:`effect_dials_by_default`.
+
+    It answers only whether the *control* exists. Whether it is worth drawing (a rank-1
+    effect has nothing to choose between) is the card's own question, and how far the
+    dial is turned is ``current_rank``.
+    """
+
+    if effect.rank_dial is not None:
+        return bool(effect.rank_dial)
+    return effect_dials_by_default(effect, game_data)
+
+
 def size_steps(
     power: Power, effect: PowerEffectInstance, char: Character, game_data: GameData
 ) -> tuple[SizeStep, ...]:
@@ -270,13 +308,11 @@ def size_steps(
             continue
         steps.append(SizeStep(rank=rank, last_rank=rank, category=row.size_category))
 
-    # The same pair :func:`size_shift` asks, and it has to be both: an array member
-    # that is not the live alternate answers ``effect_is_active`` perfectly happily
-    # (``array_active`` is a flag nothing maintains — the array's own
-    # ``active_child_id`` is the truth, and only ``live_powers`` reads it), so asking
-    # the effect alone lit a rung on a card contributing nothing to the sheet.
-    live = any(p is power for p in live_powers(char.powers))
-    if not live or not effect_is_active(power, effect, base, game_data, char):
+    # A rung is lit only where the power is actually standing — see ``effect_stands``,
+    # which is the same pair ``size_shift`` asks and which the card's rank dial reads to
+    # position itself, so the strip and the slider can never disagree about where a
+    # power is.
+    if not effect_stands(power, effect, game_data, char):
         return tuple(steps)
-    now = effect_current_rank(effect)
+    now = effect_current_rank(effect, game_data, char)
     return tuple(replace(s, current=s.rank <= now <= s.last_rank) for s in steps)

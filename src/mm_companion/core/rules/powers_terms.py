@@ -558,6 +558,9 @@ def _effective_stats(
         if modifier is None:
             continue
         tint = "better" if modifier.category == "extra" else "worse"
+        # A ranked stepping modifier moves its field once *per rank* — two ranks of
+        # Increased Action cost twice and must also move twice.
+        steps = modifier.step_by * (selection.rank if modifier.ranked else 1)
         touched = False
         for key, value in modifier.overrides.items():
             if key in stats:
@@ -565,13 +568,13 @@ def _effective_stats(
                 change[key] = tint
                 touched = True
         if modifier.step_field == "action":
-            action_step += modifier.step_by
-            if modifier.step_by:
+            action_step += steps
+            if steps:
                 action_step_tint = tint
             touched = True
         elif modifier.step_field in stats:
             stepped = _step_along(
-                ladders.get(modifier.step_field, ()), stats[modifier.step_field], modifier.step_by
+                ladders.get(modifier.step_field, ()), stats[modifier.step_field], steps
             )
             if stepped != stats[modifier.step_field]:
                 stats[modifier.step_field] = stepped

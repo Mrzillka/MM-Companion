@@ -981,9 +981,11 @@ class Modifier:
     than sniffing the check prose, and ``drops_check`` cancels it;
     ``drops_check`` removes the attack roll entirely (Perception Range);
     ``check_note`` is a parenthetical appended to the check row (Area's
-    Dodge-for-half); and ``step_field``/``step_by`` shift a field one or more steps
-    along its :attr:`GameData.game_term_ladders` ordering (Increased Duration steps
-    ``duration`` up, Increased Action steps ``action`` to a slower one).
+    Dodge-for-half); and ``step_field``/``step_by`` shift a field along its
+    :attr:`GameData.game_term_ladders` ordering (Increased Duration steps ``duration``
+    up, Increased Action steps ``action`` to a slower one). A *ranked* stepping modifier
+    moves ``step_by`` positions **per rank bought**, so two ranks of Increased Action pay
+    twice and move twice; an unranked one moves ``step_by`` once.
 
     ``adds_ability`` names a character ability whose rank is added to the effect's
     *effective* rank — Strength-Based Damage (``"STR"``) folds the wielder's Strength

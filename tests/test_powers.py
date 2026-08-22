@@ -1605,6 +1605,49 @@ def test_effect_stat_rows_increased_action_steps_to_a_slower_action() -> None:
     assert action.change == "worse"
 
 
+def test_increased_duration_steps_once_per_rank() -> None:
+    data = load_game_data()
+    # Two ranks move Damage's Instant duration two rungs (Concentration, Sustained) —
+    # and cost two per effect rank, not one. Moving once for a double price was the
+    # trap the ranked version had to avoid.
+    effect = PowerEffectInstance(
+        "damage", rank=8, extras=[ModifierSelection("increased_duration", rank=2)]
+    )
+    duration = next(r for r in effect_stat_rows(effect, data) if r.key == "duration")
+    assert duration.value == "Sustained"
+    assert duration.change == "better"
+    assert effect_total_cost(effect, data) == 24  # 8 x (1 base + 2 extra ranks)
+
+
+def test_increased_action_steps_once_per_rank_and_costs_once_per_rank() -> None:
+    data = load_game_data()
+
+    # Move Object is 2 points/rank. One rank of the flaw takes it to 1/rank; two ranks
+    # take it below 1, where the sub-1 rule quarters rather than zeroes it (see
+    # ``_ranked_cost_fraction``) — the point being that the second rank is charged.
+    def cost(rank: int) -> int:
+        return effect_total_cost(
+            PowerEffectInstance(
+                "move_object", rank=6, flaws=[ModifierSelection("increased_action", rank=rank)]
+            ),
+            data,
+        )
+
+    assert cost(1) == 6
+    assert cost(2) == 3
+
+
+def test_a_stepping_modifier_clamps_at_the_end_of_its_ladder() -> None:
+    data = load_game_data()
+    # Move Object is already a Standard action, one rung from the ladder's end, so the
+    # remaining ranks have nowhere to go and must clamp rather than run off it.
+    effect = PowerEffectInstance(
+        "move_object", rank=6, flaws=[ModifierSelection("increased_action", rank=4)]
+    )
+    action = next(r for r in effect_stat_rows(effect, data) if r.key == "action")
+    assert action.value == "Full round"
+
+
 def test_sustained_extra_raises_a_sub_free_action_to_free() -> None:
     data = load_game_data()
     # Enhanced Senses is Permanent with action "None"; the Sustained extra makes it
@@ -1644,6 +1687,21 @@ def test_increased_action_steps_from_the_sustained_free_floor() -> None:
     )
     action = next(r for r in effect_stat_rows(effect, data) if r.key == "action")
     assert action.value == "Simple"
+    assert action.change == "worse"
+
+
+def test_multi_rank_increased_action_steps_twice_from_the_floor() -> None:
+    data = load_game_data()
+    # Same floor, two ranks: Free -> Simple -> Move. The floor is the baseline the
+    # whole step moves from, applied once, not once per rank.
+    effect = PowerEffectInstance(
+        "immunity",
+        rank=10,
+        extras=[ModifierSelection("sustained_immunity")],
+        flaws=[ModifierSelection("increased_action", rank=2)],
+    )
+    action = next(r for r in effect_stat_rows(effect, data) if r.key == "action")
+    assert action.value == "Move"
     assert action.change == "worse"
 
 

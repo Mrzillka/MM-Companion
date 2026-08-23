@@ -177,6 +177,12 @@ class PowerEffectInstance:
     the number a Dynamic member's card slider writes. ``None`` means it holds no share.
     See :func:`mm_companion.core.rules.dynamic_rank_share`.
 
+    A **negative** share is a file no control could have written, and all three loaders
+    clamp it to zero rather than carrying it: the rank arithmetic reads it as zero
+    anyway (:func:`mm_companion.core.rules.dynamic_rank_share` guards ``points <= 0``)
+    while the pool the group header counts down would go on *crediting* it, so the two
+    would disagree about a pool nobody had spent.
+
     ``dynamic`` marks this effect a **Dynamic** member of its power's ``array``
     structure (p101). It is *build* state: a Dynamic alternate costs 2 points instead
     of 1 because it shares the array's point pool and runs alongside the array's other
@@ -441,7 +447,7 @@ class Power:
             item_present=bool(raw.get("item_present", True)),
             array_active=bool(raw.get("array_active", True)),
             dynamic=bool(raw.get("dynamic", False)),
-            dynamic_points=None if raw_share is None else int(raw_share),
+            dynamic_points=None if raw_share is None else max(0, int(raw_share)),
             cost_override=None if raw_cost is None else int(raw_cost),
             stunt_of=raw.get("stunt_of", ""),
             active_effect=None if raw_effect is None else int(raw_effect),
@@ -561,7 +567,7 @@ class PowerGroup:
             name=raw.get("name", ""),
             dynamic=bool(raw.get("dynamic", False)),
             dynamic_points=(
-                None if raw.get("dynamic_points") is None else int(raw["dynamic_points"])
+                None if raw.get("dynamic_points") is None else max(0, int(raw["dynamic_points"]))
             ),
         )
 

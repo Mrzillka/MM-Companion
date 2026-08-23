@@ -99,6 +99,7 @@ from mm_companion.core.rules import (
     skill_bonus,
     skill_points_spent,
     skill_total,
+    structure_header,
     synced_effect_rank,
     trait_display_name,
     trait_rate,
@@ -2318,10 +2319,69 @@ def test_a_dynamic_member_is_tagged_in_the_game_terms() -> None:
         ],
     )
     summary = power_game_terms(power, data)
-    # The header still says "one effect active at a time"; the tag is the exception.
+    # Nothing is split yet, so the header still says "one effect active at a time" and
+    # the tag is the exception to it.
+    assert "one effect active at a time" in summary
     assert "Dynamic Alternate Effect, 2 pt" in summary
     power.effects[0].dynamic = True
     assert "[base, Dynamic]" in power_game_terms(power, data)
+
+
+def test_a_split_array_stops_claiming_one_effect_at_a_time() -> None:
+    """The header promised the restriction the split had just lifted.
+
+    "One effect active at a time" is what an ordinary array buys and exactly what the
+    second point of a Dynamic alternate buys out of: once points are spread, the effects
+    run together and the line above them was contradicting the ranks printed under it.
+    """
+
+    data = load_game_data()
+    power = Power(
+        structure=STRUCTURE_ARRAY,
+        effects=[
+            PowerEffectInstance("damage", rank=8, dynamic=True),
+            PowerEffectInstance("affliction", rank=4, dynamic=True),
+        ],
+    )
+    assert structure_header(power) == "Array (one effect active at a time)"
+
+    power.effects[0].dynamic_points = 8
+    power.effects[1].dynamic_points = 4
+    assert structure_header(power) == "Array (Dynamic: 2 effects sharing the pool)"
+    assert "one effect active at a time" not in power_game_terms(power, data)
+    assert "2 effects sharing the pool" in power_game_terms(power, data)
+
+    # A pool spread over one effect still runs one at a time — but it is the split
+    # deciding now, not the *Using* picker, which has just gone off the card.
+    power.effects[1].dynamic_points = None
+    assert structure_header(power) == "Array (Dynamic: 1 effect running on its share)"
+
+    # Nothing split at all is the ordinary array again.
+    power.effects[0].dynamic_points = None
+    assert structure_header(power) == "Array (one effect active at a time)"
+
+
+def test_a_negative_share_cannot_survive_a_load() -> None:
+    """A file no control could have written, clamped at every level that carries a share.
+
+    The rank arithmetic reads a negative share as zero, while the pool the group header
+    counts down would go on crediting it — so the two would disagree about points nobody
+    had spent.
+    """
+
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=4)
+    power = Power(name="Bolt", effects=[effect])
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[power])
+
+    raw_effect = effect.to_dict() | {"dynamic_points": -3}
+    raw_power = power.to_dict() | {"dynamic_points": -3}
+    raw_group = group.to_dict() | {"dynamic_points": -3}
+
+    assert PowerEffectInstance.from_dict(raw_effect).dynamic_points == 0
+    assert Power.from_dict(raw_power).dynamic_points == 0
+    assert PowerGroup.from_dict(raw_group).dynamic_points == 0
+    assert data is not None  # the loader is content-free here; keep the fixture honest
 
 
 def test_array_base_is_the_costliest_effect_regardless_of_order() -> None:

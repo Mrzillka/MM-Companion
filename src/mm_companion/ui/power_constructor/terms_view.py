@@ -22,7 +22,6 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
-    STRUCTURE_LINKED,
     Power,
     PowerEffectInstance,
 )
@@ -34,6 +33,7 @@ from mm_companion.core.rules import (
     effect_stat_rows,
     power_total_cost,
     resolve_stat_display,
+    structure_header,
 )
 from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -514,15 +514,17 @@ class PowerTermsView(QWidget):
 
     @staticmethod
     def _structure_header(power: Power) -> str:
-        if len(power.effects) < 2:
-            return ""
-        if power.structure == STRUCTURE_LINKED:
-            return "Linked (all effects activate together):"
-        if power.structure == STRUCTURE_ARRAY:
-            # The constructor never holds a split — that is runtime, made on the sheet —
-            # so it always states the restriction the structure buys.
-            return "Array (one effect active at a time):"
-        return ""
+        """The shared sentence, with the colon this view has always drawn.
+
+        The constructor edits a **deep copy** of the sheet's power, shares and all, so a
+        power opened while its own effects are split says so here too rather than going
+        on promising the mutual exclusion the split has lifted. Same words as the card
+        and the game-term summary, from :func:`~mm_companion.core.rules.structure_header`
+        — this used to be a third copy of them.
+        """
+
+        header = structure_header(power)
+        return f"{header}:" if header else ""
 
     @staticmethod
     def _role_note(

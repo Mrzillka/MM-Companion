@@ -1942,3 +1942,49 @@ def test_a_member_with_no_share_dial_keeps_its_rank_dial(qapp: QApplication) -> 
 
     assert sec._share_dial(growth, sec._character.powers[0], True) is None
     assert sec._rank_dials(growth, sec._character.powers[0], True, shared=False)
+
+
+def test_a_receded_card_keeps_its_dial_at_full_strength(qapp: QApplication) -> None:
+    """A dial is the one live control on a card that is showing itself switched off.
+
+    Zero is off and sliding up wakes the power, so greying the dial out with the rest of
+    the card told the player the only usable thing on it was dead — and on a Dynamic
+    member parked at "Off" by its own share dial, that dial is the *only* way back:
+    a split array's cards are not clickable.
+    """
+
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour, flight = group.children
+    _share_dials(sec)[1]._slider.setValue(1)  # split the pool onto the Flight alone
+
+    card = next(c for c in sec._list_host.findChildren(_DraggableCard) if c.node_id == armour.id)
+    assert card.off_progress() == pytest.approx(1.0)  # the Force Field has receded...
+    # ...and it is its layout's children that carry the dimming, never the dial.
+    dial = card.findChild(_RankDial)
+    assert dial is not None
+    assert dial.graphicsEffect() is None
+    assert card.graphicsEffect() is None  # not the card either, or the dial would go too
+    name = next(label for label in card.findChildren(QLabel) if label.text() == "Force Field")
+    assert name.parentWidget().graphicsEffect() is not None  # the rest of it is dim
+
+
+def test_an_inert_dial_recedes_with_the_group_it_cannot_control(qapp: QApplication) -> None:
+    """A Linked group that is off drives its whole subtree, so nothing under it is live.
+
+    The members' dials go transparent to the mouse there, and a control that cannot be
+    used has no business staying lit — so nothing is exempted, and the group card's own
+    dimming covers them like everything else it holds.
+    """
+
+    char = Character.new_default(load_game_data())
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=4)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=3)])
+    group = PowerGroup(mode=STRUCTURE_LINKED, children=[growth, flight])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    sec._set_group_active(group, False)
+
+    cards = {c.node_id: c for c in sec._list_host.findChildren(_DraggableCard)}
+    assert cards[group.id].graphicsEffect() is not None  # dimmed whole, nothing exempted
+    assert cards[growth.id]._lit == []  # the member kept nothing lit under it

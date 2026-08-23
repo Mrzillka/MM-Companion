@@ -1827,8 +1827,12 @@ class PowersSection(TitledSection):
         share = self._share_dial(power, parent, interactive)
         if share is not None:
             layout.addWidget(share)
+            if interactive:
+                card.keep_lit(share)
         for dial in self._effect_share_dials(power, interactive):
             layout.addWidget(dial)
+            if interactive:
+                card.keep_lit(dial)
         # ...and now that they have registered, let the coordinator drive the header's
         # readout, the same handover :meth:`_make_group_card` makes one level up.
         effect_split = self._splits.get(power.id)
@@ -1840,8 +1844,15 @@ class PowersSection(TitledSection):
         # A dialled effect is a range, not a switch: a slider over the ranks the wielder
         # can hold it at, under the effect breakdown that explains what each notch is
         # worth and above the dice, with the rest of the mid-play controls.
+        # Every dial stays at full strength while the card recedes: zero is off and
+        # sliding up wakes the power, so a dial is the one live control on a card that
+        # is showing itself switched off (:meth:`DraggableCard.keep_lit`). Only while it
+        # really is live — inside a switched-off Linked group it is inert, and an inert
+        # control recedes with everything else it cannot do.
         for dial in self._rank_dials(power, parent, interactive, shared=share is not None):
             layout.addWidget(dial)
+            if interactive:
+                card.keep_lit(dial)
 
         # A dedicated footer for the numbers that come up mid-play — one line per roll.
         # A power that rolls nothing gets neither the footer nor its rule.

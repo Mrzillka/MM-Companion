@@ -732,7 +732,18 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   the text out). That look is a **continuous** quantity —
   `_DraggableCard.set_off_progress(0..1)` interpolates opacity, type size and
   padding together — so a flip *eases* over `PowersSection.TRANSITION_MS` instead
-  of cutting. Every runtime setter ends in `_rebuild_list()` (flipping one power
+  of cutting. **A dial does not recede with it** (`_DraggableCard.keep_lit`): zero on a
+  rank or share dial is off and sliding up wakes the power, so it is the one live
+  control on a card that is showing itself switched off, and greying it out said the
+  only usable thing there was dead. On a Dynamic member parked at "Off" by its own share
+  dial it is the *only* way back, since a split array's cards are not clickable. A
+  `QGraphicsEffect` paints its whole subtree through one buffer, so a descendant cannot
+  opt out of its ancestor's opacity: a card with something to keep lit therefore dims its
+  layout's children one at a time instead of dimming itself, and its own frame — the drag
+  target and the click target, both live on a receded card — stays lit with them. Only a
+  dial that is genuinely live is kept: inside a switched-off Linked group the members'
+  dials are transparent to the mouse, nothing is exempted, and the group card's own
+  dimming covers them. Every runtime setter ends in `_rebuild_list()` (flipping one power
   can restate another card's numbers), so no card survives a toggle: the section
   instead remembers each node's on-screen progress in `_card_off` and the
   replacement card eases on from there, the running animation writing that

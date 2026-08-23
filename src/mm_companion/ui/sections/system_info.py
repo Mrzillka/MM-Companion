@@ -394,7 +394,7 @@ class MovementModesWidget(QWidget):
 
 
 class PowerLevelCapsWidget(QWidget):
-    """How close the character is to each of their character-wide Power Level limits.
+    """The character-wide Power Level limits this build is **past**, one line each.
 
     The block owns Power Level, and until now it stated the number and nothing the number
     *does*. The caps were computed all along — :func:`~mm_companion.core.rules.
@@ -403,11 +403,12 @@ class PowerLevelCapsWidget(QWidget):
     player whose own Dodge + Toughness was over Power Level got no mark anywhere on the
     sheet while a single power got a warning glyph. This is that answer, shown.
 
-    **Headroom, not just the alarm.** Each line reads ``Dodge + Toughness 18/20``,
-    because the interesting moment is the one *before* the breach: a cap is a budget a
-    player spends deliberately, and one that only speaks up when it is already broken is
-    a budget you cannot plan against. A line goes ``tint.warning`` only when the build is
-    actually past it — sitting exactly on a cap is the intended place to sit.
+    **Breaches only.** A line reads ``Dodge + Toughness 22/20`` and is tinted, and a
+    build inside every cap gets no row at all — the same bargain Reach and Movement
+    strike a few rows down. A legal build is the ordinary case, and three lines of
+    reassurance on every sheet is noise standing where a warning has to be noticed.
+    The number a breached line carries is still the whole of it: what the build reads
+    and what it is allowed.
 
     One label per line rather than one rich-text label, for :class:`MovementModesWidget`'s
     reason: each cap carries its own tooltip and a tooltip cannot cover part of a label.
@@ -1004,18 +1005,26 @@ class SystemInfoSection(QGroupBox):
         self.changed.emit()  # fan out so the pool total re-derives
         self._emit_edited()
 
-    def _refresh_limits(self) -> None:
-        """Restate the Power Level limits row, or drop it.
+    def refresh_limits(self) -> None:
+        """Restate the Power Level limits row, or drop it. **Public: the sheet calls it.**
 
-        Every input moves it — the level itself, an ability, a skill rank, worn armour,
-        an active Growth — which is why it hangs off :meth:`refresh_derived` rather than
-        off the two fields it sits under. Gone entirely for an NPC (see
-        :meth:`_build_limits`) and for a ruleset that declares no character-wide caps.
+        Every input moves it and they are scattered across the sheet — the level itself,
+        an ability, a skill rank, a resistance, worn armour, an active Growth — so it is
+        subscribed to three topics rather than one. ``derived-changed`` covers the powers
+        and the conditions, ``caps-changed`` is the Power Level moving (this block's own
+        spin box raises it), and ``facts-changed`` is every block that edits a trait.
+        Hanging it off ``refresh_derived`` alone left it stale for the two edits that
+        move it most directly: typing a Power Level, and typing a Dodge rank.
+
+        Gone entirely for an NPC (see :meth:`_build_limits`), for a ruleset that declares
+        no character-wide caps, and — the ordinary case — for a build that is inside
+        every one of them.
         """
 
         caps = [] if self._npc else power_level_cap_summary(self._character, self._data)
-        self._limits.render_caps(caps)
-        self._set_row_visible(self._limits, bool(caps))
+        breaches = [cap for cap in caps if cap.over]
+        self._limits.render_caps(breaches)
+        self._set_row_visible(self._limits, bool(breaches))
 
     def _refresh_cost_notice(self) -> None:
         """Show the homebrew-cost notice when any non-power rate differs from default.
@@ -1171,7 +1180,7 @@ class SystemInfoSection(QGroupBox):
         # bought Power Level (replaced by the estimate) and Hero Points.
         self._set_row_visible(self._power_level, not npc)
         self._set_row_visible(self._hero_points, not npc)
-        self._refresh_limits()  # ...and with it the limits read off that level
+        self.refresh_limits()  # ...and with it the limits read off that level
         self._refresh_cost_notice()
         if npc:
             self.refresh_estimated_pl()
@@ -1208,7 +1217,7 @@ class SystemInfoSection(QGroupBox):
         the same display-only way the stat grids show them — the build math is untouched.
         """
         self._refresh_effort_note()
-        self._refresh_limits()
+        self.refresh_limits()
         self._speed.render_lines(condition_speed_lines(self._character, self._data))
         self._speed.setToolTip(
             _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))

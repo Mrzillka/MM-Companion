@@ -114,17 +114,23 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `HeroPointsWidget` is shared with GM Mode's `PlayerCard`, so its pip size
   (`column.hero-point`) has to suit both.
 - **The block owns Power Level, so it owns what Power Level does.** A `Limits` row
-  (`PowerLevelCapsWidget`) states how close the character is to each character-wide cap —
-  `Dodge + Toughness 18/20`, `Fortitude + Will 20/20`, `Skills (Stealth) 25/20` — from
-  `power_level_cap_summary`, which reduces the per-row skill cap to the row standing
-  closest to it. The arithmetic is `power_level_caps`, and `power_level_violations` is
-  now derived from the same list, so the readout and the warning cannot be two different
-  answers. That function was fully implemented and tested before this and had **no UI
-  surface at all**: its only caller was a minion's build, so a character over Power Level
-  on their own defences got no mark anywhere while a single power got a ⚠. A line tints
-  `tint.warning` only when the build is genuinely past the cap — sitting exactly on one
-  is where you are meant to sit — and the spent half of the point pool tints the same way
+  (`PowerLevelCapsWidget`) names each character-wide cap the build is **past** —
+  `Dodge + Toughness 22/20`, `Skills (Stealth) 25/20` — from `power_level_cap_summary`,
+  which reduces the per-row skill cap to the row standing closest to it. The arithmetic
+  is `power_level_caps`, and `power_level_violations` is now derived from the same list,
+  so the readout and the warning cannot be two different answers. That function was fully
+  implemented and tested before this and had **no UI surface at all**: its only caller was
+  a minion's build, so a character over Power Level on their own defences got no mark
+  anywhere while a single power got a ⚠. Breaches only, and no row for a legal build —
+  the same bargain Reach and Movement strike, and for the same reason: a legal build is
+  the ordinary case, and three lines of reassurance on every sheet is noise standing
+  where a warning has to be noticed. The spent half of the point pool tints the same way
   when the build has outrun its budget (`_restate_pool_balance`).
+- **`refresh_limits` is subscribed to three topics, not one.** Its inputs are scattered:
+  the level (this block's own spin box, `caps-changed`), every trait any other block edits
+  (`facts-changed`), and the powers and conditions (`derived-changed`, which is all it
+  had). Hanging it off `refresh_derived` alone left it stale for the two edits that move
+  it most directly — typing a Power Level, and typing a Dodge rank.
 - **Four of the block's rows are not always there** — the cost notice, Reach, Movement,
   and (for an NPC) Power Level, Hero Points and the limits. They all go through
   `_set_row_visible`, which calls `QFormLayout.setRowVisible` rather than hiding the field

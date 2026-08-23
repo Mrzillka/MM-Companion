@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QSize
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QSpinBox
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -753,7 +753,7 @@ def test_a_hidden_row_takes_its_whole_form_row_with_it(qapp: QApplication) -> No
     assert form.isRowVisible(row)
 
 
-def test_the_limits_row_states_every_character_wide_power_level_cap(
+def test_the_limits_row_is_only_there_for_a_cap_the_build_is_past(
     qapp: QApplication,
 ) -> None:
     """The block owns Power Level, so it owns what Power Level does.
@@ -761,29 +761,48 @@ def test_the_limits_row_states_every_character_wide_power_level_cap(
     ``power_level_violations`` has evaluated the paired-resistance caps and the per-skill
     modifier cap all along, and its only caller was a minion's build — so a character
     over Power Level on their own defences got no mark anywhere on the sheet while a
-    single power got a warning glyph. And the interesting moment is the one *before* the
-    breach, so the row states the headroom rather than only the alarm.
+    single power got a warning glyph. A legal build is the ordinary case, though, so the
+    row appears only for a cap the build is genuinely past.
     """
 
     data = load_game_data()
     sheet = CharacterSheet(data)
     system = sheet.system_info
+    assert system._limits.rendered_text() == []
+    assert system._limits.isHidden()
 
-    lines = system._limits.rendered_text()
-    assert any(line.startswith("Dodge + Toughness") for line in lines)
-    assert any(line.startswith("Fortitude + Will") for line in lines)
-
-    # PL 10 -> the paired cap is 20, and a build sitting on it is legal and untinted.
+    # PL 10 -> the paired cap is 20, and a build sitting exactly on it is legal.
     sheet.character.abilities["STA"] = 10
     sheet.character.resistances["DEF"] = 10
-    system.refresh_derived()
-    assert "Dodge + Toughness 20/20" in system._limits.rendered_text()
+    system.refresh_limits()
+    assert system._limits.rendered_text() == []
     assert not power_level_violations(sheet.character, data)
 
     sheet.character.resistances["DEF"] = 12
-    system.refresh_derived()
-    assert "Dodge + Toughness 22/20" in system._limits.rendered_text()
+    system.refresh_limits()
+    assert system._limits.rendered_text() == ["Dodge + Toughness 22/20"]
+    assert not system._limits.isHidden()
     assert power_level_violations(sheet.character, data)
+
+
+def test_the_limits_row_follows_the_edits_that_move_it(qapp: QApplication) -> None:
+    """Its inputs are scattered across the sheet, so one topic was never enough.
+
+    ``derived-changed`` covers the powers and the conditions and nothing else — so the
+    row sat stale through the two edits that move it most directly: typing a Power
+    Level, and typing a resistance.
+    """
+
+    sheet = CharacterSheet(load_game_data())
+    sheet.set_locked(False)
+    system = sheet.system_info
+
+    sheet.resistances.findChildren(QSpinBox)[0].setValue(25)  # a real resistance spin
+    assert system._limits.rendered_text(), "a resistance edit has to reach the row"
+
+    # ...and raising the Power Level the caps are read off puts it away again.
+    system._power_level.setValue(20)
+    assert system._limits.rendered_text() == []
 
 
 def test_the_limits_row_names_the_tightest_skill(qapp: QApplication) -> None:
@@ -794,7 +813,7 @@ def test_the_limits_row_names_the_tightest_skill(qapp: QApplication) -> None:
     sheet.character.abilities["AGL"] = 15
     sheet.character.skill_ranks["Stealth"] = 10  # 25, over the PL 10 cap of 20
     sheet.character.skill_ranks["Athletics"] = 1
-    sheet.system_info.refresh_derived()
+    sheet.system_info.refresh_limits()
 
     assert "Skills (Stealth) 25/20" in sheet.system_info._limits.rendered_text()
 
@@ -804,7 +823,13 @@ def test_an_npc_has_no_limits_row(qapp: QApplication) -> None:
     would be a tautology, not a limit."""
 
     sheet = CharacterSheet(load_game_data())
+    sheet.character.abilities["STA"] = 12
+    sheet.character.resistances["DEF"] = 12  # a breach a player sheet would report
+    sheet.system_info.refresh_limits()
+    assert sheet.system_info._limits.rendered_text()
+
     sheet.system_info.set_npc_mode(True)
+    assert sheet.system_info._limits.rendered_text() == []
     assert sheet.system_info._limits.isHidden()
 
 
